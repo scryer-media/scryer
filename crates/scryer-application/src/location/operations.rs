@@ -377,7 +377,8 @@ impl AppUseCase {
             .map_err(confirmation_error)?;
 
         if planned.planned.execution.titles.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::SELECTION_NOTHING_MOVE,
                 "this selection has nothing to move".to_string(),
             ));
         }
@@ -536,7 +537,12 @@ impl AppUseCase {
         let operation = self
             .location_operation(operation_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("location operation {operation_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::OPERATION_NOT_FOUND,
+                    format!("location operation {operation_id}"),
+                )
+            })?;
         self.require_location_operation_permission(actor, &operation)
             .await?;
         let requested = self
@@ -597,7 +603,12 @@ impl AppUseCase {
         let operation = self
             .location_operation(operation_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("location operation {operation_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::OPERATION_NOT_FOUND,
+                    format!("location operation {operation_id}"),
+                )
+            })?;
         self.require_location_operation_permission(actor, &operation)
             .await?;
         if operation.state.is_terminal() {
@@ -611,9 +622,12 @@ impl AppUseCase {
         // being closed, and a runner that already holds it is refused the
         // way a second resume is.
         let Some(_reservation) = self.runtime.library.location_runners.begin(operation_id) else {
-            return Err(AppError::Validation(format!(
-                "location operation {operation_id} is still running; cancel it instead of abandoning it"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::OPERATION_STILL_RUNNING,
+                format!(
+                    "location operation {operation_id} is still running; cancel it instead of abandoning it"
+                ),
+            ));
         };
 
         let now = chrono::Utc::now();
@@ -894,9 +908,12 @@ impl AppUseCase {
         // ownership is idempotent for the same operation, so nothing further
         // down would stop a second runner from walking the same plan.
         if self.runtime.library.location_runners.is_live(operation_id) {
-            return Err(AppError::Validation(format!(
-                "location operation {operation_id} is still running; wait for it to stop before resuming it"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::OPERATION_STILL_RUNNING,
+                format!(
+                    "location operation {operation_id} is still running; wait for it to stop before resuming it"
+                ),
+            ));
         }
 
         let Some(plan_json) = self
@@ -1241,7 +1258,10 @@ impl AppUseCase {
             .location_operation(operation_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("location operation {operation_id} not found"))
+                AppError::not_found_reason(
+                    crate::error_reasons::location::OPERATION_NOT_FOUND,
+                    format!("location operation {operation_id} not found"),
+                )
             })?;
         let job_run_id = row.job_run_id.clone();
         // The mode is read off the persisted row rather than re-derived, so a
@@ -1380,7 +1400,7 @@ impl AppUseCase {
         };
 
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().clone().spawn_worker(async move {
             // The guard releases the slot when this task ends, however it ends
             // — including a panic — so a crashed runner never leaves an
             // operation permanently unresumable.
@@ -1740,8 +1760,9 @@ impl AppUseCase {
                 .get_location_operation_plan_json(&operation.id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation(
-                        "location operation source libraries are unavailable".into(),
+                    AppError::validation_refused(
+                        crate::error_reasons::location::OPERATION_SOURCE_LIBRARIES_UNAVAILABLE,
+                        "location operation source libraries are unavailable",
                     )
                 })?;
             let plan: RootMoveExecutionPlan =
@@ -1749,8 +1770,9 @@ impl AppUseCase {
                     AppError::Repository(format!("cannot read location operation scope: {error}"))
                 })?;
             if plan.titles.is_empty() {
-                return Err(AppError::Validation(
-                    "location operation source libraries are unavailable".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::OPERATION_SOURCE_LIBRARIES_UNAVAILABLE,
+                    "location operation source libraries are unavailable",
                 ));
             }
             for title in plan.titles {
@@ -1976,12 +1998,14 @@ impl AppUseCase {
         mode: LocationExecutionMode,
     ) -> AppResult<RootMovePlanning> {
         if request.title_ids.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::TITLE_SELECTION_REQUIRED,
                 "select at least one title to move".to_string(),
             ));
         }
         if request.destination.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::DESTINATION_REQUIRED,
                 "choose a destination library or root".to_string(),
             ));
         }
@@ -2002,7 +2026,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })?;
             selection.push(title_id.clone());
             titles.push(title);
         }
@@ -2016,7 +2045,12 @@ impl AppUseCase {
                     .libraries
                     .get_by_id(&title.library_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("library {}", title.library_id)))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                            format!("library {}", title.library_id),
+                        )
+                    })?;
                 libraries.insert(library.id.clone(), library);
             }
         }
@@ -2030,7 +2064,12 @@ impl AppUseCase {
                 .libraries
                 .get_by_id(library_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?,
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                        format!("library {library_id}"),
+                    )
+                })?,
             None => {
                 let mut ids: Vec<&str> = titles
                     .iter()
@@ -2039,15 +2078,15 @@ impl AppUseCase {
                 ids.sort_unstable();
                 ids.dedup();
                 match ids.as_slice() {
-                    [only] => libraries
-                        .get(*only)
-                        .cloned()
-                        .ok_or_else(|| AppError::NotFound(format!("library {only}")))?,
+                    [only] => libraries.get(*only).cloned().ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                            format!("library {only}"),
+                        )
+                    })?,
                     _ => {
-                        return Err(AppError::Validation(
-                            "a root move spans one library; choose a destination library for a selection that spans several"
-                                .to_string(),
-                        ));
+                        return Err(AppError::validation_refused(crate::error_reasons::location::ROOT_MOVE_SPANS_ONE_LIBRARY, "a root move spans one library; choose a destination library for a selection that spans several"
+                                .to_string()));
                     }
                 }
             }
@@ -2600,7 +2639,7 @@ impl AppUseCase {
                     .as_ref()
                     .and_then(|folder| path.strip_prefix(folder).ok());
                 let Some(relative) = relative else {
-                    return Err(AppError::Validation(format!(
+                    return Err(AppError::validation_refused(crate::error_reasons::location::CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER, format!(
                         "The catalog cannot map a file outside the recorded folder for {}. Correct its folder mapping first.",
                         title.name
                     )));
@@ -2610,17 +2649,23 @@ impl AppUseCase {
                         .components()
                         .any(|component| !matches!(component, std::path::Component::Normal(_)))
                 {
-                    return Err(AppError::Validation(format!(
-                        "The catalog path for {} is ambiguous. Correct its folder mapping before moving it.",
-                        title.name
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::CATALOG_PATH_AMBIGUOUS,
+                        format!(
+                            "The catalog path for {} is ambiguous. Correct its folder mapping before moving it.",
+                            title.name
+                        ),
+                    ));
                 }
                 let mapped = path_to_stored_string(destination_folder.join(relative));
                 if !mapped_paths.insert(PathCaseRule::platform_default().fold(&mapped).into_owned())
                 {
-                    return Err(AppError::Validation(format!(
-                        "More than one catalog record would point at {mapped}. Resolve that catalog conflict before confirming the manual move."
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::MORE_ONE_CATALOG_RECORD_WOULD_POINT,
+                        format!(
+                            "More than one catalog record would point at {mapped}. Resolve that catalog conflict before confirming the manual move."
+                        ),
+                    ));
                 }
                 draft.files.push(SourceFile {
                     media_file_id: Some(media.id.clone()),
@@ -2790,7 +2835,10 @@ impl AppUseCase {
                 .get_by_id(destination_title_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("destination title {destination_title_id}"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::location::DESTINATION_TITLE_NOT_FOUND,
+                        format!("destination title {destination_title_id}"),
+                    )
                 })?;
             destinations.insert(destination_title_id.to_string(), title);
         }
@@ -3404,7 +3452,7 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             Ok(()) => Ok(()),
             // Cleanup is re-entered on resume, so a row that has already gone
             // is a completed removal rather than a failure.
-            Err(AppError::NotFound(_)) => Ok(()),
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => Ok(()),
             Err(error) => Err(error),
         }
     }

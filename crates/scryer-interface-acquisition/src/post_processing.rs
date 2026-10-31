@@ -15,9 +15,10 @@ pub struct PostProcessingMutations;
 
 fn parse_script_type(value: &str) -> GqlResult<ScriptType> {
     ScriptType::parse(value).ok_or_else(|| {
-        to_gql_error(AppError::Validation(format!(
-            "invalid post-processing script type: {value}"
-        )))
+        to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_SCRIPT_TYPE_INVALID,
+            format!("invalid post-processing script type: {value}"),
+        ))
     })
 }
 
@@ -27,9 +28,10 @@ fn parse_execution_mode(value: Option<ExecutionModeValue>) -> ExecutionMode {
 
 fn parse_schedule(input: ScriptScheduleInput) -> GqlResult<ScriptSchedule> {
     input.into_domain().map_err(|field| {
-        to_gql_error(AppError::Validation(format!(
-            "schedule is missing {field} for its kind"
-        )))
+        to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_SCRIPT_SCHEDULE_INCOMPLETE,
+            format!("schedule is missing {field} for its kind"),
+        ))
     })
 }
 
@@ -37,21 +39,24 @@ fn require_inline_shell_acknowledgement(acknowledged: Option<bool>) -> GqlResult
     if acknowledged == Some(true) {
         return Ok(());
     }
-    Err(to_gql_error(AppError::Validation(
-        "inline shell scripts require explicit acknowledgement".into(),
+    Err(to_gql_error(AppError::validation_refused(
+        scryer_interface_core::refusal::INTERFACE_SCRIPT_ACKNOWLEDGEMENT_REQUIRED,
+        "inline shell scripts require explicit acknowledgement",
     )))
 }
 
 fn validate_file_script_content(script_content: &str) -> GqlResult<()> {
     let path = script_content.trim();
     if path.is_empty() {
-        return Err(to_gql_error(AppError::Validation(
-            "file post-processing script path is required".into(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_SCRIPT_PATH_REQUIRED,
+            "file post-processing script path is required",
         )));
     }
     if !Path::new(path).is_absolute() {
-        return Err(to_gql_error(AppError::Validation(
-            "file post-processing script path must be absolute".into(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_SCRIPT_PATH_NOT_ABSOLUTE,
+            "file post-processing script path must be absolute",
         )));
     }
     Ok(())
@@ -128,7 +133,12 @@ impl PostProcessingMutations {
             .get_post_processing_script(&actor, &script_id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("script {script_id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_SCRIPT_NOT_FOUND,
+                    format!("script {script_id}"),
+                ))
+            })?;
 
         let previous_script_type = script.script_type;
         let previous_script_content = script.script_content.clone();
@@ -176,8 +186,9 @@ impl PostProcessingMutations {
         if let Some(trigger) = input.trigger
             && ScriptTrigger::from(trigger) != script.trigger
         {
-            return Err(to_gql_error(AppError::Validation(
-                "a script's trigger cannot be changed after it is created".into(),
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_SCRIPT_TRIGGER_IMMUTABLE,
+                "a script's trigger cannot be changed after it is created",
             )));
         }
         if let Some(schedule) = input.schedule {
@@ -247,7 +258,12 @@ impl PostProcessingMutations {
             .get_post_processing_script(&actor, &id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("script {id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_SCRIPT_NOT_FOUND,
+                    format!("script {id}"),
+                ))
+            })?;
         if script.script_type == ScriptType::Inline && !script.enabled {
             require_inline_shell_acknowledgement(inline_shell_acknowledged)?;
         }

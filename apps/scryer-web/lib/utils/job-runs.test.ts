@@ -18,8 +18,16 @@ test("full-hash backfill failures are read with their path and reason", () => {
     summaryJson: {
       failed: 2,
       failures: [
-        { mediaFileId: "file-000", path: "/synthetic/a.mkv", reason: "file changed while hashing" },
-        { mediaFileId: "file-001", path: "/synthetic/b.mkv", reason: "permission denied" },
+        {
+          mediaFileId: "file-000",
+          path: "/synthetic/a.mkv",
+          reason: "file changed while hashing",
+        },
+        {
+          mediaFileId: "file-001",
+          path: "/synthetic/b.mkv",
+          reason: "permission denied",
+        },
       ],
       failuresTruncated: false,
     },
@@ -27,8 +35,16 @@ test("full-hash backfill failures are read with their path and reason", () => {
 
   assert.deepEqual(parsed, {
     failures: [
-      { mediaFileId: "file-000", path: "/synthetic/a.mkv", reason: "file changed while hashing" },
-      { mediaFileId: "file-001", path: "/synthetic/b.mkv", reason: "permission denied" },
+      {
+        mediaFileId: "file-000",
+        path: "/synthetic/a.mkv",
+        reason: "file changed while hashing",
+      },
+      {
+        mediaFileId: "file-001",
+        path: "/synthetic/b.mkv",
+        reason: "permission denied",
+      },
     ],
     notListed: 0,
   });
@@ -39,7 +55,13 @@ test("a truncated failure list reports how many were not listed", () => {
     jobKey: "FULL_HASH_BACKFILL",
     summaryJson: JSON.stringify({
       failed: 150,
-      failures: [{ mediaFileId: "file-000", path: "/synthetic/a.mkv", reason: "read error" }],
+      failures: [
+        {
+          mediaFileId: "file-000",
+          path: "/synthetic/a.mkv",
+          reason: "read error",
+        },
+      ],
       failuresTruncated: true,
     }),
   });
@@ -50,16 +72,33 @@ test("a truncated failure list reports how many were not listed", () => {
 
 test("garbage, legacy, and other jobs' summaries yield no failures", () => {
   const empty = { failures: [], notListed: 0 };
-  for (const summaryJson of [null, "not json", 42, [], {}, { failed: 3 }, { failures: "nope" }]) {
+  for (const summaryJson of [
+    null,
+    "not json",
+    42,
+    [],
+    {},
+    { failed: 3 },
+    { failures: "nope" },
+  ]) {
     assert.deepEqual(
-      parseFullHashBackfillFailures({ jobKey: "FULL_HASH_BACKFILL", summaryJson }),
+      parseFullHashBackfillFailures({
+        jobKey: "FULL_HASH_BACKFILL",
+        summaryJson,
+      }),
       empty,
     );
   }
   assert.deepEqual(
     parseFullHashBackfillFailures({
       jobKey: "FULL_HASH_BACKFILL",
-      summaryJson: { failures: [null, { path: 1, reason: "x" }, { path: "/synthetic/c.mkv" }] },
+      summaryJson: {
+        failures: [
+          null,
+          { path: 1, reason: "x" },
+          { path: "/synthetic/c.mkv" },
+        ],
+      },
     }),
     empty,
   );
@@ -72,7 +111,9 @@ test("garbage, legacy, and other jobs' summaries yield no failures", () => {
   );
 });
 
-function jobRun(overrides: Partial<JobRun> & Pick<JobRun, "id" | "jobKey" | "startedAt">): JobRun {
+function jobRun(
+  overrides: Partial<JobRun> & Pick<JobRun, "id" | "jobKey" | "startedAt">,
+): JobRun {
   return {
     customJobId: null,
     displayName: overrides.jobKey,
@@ -94,12 +135,20 @@ test("each job keeps its own latest run however often another job runs", () => {
   let latest: Partial<Record<string, JobRun>> = {};
   latest = mergeLatestJobRun(
     latest,
-    jobRun({ id: "housekeeping-1", jobKey: "HOUSEKEEPING", startedAt: "2026-01-01T00:00:00Z" }),
+    jobRun({
+      id: "housekeeping-1",
+      jobKey: "HOUSEKEEPING",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
   );
   for (let minute = 10; minute < 60; minute += 1) {
     latest = mergeLatestJobRun(
       latest,
-      jobRun({ id: `rss-${minute}`, jobKey: "RSS_SYNC", startedAt: `2026-01-01T00:${minute}:00Z` }),
+      jobRun({
+        id: `rss-${minute}`,
+        jobKey: "RSS_SYNC",
+        startedAt: `2026-01-01T00:${minute}:00Z`,
+      }),
     );
   }
   assert.equal(latest.HOUSEKEEPING?.id, "housekeeping-1");
@@ -115,15 +164,29 @@ test("an older run never displaces a newer one, and a snapshot updates its own r
     completedAt: null,
   });
   let latest = mergeLatestJobRun({}, running);
-  const older = jobRun({ id: "rss-1", jobKey: "RSS_SYNC", startedAt: "2026-01-01T00:01:00Z" });
+  const older = jobRun({
+    id: "rss-1",
+    jobKey: "RSS_SYNC",
+    startedAt: "2026-01-01T00:01:00Z",
+  });
   assert.equal(mergeLatestJobRun(latest, older), latest);
-  latest = mergeLatestJobRun(latest, { ...running, status: "COMPLETED", completedAt: "2026-01-01T00:03:00Z" });
+  latest = mergeLatestJobRun(latest, {
+    ...running,
+    status: "COMPLETED",
+    completedAt: "2026-01-01T00:03:00Z",
+  });
   assert.equal(latest.RSS_SYNC?.status, "COMPLETED");
 });
 
 test("built-in and user-defined jobs are tracked under keys that never collide", () => {
-  assert.equal(jobInstanceKey({ key: "RSS_SYNC", customJobId: null }), "RSS_SYNC");
-  assert.equal(jobInstanceKey({ jobKey: "CUSTOM_JOB", customJobId: "script-a" }), "script-a");
+  assert.equal(
+    jobInstanceKey({ key: "RSS_SYNC", customJobId: null }),
+    "RSS_SYNC",
+  );
+  assert.equal(
+    jobInstanceKey({ jobKey: "CUSTOM_JOB", customJobId: "script-a" }),
+    "script-a",
+  );
   assert.notEqual(
     jobInstanceKey({ jobKey: "CUSTOM_JOB", customJobId: "script-a" }),
     jobInstanceKey({ jobKey: "CUSTOM_JOB", customJobId: "script-b" }),
@@ -134,7 +197,11 @@ test("each user-defined job keeps its own latest run alongside built-in jobs", (
   let latest: Partial<Record<string, JobRun>> = {};
   latest = mergeLatestJobRun(
     latest,
-    jobRun({ id: "rss-1", jobKey: "RSS_SYNC", startedAt: "2026-01-01T00:00:00Z" }),
+    jobRun({
+      id: "rss-1",
+      jobKey: "RSS_SYNC",
+      startedAt: "2026-01-01T00:00:00Z",
+    }),
   );
   latest = mergeLatestJobRun(
     latest,
@@ -177,15 +244,27 @@ test("a run's custom job id is read from the payload and absent ids become null"
 test("a custom job run joins to its script run through the summary", () => {
   const scriptRuns = [{ id: "script-run-1" }, { id: "script-run-2" }];
 
-  assert.equal(scriptRunIdOf({ summaryJson: { script_run_id: "script-run-2" } }), "script-run-2");
-  assert.equal(scriptRunIdOf({ summaryJson: '{"script_run_id":"script-run-1"}' }), "script-run-1");
+  assert.equal(
+    scriptRunIdOf({ summaryJson: { script_run_id: "script-run-2" } }),
+    "script-run-2",
+  );
+  assert.equal(
+    scriptRunIdOf({ summaryJson: '{"script_run_id":"script-run-1"}' }),
+    "script-run-1",
+  );
   assert.equal(scriptRunIdOf({ summaryJson: "not json" }), null);
   assert.equal(scriptRunIdOf({ summaryJson: null }), null);
   assert.equal(
-    scriptRunForJobRun({ summaryJson: { script_run_id: "script-run-2" } }, scriptRuns)?.id,
+    scriptRunForJobRun(
+      { summaryJson: { script_run_id: "script-run-2" } },
+      scriptRuns,
+    )?.id,
     "script-run-2",
   );
-  assert.equal(scriptRunForJobRun({ summaryJson: { script_run_id: "gone" } }, scriptRuns), null);
+  assert.equal(
+    scriptRunForJobRun({ summaryJson: { script_run_id: "gone" } }, scriptRuns),
+    null,
+  );
 });
 
 test("the newest finished run waits until its script run has settled", () => {
@@ -203,16 +282,30 @@ test("the newest finished run waits until its script run has settled", () => {
     startedAt: "2026-01-01T00:05:00Z",
     summaryJson: { script_run_id: "script-run-new" },
   });
-  const active = jobRun({ id: "run-active", jobKey: "CUSTOM_JOB", status: "RUNNING", startedAt: "2026-01-01T00:09:00Z" });
+  const active = jobRun({
+    id: "run-active",
+    jobKey: "CUSTOM_JOB",
+    status: "RUNNING",
+    startedAt: "2026-01-01T00:09:00Z",
+  });
   const settledOld = { id: "script-run-old", status: "success" };
 
-  assert.equal(runAwaitingScriptOutput([older, newer, active], [settledOld]), "run-new");
   assert.equal(
-    runAwaitingScriptOutput([older, newer], [settledOld, { id: "script-run-new", status: "running" }]),
+    runAwaitingScriptOutput([older, newer, active], [settledOld]),
     "run-new",
   );
   assert.equal(
-    runAwaitingScriptOutput([older, newer], [settledOld, { id: "script-run-new", status: "failed" }]),
+    runAwaitingScriptOutput(
+      [older, newer],
+      [settledOld, { id: "script-run-new", status: "running" }],
+    ),
+    "run-new",
+  );
+  assert.equal(
+    runAwaitingScriptOutput(
+      [older, newer],
+      [settledOld, { id: "script-run-new", status: "failed" }],
+    ),
     null,
   );
   assert.equal(runAwaitingScriptOutput([active], []), null);

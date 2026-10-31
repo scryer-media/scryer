@@ -607,6 +607,7 @@ fn map_queue_item(
     );
     let seeding = seeding_snapshot_for_item(&item);
     DownloadQueueItem {
+        attention_reason_code: None,
         id: format!(
             "{client_type}:{}",
             info_hash
@@ -753,6 +754,7 @@ fn map_history_item_from_completed(
     );
     let download_client_item_id = info_hash.unwrap_or_else(|| item.client_item_id.clone());
     DownloadQueueItem {
+        attention_reason_code: None,
         id: format!("{client_type}:{download_client_item_id}"),
         title_id: None,
         episode_id: None,

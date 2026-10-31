@@ -8,7 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   applyRenameTemplatePreview,
@@ -25,24 +31,52 @@ import type { ViewCategoryId } from "./indexer-category-picker";
 const RENAME_COLLISION_POLICY_OPTIONS = [
   { value: "SKIP", label: "settings.renameCollisionPolicySkip" },
   { value: "ERROR", label: "settings.renameCollisionPolicyError" },
-  { value: "REPLACE_IF_BETTER", label: "settings.renameCollisionPolicyReplaceIfBetter" },
+  {
+    value: "REPLACE_IF_BETTER",
+    label: "settings.renameCollisionPolicyReplaceIfBetter",
+  },
 ];
 
 const RENAME_MISSING_METADATA_POLICY_OPTIONS = [
-  { value: "FALLBACK_TITLE", label: "settings.renameMissingMetadataPolicyFallbackTitle" },
+  {
+    value: "FALLBACK_TITLE",
+    label: "settings.renameMissingMetadataPolicyFallbackTitle",
+  },
   { value: "SKIP", label: "settings.renameMissingMetadataPolicySkip" },
 ];
 
 const COMMON_RENAME_TOKENS = [
-  "title", "title_with_year", "title_without_year", "year", "quality", "source",
-  "video_codec", "audio_codec", "audio_channels", "group", "ext",
-  "title_with_article", "title_first_character",
+  "title",
+  "title_with_year",
+  "title_without_year",
+  "year",
+  "quality",
+  "source",
+  "dynamic_range",
+  "revision",
+  "is_3d",
+  "video_codec",
+  "audio_codec",
+  "audio_channels",
+  "group",
+  "ext",
+  "title_with_article",
+  "title_first_character",
 ];
 const EXTERNAL_ID_RENAME_TOKENS = [
-  "imdb_id", "tmdb_id", "tvdb_id", "anidb_id", "mal_id", "anilist_id",
+  "imdb_id",
+  "tmdb_id",
+  "tvdb_id",
+  "anidb_id",
+  "mal_id",
+  "anilist_id",
 ];
 const EPISODE_RENAME_TOKENS = [
-  "season", "season_order", "episode", "episode_title", "absolute_episode",
+  "season",
+  "season_order",
+  "episode",
+  "episode_title",
+  "absolute_episode",
 ];
 const VALID_MOVIE_RENAME_TOKENS = new Set([
   ...COMMON_RENAME_TOKENS,
@@ -55,22 +89,37 @@ const VALID_EPISODE_RENAME_TOKENS = new Set([
   ...EXTERNAL_ID_RENAME_TOKENS,
 ]);
 const VALID_FOLDER_TOKENS = new Set([
-  "title", "title_with_year", "title_without_year", "year",
-  "title_with_article", "title_first_character",
-  "imdb_id", "tmdb_id", "tvdb_id", "anidb_id", "mal_id", "anilist_id",
+  "title",
+  "title_with_year",
+  "title_without_year",
+  "year",
+  "title_with_article",
+  "title_first_character",
+  "imdb_id",
+  "tmdb_id",
+  "tvdb_id",
+  "anidb_id",
+  "mal_id",
+  "anilist_id",
 ]);
 const TITLE_ORDER_TOKENS = [
-  { token: "title_with_article", labelKey: "settings.renameTokenTitleWithArticle" },
-  { token: "title_first_character", labelKey: "settings.renameTokenTitleFirstCharacter" },
+  {
+    token: "title_with_article",
+    labelKey: "settings.renameTokenTitleWithArticle",
+  },
+  {
+    token: "title_first_character",
+    labelKey: "settings.renameTokenTitleFirstCharacter",
+  },
 ];
-const VALID_SEASON_FOLDER_TOKENS = new Set([
-  ...VALID_FOLDER_TOKENS,
-  "season",
-]);
+const VALID_SEASON_FOLDER_TOKENS = new Set([...VALID_FOLDER_TOKENS, "season"]);
 
 const TITLE_YEAR_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "title_with_year", labelKey: "settings.renameTokenTitleWithYear" },
-  { token: "title_without_year", labelKey: "settings.renameTokenTitleWithoutYear" },
+  {
+    token: "title_without_year",
+    labelKey: "settings.renameTokenTitleWithoutYear",
+  },
 ];
 
 const FOLDER_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
@@ -85,33 +134,38 @@ const FOLDER_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "mal_id", labelKey: "settings.renameTokenMalId" },
   { token: "anilist_id", labelKey: "settings.renameTokenAnilistId" },
 ];
-const MOVIE_FOLDER_TOKEN_DESCRIPTIONS = [
-  ...FOLDER_TOKEN_DESCRIPTIONS,
-];
+const MOVIE_FOLDER_TOKEN_DESCRIPTIONS = [...FOLDER_TOKEN_DESCRIPTIONS];
 const SEASON_FOLDER_TOKEN_DESCRIPTIONS = [
   ...FOLDER_TOKEN_DESCRIPTIONS,
   { token: "season", labelKey: "settings.renameTokenSeason" },
 ];
 
-const SHARED_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
-  { token: "title", labelKey: "settings.renameTokenTitle" },
-  ...TITLE_ORDER_TOKENS,
-  ...TITLE_YEAR_TOKEN_DESCRIPTIONS,
-  { token: "year", labelKey: "settings.renameTokenYear" },
-  { token: "quality", labelKey: "settings.renameTokenQuality" },
-  { token: "source", labelKey: "settings.renameTokenSource" },
-  { token: "video_codec", labelKey: "settings.renameTokenVideoCodec" },
-  { token: "audio_codec", labelKey: "settings.renameTokenAudioCodec" },
-  { token: "audio_channels", labelKey: "settings.renameTokenAudioChannels" },
-  { token: "group", labelKey: "settings.renameTokenGroup" },
-  { token: "ext", labelKey: "settings.renameTokenExt" },
-];
+const SHARED_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] =
+  [
+    { token: "title", labelKey: "settings.renameTokenTitle" },
+    ...TITLE_ORDER_TOKENS,
+    ...TITLE_YEAR_TOKEN_DESCRIPTIONS,
+    { token: "year", labelKey: "settings.renameTokenYear" },
+    { token: "quality", labelKey: "settings.renameTokenQuality" },
+    { token: "source", labelKey: "settings.renameTokenSource" },
+    { token: "dynamic_range", labelKey: "settings.renameTokenDynamicRange" },
+    { token: "revision", labelKey: "settings.renameTokenRevision" },
+    { token: "is_3d", labelKey: "settings.renameTokenIs3d" },
+    { token: "video_codec", labelKey: "settings.renameTokenVideoCodec" },
+    { token: "audio_codec", labelKey: "settings.renameTokenAudioCodec" },
+    { token: "audio_channels", labelKey: "settings.renameTokenAudioChannels" },
+    { token: "group", labelKey: "settings.renameTokenGroup" },
+    { token: "ext", labelKey: "settings.renameTokenExt" },
+  ];
 
 const MOVIE_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "edition", labelKey: "settings.renameTokenEdition" },
 ];
 
-const EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
+const EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS: {
+  token: string;
+  labelKey: string;
+}[] = [
   { token: "imdb_id", labelKey: "settings.renameTokenImdbId" },
   { token: "tmdb_id", labelKey: "settings.renameTokenTmdbId" },
   { token: "tvdb_id", labelKey: "settings.renameTokenTvdbId" },
@@ -120,19 +174,26 @@ const EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }
   { token: "anilist_id", labelKey: "settings.renameTokenAnilistId" },
 ];
 
-const SERIES_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
-  { token: "season", labelKey: "settings.renameTokenSeason" },
-  { token: "season_order", labelKey: "settings.renameTokenSeasonOrder" },
-  { token: "episode", labelKey: "settings.renameTokenEpisode" },
-  { token: "absolute_episode", labelKey: "settings.renameTokenAbsoluteEpisode" },
-  { token: "episode_title", labelKey: "settings.renameTokenEpisodeTitle" },
-];
+const SERIES_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] =
+  [
+    { token: "season", labelKey: "settings.renameTokenSeason" },
+    { token: "season_order", labelKey: "settings.renameTokenSeasonOrder" },
+    { token: "episode", labelKey: "settings.renameTokenEpisode" },
+    {
+      token: "absolute_episode",
+      labelKey: "settings.renameTokenAbsoluteEpisode",
+    },
+    { token: "episode_title", labelKey: "settings.renameTokenEpisodeTitle" },
+  ];
 
 const ANIME_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "season", labelKey: "settings.renameTokenSeason" },
   { token: "season_order", labelKey: "settings.renameTokenSeasonOrder" },
   { token: "episode", labelKey: "settings.renameTokenEpisode" },
-  { token: "absolute_episode", labelKey: "settings.renameTokenAbsoluteEpisode" },
+  {
+    token: "absolute_episode",
+    labelKey: "settings.renameTokenAbsoluteEpisode",
+  },
   { token: "episode_title", labelKey: "settings.renameTokenEpisodeTitle" },
 ];
 
@@ -179,16 +240,26 @@ const RENAME_FILTER_AUTOCOMPLETE_SUGGESTIONS: TemplateFilterSuggestion[] = [
   })),
 ];
 
-function getRenameTokenDescriptions(scopeId: ViewCategoryId): { token: string; labelKey: string }[] {
-  const scopeSpecific = scopeId === "MOVIE"
-    ? MOVIE_RENAME_TOKEN_DESCRIPTIONS
-    : scopeId === "ANIME"
-      ? ANIME_RENAME_TOKEN_DESCRIPTIONS
-      : SERIES_RENAME_TOKEN_DESCRIPTIONS;
-  const shared = scopeId === "SERIES"
-    ? SHARED_RENAME_TOKEN_DESCRIPTIONS.filter((token) => token.token !== "group")
-    : SHARED_RENAME_TOKEN_DESCRIPTIONS;
-  return [...scopeSpecific, ...EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS, ...shared];
+function getRenameTokenDescriptions(
+  scopeId: ViewCategoryId,
+): { token: string; labelKey: string }[] {
+  const scopeSpecific =
+    scopeId === "MOVIE"
+      ? MOVIE_RENAME_TOKEN_DESCRIPTIONS
+      : scopeId === "ANIME"
+        ? ANIME_RENAME_TOKEN_DESCRIPTIONS
+        : SERIES_RENAME_TOKEN_DESCRIPTIONS;
+  const shared =
+    scopeId === "SERIES"
+      ? SHARED_RENAME_TOKEN_DESCRIPTIONS.filter(
+          (token) => token.token !== "group",
+        )
+      : SHARED_RENAME_TOKEN_DESCRIPTIONS;
+  return [
+    ...scopeSpecific,
+    ...EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS,
+    ...shared,
+  ];
 }
 
 function getValidRenameTokens(scopeId: ViewCategoryId): ReadonlySet<string> {
@@ -197,8 +268,12 @@ function getValidRenameTokens(scopeId: ViewCategoryId): ReadonlySet<string> {
     : VALID_EPISODE_RENAME_TOKENS;
 }
 
-function getFolderTokenDescriptions(scopeId: ViewCategoryId): TokenDescription[] {
-  return scopeId === "MOVIE" ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS : FOLDER_TOKEN_DESCRIPTIONS;
+function getFolderTokenDescriptions(
+  scopeId: ViewCategoryId,
+): TokenDescription[] {
+  return scopeId === "MOVIE"
+    ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS
+    : FOLDER_TOKEN_DESCRIPTIONS;
 }
 
 function getRenameReferenceTokens(
@@ -220,9 +295,10 @@ function getRenameReferenceTokens(
     });
   };
 
-  const folderTokens = scopeId === "MOVIE"
-    ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS
-    : SEASON_FOLDER_TOKEN_DESCRIPTIONS;
+  const folderTokens =
+    scopeId === "MOVIE"
+      ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS
+      : SEASON_FOLDER_TOKEN_DESCRIPTIONS;
   folderTokens.forEach((item) => addToken(item, "folders"));
   renameTokenDescriptions.forEach((item) => addToken(item, "files"));
 
@@ -258,9 +334,13 @@ function formatRenameValidationIssue(
     case "unknownToken":
       return t("settings.renameValidationUnknownToken", { token: issue.token });
     case "invalidPadding":
-      return t("settings.renameValidationInvalidPadding", { padding: issue.padding });
+      return t("settings.renameValidationInvalidPadding", {
+        padding: issue.padding,
+      });
     case "invalidFilter":
-      return t("settings.renameValidationInvalidFilter", { filter: issue.filter });
+      return t("settings.renameValidationInvalidFilter", {
+        filter: issue.filter,
+      });
     case "invalidOptionalGroup":
       return t("settings.renameValidationInvalidOptionalGroup");
     case "nestedOptionalGroup":
@@ -279,12 +359,13 @@ function validateFolderTemplate(
   requiredToken?: string,
   allowPathComponents = false,
 ): string | null {
-  const issue: FolderTemplateValidationIssue | null = validateFolderTemplateSyntax(
-    template,
-    validTokens,
-    requiredToken,
-    allowPathComponents,
-  );
+  const issue: FolderTemplateValidationIssue | null =
+    validateFolderTemplateSyntax(
+      template,
+      validTokens,
+      requiredToken,
+      allowPathComponents,
+    );
   if (!issue) return null;
 
   switch (issue.kind) {
@@ -295,15 +376,20 @@ function validateFolderTemplate(
     case "unmatchedClose":
       return t("settings.renameValidationUnmatchedClose");
     case "unknownToken": {
-      const key = validTokens === VALID_SEASON_FOLDER_TOKENS
-        ? "settings.seasonFolderValidationUnknownToken"
-        : "settings.folderValidationUnknownToken";
+      const key =
+        validTokens === VALID_SEASON_FOLDER_TOKENS
+          ? "settings.seasonFolderValidationUnknownToken"
+          : "settings.folderValidationUnknownToken";
       return t(key, { token: issue.token });
     }
     case "invalidPadding":
-      return t("settings.renameValidationInvalidPadding", { padding: issue.padding });
+      return t("settings.renameValidationInvalidPadding", {
+        padding: issue.padding,
+      });
     case "invalidFilter":
-      return t("settings.renameValidationInvalidFilter", { filter: issue.filter });
+      return t("settings.renameValidationInvalidFilter", {
+        filter: issue.filter,
+      });
     case "invalidOptionalGroup":
       return t("settings.renameValidationInvalidOptionalGroup");
     case "nestedOptionalGroup":
@@ -322,46 +408,107 @@ function validateFolderTemplate(
 }
 
 const RENAME_PREVIEW_MOVIE_SAMPLE: Record<string, string> = {
-  title: "The Grey Harbor", title_with_year: "The Grey Harbor (2008)",
-  title_without_year: "The Grey Harbor", year: "2008", quality: "2160p", edition: "IMAX",
-  title_with_article: "Grey Harbor, The", title_first_character: "G",
-  source: "BluRay", video_codec: "x265", audio_codec: "DTS-HD MA",
-  audio_channels: "5.1", group: "FraMeSToR", ext: "mkv",
-  imdb_id: "tt0468569", tmdb_id: "155", tvdb_id: "123456",
-  anidb_id: "", mal_id: "", anilist_id: "",
-  season: "1", episode: "5", episode_title: "Pilot",
+  title: "The Grey Harbor",
+  title_with_year: "The Grey Harbor (2008)",
+  title_without_year: "The Grey Harbor",
+  year: "2008",
+  quality: "2160p",
+  edition: "IMAX",
+  title_with_article: "Grey Harbor, The",
+  title_first_character: "G",
+  source: "BluRay",
+  dynamic_range: "HDR10",
+  revision: "Proper",
+  is_3d: "3D",
+  video_codec: "x265",
+  audio_codec: "DTS-HD MA",
+  audio_channels: "5.1",
+  group: "FraMeSToR",
+  ext: "mkv",
+  imdb_id: "tt0468569",
+  tmdb_id: "155",
+  tvdb_id: "123456",
+  anidb_id: "",
+  mal_id: "",
+  anilist_id: "",
+  season: "1",
+  episode: "5",
+  episode_title: "Pilot",
 };
 
 const RENAME_PREVIEW_SERIES_SAMPLE: Record<string, string> = {
-  title: "Harbor Lights", title_with_year: "Harbor Lights (1994)",
-  title_without_year: "Harbor Lights", year: "1994", quality: "1080p", edition: "Director's Cut",
-  source: "WEB-DL", video_codec: "x264", audio_codec: "AAC",
-  audio_channels: "2.0", group: "NTb", ext: "mkv",
-  imdb_id: "tt0108778", tmdb_id: "1668", tvdb_id: "79168",
-  anidb_id: "", mal_id: "", anilist_id: "",
-  season: "5", season_order: "5", episode: "12",
-  absolute_episode: "97", episode_title: "The One with the Embryos",
+  title: "Harbor Lights",
+  title_with_year: "Harbor Lights (1994)",
+  title_without_year: "Harbor Lights",
+  year: "1994",
+  quality: "1080p",
+  edition: "Director's Cut",
+  source: "WEB-DL",
+  dynamic_range: "HDR10+",
+  revision: "Proper",
+  is_3d: "3D",
+  video_codec: "x264",
+  audio_codec: "AAC",
+  audio_channels: "2.0",
+  group: "NTb",
+  ext: "mkv",
+  imdb_id: "tt0108778",
+  tmdb_id: "1668",
+  tvdb_id: "79168",
+  anidb_id: "",
+  mal_id: "",
+  anilist_id: "",
+  season: "5",
+  season_order: "5",
+  episode: "12",
+  absolute_episode: "97",
+  episode_title: "The One with the Embryos",
 };
 
 const RENAME_PREVIEW_ANIME_SAMPLE: Record<string, string> = {
-  title: "Tidebreaker", title_with_year: "Tidebreaker (1999)",
-  title_without_year: "Tidebreaker", year: "1999", quality: "1080p", edition: "Director's Cut",
-  source: "WEB-DL", video_codec: "x265", audio_codec: "AAC",
-  audio_channels: "2.0", group: "SubsPlease", ext: "mkv",
-  imdb_id: "tt0388629", tmdb_id: "37854", tvdb_id: "81797",
-  anidb_id: "69", mal_id: "21", anilist_id: "21",
-  season: "1", season_order: "1", episode: "1",
-  absolute_episode: "1", episode_title: "Romance Dawn",
+  title: "Tidebreaker",
+  title_with_year: "Tidebreaker (1999)",
+  title_without_year: "Tidebreaker",
+  year: "1999",
+  quality: "1080p",
+  edition: "Director's Cut",
+  source: "WEB-DL",
+  dynamic_range: "DV",
+  revision: "REPACK",
+  is_3d: "3D",
+  video_codec: "x265",
+  audio_codec: "AAC",
+  audio_channels: "2.0",
+  group: "SubsPlease",
+  ext: "mkv",
+  imdb_id: "tt0388629",
+  tmdb_id: "37854",
+  tvdb_id: "81797",
+  anidb_id: "69",
+  mal_id: "21",
+  anilist_id: "21",
+  season: "1",
+  season_order: "1",
+  episode: "1",
+  absolute_episode: "1",
+  episode_title: "Romance Dawn",
 };
 
-function applyRenameTemplate(template: string, scopeId: ViewCategoryId): string | null {
+function applyRenameTemplate(
+  template: string,
+  scopeId: ViewCategoryId,
+): string | null {
   const sampleValues =
     scopeId === "MOVIE"
       ? RENAME_PREVIEW_MOVIE_SAMPLE
       : scopeId === "ANIME"
         ? RENAME_PREVIEW_ANIME_SAMPLE
         : RENAME_PREVIEW_SERIES_SAMPLE;
-  return applyRenameTemplatePreview(template, getValidRenameTokens(scopeId), sampleValues);
+  return applyRenameTemplatePreview(
+    template,
+    getValidRenameTokens(scopeId),
+    sampleValues,
+  );
 }
 
 function applyFolderTemplate(
@@ -376,10 +523,12 @@ function applyFolderTemplate(
       : scopeId === "ANIME"
         ? RENAME_PREVIEW_ANIME_SAMPLE
         : RENAME_PREVIEW_SERIES_SAMPLE;
-  const sampleValues = season === undefined
-    ? baseSampleValues
-    : { ...baseSampleValues, season };
-  return applyRenameTemplatePreview(template, validTokens, sampleValues)?.trim() || null;
+  const sampleValues =
+    season === undefined ? baseSampleValues : { ...baseSampleValues, season };
+  return (
+    applyRenameTemplatePreview(template, validTokens, sampleValues)?.trim() ||
+    null
+  );
 }
 
 function splitFolderTemplateSegments(
@@ -439,7 +588,8 @@ function insertTemplateToken(
   const insertion = `{${token}}`;
   const start = input.selectionStart ?? currentValue.length;
   const end = input.selectionEnd ?? start;
-  const nextValue = currentValue.slice(0, start) + insertion + currentValue.slice(end);
+  const nextValue =
+    currentValue.slice(0, start) + insertion + currentValue.slice(end);
   updateInputValue(input, nextValue, start + insertion.length);
 }
 
@@ -463,7 +613,9 @@ function resolveTemplateTokenContext(
     return null;
   }
   const isOptionalGroupGuard = tokenBody.startsWith("?");
-  const guardOrTokenBody = isOptionalGroupGuard ? tokenBody.slice(1) : tokenBody;
+  const guardOrTokenBody = isOptionalGroupGuard
+    ? tokenBody.slice(1)
+    : tokenBody;
 
   const nextOpen = value.indexOf("{", lastOpen + 1);
   const nextClose = value.indexOf("}", lastOpen + 1);
@@ -474,11 +626,17 @@ function resolveTemplateTokenContext(
     if (isOptionalGroupGuard) {
       return null;
     }
-    const tokenName = guardOrTokenBody.slice(0, pipeIndex).split("|", 1)[0]?.trim();
+    const tokenName = guardOrTokenBody
+      .slice(0, pipeIndex)
+      .split("|", 1)[0]
+      ?.trim();
     if (!tokenName || tokenName.includes(":")) {
       return null;
     }
-    const query = guardOrTokenBody.slice(pipeIndex + 1).trim().toLowerCase();
+    const query = guardOrTokenBody
+      .slice(pipeIndex + 1)
+      .trim()
+      .toLowerCase();
     return {
       kind: "filter",
       key: `filter:${lastOpen}:${pipeIndex}:${query}`,
@@ -533,67 +691,80 @@ function applyAutocompleteToken(
     suffix +
     currentValue.slice(context.replaceEnd);
   const selectionStart =
-    context.replaceStart + (options.selectionStart ?? token.length + suffix.length);
+    context.replaceStart +
+    (options.selectionStart ?? token.length + suffix.length);
   const selectionEnd =
-    context.replaceStart + (options.selectionEnd ?? options.selectionStart ?? token.length + suffix.length);
+    context.replaceStart +
+    (options.selectionEnd ??
+      options.selectionStart ??
+      token.length + suffix.length);
   updateInputValue(input, nextValue, selectionStart, selectionEnd);
 }
 
-const HighlightedTemplateInput = React.forwardRef<HTMLInputElement, HighlightedTemplateInputProps>(
-  ({ className, value, getSegments, onScroll, ...props }, ref) => {
-    const [scrollLeft, setScrollLeft] = React.useState(0);
-    const segments = React.useMemo(
-      () =>
-        getSegments
-          ? getSegments(value)
-          : splitRenameTemplateSegments(value, VALID_EPISODE_RENAME_TOKENS),
-      [getSegments, value],
-    );
-    const showOverlay = value.length > 0;
+const HighlightedTemplateInput = React.forwardRef<
+  HTMLInputElement,
+  HighlightedTemplateInputProps
+>(({ className, value, getSegments, onScroll, ...props }, ref) => {
+  const [scrollLeft, setScrollLeft] = React.useState(0);
+  const segments = React.useMemo(
+    () =>
+      getSegments
+        ? getSegments(value)
+        : splitRenameTemplateSegments(value, VALID_EPISODE_RENAME_TOKENS),
+    [getSegments, value],
+  );
+  const showOverlay = value.length > 0;
 
-    return (
-      <div className="relative">
-        {showOverlay ? (
+  return (
+    <div className="relative">
+      {showOverlay ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center overflow-hidden rounded-md px-3 py-1 text-base md:text-sm"
+        >
           <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-10 flex items-center overflow-hidden rounded-md px-3 py-1 text-base md:text-sm"
+            className="min-w-full whitespace-pre"
+            style={{ transform: `translateX(-${scrollLeft}px)` }}
           >
-            <div
-              className="min-w-full whitespace-pre"
-              style={{ transform: `translateX(-${scrollLeft}px)` }}
-            >
-              {segments.map((segment, index) => (
-                <span
-                  key={`${index}-${segment.text}`}
-                  className={segment.isToken ? "text-[var(--scry-accent-text)]" : "text-foreground"}
-                >
-                  {segment.text}
-                </span>
-              ))}
-            </div>
+            {segments.map((segment, index) => (
+              <span
+                key={`${index}-${segment.text}`}
+                className={
+                  segment.isToken
+                    ? "text-[var(--scry-accent-text)]"
+                    : "text-foreground"
+                }
+              >
+                {segment.text}
+              </span>
+            ))}
           </div>
-        ) : null}
-        <Input
-          {...props}
-          ref={ref}
-          value={value}
-          onScroll={(event) => {
-            setScrollLeft(event.currentTarget.scrollLeft);
-            onScroll?.(event);
-          }}
-          className={cn(
-            showOverlay && "text-transparent caret-foreground selection:text-transparent",
-            className,
-          )}
-        />
-      </div>
-    );
-  },
-);
+        </div>
+      ) : null}
+      <Input
+        {...props}
+        ref={ref}
+        value={value}
+        onScroll={(event) => {
+          setScrollLeft(event.currentTarget.scrollLeft);
+          onScroll?.(event);
+        }}
+        className={cn(
+          showOverlay &&
+            "text-transparent caret-foreground selection:text-transparent",
+          className,
+        )}
+      />
+    </div>
+  );
+});
 
 HighlightedTemplateInput.displayName = "HighlightedTemplateInput";
 
-type TokenAutocompleteInputProps = Omit<HighlightedTemplateInputProps, "ref"> & {
+type TokenAutocompleteInputProps = Omit<
+  HighlightedTemplateInputProps,
+  "ref"
+> & {
   inputRef: React.RefObject<HTMLInputElement | null>;
   tokenDescriptions: TokenDescription[];
   onAutocompleteToken: (token: string) => void;
@@ -652,12 +823,16 @@ function TokenAutocompleteInput({
     }
 
     if (tokenContext.kind === "filter") {
-      return RENAME_FILTER_AUTOCOMPLETE_SUGGESTIONS
-        .map((item, index) => ({ item, index }))
+      return RENAME_FILTER_AUTOCOMPLETE_SUGGESTIONS.map((item, index) => ({
+        item,
+        index,
+      }))
         .filter(({ item }) => {
           const code = item.code.toLowerCase();
-          return code.includes(tokenContext.query) ||
-            item.aliases?.some((alias) => alias.includes(tokenContext.query));
+          return (
+            code.includes(tokenContext.query) ||
+            item.aliases?.some((alias) => alias.includes(tokenContext.query))
+          );
         })
         .sort((left, right) => {
           if (!tokenContext.query) {
@@ -762,12 +937,17 @@ function TokenAutocompleteInput({
           if (suggestions.length > 0) {
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              setHighlightedIndex((current) => (current + 1) % suggestions.length);
+              setHighlightedIndex(
+                (current) => (current + 1) % suggestions.length,
+              );
               return;
             }
             if (event.key === "ArrowUp") {
               event.preventDefault();
-              setHighlightedIndex((current) => (current - 1 + suggestions.length) % suggestions.length);
+              setHighlightedIndex(
+                (current) =>
+                  (current - 1 + suggestions.length) % suggestions.length,
+              );
               return;
             }
             if (event.key === "Enter" || event.key === "Tab") {
@@ -798,7 +978,9 @@ function TokenAutocompleteInput({
                   type="button"
                   className={cn(
                     "flex w-full items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
-                    isActive ? "bg-accent text-accent-foreground" : "text-popover-foreground hover:bg-accent/70",
+                    isActive
+                      ? "bg-accent text-accent-foreground"
+                      : "text-popover-foreground hover:bg-accent/70",
                   )}
                   onMouseDown={(event) => {
                     event.preventDefault();
@@ -806,7 +988,9 @@ function TokenAutocompleteInput({
                     setDismissedKey(null);
                   }}
                 >
-                  <code className="font-[var(--font-code)] text-[var(--scry-accent-text)]">{item.code}</code>
+                  <code className="font-[var(--font-code)] text-[var(--scry-accent-text)]">
+                    {item.code}
+                  </code>
                   <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                     {translateLabel(item.labelKey)}
                   </span>
@@ -835,7 +1019,10 @@ function RenameTokenReferenceList({
     files: t("settings.renameReferenceFiles"),
     folders: t("settings.renameReferenceFolders"),
   };
-  const applicabilityActions: Record<TokenApplicability, (token: string) => void> = {
+  const applicabilityActions: Record<
+    TokenApplicability,
+    (token: string) => void
+  > = {
     files: onFileTokenClick,
     folders: onFolderTokenClick,
   };
@@ -1023,7 +1210,9 @@ function RenameSettingsSection({
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
-          <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">{title}</h2>
+          <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">
+            {title}
+          </h2>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -1088,87 +1277,122 @@ export function RenameSettingsPanel({
   mediaSettingsLoading: boolean;
   mediaSettingsSaving: boolean;
   categoryFolderTemplates: Record<ViewCategoryId, string>;
-  handleFolderTemplateChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  handleFolderTemplateChange: (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => void;
   categorySeasonFolderTemplates: Record<ViewCategoryId, string>;
-  handleSeasonFolderTemplateChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  handleSeasonFolderTemplateChange: (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => void;
   categoryUseSeasonFolders: Record<ViewCategoryId, boolean>;
   handleUseSeasonFoldersChange: (checked: boolean) => void;
   categorySpecialsFolderTemplates: Record<ViewCategoryId, string>;
-  handleSpecialsFolderTemplateChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  handleSpecialsFolderTemplateChange: (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => void;
   categoryRenameTemplates: Record<ViewCategoryId, string>;
-  handleRenameTemplateChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  handleRenameTemplateChange: (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => void;
   categoryRenameEnabled: Record<ViewCategoryId, string>;
   handleRenameEnabledChange: (checked: boolean) => void;
   categoryRenameCollisionPolicies: Record<ViewCategoryId, string>;
   handleRenameCollisionPolicyChange: (value: string) => void;
   categoryRenameMissingMetadataPolicies: Record<ViewCategoryId, string>;
   handleRenameMissingMetadataPolicyChange: (value: string) => void;
-  updateCategoryMediaProfileSettings: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  updateCategoryMediaProfileSettings: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
 }) {
   const t = useTranslate();
   const folderTemplateValue = categoryFolderTemplates[activeQualityScopeId];
   const episodicScope = activeQualityScopeId !== "MOVIE";
   const folderTokens = VALID_FOLDER_TOKENS;
-  const useSeasonFolders = categoryUseSeasonFolders[activeQualityScopeId] !== false;
-  const seasonFolderTemplateValue = categorySeasonFolderTemplates[activeQualityScopeId];
-  const specialsFolderTemplateValue = categorySpecialsFolderTemplates[activeQualityScopeId];
+  const useSeasonFolders =
+    categoryUseSeasonFolders[activeQualityScopeId] !== false;
+  const seasonFolderTemplateValue =
+    categorySeasonFolderTemplates[activeQualityScopeId];
+  const specialsFolderTemplateValue =
+    categorySpecialsFolderTemplates[activeQualityScopeId];
   const renameEnabled = categoryRenameEnabled[activeQualityScopeId] !== "false";
   const templateValue = categoryRenameTemplates[activeQualityScopeId];
   const folderValidationError = React.useMemo(
-    () => validateFolderTemplate(folderTemplateValue, t, folderTokens, undefined, true),
+    () =>
+      validateFolderTemplate(
+        folderTemplateValue,
+        t,
+        folderTokens,
+        undefined,
+        true,
+      ),
     [folderTemplateValue, folderTokens, t],
   );
   const renameValidationError = React.useMemo(
-    () => (renameEnabled ? validateRenameTemplate(templateValue, activeQualityScopeId, t) : null),
+    () =>
+      renameEnabled
+        ? validateRenameTemplate(templateValue, activeQualityScopeId, t)
+        : null,
     [activeQualityScopeId, renameEnabled, templateValue, t],
   );
   const seasonFolderValidationError = React.useMemo(
-    () => episodicScope
-      ? validateFolderTemplate(
-          seasonFolderTemplateValue,
-          t,
-          VALID_SEASON_FOLDER_TOKENS,
-          "season",
-        )
-      : null,
+    () =>
+      episodicScope
+        ? validateFolderTemplate(
+            seasonFolderTemplateValue,
+            t,
+            VALID_SEASON_FOLDER_TOKENS,
+            "season",
+          )
+        : null,
     [episodicScope, seasonFolderTemplateValue, t],
   );
   const specialsFolderValidationError = React.useMemo(
-    () => episodicScope
-      ? validateFolderTemplate(
-          specialsFolderTemplateValue,
-          t,
-          VALID_SEASON_FOLDER_TOKENS,
-        )
-      : null,
+    () =>
+      episodicScope
+        ? validateFolderTemplate(
+            specialsFolderTemplateValue,
+            t,
+            VALID_SEASON_FOLDER_TOKENS,
+          )
+        : null,
     [episodicScope, specialsFolderTemplateValue, t],
   );
 
   const folderPreview = React.useMemo(
-    () => applyFolderTemplate(folderTemplateValue, activeQualityScopeId, folderTokens),
+    () =>
+      applyFolderTemplate(
+        folderTemplateValue,
+        activeQualityScopeId,
+        folderTokens,
+      ),
     [activeQualityScopeId, folderTemplateValue, folderTokens],
   );
   const seasonFolderPreview = React.useMemo(
-    () => applyFolderTemplate(
-      seasonFolderTemplateValue,
-      activeQualityScopeId,
-      VALID_SEASON_FOLDER_TOKENS,
-      "1",
-    ),
+    () =>
+      applyFolderTemplate(
+        seasonFolderTemplateValue,
+        activeQualityScopeId,
+        VALID_SEASON_FOLDER_TOKENS,
+        "1",
+      ),
     [activeQualityScopeId, seasonFolderTemplateValue],
   );
   const specialsFolderPreview = React.useMemo(
-    () => applyFolderTemplate(
-      specialsFolderTemplateValue,
-      activeQualityScopeId,
-      VALID_SEASON_FOLDER_TOKENS,
-      "0",
-    ),
+    () =>
+      applyFolderTemplate(
+        specialsFolderTemplateValue,
+        activeQualityScopeId,
+        VALID_SEASON_FOLDER_TOKENS,
+        "0",
+      ),
     [activeQualityScopeId, specialsFolderTemplateValue],
   );
 
   const renamePreview = React.useMemo(
-    () => (renameEnabled ? applyRenameTemplate(templateValue, activeQualityScopeId) : null),
+    () =>
+      renameEnabled
+        ? applyRenameTemplate(templateValue, activeQualityScopeId)
+        : null,
     [activeQualityScopeId, renameEnabled, templateValue],
   );
 
@@ -1181,10 +1405,13 @@ export function RenameSettingsPanel({
     [activeQualityScopeId],
   );
   const referenceTokens = React.useMemo(
-    () => getRenameReferenceTokens(renameTokenDescriptions, activeQualityScopeId),
+    () =>
+      getRenameReferenceTokens(renameTokenDescriptions, activeQualityScopeId),
     [activeQualityScopeId, renameTokenDescriptions],
   );
-  const [referenceSlot, setReferenceSlot] = React.useState<HTMLElement | null>(null);
+  const [referenceSlot, setReferenceSlot] = React.useState<HTMLElement | null>(
+    null,
+  );
 
   React.useEffect(() => {
     setReferenceSlot(document.getElementById(FACET_REFERENCE_SLOT_ID));
@@ -1193,7 +1420,9 @@ export function RenameSettingsPanel({
   const insertFolderToken = React.useCallback(
     (token: string) => {
       const seasonToken = episodicScope && token === "season";
-      const input = seasonToken ? seasonFolderInputRef.current : folderInputRef.current;
+      const input = seasonToken
+        ? seasonFolderInputRef.current
+        : folderInputRef.current;
       if (!input) return;
       insertTemplateToken(
         input,
@@ -1267,7 +1496,12 @@ export function RenameSettingsPanel({
         insertTemplateToken(input, specialsFolderTemplateValue, token);
         return;
       }
-      applyAutocompleteToken(input, specialsFolderTemplateValue, context, token);
+      applyAutocompleteToken(
+        input,
+        specialsFolderTemplateValue,
+        context,
+        token,
+      );
     },
     [specialsFolderTemplateValue],
   );
@@ -1279,7 +1513,11 @@ export function RenameSettingsPanel({
         return;
       }
       const cursor = input.selectionStart ?? templateValue.length;
-      const context = resolveTemplateTokenContext(templateValue, cursor, renameTokenDescriptions);
+      const context = resolveTemplateTokenContext(
+        templateValue,
+        cursor,
+        renameTokenDescriptions,
+      );
       if (!context) {
         insertTemplateToken(input, templateValue, token);
         return;
@@ -1291,7 +1529,10 @@ export function RenameSettingsPanel({
 
   return (
     <>
-      <form onSubmit={updateCategoryMediaProfileSettings} className="space-y-[18px]">
+      <form
+        onSubmit={updateCategoryMediaProfileSettings}
+        className="space-y-[18px]"
+      >
         <RenameSettingsSection
           icon={Folder}
           title={t("settings.folderRenameSectionTitle")}
@@ -1320,7 +1561,9 @@ export function RenameSettingsPanel({
                 }
               />
               {folderValidationError ? (
-                <p className="text-xs text-[var(--scry-danger-text-soft)]">{folderValidationError}</p>
+                <p className="text-xs text-[var(--scry-danger-text-soft)]">
+                  {folderValidationError}
+                </p>
               ) : null}
             </div>
 
@@ -1341,81 +1584,93 @@ export function RenameSettingsPanel({
                     id="rename-settings-use-season-folders-toggle"
                     checked={useSeasonFolders}
                     disabled={mediaSettingsLoading}
-                    ariaLabel={useSeasonFolders ? t("label.enabled") : t("label.disabled")}
+                    ariaLabel={
+                      useSeasonFolders
+                        ? t("label.enabled")
+                        : t("label.disabled")
+                    }
                     onChange={handleUseSeasonFoldersChange}
                   />
                 </div>
-              <div className="grid gap-5 md:grid-cols-2">
-                <div className="space-y-3">
-                  <div className="space-y-2.5">
-                    <Label className="text-sm text-card-foreground">
-                      {t("settings.seasonFolderTemplateLabel")}
-                    </Label>
-                    <TokenAutocompleteInput
-                      inputRef={seasonFolderInputRef}
-                      value={seasonFolderTemplateValue}
-                      onChange={handleSeasonFolderTemplateChange}
-                      tokenDescriptions={SEASON_FOLDER_TOKEN_DESCRIPTIONS}
-                      onAutocompleteToken={autocompleteSeasonFolderToken}
-                      translateLabel={t}
-                      getSegments={(value) => splitFolderTemplateSegments(
-                        value,
-                        VALID_SEASON_FOLDER_TOKENS,
-                      )}
-                      placeholder={t("settings.seasonFolderTemplatePlaceholder")}
-                      disabled={mediaSettingsLoading}
-                      className={
-                        seasonFolderTemplateValue.trim()
-                          ? seasonFolderValidationError
-                            ? "border-[var(--scry-danger-border-strong)]"
-                            : "border-[var(--scry-accent)]"
-                          : undefined
-                      }
-                    />
-                    {seasonFolderValidationError ? (
-                      <p className="text-xs text-[var(--scry-danger-text-soft)]">
-                        {seasonFolderValidationError}
-                      </p>
-                    ) : null}
+                <div className="grid gap-5 md:grid-cols-2">
+                  <div className="space-y-3">
+                    <div className="space-y-2.5">
+                      <Label className="text-sm text-card-foreground">
+                        {t("settings.seasonFolderTemplateLabel")}
+                      </Label>
+                      <TokenAutocompleteInput
+                        inputRef={seasonFolderInputRef}
+                        value={seasonFolderTemplateValue}
+                        onChange={handleSeasonFolderTemplateChange}
+                        tokenDescriptions={SEASON_FOLDER_TOKEN_DESCRIPTIONS}
+                        onAutocompleteToken={autocompleteSeasonFolderToken}
+                        translateLabel={t}
+                        getSegments={(value) =>
+                          splitFolderTemplateSegments(
+                            value,
+                            VALID_SEASON_FOLDER_TOKENS,
+                          )
+                        }
+                        placeholder={t(
+                          "settings.seasonFolderTemplatePlaceholder",
+                        )}
+                        disabled={mediaSettingsLoading}
+                        className={
+                          seasonFolderTemplateValue.trim()
+                            ? seasonFolderValidationError
+                              ? "border-[var(--scry-danger-border-strong)]"
+                              : "border-[var(--scry-accent)]"
+                            : undefined
+                        }
+                      />
+                      {seasonFolderValidationError ? (
+                        <p className="text-xs text-[var(--scry-danger-text-soft)]">
+                          {seasonFolderValidationError}
+                        </p>
+                      ) : null}
+                    </div>
+                    <TemplateExample value={seasonFolderPreview} />
                   </div>
-                  <TemplateExample value={seasonFolderPreview} />
-                </div>
 
-                <div className="space-y-3">
-                  <div className="space-y-2.5">
-                    <Label className="text-sm text-card-foreground">
-                      {t("settings.specialsFolderTemplateLabel")}
-                    </Label>
-                    <TokenAutocompleteInput
-                      inputRef={specialsFolderInputRef}
-                      value={specialsFolderTemplateValue}
-                      onChange={handleSpecialsFolderTemplateChange}
-                      tokenDescriptions={SEASON_FOLDER_TOKEN_DESCRIPTIONS}
-                      onAutocompleteToken={autocompleteSpecialsFolderToken}
-                      translateLabel={t}
-                      getSegments={(value) => splitFolderTemplateSegments(
-                        value,
-                        VALID_SEASON_FOLDER_TOKENS,
-                      )}
-                      placeholder={t("settings.specialsFolderTemplatePlaceholder")}
-                      disabled={mediaSettingsLoading}
-                      className={
-                        specialsFolderTemplateValue.trim()
-                          ? specialsFolderValidationError
-                            ? "border-[var(--scry-danger-border-strong)]"
-                            : "border-[var(--scry-accent)]"
-                          : undefined
-                      }
-                    />
-                    {specialsFolderValidationError ? (
-                      <p className="text-xs text-[var(--scry-danger-text-soft)]">
-                        {specialsFolderValidationError}
-                      </p>
-                    ) : null}
+                  <div className="space-y-3">
+                    <div className="space-y-2.5">
+                      <Label className="text-sm text-card-foreground">
+                        {t("settings.specialsFolderTemplateLabel")}
+                      </Label>
+                      <TokenAutocompleteInput
+                        inputRef={specialsFolderInputRef}
+                        value={specialsFolderTemplateValue}
+                        onChange={handleSpecialsFolderTemplateChange}
+                        tokenDescriptions={SEASON_FOLDER_TOKEN_DESCRIPTIONS}
+                        onAutocompleteToken={autocompleteSpecialsFolderToken}
+                        translateLabel={t}
+                        getSegments={(value) =>
+                          splitFolderTemplateSegments(
+                            value,
+                            VALID_SEASON_FOLDER_TOKENS,
+                          )
+                        }
+                        placeholder={t(
+                          "settings.specialsFolderTemplatePlaceholder",
+                        )}
+                        disabled={mediaSettingsLoading}
+                        className={
+                          specialsFolderTemplateValue.trim()
+                            ? specialsFolderValidationError
+                              ? "border-[var(--scry-danger-border-strong)]"
+                              : "border-[var(--scry-accent)]"
+                            : undefined
+                        }
+                      />
+                      {specialsFolderValidationError ? (
+                        <p className="text-xs text-[var(--scry-danger-text-soft)]">
+                          {specialsFolderValidationError}
+                        </p>
+                      ) : null}
+                    </div>
+                    <TemplateExample value={specialsFolderPreview} />
                   </div>
-                  <TemplateExample value={specialsFolderPreview} />
                 </div>
-              </div>
               </div>
             ) : null}
           </div>
@@ -1429,7 +1684,9 @@ export function RenameSettingsPanel({
               id="rename-settings-enabled-toggle"
               checked={renameEnabled}
               disabled={mediaSettingsLoading}
-              ariaLabel={renameEnabled ? t("label.enabled") : t("label.disabled")}
+              ariaLabel={
+                renameEnabled ? t("label.enabled") : t("label.disabled")
+              }
               onChange={handleRenameEnabledChange}
             />
           }
@@ -1449,7 +1706,9 @@ export function RenameSettingsPanel({
                     tokenDescriptions={renameTokenDescriptions}
                     onAutocompleteToken={autocompleteRenameToken}
                     translateLabel={t}
-                    getSegments={(value) => splitRenameInputSegments(value, activeQualityScopeId)}
+                    getSegments={(value) =>
+                      splitRenameInputSegments(value, activeQualityScopeId)
+                    }
                     placeholder={t("settings.renameTemplatePlaceholder")}
                     disabled={mediaSettingsLoading}
                     className={
@@ -1461,7 +1720,12 @@ export function RenameSettingsPanel({
                     }
                   />
                   {renameValidationError ? (
-                    <p id="rename-settings-validation-message" className="text-xs text-[var(--scry-danger-text-soft)]">{renameValidationError}</p>
+                    <p
+                      id="rename-settings-validation-message"
+                      className="text-xs text-[var(--scry-danger-text-soft)]"
+                    >
+                      {renameValidationError}
+                    </p>
                   ) : null}
                 </div>
 
@@ -1477,13 +1741,21 @@ export function RenameSettingsPanel({
                     <Label className="text-sm text-card-foreground">
                       {t("settings.renameCollisionPolicyLabel")}
                     </Label>
-                    <Select value={categoryRenameCollisionPolicies[activeQualityScopeId]} onValueChange={handleRenameCollisionPolicyChange} disabled={mediaSettingsLoading}>
+                    <Select
+                      value={
+                        categoryRenameCollisionPolicies[activeQualityScopeId]
+                      }
+                      onValueChange={handleRenameCollisionPolicyChange}
+                      disabled={mediaSettingsLoading}
+                    >
                       <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         {RENAME_COLLISION_POLICY_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
+                          <SelectItem key={option.value} value={option.value}>
+                            {t(option.label)}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1492,14 +1764,26 @@ export function RenameSettingsPanel({
                     <Label className="text-sm text-card-foreground">
                       {t("settings.renameMissingMetadataPolicyLabel")}
                     </Label>
-                    <Select value={categoryRenameMissingMetadataPolicies[activeQualityScopeId]} onValueChange={handleRenameMissingMetadataPolicyChange} disabled={mediaSettingsLoading}>
+                    <Select
+                      value={
+                        categoryRenameMissingMetadataPolicies[
+                          activeQualityScopeId
+                        ]
+                      }
+                      onValueChange={handleRenameMissingMetadataPolicyChange}
+                      disabled={mediaSettingsLoading}
+                    >
                       <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {RENAME_MISSING_METADATA_POLICY_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{t(option.label)}</SelectItem>
-                        ))}
+                        {RENAME_MISSING_METADATA_POLICY_OPTIONS.map(
+                          (option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {t(option.label)}
+                            </SelectItem>
+                          ),
+                        )}
                       </SelectContent>
                     </Select>
                   </label>

@@ -115,8 +115,9 @@ impl OAuthRepository for OAuthStore {
         )
         .await?;
         if rows == 0 {
-            return Err(AppError::Validation(
-                "an API key with this lookup ID is not environment-managed".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::IDENTITY_API_KEY_NOT_ENVIRONMENT_MANAGED,
+                "an API key with this lookup ID is not environment-managed",
             ));
         }
         Ok(record)
@@ -480,8 +481,9 @@ impl OAuthRepository for OAuthStore {
                             )
                             .await?;
                         if rows == 0 {
-                            return Err(AppError::Unauthorized(
-                                "OAuth client is disabled or unavailable".into(),
+                            return Err(AppError::unauthorized_reason(
+                                crate::error_reasons::IDENTITY_OAUTH_CLIENT_DISABLED_UNAVAILABLE,
+                                "OAuth client is disabled or unavailable",
                             ));
                         }
                     }
@@ -514,8 +516,9 @@ impl OAuthRepository for OAuthStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "OAuth client is disabled or unavailable".into(),
+                        return Err(AppError::unauthorized_reason(
+                            crate::error_reasons::IDENTITY_OAUTH_CLIENT_DISABLED_UNAVAILABLE,
+                            "OAuth client is disabled or unavailable",
                         ));
                     }
                 }
@@ -606,7 +609,12 @@ impl OAuthRepository for OAuthStore {
                 insert_refresh_token_tx(tx, &next_token).await?;
                 let grant = load_refresh_grant_by_id_tx(tx, &grant.id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("OAuth grant {}", grant.id)))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_OAUTH_GRANT_NOT_FOUND,
+                            format!("OAuth grant {}", grant.id),
+                        )
+                    })?;
                 Ok(OAuthRefreshRotationOutcome::Rotated(Box::new(
                     OAuthRefreshRotation {
                         grant,

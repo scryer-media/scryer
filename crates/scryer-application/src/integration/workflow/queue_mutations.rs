@@ -10,7 +10,7 @@ impl AppUseCase {
         let submission = repository
             .find_by_canonical_download_id(&download_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("download submission not found".into()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::DOWNLOAD_SUBMISSION_NOT_FOUND, "download submission not found"))?;
         if submission.title_id.is_empty() {
             self.require_any_library_permission(
                 actor,
@@ -31,16 +31,14 @@ impl AppUseCase {
             });
         }
         if !matches!(source.client_type.as_str(), "sabnzbd" | "nzbget" | "weaver") {
-            return Err(AppError::Validation(
-                "this download client does not support password retries".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_PASSWORD_RETRIES, "this download client does not support password retries"));
         }
         let client_id = source
             .client_id
             .as_deref()
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                AppError::Validation("password retry requires an exact download client".into())
+                AppError::validation_refused(crate::error_reasons::integration::PASSWORD_RETRY_REQUIRES_EXACT_DOWNLOAD_CLIENT, "password retry requires an exact download client")
             })?
             .to_owned();
         self.runtime
@@ -76,10 +74,8 @@ impl AppUseCase {
         let claimed = repository.claim_password_retry(&claim, password).await;
         self.invalidate_download_queue_read_model().await;
         if claimed? != crate::DownloadPasswordRetryClaimOutcome::Claimed {
-            return Err(AppError::Validation(
-                "download is not eligible for a password retry or is awaiting reconciliation"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_UNAVAILABLE, "download is not eligible for a password retry or is awaiting reconciliation"
+                    ));
         }
         drop(title_guard);
         // The durable claim and encrypted replacement precede the single remote

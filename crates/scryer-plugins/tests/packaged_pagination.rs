@@ -34,6 +34,7 @@ impl Respond for Pages {
 
 fn config(provider: &str, base: &str) -> IndexerConfig {
     IndexerConfig {
+        last_error_code: None,
         id: "packaged-indexer".into(),
         name: "Packaged fixture".into(),
         provider_type: provider.into(),
@@ -81,6 +82,7 @@ fn strategy(cursor: Option<String>) -> IndexerSearchStrategyRequest {
         page_cursor: cursor,
         page_budget: Some(2),
         result_limit: None,
+        first_page_gate: None,
     }
 }
 

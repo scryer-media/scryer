@@ -206,11 +206,11 @@ async fn check_requires_canonical_completion_evidence_for_title_parse_observatio
     check_with_lookup(&app, &mut td, Some(&lookup)).await;
 
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
-    assert!(
-        td.status_messages
-            .iter()
-            .any(|message| { message.contains("completed release name no longer proves") })
-    );
+    assert!(td.status_messages.iter().any(|message| {
+        message
+            .text
+            .contains("completed release name no longer proves")
+    }));
 }
 
 #[tokio::test]
@@ -455,7 +455,7 @@ async fn check_with_lookup_retries_scryer_origin_when_completed_history_is_missi
     assert!(
         td.status_messages
             .iter()
-            .any(|message| message.contains("waiting for client history"))
+            .any(|message| message.text.contains("waiting for client history"))
     );
     assert!(
         submission_repo
@@ -500,7 +500,7 @@ async fn check_with_recent_lookup_retries_local_identity_miss_without_manual_blo
     assert!(
         td.status_messages
             .iter()
-            .any(|message| message.contains("waiting for client history"))
+            .any(|message| message.text.contains("waiting for client history"))
     );
     let recorded_state = submission_repo
         .get_identity_tracked_state(&identity, Some(&source_identity))

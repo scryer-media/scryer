@@ -1,9 +1,14 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient, useMutation } from "urql";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useManualImportLauncher } from "@/components/common/manual-import-launcher";
-import { DashboardView } from "@/components/views/dashboard-view";
+import {
+  DashboardGridFallback,
+  DashboardView,
+  type DashboardPanelData,
+} from "@/components/views/dashboard-view";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
@@ -36,8 +41,21 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 import { isBreakingVersionChange } from "@/lib/utils/dashboard";
-import { createDashboardRefresh, initialDashboardPanelStates } from "@/lib/utils/dashboard-refresh";
+import {
+  createDashboardRefresh,
+  initialDashboardPanelStates,
+} from "@/lib/utils/dashboard-refresh";
 import { isHistoryQueueState } from "@/lib/utils/download-queue";
+
+/**
+ * The arrangeable grid and react-grid-layout load only with the dashboard, in
+ * their own chunk.
+ */
+const DashboardGrid = React.lazy(() =>
+  import("@/components/views/dashboard/dashboard-grid").then((module) => ({
+    default: module.DashboardGrid,
+  })),
+);
 
 /** Trailing window the two 24h tiles compare against the window before it. */
 const ACTIVITY_WINDOW_HOURS = 24;
@@ -59,35 +77,49 @@ export function DashboardContainer() {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
 
-  const [overview, setOverview] = React.useState<DashboardOverview | null>(null);
+  const [overview, setOverview] = React.useState<DashboardOverview | null>(
+    null,
+  );
   const [requests, setRequests] = React.useState<DashboardRequest[]>([]);
   const [requestLibraries, setRequestLibraries] = React.useState<
     DashboardRequestLibrary[]
   >([]);
-  const [importActivity, setImportActivity] = React.useState<DownloadQueueItem[]>(
-    [],
-  );
+  const [importActivity, setImportActivity] = React.useState<
+    DownloadQueueItem[]
+  >([]);
   const [importActivityTotal, setImportActivityTotal] = React.useState(0);
-  const [recentImports, setRecentImports] = React.useState<DashboardImportedItem[]>(
-    [],
-  );
+  const [recentImports, setRecentImports] = React.useState<
+    DashboardImportedItem[]
+  >([]);
   const [queueItems, setQueueItems] = React.useState<DownloadQueueItem[]>([]);
   const [queueTotal, setQueueTotal] = React.useState(0);
-  const [storageRoots, setStorageRoots] = React.useState<DashboardStorageRoot[]>([]);
+  const [storageRoots, setStorageRoots] = React.useState<
+    DashboardStorageRoot[]
+  >([]);
   const [panels, setPanels] = React.useState(initialDashboardPanelStates);
-  const refresh = React.useMemo(() => createDashboardRefresh((key, patch) => {
-    setPanels((current) => ({ ...current, [key]: { ...current[key], ...patch } }));
-  }), []);
+  const [editingLayout, setEditingLayout] = React.useState(false);
+  const refresh = React.useMemo(
+    () =>
+      createDashboardRefresh((key, patch) => {
+        setPanels((current) => ({
+          ...current,
+          [key]: { ...current[key], ...patch },
+        }));
+      }),
+    [],
+  );
   React.useEffect(() => {
     refresh.activate();
     return () => refresh.dispose();
   }, [client, refresh]);
-  const [actionRequestId, setActionRequestId] = React.useState<string | null>(null);
-  const [deleteConfirmItem, setDeleteConfirmItem] =
-    React.useState<DownloadQueueItem | null>(null);
-  const [importActionItemId, setImportActionItemId] = React.useState<string | null>(
+  const [actionRequestId, setActionRequestId] = React.useState<string | null>(
     null,
   );
+  const [deleteConfirmItem, setDeleteConfirmItem] =
+    React.useState<DownloadQueueItem | null>(null);
+  const [importActionItemId, setImportActionItemId] = React.useState<
+    string | null
+  >(null);
   const [deleteInProgress, setDeleteInProgress] = React.useState(false);
   const [, executeMarkTrackedDownloadFailed] = useMutation(
     markTrackedDownloadFailedMutation,
@@ -97,7 +129,7 @@ export function DashboardContainer() {
   const reportError = React.useCallback(
     (error: unknown) => {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.apiError"),
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
         { level: "ERROR" },
       );
     },
@@ -344,16 +376,30 @@ export function DashboardContainer() {
           },
         });
         if (result.error) {
-          setGlobalStatus(result.error.message ?? t("queue.markFailedFailed"), { level: "ERROR" });
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(
+              result.error,
+              t("queue.markFailedFailed"),
+              t,
+            ),
+            { level: "ERROR" },
+          );
           return;
         }
-        setGlobalStatus(t("queue.markFailedSearchSuccess"), { level: "SUCCESS" });
+        setGlobalStatus(t("queue.markFailedSearchSuccess"), {
+          level: "SUCCESS",
+        });
         refreshAfterImportAction();
       } finally {
         setImportActionItemId(null);
       }
     },
-    [executeMarkTrackedDownloadFailed, refreshAfterImportAction, setGlobalStatus, t],
+    [
+      executeMarkTrackedDownloadFailed,
+      refreshAfterImportAction,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const removeFromClient = React.useCallback(async () => {
@@ -372,7 +418,14 @@ export function DashboardContainer() {
         },
       });
       if (result.error) {
-        setGlobalStatus(result.error.message ?? t("queue.deleteFailed"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            result.error,
+            t("queue.deleteFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
         return;
       }
       setGlobalStatus(t("queue.deleteQueued"), { level: "SUCCESS" });
@@ -391,10 +444,21 @@ export function DashboardContainer() {
 
   const refreshAll = React.useCallback(async () => {
     await Promise.all([
-      refreshOverview(), refreshStorage(), refreshRequests(),
-      refreshImportActivity(), refreshRecentImports(), refreshQueue(),
+      refreshOverview(),
+      refreshStorage(),
+      refreshRequests(),
+      refreshImportActivity(),
+      refreshRecentImports(),
+      refreshQueue(),
     ]);
-  }, [refreshOverview, refreshStorage, refreshRequests, refreshImportActivity, refreshRecentImports, refreshQueue]);
+  }, [
+    refreshOverview,
+    refreshStorage,
+    refreshRequests,
+    refreshImportActivity,
+    refreshRecentImports,
+    refreshQueue,
+  ]);
 
   React.useEffect(() => {
     void refreshAll();
@@ -414,9 +478,13 @@ export function DashboardContainer() {
       if (!(event instanceof CustomEvent)) {
         return;
       }
-      const source = (event as CustomEvent<NavigationBadgesRefreshDetail>).detail
-        ?.source;
-      if (!document.hidden && (source === "poll" || source === "focus") && Date.now() - lastPulse > 2000) {
+      const source = (event as CustomEvent<NavigationBadgesRefreshDetail>)
+        .detail?.source;
+      if (
+        !document.hidden &&
+        (source === "poll" || source === "focus") &&
+        Date.now() - lastPulse > 2000
+      ) {
         lastPulse = Date.now();
         void refreshAll();
       }
@@ -433,7 +501,10 @@ export function DashboardContainer() {
       if (actionRequestId) {
         return;
       }
-      const qualityProfileId = resolveApprovalProfileId(request, requestLibraries);
+      const qualityProfileId = resolveApprovalProfileId(
+        request,
+        requestLibraries,
+      );
       if (!qualityProfileId) {
         // Approving needs a profile and the dashboard has no picker, so send the
         // operator to the requests page rather than guessing.
@@ -495,7 +566,14 @@ export function DashboardContainer() {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refreshAfterRequestAction, reportError, setGlobalStatus, t],
+    [
+      actionRequestId,
+      client,
+      refreshAfterRequestAction,
+      reportError,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const updatePlugin = React.useCallback(
@@ -526,30 +604,44 @@ export function DashboardContainer() {
     void refreshPluginsRegistry();
   }, [mutatingPluginIds.length, refreshPluginsRegistry]);
 
+  const panelData: DashboardPanelData = {
+    panels,
+    storageRoots,
+    overview,
+    requests,
+    importActivity,
+    importActivityTotal,
+    recentImports,
+    queueItems,
+    queueTotal,
+    actionRequestId,
+    importActionItemId: importActionItemId ?? manualImport.busyItemId,
+    onApproveRequest: (request) => void approveRequest(request),
+    onDismissRequest: (request) => void dismissRequest(request),
+    onImportItem: (item) => void manualImport.launch(item),
+    onMarkImportFailed: (item) => void markImportFailed(item),
+    onRemoveImportItem: setDeleteConfirmItem,
+  };
+
   return (
     <>
       <DashboardView
-        panels={panels}
-        storageRoots={storageRoots}
         overview={overview}
-        requests={requests}
-        importActivity={importActivity}
-        importActivityTotal={importActivityTotal}
-        recentImports={recentImports}
-        queueItems={queueItems}
-        queueTotal={queueTotal}
         pluginUpdates={pluginUpdates}
         updatingPluginIds={mutatingPluginIds}
-        actionRequestId={actionRequestId}
-        importActionItemId={importActionItemId ?? manualImport.busyItemId}
-        onApproveRequest={(request) => void approveRequest(request)}
-        onDismissRequest={(request) => void dismissRequest(request)}
-        onImportItem={(item) => void manualImport.launch(item)}
-        onMarkImportFailed={(item) => void markImportFailed(item)}
-        onRemoveImportItem={setDeleteConfirmItem}
         onUpdatePlugin={updatePlugin}
         onUpdateAllPlugins={updateAllPlugins}
-      />
+        editing={editingLayout}
+        onEdit={() => setEditingLayout(true)}
+      >
+        <React.Suspense fallback={<DashboardGridFallback />}>
+          <DashboardGrid
+            data={panelData}
+            editing={editingLayout}
+            onEditingChange={setEditingLayout}
+          />
+        </React.Suspense>
+      </DashboardView>
       <ConfirmDialog
         open={deleteConfirmItem !== null}
         title={t("queue.deleteConfirmTitle")}
@@ -566,7 +658,8 @@ export function DashboardContainer() {
 }
 
 function sumFacetCounts(
-  counts: { movie?: number; series?: number; anime?: number } | null | undefined,
+  counts:
+    { movie?: number; series?: number; anime?: number } | null | undefined,
 ): number {
   return (counts?.movie ?? 0) + (counts?.series ?? 0) + (counts?.anime ?? 0);
 }

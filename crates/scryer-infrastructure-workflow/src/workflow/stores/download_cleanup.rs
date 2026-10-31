@@ -20,7 +20,43 @@ fn cleanup_record(row: &SqlRow) -> AppResult<DownloadCleanupRecord> {
         title_id: blank_to_none(row.opt_text("title_id")?),
         facet: blank_to_none(row.opt_text("facet")?),
         source_title: blank_to_none(row.opt_text("source_title")?),
+        previous_failure_retry_seconds: None,
     })
+}
+
+/// The stored outcome of a retryable cleanup failure. Must equal the
+/// application's `CleanupSettlement::CleanupFailed` string.
+const CLEANUP_FAILED_OUTCOME: &str = "cleanup_failed";
+
+/// The stored outcome of a claim deferred by a hold on the download (archive
+/// delivery, a manual import, an import or password retry). Must equal the
+/// application's `CleanupSettlement::ClaimDeferred` string.
+const CLAIM_DEFERRED_OUTCOME: &str = "claim_deferred";
+
+/// How long a deferred claim stays out of the due listing. The claim checks
+/// the hold again on its next attempt; a direct claim (a manual import that
+/// just settled, a tracked poll) is not held back by it.
+const CLEANUP_DEFERRED_RECHECK: chrono::Duration = chrono::Duration::minutes(5);
+
+/// Moves a due, unleased pending row out of the due listing after its claim
+/// was deferred, so the cleanup tick does not reclaim it every few seconds.
+async fn defer_cleanup_claim_tx(tx: &mut SqlTx<'_>, id: &str) -> AppResult<()> {
+    let now = Utc::now();
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "UPDATE download_cleanup SET next_attempt_at = {}, outcome = {}
+         WHERE download_id = {} AND status = 'pending' AND next_attempt_at <= {}
+           AND (lease_until IS NULL OR lease_until <= {})",
+        &[
+            SqlArg::Timestamp(now + CLEANUP_DEFERRED_RECHECK),
+            SqlArg::Text(CLAIM_DEFERRED_OUTCOME.into()),
+            SqlArg::Text(id.to_string()),
+            SqlArg::Timestamp(now),
+            SqlArg::Timestamp(now),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 async fn resolve_legacy_cleanup_client_tx(tx: &mut SqlTx<'_>, id: &str) -> AppResult<()> {
@@ -298,14 +334,13 @@ impl DownloadSubmissionStore {
                     &[SqlArg::Text(id.clone())],
                 ).await?;
                 for import in imports {
-                    if super::import_store::archive_import_has_pending_sources(&import)? {
-                        return Ok(DownloadCleanupClaim::Deferred);
-                    }
                     // A manual import queued against this download reads its
                     // files; cleanup waits until that import settles.
-                    if import.text("import_type")? == "manual_import"
-                        && matches!(import.text("status")?.as_str(), "pending" | "running" | "processing")
+                    if super::import_store::archive_import_has_pending_sources(&import)?
+                        || (import.text("import_type")? == "manual_import"
+                            && matches!(import.text("status")?.as_str(), "pending" | "running" | "processing"))
                     {
+                        defer_cleanup_claim_tx(tx, &id).await?;
                         return Ok(DownloadCleanupClaim::Deferred);
                     }
                 }
@@ -315,15 +350,31 @@ impl DownloadSubmissionStore {
                       SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into()), SqlArg::Text(DOWNLOAD_PASSWORD_REQUIRED_REASON.into()),
                       SqlArg::Text(DOWNLOAD_PASSWORD_AMBIGUOUS_REASON.into())],
                 ).await?.is_some() {
+                    defer_cleanup_claim_tx(tx, &id).await?;
                     return Ok(DownloadCleanupClaim::Deferred);
                 }
+                // Read before the claim stamps the row: a failed previous
+                // attempt was rescheduled `next_attempt_at - updated_at` ahead.
+                let previous_failure_retry_seconds = match SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT outcome, next_attempt_at, updated_at FROM download_cleanup WHERE download_id = {} AND status = 'pending'",
+                    &[SqlArg::Text(id.clone())],
+                ).await? {
+                    Some(row) if row.opt_text("outcome")?.as_deref() == Some(CLEANUP_FAILED_OUTCOME) => Some(
+                        (row.timestamp("next_attempt_at")? - row.timestamp("updated_at")?).num_seconds().max(0),
+                    ),
+                    _ => None,
+                };
                 let now = Utc::now();
+                // A deferred claim is out of the due listing, not out of reach:
+                // a direct claim after its hold clears proceeds at once.
                 let changed = SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE download_cleanup SET attempts = attempts + 1, lease_until = {}, updated_at = {}
-                     WHERE download_id = {} AND status = 'pending' AND tracked_state IN ('imported', 'imported_seeding', 'failed', 'ignored') AND next_attempt_at <= {}
+                     WHERE download_id = {} AND status = 'pending' AND tracked_state IN ('imported', 'imported_seeding', 'failed', 'ignored')
+                       AND (next_attempt_at <= {} OR outcome = {})
                        AND (lease_until IS NULL OR lease_until <= {})",
                     &[SqlArg::Timestamp(now + chrono::Duration::minutes(5)), SqlArg::Timestamp(now),
-                      SqlArg::Text(id.clone()), SqlArg::Timestamp(now), SqlArg::Timestamp(now)],
+                      SqlArg::Text(id.clone()), SqlArg::Timestamp(now), SqlArg::Text(CLAIM_DEFERRED_OUTCOME.into()),
+                      SqlArg::Timestamp(now)],
                 ).await?;
                 if changed == 0 {
                     let settled = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
@@ -340,7 +391,9 @@ impl DownloadSubmissionStore {
                     &format!("SELECT {CLEANUP_COLUMNS} FROM download_cleanup c WHERE c.download_id = {{}}"),
                     &[SqlArg::Text(id)],
                 ).await?.ok_or_else(|| AppError::Repository("claimed cleanup disappeared".into()))?;
-                Ok(DownloadCleanupClaim::Claimed(Box::new(cleanup_record(&row)?)))
+                let mut record = cleanup_record(&row)?;
+                record.previous_failure_retry_seconds = previous_failure_retry_seconds;
+                Ok(DownloadCleanupClaim::Claimed(Box::new(record)))
             })
         }).await
     }

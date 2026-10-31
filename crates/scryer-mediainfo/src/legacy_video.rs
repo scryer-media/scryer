@@ -137,7 +137,7 @@ fn jpeg(track: &mut RawTrack, data: &[u8]) -> Option<()> {
                     return None;
                 }
                 let mut ids = [false; 256];
-                for component in payload[6..].chunks_exact(3) {
+                for component in payload[6..].as_chunks::<3>().0 {
                     let id = usize::from(component[0]);
                     if ids[id]
                         || !(1..=4).contains(&(component[1] >> 4))
@@ -157,11 +157,13 @@ fn jpeg(track: &mut RawTrack, data: &[u8]) -> Option<()> {
                 }
                 let (_, header) = frame?;
                 let mut ids = [false; 256];
-                for component in payload[1..1 + components * 2].chunks_exact(2) {
+                for component in payload[1..1 + components * 2].as_chunks::<2>().0 {
                     let id = usize::from(component[0]);
                     if ids[id]
                         || !header[6..]
-                            .chunks_exact(3)
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
                             .any(|entry| entry[0] == component[0])
                         || component[1] >> 4 > 3
                         || component[1] & 15 > 3

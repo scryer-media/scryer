@@ -1,0 +1,14 @@
+# Generated output and local assets
+dist/
+node_modules/
+tmp/
+*.tsbuildinfo
+.design-sync/
+.ds-sync/
+ds-bundle/
+public/
+
+# Fixtures, generated dependency records, and documentation
+**/__fixtures__/
+package-lock.json
+**/*.md

@@ -20,9 +20,7 @@ impl AppUseCase {
             .map(|library| library.id)
             .collect();
         if library_id.is_some() && libraries.is_empty() {
-            return Err(AppError::Validation(
-                "The selected library is unavailable or incompatible with this endpoint".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::SELECTED_LIBRARY_UNAVAILABLE_INCOMPATIBLE_ENDPOINT, "The selected library is unavailable or incompatible with this endpoint"));
         }
         let candidate = input.into_candidate()?;
         let matching_libraries = libraries.clone();
@@ -58,7 +56,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("matched title no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::acquisition::MATCHED_TITLE_NO_LONGER_EXISTS_NOT_FOUND,
+                    "matched title no longer exists",
+                )
+            })?;
         if !libraries.contains(&title.library_id) || !facets.contains(&title.facet) {
             return Ok(ExternalReleaseOutcome::rejected(
                 "The matched title moved outside the selected scope. Retry the announcement.",

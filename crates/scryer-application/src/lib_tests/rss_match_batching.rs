@@ -88,6 +88,7 @@ async fn library() -> Arc<MockTitleRepo> {
     spelling_title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Kväll Brönnöviken".into(),
         language: "swe".into(),
+        country: None,
     }];
     let mut unmonitored = movie("unmonitored", "Pellucid Varrow Sound", 2020);
     unmonitored.monitored = false;

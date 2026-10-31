@@ -30,24 +30,27 @@ export function createApiExplorerTransport(options: {
   const url = new URL(options.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = url.pathname.replace(/\/+$/, "") + "/ws";
-  const wsClient = options.mode === "oauth" ? createClient({
-    url: url.toString(),
-    retryAttempts: 0,
-    connectionParams: async () => {
-      const token = options.getToken();
-      const proof = token ? null : await options.getProof();
-      return {
-        [API_EXPLORER_MODE_HEADER]: options.mode,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(proof ? { authlessWebClientProof: proof } : {}),
-      };
-    },
-    on: {
-      closed: () => {
-        if (!controller.signal.aborted) options.onUnavailable();
-      },
-    },
-  }) : undefined;
+  const wsClient =
+    options.mode === "oauth"
+      ? createClient({
+          url: url.toString(),
+          retryAttempts: 0,
+          connectionParams: async () => {
+            const token = options.getToken();
+            const proof = token ? null : await options.getProof();
+            return {
+              [API_EXPLORER_MODE_HEADER]: options.mode,
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              ...(proof ? { authlessWebClientProof: proof } : {}),
+            };
+          },
+          on: {
+            closed: () => {
+              if (!controller.signal.aborted) options.onUnavailable();
+            },
+          },
+        })
+      : undefined;
   const execute = createGraphiQLFetcher({
     url: options.url,
     wsClient,
@@ -57,15 +60,26 @@ export function createApiExplorerTransport(options: {
       const response = await options.fetch(input, {
         ...init,
         credentials: "include",
-        headers: explorerHeaders(init?.headers, options.getToken(), options.mode),
+        headers: explorerHeaders(
+          init?.headers,
+          options.getToken(),
+          options.mode,
+        ),
         signal: init?.signal
           ? AbortSignal.any([controller.signal, init.signal])
           : controller.signal,
       });
       if (response.status === 403) {
-        const result = await response.clone().json().catch(() => null);
-        if (result?.errors?.some((error: { extensions?: { code?: string } }) =>
-          error.extensions?.code === "API_EXPLORER_UNAVAILABLE")) {
+        const result = await response
+          .clone()
+          .json()
+          .catch(() => null);
+        if (
+          result?.errors?.some(
+            (error: { extensions?: { code?: string } }) =>
+              error.extensions?.code === "API_EXPLORER_UNAVAILABLE",
+          )
+        ) {
           options.onUnavailable();
         }
       }
@@ -75,9 +89,18 @@ export function createApiExplorerTransport(options: {
   const fetcher: Fetcher = (params, opts) => {
     controller.signal.throwIfAborted();
     const documentAST = parse(params.query);
-    if (options.mode === "api-key" &&
-        getOperationAST(documentAST, params.operationName)?.operation === "subscription") {
-      return { errors: [new GraphQLError("API keys do not support subscriptions. Select OAuth App to test subscriptions.")] };
+    if (
+      options.mode === "api-key" &&
+      getOperationAST(documentAST, params.operationName)?.operation ===
+        "subscription"
+    ) {
+      return {
+        errors: [
+          new GraphQLError(
+            "API keys do not support subscriptions. Select OAuth App to test subscriptions.",
+          ),
+        ],
+      };
     }
     return execute(params, { ...opts, documentAST });
   };

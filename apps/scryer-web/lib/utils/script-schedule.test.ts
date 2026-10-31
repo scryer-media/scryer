@@ -22,7 +22,10 @@ test("an interval is never shorter than one minute", () => {
 
 test("a stored interval reads back in the largest whole unit", () => {
   assert.deepEqual(splitIntervalSeconds(172_800), { amount: 2, unit: "days" });
-  assert.deepEqual(splitIntervalSeconds(5_400), { amount: 90, unit: "minutes" });
+  assert.deepEqual(splitIntervalSeconds(5_400), {
+    amount: 90,
+    unit: "minutes",
+  });
   assert.deepEqual(splitIntervalSeconds(7_200), { amount: 2, unit: "hours" });
 });
 

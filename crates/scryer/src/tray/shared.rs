@@ -99,6 +99,92 @@ pub(crate) fn app_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/")
 }
 
+/// Whether a restore is running right now. The record alone is not enough: a
+/// server that crashed mid-restore leaves an active phase on disk. Only an
+/// active phase whose owning process is a live Scryer server counts; an
+/// unreadable, stale or ownerless record never holds the wrapper open.
+fn restore_processing_active(profile: &Path, owner_is_live_server: impl Fn(u32) -> bool) -> bool {
+    let Ok(bytes) = std::fs::read(profile.join("restore-job.json")) else {
+        return false;
+    };
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    let active = matches!(
+        record.get("phase").and_then(serde_json::Value::as_str),
+        Some("inspecting" | "draining" | "restoring" | "cancelling" | "restarting")
+    );
+    active
+        && record
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .is_some_and(owner_is_live_server)
+}
+
+fn readiness_deadline_expired(
+    profile: &Path,
+    now: Instant,
+    deadline: Instant,
+    owner_is_live_server: impl Fn(u32) -> bool,
+) -> bool {
+    now >= deadline && !restore_processing_active(profile, owner_is_live_server)
+}
+
+/// Whether `pid` is a running server from this installation.
+#[cfg(windows)]
+fn restore_owner_is_live_server(pid: u32) -> bool {
+    installation_dir().is_ok_and(|install_dir| {
+        application_updater::windows_process::find_product_processes(
+            &[SERVER_EXECUTABLE],
+            &install_dir,
+            &[],
+        )
+        .contains(&pid)
+    })
+}
+
+/// Whether `pid` is a running server from this installation.
+#[cfg(unix)]
+fn restore_owner_is_live_server(pid: u32) -> bool {
+    let Some(image) = process_image(pid) else {
+        return false;
+    };
+    let Ok(wrapper) = std::env::current_exe() else {
+        return false;
+    };
+    let expected = wrapper.with_file_name(SERVER_EXECUTABLE);
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
+    canonical(&image) == canonical(&expected)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn restore_owner_is_live_server(_pid: u32) -> bool {
+    false
+}
+
+/// The executable a live process runs, or `None` when it is not running.
+#[cfg(target_os = "macos")]
+fn process_image(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: The buffer is writable for the length passed; the call writes
+    // at most that many bytes and returns how many it wrote.
+    let written =
+        unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    let written = usize::try_from(written).ok().filter(|length| *length > 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+        &buffer[..written],
+    )))
+}
+
+/// The executable a live process runs, or `None` when it is not running.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_image(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// Where the desktop wrapper keeps the server's configuration, database and
 /// logs. This is deliberately not the portable layout the tarball uses: a
 /// wrapper install writes to per-user application data, and a portable install
@@ -606,6 +692,9 @@ pub(crate) struct ServerSupervisor {
     /// How long the log was when the owned server was started, so a failed
     /// start is reported with its own error rather than an earlier run's.
     log_offset: u64,
+    /// Decides whether a restore record's owning process is a live server.
+    /// Replaceable so tests can stand in for the shipped server binary.
+    restore_owner_probe: fn(u32) -> bool,
 }
 
 impl ServerSupervisor {
@@ -617,11 +706,24 @@ impl ServerSupervisor {
             #[cfg(windows)]
             job: None,
             log_offset: 0,
+            restore_owner_probe: restore_owner_is_live_server,
         }
     }
 
     pub(crate) fn profile_dir(&self) -> &Path {
         &self.profile_dir
+    }
+
+    fn restore_active(&self) -> bool {
+        restore_processing_active(&self.profile_dir, self.restore_owner_probe)
+    }
+
+    pub(crate) fn ensure_restore_idle(&self) -> Result<(), String> {
+        if self.restore_active() {
+            Err("A backup restore is still running. Keep Scryer open until it finishes.".into())
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn logs_dir(&self) -> PathBuf {
@@ -697,6 +799,7 @@ impl ServerSupervisor {
             // server must not also open a browser tab.
             .env("SCRYER_OPEN_BROWSER", "false")
             .env("SCRYER_TRAY_SUPERVISED", "1");
+        configure_server_console(&mut command, &self.logs_dir())?;
         configure_server_command(&mut command);
         let child = command.spawn().map_err(|error| {
             format!(
@@ -737,6 +840,12 @@ impl ServerSupervisor {
             .map_err(|error| format!("failed to check Scryer server status: {error}"))?
             .is_none()
         {
+            if self.restore_active() {
+                self.server = Some(child);
+                return Err(
+                    "A backup restore is still running. Keep Scryer open until it finishes.".into(),
+                );
+            }
             if request_graceful_stop(&mut child)? {
                 return Ok(());
             }
@@ -760,6 +869,7 @@ impl ServerSupervisor {
         &self,
         policy: application_updater::windows_process::StopPolicy,
     ) -> Result<Vec<u32>, String> {
+        self.ensure_restore_idle()?;
         let install_dir = installation_dir()?;
         let owned: Vec<u32> = self.server.iter().map(Child::id).collect();
         Ok(
@@ -792,7 +902,12 @@ impl ServerSupervisor {
             if let Some(status) = self.exited_server()? {
                 return Err(self.start_failure(status));
             }
-            if Instant::now() >= deadline {
+            if readiness_deadline_expired(
+                &self.profile_dir,
+                Instant::now(),
+                deadline,
+                self.restore_owner_probe,
+            ) {
                 return Err(format!(
                     "timed out waiting for Scryer to become ready at {}",
                     app_origin(self.port)
@@ -1056,6 +1171,27 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Preserve operator-only process output when the desktop has no console.
+/// This stream is separate from tracing and the web-accessible log ring.
+fn configure_server_console(command: &mut Command, logs_dir: &Path) -> Result<(), String> {
+    let path = logs_dir.join("console.log");
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let output = options.open(&path).map_err(|error| {
+        format!(
+            "failed to capture server console at {}: {error}",
+            path.display()
+        )
+    })?;
+    command.stderr(output);
+    Ok(())
+}
+
 /// Keep the server out of the user's face. On Windows a console subsystem
 /// child would flash a window on every start; on macOS the child inherits the
 /// wrapper's already-windowless session and needs nothing.
@@ -1252,6 +1388,100 @@ mod tests {
         popover_content_from_health, remove_desktop_profile, row_detail,
     };
 
+    #[test]
+    fn background_restore_desktop_deadline_waits_only_for_a_live_restore_owner() {
+        let profile = tempfile::tempdir().unwrap();
+        let record = profile.path().join("restore-job.json");
+        let started = std::time::Instant::now();
+        let deadline = started + super::SERVER_READY_TIMEOUT;
+        let later = started + std::time::Duration::from_secs(7200);
+        let live_owner = std::process::id();
+        let is_live = |pid: u32| pid == std::process::id();
+        let supervisor = || {
+            let mut supervisor = super::ServerSupervisor::new(profile.path().to_owned(), 0);
+            supervisor.restore_owner_probe = |pid| pid == std::process::id();
+            supervisor
+        };
+        assert!(super::readiness_deadline_expired(
+            profile.path(),
+            later,
+            deadline,
+            is_live
+        ));
+        for phase in [
+            "inspecting",
+            "draining",
+            "restoring",
+            "cancelling",
+            "restarting",
+        ] {
+            std::fs::write(
+                &record,
+                serde_json::json!({"phase": phase, "pid": live_owner}).to_string(),
+            )
+            .unwrap();
+            assert!(!super::readiness_deadline_expired(
+                profile.path(),
+                later,
+                deadline,
+                is_live
+            ));
+            assert!(supervisor().ensure_restore_idle().is_err());
+            // The same phase left behind by a server that is gone, or by a
+            // record that names no owner, must not hold the wrapper open.
+            std::fs::write(
+                &record,
+                serde_json::json!({"phase": phase, "pid": live_owner.wrapping_add(1)}).to_string(),
+            )
+            .unwrap();
+            assert!(super::readiness_deadline_expired(
+                profile.path(),
+                later,
+                deadline,
+                is_live
+            ));
+            supervisor().ensure_restore_idle().unwrap();
+            std::fs::write(&record, serde_json::json!({"phase": phase}).to_string()).unwrap();
+            supervisor().ensure_restore_idle().unwrap();
+        }
+        // A damaged record is not evidence that a restore is running.
+        std::fs::write(&record, b"incomplete").unwrap();
+        assert!(super::readiness_deadline_expired(
+            profile.path(),
+            later,
+            deadline,
+            is_live
+        ));
+        supervisor().ensure_restore_idle().unwrap();
+        for phase in ["complete", "failed", "interrupted"] {
+            std::fs::write(
+                &record,
+                serde_json::json!({"phase": phase, "pid": live_owner}).to_string(),
+            )
+            .unwrap();
+            assert!(super::readiness_deadline_expired(
+                profile.path(),
+                later,
+                deadline,
+                is_live
+            ));
+            assert!(!super::readiness_deadline_expired(
+                profile.path(),
+                started,
+                deadline,
+                is_live
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_restore_owner_probe_rejects_processes_that_are_not_the_server() {
+        // The test binary is alive but is not the server shipped beside it.
+        assert!(!super::restore_owner_is_live_server(std::process::id()));
+        assert!(!super::restore_owner_is_live_server(u32::MAX));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windowless_shutdown_child() {
@@ -1262,11 +1492,12 @@ mod tests {
         println!("shutdown-child-ready");
         std::io::stdout().flush().unwrap();
         assert_eq!(std::io::stdin().read(&mut [0]).unwrap(), 0);
+        println!("shutdown-child-finished");
     }
 
     #[cfg(windows)]
     #[test]
-    fn windowless_child_stops_without_console_interrupt_or_kill() {
+    fn background_restore_windows_supervisor_preserves_active_child() {
         use std::io::{BufRead, BufReader};
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
@@ -1282,25 +1513,122 @@ mod tests {
         let stdout = child.stdout.take().unwrap();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let reader = std::thread::spawn(move || {
+            let mut finished = false;
             for line in BufReader::new(stdout).lines() {
-                if line.unwrap().contains("shutdown-child-ready") {
+                let line = line.unwrap();
+                if line.contains("shutdown-child-ready") {
                     let _ = ready_tx.send(());
                 }
+                finished |= line.contains("shutdown-child-finished");
             }
+            finished
         });
         let ready = ready_rx
             .recv_timeout(std::time::Duration::from_secs(60))
             .is_ok();
-        let stopped = ready && super::request_graceful_stop(&mut child).unwrap();
-        if !stopped {
+        if !ready {
             let _ = child.kill();
+            let _ = child.wait();
+            reader.join().unwrap();
+            panic!("synthetic child did not signal readiness");
         }
-        let status = child.wait().unwrap();
-        reader.join().unwrap();
-        assert!(ready && stopped && status.success());
+
+        let profile = tempfile::tempdir().unwrap();
+        let coordinator = scryer_application::RestoreCoordinator::default();
+        let (attempt, _) = coordinator
+            .start(
+                profile.path(),
+                "fixture",
+                scryer_application::RestoreJobKind::Apply,
+            )
+            .unwrap();
+        let mut supervisor = super::ServerSupervisor::new(profile.path().to_owned(), 0);
+        // The coordinator above runs in this test process, so it is the live
+        // restore owner the record names.
+        supervisor.restore_owner_probe = |pid| pid == std::process::id();
+        supervisor.place_in_job(&child);
+        supervisor.server = Some(child);
+        assert!(supervisor.ensure_restore_idle().is_err());
+        assert!(supervisor.stop().is_err());
+        assert!(
+            supervisor
+                .server
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none()
+        );
+        coordinator
+            .transition(
+                &attempt.id,
+                scryer_application::RestoreJobPhase::Failed,
+                Some(scryer_application::restore_refusal::RESTORE_DEADLINE_EXCEEDED),
+            )
+            .unwrap();
+        supervisor.ensure_restore_idle().unwrap();
+        supervisor.stop().unwrap();
+        assert!(
+            reader.join().unwrap(),
+            "child must finish through the graceful shutdown protocol"
+        );
+        assert!(!supervisor.owns_server());
     }
 
     // -- the environment the supervised server is not allowed to inherit ------
+
+    #[test]
+    fn desktop_console_child() {
+        if std::env::var("SCRYER_TEST_DESKTOP_CONSOLE_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        use std::io::Write;
+        writeln!(std::io::stderr(), "Scryer one-time setup code: ABC-234").unwrap();
+    }
+
+    #[tokio::test]
+    async fn desktop_console_captures_setup_output_without_overwriting_previous_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        for _ in 0..2 {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "shared::tests::desktop_console_child",
+                    "--nocapture",
+                ])
+                .env("SCRYER_TEST_DESKTOP_CONSOLE_CHILD", "1")
+                .stdout(std::process::Stdio::piped());
+            super::configure_server_console(&mut command, dir.path()).unwrap();
+            super::configure_server_command(&mut command);
+            let output = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                tokio::process::Command::from(command)
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap()
+                    .wait_with_output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty());
+        }
+        let output_path = dir.path().join("console.log");
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "Scryer one-time setup code: ABC-234\n".repeat(2)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(output_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 
     #[test]
     fn desktop_environment_child() {

@@ -47,9 +47,7 @@ impl AppUseCase {
                     .save_caps_if_unchanged(&config, &snapshot)
                     .await?
                 {
-                    return Err(AppError::Validation(
-                        "Indexer settings changed during validation; reload and test again".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_SETTINGS_CHANGED_DURING_VALIDATION, "Indexer settings changed during validation; reload and test again"));
                 }
                 let mut refreshed = config.clone();
                 refreshed.caps_snapshot_json = Some(snapshot);
@@ -66,7 +64,7 @@ impl AppUseCase {
             self.services
                 .integrations
                 .indexer_configs
-                .set_last_error_if_unchanged(&config, None)
+                .set_last_error_if_unchanged(&config, None, None)
                 .await?;
             self.publish_indexers_changed();
         }
@@ -119,7 +117,7 @@ impl AppUseCase {
             let client = provider
                 .management_client_for_provider_with_accounting(&temp_config, accounting.as_ref())
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::integration::NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE, format!(
                         "no indexer management client available for provider type '{provider_type}'"
                     ))
                 })?;
@@ -140,9 +138,10 @@ impl AppUseCase {
                 accounting.as_ref(),
             )
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "no indexer provider available for provider type '{provider_type}'"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::integration::NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE,
+                    format!("no indexer provider available for provider type '{provider_type}'"),
+                )
             })?;
         if !client
             .probe_connection()
@@ -212,9 +211,7 @@ impl AppUseCase {
             .await
             .map_err(map_indexer_connection_test_error)?;
         if caps_refresh_available && temp_config.is_direct_nab() && caps_snapshot.is_none() {
-            return Err(AppError::Validation(
-                "indexer connection test did not return a valid Newznab caps document".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_CONNECTION_TEST_DID_NOT_RETURN_VALID_NEWZNAB_CAPS_DOCUMENT, "indexer connection test did not return a valid Newznab caps document".to_string()));
         }
 
         Ok(ConnectionValidation {
@@ -363,7 +360,12 @@ impl AppUseCase {
         // Reject obviously invalid API keys (e.g. masked placeholders from
         // Sonarr/Radarr import that were stored before the masking fix).
         let parsed_config: serde_json::Value = serde_json::from_str(&normalized_config_json)
-            .map_err(|error| AppError::Validation(error.to_string()))?;
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_CONFIG_INVALID,
+                    error.to_string(),
+                )
+            })?;
         for field in fields
             .iter()
             .filter(|field| field.field_type == scryer_domain::ConfigFieldType::Password)
@@ -375,9 +377,7 @@ impl AppUseCase {
                 && trimmed.chars().all(|c| c == '*')
                 && !trimmed.is_empty()
             {
-                return Err(AppError::Validation(
-                    "API key appears to be a masked placeholder — enter the real key".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::API_KEY_APPEARS_MASKED_PLACEHOLDER_ENTER_REAL_KEY, "API key appears to be a masked placeholder — enter the real key"));
             }
         }
 
@@ -396,10 +396,14 @@ impl AppUseCase {
                 .get_by_id(proxy_config_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation("Proxy configuration was not found.".to_string())
+                    AppError::validation_refused(
+                        crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND,
+                        "Proxy configuration was not found.".to_string(),
+                    )
                 })?;
             if !proxy_config.is_enabled {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::integration::PROXY_DISABLED_INDEXER,
                     "Proxy is disabled for this indexer.".to_string(),
                 ));
             }
@@ -412,10 +416,8 @@ impl AppUseCase {
                         .as_ref()
                         .is_some_and(IndexerConfig::is_prowlarr_nab_proxy))
             {
-                return Err(AppError::Validation(
-                    "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
-                        .to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS, "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
+                        .to_string()));
             }
             Some(proxy_config)
         } else {
@@ -448,6 +450,7 @@ impl AppUseCase {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(normalized_config_json),
@@ -504,13 +507,18 @@ impl AppUseCase {
             .ok_or_else(|| AppError::Repository("indexer provider not available".into()))?;
         let management_capabilities = provider.management_capabilities_for_provider(provider_type);
         if !management_capabilities.supports_managed_children_sync {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC, format!(
                 "provider type '{provider_type}' does not support managed child sync"
             )));
         }
 
         let parsed_config: serde_json::Value = serde_json::from_str(&normalized_config_json)
-            .map_err(|error| AppError::Validation(error.to_string()))?;
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_CONFIG_INVALID,
+                    error.to_string(),
+                )
+            })?;
         for field in fields
             .iter()
             .filter(|field| field.field_type == scryer_domain::ConfigFieldType::Password)
@@ -522,9 +530,7 @@ impl AppUseCase {
                 && trimmed.chars().all(|c| c == '*')
                 && !trimmed.is_empty()
             {
-                return Err(AppError::Validation(
-                    "API key appears to be a masked placeholder — enter the real key".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::API_KEY_APPEARS_MASKED_PLACEHOLDER_ENTER_REAL_KEY, "API key appears to be a masked placeholder — enter the real key"));
             }
         }
 
@@ -550,6 +556,7 @@ impl AppUseCase {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(normalized_config_json),
@@ -560,7 +567,7 @@ impl AppUseCase {
         let client = provider
             .management_client_for_provider(&temp_config)
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::integration::NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE, format!(
                     "no indexer management client available for provider type '{provider_type}'"
                 ))
             })?;
@@ -609,8 +616,11 @@ fn map_indexer_connection_test_error(error: AppError) -> AppError {
         // code. Re-wrapping them would only bury what they say.
         AppError::Validation(_)
         | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. }
         | AppError::Unauthorized(_)
+        | AppError::UnauthorizedReason { .. }
         | AppError::NotFound(_)
+        | AppError::NotFoundReason { .. }
         | AppError::Canceled(_)
         | AppError::TemporaryUnavailable { .. } => error,
         // Keeps the reason the plugin named, so a client can still say why
@@ -623,12 +633,20 @@ fn map_indexer_connection_test_error(error: AppError) -> AppError {
             // `Repository`'s Display prepends "repository: ", which is noise in
             // a toast, so unwrap it to the message the provider wrote.
             let message = match error {
-                AppError::Repository(message) => message,
+                AppError::Repository(message)
+                | AppError::RepositoryFailure { message, .. }
+                | AppError::RepositoryFailed { message, .. } => message,
                 other => other.to_string(),
             };
             match known_newznab_error_message(&message) {
-                Some(user_message) => AppError::Validation(user_message),
-                None => AppError::Validation(format!("indexer connection test failed: {message}")),
+                Some(user_message) => AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_REQUEST_REJECTED,
+                    user_message,
+                ),
+                None => AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_CONNECTION_TEST_FAILED,
+                    format!("indexer connection test failed: {message}"),
+                ),
             }
         }
     }
@@ -761,19 +779,28 @@ fn mentions_api_key(message: &str) -> bool {
 }
 
 fn validate_test_flight_url(raw: &str) -> AppResult<url::Url> {
-    let url = url::Url::parse(raw)
-        .map_err(|error| AppError::Validation(format!("invalid base URL: {error}")))?;
+    let url = url::Url::parse(raw).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::integration::BASE_URL_INVALID,
+            format!("invalid base URL: {error}"),
+        )
+    })?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(AppError::Validation(
-            "base URL must use http or https".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::integration::BASE_URL_INVALID,
+            "base URL must use http or https",
         ));
     }
     if url.host_str().is_none() {
-        return Err(AppError::Validation("base URL must include a host".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::integration::BASE_URL_HOST_REQUIRED,
+            "base URL must include a host",
+        ));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(AppError::Validation(
-            "base URL must not include embedded credentials".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::integration::BASE_URL_CREDENTIALS_FORBIDDEN,
+            "base URL must not include embedded credentials",
         ));
     }
     Ok(url)
@@ -887,6 +914,8 @@ async fn observed_preflight_test_flight_url(
         proxy,
         scryer_outbound_http::indexer_reqwest_client,
     )
+    // The transport builder supplies its own diagnostic; no provider condition
+    // can be inferred here. Keep this internal transport failure as a relay.
     .map_err(AppError::Validation)?;
     let outbound_http = scryer_outbound_http::OutboundHttpClient::new(
         client,
@@ -921,11 +950,10 @@ async fn observed_preflight_test_flight_url(
         .await
         .map_err(|error| {
             tally.note_result(crate::IndexerRequestResult::NoResponse);
-            AppError::Validation(format_preflight_transport_error(
-                url,
-                &origin,
-                &error.to_string(),
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_CONNECTION_UNREACHABLE,
+                format_preflight_transport_error(url, &origin, &error.to_string()),
+            )
         })?;
     tally.note_response(&crate::CapturedIndexerHttpResponse {
         status: response.status().as_u16(),
@@ -1546,6 +1574,7 @@ mod tests {
         created: Arc<Mutex<Vec<IndexerConfig>>>,
         cleared_ids: Arc<Mutex<Vec<String>>>,
         recorded_errors: RecordedIndexerErrors,
+        recorded_error_codes: Arc<Mutex<Vec<Option<String>>>>,
         system_backoffs: Arc<Mutex<HashMap<String, crate::IndexerSystemBackoff>>>,
     }
 
@@ -1555,6 +1584,7 @@ mod tests {
                 created: Arc::new(Mutex::new(Vec::new())),
                 cleared_ids: Arc::new(Mutex::new(Vec::new())),
                 recorded_errors: Arc::new(Mutex::new(Vec::new())),
+                recorded_error_codes: Arc::new(Mutex::new(Vec::new())),
                 system_backoffs: Arc::new(Mutex::new(HashMap::new())),
             }
         }
@@ -1666,7 +1696,13 @@ mod tests {
             Ok(())
         }
 
-        async fn record_last_error(&self, id: &str, message: Option<String>) -> AppResult<()> {
+        async fn record_last_error(
+            &self,
+            id: &str,
+            message: Option<String>,
+            code: Option<String>,
+        ) -> AppResult<()> {
+            self.recorded_error_codes.lock().await.push(code);
             self.recorded_errors
                 .lock()
                 .await
@@ -2673,6 +2709,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -2769,6 +2806,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -2854,6 +2892,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: Some("Last search failed".to_string()),
+            last_error_code: None,
             last_error_message: Some("Last search failed".to_string()),
             last_error_at: Some(Utc::now()),
             config_json: Some(
@@ -2916,7 +2955,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_caps_snapshot_prunes_coverage_and_learning() {
+    async fn deferred_caps_snapshot_preserves_coverage_and_learning() {
         let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
         indexer_repo.created.lock().await.push(IndexerConfig {
             id: "cfg-caps".into(),
@@ -2939,6 +2978,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: None,
@@ -2975,24 +3015,13 @@ mod tests {
         let (refreshed, failures) = app
             .refresh_enabled_direct_nab_caps_snapshots(&test_admin())
             .await
-            .expect("caps refresh pass should report provider failures");
+            .expect("caps refresh pass should tolerate deferred discovery");
 
         assert_eq!(refreshed, 0);
-        assert_eq!(failures.len(), 1);
-        assert_eq!(indexer_client.pruned_indexers(), vec!["cfg-caps"]);
-        assert_eq!(
-            coverage.pruned_indexers.lock().unwrap().as_slice(),
-            &["cfg-caps"]
-        );
-        let errors = indexer_repo.recorded_errors.lock().await;
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].0, "cfg-caps");
-        assert!(
-            errors[0]
-                .1
-                .as_deref()
-                .is_some_and(|message| message.starts_with("caps refresh failed:"))
-        );
+        assert!(failures.is_empty());
+        assert!(indexer_client.pruned_indexers().is_empty());
+        assert!(coverage.pruned_indexers.lock().unwrap().is_empty());
+        assert!(indexer_repo.recorded_errors.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -3020,7 +3049,8 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
-            last_error_message: Some("caps refresh failed: synthetic failure".into()),
+            last_error_code: Some(crate::error_reasons::indexer_caps::REFRESH_FAILED.into()),
+            last_error_message: Some("Synthetic capability failure".into()),
             last_error_at: Some(now),
             config_json: None,
             created_at: now,
@@ -3031,6 +3061,7 @@ mod tests {
         unrelated_error.name = "Synthetic Indexer B".into();
         unrelated_error.base_url = "https://indexer-b.example.test".into();
         unrelated_error.last_error_message = Some("authentication failed".into());
+        unrelated_error.last_error_code = None;
         indexer_repo
             .created
             .lock()
@@ -3103,6 +3134,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: Some(r#"{"known":"snapshot"}"#.into()),
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: None,
@@ -3223,6 +3255,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -3456,6 +3489,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: None,
@@ -3485,11 +3519,9 @@ mod tests {
         assert_eq!(failures.len(), 2, "{failures:?}");
         let errors = indexer_repo.recorded_errors.lock().await;
         assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors.iter().all(|(_, message)| {
-            message
-                .as_deref()
-                .is_some_and(|message| message.starts_with("caps refresh failed:"))
-        }));
+        assert!(indexer_repo.recorded_error_codes.lock().await.iter().all(
+            |code| code.as_deref() == Some(crate::error_reasons::indexer_caps::REFRESH_FAILED)
+        ));
     }
 
     #[tokio::test]
@@ -3516,6 +3548,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -3614,6 +3647,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -3902,6 +3936,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(
@@ -4018,6 +4053,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -4730,6 +4766,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -4760,6 +4797,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"feed_url":"https://child.example/rss"}"#.to_string()),
@@ -4824,6 +4862,7 @@ mod tests {
                 ),
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -4854,6 +4893,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"feed_url":"https://child.example/rss"}"#.to_string()),
@@ -5013,6 +5053,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -5076,6 +5117,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(
@@ -5108,6 +5150,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(
@@ -5168,6 +5211,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -5198,6 +5242,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -5260,6 +5305,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -5375,6 +5421,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -5453,6 +5500,7 @@ mod tests {
             managed_metadata_json: Some(r#"{"locally_disabled_children":["keep"]}"#.to_string()),
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some("{}".to_string()),
@@ -5491,6 +5539,7 @@ mod tests {
             ),
             caps_snapshot_json: Some(r#"{"search":{"available":true}}"#.to_string()),
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"feed_url":"https://old.example/rss"}"#.to_string()),
@@ -5518,6 +5567,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"feed_url":"https://delete.example/rss"}"#.to_string()),
@@ -5728,6 +5778,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"base_url":"https://prowlarr.example"}"#.to_string()),
@@ -5757,6 +5808,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(r#"{"base_url":"https://child.example"}"#.to_string()),
@@ -5845,6 +5897,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(format!(r#"{{"feed_url":"https://{id}.example/rss"}}"#)),
@@ -5943,6 +5996,65 @@ mod tests {
             provider.enrichment_requests.lock().unwrap().len(),
             1,
             "a pass with every snapshot fresh must not ask for caps"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_managed_child_that_gets_no_caps_is_not_asked_again_on_the_next_pass() {
+        let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
+        let mut parent = managed_test_child("parent", None, true, None);
+        parent.provider_type = "manager".to_string();
+        parent.managed_parent_config_id = None;
+        parent.managed_child_key = None;
+        parent.enable_interactive_search = false;
+        parent.enable_auto_search = false;
+        parent.config_json = Some(r#"{"base_url":"https://manager.example"}"#.to_string());
+        indexer_repo.create(parent).await.unwrap();
+        indexer_repo
+            .create(managed_test_child("silent", None, true, None))
+            .await
+            .unwrap();
+        // The manager's plan never carries this child, so no caps come back.
+        let mut provider = RecordingPluginProvider::with_sync_plan(crate::IndexerSyncPlan {
+            children: Vec::new(),
+        });
+        provider.enrichment_caps_json =
+            Some(serde_json::to_string(&scryer_domain::IndexerCapsSnapshot::default()).unwrap());
+        let provider = Arc::new(provider);
+        let app = test_app(
+            indexer_repo.clone(),
+            Some(provider.clone()),
+            Arc::new(RecordingSettingsRepository::default()),
+        );
+
+        app.enrich_managed_indexer_children(&test_admin(), "parent")
+            .await
+            .unwrap();
+        app.enrich_managed_indexer_children(&test_admin(), "parent")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider.enrichment_requests.lock().unwrap().clone(),
+            vec![HashSet::from(["silent".to_string()])],
+            "an unanswered child waits out its retry instead of being asked on every pass"
+        );
+
+        indexer_repo
+            .update(crate::IndexerConfigUpdate {
+                id: "silent".to_string(),
+                derived_base_url: Some("https://silent-moved.example".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        app.enrich_managed_indexer_children(&test_admin(), "parent")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.enrichment_requests.lock().unwrap().len(),
+            2,
+            "a connection change makes the child due again at once"
         );
     }
 
@@ -6055,6 +6167,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some("{}".to_string()),
@@ -6120,6 +6233,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
@@ -6150,6 +6264,7 @@ mod tests {
                 managed_metadata_json: None,
                 caps_snapshot_json: None,
                 last_health_status: None,
+                last_error_code: None,
                 last_error_message: None,
                 last_error_at: None,
                 config_json: Some(r#"{"feed_url":"https://managed.example/rss"}"#.to_string()),

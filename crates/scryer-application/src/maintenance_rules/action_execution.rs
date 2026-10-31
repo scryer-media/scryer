@@ -495,9 +495,7 @@ impl AppUseCase {
             ),
         };
         if state == MaintenanceRuleState::Enabled && arming == MaintenanceEffectArming::None {
-            return Err(AppError::Validation(
-                "this rule's action never changes anything, so it can only run as a dry run".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::maintenance::RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN, "this rule's action never changes anything, so it can only run as a dry run"));
         }
 
         if arming == MaintenanceEffectArming::Destructive {
@@ -507,19 +505,23 @@ impl AppUseCase {
                 .as_ref()
                 .is_some_and(|reviewed| reviewed.matches(&detail.rule_set))
             {
-                return Err(AppError::Validation(
-                    "the rule configuration must be reviewed again before arming deletion; reopen the confirmation".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::maintenance::RULE_CONFIGURATION_INVALID,
+                    "the rule configuration must be reviewed again before arming deletion; reopen the confirmation",
                 ));
             }
             let current = self
                 .count_active_maintenance_candidates(&detail.rule_set.id)
                 .await?;
             if acknowledged_candidate_count != Some(current) {
-                // The web client parses the count out of this exact message to
-                // re-present the confirmation; keep the shape stable.
-                return Err(AppError::Validation(format!(
-                    "destructive arming requires acknowledging the current candidate count ({current})"
-                )));
+                // The count is a fact beside the translated refusal sentence.
+                return Err(AppError::validation_refused_with_count(
+                    crate::error_reasons::maintenance::ARM_COUNT_MISMATCH,
+                    format!(
+                        "destructive arming requires acknowledging the current candidate count ({current})"
+                    ),
+                    current,
+                ));
             }
         }
 
@@ -537,8 +539,9 @@ impl AppUseCase {
             )
             .await?;
         if !updated {
-            return Err(AppError::Validation(
-                "the rule changed while confirming; review it again before arming deletion".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_CHANGED_WHILE_CONFIRMING,
+                "the rule changed while confirming; review it again before arming deletion",
             ));
         }
 
@@ -1520,8 +1523,12 @@ impl AppUseCase {
                         let terminal = matches!(
                             error,
                             AppError::Validation(_)
+                                | AppError::ValidationRefused { .. }
+                                | AppError::ValidationRefusedWithCount { .. }
                                 | AppError::Unauthorized(_)
+                                | AppError::UnauthorizedReason { .. }
                                 | AppError::NotFound(_)
+                                | AppError::NotFoundReason { .. }
                         ) || attempt >= MAINTENANCE_MAX_ACTION_ATTEMPTS;
                         run.status = LifecycleActionRunStatus::Failed;
                         run.error = Some(error.to_string());
@@ -1680,7 +1687,7 @@ impl AppUseCase {
             // later. Every other error is the repository being unreachable,
             // which says nothing about the rule — it holds, like every sibling
             // check on this path.
-            Err(AppError::NotFound(_)) => {
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
                 return SafetyDecision::Cancel(execution_reason::RULE_NOT_ELIGIBLE);
             }
             Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
@@ -1948,7 +1955,7 @@ impl AppUseCase {
             .await
         {
             Ok(subject) => subject,
-            Err(AppError::NotFound(_)) => {
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
                 return SafetyDecision::Cancel(execution_reason::TITLE_MISSING);
             }
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
@@ -2350,7 +2357,8 @@ impl AppUseCase {
         let tag_conflicts = context.tag_conflicts;
         let actor = User::system_execution_actor();
         let MaintenanceActionDefinition::Legacy(spec) = &detail.action_definition else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::SEQUENCE_ACTIONS_INVALID,
                 "sequence actions must use the sequence executor".to_string(),
             ));
         };
@@ -2434,7 +2442,10 @@ impl AppUseCase {
                 // is refused rather than silently reinterpreted. The match is
                 // deliberately exhaustive so a new catalog kind is a compile
                 // error until it is placed on one side or the other.
-                Err(AppError::Validation(title_rule_action_not_executable(kind)))
+                Err(AppError::validation_refused(
+                    crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
+                    title_rule_action_not_executable(kind),
+                ))
             }
         }
     }
@@ -2461,7 +2472,8 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<ActionResult> {
         let MaintenanceActionParameters::Tags { tags } = &spec.parameters else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::TAG_ACTION_NO_TAGS_CONFIGURED,
                 "tag action has no tags configured".to_string(),
             ));
         };
@@ -2524,7 +2536,8 @@ impl AppUseCase {
             target_quality_profile_id,
         } = &spec.parameters
         else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE,
                 "quality-profile action has no target profile".to_string(),
             ));
         };
@@ -2536,9 +2549,10 @@ impl AppUseCase {
             .iter()
             .any(|profile| crate::settings::runtime::quality_profile_ids_equal(&profile.id, target))
         {
-            return Err(AppError::Validation(format!(
-                "target quality profile '{target}' does not exist"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
+                format!("target quality profile '{target}' does not exist"),
+            ));
         }
 
         let current = title

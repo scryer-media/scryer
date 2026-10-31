@@ -114,7 +114,12 @@ impl<'a> AppListActions<'a> {
             .users
             .get_by_id(&subscription.owner_user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("list owner".to_string()))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::OWNER_NOT_FOUND,
+                    "list owner".to_string(),
+                )
+            })
     }
 }
 
@@ -371,7 +376,10 @@ impl ListActions for AppListActions<'_> {
     ) -> AppResult<String> {
         let owner = self.list_owner(subscription).await?;
         if !owner.authorization.login_status.is_enabled() {
-            return Err(AppError::Unauthorized("list owner is disabled".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::lists::OWNER_DISABLED,
+                "list owner is disabled",
+            ));
         }
         let committed = self
             .app
@@ -500,7 +508,10 @@ impl ListActions for AppListActions<'_> {
         }
         let owner = self.list_owner(subscription).await?;
         if !owner.authorization.login_status.is_enabled() {
-            return Err(AppError::Unauthorized("list owner is disabled".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::lists::OWNER_DISABLED,
+                "list owner is disabled",
+            ));
         }
         self.app
             .set_title_monitored(&owner, title_id, monitored)
@@ -519,7 +530,10 @@ impl ListActions for AppListActions<'_> {
         }
         let owner = self.list_owner(subscription).await?;
         if !owner.authorization.login_status.is_enabled() {
-            return Err(AppError::Unauthorized("list owner is disabled".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::lists::OWNER_DISABLED,
+                "list owner is disabled",
+            ));
         }
         let title = self
             .app
@@ -528,7 +542,9 @@ impl ListActions for AppListActions<'_> {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("title".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(crate::error_reasons::lists::TITLE_NOT_FOUND, "title")
+            })?;
         self.app
             .require_library_permission(&owner, &title.library_id, LibraryPermission::ManageTitles)
             .await?;

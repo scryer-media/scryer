@@ -24,9 +24,14 @@ function record(value: unknown): Record<string, unknown> {
 
 function strings(value: unknown): string[] {
   return Array.isArray(value)
-    ? [...new Set(value.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
-      ))]
+    ? [
+        ...new Set(
+          value.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry.length > 0,
+          ),
+        ),
+      ]
     : [];
 }
 
@@ -35,8 +40,11 @@ function numberInRange(
   maximum: number,
   integer = false,
 ): number | null {
-  return typeof value === "number" && Number.isFinite(value)
-    && value >= 0 && value <= maximum && (!integer || Number.isInteger(value))
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= maximum &&
+    (!integer || Number.isInteger(value))
     ? value
     : null;
 }
@@ -82,7 +90,9 @@ export function readCatalogFilters(facet: Facet): CatalogFilterState {
   try {
     if (typeof window !== "undefined") {
       return normalizeCatalogFilters(
-        JSON.parse(window.localStorage.getItem(STORAGE_PREFIX + facet) ?? "null"),
+        JSON.parse(
+          window.localStorage.getItem(STORAGE_PREFIX + facet) ?? "null",
+        ),
       );
     }
   } catch {
@@ -91,7 +101,10 @@ export function readCatalogFilters(facet: Facet): CatalogFilterState {
   return emptyCatalogFilters();
 }
 
-export function writeCatalogFilters(facet: Facet, state: CatalogFilterState): void {
+export function writeCatalogFilters(
+  facet: Facet,
+  state: CatalogFilterState,
+): void {
   if (typeof window === "undefined") return;
   try {
     const serialized = JSON.stringify(normalizeCatalogFilters(state));

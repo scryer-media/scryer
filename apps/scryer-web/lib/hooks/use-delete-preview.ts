@@ -79,7 +79,8 @@ export function useDeletePreview<
           throw queryError;
         }
 
-        const nextPayload = (data?.[fieldName] as TPayload | null | undefined) ?? null;
+        const nextPayload =
+          (data?.[fieldName] as TPayload | null | undefined) ?? null;
         const select = selectPreviewRef.current;
         const nextPreview = nextPayload
           ? ((select
@@ -100,7 +101,9 @@ export function useDeletePreview<
         setPreview(null);
         setPayload(null);
         setError(deleteErrorMessage(nextError, t, t("status.apiError")));
-        setErrorReason(graphQlErrorExtension(nextError, "VALIDATION_ERROR", "reason"));
+        setErrorReason(
+          graphQlErrorExtension(nextError, "VALIDATION_ERROR", "reason"),
+        );
       })
       .finally(() => {
         if (!cancelled) {

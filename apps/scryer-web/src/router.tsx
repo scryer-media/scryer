@@ -7,7 +7,11 @@ import {
   useSearchParams,
 } from "react-router";
 import { PageShellFallback } from "@/components/root/page-shell-fallback";
-import { SetupIntroLoading } from "@/components/setup/setup-intro";
+import {
+  SetupIntroBoundary,
+  SetupIntroLoading,
+} from "@/components/setup/setup-intro";
+import { InitialAuthenticationGate } from "@/components/setup/initial-authentication-gate";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
@@ -19,7 +23,9 @@ const RootPageShell = lazy(() => import("@/components/root/root-page-shell"));
 const LoginPage = lazy(() => import("@/src/pages/login"));
 const OAuthAuthorizePage = lazy(() => import("@/src/pages/oauth-authorize"));
 const SetupPage = lazy(() => import("@/src/pages/setup"));
-const ListAccountReturnPage = lazy(() => import("@/src/pages/list-account-return"));
+const ListAccountReturnPage = lazy(
+  () => import("@/src/pages/list-account-return"),
+);
 
 // This provider covers sibling routes such as login and setup. The selected
 // dictionary is loaded before useLanguage commits a language change.
@@ -29,7 +35,11 @@ function RootTranslateBoundary() {
 
   return (
     <TranslateContext.Provider value={t}>
-      <Outlet />
+      <SetupIntroBoundary>
+        <InitialAuthenticationGate>
+          <Outlet />
+        </InitialAuthenticationGate>
+      </SetupIntroBoundary>
     </TranslateContext.Provider>
   );
 }
@@ -88,11 +98,21 @@ export const router = createBrowserRouter(
         },
         ...["/lists/oauth/return", "/lists/oauth/callback"].map((path) => ({
           path,
-          element: <Suspense fallback={<PageShellFallback />}><ListAccountReturnPage /></Suspense>,
+          element: (
+            <Suspense fallback={<PageShellFallback />}>
+              <ListAccountReturnPage />
+            </Suspense>
+          ),
         })),
         { path: "*", element: <ShellRoute /> },
       ],
     },
   ],
-  { basename: /^\/lists\/oauth\/(return|callback)$/.test(window.location.pathname) ? "/" : getRuntimeBasePath() },
+  {
+    basename: /^\/lists\/oauth\/(return|callback)$/.test(
+      window.location.pathname,
+    )
+      ? "/"
+      : getRuntimeBasePath(),
+  },
 );

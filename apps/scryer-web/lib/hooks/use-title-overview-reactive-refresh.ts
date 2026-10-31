@@ -68,9 +68,9 @@ export function useTitleOverviewReactiveRefresh<
   const onHydrationStartedRef = useRef(onHydrationStarted);
   const onHydrationCompletedRef = useRef(onHydrationCompleted);
   const onHydrationFailedRef = useRef(onHydrationFailed);
-  const bulkOverviewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
+  const bulkOverviewRefreshTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const bulkOverviewRefreshStartedAtRef = useRef<number | null>(null);
 
   useLayoutEffect(() => {
@@ -109,7 +109,10 @@ export function useTitleOverviewReactiveRefresh<
         );
       },
       onError(error) {
-        console.error("[title-overview-reactive-refresh] refresh failed:", error);
+        console.error(
+          "[title-overview-reactive-refresh] refresh failed:",
+          error,
+        );
       },
     });
   };

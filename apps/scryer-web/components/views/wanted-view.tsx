@@ -1,13 +1,21 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
-import type { OverviewTitleTarget, ViewId, WantedSection } from "@/components/root/types";
+import type {
+  OverviewTitleTarget,
+  ViewId,
+  WantedSection,
+} from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { Translate } from "@/components/root/types";
 import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
-import { selectorId, wantedItemRowId, wantedItemSearchNowId } from "@/lib/utils/dom-ids";
+import {
+  selectorId,
+  wantedItemRowId,
+  wantedItemSearchNowId,
+} from "@/lib/utils/dom-ids";
 import { parseDecisionExplanation } from "@/lib/utils/release-decision-explanation";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -180,7 +188,9 @@ function wantedItemOverviewView(item: WantedItem): ViewId | null {
   }
 }
 
-function wantedItemOverviewTarget(item: WantedItem): OverviewTitleTarget | null {
+function wantedItemOverviewTarget(
+  item: WantedItem,
+): OverviewTitleTarget | null {
   const normalizedTitleId = item.titleId.trim();
   if (!normalizedTitleId) {
     return null;
@@ -216,8 +226,10 @@ function wantedItemSubtitle(item: WantedItem, t: Translate): string {
 function statusBadge(status: WantedStatus, t: Translate) {
   const colors: Record<WantedStatus, string> = {
     WANTED: "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]",
-    GRABBED: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
-    COMPLETED: "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
+    GRABBED:
+      "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+    COMPLETED:
+      "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
     PAUSED: "bg-muted text-muted-foreground",
   };
   return (
@@ -231,24 +243,41 @@ function statusBadge(status: WantedStatus, t: Translate) {
 
 function decisionBadge(code: string, t: Translate) {
   const colors: Record<string, string> = {
-    eligible: "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
-    title_mismatch: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    title_year_mismatch: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    episodic_release_for_movie: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    episode_mismatch: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    category_mismatch: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    ambiguous_identity: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    quality_blocked: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    upgrade_rejected: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
-    pending_delay: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+    eligible:
+      "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
+    title_mismatch:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    title_year_mismatch:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    episodic_release_for_movie:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    episode_mismatch:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    category_mismatch:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    ambiguous_identity:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    quality_blocked:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    upgrade_rejected:
+      "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+    pending_delay:
+      "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
     already_active: "bg-muted text-muted-foreground",
-    download_client_unavailable: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
-    repack_group_mismatch: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    accept_initial: "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
-    accept_upgrade: "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
-    reject_insufficient_delta: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
-    reject_cooldown: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
-    reject_not_allowed: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    download_client_unavailable:
+      "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+    repack_group_mismatch:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    accept_initial:
+      "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
+    accept_upgrade:
+      "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]",
+    reject_insufficient_delta:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
+    reject_cooldown:
+      "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+    reject_not_allowed:
+      "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text-soft)]",
   };
   return (
     <span
@@ -267,12 +296,16 @@ function formatBytes(bytes: number | null) {
   if (bytes == null) return "—";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function isSeasonPackRelease(title: string) {
-  return /(?:^|[ ._-])S\d{1,2}(?:$|[ ._-])/i.test(title) && !/S\d{1,2}E\d{1,3}/i.test(title);
+  return (
+    /(?:^|[ ._-])S\d{1,2}(?:$|[ ._-])/i.test(title) &&
+    !/S\d{1,2}E\d{1,3}/i.test(title)
+  );
 }
 
 function StandbyReleasesList({
@@ -286,7 +319,11 @@ function StandbyReleasesList({
   const dateTimeFormat = useUiDateTimeFormat();
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">{t("wanted.loadingStandby")}</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("wanted.loadingStandby")}
+      </p>
+    );
   }
   if (items.length === 0) {
     return null;
@@ -317,13 +354,29 @@ function StandbyReleasesList({
               </p>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground sm:grid-cols-3">
-              <span>{t("wanted.standbyIndexer")}: {release.indexerSource ?? "—"}</span>
-              <span>{t("wanted.standbySize")}: {formatBytes(release.releaseSizeBytes)}</span>
+              <span>
+                {t("wanted.standbyIndexer")}: {release.indexerSource ?? "—"}
+              </span>
+              <span>
+                {t("wanted.standbySize")}:{" "}
+                {formatBytes(release.releaseSizeBytes)}
+              </span>
               {release.seeders == null ? null : (
-                <span>{t("wanted.standbySeeders")}: {release.seeders}</span>
+                <span>
+                  {t("wanted.standbySeeders")}: {release.seeders}
+                </span>
               )}
-              <span>{t("wanted.standbyScore")}: <ScoreValue score={release.releaseScore} /></span>
-              <span>{t("wanted.standbyAge")}: {formatDate(release.publishedAt ?? release.addedAt, dateTimeFormat)}</span>
+              <span>
+                {t("wanted.standbyScore")}:{" "}
+                <ScoreValue score={release.releaseScore} />
+              </span>
+              <span>
+                {t("wanted.standbyAge")}:{" "}
+                {formatDate(
+                  release.publishedAt ?? release.addedAt,
+                  dateTimeFormat,
+                )}
+              </span>
             </div>
           </div>
         ))}
@@ -369,7 +422,11 @@ function NoStandbyCandidates({ item }: { item: WantedItem }) {
   ) {
     return null;
   }
-  return <span className="text-xs text-muted-foreground">{t("wanted.noStandbyCandidates")}</span>;
+  return (
+    <span className="text-xs text-muted-foreground">
+      {t("wanted.noStandbyCandidates")}
+    </span>
+  );
 }
 
 type PendingViewState = {
@@ -478,7 +535,9 @@ export function WantedView({
                 disabled={activeRefresh.busy}
               >
                 <RefreshCw className="mr-1 h-3 w-3" />
-                {activeRefresh.busy ? t("wanted.refreshing") : t("label.refresh")}
+                {activeRefresh.busy
+                  ? t("wanted.refreshing")
+                  : t("label.refresh")}
               </Button>
             ) : null}
           </div>
@@ -488,7 +547,10 @@ export function WantedView({
             ) : section === "pending" ? (
               <PendingReleasesCard state={pendingState} />
             ) : (
-              <WantedItemsCard state={wantedState} onOpenOverview={onOpenOverview} />
+              <WantedItemsCard
+                state={wantedState}
+                onOpenOverview={onOpenOverview}
+              />
             )}
           </div>
         </div>
@@ -535,7 +597,9 @@ function WantedItemsCard({
     resumeItem,
     triggerMismatchRecovery,
   } = state;
-  const [expandedDecisionIds, setExpandedDecisionIds] = useState<Set<string>>(new Set());
+  const [expandedDecisionIds, setExpandedDecisionIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const hasPrev = offset > 0;
   const hasNext = offset + limit < total;
@@ -614,11 +678,16 @@ function WantedItemsCard({
 
         {isMobile ? (
           items.length === 0 && !loading ? (
-            <p className="text-center text-[var(--scry-muted3)]">{t("wanted.noItems")}</p>
+            <p className="text-center text-[var(--scry-muted3)]">
+              {t("wanted.noItems")}
+            </p>
           ) : (
             <div className="space-y-3">
               {items.map((item) => (
-                <div key={item.id} className="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)] p-3 shadow-[0_12px_28px_rgba(2,6,23,0.10)]">
+                <div
+                  key={item.id}
+                  className="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)] p-3 shadow-[0_12px_28px_rgba(2,6,23,0.10)]"
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <button
@@ -653,7 +722,9 @@ function WantedItemsCard({
                         <StandbyChip
                           item={item}
                           expanded={expandedItemId === item.id}
-                          onExpand={() => void loadItemDetails(item.id, item.standbyCount)}
+                          onExpand={() =>
+                            void loadItemDetails(item.id, item.standbyCount)
+                          }
                         />
                         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                           {formatWantedMediaType(item.mediaType, t)}
@@ -663,7 +734,9 @@ function WantedItemsCard({
                     <button
                       type="button"
                       className="p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => void loadItemDetails(item.id, item.standbyCount)}
+                      onClick={() =>
+                        void loadItemDetails(item.id, item.standbyCount)
+                      }
                     >
                       {expandedItemId === item.id ? (
                         <ChevronDown className="h-4 w-4" />
@@ -680,7 +753,9 @@ function WantedItemsCard({
                       </span>
                     </div>
                     <div>
-                      <span className="block">{t("wanted.colLatestDecision")}</span>
+                      <span className="block">
+                        {t("wanted.colLatestDecision")}
+                      </span>
                       <span className="text-foreground">
                         {item.latestReleaseDecision
                           ? formatWantedDecisionCode(
@@ -702,17 +777,32 @@ function WantedItemsCard({
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" className="flex-1" onClick={() => void triggerSearch(item.id)}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="flex-1"
+                      onClick={() => void triggerSearch(item.id)}
+                    >
                       <Search className="h-4 w-4" />
                       <span>{t("wanted.searchNow")}</span>
                     </Button>
                     {item.status === "PAUSED" ? (
-                      <Button size="sm" variant="secondary" className="flex-1" onClick={() => void resumeItem(item.id)}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="flex-1"
+                        onClick={() => void resumeItem(item.id)}
+                      >
                         <Play className="h-4 w-4" />
                         <span>{t("wanted.resume")}</span>
                       </Button>
                     ) : (
-                      <Button size="sm" variant="secondary" className="flex-1" onClick={() => void pauseItem(item.id)}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="flex-1"
+                        onClick={() => void pauseItem(item.id)}
+                      >
                         <Pause className="h-4 w-4" />
                         <span>{t("wanted.pause")}</span>
                       </Button>
@@ -722,7 +812,9 @@ function WantedItemsCard({
                         size="sm"
                         variant="outline"
                         className="w-full"
-                        onClick={() => void triggerMismatchRecovery(item.titleId)}
+                        onClick={() =>
+                          void triggerMismatchRecovery(item.titleId)
+                        }
                       >
                         <RotateCcw className="h-4 w-4" />
                         <span>{t("wanted.actionRecoverMismatch")}</span>
@@ -731,40 +823,63 @@ function WantedItemsCard({
                   </div>
                   {expandedItemId === item.id ? (
                     <div className="mt-3 border-t border-border pt-3">
-                      <StandbyReleasesList items={standbyReleases} loading={standbyLoading} />
+                      <StandbyReleasesList
+                        items={standbyReleases}
+                        loading={standbyLoading}
+                      />
                       {decisionsLoading ? (
-                        <p className="text-sm text-muted-foreground">{t("wanted.loadingDecisions")}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {t("wanted.loadingDecisions")}
+                        </p>
                       ) : decisions.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">{t("wanted.noDecisions")}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {t("wanted.noDecisions")}
+                        </p>
                       ) : (
                         <div className="space-y-2">
                           {decisions.map((d) => {
-                            const scoringEntries = parseDecisionExplanation(d.explanationJson);
-                            const hasScoringBreakdown = scoringEntries.length > 0;
-                            const scoringExpanded = expandedDecisionIds.has(d.id);
+                            const scoringEntries = parseDecisionExplanation(
+                              d.explanationJson,
+                            );
+                            const hasScoringBreakdown =
+                              scoringEntries.length > 0;
+                            const scoringExpanded = expandedDecisionIds.has(
+                              d.id,
+                            );
 
                             return (
-                              <div key={d.id} className="rounded-lg border border-border bg-background/40 p-3">
-                                <p className="break-words text-xs font-medium text-foreground">{d.releaseTitle}</p>
+                              <div
+                                key={d.id}
+                                className="rounded-lg border border-border bg-background/40 p-3"
+                              >
+                                <p className="break-words text-xs font-medium text-foreground">
+                                  {d.releaseTitle}
+                                </p>
                                 <div className="mt-2 flex flex-wrap gap-2">
                                   {decisionBadge(d.decisionCode, t)}
                                   <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                    {t("wanted.decScore")}: <ScoreValue score={d.candidateScore} />
+                                    {t("wanted.decScore")}:{" "}
+                                    <ScoreValue score={d.candidateScore} />
                                   </span>
                                   <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                    {t("wanted.decDelta")}: <ScoreValue score={d.scoreDelta} />
+                                    {t("wanted.decDelta")}:{" "}
+                                    <ScoreValue score={d.scoreDelta} />
                                   </span>
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                                   <span>{formatBytes(d.releaseSizeBytes)}</span>
-                                  <span>{formatDate(d.createdAt, dateTimeFormat)}</span>
+                                  <span>
+                                    {formatDate(d.createdAt, dateTimeFormat)}
+                                  </span>
                                 </div>
                                 {hasScoringBreakdown ? (
                                   <div className="mt-3 border-t border-border pt-3">
                                     <button
                                       type="button"
                                       className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                                      onClick={() => toggleDecisionScoring(d.id)}
+                                      onClick={() =>
+                                        toggleDecisionScoring(d.id)
+                                      }
                                     >
                                       {scoringExpanded ? (
                                         <ChevronDown className="h-3.5 w-3.5" />
@@ -808,14 +923,20 @@ function WantedItemsCard({
               className="min-w-[1280px]"
             >
               <TableHeader
-                className={shouldScrollDesktopTable ? "[&_th]:sticky [&_th]:top-0 [&_th]:z-10" : undefined}
+                className={
+                  shouldScrollDesktopTable
+                    ? "[&_th]:sticky [&_th]:top-0 [&_th]:z-10"
+                    : undefined
+                }
               >
                 <TableRow>
                   <TableHead className="w-10 min-w-10 text-center" />
                   <TableHead className="w-[30%] min-w-[280px]">
                     {t("wanted.colTitle")}
                   </TableHead>
-                  <TableHead className="min-w-[112px] text-center">Library</TableHead>
+                  <TableHead className="min-w-[112px] text-center">
+                    Library
+                  </TableHead>
                   <TableHead className="min-w-[80px] text-center">
                     {t("wanted.colType")}
                   </TableHead>
@@ -855,7 +976,9 @@ function WantedItemsCard({
                       <TableCell className="text-center">
                         <button
                           className="p-0.5 text-muted-foreground hover:text-foreground"
-                          onClick={() => void loadItemDetails(item.id, item.standbyCount)}
+                          onClick={() =>
+                            void loadItemDetails(item.id, item.standbyCount)
+                          }
                         >
                           {expandedItemId === item.id ? (
                             <ChevronDown className="h-4 w-4" />
@@ -889,7 +1012,9 @@ function WantedItemsCard({
                           <StandbyChip
                             item={item}
                             expanded={expandedItemId === item.id}
-                            onExpand={() => void loadItemDetails(item.id, item.standbyCount)}
+                            onExpand={() =>
+                              void loadItemDetails(item.id, item.standbyCount)
+                            }
                           />
                         </div>
                       </TableCell>
@@ -916,7 +1041,10 @@ function WantedItemsCard({
                       <TableCell className="text-center text-xs">
                         {item.latestReleaseDecision ? (
                           <div className="space-y-1">
-                            {decisionBadge(item.latestReleaseDecision.decisionCode, t)}
+                            {decisionBadge(
+                              item.latestReleaseDecision.decisionCode,
+                              t,
+                            )}
                             <div className="text-muted-foreground">
                               {formatDate(
                                 item.latestReleaseDecision.createdAt,
@@ -974,7 +1102,9 @@ function WantedItemsCard({
                               label={t("wanted.actionRecoverMismatch")}
                               appearance="ghost"
                               className="h-7 w-7"
-                              onClick={() => void triggerMismatchRecovery(item.titleId)}
+                              onClick={() =>
+                                void triggerMismatchRecovery(item.titleId)
+                              }
                             >
                               <RefreshCw className="h-3.5 w-3.5" />
                             </IconButton>
@@ -984,8 +1114,14 @@ function WantedItemsCard({
                     </TableRow>
                     {expandedItemId === item.id && (
                       <TableRow>
-                        <TableCell colSpan={11} className="space-y-3 bg-muted/30 p-4">
-                          <StandbyReleasesList items={standbyReleases} loading={standbyLoading} />
+                        <TableCell
+                          colSpan={11}
+                          className="space-y-3 bg-muted/30 p-4"
+                        >
+                          <StandbyReleasesList
+                            items={standbyReleases}
+                            loading={standbyLoading}
+                          />
                           {decisionsLoading ? (
                             <p className="text-sm text-muted-foreground">
                               {t("wanted.loadingDecisions")}
@@ -1004,7 +1140,9 @@ function WantedItemsCard({
                               <TableHeader>
                                 <TableRow>
                                   <TableHead className="w-10 text-center" />
-                                  <TableHead>{t("wanted.decRelease")}</TableHead>
+                                  <TableHead>
+                                    {t("wanted.decRelease")}
+                                  </TableHead>
                                   <TableHead className="w-28 text-center">
                                     {t("wanted.decDecision")}
                                   </TableHead>
@@ -1024,9 +1162,12 @@ function WantedItemsCard({
                               </TableHeader>
                               <TableBody>
                                 {decisions.map((d) => {
-                                  const scoringEntries = parseDecisionExplanation(d.explanationJson);
-                                  const hasScoringBreakdown = scoringEntries.length > 0;
-                                  const scoringExpanded = expandedDecisionIds.has(d.id);
+                                  const scoringEntries =
+                                    parseDecisionExplanation(d.explanationJson);
+                                  const hasScoringBreakdown =
+                                    scoringEntries.length > 0;
+                                  const scoringExpanded =
+                                    expandedDecisionIds.has(d.id);
 
                                   return (
                                     <Fragment key={d.id}>
@@ -1036,7 +1177,9 @@ function WantedItemsCard({
                                             <button
                                               type="button"
                                               className="p-0.5 text-muted-foreground hover:text-foreground"
-                                              onClick={() => toggleDecisionScoring(d.id)}
+                                              onClick={() =>
+                                                toggleDecisionScoring(d.id)
+                                              }
                                             >
                                               {scoringExpanded ? (
                                                 <ChevronDown className="h-4 w-4" />
@@ -1056,7 +1199,9 @@ function WantedItemsCard({
                                           {decisionBadge(d.decisionCode, t)}
                                         </TableCell>
                                         <TableCodeCell className="text-center">
-                                          <ScoreValue score={d.candidateScore} />
+                                          <ScoreValue
+                                            score={d.candidateScore}
+                                          />
                                         </TableCodeCell>
                                         <TableCodeCell className="text-center">
                                           <ScoreValue score={d.scoreDelta} />
@@ -1065,13 +1210,22 @@ function WantedItemsCard({
                                           {formatBytes(d.releaseSizeBytes)}
                                         </TableCodeCell>
                                         <TableCell className="text-center text-xs">
-                                          {formatDate(d.createdAt, dateTimeFormat)}
+                                          {formatDate(
+                                            d.createdAt,
+                                            dateTimeFormat,
+                                          )}
                                         </TableCell>
                                       </TableRow>
                                       {scoringExpanded ? (
                                         <TableRow>
-                                          <TableCell colSpan={7} className="p-0">
-                                            <ScoreLog entries={scoringEntries} total={d.candidateScore} />
+                                          <TableCell
+                                            colSpan={7}
+                                            className="p-0"
+                                          >
+                                            <ScoreLog
+                                              entries={scoringEntries}
+                                              total={d.candidateScore}
+                                            />
                                           </TableCell>
                                         </TableRow>
                                       ) : null}
@@ -1088,7 +1242,10 @@ function WantedItemsCard({
                 ))}
                 {items.length === 0 && !loading && (
                   <TableRow>
-                    <TableCell colSpan={11} className="text-center text-muted-foreground">
+                    <TableCell
+                      colSpan={11}
+                      className="text-center text-muted-foreground"
+                    >
                       {t("wanted.noItems")}
                     </TableCell>
                   </TableRow>
@@ -1141,7 +1298,10 @@ function formatTimeRemaining(delayUntil: string, t: Translate): string {
   return t("wanted.timeMinutes", { minutes });
 }
 
-function formatPendingStatus(status: PendingReleaseStatus, t: Translate): string {
+function formatPendingStatus(
+  status: PendingReleaseStatus,
+  t: Translate,
+): string {
   if (status === "NEEDS_REVIEW") {
     return t("pending.status.needsReview");
   }
@@ -1163,7 +1323,9 @@ function pendingStatusBadge(status: PendingReleaseStatus, t: Translate) {
             ? "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]"
             : "border-[var(--scry-border2)] bg-[var(--scry-chip)] text-[var(--scry-muted2)]";
   return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}
+    >
       {formatPendingStatus(status, t)}
     </span>
   );
@@ -1218,7 +1380,9 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
     forceGrab,
     dismiss,
   } = state;
-  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null);
+  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(
+    null,
+  );
 
   const togglePendingExpanded = (id: string) => {
     setExpandedPendingId((current) => (current === id ? null : id));
@@ -1253,260 +1417,386 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
     <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none">
       <CardContent className="p-4 sm:p-5">
         <div ref={contentRef}>
-        {useCards ? (
-          items.length === 0 && !loading ? (
-            <p className="text-center text-[var(--scry-muted3)]">{t("pending.noItems")}</p>
-          ) : (
-            <div className="space-y-3">
-              {items.map((item) => {
-                const expanded = expandedPendingId === item.id;
-                return (
-                <div
-                  key={item.id}
-                  id={selectorId("pending-release", "card", item.id)}
-                  data-ui="pending-release-row"
-                  data-release-title={item.releaseTitle}
-                  data-pending-status={item.status}
-                  className="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)] p-3 shadow-[0_12px_28px_rgba(2,6,23,0.10)]"
-                >
-                  <div className="flex items-start gap-2">
-                    <button
-                      type="button"
-                      className="mt-0.5 p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => togglePendingExpanded(item.id)}
-                    >
-                      {expanded ? (
-                        <ChevronDown className="h-4 w-4" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4" />
-                      )}
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-medium text-foreground">{item.releaseTitle}</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {pendingStatusBadge(item.status, t)}
-                        {pendingPhaseBadge(item.status, t)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                    <div>
-                      <span className="block">{t("pending.colScore")}</span>
-                      <ScoreValue score={item.releaseScore} />
-                    </div>
-                    <div>
-                      <span className="block">{t("pending.colSize")}</span>
-                      <span className="font-[var(--font-code)] text-foreground">
-                        {item.releaseSizeBytes == null ? "—" : formatBytes(item.releaseSizeBytes)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="block">{t("pending.colIndexer")}</span>
-                      <span className="text-foreground">{item.indexerSource ?? "—"}</span>
-                    </div>
-                    <div>
-                      <span className="block">{t("pending.colDelayUntil")}</span>
-                      <span
-                        className="text-foreground"
-                        title={formatDate(item.delayUntil, dateTimeFormat)}
-                      >
-                        {formatTimeRemaining(item.delayUntil, t)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="block">{t("pending.colReason")}</span>
-                      <span className="text-foreground">{item.lastDecisionCode ?? "—"}</span>
-                    </div>
-                    <div>
-                      <span className="block">{t("pending.colRole")}</span>
-                      <span className="text-foreground">{item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}</span>
-                    </div>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {formatDate(item.addedAt, dateTimeFormat)}
-                  </p>
-                  {expanded ? (
-                    <div className="mt-3 grid gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-bg)] p-3 text-xs">
-                      <div>
-                        <span className="block text-muted-foreground">Title ID</span>
-                        <span className="break-all text-foreground">{item.titleId}</span>
-                      </div>
-                      <div>
-                        <span className="block text-muted-foreground">Wanted Item</span>
-                        <span className="break-all text-foreground">{item.wantedItemId}</span>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="mt-3 flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      id={selectorId("pending-release", "force-grab-card", item.id)}
-                      className="flex-1"
-                      onClick={() => void forceGrab(item.id)}
-                    >
-                      <Download className="h-4 w-4" />
-                      <span>{t("pending.forceGrab")}</span>
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      id={selectorId("pending-release", "dismiss-card", item.id)}
-                      className="flex-1"
-                      onClick={() => void dismiss(item.id)}
-                    >
-                      <X className="h-4 w-4" />
-                      <span>{t("pending.dismiss")}</span>
-                    </Button>
-                  </div>
-                </div>
-                );
-              })}
-            </div>
-          )
-        ) : (
-          <div className="overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]">
-            <Table overflow="clip" layout="fixed" density="dense">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10 text-center" />
-                  <TableHead>{t("pending.colRelease")}</TableHead>
-                  <TableHead className="w-28 text-center">{t("wanted.colStatus")}</TableHead>
-                  <TableHead className="w-28 text-center">{t("wanted.colPhase")}</TableHead>
-                  <TableHead className="w-20 text-center">{t("pending.colScore")}</TableHead>
-                  <TableHead className="w-28 text-center">{t("pending.colSize")}</TableHead>
-                  <TableHead className="w-32 text-center">{t("pending.colIndexer")}</TableHead>
-                  <TableHead className="w-32 text-center">{t("pending.colAddedAt")}</TableHead>
-                  <TableHead className="w-32 text-center">{t("pending.colDelayUntil")}</TableHead>
-                  <TableHead className="w-36 text-center">{t("pending.colReason")}</TableHead>
-                  <TableHead className="w-24 text-center">{t("pending.colRole")}</TableHead>
-                  <TableActionsHead className="w-24">{t("label.actions")}</TableActionsHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+          {useCards ? (
+            items.length === 0 && !loading ? (
+              <p className="text-center text-[var(--scry-muted3)]">
+                {t("pending.noItems")}
+              </p>
+            ) : (
+              <div className="space-y-3">
                 {items.map((item) => {
                   const expanded = expandedPendingId === item.id;
                   return (
-                    <Fragment key={item.id}>
-                      <TableRow
-                        id={selectorId("pending-release", "row", item.id)}
-                        data-ui="pending-release-row"
-                        data-release-title={item.releaseTitle}
-                        data-pending-status={item.status}
-                      >
-                        <TableCell className="text-center">
-                          <button
-                            type="button"
-                            id={selectorId("pending-release", "expand", item.id)}
-                            className="p-0.5 text-muted-foreground hover:text-foreground"
-                            onClick={() => togglePendingExpanded(item.id)}
+                    <div
+                      key={item.id}
+                      id={selectorId("pending-release", "card", item.id)}
+                      data-ui="pending-release-row"
+                      data-release-title={item.releaseTitle}
+                      data-pending-status={item.status}
+                      className="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)] p-3 shadow-[0_12px_28px_rgba(2,6,23,0.10)]"
+                    >
+                      <div className="flex items-start gap-2">
+                        <button
+                          type="button"
+                          className="mt-0.5 p-0.5 text-muted-foreground hover:text-foreground"
+                          onClick={() => togglePendingExpanded(item.id)}
+                        >
+                          {expanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words text-sm font-medium text-foreground">
+                            {item.releaseTitle}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {pendingStatusBadge(item.status, t)}
+                            {pendingPhaseBadge(item.status, t)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                        <div>
+                          <span className="block">{t("pending.colScore")}</span>
+                          <ScoreValue score={item.releaseScore} />
+                        </div>
+                        <div>
+                          <span className="block">{t("pending.colSize")}</span>
+                          <span className="font-[var(--font-code)] text-foreground">
+                            {item.releaseSizeBytes == null
+                              ? "—"
+                              : formatBytes(item.releaseSizeBytes)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">
+                            {t("pending.colIndexer")}
+                          </span>
+                          <span className="text-foreground">
+                            {item.indexerSource ?? "—"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">
+                            {t("pending.colDelayUntil")}
+                          </span>
+                          <span
+                            className="text-foreground"
+                            title={formatDate(item.delayUntil, dateTimeFormat)}
                           >
-                            {expanded ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" />
-                            )}
-                          </button>
-                        </TableCell>
-                        <TableCell className="truncate text-sm" title={item.releaseTitle}>
-                          {item.releaseTitle}
-                        </TableCell>
-                        <TableCell className="text-center">{pendingStatusBadge(item.status, t)}</TableCell>
-                        <TableCell className="text-center">{pendingPhaseBadge(item.status, t)}</TableCell>
-                        <TableCodeCell className="text-center"><ScoreValue score={item.releaseScore} /></TableCodeCell>
-                        <TableCodeCell className="text-center text-xs">
-                          {item.releaseSizeBytes == null ? "—" : formatBytes(item.releaseSizeBytes)}
-                        </TableCodeCell>
-                        <TableCell className="text-center text-xs">{item.indexerSource ?? "—"}</TableCell>
-                        <TableCell className="text-center text-xs">
-                          {formatDate(item.addedAt, dateTimeFormat)}
-                        </TableCell>
-                        <TableCell className="text-center text-xs">
-                          <span title={formatDate(item.delayUntil, dateTimeFormat)}>
                             {formatTimeRemaining(item.delayUntil, t)}
                           </span>
-                        </TableCell>
-                        <TableCell className="truncate text-center text-xs" title={item.lastDecisionCode ?? undefined}>
-                          {item.lastDecisionCode ?? "—"}
-                        </TableCell>
-                        <TableCell className="text-center text-xs">
-                          {item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}
-                        </TableCell>
-                        <TableActionsCell className="w-24">
-                          <div className="flex justify-center gap-1">
-                            <IconButton
-                              id={selectorId("pending-release", "force-grab", item.id)}
-                              label={t("pending.forceGrab")}
-                              appearance="ghost"
-                              className="h-7 w-7"
-                              onClick={() => void forceGrab(item.id)}
-                            >
-                              <Download className="h-3.5 w-3.5" />
-                            </IconButton>
-                            <IconButton
-                              id={selectorId("pending-release", "dismiss", item.id)}
-                              label={t("pending.dismiss")}
-                              appearance="ghost"
-                              className="h-7 w-7"
-                              onClick={() => void dismiss(item.id)}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </IconButton>
-                          </div>
-                        </TableActionsCell>
-                      </TableRow>
+                        </div>
+                        <div>
+                          <span className="block">
+                            {t("pending.colReason")}
+                          </span>
+                          <span className="text-foreground">
+                            {item.lastDecisionCode ?? "—"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block">{t("pending.colRole")}</span>
+                          <span className="text-foreground">
+                            {item.role === "PRIMARY"
+                              ? t("pending.role.primary")
+                              : t("pending.role.fallback")}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {formatDate(item.addedAt, dateTimeFormat)}
+                      </p>
                       {expanded ? (
-                        <TableRow>
-                          <TableCell colSpan={12} className="bg-background/30 p-4">
-                            <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
-                              <div>
-                                <span className="block text-muted-foreground">Title ID</span>
-                                <span className="break-all text-foreground">{item.titleId}</span>
-                              </div>
-                              <div>
-                                <span className="block text-muted-foreground">Wanted Item</span>
-                                <span className="break-all text-foreground">{item.wantedItemId}</span>
-                              </div>
-                              <div>
-                                <span className="block text-muted-foreground">{t("pending.colAddedAt")}</span>
-                                <span className="text-foreground">{formatDate(item.addedAt, dateTimeFormat)}</span>
-                              </div>
-                              <div>
-                                <span className="block text-muted-foreground">{t("pending.colDelayUntil")}</span>
-                                <span className="text-foreground">{formatDate(item.delayUntil, dateTimeFormat)}</span>
-                              </div>
-                              <div>
-                                <span className="block text-muted-foreground">{t("pending.colReason")}</span>
-                                <span className="text-foreground">{item.lastDecisionCode ?? "—"}</span>
-                              </div>
-                              <div>
-                                <span className="block text-muted-foreground">{t("pending.colRole")}</span>
-                                <span className="text-foreground">{item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}</span>
-                              </div>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                        <div className="mt-3 grid gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-bg)] p-3 text-xs">
+                          <div>
+                            <span className="block text-muted-foreground">
+                              Title ID
+                            </span>
+                            <span className="break-all text-foreground">
+                              {item.titleId}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="block text-muted-foreground">
+                              Wanted Item
+                            </span>
+                            <span className="break-all text-foreground">
+                              {item.wantedItemId}
+                            </span>
+                          </div>
+                        </div>
                       ) : null}
-                    </Fragment>
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          id={selectorId(
+                            "pending-release",
+                            "force-grab-card",
+                            item.id,
+                          )}
+                          className="flex-1"
+                          onClick={() => void forceGrab(item.id)}
+                        >
+                          <Download className="h-4 w-4" />
+                          <span>{t("pending.forceGrab")}</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          id={selectorId(
+                            "pending-release",
+                            "dismiss-card",
+                            item.id,
+                          )}
+                          className="flex-1"
+                          onClick={() => void dismiss(item.id)}
+                        >
+                          <X className="h-4 w-4" />
+                          <span>{t("pending.dismiss")}</span>
+                        </Button>
+                      </div>
+                    </div>
                   );
                 })}
-                {items.length === 0 && !loading && (
+              </div>
+            )
+          ) : (
+            <div className="overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]">
+              <Table overflow="clip" layout="fixed" density="dense">
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center text-muted-foreground">
-                      {t("pending.noItems")}
-                    </TableCell>
+                    <TableHead className="w-10 text-center" />
+                    <TableHead>{t("pending.colRelease")}</TableHead>
+                    <TableHead className="w-28 text-center">
+                      {t("wanted.colStatus")}
+                    </TableHead>
+                    <TableHead className="w-28 text-center">
+                      {t("wanted.colPhase")}
+                    </TableHead>
+                    <TableHead className="w-20 text-center">
+                      {t("pending.colScore")}
+                    </TableHead>
+                    <TableHead className="w-28 text-center">
+                      {t("pending.colSize")}
+                    </TableHead>
+                    <TableHead className="w-32 text-center">
+                      {t("pending.colIndexer")}
+                    </TableHead>
+                    <TableHead className="w-32 text-center">
+                      {t("pending.colAddedAt")}
+                    </TableHead>
+                    <TableHead className="w-32 text-center">
+                      {t("pending.colDelayUntil")}
+                    </TableHead>
+                    <TableHead className="w-36 text-center">
+                      {t("pending.colReason")}
+                    </TableHead>
+                    <TableHead className="w-24 text-center">
+                      {t("pending.colRole")}
+                    </TableHead>
+                    <TableActionsHead className="w-24">
+                      {t("label.actions")}
+                    </TableActionsHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        <div ref={loadMoreRef} aria-hidden="true" className="h-px" />
-        {loadingMore ? (
-          <p className="mt-3 text-center text-sm text-muted-foreground">
-            {t("wanted.refreshing")}
-          </p>
-        ) : null}
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => {
+                    const expanded = expandedPendingId === item.id;
+                    return (
+                      <Fragment key={item.id}>
+                        <TableRow
+                          id={selectorId("pending-release", "row", item.id)}
+                          data-ui="pending-release-row"
+                          data-release-title={item.releaseTitle}
+                          data-pending-status={item.status}
+                        >
+                          <TableCell className="text-center">
+                            <button
+                              type="button"
+                              id={selectorId(
+                                "pending-release",
+                                "expand",
+                                item.id,
+                              )}
+                              className="p-0.5 text-muted-foreground hover:text-foreground"
+                              onClick={() => togglePendingExpanded(item.id)}
+                            >
+                              {expanded ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4" />
+                              )}
+                            </button>
+                          </TableCell>
+                          <TableCell
+                            className="truncate text-sm"
+                            title={item.releaseTitle}
+                          >
+                            {item.releaseTitle}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {pendingStatusBadge(item.status, t)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {pendingPhaseBadge(item.status, t)}
+                          </TableCell>
+                          <TableCodeCell className="text-center">
+                            <ScoreValue score={item.releaseScore} />
+                          </TableCodeCell>
+                          <TableCodeCell className="text-center text-xs">
+                            {item.releaseSizeBytes == null
+                              ? "—"
+                              : formatBytes(item.releaseSizeBytes)}
+                          </TableCodeCell>
+                          <TableCell className="text-center text-xs">
+                            {item.indexerSource ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-center text-xs">
+                            {formatDate(item.addedAt, dateTimeFormat)}
+                          </TableCell>
+                          <TableCell className="text-center text-xs">
+                            <span
+                              title={formatDate(
+                                item.delayUntil,
+                                dateTimeFormat,
+                              )}
+                            >
+                              {formatTimeRemaining(item.delayUntil, t)}
+                            </span>
+                          </TableCell>
+                          <TableCell
+                            className="truncate text-center text-xs"
+                            title={item.lastDecisionCode ?? undefined}
+                          >
+                            {item.lastDecisionCode ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-center text-xs">
+                            {item.role === "PRIMARY"
+                              ? t("pending.role.primary")
+                              : t("pending.role.fallback")}
+                          </TableCell>
+                          <TableActionsCell className="w-24">
+                            <div className="flex justify-center gap-1">
+                              <IconButton
+                                id={selectorId(
+                                  "pending-release",
+                                  "force-grab",
+                                  item.id,
+                                )}
+                                label={t("pending.forceGrab")}
+                                appearance="ghost"
+                                className="h-7 w-7"
+                                onClick={() => void forceGrab(item.id)}
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                              </IconButton>
+                              <IconButton
+                                id={selectorId(
+                                  "pending-release",
+                                  "dismiss",
+                                  item.id,
+                                )}
+                                label={t("pending.dismiss")}
+                                appearance="ghost"
+                                className="h-7 w-7"
+                                onClick={() => void dismiss(item.id)}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </IconButton>
+                            </div>
+                          </TableActionsCell>
+                        </TableRow>
+                        {expanded ? (
+                          <TableRow>
+                            <TableCell
+                              colSpan={12}
+                              className="bg-background/30 p-4"
+                            >
+                              <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    Title ID
+                                  </span>
+                                  <span className="break-all text-foreground">
+                                    {item.titleId}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    Wanted Item
+                                  </span>
+                                  <span className="break-all text-foreground">
+                                    {item.wantedItemId}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    {t("pending.colAddedAt")}
+                                  </span>
+                                  <span className="text-foreground">
+                                    {formatDate(item.addedAt, dateTimeFormat)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    {t("pending.colDelayUntil")}
+                                  </span>
+                                  <span className="text-foreground">
+                                    {formatDate(
+                                      item.delayUntil,
+                                      dateTimeFormat,
+                                    )}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    {t("pending.colReason")}
+                                  </span>
+                                  <span className="text-foreground">
+                                    {item.lastDecisionCode ?? "—"}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="block text-muted-foreground">
+                                    {t("pending.colRole")}
+                                  </span>
+                                  <span className="text-foreground">
+                                    {item.role === "PRIMARY"
+                                      ? t("pending.role.primary")
+                                      : t("pending.role.fallback")}
+                                  </span>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                  {items.length === 0 && !loading && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={12}
+                        className="text-center text-muted-foreground"
+                      >
+                        {t("pending.noItems")}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <div ref={loadMoreRef} aria-hidden="true" className="h-px" />
+          {loadingMore ? (
+            <p className="mt-3 text-center text-sm text-muted-foreground">
+              {t("wanted.refreshing")}
+            </p>
+          ) : null}
         </div>
       </CardContent>
     </Card>

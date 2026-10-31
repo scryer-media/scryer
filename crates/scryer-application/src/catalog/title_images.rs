@@ -121,21 +121,25 @@ impl AppUseCase {
         &self,
         run: &JobRunRecord,
     ) -> AppResult<ArtworkEncodingSummary> {
-        let (class, elapsed) = self.artwork_cpu_performance().await;
-        let workers = artwork_workers(class);
-        info!(cpu_class = %class, cpu_probe_elapsed_ms = elapsed, workers, "artwork run CPU budget selected");
-        self.services
-            .library
-            .title_image_processor
-            .configure_encoding_workers(workers)
-            .await?;
-        self.run_artwork_encoding_with_workers(
-            run,
-            workers,
-            &self.runtime.catalog.artwork_shutdown,
-            &|| self.runtime.environment.now().with_timezone(&Local),
-        )
+        let app = self.clone();
+        let run = run.clone();
+        // Dropping the caller must not release disk admission while an encoder or
+        // a blocking filesystem operation is still running.
+        tokio::spawn(async move {
+            let (class, elapsed) = app.artwork_cpu_performance().await;
+            let workers = artwork_workers(class);
+            info!(cpu_class = %class, cpu_probe_elapsed_ms = elapsed, workers, "artwork run CPU budget selected");
+            app.services.library.title_image_processor
+                .configure_encoding_workers(workers).await?;
+            app.run_artwork_encoding_with_workers(
+                &run,
+                workers,
+                &app.runtime.catalog.artwork_shutdown,
+                &|| app.runtime.environment.now().with_timezone(&Local),
+            ).await
+        })
         .await
+        .map_err(|error| AppError::Repository(format!("artwork invocation failed: {error}")))?
     }
 
     pub(crate) async fn run_artwork_encoding_with_workers(
@@ -149,6 +153,10 @@ impl AppUseCase {
         let mut summary = ArtworkEncodingSummary {
             concurrency: workers,
             ..Default::default()
+        };
+        let Some(_disk_admission) = self.acquire_image_maintenance(token).await else {
+            summary.reason = "Stopped for shutdown; remaining artwork is pending".into();
+            return Ok(summary);
         };
         let mut skipped = Vec::new();
         let mut jpeg_cursor: Option<(String, String)> = None;
@@ -274,18 +282,10 @@ impl AppUseCase {
                     (None, result)
                 });
             }
-            // The nightly cutoff drains admitted images; shutdown abandons them for a later run.
+            // Cutoff and shutdown stop new admission, but drain current images:
+            // aborting an async task cannot stop its outstanding blocking I/O.
             let mut panic_error = None;
-            loop {
-                let result = tokio::select! {
-                    biased;
-                    _ = token.cancelled() => {
-                        tasks.abort_all();
-                        break;
-                    },
-                    result = tasks.join_next() => result,
-                };
-                let Some(result) = result else { break };
+            while let Some(result) = tasks.join_next().await {
                 match result {
                     Ok((_, Ok(true))) => summary.processed += 1,
                     Ok((_, Ok(false))) => {}

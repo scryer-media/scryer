@@ -124,10 +124,13 @@ impl WasmSubtitleClient {
             .map(|binding| binding.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        AppError::Validation(format!(
-            "subtitle provider '{}' is missing required host bindings: {binding_names}",
-            self.provider_name
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::PLUGIN_SUBTITLE_HOST_BINDING_REQUIRED,
+            format!(
+                "subtitle provider '{}' is missing required host bindings: {binding_names}",
+                self.provider_name
+            ),
+        )
     }
 
     fn missing_host_binding_validation(&self) -> SubtitleProviderValidationResult {
@@ -343,16 +346,22 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             )));
         }
         if request.size_bytes > GENERATOR_MAX_INPUT_SIZE_BYTES {
-            return Err(AppError::Validation(format!(
-                "subtitle generator input exceeds size limit ({} > {})",
-                request.size_bytes, GENERATOR_MAX_INPUT_SIZE_BYTES
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_SUBTITLE_INPUT_TOO_LARGE,
+                format!(
+                    "subtitle generator input exceeds size limit ({} > {})",
+                    request.size_bytes, GENERATOR_MAX_INPUT_SIZE_BYTES
+                ),
+            ));
         }
         if request.duration_seconds > GENERATOR_MAX_DURATION_SECONDS {
-            return Err(AppError::Validation(format!(
-                "subtitle generator input exceeds duration limit ({} > {})",
-                request.duration_seconds, GENERATOR_MAX_DURATION_SECONDS
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_SUBTITLE_INPUT_TOO_LONG,
+                format!(
+                    "subtitle generator input exceeds duration limit ({} > {})",
+                    request.duration_seconds, GENERATOR_MAX_DURATION_SECONDS
+                ),
+            ));
         }
 
         let guest_input_path = guest_input_path(&request.input_path)?;
@@ -435,9 +444,10 @@ fn build_subtitle_spec(
             }
         }
         Err(error) => {
-            return Err(AppError::Validation(format!(
-                "subtitle provider config_json must be a JSON object: {error}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_SUBTITLE_CONFIG_NOT_OBJECT,
+                format!("subtitle provider config_json must be a JSON object: {error}"),
+            ));
         }
     }
 
@@ -957,18 +967,43 @@ fn audio_codec_matches(left: Option<&str>, parsed: &ParsedReleaseMetadata) -> bo
 }
 
 fn guest_input_path(input_path: &Path) -> AppResult<PathBuf> {
+    // The SDK field is a `PathBuf`, but its contents are the guest's
+    // `/`-separated spelling, never a host join.
     let file_name = input_path.file_name().ok_or_else(|| {
-        AppError::Validation(format!(
-            "subtitle generator input path '{}' has no file name",
-            input_path.display()
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::PLUGIN_SUBTITLE_INPUT_FILENAME_REQUIRED,
+            format!(
+                "subtitle generator input path '{}' has no file name",
+                input_path.display()
+            ),
+        )
     })?;
-    Ok(Path::new(GUEST_INPUT_ROOT).join(file_name))
+    Ok(PathBuf::from(crate::guest_path::guest_child_path(
+        GUEST_INPUT_ROOT,
+        Path::new(file_name),
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_input_guest_path_uses_forward_slashes_on_every_host() {
+        let host_path = std::env::temp_dir()
+            .join("Synthetic Library")
+            .join("synthetic-feature.mkv");
+        let guest = guest_input_path(&host_path).expect("guest path");
+        assert_eq!(guest.to_str(), Some("/input/synthetic-feature.mkv"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generator_input_guest_path_from_a_windows_path_uses_forward_slashes() {
+        let guest = guest_input_path(Path::new(r"C:\Synthetic Library\synthetic-feature.mkv"))
+            .expect("guest path");
+        assert_eq!(guest.to_str(), Some("/input/synthetic-feature.mkv"));
+    }
 
     #[test]
     fn a_failed_subtitle_call_names_the_plugin_reason() {

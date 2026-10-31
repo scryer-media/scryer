@@ -13,22 +13,40 @@ use scryer_domain::ImportContentProof;
 
 pub const IMPORT_CONTENT_PROOF_SAMPLE_BYTES: usize = 1024 * 1024;
 
+/// Retain an import filesystem failure's native kind beside its diagnostic.
+pub fn import_io_failure(error: &std::io::Error, message: String) -> AppError {
+    use crate::error_reasons::import as reason;
+    let reason = match error.kind() {
+        std::io::ErrorKind::NotFound => reason::FILE_NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => reason::PERMISSION_DENIED,
+        std::io::ErrorKind::StorageFull => reason::DISK_FULL,
+        _ => reason::IO_FAILED,
+    };
+    AppError::RepositoryFailed { reason, message }
+}
+
 /// Compute the import content proof for `path`: file size plus a BLAKE3 digest
 /// over the first and last `IMPORT_CONTENT_PROOF_SAMPLE_BYTES` bytes.
 pub fn import_content_proof(path: &Path) -> AppResult<ImportContentProof> {
     let mut file = std::fs::File::open(path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open import content proof path: {}: {error}",
-            path.display()
-        ))
+        import_io_failure(
+            &error,
+            format!(
+                "failed to open import content proof path: {}: {error}",
+                path.display()
+            ),
+        )
     })?;
     let size_bytes = file
         .metadata()
         .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to stat import content proof path: {}: {error}",
-                path.display()
-            ))
+            import_io_failure(
+                &error,
+                format!(
+                    "failed to stat import content proof path: {}: {error}",
+                    path.display()
+                ),
+            )
         })?
         .len();
 
@@ -69,16 +87,18 @@ fn read_import_content_sample<R: Read + Seek>(
     sample: &mut Vec<u8>,
 ) -> AppResult<()> {
     reader.seek(SeekFrom::Start(offset)).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to seek import content proof path: {label}: {error}"
-        ))
+        import_io_failure(
+            &error,
+            format!("failed to seek import content proof path: {label}: {error}"),
+        )
     })?;
     let start = sample.len();
     sample.resize(start + len, 0);
     reader.read_exact(&mut sample[start..]).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read import content proof path: {label}: {error}"
-        ))
+        import_io_failure(
+            &error,
+            format!("failed to read import content proof path: {label}: {error}"),
+        )
     })
 }
 

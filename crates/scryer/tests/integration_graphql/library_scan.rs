@@ -1922,7 +1922,11 @@ async fn title_scan_refuses_a_title_recorded_at_the_library_root() {
         .await
         .expect_err("a title recorded at the library root is not scanned");
     assert!(
-        matches!(error, scryer_application::AppError::Validation(_)),
+        matches!(
+            error,
+            scryer_application::AppError::Validation(_)
+                | scryer_application::AppError::ValidationRefused { .. }
+        ),
         "unexpected error: {error}"
     );
     let tracked = ctx

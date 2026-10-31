@@ -43,7 +43,9 @@ export function episodeTargetLabel(
   return title ? `${tag} - ${title}` : tag;
 }
 
-export function seriesMovieTargetLabel(movie: EpisodeTargetSeriesMovie): string {
+export function seriesMovieTargetLabel(
+  movie: EpisodeTargetSeriesMovie,
+): string {
   const year = movie.year ? ` (${movie.year})` : "";
   const runtime = movie.runtimeMinutes ? ` • ${movie.runtimeMinutes} min` : "";
   return `${movie.movieTitle}${year}${runtime}`;
@@ -68,8 +70,14 @@ export function groupEpisodesBySeason<TEpisode extends EpisodeTargetEpisode>(
     groups.set(
       key,
       group.sort((a, b) => {
-        const aNum = Number.parseInt(a.episodeNumber?.replace(/\D/g, "") ?? "0", 10);
-        const bNum = Number.parseInt(b.episodeNumber?.replace(/\D/g, "") ?? "0", 10);
+        const aNum = Number.parseInt(
+          a.episodeNumber?.replace(/\D/g, "") ?? "0",
+          10,
+        );
+        const bNum = Number.parseInt(
+          b.episodeNumber?.replace(/\D/g, "") ?? "0",
+          10,
+        );
         return aNum - bNum;
       }),
     );
@@ -101,8 +109,12 @@ export function seriesMovieTargetValue(seriesMovieLinkId: string): string {
 }
 
 /** The picker value that selects exactly these episodes, or unassigned. */
-export function episodeSelectionTargetValue(episodeIds: readonly string[]): string {
-  return episodeIds.length > 0 ? episodeTargetValue(episodeIds) : UNASSIGNED_TARGET;
+export function episodeSelectionTargetValue(
+  episodeIds: readonly string[],
+): string {
+  return episodeIds.length > 0
+    ? episodeTargetValue(episodeIds)
+    : UNASSIGNED_TARGET;
 }
 
 export type EpisodeTargetRow =
@@ -144,10 +156,19 @@ export function buildEpisodeTargetRows<TEpisode extends EpisodeTargetEpisode>(
     matches(seriesMovieTargetLabel(movie), labels.seriesMovies),
   );
   if (matchingSeriesMovies.length > 0) {
-    rows.push({ kind: "group", key: "group:series-movies", label: labels.seriesMovies });
+    rows.push({
+      kind: "group",
+      key: "group:series-movies",
+      label: labels.seriesMovies,
+    });
     matchingSeriesMovies.forEach((movie) => {
       const value = seriesMovieTargetValue(movie.seriesMovieLinkId);
-      rows.push({ kind: "option", key: value, label: seriesMovieTargetLabel(movie), value });
+      rows.push({
+        kind: "option",
+        key: value,
+        label: seriesMovieTargetLabel(movie),
+        value,
+      });
     });
   }
 
@@ -162,7 +183,12 @@ export function buildEpisodeTargetRows<TEpisode extends EpisodeTargetEpisode>(
     rows.push({ kind: "group", key: `group:${groupKey}`, label: groupLabel });
     matchingEpisodes.forEach((episode) => {
       const value = episodeTargetValue([episode.id]);
-      rows.push({ kind: "option", key: value, label: episodeTargetLabel(episode, t), value });
+      rows.push({
+        kind: "option",
+        key: value,
+        label: episodeTargetLabel(episode, t),
+        value,
+      });
     });
   });
 

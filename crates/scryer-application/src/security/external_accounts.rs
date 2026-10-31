@@ -103,10 +103,10 @@ impl AppUseCase {
             .get_by_id(connection_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "{} connection is not configured",
-                    provider.as_str()
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::security::CONNECTION_NOT_CONFIGURED,
+                    format!("{} connection is not configured", provider.as_str()),
+                )
             })?;
         let expected_provider = match provider {
             scryer_domain::ExternalAccountProvider::Jellyfin => {
@@ -120,38 +120,42 @@ impl AppUseCase {
             }
         };
         if connection.provider != expected_provider {
-            return Err(AppError::Validation(format!(
-                "{} connection is not configured for external auth",
-                provider.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CONNECTION_NOT_CONFIGURED,
+                format!(
+                    "{} connection is not configured for external auth",
+                    provider.as_str()
+                ),
+            ));
         }
         if !connection.enabled {
-            return Err(AppError::Validation(format!(
-                "{} connection is disabled",
-                provider.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CONNECTION_DISABLED,
+                format!("{} connection is disabled", provider.as_str()),
+            ));
         }
         let enabled = match usage {
             ExternalAuthUse::Login | ExternalAuthUse::Invite => connection.login_enabled,
             ExternalAuthUse::Linking => connection.linking_enabled,
         };
         if !enabled {
-            return Err(AppError::Validation(format!(
-                "{} is not enabled for {}",
-                provider.as_str(),
-                match usage {
-                    ExternalAuthUse::Login => "login",
-                    ExternalAuthUse::Linking => "linking",
-                    ExternalAuthUse::Invite => "invites",
-                }
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::NOT_ENABLED,
+                format!(
+                    "{} is not enabled for {}",
+                    provider.as_str(),
+                    match usage {
+                        ExternalAuthUse::Login => "login",
+                        ExternalAuthUse::Linking => "linking",
+                        ExternalAuthUse::Invite => "invites",
+                    }
+                ),
+            ));
         }
         if provider == scryer_domain::ExternalAccountProvider::Plex
             && connection.machine_id.is_none()
         {
-            return Err(AppError::Validation(
-                "Plex server discovery is required before using Plex for auth".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::PLEX_SERVER_DISCOVERY_REQUIRED_BEFORE_USING_PLEX_AUTH, "Plex server discovery is required before using Plex for auth"));
         }
         Ok(connection)
     }
@@ -163,15 +167,11 @@ impl AppUseCase {
         verified: &VerifiedExternalIdentity,
     ) -> AppResult<()> {
         if &verified.provider != expected_provider {
-            return Err(AppError::Validation(
-                "verified external identity provider did not match the requested provider".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::VERIFIED_EXTERNAL_IDENTITY_PROVIDER_DID_NOT_MATCH_REQUESTED_PROVIDER, "verified external identity provider did not match the requested provider"));
         }
         if verified.connection_id.trim() != expected_connection_id.trim() {
-            return Err(AppError::Validation(
-                "verified external identity connection did not match the requested connection"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::VERIFIED_EXTERNAL_IDENTITY_CONNECTION_DID_NOT_MATCH_REQUESTED_CONNECTION, "verified external identity connection did not match the requested connection"
+                    ));
         }
         Ok(())
     }
@@ -336,7 +336,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
 
         let (external_user_id, username, display_name, avatar_url) = match provider {
             scryer_domain::ExternalAccountProvider::Jellyfin => {
@@ -345,15 +350,11 @@ impl AppUseCase {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "Jellyfin invites require selecting a Jellyfin user from the picker"
-                                .into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::JELLYFIN_INVITES_REQUIRE_SELECTING_JELLYFIN_USER_PICKER, "Jellyfin invites require selecting a Jellyfin user from the picker"
+                                )
                     })?;
                 let api_key = connection.api_key.as_deref().ok_or_else(|| {
-                    AppError::Validation(
-                        "Jellyfin invites require a saved Jellyfin API key so Scryer can resolve the immutable user id".into(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::security::JELLYFIN_INVITE_API_KEY_REQUIRED, "Jellyfin invites require a saved Jellyfin API key so Scryer can resolve the immutable user id")
                 })?;
                 let user = self
                     .services
@@ -364,9 +365,7 @@ impl AppUseCase {
                     .into_iter()
                     .find(|user| user.id.eq_ignore_ascii_case(jellyfin_user_id))
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "selected Jellyfin user was not found on the configured server".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::SELECTED_JELLYFIN_USER_NOT_FOUND_CONFIGURED_SERVER, "selected Jellyfin user was not found on the configured server")
                     })?;
                 if self
                     .services
@@ -376,8 +375,9 @@ impl AppUseCase {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::Validation(
-                        "Jellyfin account is already linked or invited".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::security::JELLYFIN_ACCOUNT_ALREADY_LINKED_INVITED,
+                        "Jellyfin account is already linked or invited",
                     ));
                 }
                 (
@@ -393,14 +393,10 @@ impl AppUseCase {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "Plex invites require selecting a Plex user from the picker".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::PLEX_INVITES_REQUIRE_SELECTING_PLEX_USER_PICKER, "Plex invites require selecting a Plex user from the picker")
                     })?;
                 let plex_auth_token = connection.api_key.as_deref().ok_or_else(|| {
-                    AppError::Validation(
-                        "Plex invites require a saved Plex token so Scryer can resolve the immutable user id".into(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::security::PLEX_INVITE_TOKEN_REQUIRED, "Plex invites require a saved Plex token so Scryer can resolve the immutable user id")
                 })?;
                 let user = self
                     .services
@@ -411,9 +407,7 @@ impl AppUseCase {
                     .into_iter()
                     .find(|user| user.id.eq_ignore_ascii_case(plex_user_id))
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "selected Plex user was not found on the configured account".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::SELECTED_PLEX_USER_NOT_FOUND_CONFIGURED_ACCOUNT, "selected Plex user was not found on the configured account")
                     })?;
                 if self
                     .services
@@ -423,8 +417,9 @@ impl AppUseCase {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::Validation(
-                        "Plex account is already linked or invited".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::security::PLEX_ACCOUNT_ALREADY_LINKED_INVITED,
+                        "Plex account is already linked or invited",
                     ));
                 }
                 (
@@ -440,12 +435,10 @@ impl AppUseCase {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "Emby invites require selecting an Emby user from the picker".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::EMBY_INVITES_REQUIRE_SELECTING_EMBY_USER_PICKER, "Emby invites require selecting an Emby user from the picker")
                     })?;
                 let api_key = connection.api_key.as_deref().ok_or_else(|| {
-                    AppError::Validation("Emby invites require a saved integration API key".into())
+                    AppError::validation_refused(crate::error_reasons::security::EMBY_INVITES_REQUIRE_SAVED_INTEGRATION_API_KEY, "Emby invites require a saved integration API key")
                 })?;
                 let user = self
                     .services
@@ -461,9 +454,7 @@ impl AppUseCase {
                     .into_iter()
                     .find(|user| user.id.eq_ignore_ascii_case(emby_user_id))
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "selected Emby user was not found on the configured server".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::security::SELECTED_EMBY_USER_NOT_FOUND_CONFIGURED_SERVER, "selected Emby user was not found on the configured server")
                     })?;
                 if self
                     .services
@@ -473,8 +464,9 @@ impl AppUseCase {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::Validation(
-                        "Emby account is already linked or invited".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::security::EMBY_ACCOUNT_ALREADY_LINKED_INVITED,
+                        "Emby account is already linked or invited",
                     ));
                 }
                 (
@@ -571,9 +563,17 @@ impl AppUseCase {
         let (verified, refreshed_base_url) = self
             .verify_emby_identity(&connection, mode, &username, &password)
             .await
-            .map_err(|_| AppError::Unauthorized("Emby sign-in failed".into()))?;
+            .map_err(|_| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::EMBY_SIGN_FAILED,
+                    "Emby sign-in failed",
+                )
+            })?;
         if password.is_empty() && verified.remote_password_configured != Some(false) {
-            return Err(AppError::Unauthorized("Emby sign-in failed".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::EMBY_SIGN_FAILED,
+                "Emby sign-in failed",
+            ));
         }
         self.refresh_emby_base_url_if_needed(&connection, refreshed_base_url.as_deref())
             .await;
@@ -589,7 +589,10 @@ impl AppUseCase {
         password: &str,
     ) -> AppResult<(VerifiedExternalIdentity, Option<String>)> {
         let server_id = connection.emby_server_id.as_deref().ok_or_else(|| {
-            AppError::Validation("Emby connection has no verified server identity".into())
+            AppError::validation_refused(
+                crate::error_reasons::security::EMBY_CONNECTION_NO_VERIFIED_SERVER_IDENTITY,
+                "Emby connection has no verified server identity",
+            )
         })?;
         match mode {
             EmbyConnectionMode::Local => self
@@ -607,8 +610,9 @@ impl AppUseCase {
                 .map(|identity| (identity, None)),
             EmbyConnectionMode::Connect => {
                 if !connection.emby_connect_enabled {
-                    return Err(AppError::Validation(
-                        "Emby Connect sign-in is disabled for this connection".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::security::EMBY_CONNECT_SIGN_DISABLED_CONNECTION,
+                        "Emby Connect sign-in is disabled for this connection",
                     ));
                 }
                 self.services
@@ -722,16 +726,18 @@ impl AppUseCase {
         verified: VerifiedExternalIdentity,
     ) -> AppResult<scryer_domain::UserExternalAccount> {
         if existing.user_id != actor.id {
-            return Err(AppError::Validation(
-                "external account is already linked to another Scryer user".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNAL_ACCOUNT_LINKED_ELSEWHERE,
+                "external account is already linked to another Scryer user",
             ));
         }
         if matches!(
             existing.status,
             scryer_domain::ExternalAccountStatus::Disabled
         ) {
-            return Err(AppError::Validation(
-                "external account is disabled and must be repaired by an administrator".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNAL_ACCOUNT_DISABLED_INVALID,
+                "external account is disabled and must be repaired by an administrator",
             ));
         }
         existing.external_user_id = Some(verified.external_user_id);
@@ -759,40 +765,65 @@ impl AppUseCase {
         jellyfin_user_id: &str,
     ) -> AppResult<scryer_domain::UserExternalAccount> {
         let canonical_jellyfin_user_id = crate::canonicalize_jellyfin_user_id(jellyfin_user_id)
-            .ok_or_else(|| AppError::Validation("Jellyfin user ID is invalid".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::security::JELLYFIN_USER_ID_INVALID,
+                    "Jellyfin user ID is invalid",
+                )
+            })?;
         let grant = self
             .services
             .identity
             .oauth
             .get_refresh_grant(grant_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth grant is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                    "OAuth grant is unavailable",
+                )
+            })?;
         if grant.user_id != actor.id
             || grant.client_id != client_id
             || grant.revoked_at.is_some()
             || !grant.authorization_source.is_authenticated()
             || !crate::oauth::oauth_scope_has_jellyfin_link(&grant.scope)
         {
-            return Err(AppError::Unauthorized(
-                "OAuth grant is not eligible for Jellyfin linking".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
             ));
         }
         let connection_id = grant.jellyfin_connection_id.clone().ok_or_else(|| {
-            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
+            )
         })?;
         let external_url = grant.jellyfin_external_url.clone().ok_or_else(|| {
-            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
+            )
         })?;
         let base_url = grant.jellyfin_base_url.clone().ok_or_else(|| {
-            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
+            )
         })?;
         let api_key_hash = grant.jellyfin_api_key_hash.clone().ok_or_else(|| {
-            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
+            )
         })?;
-        let client = self
-            .oauth_client_info(client_id)
-            .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth client is unavailable".into()))?;
+        let client = self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_CLIENT_UNAVAILABLE,
+                "OAuth client is unavailable",
+            )
+        })?;
         let expected_redirect = format!(
             "{}/Scryer/Auth/Callback",
             external_url.trim_end_matches('/')
@@ -804,8 +835,9 @@ impl AppUseCase {
             || !client.redirect_uris.contains(&grant.redirect_uri)
             || grant.redirect_uri != expected_redirect
         {
-            return Err(AppError::Unauthorized(
-                "OAuth grant is not eligible for Jellyfin linking".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                "OAuth grant is not eligible for Jellyfin linking",
             ));
         }
         let connection = self
@@ -814,7 +846,12 @@ impl AppUseCase {
             .media_server_connections
             .get_by_id(&connection_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::JELLYFIN_CONNECTION_UNAVAILABLE,
+                    "Jellyfin connection is unavailable",
+                )
+            })?;
         if connection.provider != scryer_domain::MediaServerProvider::Jellyfin
             || !connection.enabled
             || !connection.linking_enabled
@@ -825,18 +862,25 @@ impl AppUseCase {
                 .map(|url| url.trim_end_matches('/'))
                 != Some(external_url.trim_end_matches('/'))
         {
-            return Err(AppError::Unauthorized(
-                "Jellyfin connection is unavailable".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_CONNECTION_UNAVAILABLE,
+                "Jellyfin connection is unavailable",
             ));
         }
         let api_key = connection
             .api_key
             .as_deref()
             .filter(|key| !key.trim().is_empty())
-            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::JELLYFIN_CONNECTION_UNAVAILABLE,
+                    "Jellyfin connection is unavailable",
+                )
+            })?;
         if self.oauth_token_hash("jellyfin_link_api_key", api_key) != api_key_hash {
-            return Err(AppError::Unauthorized(
-                "Jellyfin connection authorization changed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_CONNECTION_AUTHORIZATION_CHANGED,
+                "Jellyfin connection authorization changed",
             ));
         }
         let verified = self
@@ -854,8 +898,9 @@ impl AppUseCase {
             || verified.connection_id != connection.id
             || verified.external_user_id != canonical_jellyfin_user_id
         {
-            return Err(AppError::Unauthorized(
-                "Jellyfin user verification failed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_USER_VERIFICATION_FAILED,
+                "Jellyfin user verification failed",
             ));
         }
         // Re-resolve the immutable grant and live connection after I/O so an
@@ -866,18 +911,30 @@ impl AppUseCase {
             .oauth
             .get_refresh_grant(grant_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth grant is unavailable".into()))?;
-        let current_client = self
-            .oauth_client_info(client_id)
-            .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth client is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::OAUTH_GRANT_UNAVAILABLE,
+                    "OAuth grant is unavailable",
+                )
+            })?;
+        let current_client = self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_CLIENT_UNAVAILABLE,
+                "OAuth client is unavailable",
+            )
+        })?;
         let current_connection = self
             .services
             .integrations
             .media_server_connections
             .get_by_id(&connection_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::JELLYFIN_CONNECTION_UNAVAILABLE,
+                    "Jellyfin connection is unavailable",
+                )
+            })?;
         if !oauth_jellyfin_link_grant_matches(&current_grant, &grant)
             || current_client.source != crate::oauth::OAuthClientSource::Custom
             || !current_client.enabled
@@ -897,19 +954,19 @@ impl AppUseCase {
                 self.oauth_token_hash("jellyfin_link_api_key", key) != api_key_hash
             })
         {
-            return Err(AppError::Unauthorized(
-                "Jellyfin link authorization changed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_LINK_AUTHORIZATION_CHANGED,
+                "Jellyfin link authorization changed",
             ));
         }
         self.link_verified_external_account(actor, verified)
             .await
             .map_err(|error| match error {
-                AppError::Validation(message)
-                    if message == "external account is already linked to another Scryer user"
-                        || message
-                            == "external account is already linked to a different provider identity" =>
+                error
+                    if matches!(error.validation_reason(),
+                        Some(crate::error_reasons::security::EXTERNAL_ACCOUNT_LINKED_ELSEWHERE | crate::error_reasons::security::EXTERNAL_ACCOUNT_IDENTITY_MISMATCH)) =>
                 {
-                    AppError::Validation("Jellyfin account could not be linked".into())
+                    AppError::validation_refused(crate::error_reasons::security::EXTERNAL_ACCOUNT_LINK_FAILED, "Jellyfin account could not be linked")
                 }
                 other => other,
             })
@@ -955,8 +1012,9 @@ impl AppUseCase {
         // `to_login_gql_error`, so neither reveals whether the account exists or
         // whether it happens to be passwordless.
         if password.trim().is_empty() {
-            return Err(AppError::Unauthorized(
-                "invalid Jellyfin credentials".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_CREDENTIALS_INVALID,
+                "invalid Jellyfin credentials",
             ));
         }
 
@@ -976,8 +1034,9 @@ impl AppUseCase {
         // server did not report the fact and is deliberately not treated as
         // passwordless.
         if verified.remote_password_configured == Some(false) {
-            return Err(AppError::Unauthorized(
-                "invalid Jellyfin credentials".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::JELLYFIN_CREDENTIALS_INVALID,
+                "invalid Jellyfin credentials",
             ));
         }
         self.ensure_verified_identity_matches_request(&provider, &connection_id, &verified)?;
@@ -993,7 +1052,10 @@ impl AppUseCase {
         password: String,
     ) -> AppResult<(User, Option<String>)> {
         if password.is_empty() {
-            return Err(AppError::Unauthorized("Emby sign-in failed".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::EMBY_SIGN_FAILED,
+                "Emby sign-in failed",
+            ));
         }
         let provider = scryer_domain::ExternalAccountProvider::Emby;
         let connection_id = normalize_connection_id(connection_id);
@@ -1003,9 +1065,17 @@ impl AppUseCase {
         let (verified, refreshed_base_url) = self
             .verify_emby_identity(&connection, mode, &username, &password)
             .await
-            .map_err(|_| AppError::Unauthorized("Emby sign-in failed".into()))?;
+            .map_err(|_| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::EMBY_SIGN_FAILED,
+                    "Emby sign-in failed",
+                )
+            })?;
         if mode == EmbyConnectionMode::Local && verified.remote_password_configured == Some(false) {
-            return Err(AppError::Unauthorized("Emby sign-in failed".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::EMBY_SIGN_FAILED,
+                "Emby sign-in failed",
+            ));
         }
         self.refresh_emby_base_url_if_needed(&connection, refreshed_base_url.as_deref())
             .await;
@@ -1041,8 +1111,9 @@ impl AppUseCase {
             auto_added_user = Some(user);
             account
         } else {
-            return Err(AppError::Unauthorized(
-                "external account is not invited".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::EXTERNAL_ACCOUNT_NOT_INVITED,
+                "external account is not invited",
             ));
         };
 
@@ -1054,16 +1125,25 @@ impl AppUseCase {
                 .users
                 .get_by_id(&account.user_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("user {}", account.user_id)))?
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::security::USER_NOT_FOUND,
+                        format!("user {}", account.user_id),
+                    )
+                })?
         };
         if !user.login_status().is_enabled() {
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
 
         match account.status {
             scryer_domain::ExternalAccountStatus::Disabled => {
-                return Err(AppError::Unauthorized(
-                    "external account is disabled".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::security::EXTERNAL_ACCOUNT_DISABLED,
+                    "external account is disabled",
                 ));
             }
             scryer_domain::ExternalAccountStatus::PendingClaim => {
@@ -1101,8 +1181,9 @@ impl AppUseCase {
         connection: &scryer_domain::MediaServerConnection,
     ) -> AppResult<(User, scryer_domain::UserExternalAccount)> {
         if !connection.auto_add_enabled {
-            return Err(AppError::Unauthorized(
-                "external account is not invited".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::EXTERNAL_ACCOUNT_NOT_INVITED,
+                "external account is not invited",
             ));
         }
         let username = self.unique_auto_added_username(&verified.username).await?;
@@ -1181,8 +1262,9 @@ impl AppUseCase {
                 return Ok(candidate);
             }
         }
-        Err(AppError::Validation(
-            "could not allocate a Scryer username for the external account".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::security::COULD_NOT_ALLOCATE_SCRYER_USERNAME_EXTERNAL_ACCOUNT,
+            "could not allocate a Scryer username for the external account",
         ))
     }
 
@@ -1197,7 +1279,12 @@ impl AppUseCase {
             .external_accounts
             .get_by_id(linked_account_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("external account {linked_account_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::EXTERNAL_ACCOUNT_NOT_FOUND,
+                    format!("external account {linked_account_id}"),
+                )
+            })?;
         if account.user_id != actor.id {
             self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
                 .await?;
@@ -1237,7 +1324,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
         if user.password_hash.is_some() {
             return Ok(());
         }
@@ -1251,8 +1343,9 @@ impl AppUseCase {
         {
             return Ok(());
         }
-        Err(AppError::Validation(
-            "cannot unlink the last external login without a local password or passkey".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::security::LAST_EXTERNAL_LOGIN_REMOVAL_FORBIDDEN,
+            "cannot unlink the last external login without a local password or passkey",
         ))
     }
 }
@@ -2638,7 +2731,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(account, Err(AppError::Validation(message)) if message.contains("picker"))
+            matches!(account, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("picker"))
         );
     }
 
@@ -2850,7 +2943,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(AppError::Validation(ref message))
+                Err(AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. })
                     if message == "externally managed users cannot set a Scryer password"
             ),
             "expected externally managed password validation, got {result:?}"
@@ -2913,7 +3006,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(AppError::Validation(ref message))
+                Err(AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. })
                     if message
                         == "cannot unlink the last external login without a local password or passkey"
             ),
@@ -2982,7 +3075,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(AppError::Validation(ref message))
+                Err(AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. })
                     if message == "externally managed users cannot set a Scryer password"
             ),
             "expected externally managed password validation, got {result:?}"
@@ -3032,7 +3125,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(account, Err(AppError::Validation(message)) if message.contains("picker"))
+            matches!(account, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("picker"))
         );
     }
 
@@ -3146,7 +3239,10 @@ mod tests {
         assert!(user_ids.contains(&second.id.as_str()));
 
         let result = app.list_external_account_invites(&first).await;
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
     }
 
     #[tokio::test]
@@ -3306,7 +3402,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(AppError::Validation(message)) if message.contains("not configured"))
+            matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("not configured"))
         );
     }
 
@@ -3326,7 +3422,7 @@ mod tests {
             // No connection is configured here, so if the guard ran any later
             // this would surface the "not configured" validation error instead.
             assert!(
-                matches!(&result, Err(AppError::Unauthorized(message)) if message.contains("invalid Jellyfin credentials")),
+                matches!(&result, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message.contains("invalid Jellyfin credentials")),
                 "expected password {password:?} to be refused up front, got {result:?}"
             );
         }
@@ -3372,7 +3468,7 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(&passwordless, Err(AppError::Unauthorized(message)) if message.contains("invalid Jellyfin credentials")),
+            matches!(&passwordless, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message.contains("invalid Jellyfin credentials")),
             "passwordless account must not be able to sign in, got {passwordless:?}"
         );
 
@@ -3387,7 +3483,7 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(&with_password, Err(AppError::Unauthorized(message)) if message.contains("not invited")),
+            matches!(&with_password, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message.contains("not invited")),
             "password-configured account should reach the invitation check, got {with_password:?}"
         );
     }
@@ -3473,7 +3569,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(AppError::Validation(message)) if message.contains("disabled"))
+            matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("disabled"))
         );
     }
 
@@ -3508,11 +3604,11 @@ mod tests {
         assert_eq!(
             usize::from(matches!(
                 &first,
-                Err(AppError::Validation(message))
+                Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
                     if message == "external account is already linked to another Scryer user"
             )) + usize::from(matches!(
                 &second,
-                Err(AppError::Validation(message))
+                Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
                     if message == "external account is already linked to another Scryer user"
             )),
             1,
@@ -3603,7 +3699,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(AppError::Validation(message)) if message.contains("disabled")),
+            matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("disabled")),
             "a disabled account returned by the atomic claim must remain disabled"
         );
         let accounts = external_accounts.accounts.lock().await;
@@ -3854,7 +3950,10 @@ mod tests {
                 test_media_server_connection(scryer_domain::MediaServerProvider::Plex, "plex-main"),
             )
             .await;
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
 
         let stored = external_accounts
             .get_by_provider_identity(ExternalAccountProvider::Plex, "plex-main", "remote-user")
@@ -3884,7 +3983,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(AppError::Validation(message)) if message.contains("did not match"))
+            matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("did not match"))
         );
     }
 
@@ -3907,7 +4006,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(AppError::Validation(message)) if message.contains("provider"))
+            matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("provider"))
         );
     }
 
@@ -3980,7 +4079,7 @@ mod tests {
         assert_eq!(local.0.id, user.id);
         assert_eq!(connect.0.id, user.id);
         assert!(
-            matches!(empty, Err(AppError::Unauthorized(message)) if message == "Emby sign-in failed")
+            matches!(empty, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message == "Emby sign-in failed")
         );
         let linked = external_accounts
             .list_by_user_id(&user.id)
@@ -4052,7 +4151,7 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(connect, Err(AppError::Unauthorized(message)) if message == "Emby sign-in failed")
+            matches!(connect, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message == "Emby sign-in failed")
         );
     }
 
@@ -4100,7 +4199,7 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(login, Err(AppError::Unauthorized(message)) if message == "Emby sign-in failed")
+            matches!(login, Err(AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. }) if message == "Emby sign-in failed")
         );
     }
 
@@ -4130,7 +4229,7 @@ mod tests {
                 .await
                 .expect_err("fake upstream failure");
             assert!(
-                matches!(&error, AppError::Unauthorized(message) if message == "Emby sign-in failed")
+                matches!(&error, AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. } if message == "Emby sign-in failed")
             );
             assert!(!error.to_string().contains("request-secret"));
             assert!(!error.to_string().contains("upstream Emby detail"));
@@ -4304,7 +4403,10 @@ mod tests {
                 )
                 .await;
             assert!(
-                matches!(result, Err(AppError::Unauthorized(_))),
+                matches!(
+                    result,
+                    Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+                ),
                 "{name} should reject the OAuth grant, got {result:?}"
             );
         }
@@ -4355,8 +4457,8 @@ mod tests {
                 )
                 .await;
             assert!(
-                matches!(result, Err(AppError::Unauthorized(ref message))
-                    if message == "Jellyfin link authorization changed"),
+                matches!(result, Err(ref error)
+                    if error.reason() == Some(crate::error_reasons::security::JELLYFIN_LINK_AUTHORIZATION_CHANGED)),
                 "changed {name} must reject after verification, got {result:?}"
             );
         }
@@ -4402,8 +4504,8 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(AppError::Unauthorized(ref message))
-                if message == "Jellyfin link authorization changed"),
+            matches!(result, Err(ref error)
+                if error.reason() == Some(crate::error_reasons::security::JELLYFIN_LINK_AUTHORIZATION_CHANGED)),
             "redirect changes during verification must reject before durable linking, got {result:?}"
         );
     }
@@ -4445,9 +4547,21 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(result, Err(AppError::Validation(ref message))
-                if message == "Jellyfin account could not be linked"),
+            matches!(result, Err(ref error)
+                if error.validation_reason() == Some(crate::error_reasons::security::EXTERNAL_ACCOUNT_LINK_FAILED)
+                    && error.to_string() == "validation: Jellyfin account could not be linked"),
             "cross-user conflict must stay generic, got {result:?}"
+        );
+        let error = result.expect_err("the account belongs to another user");
+        assert!(
+            !matches!(
+                error.validation_reason(),
+                Some(
+                    crate::error_reasons::security::EXTERNAL_ACCOUNT_LINKED_ELSEWHERE
+                        | crate::error_reasons::security::EXTERNAL_ACCOUNT_IDENTITY_MISMATCH
+                )
+            ),
+            "the public error must not reveal a hidden identity condition"
         );
     }
 

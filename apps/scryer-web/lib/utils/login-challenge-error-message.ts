@@ -12,7 +12,8 @@ import {
  * shows the server's sentence.
  */
 export const LOGIN_CHALLENGE_REFUSAL_KEYS: Readonly<Record<string, string>> = {
-  INDEXER_LOGIN_CHALLENGE_MALFORMED: "settings.indexerLoginChallengeRefusal.malformed",
+  INDEXER_LOGIN_CHALLENGE_MALFORMED:
+    "settings.indexerLoginChallengeRefusal.malformed",
   INDEXER_LOGIN_CHALLENGE_KIND_UNSUPPORTED:
     "settings.indexerLoginChallengeRefusal.kindUnsupported",
   INDEXER_LOGIN_CHALLENGE_IMAGE_TYPE_UNSUPPORTED:
@@ -40,5 +41,5 @@ export function loginChallengeErrorMessage(
   fallback: string,
 ): string {
   const key = loginChallengeRefusalKey(error);
-  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback);
+  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback, t);
 }

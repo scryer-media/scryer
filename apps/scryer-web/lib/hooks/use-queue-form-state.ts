@@ -4,7 +4,8 @@ export function useQueueFormState() {
   const [titleNameForQueue, setTitleNameForQueue] = useState("");
   const [monitoredForQueue, setMonitoredForQueue] = useState(true);
   const [seasonFoldersForQueue, setSeasonFoldersForQueue] = useState(true);
-  const [minAvailabilityForQueue, setMinAvailabilityForQueue] = useState("default");
+  const [minAvailabilityForQueue, setMinAvailabilityForQueue] =
+    useState("default");
 
   return {
     titleNameForQueue,

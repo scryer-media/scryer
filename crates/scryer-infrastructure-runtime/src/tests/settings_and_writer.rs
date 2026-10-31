@@ -604,14 +604,16 @@ async fn serialized_writer_handles_notification_channel_and_subscription_round_t
         .expect("second subscription should delete");
     assert!(matches!(
         NotificationSubscriptionRepository::delete_subscription(&store, &subscription.id).await,
-        Err(scryer_application::AppError::NotFound(_))
+        Err(scryer_application::AppError::NotFound(_)
+            | scryer_application::AppError::NotFoundReason { .. })
     ));
     NotificationChannelRepository::delete_channel(&store, &updated.id)
         .await
         .expect("channel should delete");
     assert!(matches!(
         NotificationChannelRepository::delete_channel(&store, &updated.id).await,
-        Err(scryer_application::AppError::NotFound(_))
+        Err(scryer_application::AppError::NotFound(_)
+            | scryer_application::AppError::NotFoundReason { .. })
     ));
 
     let remaining =
@@ -1022,11 +1024,13 @@ async fn source_password_backfill_encrypts_legacy_postgres_rows() -> AppResult<(
             AppError::Repository(format!("failed to insert release attempt: {error}"))
         })?;
 
+        // Seed a legacy plaintext password in the current schema, retaining
+        // the identities a normal observation of these listing facts derives.
         sqlx::query(
             "INSERT INTO pending_releases
              (id, wanted_item_id, title_id, release_title, release_score, added_at, delay_until,
-              status, source_password)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              status, source_password, last_observed_at, release_identity, coverage_identity)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind("legacy-pending-pg")
         .bind("wanted-pg")
@@ -1037,6 +1041,9 @@ async fn source_password_backfill_encrypts_legacy_postgres_rows() -> AppResult<(
         .bind(now)
         .bind("waiting")
         .bind("pending-pg-secret")
+        .bind(now)
+        .bind("listing:unknown:legacy.pending.pg:unknown")
+        .bind("scope:wanted-pg")
         .execute(services.pool())
         .await
         .map_err(|error| {
@@ -1090,6 +1097,11 @@ async fn source_password_backfill_encrypts_legacy_postgres_rows() -> AppResult<(
             pending_release.source_password.as_deref(),
             Some("pending-pg-secret")
         );
+        assert_eq!(
+            pending_release.release_identity,
+            "listing:unknown:legacy.pending.pg:unknown"
+        );
+        assert_eq!(pending_release.coverage_identity, "scope:wanted-pg");
 
         services.pool().close().await;
         Ok(())

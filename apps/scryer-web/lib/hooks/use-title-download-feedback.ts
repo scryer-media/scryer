@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -25,7 +26,9 @@ import {
  * whose own query does not report it; the series and anime overview reads it
  * from its overview query instead.
  */
-export function useDownloadClientsConfigured(titleId: string | null): boolean | null {
+export function useDownloadClientsConfigured(
+  titleId: string | null,
+): boolean | null {
   const client = useClient();
   const [answer, setAnswer] = React.useState<{
     titleId: string;
@@ -64,7 +67,9 @@ export function useDownloadClientsConfigured(titleId: string | null): boolean | 
     };
   }, [client, titleId]);
 
-  return titleId !== null && answer?.titleId === titleId ? answer.configured : null;
+  return titleId !== null && answer?.titleId === titleId
+    ? answer.configured
+    : null;
 }
 
 type FeedbackState = {
@@ -152,7 +157,10 @@ export function useTitleDownloadFeedback({
       if (!stillCurrent()) {
         return;
       }
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
       setState((previous) =>
         previous?.titleId === requestedTitleId
           ? { ...previous, settled: true }
@@ -222,7 +230,10 @@ export function useTitleDownloadFeedback({
   });
 
   const queueItems = useTitleDownloadQueue({
-    enabled: titleId !== null && hasDownloadClients === true && current?.settled === true,
+    enabled:
+      titleId !== null &&
+      hasDownloadClients === true &&
+      current?.settled === true,
     titleId,
     initialItems: current?.seed ?? EMPTY_ITEMS,
   });

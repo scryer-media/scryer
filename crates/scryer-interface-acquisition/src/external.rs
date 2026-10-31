@@ -56,6 +56,7 @@ impl SubmitExternalReleaseInput {
                 tmdb_id: self.tmdb_id,
                 imdb_id: self.imdb_id,
                 categories: vec![],
+                ..Default::default()
             },
             flags: self.flags,
         })

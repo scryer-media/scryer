@@ -42,11 +42,14 @@ test("a named plugin failure is shown in translation, not as the server's senten
 });
 
 test("the plugin's own sentence follows the translated reason", () => {
-  const error = failure("download test_connection: plugin error AuthFailed: Login refused", {
-    code: "PLUGIN_FAILED",
-    reason: "PLUGIN_AUTH_FAILED",
-    detail: "Login refused",
-  });
+  const error = failure(
+    "download test_connection: plugin error AuthFailed: Login refused",
+    {
+      code: "PLUGIN_FAILED",
+      reason: "PLUGIN_AUTH_FAILED",
+      detail: "Login refused",
+    },
+  );
 
   assert.equal(pluginFailureDetail(error), "Login refused");
   assert.equal(
@@ -56,22 +59,31 @@ test("the plugin's own sentence follows the translated reason", () => {
 });
 
 test("a reason this client does not know shows the plugin's own sentence", () => {
-  const error = failure("plugin error quota_exhausted: the dial is set to eleven", {
-    code: "PLUGIN_FAILED",
-    reason: "PLUGIN_QUOTA_EXHAUSTED",
-    detail: "the dial is set to eleven",
-  });
+  const error = failure(
+    "plugin error quota_exhausted: the dial is set to eleven",
+    {
+      code: "PLUGIN_FAILED",
+      reason: "PLUGIN_QUOTA_EXHAUSTED",
+      detail: "the dial is set to eleven",
+    },
+  );
 
   assert.equal(pluginFailureKey(error), null);
   assert.equal(unknownPluginFailureReason(error), "PLUGIN_QUOTA_EXHAUSTED");
-  assert.equal(pluginErrorMessage(error, t, "Test failed"), "the dial is set to eleven");
+  assert.equal(
+    pluginErrorMessage(error, t, "Test failed"),
+    "the dial is set to eleven",
+  );
 });
 
 test("a reason this client does not know, with no sentence, names the code in translation", () => {
-  const error = failure("plugin error quota_exhausted: indexer component failed", {
-    code: "PLUGIN_FAILED",
-    reason: "PLUGIN_QUOTA_EXHAUSTED",
-  });
+  const error = failure(
+    "plugin error quota_exhausted: indexer component failed",
+    {
+      code: "PLUGIN_FAILED",
+      reason: "PLUGIN_QUOTA_EXHAUSTED",
+    },
+  );
 
   assert.equal(
     pluginErrorMessage(error, t, "Test failed"),
@@ -81,12 +93,18 @@ test("a reason this client does not know, with no sentence, names the code in tr
 
 test("a new plugin reason translates once it is registered, with no other change", () => {
   const reason = "PLUGIN_INVALID_USERNAME_PASSWORD";
-  const error = failure("plugin error invalid_username_password: Login refused", {
-    code: "PLUGIN_FAILED",
-    reason,
-    detail: "Login refused",
-  });
-  assert.equal(pluginFailureKey(error), "plugins.failure.invalidUsernamePassword");
+  const error = failure(
+    "plugin error invalid_username_password: Login refused",
+    {
+      code: "PLUGIN_FAILED",
+      reason,
+      detail: "Login refused",
+    },
+  );
+  assert.equal(
+    pluginFailureKey(error),
+    "plugins.failure.invalidUsernamePassword",
+  );
   assert.equal(unknownPluginFailureReason(error), null);
   assert.equal(
     pluginErrorMessage(error, t, "Test failed"),
@@ -94,24 +112,41 @@ test("a new plugin reason translates once it is registered, with no other change
   );
 
   // The same failure before the client knew the reason: the plugin's sentence.
-  const unregistered = failure("plugin error invalid_username_password: Login refused", {
-    code: "PLUGIN_FAILED",
-    reason: "PLUGIN_INVALID_USERNAME_PASSWORDS",
-    detail: "Login refused",
-  });
-  assert.equal(pluginErrorMessage(unregistered, t, "Test failed"), "Login refused");
+  const unregistered = failure(
+    "plugin error invalid_username_password: Login refused",
+    {
+      code: "PLUGIN_FAILED",
+      reason: "PLUGIN_INVALID_USERNAME_PASSWORDS",
+      detail: "Login refused",
+    },
+  );
+  assert.equal(
+    pluginErrorMessage(unregistered, t, "Test failed"),
+    "Login refused",
+  );
 });
 
 test("a reason without the plugin prefix is not read as a plugin reason", () => {
   for (const reason of ["SOMETHING_ELSE", "PLUGIN_"]) {
-    const error = failure("plugin error: boom", { code: "PLUGIN_FAILED", reason, detail: "boom" });
+    const error = failure("plugin error: boom", {
+      code: "PLUGIN_FAILED",
+      reason,
+      detail: "boom",
+    });
     assert.equal(unknownPluginFailureReason(error), null, reason);
-    assert.equal(pluginErrorMessage(error, t, "Test failed"), "plugin error: boom", reason);
+    assert.equal(
+      pluginErrorMessage(error, t, "Test failed"),
+      "plugin error: boom",
+      reason,
+    );
   }
 });
 
 test("a plugin reason reads as words", () => {
-  assert.equal(humanisePluginReason("PLUGIN_INVALID_USERNAME_PASSWORD"), "invalid username password");
+  assert.equal(
+    humanisePluginReason("PLUGIN_INVALID_USERNAME_PASSWORD"),
+    "invalid username password",
+  );
   assert.equal(humanisePluginReason("PLUGIN_HTTP_429"), "http 429");
 });
 
@@ -122,11 +157,17 @@ test("a reason on another kind of error is not read as a plugin failure", () => 
   });
 
   assert.equal(pluginFailureKey(error), null);
-  assert.equal(pluginErrorMessage(error, t, "Test failed"), "The indexer rejected the API key.");
+  assert.equal(
+    pluginErrorMessage(error, t, "Test failed"),
+    "The indexer rejected the API key.",
+  );
 });
 
 test("a failure with no sentence at all shows the fallback", () => {
-  assert.equal(pluginErrorMessage(new Error(""), t, "Test failed"), "Test failed");
+  assert.equal(
+    pluginErrorMessage(new Error(""), t, "Test failed"),
+    "Test failed",
+  );
 });
 
 test("every reason the server can name has a translation in every locale", () => {
@@ -157,41 +198,65 @@ test("every reason the server can name has a translation in every locale", () =>
     "PLUGIN_DOWNLOAD_REJECTED",
     "PLUGIN_PATH_NOT_WRITABLE",
   ];
-  assert.deepEqual(Object.keys(PLUGIN_FAILURE_KEYS).sort(), [...reasons].sort());
+  assert.deepEqual(
+    Object.keys(PLUGIN_FAILURE_KEYS).sort(),
+    [...reasons].sort(),
+  );
 
-  const localesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../i18n/locales");
+  const localesDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../i18n/locales",
+  );
   const keys = [
     ...Object.values(PLUGIN_FAILURE_KEYS),
     "plugins.failure.withDetail",
     "plugins.failure.unknown",
   ];
-  for (const file of readdirSync(localesDir).filter((name) => name.endsWith(".ts"))) {
+  for (const file of readdirSync(localesDir).filter((name) =>
+    name.endsWith(".ts"),
+  )) {
     const source = readFileSync(path.join(localesDir, file), "utf8");
     for (const key of keys) {
       assert.ok(source.includes(`"${key}":`), `${file} is missing ${key}`);
     }
-    const withDetail = source.match(/"plugins\.failure\.withDetail":\s*"([^"]*)"/)?.[1] ?? "";
+    const withDetail =
+      source.match(/"plugins\.failure\.withDetail":\s*"([^"]*)"/)?.[1] ?? "";
     assert.ok(
       withDetail.includes("{{reason}}") && withDetail.includes("{{detail}}"),
       `${file} withDetail must keep both placeholders`,
     );
-    const unknown = source.match(/"plugins\.failure\.unknown":\s*"([^"]*)"/)?.[1] ?? "";
-    assert.ok(unknown.includes("{{code}}"), `${file} unknown must keep its placeholder`);
+    const unknown =
+      source.match(/"plugins\.failure\.unknown":\s*"([^"]*)"/)?.[1] ?? "";
+    assert.ok(
+      unknown.includes("{{code}}"),
+      `${file} unknown must keep its placeholder`,
+    );
   }
 });
 
 test("every plugin reason resolves to a sentence of its own in every locale", async () => {
-  const localesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../i18n/locales");
+  const localesDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../i18n/locales",
+  );
   const files = readdirSync(localesDir).filter((name) => name.endsWith(".ts"));
   assert.equal(files.length, 14);
   for (const file of files) {
-    const locale = (await import(path.join(localesDir, file))).default as Record<string, string>;
+    const locale = (await import(path.join(localesDir, file)))
+      .default as Record<string, string>;
     const sentences = new Set<string>();
     for (const [reason, key] of Object.entries(PLUGIN_FAILURE_KEYS)) {
       const sentence = locale[key];
-      assert.equal(typeof sentence, "string", `${file} has no ${key} for ${reason}`);
+      assert.equal(
+        typeof sentence,
+        "string",
+        `${file} has no ${key} for ${reason}`,
+      );
       assert.ok(sentence.trim().length > 0, `${file} ${key} is empty`);
-      assert.ok(!sentences.has(sentence), `${file} ${key} repeats another reason's sentence`);
+      assert.ok(
+        !sentences.has(sentence),
+        `${file} ${key} repeats another reason's sentence`,
+      );
       sentences.add(sentence);
     }
   }

@@ -89,7 +89,9 @@ export function SettingsAcquisitionSection({
 
   return (
     <div id="settings-acquisition-section" className="max-w-[760px] space-y-6">
-      <p className="text-sm text-muted-foreground">{t("settings.acquisitionIntro")}</p>
+      <p className="text-sm text-muted-foreground">
+        {t("settings.acquisitionIntro")}
+      </p>
 
       <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
@@ -158,7 +160,9 @@ export function SettingsAcquisitionSection({
           help={t("settings.acquisitionReconvergeDaysHelp")}
           value={draft.longTailReconvergeDays}
           disabled={disabled}
-          onChange={(longTailReconvergeDays) => update({ longTailReconvergeDays })}
+          onChange={(longTailReconvergeDays) =>
+            update({ longTailReconvergeDays })
+          }
         />
       </div>
 

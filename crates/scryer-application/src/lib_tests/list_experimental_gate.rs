@@ -620,5 +620,11 @@ async fn a_list_manager_can_read_quality_profiles_for_list_routes() {
         .get_quality_profile_settings(&outsider)
         .await
         .expect_err("a user without any of the permissions is refused");
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
 }

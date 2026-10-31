@@ -41,7 +41,7 @@ pub(super) fn parse(data: &[u8], source_packets: u32) -> Result<Vec<EntryMap>> {
     let mut maps = Vec::<EntryMap>::new();
     let mut occupied = Vec::<std::ops::Range<usize>>::new();
     let mut remaining = MAX_POINTS;
-    for entry in data[4..table_end].chunks_exact(12) {
+    for entry in data[4..table_end].as_chunks::<12>().0 {
         let pid = u16::from_be_bytes(entry[..2].try_into().unwrap());
         let packed = entry[2..8]
             .iter()
@@ -84,7 +84,7 @@ pub(super) fn parse(data: &[u8], source_packets: u32) -> Result<Vec<EntryMap>> {
         }
         occupied.push(at..end);
         let mut points = Vec::<Point>::with_capacity(fine_count);
-        for (index, entry) in coarse.chunks_exact(8).enumerate() {
+        for (index, entry) in coarse.as_chunks::<8>().0.iter().enumerate() {
             let timing = word(entry, 0)?;
             let first = (timing >> 14) as usize;
             let next = if index + 1 < coarse_count {
@@ -99,7 +99,7 @@ pub(super) fn parse(data: &[u8], source_packets: u32) -> Result<Vec<EntryMap>> {
             }
             let base_packet = word(entry, 4)? & !0x1ffff;
             let base_time = (timing & 0x3ffe) << 18;
-            for fine in fine[first * 4..next * 4].chunks_exact(4) {
+            for fine in fine[first * 4..next * 4].as_chunks::<4>().0 {
                 let fine = word(fine, 0)?;
                 let packet = base_packet | (fine & 0x1ffff);
                 let time = base_time | (((fine >> 17) & 0x7ff) << 8);

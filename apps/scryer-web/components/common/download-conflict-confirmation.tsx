@@ -8,7 +8,9 @@ type PendingConfirmation = {
 };
 
 export function useDownloadConflictConfirmation() {
-  const [pending, setPending] = React.useState<PendingConfirmation | null>(null);
+  const [pending, setPending] = React.useState<PendingConfirmation | null>(
+    null,
+  );
   const resolverRef = React.useRef<((confirmed: boolean) => void) | null>(null);
 
   const close = React.useCallback((confirmed: boolean) => {

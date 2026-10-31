@@ -22,7 +22,11 @@ interface SetupMediaPathsViewProps {
   t: (key: string) => string;
   roots: SetupMediaRoots;
   onAddRoot: (field: SetupMediaPathField, path: string) => void;
-  onReplaceRoot: (field: SetupMediaPathField, index: number, path: string) => void;
+  onReplaceRoot: (
+    field: SetupMediaPathField,
+    index: number,
+    path: string,
+  ) => void;
   onRemoveRoot: (field: SetupMediaPathField, index: number) => void;
   onSetDefaultRoot: (field: SetupMediaPathField, index: number) => void;
   onNext: () => void;
@@ -142,7 +146,9 @@ export function SetupMediaPathsView({
                               value={root.path}
                               readOnly
                               onClick={() => setBrowseTarget(target)}
-                              onKeyDown={(event) => handlePathInputKeyDown(event, target)}
+                              onKeyDown={(event) =>
+                                handlePathInputKeyDown(event, target)
+                              }
                               className="cursor-pointer font-[var(--font-code)]"
                               aria-invalid={invalid}
                             />
@@ -206,7 +212,11 @@ export function SetupMediaPathsView({
           );
         })}
         {error && (
-          <p id="setup-media-paths-error" data-ui="setup-media-paths-error" className="text-sm text-destructive">
+          <p
+            id="setup-media-paths-error"
+            data-ui="setup-media-paths-error"
+            className="text-sm text-destructive"
+          >
             {error}
           </p>
         )}
@@ -222,11 +232,20 @@ export function SetupMediaPathsView({
         </SetupBackButton>
         <div className="flex items-center gap-3">
           {onSkip && (
-            <Button id="setup-media-paths-skip" type="button" variant="link" onClick={onSkip}>
+            <Button
+              id="setup-media-paths-skip"
+              type="button"
+              variant="link"
+              onClick={onSkip}
+            >
               {t("setup.skip")}
             </Button>
           )}
-          <SetupPrimaryButton id="setup-media-paths-next" onClick={onNext} disabled={saving}>
+          <SetupPrimaryButton
+            id="setup-media-paths-next"
+            onClick={onNext}
+            disabled={saving}
+          >
             {saving ? t("label.saving") : t("setup.next")}
           </SetupPrimaryButton>
         </div>
@@ -234,7 +253,9 @@ export function SetupMediaPathsView({
 
       <FolderBrowserDialog
         open={browseTarget !== null}
-        onOpenChange={(open) => { if (!open) setBrowseTarget(null); }}
+        onOpenChange={(open) => {
+          if (!open) setBrowseTarget(null);
+        }}
         onSelect={handleBrowseSelect}
         selectionTypes={["folder"]}
         initialPath={browseInitialPath || "/"}

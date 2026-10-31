@@ -638,6 +638,8 @@ impl DiscoveryRatingProvenance {
 
 #[derive(Debug, Clone, Default)]
 pub struct MovieMetadata {
+    /// All title-level external identities supplied by the metadata gateway.
+    pub external_ids: Vec<ExternalId>,
     pub target_key: Option<String>,
     pub smg_id: Option<i64>,
     pub primary_source: String,
@@ -713,6 +715,8 @@ pub struct SeriesTitleBulkResult {
 
 #[derive(Debug, Clone, Default)]
 pub struct SeriesMetadata {
+    /// All title-level external identities supplied by the metadata gateway.
+    pub external_ids: Vec<ExternalId>,
     pub target_key: Option<String>,
     /// SMG's title id. Set only when the series came from the title surface.
     pub smg_id: Option<i64>,
@@ -1236,8 +1240,9 @@ impl LibraryScanner for NullLibraryScanner {
         batch_size: usize,
     ) -> AppResult<LibraryFileBatchReceiver> {
         if batch_size == 0 {
-            return Err(AppError::Validation(
-                "batch size must be greater than 0".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::BATCH_SIZE_OUT_OF_RANGE,
+                "batch size must be greater than 0",
             ));
         }
 
@@ -1252,8 +1257,9 @@ impl LibraryScanner for NullLibraryScanner {
         batch_size: usize,
     ) -> AppResult<LibraryFileBatchReceiver> {
         if batch_size == 0 {
-            return Err(AppError::Validation(
-                "batch size must be greater than 0".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::BATCH_SIZE_OUT_OF_RANGE,
+                "batch size must be greater than 0",
             ));
         }
 

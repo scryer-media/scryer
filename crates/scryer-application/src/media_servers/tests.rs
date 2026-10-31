@@ -805,7 +805,10 @@ fn empty_update_patch(id: &str) -> MediaServerConnectionPatch {
 
 fn assert_unauthorized(error: AppError) {
     assert!(
-        matches!(error, AppError::Unauthorized(_)),
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "expected unauthorized error, got {error:?}",
     );
 }
@@ -944,7 +947,9 @@ async fn enabled_emby_connection_cannot_clear_api_key() {
         .await
         .expect_err("enabled Emby connection must retain its key");
 
-    assert!(matches!(error, AppError::Validation(message) if message.contains("retain")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("retain"))
+    );
 }
 
 #[tokio::test]
@@ -1046,7 +1051,7 @@ async fn emby_setup_preserves_admin_and_connect_password_bytes() {
         )
         .await;
     assert!(
-        matches!(empty_local, Err(AppError::Validation(message)) if message == "both Emby administrator username and password are required")
+        matches!(empty_local, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message == "both Emby administrator username and password are required")
     );
     let empty_connect = app
         .create_media_server_connection(
@@ -1055,7 +1060,7 @@ async fn emby_setup_preserves_admin_and_connect_password_bytes() {
         )
         .await;
     assert!(
-        matches!(empty_connect, Err(AppError::Validation(message)) if message == "Emby Connect password is required")
+        matches!(empty_connect, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message == "Emby Connect password is required")
     );
 
     app.create_media_server_connection(

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import type * as React from "react";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -87,7 +88,9 @@ export function ExternalAccountInvitesContainer({
   const [loading, setLoading] = useState(true);
   const [externalInviteSubmitting, setExternalInviteSubmitting] =
     useState(false);
-  const [unlinkingAccountId, setUnlinkingAccountId] = useState<string | null>(null);
+  const [unlinkingAccountId, setUnlinkingAccountId] = useState<string | null>(
+    null,
+  );
 
   const updateExternalInviteDraft = useCallback(
     (patch: Partial<ExternalInviteDraft>) => {
@@ -158,7 +161,7 @@ export function ExternalAccountInvitesContainer({
     } catch (error) {
       setExternalAuthSettings(DEFAULT_EXTERNAL_AUTH_RUNTIME_SETTINGS);
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -223,7 +226,13 @@ export function ExternalAccountInvitesContainer({
             if (cancelled) return;
             if (error) {
               setMediaServerUserGroups([]);
-              setMediaServerUserLookupError(error.message);
+              setMediaServerUserLookupError(
+                userFacingGraphQlErrorMessage(
+                  error,
+                  t("status.failedToLoad"),
+                  t,
+                ),
+              );
               return;
             }
             setMediaServerUserGroups(
@@ -235,9 +244,11 @@ export function ExternalAccountInvitesContainer({
             if (cancelled) return;
             setMediaServerUserGroups([]);
             setMediaServerUserLookupError(
-              error instanceof Error
-                ? error.message
-                : t("settings.mediaServerUserSearchFailed"),
+              userFacingGraphQlErrorMessage(
+                error,
+                t("settings.mediaServerUserSearchFailed"),
+                t,
+              ),
             );
           })
           .finally(() => {
@@ -289,13 +300,17 @@ export function ExternalAccountInvitesContainer({
         providerUserIdentifier: "",
         providerUserId: "",
       }));
-      setGlobalStatus(t("settings.externalAccountInviteCreated"), { level: "SUCCESS" });
+      setGlobalStatus(t("settings.externalAccountInviteCreated"), {
+        level: "SUCCESS",
+      });
       await refreshExternalInvites();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error
-          ? error.message
-          : t("settings.externalAccountInviteFailed"),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("settings.externalAccountInviteFailed"),
+          t,
+        ),
         { level: "ERROR" },
       );
     } finally {
@@ -321,7 +336,11 @@ export function ExternalAccountInvitesContainer({
       notifyExternalAccountInviteSourcesChanged();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("profile.linkedAccountUnlinkFailed"),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("profile.linkedAccountUnlinkFailed"),
+          t,
+        ),
         { level: "ERROR" },
       );
     } finally {

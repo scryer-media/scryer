@@ -1,3 +1,4 @@
+mod indexer_clients;
 mod mutation;
 
 use async_graphql::{Context, ID, Object, Result as GqlResult};
@@ -16,6 +17,7 @@ use scryer_interface_media::mappers::{
 };
 use scryer_interface_media::types::*;
 
+pub use indexer_clients::{IndexerClientMutations, IndexerClientQueries};
 pub use mutation::SettingsMutations;
 
 #[derive(Default)]
@@ -577,7 +579,6 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
         high_contrast_mode: settings.high_contrast_mode,
         reduce_motion: settings.reduce_motion,
         hide_sponsor_button: settings.hide_sponsor_button,
-        no_glow: settings.no_glow,
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
@@ -603,6 +604,67 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
                 view_mode: from_ui_catalog_view_mode(view.view_mode),
             })
             .collect(),
+        dashboard_layouts: settings
+            .dashboard_layouts
+            .into_iter()
+            .map(|layout| UiDashboardLayout {
+                breakpoint: from_ui_dashboard_breakpoint(layout.breakpoint),
+                columns: layout.columns,
+                items: layout
+                    .items
+                    .into_iter()
+                    .map(|item| UiDashboardLayoutItem {
+                        panel_id: item.panel_id,
+                        x: item.x,
+                        y: item.y,
+                        w: item.w,
+                        h: item.h,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn from_ui_dashboard_breakpoint(
+    breakpoint: scryer_application::UiDashboardBreakpoint,
+) -> UiDashboardBreakpoint {
+    match breakpoint {
+        scryer_application::UiDashboardBreakpoint::Xs => UiDashboardBreakpoint::Xs,
+        scryer_application::UiDashboardBreakpoint::Sm => UiDashboardBreakpoint::Sm,
+        scryer_application::UiDashboardBreakpoint::Md => UiDashboardBreakpoint::Md,
+        scryer_application::UiDashboardBreakpoint::Lg => UiDashboardBreakpoint::Lg,
+    }
+}
+
+pub(crate) fn to_app_ui_dashboard_breakpoint(
+    breakpoint: UiDashboardBreakpoint,
+) -> scryer_application::UiDashboardBreakpoint {
+    match breakpoint {
+        UiDashboardBreakpoint::Xs => scryer_application::UiDashboardBreakpoint::Xs,
+        UiDashboardBreakpoint::Sm => scryer_application::UiDashboardBreakpoint::Sm,
+        UiDashboardBreakpoint::Md => scryer_application::UiDashboardBreakpoint::Md,
+        UiDashboardBreakpoint::Lg => scryer_application::UiDashboardBreakpoint::Lg,
+    }
+}
+
+pub(crate) fn dashboard_layout_from_input(
+    input: SetMyDashboardLayoutInput,
+) -> scryer_application::UiDashboardLayout {
+    scryer_application::UiDashboardLayout {
+        breakpoint: to_app_ui_dashboard_breakpoint(input.breakpoint),
+        columns: input.columns,
+        items: input
+            .items
+            .into_iter()
+            .map(|item| scryer_application::UiDashboardLayoutItem {
+                panel_id: item.panel_id,
+                x: item.x,
+                y: item.y,
+                w: item.w,
+                h: item.h,
+            })
+            .collect(),
     }
 }
 
@@ -625,7 +687,6 @@ pub(crate) fn ui_settings_update_from_input(
         high_contrast_mode: input.high_contrast_mode,
         reduce_motion: input.reduce_motion,
         hide_sponsor_button: input.hide_sponsor_button,
-        no_glow: input.no_glow.unwrap_or(current.no_glow),
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),
@@ -715,6 +776,9 @@ fn from_auth_runtime_state(
     default_persist_session: bool,
 ) -> AuthRuntimeStatePayload {
     AuthRuntimeStatePayload {
+        initial_authentication_stage: None,
+        initial_authentication_code_required: false,
+        password_min_length: security_settings.password_min_length,
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         skip_login_for_local_ips: auth_runtime.skip_login_for_local_ips,
         passkey_enabled: auth_runtime.passkey_enabled,
@@ -1090,11 +1154,22 @@ impl SettingsQueries {
         let app = app_from_ctx(ctx)?;
         let auth_runtime = auth_runtime_from_ctx(ctx);
         let security_settings = app.security_settings().await.map_err(to_gql_error)?;
-        Ok(from_auth_runtime_state(
+        let setup = app
+            .initial_authentication_state()
+            .await
+            .map_err(to_gql_error)?;
+        let mut payload = from_auth_runtime_state(
             &auth_runtime.snapshot(),
             security_settings,
             default_persist_session_from_ctx(ctx),
-        ))
+        );
+        payload.initial_authentication_stage = setup.as_ref().map(|state| state.stage().to_owned());
+        payload.initial_authentication_code_required =
+            matches!(
+                setup,
+                Some(scryer_application::initial_auth::SetupState::Choice)
+            ) && auth_runtime.initial_authentication.code_required();
+        Ok(payload)
     }
 
     /// Lists the authenticated actor's passkey summaries without credential material.

@@ -26,8 +26,9 @@ enum StoredChallengeState {
 impl AppUseCase {
     fn ensure_passkey_management_enabled(&self) -> AppResult<()> {
         if self.webauthn.available().is_none() {
-            return Err(AppError::Validation(
-                "passkey authentication is not configured".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_AUTHENTICATION_NOT_CONFIGURED,
+                "passkey authentication is not configured",
             ));
         }
 
@@ -36,19 +37,19 @@ impl AppUseCase {
 
     fn ensure_passkey_authentication_enabled(&self, form_login_enabled: bool) -> AppResult<()> {
         if !form_login_enabled {
-            return Err(AppError::Validation(
-                "passkey authentication is unavailable while form login is disabled".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::PASSKEY_AUTHENTICATION_UNAVAILABLE_WHILE_FORM_LOGIN_DISABLED, "passkey authentication is unavailable while form login is disabled"));
         }
 
         self.ensure_passkey_management_enabled()
     }
 
     fn webauthn_runtime(&self) -> AppResult<&webauthn_rs::Webauthn> {
-        self.webauthn
-            .available()
-            .map(Arc::as_ref)
-            .ok_or_else(|| AppError::Validation("passkey authentication is not configured".into()))
+        self.webauthn.available().map(Arc::as_ref).ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_AUTHENTICATION_NOT_CONFIGURED,
+                "passkey authentication is not configured",
+            )
+        })
     }
 
     async fn load_passkey_user(&self, user_id: &str) -> AppResult<User> {
@@ -58,10 +59,18 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
 
         if !user.login_status().is_enabled() {
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
 
         Ok(user)
@@ -80,12 +89,15 @@ impl AppUseCase {
         for candidate in Self::user_id_candidates_for_webauthn_uuid(user_uuid) {
             match self.load_passkey_user(&candidate).await {
                 Ok(user) => return Ok(user),
-                Err(AppError::NotFound(_)) => {}
+                Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        Err(AppError::NotFound(format!("user {user_uuid}")))
+        Err(AppError::not_found_reason(
+            crate::error_reasons::security::USER_NOT_FOUND,
+            format!("user {user_uuid}"),
+        ))
     }
 
     async fn cleanup_expired_webauthn_challenges(&self) -> AppResult<()> {
@@ -215,7 +227,10 @@ impl AppUseCase {
                 exclude_credentials,
             )
             .map_err(|error| {
-                AppError::Validation(format!("failed to start passkey registration: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::security::FAILED_START_PASSKEY_REGISTRATION,
+                    format!("failed to start passkey registration: {error}"),
+                )
             })?;
 
         let challenge = WebauthnChallengeRecord {
@@ -312,32 +327,44 @@ impl AppUseCase {
             .webauthn
             .take_challenge(challenge_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("passkey challenge {challenge_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::PASSKEY_CHALLENGE_NOT_FOUND,
+                    format!("passkey challenge {challenge_id}"),
+                )
+            })?;
 
         if challenge.user_id.as_deref() != Some(user.id.as_str()) {
-            return Err(AppError::Unauthorized(
-                "passkey challenge does not belong to the current user".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_DOES_NOT_BELONG_CURRENT_USER,
+                "passkey challenge does not belong to the current user",
             ));
         }
         if challenge.challenge_type != WebauthnChallengeType::Registration {
-            return Err(AppError::Validation(
-                "passkey challenge is not a registration ceremony".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_NOT_REGISTRATION_CEREMONY,
+                "passkey challenge is not a registration ceremony",
             ));
         }
         if challenge.purpose != expected_purpose {
-            return Err(AppError::Validation(
-                "passkey challenge has an unexpected registration purpose".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_UNEXPECTED_REGISTRATION_PURPOSE,
+                "passkey challenge has an unexpected registration purpose",
             ));
         }
         if Self::challenge_expired(&challenge) {
-            return Err(AppError::Validation("passkey challenge has expired".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_EXPIRED,
+                "passkey challenge has expired",
+            ));
         }
 
         let registration = serde_json::from_str::<RegisterPublicKeyCredential>(response_json)
             .map_err(|error| {
-                AppError::Validation(format!(
-                    "invalid passkey registration response payload: {error}"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::security::PASSKEY_REGISTRATION_RESPONSE_PAYLOAD_INVALID,
+                    format!("invalid passkey registration response payload: {error}"),
+                )
             })?;
         let state = match serde_json::from_str::<StoredChallengeState>(&challenge.state_json)
             .map_err(|error| {
@@ -347,9 +374,7 @@ impl AppUseCase {
             })? {
             StoredChallengeState::Registration(state) => state,
             StoredChallengeState::Authentication(_) => {
-                return Err(AppError::Validation(
-                    "passkey challenge stored an authentication ceremony".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::security::PASSKEY_CHALLENGE_STORED_AUTHENTICATION_CEREMONY, "passkey challenge stored an authentication ceremony"));
             }
         };
 
@@ -357,7 +382,10 @@ impl AppUseCase {
             .webauthn_runtime()?
             .finish_passkey_registration(&registration, &state)
             .map_err(|error| {
-                AppError::Validation(format!("failed to finish passkey registration: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::security::FAILED_FINISH_PASSKEY_REGISTRATION,
+                    format!("failed to finish passkey registration: {error}"),
+                )
             })?;
         let credential_id = Self::encode_credential_id(passkey.cred_id().as_ref());
 
@@ -369,8 +397,9 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(
-                "a passkey with this credential id is already registered".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CREDENTIAL_ID_ALREADY_REGISTERED,
+                "a passkey with this credential id is already registered",
             ));
         }
 
@@ -422,8 +451,9 @@ impl AppUseCase {
             .map(Self::deserialize_passkey)
             .collect::<AppResult<Vec<_>>>()?;
         if passkeys.is_empty() {
-            return Err(AppError::Unauthorized(
-                "passkey reauthentication is unavailable for this account".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::PASSKEY_REAUTHENTICATION_UNAVAILABLE_ACCOUNT,
+                "passkey reauthentication is unavailable for this account",
             ));
         }
 
@@ -431,7 +461,10 @@ impl AppUseCase {
             .webauthn_runtime()?
             .start_passkey_authentication(&passkeys)
             .map_err(|error| {
-                AppError::Validation(format!("failed to start passkey authentication: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::security::FAILED_START_PASSKEY_AUTHENTICATION,
+                    format!("failed to start passkey authentication: {error}"),
+                )
             })?;
         let now = Utc::now();
         let auth_session_version = self
@@ -489,7 +522,7 @@ impl AppUseCase {
             .webauthn_runtime()?
             .start_discoverable_authentication()
             .map_err(|error| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::security::FAILED_START_DISCOVERABLE_PASSKEY_AUTHENTICATION, format!(
                     "failed to start discoverable passkey authentication: {error}"
                 ))
             })?;
@@ -567,9 +600,7 @@ impl AppUseCase {
             )
             .await?;
         if user.id != actor.id {
-            return Err(AppError::Unauthorized(
-                "passkey reauthentication challenge belongs to another user".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::PASSKEY_REAUTHENTICATION_CHALLENGE_BELONGS_ANOTHER_USER, "passkey reauthentication challenge belongs to another user"));
         }
         Ok(())
     }
@@ -590,27 +621,35 @@ impl AppUseCase {
             .webauthn
             .take_challenge(challenge_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("passkey challenge {challenge_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::PASSKEY_CHALLENGE_NOT_FOUND,
+                    format!("passkey challenge {challenge_id}"),
+                )
+            })?;
 
         if challenge.challenge_type != WebauthnChallengeType::Authentication {
-            return Err(AppError::Validation(
-                "passkey challenge is not an authentication ceremony".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_NOT_AUTHENTICATION_CEREMONY,
+                "passkey challenge is not an authentication ceremony",
             ));
         }
         if challenge.purpose != expected_purpose {
-            return Err(AppError::Validation(
-                "passkey challenge has an unexpected authentication purpose".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_UNEXPECTED_AUTHENTICATION_PURPOSE,
+                "passkey challenge has an unexpected authentication purpose",
             ));
         }
         if challenge.login_verification_challenge_id.as_deref()
             != expected_login_verification_challenge_id
         {
-            return Err(AppError::Unauthorized(
-                "passkey challenge does not belong to this login verification".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::PASSKEY_CHALLENGE_DOES_NOT_BELONG_LOGIN_VERIFICATION, "passkey challenge does not belong to this login verification"));
         }
         if Self::challenge_expired(&challenge) {
-            return Err(AppError::Validation("passkey challenge has expired".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSKEY_CHALLENGE_EXPIRED,
+                "passkey challenge has expired",
+            ));
         }
         if let Some(expected_auth_session_version) = &challenge.auth_session_version {
             let current_auth_session_version = self
@@ -618,21 +657,26 @@ impl AppUseCase {
                 .identity
                 .users
                 .auth_session_version(challenge.user_id.as_deref().ok_or_else(|| {
-                    AppError::Unauthorized("passkey challenge is not actor-bound".into())
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::security::PASSKEY_CHALLENGE_NOT_ACTOR_BOUND,
+                        "passkey challenge is not actor-bound",
+                    )
                 })?)
                 .await?;
             if current_auth_session_version.as_deref() != Some(expected_auth_session_version) {
-                return Err(AppError::Unauthorized(
-                    "passkey challenge session has been invalidated".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::security::PASSKEY_CHALLENGE_SESSION_INVALIDATED,
+                    "passkey challenge session has been invalidated",
                 ));
             }
         }
 
         let credential =
             serde_json::from_str::<PublicKeyCredential>(response_json).map_err(|error| {
-                AppError::Validation(format!(
-                    "invalid passkey authentication response payload: {error}"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::security::PASSKEY_AUTHENTICATION_RESPONSE_PAYLOAD_INVALID,
+                    format!("invalid passkey authentication response payload: {error}"),
+                )
             })?;
         let state = match serde_json::from_str::<StoredChallengeState>(&challenge.state_json)
             .map_err(|error| {
@@ -642,8 +686,9 @@ impl AppUseCase {
             })? {
             StoredChallengeState::Authentication(state) => state,
             StoredChallengeState::Registration(_) => {
-                return Err(AppError::Validation(
-                    "passkey challenge stored a registration ceremony".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::PASSKEY_CHALLENGE_STORED_REGISTRATION_CEREMONY,
+                    "passkey challenge stored a registration ceremony",
                 ));
             }
         };
@@ -661,11 +706,14 @@ impl AppUseCase {
                     .webauthn
                     .get_credential_by_credential_id(&requested_credential_id)
                     .await?
-                    .ok_or_else(|| AppError::Unauthorized("passkey credential not found".into()))?;
+                    .ok_or_else(|| {
+                        AppError::unauthorized_reason(
+                            crate::error_reasons::security::PASSKEY_CREDENTIAL_NOT_FOUND,
+                            "passkey credential not found",
+                        )
+                    })?;
                 if record.user_id != user.id {
-                    return Err(AppError::Unauthorized(
-                        "passkey credential does not belong to the challenge user".into(),
-                    ));
+                    return Err(AppError::unauthorized_reason(crate::error_reasons::security::PASSKEY_CREDENTIAL_DOES_NOT_BELONG_CHALLENGE_USER, "passkey credential does not belong to the challenge user"));
                 }
                 let auth_session_version = self
                     .services
@@ -679,9 +727,10 @@ impl AppUseCase {
                     .webauthn_runtime()?
                     .finish_passkey_authentication(&credential, &state, &passkey)
                     .map_err(|error| {
-                        AppError::Unauthorized(format!(
-                            "failed to finish passkey authentication: {error}"
-                        ))
+                        AppError::unauthorized_reason(
+                            crate::error_reasons::security::FAILED_FINISH_PASSKEY_AUTHENTICATION,
+                            format!("failed to finish passkey authentication: {error}"),
+                        )
                     })?;
                 passkey.update_credential(&auth_result);
                 record.credential_json = serde_json::to_string(&passkey).map_err(|error| {
@@ -696,9 +745,7 @@ impl AppUseCase {
                     .update_credential_if_current(record, &original_credential_json)
                     .await?
                     .ok_or_else(|| {
-                        AppError::Unauthorized(
-                            "passkey credential changed during authentication".into(),
-                        )
+                        AppError::unauthorized_reason(crate::error_reasons::security::PASSKEY_CREDENTIAL_CHANGED_DURING_AUTHENTICATION, "passkey credential changed during authentication")
                     })?;
                 Ok((user, auth_session_version))
             }
@@ -707,7 +754,7 @@ impl AppUseCase {
                     .webauthn_runtime()?
                     .identify_discoverable_authentication(&credential)
                     .map_err(|error| {
-                        AppError::Unauthorized(format!(
+                        AppError::unauthorized_reason(crate::error_reasons::security::FAILED_IDENTIFY_DISCOVERABLE_PASSKEY_AUTHENTICATION, format!(
                             "failed to identify discoverable passkey authentication: {error}"
                         ))
                     })?;
@@ -720,15 +767,11 @@ impl AppUseCase {
                     .get_credential_by_credential_id(&credential_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::Unauthorized(
-                            "discoverable passkey credential was not found".into(),
-                        )
+                        AppError::unauthorized_reason(crate::error_reasons::security::DISCOVERABLE_PASSKEY_CREDENTIAL_NOT_FOUND, "discoverable passkey credential was not found")
                     })?;
                 if record.user_id != user.id {
-                    return Err(AppError::Unauthorized(
-                        "discoverable passkey credential does not belong to the resolved user"
-                            .into(),
-                    ));
+                    return Err(AppError::unauthorized_reason(crate::error_reasons::security::DISCOVERABLE_PASSKEY_CREDENTIAL_DOES_NOT_BELONG_RESOLVED_USER, "discoverable passkey credential does not belong to the resolved user"
+                            ));
                 }
                 let auth_session_version = self
                     .services
@@ -743,7 +786,7 @@ impl AppUseCase {
                     .webauthn_runtime()?
                     .finish_discoverable_authentication(&credential, state, &[discoverable_key])
                     .map_err(|error| {
-                        AppError::Unauthorized(format!(
+                        AppError::unauthorized_reason(crate::error_reasons::security::FAILED_FINISH_DISCOVERABLE_PASSKEY_AUTHENTICATION, format!(
                             "failed to finish discoverable passkey authentication: {error}"
                         ))
                     })?;
@@ -760,9 +803,7 @@ impl AppUseCase {
                     .update_credential_if_current(record, &original_credential_json)
                     .await?
                     .ok_or_else(|| {
-                        AppError::Unauthorized(
-                            "discoverable passkey credential changed during authentication".into(),
-                        )
+                        AppError::unauthorized_reason(crate::error_reasons::security::DISCOVERABLE_PASSKEY_CREDENTIAL_CHANGED_DURING_AUTHENTICATION, "discoverable passkey credential changed during authentication")
                     })?;
                 Ok((user, auth_session_version))
             }
@@ -791,15 +832,19 @@ impl AppUseCase {
             .map(Self::deserialize_passkey)
             .collect::<AppResult<Vec<_>>>()?;
         if passkeys.is_empty() {
-            return Err(AppError::Unauthorized(
-                "passkey factor is no longer available".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::PASSKEY_FACTOR_UNAVAILABLE,
+                "passkey factor is no longer available",
             ));
         }
         let (options, state) = self
             .webauthn_runtime()?
             .start_passkey_authentication(&passkeys)
             .map_err(|error| {
-                AppError::Validation(format!("failed to start passkey authentication: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::security::FAILED_START_PASSKEY_AUTHENTICATION,
+                    format!("failed to start passkey authentication: {error}"),
+                )
             })?;
         let now = Utc::now();
         let challenge = WebauthnChallengeRecord {
@@ -856,9 +901,7 @@ impl AppUseCase {
             )
             .await?;
         if user.id != expected_user.id {
-            return Err(AppError::Unauthorized(
-                "passkey credential does not belong to this login verification".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::PASSKEY_CREDENTIAL_DOES_NOT_BELONG_LOGIN_VERIFICATION, "passkey credential does not belong to this login verification"));
         }
         let verification = self
             .consume_login_verification_challenge(login_verification_challenge_id, &user.id)

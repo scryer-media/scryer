@@ -217,7 +217,8 @@ impl TitleMergeRepository for TitleMergeStore {
 
     async fn execute_title_merge(&self, plan: &MergePlan) -> AppResult<MergeOutcome> {
         if plan.is_blocked() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_MERGE_BLOCKED,
                 plan.summary
                     .blocked_reason()
                     .unwrap_or_else(|| "the merge is blocked".to_string()),
@@ -292,7 +293,12 @@ async fn load_title_shape(exec: SqlExec<'_, '_>, title_id: &str) -> AppResult<Ti
         &[SqlArg::Text(title_id.to_string())],
     )
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("title {title_id} not found")))?;
+    .ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::TITLE_NOT_FOUND,
+            format!("title {title_id} not found"),
+        )
+    })?;
     Ok(TitleShape {
         library_id: row.opt_text("library_id")?,
         name: row

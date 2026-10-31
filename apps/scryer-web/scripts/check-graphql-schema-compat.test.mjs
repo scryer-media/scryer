@@ -130,7 +130,9 @@ test("rejects removed fields", () => {
   `);
 
   assert.equal(hasSchemaCompatibilityFailure(changes), true);
-  assert.ok(changes.breaking.some((change) => change.description.includes("name")));
+  assert.ok(
+    changes.breaking.some((change) => change.description.includes("name")),
+  );
 });
 
 test("rejects changed field types", () => {
@@ -166,7 +168,9 @@ test("rejects changed field types", () => {
   `);
 
   assert.equal(hasSchemaCompatibilityFailure(changes), true);
-  assert.ok(changes.breaking.some((change) => change.description.includes("name")));
+  assert.ok(
+    changes.breaking.some((change) => change.description.includes("name")),
+  );
 });
 
 test("rejects new required input fields and arguments", () => {
@@ -203,7 +207,9 @@ test("rejects new required input fields and arguments", () => {
   `);
 
   assert.equal(hasSchemaCompatibilityFailure(changes), true);
-  assert.ok(changes.breaking.some((change) => change.description.includes("libraryId")));
+  assert.ok(
+    changes.breaking.some((change) => change.description.includes("libraryId")),
+  );
 });
 
 test("rejects enum value additions as dangerous", () => {
@@ -241,7 +247,9 @@ test("rejects enum value additions as dangerous", () => {
 
   assert.equal(hasSchemaCompatibilityFailure(changes), true);
   assert.equal(changes.breaking.length, 0);
-  assert.ok(changes.dangerous.some((change) => change.description.includes("PAUSED")));
+  assert.ok(
+    changes.dangerous.some((change) => change.description.includes("PAUSED")),
+  );
   assert.equal(
     hasSchemaCompatibilityFailure(changes, { allowDangerous: true }),
     false,

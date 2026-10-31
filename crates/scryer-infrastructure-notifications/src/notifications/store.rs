@@ -125,7 +125,7 @@ impl NotificationChannelRepository for NotificationStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("notification channel {id}")));
+                    return Err(AppError::not_found_reason(crate::error_reasons::NOTIFICATION_CHANNEL_NOT_FOUND, format!("notification channel {id}")));
                 }
                 fetch_optional_channel(
                     SqlExec::Tx(tx),
@@ -134,7 +134,7 @@ impl NotificationChannelRepository for NotificationStore {
                     encryption_key.as_ref(),
                 )
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("notification channel {id}")))
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::NOTIFICATION_CHANNEL_NOT_FOUND, format!("notification channel {id}")))
             })
         })
         .await
@@ -152,7 +152,10 @@ impl NotificationChannelRepository for NotificationStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("notification channel {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::NOTIFICATION_CHANNEL_NOT_FOUND,
+                        format!("notification channel {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -272,7 +275,7 @@ impl NotificationSubscriptionRepository for NotificationStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!(
+                        return Err(AppError::not_found_reason(crate::error_reasons::NOTIFICATION_SUBSCRIPTION_NOT_FOUND, format!(
                             "notification subscription {}",
                             sub.id
                         )));
@@ -299,9 +302,10 @@ impl NotificationSubscriptionRepository for NotificationStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!(
-                            "notification subscription {id}"
-                        )));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::NOTIFICATION_SUBSCRIPTION_NOT_FOUND,
+                            format!("notification subscription {id}"),
+                        ));
                     }
                     Ok(())
                 })

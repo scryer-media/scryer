@@ -353,8 +353,9 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         now: DateTime<Utc>,
     ) -> AppResult<()> {
         if expires_at <= now {
-            return Err(AppError::Validation(
-                "claim extension must be in the future".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_CLAIM_EXTENSION_NOT_FUTURE,
+                "claim extension must be in the future",
             ));
         }
         let state_placeholders = std::iter::repeat_n("{}", LIFECYCLE_CLAIM_LIVE_STATES.len())
@@ -381,7 +382,8 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         )
         .await?;
         if updated == 0 {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_CLAIM_EXTENSION_NOT_LONGER,
                 "claim extension must lengthen a live finite lease".to_string(),
             ));
         }
@@ -412,7 +414,8 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         )
         .await?;
         if updated == 0 {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIFECYCLE_CLAIM_NOT_LIVE,
                 "lifecycle claim is no longer live".to_string(),
             ));
         }

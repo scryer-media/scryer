@@ -9,15 +9,15 @@ type PluginInstallState = {
   version: string;
 };
 
-export function applySuccessfulPluginOperationState<T extends PluginInstallState>(
-  plugin: T,
-  operationKind: PluginInstallOperationKind,
-): T {
+export function applySuccessfulPluginOperationState<
+  T extends PluginInstallState,
+>(plugin: T, operationKind: PluginInstallOperationKind): T {
   return {
     ...plugin,
     installInProgress: false,
     isInstalled: true,
-    updateAvailable: operationKind === "UPGRADE" ? false : plugin.updateAvailable,
+    updateAvailable:
+      operationKind === "UPGRADE" ? false : plugin.updateAvailable,
     installedVersion:
       operationKind === "UPGRADE"
         ? (plugin.latestVersion ?? plugin.version)

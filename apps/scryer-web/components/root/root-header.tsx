@@ -75,10 +75,7 @@ import {
   useIsMobile,
 } from "@/lib/hooks/use-mobile";
 import { MobileSearchOverlay } from "@/components/root/mobile-search-overlay";
-import {
-  sectionLabelForFacet,
-  viewFromFacet,
-} from "@/lib/facets/helpers";
+import { sectionLabelForFacet, viewFromFacet } from "@/lib/facets/helpers";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { useSearchContext } from "@/lib/context/search-context";
 import { cn } from "@/lib/utils";
@@ -92,10 +89,7 @@ import {
   hasAnyAppPermission,
   hasAnyLibraryPermission,
 } from "@/lib/utils/permissions";
-import {
-  globalSearchMetadataResultId,
-  selectorId,
-} from "@/lib/utils/dom-ids";
+import { globalSearchMetadataResultId, selectorId } from "@/lib/utils/dom-ids";
 import {
   AddToCatalogDialog,
   EMPTY_SEARCH_RESULT,
@@ -320,7 +314,8 @@ export const RootHeader = React.memo(function RootHeader({
     [desktopSearchFilters, routeCommandResults],
   );
   const visibleCatalogFacets = React.useMemo(
-    () => getVisibleCatalogFacetsForFilters(desktopSearchFilters, canViewCatalog),
+    () =>
+      getVisibleCatalogFacetsForFilters(desktopSearchFilters, canViewCatalog),
     [canViewCatalog, desktopSearchFilters],
   );
   const metadataSectionFacets = React.useMemo(
@@ -362,11 +357,12 @@ export const RootHeader = React.memo(function RootHeader({
   const showCatalogSection =
     canViewCatalog && (catalogSearchLoading || visibleCatalogCount > 0);
   const showRouteCommandSection = visibleRouteCommandResults.length > 0;
-  const hiddenRouteCommandResultCount = countHiddenRouteCommandResultsForFilters(
-    desktopSearchFilters,
-    routeCommandResults,
-    visibleRouteCommandResults,
-  );
+  const hiddenRouteCommandResultCount =
+    countHiddenRouteCommandResultsForFilters(
+      desktopSearchFilters,
+      routeCommandResults,
+      visibleRouteCommandResults,
+    );
   const showSectionResults =
     showCatalogSection ||
     metadataSectionFacets.length > 0 ||
@@ -1374,7 +1370,7 @@ export const RootHeader = React.memo(function RootHeader({
                   id="global-search-mobile-trigger"
                   ref={searchTriggerRef}
                   type="button"
-                  className="relative flex h-11 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-11 pr-3 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_10px_24px_rgba(var(--scry-accent-rgb),calc(0.12*var(--scry-glow)))] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] active:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.16*var(--scry-glow)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
+                  className="relative flex h-11 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-11 pr-3 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16)] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] active:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]"
                   onClick={() => openGlobalSearchPanel(true)}
                   aria-label={t("search.title")}
                   aria-haspopup="dialog"
@@ -1393,9 +1389,9 @@ export const RootHeader = React.memo(function RootHeader({
                   ref={searchTriggerRef}
                   type="button"
                   className={cn(
-                    "relative flex h-12 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-12 pr-4 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.12*var(--scry-glow)))] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] hover:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28),0_14px_32px_rgba(var(--scry-accent-rgb),calc(0.16*var(--scry-glow)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]",
+                    "relative flex h-12 w-full items-center gap-3 overflow-hidden rounded-[13px] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),1),rgba(var(--scry-accent-rgb),0.48),rgba(var(--scry-accent-rgb),0.96))] py-0 pl-12 pr-4 text-left text-[15px] font-medium text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.16)] transition before:pointer-events-none before:absolute before:inset-[2px] before:rounded-[11px] before:bg-[var(--scry-bg)] before:content-[''] hover:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.28)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]",
                     isGlobalSearchPanelOpen
-                      ? "before:bg-[rgba(var(--scry-accent-rgb),0.08)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.30),0_16px_36px_rgba(var(--scry-accent-rgb),calc(0.18*var(--scry-glow)))]"
+                      ? "before:bg-[rgba(var(--scry-accent-rgb),0.08)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.30)]"
                       : null,
                   )}
                   onClick={() => openGlobalSearchPanel(true)}
@@ -1437,7 +1433,7 @@ export const RootHeader = React.memo(function RootHeader({
                         onKeyDown={handleSearchPanelKeyDown}
                       >
                         <div className="flex items-center gap-[13px] border-b border-[var(--scry-border)] px-[18px] py-4">
-                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-none dark:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10),0_12px_28px_rgba(var(--scry-accent-rgb),calc(0.08*var(--scry-glow)))]">
+                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-none dark:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10)]">
                             <Search className="h-[22px] w-[22px] shrink-0 text-primary" />
                             <input
                               type="text"
@@ -1482,10 +1478,7 @@ export const RootHeader = React.memo(function RootHeader({
                               </IconButton>
                             ) : null}
                           </div>
-                          <p
-                            id="global-search-description"
-                            className="sr-only"
-                          >
+                          <p id="global-search-description" className="sr-only">
                             {globalSearch.trim()
                               ? t("search.subtitleWithQuery", {
                                   query: globalSearch.trim(),
@@ -1657,27 +1650,27 @@ export const RootHeader = React.memo(function RootHeader({
                                           <p className="rounded-[12px] border border-dashed border-[var(--scry-border2)] bg-[var(--scry-surfC)] px-4 py-5 text-sm text-[var(--scry-muted3)]">
                                             {t("search.noMetadataMatches")}
                                           </p>
+                                        ) : desktopSearchFilters.includes(
+                                            f.id,
+                                          ) ? (
+                                          <div className="flex flex-wrap gap-3 pb-1">
+                                            {renderMetadataSection(
+                                              items,
+                                              f.id,
+                                              f.metadataKey,
+                                            )}
+                                          </div>
                                         ) : (
-                                          desktopSearchFilters.includes(f.id) ? (
-                                            <div className="flex flex-wrap gap-3 pb-1">
-                                              {renderMetadataSection(
-                                                items,
-                                                f.id,
-                                                f.metadataKey,
-                                              )}
-                                            </div>
-                                          ) : (
-                                            <HorizontalRail
-                                              className="flex gap-3 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                                              fadeClassName="to-[var(--scry-bg)]"
-                                            >
-                                              {renderMetadataSection(
-                                                items,
-                                                f.id,
-                                                f.metadataKey,
-                                              )}
-                                            </HorizontalRail>
-                                          )
+                                          <HorizontalRail
+                                            className="flex gap-3 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                                            fadeClassName="to-[var(--scry-bg)]"
+                                          >
+                                            {renderMetadataSection(
+                                              items,
+                                              f.id,
+                                              f.metadataKey,
+                                            )}
+                                          </HorizontalRail>
                                         )}
                                       </section>
                                     );
@@ -1698,7 +1691,7 @@ export const RootHeader = React.memo(function RootHeader({
                                               count: String(
                                                 routeCommandResults.length,
                                               ),
-                                        })}
+                                            })}
                                       </span>
                                     </div>
                                     {hiddenRouteCommandResultCount > 0 ? (
@@ -1793,93 +1786,93 @@ export const RootHeader = React.memo(function RootHeader({
           {user ? (
             <div className="shrink-0 min-[981px]:col-start-3 min-[981px]:justify-self-end">
               <Popover open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  id="account-menu-trigger"
-                  type="button"
-                  variant="ghost"
-                  className={cn(
-                    "h-10 shrink-0 gap-2 rounded-[11px] border border-[rgba(var(--scry-accent-rgb),0.48)] bg-[rgba(var(--scry-accent-rgb),0.08)] p-[5px] pr-2 text-[var(--scry-body)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.08)] transition hover:border-[rgba(var(--scry-accent-rgb),0.68)] hover:bg-[rgba(var(--scry-accent-rgb),0.12)] hover:text-[var(--scry-ink2)] sm:h-10",
-                    accountMenuOpen
-                      ? "border-[rgba(var(--scry-accent-rgb),0.78)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.22)]"
-                      : null,
-                  )}
-                  aria-label={t("profile.accountInfo")}
-                  aria-haspopup="dialog"
-                  aria-controls="account-menu-content"
-                  aria-expanded={accountMenuOpen}
-                >
-                  {accountAvatar?.avatarUrl?.trim() ? (
-                    <img
-                      src={accountAvatar.avatarUrl}
-                      alt=""
-                      className="h-[30px] w-[30px] shrink-0 rounded-lg border border-white/20 object-cover shadow-[0_8px_18px_rgba(0,0,0,0.24)]"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <span
-                      className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg text-[13px] font-extrabold text-white"
-                      style={accountBadgeStyle}
-                    >
-                      {accountInitial}
-                    </span>
-                  )}
-                  <span className="hidden min-w-0 flex-col items-start leading-tight sm:flex">
-                    <span className="max-w-32 truncate text-[12.5px] font-semibold text-[var(--scry-ink2)]">
-                      {user.username}
-                    </span>
-                  </span>
-                  <ChevronsUpDown className="h-4 w-4 text-[var(--scry-faint)]" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                id="account-menu-content"
-                align="end"
-                sideOffset={8}
-                className="w-[min(18rem,calc(100vw-1rem))] border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] p-2 shadow-[0_18px_48px_rgba(0,0,0,0.36)] sm:w-56"
-              >
-                <div className="border-b border-[var(--scry-border)] px-3 pb-2 pt-1.5">
-                  <p className="truncate text-sm font-medium text-foreground">
-                    {user.username}
-                  </p>
-                </div>
-                <div className="space-y-1 pt-2">
+                <PopoverTrigger asChild>
                   <Button
-                    id="account-menu-profile"
+                    id="account-menu-trigger"
                     type="button"
                     variant="ghost"
-                    className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] focus-visible:ring-primary/25"
-                    onClick={handleOpenProfile}
+                    className={cn(
+                      "h-10 shrink-0 gap-2 rounded-[11px] border border-[rgba(var(--scry-accent-rgb),0.48)] bg-[rgba(var(--scry-accent-rgb),0.08)] p-[5px] pr-2 text-[var(--scry-body)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.08)] transition hover:border-[rgba(var(--scry-accent-rgb),0.68)] hover:bg-[rgba(var(--scry-accent-rgb),0.12)] hover:text-[var(--scry-ink2)] sm:h-10",
+                      accountMenuOpen
+                        ? "border-[rgba(var(--scry-accent-rgb),0.78)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-ink2)] shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.22)]"
+                        : null,
+                    )}
+                    aria-label={t("profile.accountInfo")}
+                    aria-haspopup="dialog"
+                    aria-controls="account-menu-content"
+                    aria-expanded={accountMenuOpen}
                   >
-                    <User className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
-                    {t("settings.profile")}
+                    {accountAvatar?.avatarUrl?.trim() ? (
+                      <img
+                        src={accountAvatar.avatarUrl}
+                        alt=""
+                        className="h-[30px] w-[30px] shrink-0 rounded-lg border border-white/20 object-cover shadow-[0_8px_18px_rgba(0,0,0,0.24)]"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span
+                        className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg text-[13px] font-extrabold text-white"
+                        style={accountBadgeStyle}
+                      >
+                        {accountInitial}
+                      </span>
+                    )}
+                    <span className="hidden min-w-0 flex-col items-start leading-tight sm:flex">
+                      <span className="max-w-32 truncate text-[12.5px] font-semibold text-[var(--scry-ink2)]">
+                        {user.username}
+                      </span>
+                    </span>
+                    <ChevronsUpDown className="h-4 w-4 text-[var(--scry-faint)]" />
                   </Button>
-                  {canEnableFormLogin ? (
+                </PopoverTrigger>
+                <PopoverContent
+                  id="account-menu-content"
+                  align="end"
+                  sideOffset={8}
+                  className="w-[min(18rem,calc(100vw-1rem))] border-[var(--scry-border2)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-bg))] p-2 shadow-[0_18px_48px_rgba(0,0,0,0.36)] sm:w-56"
+                >
+                  <div className="border-b border-[var(--scry-border)] px-3 pb-2 pt-1.5">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {user.username}
+                    </p>
+                  </div>
+                  <div className="space-y-1 pt-2">
                     <Button
-                      id="account-menu-enable-login"
+                      id="account-menu-profile"
                       type="button"
                       variant="ghost"
                       className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] focus-visible:ring-primary/25"
-                      onClick={handleEnableLogin}
+                      onClick={handleOpenProfile}
                     >
-                      <ShieldCheck className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
-                      {t("settings.enableFormLogin")}
+                      <User className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
+                      {t("settings.profile")}
                     </Button>
-                  ) : null}
-                  {token && effectiveFormLoginEnabled !== false ? (
-                    <Button
-                      id="account-menu-logout"
-                      type="button"
-                      variant="ghost"
-                      className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-destructive transition hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/25"
-                      onClick={handleLogout}
-                    >
-                      <LogOut className="mr-2 h-4 w-4" />
-                      {t("auth.logoutButton")}
-                    </Button>
-                  ) : null}
-                </div>
-              </PopoverContent>
+                    {canEnableFormLogin ? (
+                      <Button
+                        id="account-menu-enable-login"
+                        type="button"
+                        variant="ghost"
+                        className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] focus-visible:ring-primary/25"
+                        onClick={handleEnableLogin}
+                      >
+                        <ShieldCheck className="mr-2 h-4 w-4 text-[var(--scry-accent-ring)]" />
+                        {t("settings.enableFormLogin")}
+                      </Button>
+                    ) : null}
+                    {token && effectiveFormLoginEnabled !== false ? (
+                      <Button
+                        id="account-menu-logout"
+                        type="button"
+                        variant="ghost"
+                        className="h-11 w-full justify-start rounded-[9px] px-3 text-sm font-medium text-destructive transition hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/25"
+                        onClick={handleLogout}
+                      >
+                        <LogOut className="mr-2 h-4 w-4" />
+                        {t("auth.logoutButton")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </PopoverContent>
               </Popover>
             </div>
           ) : null}

@@ -140,8 +140,7 @@ mod tests {
         TitleRepository, UserRepository, builtin_4k_profile,
     };
     use scryer_domain::{
-        Id, Library, LibraryGrant, LibraryPermission, LibraryPermissionMask, MediaFacet, Title,
-        User,
+        Id, LibraryGrant, LibraryPermission, LibraryPermissionMask, MediaFacet, Title, User,
     };
     use sqlx::Row;
     use tokio::task::JoinSet;
@@ -203,6 +202,11 @@ mod tests {
             let catalog = title_store(&services);
             let images = TitleImageStore::new(services.datastore());
             let settings = settings_store(&services);
+            let initial_setup: String = sqlx::query_scalar("SELECT CAST(value_json AS TEXT) FROM settings_values WHERE id = 'initial-authentication-setup'")
+                .fetch_one(services.pool()).await.map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&initial_setup).unwrap(), serde_json::json!({"stage": "choice"}));
+            crate::postgres::migrations::run_migrations(services.pool(), MigrationMode::Apply).await?;
+            assert_eq!(user_store(&services).initial_authentication_state().await?, Some(scryer_application::initial_auth::SetupState::Choice));
             let info = settings.datastore_info().await?;
             assert_eq!(info.engine, "postgres");
             let current_migration_key = info.current_migration_key.as_deref().ok_or_else(|| {
@@ -214,18 +218,18 @@ mod tests {
             let current_migration_version = current_migration_key
                 .split('_')
                 .next()
-                .and_then(|value| value.parse::<u32>().ok())
+                .and_then(|value| value.parse::<i64>().ok())
                 .ok_or_else(|| {
                     AppError::Repository(format!(
                         "failed to parse PostgreSQL migration key {current_migration_key}"
                     ))
                 })?;
-            assert!(
-                current_migration_version >= 111,
-                "expected PostgreSQL blank install to apply through 0111+, got {current_migration_key}",
+            assert_eq!(
+                current_migration_version,
+                crate::migrations::embedded_catalog()?.max_version(),
+                "PostgreSQL blank install must apply the entire current catalog",
             );
             assert_postgres_runtime_schema_columns(services.pool()).await?;
-            assert_schema_parity_owned_tables_match_sqlite(services.pool()).await?;
             let default_library_count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM libraries WHERE is_default = TRUE")
                     .fetch_one(services.pool())
@@ -275,8 +279,8 @@ mod tests {
                         name: None,
                         year: Some(2024),
                         overview: Some("postgres blank install smoke".to_string()),
-                        poster_url: Some("https://example.com/poster.jpg".to_string()),
-                        background_url: Some("https://example.com/fanart.jpg".to_string()),
+                        poster_url: Some("https://image.tmdb.org/t/p/original/scryer-pg-blank-install-poster.jpg".to_string()),
+                        background_url: Some("https://image.tmdb.org/t/p/original/scryer-pg-blank-install-fanart.jpg".to_string()),
                         sort_title: Some("Postgres Blank Install Smoke".to_string()),
                         slug: Some("postgres-blank-install-smoke".to_string()),
                         imdb_id: Some("tt1234567".to_string()),
@@ -318,7 +322,7 @@ mod tests {
             assert_eq!(poster_tasks[0].title_id, title.id);
             assert_eq!(
                 poster_tasks[0].source_url,
-                "https://example.com/poster.jpg".to_string()
+                "https://image.tmdb.org/t/p/original/scryer-pg-blank-install-poster.jpg".to_string()
             );
 
             let variant_bytes = vec![5, 6, 7, 8];
@@ -328,8 +332,8 @@ mod tests {
                     &title.id,
                     TitleImageSourceResult {
                         kind: TitleImageKind::Poster,
-                        requested_source_url: "https://example.com/poster.jpg".to_string(),
-                        source_url: "https://example.com/poster.jpg".to_string(),
+                        requested_source_url: "https://image.tmdb.org/t/p/original/scryer-pg-blank-install-poster.jpg".to_string(),
+                        source_url: "https://image.tmdb.org/t/p/original/scryer-pg-blank-install-poster.jpg".to_string(),
                         source_etag: Some("source-etag".to_string()),
                         source_last_modified: Some("Wed, 14 May 2026 03:00:00 GMT".to_string()),
                         source_format: "jpeg".to_string(),
@@ -341,7 +345,7 @@ mod tests {
                             width: 250,
                             height: 375,
                             bytes: variant_bytes,
-                            digest: variant_digest,
+                            digest: variant_digest.clone(),
                         }],
                     },
                     None,
@@ -363,8 +367,29 @@ mod tests {
                     )
                 })?;
             assert_eq!(thumb_blob.content_type, "image/avif");
-            assert_eq!(thumb_blob.etag, "blake3:poster-thumb");
+            assert_eq!(thumb_blob.etag, variant_digest);
             assert_eq!(thumb_blob.bytes, vec![5, 6, 7, 8]);
+
+            // A second apply is a no-op, and the resulting full catalog validates.
+            let ledger_snapshot = |rows: Vec<crate::MigrationStatus>| {
+                rows.into_iter()
+                    .map(|row| (
+                        row.migration_key,
+                        row.migration_checksum_algo,
+                        row.migration_checksum,
+                        row.applied_at,
+                        row.success,
+                        row.error_message,
+                        row.runtime_version,
+                    ))
+                    .collect::<Vec<_>>()
+            };
+            let before = ledger_snapshot(crate::postgres::migrations::list_applied_migrations(services.pool()).await?);
+            crate::postgres::migrations::run_migrations(services.pool(), MigrationMode::Apply).await?;
+            crate::postgres::migrations::run_migrations(services.pool(), MigrationMode::ValidateOnly).await?;
+            let after = ledger_snapshot(crate::postgres::migrations::list_applied_migrations(services.pool()).await?);
+            assert_eq!(before, after, "reapplying the current catalog must preserve its ledger");
+            assert_postgres_runtime_schema_columns(services.pool()).await?;
 
             services.pool().close().await;
             Ok::<_, AppError>(())
@@ -412,8 +437,7 @@ mod tests {
             let pool = sqlx::PgPool::connect(&schema_url)
                 .await
                 .map_err(|error| AppError::Repository(error.to_string()))?;
-            crate::postgres::migrations::replay_source_catalog_for_fresh_install(&pool, Some(197))
-                .await?;
+            crate::postgres_history_test_support::replay_historical_postgres(&pool, 197).await?;
 
             sqlx::query(
                 "INSERT INTO libraries
@@ -441,6 +465,8 @@ mod tests {
             .map_err(|error| AppError::Repository(error.to_string()))?;
 
             crate::postgres::migrations::run_migrations(&pool, MigrationMode::Apply).await?;
+            crate::postgres::migrations::run_migrations(&pool, MigrationMode::Apply).await?;
+            crate::postgres::migrations::run_migrations(&pool, MigrationMode::ValidateOnly).await?;
 
             let custom_movies: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM libraries
@@ -954,6 +980,62 @@ mod tests {
                 actual_indexes.contains("idx_library_scan_unmatched_items_facet_title_status_updated"),
                 "expected PostgreSQL blank install to restore the title-aware unmatched-items index"
             );
+            assert!(
+                !actual_indexes.contains("idx_title_search_terms_title_kind_normalized"),
+                "0278 retires the folded-term index so native spellings can coexist"
+            );
+
+            // Protect the replacement index's behavior, including its expression
+            // key: folded spellings and language profiles coexist, but NULL and
+            // the empty language tag identify the same native spelling.
+            let title = sample_title("pg-parity-index-title");
+            TitleRepository::create(&title_store(&services), title.clone()).await?;
+            let insert_term = "INSERT INTO title_search_terms
+                (title_id, facet, term_kind, raw_term, normalized_term, weight, literal_term, language_tag)
+                VALUES ($1, 'movie', 'alias', $2, 'shared_folded', 1, $2, $3)";
+            for (literal, language) in [
+                ("Native spelling A", None),
+                ("Native spelling B", None),
+                ("Native spelling A", Some("fra")),
+            ] {
+                sqlx::query(insert_term)
+                    .bind(&title.id)
+                    .bind(literal)
+                    .bind(language)
+                    .execute(services.pool())
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+            }
+            let duplicate = sqlx::query(insert_term)
+                .bind(&title.id)
+                .bind("Native spelling A")
+                .bind("")
+                .execute(services.pool())
+                .await
+                .expect_err("NULL and empty language tags must share the unique index key");
+            assert!(
+                duplicate.as_database_error().is_some_and(|error| error.is_unique_violation()),
+                "expected the language-aware unique index to refuse a duplicate: {duplicate}"
+            );
+            let term_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM title_search_terms WHERE title_id = $1 AND normalized_term = 'shared_folded'",
+            )
+            .bind(&title.id)
+            .fetch_one(services.pool())
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(term_count, 3, "native spelling and language columns must remain independent keys");
+            let orphan = sqlx::query(insert_term)
+                .bind("missing-parity-index-title")
+                .bind("Orphan")
+                .bind(Option::<&str>::None)
+                .execute(services.pool())
+                .await
+                .expect_err("search terms must retain their title foreign key");
+            assert!(
+                orphan.as_database_error().is_some_and(|error| error.is_foreign_key_violation()),
+                "expected the title foreign key to refuse an orphan term: {orphan}"
+            );
 
             services.pool().close().await;
             Ok::<_, AppError>(())
@@ -1101,18 +1183,16 @@ mod tests {
                 PostgresServices::new_with_mode(schema_url, MigrationMode::Apply).await?;
             let users = user_store(&services);
             let libraries = library_store(&services);
-            let now = chrono::Utc::now();
-            let movie_library = Library {
-                id: "movie_default_library".to_string(),
-                facet: MediaFacet::Movie,
-                name: "Default movie".to_string(),
-                slug: "movies".to_string(),
-                is_default: true,
-                roots: Vec::new(),
-                created_at: now,
-                updated_at: now,
-            };
-            LibraryRepository::create(&libraries, movie_library, Vec::new()).await?;
+            let movie_library = LibraryRepository::default_for_facet(&libraries, MediaFacet::Movie)
+                .await?
+                .expect("blank install seeds the default movie library");
+            assert_eq!(movie_library.id, "movie_default_library");
+            assert_eq!(movie_library.facet, MediaFacet::Movie);
+            assert_eq!(movie_library.slug, "movies");
+            assert!(movie_library.is_default);
+            assert_eq!(movie_library.roots.len(), 1);
+            assert!(movie_library.roots[0].is_default);
+            assert_eq!(movie_library.roots[0].path, "/data/movies");
             let user = UserRepository::create(&users, User::new_admin("admin-concurrency")).await?;
             let user_id = user.id.clone();
             let permissions = LibraryPermissionMask::from_permissions([
@@ -1188,7 +1268,7 @@ mod tests {
     }
 
     fn postgres_parity_index_names_from_source() -> BTreeSet<String> {
-        let indexes: BTreeSet<String> = std::fs::read_to_string(postgres_0254_baseline_path())
+        let mut indexes: BTreeSet<String> = std::fs::read_to_string(postgres_0254_baseline_path())
             .expect("read PostgreSQL 0254 baseline")
             .lines()
             .filter_map(|line| {
@@ -1200,6 +1280,10 @@ mod tests {
                     .map(str::to_string)
             })
             .collect();
+        // 0278 replaces folded-term uniqueness with native spelling/language
+        // uniqueness. Every other baseline parity index is still required.
+        assert!(indexes.remove("idx_title_search_terms_title_kind_normalized"));
+        assert!(indexes.insert("idx_title_search_terms_title_kind_language".to_string()));
         indexes
     }
 
@@ -1208,60 +1292,62 @@ mod tests {
             .join("../scryer/src/db/postgres/baselines/0254_baseline.sql")
     }
 
-    async fn assert_postgres_runtime_schema_columns(pool: &sqlx::PgPool) -> AppResult<()> {
-        let rows = sqlx::query(
-            "SELECT table_name, column_name
-               FROM information_schema.columns
-              WHERE table_schema = current_schema()",
+    async fn assert_postgres_runtime_schema_columns(postgres_pool: &sqlx::PgPool) -> AppResult<()> {
+        // Each engine independently applies its current baseline, engine-specific
+        // SQL steps, and hooks. Compare the complete logical schema, rather than
+        // rejecting every column introduced after the old 0254 baseline.
+        let sqlite = crate::sqlite_services::SqliteServices::new_with_mode(
+            "sqlite://:memory:",
+            MigrationMode::Apply,
         )
-        .fetch_all(pool)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
+        .await?;
+        let mut sqlite_schema = sqlite_table_columns(sqlite.pool()).await?;
+        let mut postgres_schema = postgres_table_columns(postgres_pool).await?;
+        let actual_tables: BTreeSet<String> = postgres_schema.keys().cloned().collect();
 
-        let actual_columns: BTreeSet<(String, String)> = rows
+        // The PostgreSQL ledger intentionally retains two runtime diagnostic
+        // columns. Assert both exact ledger shapes before comparing application
+        // tables; an arbitrary schema difference must never be filtered away.
+        let sqlite_ledger = sqlite_schema
+            .remove("_sqlx_migrations")
+            .expect("SQLite migration ledger");
+        let postgres_ledger = postgres_schema
+            .remove("_sqlx_migrations")
+            .expect("PostgreSQL migration ledger");
+        let common_ledger: BTreeSet<String> = [
+            "version",
+            "description",
+            "installed_on",
+            "success",
+            "checksum",
+            "execution_time",
+            "checksum_algo",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert_eq!(sqlite_ledger, common_ledger);
+        let mut expected_postgres_ledger = common_ledger;
+        expected_postgres_ledger
+            .extend(["runtime_version".to_string(), "error_message".to_string()]);
+        assert_eq!(postgres_ledger, expected_postgres_ledger);
+
+        let table_names: BTreeSet<&String> =
+            sqlite_schema.keys().chain(postgres_schema.keys()).collect();
+        let mismatches: Vec<String> = table_names
             .into_iter()
-            .map(|row| {
-                Ok::<_, AppError>((
-                    row.try_get("table_name")
-                        .map_err(|error| AppError::Repository(error.to_string()))?,
-                    row.try_get("column_name")
-                        .map_err(|error| AppError::Repository(error.to_string()))?,
-                ))
+            .filter(|table| sqlite_schema.get(*table) != postgres_schema.get(*table))
+            .map(|table| {
+                format!(
+                    "{table}: sqlite={:?} postgres={:?}",
+                    sqlite_schema.get(table),
+                    postgres_schema.get(table)
+                )
             })
-            .collect::<AppResult<_>>()?;
-        let actual_tables: BTreeSet<String> = actual_columns
-            .iter()
-            .map(|(table, _)| table.clone())
             .collect();
-        let expected_columns = postgres_0254_baseline_columns();
-
-        let mut missing_columns = Vec::new();
-        for (table, columns) in &expected_columns {
-            for column in columns {
-                if !actual_columns.contains(&(table.clone(), column.clone())) {
-                    missing_columns.push(format!("{table}.{column}"));
-                }
-            }
-        }
-
         assert!(
-            missing_columns.is_empty(),
-            "expected PostgreSQL blank install to include every 0254 baseline column; missing {missing_columns:?}"
-        );
-
-        let unexpected_columns: Vec<String> = actual_columns
-            .iter()
-            .filter(|(table, column)| {
-                expected_columns
-                    .get(table)
-                    .is_some_and(|columns| !columns.contains(column))
-            })
-            .map(|(table, column)| format!("{table}.{column}"))
-            .collect();
-
-        assert!(
-            unexpected_columns.is_empty(),
-            "PostgreSQL blank install exposes columns outside the 0254 baseline: {unexpected_columns:?}"
+            mismatches.is_empty(),
+            "current SQLite/PostgreSQL logical schema parity mismatch: {mismatches:#?}"
         );
 
         for removed_table in [
@@ -1278,102 +1364,7 @@ mod tests {
                 "PostgreSQL blank install still exposes removed table {removed_table}"
             );
         }
-
-        Ok(())
-    }
-
-    fn postgres_0254_baseline_columns() -> BTreeMap<String, BTreeSet<String>> {
-        parse_create_table_columns(include_str!(
-            "../../../scryer/src/db/postgres/baselines/0254_baseline.sql"
-        ))
-    }
-
-    fn parse_create_table_columns(sql: &str) -> BTreeMap<String, BTreeSet<String>> {
-        let mut schema = BTreeMap::<String, BTreeSet<String>>::new();
-        let mut current_table: Option<String> = None;
-        for line in sql.lines() {
-            let trimmed = line.trim();
-            if let Some(table) = current_table.as_ref() {
-                if trimmed == ");" {
-                    current_table = None;
-                    continue;
-                }
-                if trimmed.is_empty()
-                    || trimmed.starts_with("CONSTRAINT ")
-                    || trimmed.starts_with("PRIMARY ")
-                    || trimmed.starts_with("UNIQUE ")
-                    || trimmed.starts_with("FOREIGN ")
-                    || trimmed.starts_with("CHECK ")
-                {
-                    continue;
-                }
-                if let Some(column) = trimmed
-                    .trim_end_matches(',')
-                    .split_whitespace()
-                    .next()
-                    .map(|value| value.trim_matches('"').to_string())
-                {
-                    schema.entry(table.clone()).or_default().insert(column);
-                }
-                continue;
-            }
-
-            if let Some(rest) = trimmed.strip_prefix("CREATE TABLE ") {
-                let table = rest
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or_default()
-                    .trim_end_matches('(')
-                    .trim_start_matches("public.")
-                    .to_string();
-                schema.entry(table.clone()).or_default();
-                current_table = Some(table);
-            }
-        }
-        schema
-    }
-
-    async fn assert_schema_parity_owned_tables_match_sqlite(
-        postgres_pool: &sqlx::PgPool,
-    ) -> AppResult<()> {
-        let sqlite = crate::sqlite_services::SqliteServices::new_with_mode(
-            "sqlite://:memory:",
-            MigrationMode::Apply,
-        )
-        .await?;
-
-        let sqlite_schema = sqlite_table_columns(sqlite.pool()).await?;
-        let postgres_schema = postgres_table_columns(postgres_pool).await?;
-        let parity_tables = [
-            "titles",
-            "indexers",
-            "download_clients",
-            "subtitle_provider_configs",
-            "rule_sets",
-            "rule_pack_installations",
-            "rule_pack_members",
-            "post_processing_scripts",
-            "post_processing_script_runs",
-            "plugin_installations",
-            "plugin_catalog_sources",
-            "plugin_catalog_status",
-        ];
-
-        let mut mismatches = Vec::new();
-        for table in parity_tables {
-            let sqlite_columns = sqlite_schema.get(table).cloned().unwrap_or_default();
-            let postgres_columns = postgres_schema.get(table).cloned().unwrap_or_default();
-            if sqlite_columns != postgres_columns {
-                mismatches.push(format!(
-                    "{table}: sqlite={sqlite_columns:?} postgres={postgres_columns:?}"
-                ));
-            }
-        }
-
-        assert!(
-            mismatches.is_empty(),
-            "SQLite/PostgreSQL logical schema parity mismatch: {mismatches:#?}"
-        );
+        sqlite.pool().close().await;
         Ok(())
     }
 

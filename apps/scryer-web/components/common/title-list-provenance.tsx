@@ -7,7 +7,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { titleListMembershipsQuery } from "@/lib/graphql/queries";
 import type { TitleListMembership } from "@/lib/types/lists";
 import { cn } from "@/lib/utils";
-import { titleListMembershipChanged, titleListProvenance } from "@/lib/utils/lists";
+import {
+  titleListMembershipChanged,
+  titleListProvenance,
+} from "@/lib/utils/lists";
 
 type TitleListProvenanceProps = {
   titleId: string;
@@ -20,12 +23,18 @@ type TitleListProvenanceProps = {
  * the title in the library, or a muted note once that list has dropped it.
  * Renders nothing for titles no list added.
  */
-export function TitleListProvenance({ titleId, variant = "default", className }: TitleListProvenanceProps) {
+export function TitleListProvenance({
+  titleId,
+  variant = "default",
+  className,
+}: TitleListProvenanceProps) {
   const client = useClient();
   const t = useTranslate();
   const { registerReactiveRefresh } = useReactiveRefresh();
   const refreshAliasId = React.useId();
-  const [memberships, setMemberships] = React.useState<TitleListMembership[]>([]);
+  const [memberships, setMemberships] = React.useState<TitleListMembership[]>(
+    [],
+  );
   // Only the newest read may land: a refresh started by a live event can race
   // the first read or an earlier refresh.
   const latestRequestRef = React.useRef(0);
@@ -39,7 +48,10 @@ export function TitleListProvenance({ titleId, variant = "default", className }:
         .toPromise()
         .then((result) => {
           if (request !== latestRequestRef.current || result.error) return;
-          setMemberships((result.data?.title?.listMemberships ?? []) as TitleListMembership[]);
+          setMemberships(
+            (result.data?.title?.listMemberships ??
+              []) as TitleListMembership[],
+          );
         });
     };
     load("cache-first");
@@ -72,7 +84,11 @@ export function TitleListProvenance({ titleId, variant = "default", className }:
     <p
       id="title-list-provenance"
       data-state={provenance.kind}
-      className={cn("flex min-w-0 items-center gap-1.5 text-[12px]", tone, className)}
+      className={cn(
+        "flex min-w-0 items-center gap-1.5 text-[12px]",
+        tone,
+        className,
+      )}
     >
       <ListPlus className="h-3.5 w-3.5 flex-none" aria-hidden />
       <span className="min-w-0 truncate">

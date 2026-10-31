@@ -134,6 +134,9 @@ export const SEARCH_LANGUAGES: SubtitleLanguage[] = AUDIO_LANGUAGES;
 
 export function formatSearchLanguageLabels(codes: string[]): string {
   return codes
-    .map((code) => audioLanguageByCode.get(code.trim().toLowerCase())?.name ?? code)
+    .map(
+      (code) =>
+        audioLanguageByCode.get(code.trim().toLowerCase())?.name ?? code,
+    )
     .join(", ");
 }

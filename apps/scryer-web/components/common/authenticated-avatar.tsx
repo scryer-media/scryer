@@ -14,7 +14,7 @@ export function useAuthenticatedAvatarSource(
     typeof window !== "undefined" &&
     Boolean(
       avatarUrl &&
-        isProtectedMediaServerAvatarUrl(avatarUrl, window.location.origin),
+      isProtectedMediaServerAvatarUrl(avatarUrl, window.location.origin),
     );
   const [loaded, setLoaded] = React.useState<{
     requestedUrl: string;

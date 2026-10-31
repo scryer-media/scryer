@@ -91,7 +91,13 @@ test("resubscribes with the last-seen afterSequence for lossless catch-up", () =
 
   // The server delivers an event at sequence 5; the engine advances its cursor.
   capture.get().next({
-    data: { domainEventFeed: { sequence: 5, eventType: "title_updated", titleId: "A" } },
+    data: {
+      domainEventFeed: {
+        sequence: 5,
+        eventType: "title_updated",
+        titleId: "A",
+      },
+    },
   });
   assert.equal(engine.afterSequence(), 5);
 
@@ -106,7 +112,9 @@ test("resubscribes with the last-seen afterSequence for lossless catch-up", () =
 
 test("degrades to an interval refresh after repeated failures and recovers on delivery", () => {
   const engineSched = createManualScheduler();
-  const engine = createReactiveRefreshEngine({ scheduler: engineSched.scheduler });
+  const engine = createReactiveRefreshEngine({
+    scheduler: engineSched.scheduler,
+  });
   let ran = 0;
   engine.register({
     aliasKey: "a",
@@ -163,7 +171,9 @@ test("degrades to an interval refresh after repeated failures and recovers on de
 
 test("refreshes while reconnecting without an event cursor", () => {
   const engineSched = createManualScheduler();
-  const engine = createReactiveRefreshEngine({ scheduler: engineSched.scheduler });
+  const engine = createReactiveRefreshEngine({
+    scheduler: engineSched.scheduler,
+  });
   let ran = 0;
   engine.register({
     aliasKey: "a",

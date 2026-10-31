@@ -96,10 +96,34 @@ function root(overrides: Partial<StorageRootUsage>): StorageRootUsage {
 
 test("storage roots group by library, ordered by the worst root descending", () => {
   const groups = groupStorageRootsByLibrary([
-    root({ path: "/data/movies", libraryId: "movies", libraryName: "Movies", usedBytes: 5, totalBytes: 10 }),
-    root({ path: "/data/series", libraryId: "series", libraryName: "Series", usedBytes: 9, totalBytes: 10 }),
-    root({ path: "/data/4k", libraryId: "movies", libraryName: "Movies", usedBytes: 97, totalBytes: 100 }),
-    root({ path: "/data/anime", libraryId: "anime", libraryName: "Anime", usedBytes: 1, totalBytes: 10 }),
+    root({
+      path: "/data/movies",
+      libraryId: "movies",
+      libraryName: "Movies",
+      usedBytes: 5,
+      totalBytes: 10,
+    }),
+    root({
+      path: "/data/series",
+      libraryId: "series",
+      libraryName: "Series",
+      usedBytes: 9,
+      totalBytes: 10,
+    }),
+    root({
+      path: "/data/4k",
+      libraryId: "movies",
+      libraryName: "Movies",
+      usedBytes: 97,
+      totalBytes: 100,
+    }),
+    root({
+      path: "/data/anime",
+      libraryId: "anime",
+      libraryName: "Anime",
+      usedBytes: 1,
+      totalBytes: 10,
+    }),
   ]);
 
   assert.deepEqual(
@@ -115,9 +139,27 @@ test("storage roots group by library, ordered by the worst root descending", () 
 
 test("roots with unknown usage sort last and never rank a library as worst", () => {
   const groups = groupStorageRootsByLibrary([
-    root({ path: "/mnt/unknown", libraryId: "unknown", libraryName: "Unknown", usedBytes: null, totalBytes: null }),
-    root({ path: "/data/movies", libraryId: "movies", libraryName: "Movies", usedBytes: 5, totalBytes: 10 }),
-    root({ path: "/data/movies-b", libraryId: "movies", libraryName: "Movies", usedBytes: null, totalBytes: null }),
+    root({
+      path: "/mnt/unknown",
+      libraryId: "unknown",
+      libraryName: "Unknown",
+      usedBytes: null,
+      totalBytes: null,
+    }),
+    root({
+      path: "/data/movies",
+      libraryId: "movies",
+      libraryName: "Movies",
+      usedBytes: 5,
+      totalBytes: 10,
+    }),
+    root({
+      path: "/data/movies-b",
+      libraryId: "movies",
+      libraryName: "Movies",
+      usedBytes: null,
+      totalBytes: null,
+    }),
   ]);
 
   assert.deepEqual(
@@ -153,8 +195,16 @@ test("indexer health counts exclude disabled indexers from both sides", () => {
   const summary = summarizeIndexerHealth([
     { isEnabled: true, lastHealthStatus: "healthy", lastErrorMessage: null },
     { isEnabled: true, lastHealthStatus: "healthy", lastErrorMessage: null },
-    { isEnabled: true, lastHealthStatus: "unhealthy", lastErrorMessage: "auth failed" },
-    { isEnabled: false, lastHealthStatus: "unhealthy", lastErrorMessage: "auth failed" },
+    {
+      isEnabled: true,
+      lastHealthStatus: "unhealthy",
+      lastErrorMessage: "auth failed",
+    },
+    {
+      isEnabled: false,
+      lastHealthStatus: "unhealthy",
+      lastErrorMessage: "auth failed",
+    },
   ]);
 
   assert.deepEqual(summary, { healthy: 2, enabled: 3, erroring: 1 });
@@ -206,11 +256,21 @@ test("per-client counts split active from queued and drop terminal rows", () => 
 
 test("attention total sums the four operator queues", () => {
   assert.equal(
-    attentionTotal({ requests: 7, imports: 4, pluginUpdates: 2, indexerErrors: 1 }),
+    attentionTotal({
+      requests: 7,
+      imports: 4,
+      pluginUpdates: 2,
+      indexerErrors: 1,
+    }),
     14,
   );
   assert.equal(
-    attentionTotal({ requests: 0, imports: 0, pluginUpdates: 0, indexerErrors: 0 }),
+    attentionTotal({
+      requests: 0,
+      imports: 0,
+      pluginUpdates: 0,
+      indexerErrors: 0,
+    }),
     0,
   );
 });

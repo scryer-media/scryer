@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTvdbMovieUrl, buildTvdbSeriesUrl } from "./external-media-links.ts";
+import {
+  buildTvdbMovieUrl,
+  buildTvdbSeriesUrl,
+} from "./external-media-links.ts";
 
 test("TVDB movie links use slug URLs when available", () => {
   assert.equal(

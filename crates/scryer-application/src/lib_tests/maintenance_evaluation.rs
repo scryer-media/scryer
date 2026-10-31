@@ -1566,14 +1566,26 @@ async fn gates_require_system_settings_management() {
         .maintenance_instance_gates(&outsider)
         .await
         .expect_err("reading gates must be permission gated");
-    assert!(matches!(read, AppError::Unauthorized(_)), "{read:?}");
+    assert!(
+        matches!(
+            read,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{read:?}"
+    );
 
     let write = fixture
         .app
         .set_maintenance_instance_gates(&outsider, MaintenanceGatesUpdate::default())
         .await
         .expect_err("arming gates must be permission gated");
-    assert!(matches!(write, AppError::Unauthorized(_)), "{write:?}");
+    assert!(
+        matches!(
+            write,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{write:?}"
+    );
 }
 
 #[tokio::test]
@@ -1698,7 +1710,15 @@ async fn a_rule_whose_action_changes_nothing_cannot_be_enabled() {
         )
         .await
         .expect_err("nothing to arm");
-    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

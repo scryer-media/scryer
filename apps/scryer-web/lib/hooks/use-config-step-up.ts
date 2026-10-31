@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { backendClient, MFA_STEP_UP_REQUIRED_EVENT } from "@/lib/graphql/urql-client";
+import {
+  backendClient,
+  MFA_STEP_UP_REQUIRED_EVENT,
+} from "@/lib/graphql/urql-client";
 import { authRuntimeStateQuery } from "@/lib/graphql/queries";
 import { mfaVerifyStepUpMutation } from "@/lib/graphql/mutations";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
@@ -74,66 +77,69 @@ export function useConfigStepUp({
   );
   const [settingsStepUpForced, setSettingsStepUpForced] = useState(false);
 
-  const refreshConfigStepUpPolicy = useCallback(async (options?: { force?: boolean }) => {
-    if (!protectedSettingsRoute) {
-      usedInitialPolicyRef.current = false;
-      setConfigStepUpPolicy((current) => ({
-        ...current,
-        loading: false,
-        error: false,
-      }));
-      return;
-    }
-
-    if (
-      options?.force !== true &&
-      !usedInitialPolicyRef.current &&
-      initialMfaRequireConfigStepUp !== null
-    ) {
-      usedInitialPolicyRef.current = true;
-      setConfigStepUpPolicy({
-        loading: false,
-        required: initialMfaRequireConfigStepUp,
-        error: false,
-        resolved: true,
-      });
-      return;
-    }
-
-    usedInitialPolicyRef.current = true;
-    setConfigStepUpPolicy((current) => ({
-      ...current,
-      loading: !current.resolved,
-      error: false,
-    }));
-    try {
-      const { data, error } = await backendClient
-        .query<{
-          authRuntimeState?: {
-            mfaRequireConfigStepUp?: boolean | null;
-          } | null;
-        }>(authRuntimeStateQuery, {})
-        .toPromise();
-      if (error) {
-        throw error;
+  const refreshConfigStepUpPolicy = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!protectedSettingsRoute) {
+        usedInitialPolicyRef.current = false;
+        setConfigStepUpPolicy((current) => ({
+          ...current,
+          loading: false,
+          error: false,
+        }));
+        return;
       }
 
-      const runtimeState = data?.authRuntimeState;
-      setConfigStepUpPolicy({
-        loading: false,
-        required: runtimeState?.mfaRequireConfigStepUp === true,
-        error: false,
-        resolved: true,
-      });
-    } catch (error) {
-      console.warn("Failed to refresh MFA step-up policy", error);
+      if (
+        options?.force !== true &&
+        !usedInitialPolicyRef.current &&
+        initialMfaRequireConfigStepUp !== null
+      ) {
+        usedInitialPolicyRef.current = true;
+        setConfigStepUpPolicy({
+          loading: false,
+          required: initialMfaRequireConfigStepUp,
+          error: false,
+          resolved: true,
+        });
+        return;
+      }
+
+      usedInitialPolicyRef.current = true;
       setConfigStepUpPolicy((current) => ({
         ...current,
-        loading: false,
-        error: !current.resolved,
+        loading: !current.resolved,
+        error: false,
       }));
-    }
-  }, [initialMfaRequireConfigStepUp, protectedSettingsRoute]);
+      try {
+        const { data, error } = await backendClient
+          .query<{
+            authRuntimeState?: {
+              mfaRequireConfigStepUp?: boolean | null;
+            } | null;
+          }>(authRuntimeStateQuery, {})
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+
+        const runtimeState = data?.authRuntimeState;
+        setConfigStepUpPolicy({
+          loading: false,
+          required: runtimeState?.mfaRequireConfigStepUp === true,
+          error: false,
+          resolved: true,
+        });
+      } catch (error) {
+        console.warn("Failed to refresh MFA step-up policy", error);
+        setConfigStepUpPolicy((current) => ({
+          ...current,
+          loading: false,
+          error: !current.resolved,
+        }));
+      }
+    },
+    [initialMfaRequireConfigStepUp, protectedSettingsRoute],
+  );
 
   useEffect(() => {
     return scheduleAfterFirstPaint(() => {

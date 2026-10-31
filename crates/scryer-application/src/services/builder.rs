@@ -628,6 +628,16 @@ impl AppServicesBuilder {
         Arc<dyn IndexerCapsSnapshotRefresher>
     );
     app_services_builder_runtime_feature_setter!(
+        with_indexer_client_repository,
+        integrations.indexer_clients,
+        Arc<dyn crate::indexer_clients::IndexerClientRepository>
+    );
+    app_services_builder_setter!(
+        with_indexer_caps_cache,
+        integrations.indexer_caps_cache,
+        Arc<crate::CapsRequestCache>
+    );
+    app_services_builder_runtime_feature_setter!(
         with_plugin_provider,
         integrations.plugin_provider,
         Arc<dyn IndexerPluginProvider>

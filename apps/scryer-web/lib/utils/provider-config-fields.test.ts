@@ -11,7 +11,9 @@ import {
 } from "./provider-config-fields.ts";
 import { visibleIndexerConfigFields } from "../types/indexers.ts";
 
-function field(overrides: Partial<ConfigFieldDef> & Pick<ConfigFieldDef, "key">): ConfigFieldDef {
+function field(
+  overrides: Partial<ConfigFieldDef> & Pick<ConfigFieldDef, "key">,
+): ConfigFieldDef {
   return {
     key: overrides.key,
     label: overrides.label ?? overrides.key,
@@ -74,10 +76,7 @@ test("host-bound values never reach the form", () => {
 test("each operator matches the host's semantics", () => {
   const values = { definition: "custom", cookie: "  ", profile_id: "nzbgeek" };
   const holds = (op: string, key: string, vals: string[]) =>
-    fieldConditionHolds(
-      { key, op: op as never, values: vals },
-      values,
-    );
+    fieldConditionHolds({ key, op: op as never, values: vals }, values);
 
   assert.equal(holds("EQ", "definition", ["custom"]), true);
   assert.equal(holds("EQ", "definition", ["byo"]), false);

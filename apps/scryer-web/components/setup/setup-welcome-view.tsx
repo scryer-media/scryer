@@ -83,11 +83,15 @@ export function SetupWelcomeView({
         >
           {t("setup.welcomeTitle")}
         </h1>
-        <p className="text-[var(--scry-muted)]">{t("setup.welcomeDescription")}</p>
+        <p className="text-[var(--scry-muted)]">
+          {t("setup.welcomeDescription")}
+        </p>
       </div>
       <div
         className={`grid w-full gap-4 ${
-          canRestoreSetup ? "max-w-5xl xl:grid-cols-3" : "max-w-3xl md:grid-cols-2"
+          canRestoreSetup
+            ? "max-w-5xl xl:grid-cols-3"
+            : "max-w-3xl md:grid-cols-2"
         }`}
       >
         {choices.map((choice) => {

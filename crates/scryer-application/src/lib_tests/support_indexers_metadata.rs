@@ -178,6 +178,9 @@ pub(super) struct RecordedIndexerSearch {
 #[derive(Default, Clone)]
 pub(super) struct TrackingIndexerClient {
     pub(super) searches: Arc<Mutex<Vec<RecordedIndexerSearch>>>,
+    pub(super) search_started: Arc<tokio::sync::Notify>,
+    pub(super) search_gate: Option<Arc<tokio::sync::Semaphore>>,
+    pub(super) search_cancellations: Arc<Mutex<Vec<tokio_util::sync::CancellationToken>>>,
     /// The learning context each search carried; the search client reads its
     /// lane from it (search semaphore, corpus reuse, request pacing).
     pub(super) learning_contexts: Arc<Mutex<Vec<Option<crate::IndexerSearchLearningContext>>>>,
@@ -209,6 +212,11 @@ pub(super) struct TrackedContainment {
     /// Contained indexers per convergence scope, with the instant they are due.
     holds: std::collections::HashMap<String, Vec<(String, chrono::DateTime<chrono::Utc>)>>,
     pub(super) linked_scopes: Vec<String>,
+    /// Instant until which every asked indexer is held out of its facet, as
+    /// if background searches had learned it carries nothing there.
+    pub(super) facet_hold_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The facet each facet-hold read asked about.
+    pub(super) facet_hold_reads: Vec<String>,
 }
 
 impl TrackingIndexerClient {
@@ -293,12 +301,35 @@ impl IndexerClient for TrackingIndexerClient {
         learning_context: Option<crate::IndexerSearchLearningContext>,
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
+        if self.search_gate.is_some() && query.is_empty() {
+            return Ok(IndexerSearchResponse {
+                results: Vec::new(),
+                next_cursor: None,
+                completion: crate::IndexerSearchCompletion::Complete,
+                indexer_outcomes: Vec::new(),
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+            });
+        }
         self.learning_contexts.lock().await.push(learning_context);
         self.searches.lock().await.push(RecordedIndexerSearch {
             query: query.clone(),
             season,
             episode,
         });
+        self.search_cancellations
+            .lock()
+            .await
+            .push(_cancel_token.clone());
+        self.search_started.notify_one();
+        if let Some(gate) = &self.search_gate {
+            tokio::select! {
+                _ = _cancel_token.cancelled() => return Err(AppError::canceled("test query cancelled")),
+                permit = gate.acquire() => permit.expect("query gate remains open").forget(),
+            }
+        }
         let mut routed_indexer_ids = indexer_routing
             .iter()
             .flat_map(|plan| plan.entries.iter())
@@ -323,6 +354,7 @@ impl IndexerClient for TrackingIndexerClient {
             routed_indexer_ids
                 .iter()
                 .map(|indexer_id| crate::IndexerQueryOutcome {
+                    page: None,
                     indexer_id: indexer_id.clone(),
                     outcome: crate::IndexerSearchOutcome::Partial {
                         empty: self.empty_results,
@@ -337,6 +369,7 @@ impl IndexerClient for TrackingIndexerClient {
                 .flat_map(|plan| plan.entries)
                 .filter(|(_, entry)| entry.enabled)
                 .map(|(indexer_id, _)| crate::IndexerQueryOutcome {
+                    page: None,
                     indexer_id,
                     outcome: crate::IndexerSearchOutcome::Complete {
                         empty: self.empty_results,
@@ -462,6 +495,21 @@ impl IndexerClient for TrackingIndexerClient {
             .filter(|(id, until)| *until > now && indexer_ids.contains(id))
             .cloned()
             .collect())
+    }
+
+    async fn facet_suppression_holds(
+        &self,
+        facet: &str,
+        indexer_ids: &[String],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        let mut containment = self.containment.lock().await;
+        containment.facet_hold_reads.push(facet.to_string());
+        Ok(containment
+            .facet_hold_until
+            .filter(|until| *until > now)
+            .map(|until| indexer_ids.iter().map(|id| (id.clone(), until)).collect())
+            .unwrap_or_default())
     }
 }
 
@@ -638,6 +686,7 @@ impl IndexerClient for FixedReleaseIndexerClient {
             .fired_indexer_ids
             .iter()
             .map(|id| crate::IndexerQueryOutcome {
+                page: None,
                 indexer_id: id.clone(),
                 outcome: crate::IndexerSearchOutcome::Complete {
                     empty: self.empty_response,

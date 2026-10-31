@@ -71,7 +71,15 @@ export function useCatalogViewPreferences(
         ? savedCatalogViewMode(uiSettings, deviceClass, facet)
         : null;
     return saved ?? readStoredContentViewMode(view);
-  }, [deviceClass, facet, localViewModes, scopeKey, uiSettings, uiSettingsLoaded, view]);
+  }, [
+    deviceClass,
+    facet,
+    localViewModes,
+    scopeKey,
+    uiSettings,
+    uiSettingsLoaded,
+    view,
+  ]);
 
   const visibleColumns: TitleTableVisibleColumns = React.useMemo(() => {
     const local = localColumns[scopeKey];
@@ -112,10 +120,10 @@ export function useCatalogViewPreferences(
       const sequence = ++saveSequenceRef.current;
       saveChainRef.current = saveChainRef.current.then(async () => {
         const result = await client
-          .mutation<{ setMyCatalogView?: UiSettings }, { input: SetMyCatalogViewInput }>(
-            setMyCatalogViewMutation,
-            { input },
-          )
+          .mutation<
+            { setMyCatalogView?: UiSettings },
+            { input: SetMyCatalogViewInput }
+          >(setMyCatalogViewMutation, { input })
           .toPromise()
           .catch(() => null);
         if (!result || result.error || !result.data?.setMyCatalogView) {
@@ -135,7 +143,11 @@ export function useCatalogViewPreferences(
       setLocalViewModes((current) => ({ ...current, [scopeKey]: mode }));
       writeStoredContentViewMode(mode, view);
       if (facet) {
-        saveToProfile({ deviceClass, facet, viewMode: catalogViewModeToProfile(mode) });
+        saveToProfile({
+          deviceClass,
+          facet,
+          viewMode: catalogViewModeToProfile(mode),
+        });
       }
     },
     [deviceClass, facet, saveToProfile, scopeKey, view],
@@ -149,7 +161,11 @@ export function useCatalogViewPreferences(
         saveToProfile({
           deviceClass,
           facet,
-          columns: catalogColumnsInput(next, TITLE_TABLE_COLUMN_KEYS, isSupported),
+          columns: catalogColumnsInput(
+            next,
+            TITLE_TABLE_COLUMN_KEYS,
+            isSupported,
+          ),
         });
       }
     },

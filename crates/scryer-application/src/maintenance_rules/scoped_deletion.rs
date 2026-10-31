@@ -467,7 +467,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&title.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title.id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", title.id),
+                )
+            })?;
         if fresh_title.monitored {
             return Err(AppError::Repository(
                 "maintenance title unmonitoring was not confirmed; files preserved".into(),
@@ -598,8 +603,9 @@ impl AppUseCase {
             .maintenance_resolve_subject(&candidate.subject_kind, &candidate.subject_id, title, &[])
             .await?;
         if subject.ambiguous_files {
-            return Err(AppError::Validation(
-                "ambiguous maintenance file coverage".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::AMBIGUOUS_MAINTENANCE_FILE_COVERAGE,
+                "ambiguous maintenance file coverage",
             ));
         }
         Ok((subject.label, subject.files))
@@ -624,8 +630,9 @@ impl AppUseCase {
                     .await?;
             }
             Scope::Title => {
-                return Err(AppError::Validation(
-                    "child deletion requires an episode or season".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::maintenance::CHILD_DELETION_REQUIRES_EPISODE_SEASON,
+                    "child deletion requires an episode or season",
                 ));
             }
         }
@@ -655,9 +662,7 @@ impl AppUseCase {
             || (candidate.subject_kind == Scope::Title.as_storage_str()
                 && candidate.subject_id != title.id)
         {
-            return Err(AppError::Validation(
-                "maintenance unmonitoring candidate identity does not match its title".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::maintenance::UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE, "maintenance unmonitoring candidate identity does not match its title"));
         }
         if candidate.subject_kind != Scope::Title.as_storage_str() {
             let fresh = self
@@ -672,7 +677,10 @@ impl AppUseCase {
         }
 
         let Some(fresh_title) = self.services.catalog.titles.get_by_id(&title.id).await? else {
-            return Err(AppError::NotFound(format!("title {}", title.id)));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                format!("title {}", title.id),
+            ));
         };
         if fresh_title.monitored || !title_includes_descendants {
             return Ok(!fresh_title.monitored);
@@ -914,8 +922,9 @@ impl AppUseCase {
                 })
             })
         {
-            return Err(AppError::Validation(
-                "maintenance file targets changed; another evaluation is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
+                "maintenance file targets changed; another evaluation is required",
             ));
         }
         let mut guards = Vec::new();
@@ -1134,8 +1143,9 @@ impl AppUseCase {
                 if catalog_proof(&file) != saved.catalog_proof
                     || !fresh_files.iter().any(|current| current.id == file.id)
                 {
-                    return Err(AppError::Validation(
-                        "maintenance file ownership changed".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::maintenance::FILE_OWNERSHIP_CHANGED,
+                        "maintenance file ownership changed",
                     ));
                 }
                 self.delete_media_file_authorized(

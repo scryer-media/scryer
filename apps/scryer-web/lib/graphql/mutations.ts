@@ -52,6 +52,13 @@ ${LOGIN_PAYLOAD_FIELDS}
   }
 }`;
 
+export const completeInitialAuthenticationMutation = `mutation CompleteInitialAuthentication($input: CompleteInitialAuthenticationInput!) {
+  completeInitialAuthentication(input: $input) {
+    completed
+    login { ${LOGIN_PAYLOAD_FIELDS} }
+  }
+}`;
+
 export const completeRequiredPasswordChangeMutation = `mutation CompleteRequiredPasswordChange($input: CompleteRequiredPasswordChangeInput!) {
   completeRequiredPasswordChange(input: $input) {
 ${LOGIN_PAYLOAD_FIELDS}
@@ -922,7 +929,6 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     highContrastMode
     reduceMotion
     hideSponsorButton
-    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -939,6 +945,17 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
       deviceClass
       facet
       viewMode
+    }
+    dashboardLayouts {
+      breakpoint
+      columns
+      items {
+        panelId
+        x
+        y
+        w
+        h
+      }
     }
   }
 }`;
@@ -953,7 +970,6 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
     highContrastMode
     reduceMotion
     hideSponsorButton
-    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -971,6 +987,67 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
       facet
       viewMode
     }
+    dashboardLayouts {
+      breakpoint
+      columns
+      items {
+        panelId
+        x
+        y
+        w
+        h
+      }
+    }
+  }
+}`;
+
+const UI_SETTINGS_PAYLOAD_FIELDS = `
+    theme
+    palette
+    dateTimeFormat
+    highlightColor
+    secondaryColor
+    highContrastMode
+    reduceMotion
+    hideSponsorButton
+    density
+    sidebarMode
+    defaultLandingView
+    language
+    tableColumns {
+      deviceClass
+      facet
+      tableViewMode
+      columnId
+      columnOrder
+      visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
+    }
+    dashboardLayouts {
+      breakpoint
+      columns
+      items {
+        panelId
+        x
+        y
+        w
+        h
+      }
+    }`;
+
+/** Replaces the saved dashboard layout for one breakpoint. */
+export const setMyDashboardLayoutMutation = `mutation SetMyDashboardLayout($input: SetMyDashboardLayoutInput!) {
+  setMyDashboardLayout(input: $input) {${UI_SETTINGS_PAYLOAD_FIELDS}
+  }
+}`;
+
+/** Drops the saved dashboard layout for one breakpoint, or every one when null. */
+export const resetMyDashboardLayoutMutation = `mutation ResetMyDashboardLayout($breakpoint: UiDashboardBreakpoint) {
+  resetMyDashboardLayout(breakpoint: $breakpoint) {${UI_SETTINGS_PAYLOAD_FIELDS}
   }
 }`;
 
@@ -1952,6 +2029,10 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
   startInteractiveReleaseSearch(input: $input) {
     id
     state
+    nextCursor
+    deadlineReached
+    failureReason
+    failureReasonCode
     results {${RELEASE_SEARCH_RESULT_FIELDS}
     }
     indexers {
@@ -1964,6 +2045,42 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       failureReason
       skipReason
       skippedUntil
+      rateLimited
+      capsSource
+      capsReason
+      capsRetryAfterSeconds
+    }
+    startedAt
+    completedAt
+  }
+}`;
+
+// Fetches the following page of a query search from its `nextCursor`; the
+// returned job is then polled like a started one.
+export const continueInteractiveReleaseSearchMutation = `mutation ContinueInteractiveReleaseSearch($after: String!, $first: Int) {
+  continueInteractiveReleaseSearch(after: $after, first: $first) {
+    id
+    state
+    nextCursor
+    deadlineReached
+    failureReason
+    failureReasonCode
+    results {${RELEASE_SEARCH_RESULT_FIELDS}
+    }
+    indexers {
+      indexerId
+      name
+      priority
+      status
+      resultCount
+      elapsedMs
+      failureReason
+      skipReason
+      skippedUntil
+      rateLimited
+      capsSource
+      capsReason
+      capsRetryAfterSeconds
     }
     startedAt
     completedAt
@@ -2488,6 +2605,7 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
 export const validateRuleSetMutation = `mutation ValidateRuleSet($input: ValidateRuleSetInput!) {
   validateRuleSet(input: $input) {
     valid
+    diagnostics { code message line column path }
     errors
   }
 }`;
@@ -2498,6 +2616,7 @@ export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInpu
     releaseName
     mediaFileId
     listing {
+      protocol
       publishedAt
       ageDays
       thumbsUp
@@ -2637,6 +2756,7 @@ export const deleteMaintenanceRuleSetMutation = `mutation DeleteMaintenanceRuleS
 export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule($input: ValidateMaintenanceRuleInput!) {
   validateMaintenanceRule(input: $input) {
     valid
+    diagnostics { code message line column path }
     errors
   }
 }`;
@@ -2743,6 +2863,7 @@ export const deleteRequestRuleSetMutation = `mutation DeleteRequestRuleSet($id: 
 export const validateRequestRuleMutation = `mutation ValidateRequestRule($input: ValidateRequestRuleInput!) {
   validateRequestRule(input: $input) {
     valid
+    diagnostics { code message line column path }
     errors
   }
 }`;
@@ -3207,10 +3328,7 @@ export const assignTrackedDownloadTitleMutation = `mutation AssignTrackedDownloa
  * readiness; the modal only renders the answer.
  */
 export type SubtitleSearchStatus =
-  | "READY"
-  | "NO_PROVIDERS"
-  | "PROVIDER_UNAVAILABLE"
-  | "DISABLED";
+  "READY" | "NO_PROVIDERS" | "PROVIDER_UNAVAILABLE" | "DISABLED";
 
 export type SubtitleSearchPayload = {
   status: SubtitleSearchStatus;
@@ -3393,5 +3511,13 @@ export const setMemberListPolicyMutation = `mutation SetMemberListPolicy($userId
     }
     policy
     listRequestsLast30d
+  }
+}`;
+
+export const createFolderMutation = `mutation CreateFolder($parentPath: String!, $name: String!) {
+  createFolder(parentPath: $parentPath, name: $name) {
+    name
+    path
+    isDirectory
   }
 }`;

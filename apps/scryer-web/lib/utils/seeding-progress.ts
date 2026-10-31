@@ -70,7 +70,9 @@ function observedNumber(value: number | null | undefined): number | null {
  * observed `0.8333` reads `0.83` and a goal typed as `1.5` in settings still
  * reads `1.5` here.
  */
-export function formatSeedRatio(ratio: number | null | undefined): string | null {
+export function formatSeedRatio(
+  ratio: number | null | undefined,
+): string | null {
   const value = observedNumber(ratio);
   return value === null ? null : String(Number.parseFloat(value.toFixed(2)));
 }
@@ -103,7 +105,10 @@ export function formatSeedDuration(
   return minutes > 0 ? `${minutes}m` : "<1m";
 }
 
-function axisLabel(observed: string | null, goal: string | null): string | null {
+function axisLabel(
+  observed: string | null,
+  goal: string | null,
+): string | null {
   if (observed === null) {
     return null;
   }

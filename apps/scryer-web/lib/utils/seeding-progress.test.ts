@@ -11,7 +11,9 @@ import {
   type SeedingProgressInput,
 } from "./seeding-progress.ts";
 
-function row(overrides: Partial<SeedingProgressInput> = {}): SeedingProgressInput {
+function row(
+  overrides: Partial<SeedingProgressInput> = {},
+): SeedingProgressInput {
   return {
     seedingState: "SEEDING",
     seedRatio: null,
@@ -80,7 +82,12 @@ test("seed time is humanized against its goal", () => {
 });
 
 test("each reportable state carries its own label and tone", () => {
-  const states = ["SEEDING", "GOAL_MET", "HELD_PRIVATE", "NEVER_REMOVE"] as const;
+  const states = [
+    "SEEDING",
+    "GOAL_MET",
+    "HELD_PRIVATE",
+    "NEVER_REMOVE",
+  ] as const;
   const seen = new Set<string>();
 
   for (const seedingState of states) {
@@ -148,7 +155,10 @@ test("an unknown private flag is never rendered as public", () => {
 });
 
 test("imported-and-still-seeding is read off the tracked state", () => {
-  assert.equal(isImportedSeedingRow({ trackedState: "IMPORTED_SEEDING" }), true);
+  assert.equal(
+    isImportedSeedingRow({ trackedState: "IMPORTED_SEEDING" }),
+    true,
+  );
   assert.equal(isImportedSeedingRow({ trackedState: "IMPORTED" }), false);
   assert.equal(isImportedSeedingRow({ trackedState: null }), false);
 });

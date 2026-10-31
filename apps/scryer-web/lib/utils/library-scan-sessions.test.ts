@@ -41,9 +41,18 @@ test("active scan lookup is scoped to the requested library", () => {
   const libraryB = scan("scan-b", "library-b", "2026-07-13T00:00:01Z");
   const sessions = [libraryA, libraryB];
 
-  assert.equal(findActiveLibraryScanSession(sessions, "MOVIE", "library-a"), libraryA);
-  assert.equal(findActiveLibraryScanSession(sessions, "MOVIE", "library-b"), libraryB);
-  assert.equal(findActiveLibraryScanSession(sessions, "MOVIE", "library-c"), null);
+  assert.equal(
+    findActiveLibraryScanSession(sessions, "MOVIE", "library-a"),
+    libraryA,
+  );
+  assert.equal(
+    findActiveLibraryScanSession(sessions, "MOVIE", "library-b"),
+    libraryB,
+  );
+  assert.equal(
+    findActiveLibraryScanSession(sessions, "MOVIE", "library-c"),
+    null,
+  );
 });
 
 test("an unscoped facet scan is active for every library in that facet", () => {
@@ -71,7 +80,9 @@ test("selected-library refreshes include only relevant concurrent scans", () => 
   const libraryB = scan("scan-b", "library-b", "2026-07-13T00:00:01Z");
 
   assert.deepEqual(
-    activeLibraryScanSessionsForSelection([libraryA, libraryB], "MOVIE", ["library-b"]),
+    activeLibraryScanSessionsForSelection([libraryA, libraryB], "MOVIE", [
+      "library-b",
+    ]),
     [libraryB],
   );
   assert.deepEqual(
@@ -115,13 +126,11 @@ test("default library ids match backend facet defaults", () => {
 });
 
 test("pending scan state is busy only for its target library", () => {
-  const state: Record<
-    string,
-    { loading: boolean; sessionId: string | null }
-  > = {
-    "library-a": { loading: true, sessionId: null },
-    "library-b": { loading: false, sessionId: null },
-  };
+  const state: Record<string, { loading: boolean; sessionId: string | null }> =
+    {
+      "library-a": { loading: true, sessionId: null },
+      "library-b": { loading: false, sessionId: null },
+    };
   const noSession = () => null;
   assert.equal(
     isLibraryScanTargetBusy(state, "library-a", null, noSession),

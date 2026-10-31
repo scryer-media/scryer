@@ -17,7 +17,10 @@ export function inferLocalPathStyleFromPath(
     return null;
   }
 
-  if (isWindowsDriveAbsolutePath(trimmed) || isWindowsUncAbsolutePath(trimmed)) {
+  if (
+    isWindowsDriveAbsolutePath(trimmed) ||
+    isWindowsUncAbsolutePath(trimmed)
+  ) {
     return "windows";
   }
 

@@ -12,7 +12,9 @@ pub(crate) fn mark_importing(td: &mut TrackedDownload) {
     td.state = TrackedDownloadState::Importing;
     td.waiting_for_completed_history = false;
     td.status = TrackedDownloadStatus::Ok;
-    td.status_messages = vec![IMPORT_RUNNING_MESSAGE.to_string()];
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+        IMPORT_RUNNING_MESSAGE.to_string(),
+    )];
 }
 
 pub async fn import(app: &AppUseCase, actor: &User, td: &mut TrackedDownload) -> bool {
@@ -131,10 +133,10 @@ async fn import_inner(
                 );
                 td.state = TrackedDownloadState::ImportPending;
                 td.status = TrackedDownloadStatus::Warning;
-                td.status_messages = vec![
+                td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
                     "Download origin could not be resolved yet; retrying automatically."
                         .to_string(),
-                ];
+                )];
                 return false;
             }
         };
@@ -152,10 +154,10 @@ async fn import_inner(
             td.import_attempted = false;
             td.state = TrackedDownloadState::ImportPending;
             td.status = TrackedDownloadStatus::Warning;
-            td.status_messages = vec![
+            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
                 "Download submission identity is still being persisted; retrying automatically."
                     .to_string(),
-            ];
+            )];
             return false;
         }
         Ok(false) => {}
@@ -241,7 +243,9 @@ async fn import_inner(
                 td.clear_import_execution_retry();
                 td.state = TrackedDownloadState::ImportBlocked;
                 td.status = TrackedDownloadStatus::Error;
-                td.status_messages = vec![message.clone()];
+                td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+                    message.clone(),
+                )];
                 return false;
             }
             // The pipeline itself erred before it could produce a result
@@ -396,7 +400,10 @@ pub(super) async fn resolve_completed_download_for_import(
             td.state = TrackedDownloadState::FailedPending;
             td.status = TrackedDownloadStatus::Error;
             td.client_item.attention_reason = Some(message.clone());
-            td.status_messages = vec![message];
+            td.client_item.attention_reason_code = None;
+            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+                message,
+            )];
             return None;
         }
         Err(error) => {

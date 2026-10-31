@@ -1,7 +1,13 @@
 import * as React from "react";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { IconButton } from "@/components/ui/icon-button";
-import { ChevronDown, ChevronUp, Power, PowerOff, SlidersVertical } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Power,
+  PowerOff,
+  SlidersVertical,
+} from "lucide-react";
 import {
   Table,
   TableBody,
@@ -13,7 +19,10 @@ import {
 import { IndexerCategoryPicker } from "./indexer-category-picker";
 import type { ViewCategoryId } from "./indexer-category-picker";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
-import type { IndexerCategoryRoutingSettings, IndexerRecord } from "@/lib/types";
+import type {
+  IndexerCategoryRoutingSettings,
+  IndexerRecord,
+} from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { selectorId } from "@/lib/utils/dom-ids";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
@@ -71,7 +80,9 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
   );
 
   const orderedIndexerIds = React.useMemo(() => {
-    const configuredIds = activeScopeIndexerRoutingOrder.filter((indexerId) => indexerById[indexerId]);
+    const configuredIds = activeScopeIndexerRoutingOrder.filter(
+      (indexerId) => indexerById[indexerId],
+    );
     const configuredIdSet = new Set(configuredIds);
     const missingIds = indexers
       .map((indexer) => indexer.id)
@@ -100,9 +111,15 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                 <TableHead>{t("settings.indexerRoutingPriority")}</TableHead>
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.indexerRoutingCategories")}</TableHead>
-                <TableHead className="text-center">{t("settings.indexerRoutingGloballyEnabled")}</TableHead>
-                <TableHead className="text-center">{t("settings.indexerRoutingEnabled")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-center">
+                  {t("settings.indexerRoutingGloballyEnabled")}
+                </TableHead>
+                <TableHead className="text-center">
+                  {t("settings.indexerRoutingEnabled")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -118,7 +135,9 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                   if (!indexer) {
                     return null;
                   }
-                  const routing = activeScopeIndexerRouting[indexer.id] ?? getDefaultIndexerRouting(activeQualityScopeId);
+                  const routing =
+                    activeScopeIndexerRouting[indexer.id] ??
+                    getDefaultIndexerRouting(activeQualityScopeId);
                   return (
                     <TableRow
                       key={indexer.id}
@@ -144,7 +163,9 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                           value={routing.categories}
                           scope={activeQualityScopeId}
                           capsCategories={indexer.capsCategories}
-                          disabled={indexerRoutingLoading || indexerRoutingSaving}
+                          disabled={
+                            indexerRoutingLoading || indexerRoutingSaving
+                          }
                           categoriesLabel={`${t("settings.indexerRoutingCategories")} (${indexer.name})`}
                           onChange={(categories) =>
                             onCategoriesChange(indexer.id, categories)
@@ -181,7 +202,11 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                             onClick={() =>
                               onEnabledChange(indexer.id, !routing.enabled)
                             }
-                            disabled={indexerRoutingLoading || indexerRoutingSaving || !indexer.isEnabled}
+                            disabled={
+                              indexerRoutingLoading ||
+                              indexerRoutingSaving ||
+                              !indexer.isEnabled
+                            }
                           >
                             {routing.enabled ? (
                               <PowerOff className="h-3.5 w-3.5" />
@@ -190,7 +215,10 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                             )}
                           </IndexerRoutingActionButton>
                           <IndexerRoutingActionButton
-                            id={selectorId("indexer-routing-move-up", indexer.name)}
+                            id={selectorId(
+                              "indexer-routing-move-up",
+                              indexer.name,
+                            )}
                             tone="reorder"
                             label={`${t("label.moveUp")} ${indexer.name}`}
                             onClick={() => onMoveUp(indexer.id)}
@@ -203,7 +231,10 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                             <ChevronUp className="h-4 w-4" />
                           </IndexerRoutingActionButton>
                           <IndexerRoutingActionButton
-                            id={selectorId("indexer-routing-move-down", indexer.name)}
+                            id={selectorId(
+                              "indexer-routing-move-down",
+                              indexer.name,
+                            )}
                             tone="reorder"
                             label={`${t("label.moveDown")} ${indexer.name}`}
                             onClick={() => onMoveDown(indexer.id)}

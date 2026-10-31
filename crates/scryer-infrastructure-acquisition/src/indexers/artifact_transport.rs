@@ -356,8 +356,9 @@ impl IndexerArtifactTransport {
         // the same way whichever path ends up resolving the artifact.
         let route = self.proxy_route(&config).await?;
         if route.proxy().is_some() && !same_origin(&config, download_url) {
-            return Err(AppError::Validation(
-                "Proxied download URL does not match the assigned indexer origin.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH,
+                "Proxied download URL does not match the assigned indexer origin.",
             ));
         }
         if let Some(artifact) = self
@@ -468,8 +469,9 @@ impl IndexerArtifactTransport {
         let tally = self.tally(Some(&config));
         let route = self.proxy_route(&config).await?;
         if route.proxy().is_some() && !same_origin(&config, download_url) {
-            return Err(AppError::Validation(
-                "Proxied download URL does not match the assigned indexer origin.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_ORIGIN_MISMATCH,
+                "Proxied download URL does not match the assigned indexer origin.",
             ));
         }
         match route {
@@ -568,10 +570,6 @@ impl IndexerArtifactTransport {
             Err(error @ AppError::TemporaryUnavailable { .. }) => return Err(error),
             Err(error @ AppError::NewznabQuotaExceeded { .. })
             | Err(error @ AppError::DownloadSourceGone(_)) => return Err(error),
-            Err(error) if matches!(&error, AppError::Validation(message) if message.contains("Newznab error 910")) =>
-            {
-                return Err(error);
-            }
             Err(_) => {}
         }
         if !headers.is_empty() {
@@ -740,8 +738,12 @@ impl IndexerArtifactTransport {
         tally: &IndexerRequestTally,
         egress: ArtifactEgress<'_>,
     ) -> AppResult<(Vec<u8>, Option<serde_json::Value>, Option<String>)> {
-        let original = url::Url::parse(raw)
-            .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
+        let original = url::Url::parse(raw).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_URL_INVALID,
+                "Download artifact URL is invalid.",
+            )
+        })?;
         let origin = (
             original.scheme().to_string(),
             original.host_str().map(str::to_string),
@@ -755,8 +757,9 @@ impl IndexerArtifactTransport {
                 return Ok((Vec::new(), None, Some(current.to_string())));
             }
             if !matches!(current.scheme(), "http" | "https") {
-                return Err(AppError::Validation(
-                    "Download artifact redirects must use HTTP(S) or magnet URLs.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_SCHEME_UNSUPPORTED,
+                    "Download artifact redirects must use HTTP(S) or magnet URLs.",
                 ));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -844,8 +847,9 @@ impl IndexerArtifactTransport {
             }
             if response.status().is_redirection() {
                 if hops == 5 {
-                    return Err(AppError::Validation(
-                        "The download artifact exceeded the redirect limit.".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_LIMIT_EXCEEDED,
+                        "The download artifact exceeded the redirect limit.",
                     ));
                 }
                 let loc = response
@@ -853,21 +857,18 @@ impl IndexerArtifactTransport {
                     .get(reqwest::header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "Download artifact redirect was missing a location.".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_MISSING_LOCATION, "Download artifact redirect was missing a location.")
                     })?;
                 let next = current
                     .join(loc)
                     .or_else(|_| url::Url::parse(loc))
                     .map_err(|_| {
-                        AppError::Validation(
-                            "Download artifact redirect location was invalid.".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_LOCATION_INVALID, "Download artifact redirect location was invalid.")
                     })?;
                 if !visited.insert(next.clone()) {
-                    return Err(AppError::Validation(
-                        "The download artifact redirect looped.".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_LOOP,
+                        "The download artifact redirect looped.",
                     ));
                 }
                 current = next;
@@ -880,6 +881,7 @@ impl IndexerArtifactTransport {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| scryer_outbound_http::parse_retry_after(v).map(|(d, _)| d));
                 return Err(AppError::TemporaryUnavailable {
+                    reason: None,
                     message: solver::rate_limit_message_with_retry_after(retry_after),
                     retry_after,
                     rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
@@ -911,8 +913,9 @@ impl IndexerArtifactTransport {
             tally.note_response(&captured);
             return Ok((bytes, headers, final_url));
         }
-        Err(AppError::Validation(
-            "The download artifact redirect loop was exhausted.".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_BUDGET_EXHAUSTED,
+            "The download artifact redirect loop was exhausted.",
         ))
     }
 
@@ -931,14 +934,19 @@ impl IndexerArtifactTransport {
         tally: IndexerRequestTally,
         egress: ArtifactEgress<'_>,
     ) -> AppResult<ArtifactFetchResponse> {
-        let mut current = url::Url::parse(raw)
-            .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
+        let mut current = url::Url::parse(raw).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_URL_INVALID,
+                "Download artifact URL is invalid.",
+            )
+        })?;
         let deadline = Instant::now() + request_timeout;
         let mut visited = HashSet::from([current.clone()]);
         for hops in 0..=5 {
             if !matches!(current.scheme(), "http" | "https") {
-                return Err(AppError::Validation(
-                    "Download artifact redirects must use HTTP(S) URLs.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_HTTP_ARTIFACT_REDIRECT_SCHEME_UNSUPPORTED,
+                    "Download artifact redirects must use HTTP(S) URLs.",
                 ));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -999,8 +1007,9 @@ impl IndexerArtifactTransport {
             }
             if response.status().is_redirection() {
                 if hops == 5 {
-                    return Err(AppError::Validation(
-                        "The download artifact exceeded the redirect limit.".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_LIMIT_EXCEEDED,
+                        "The download artifact exceeded the redirect limit.",
                     ));
                 }
                 let location = response
@@ -1008,17 +1017,13 @@ impl IndexerArtifactTransport {
                     .get(reqwest::header::LOCATION)
                     .and_then(|value| value.to_str().ok())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "Download artifact redirect was missing a location.".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_MISSING_LOCATION, "Download artifact redirect was missing a location.")
                     })?;
                 let next = current
                     .join(location)
                     .or_else(|_| url::Url::parse(location))
                     .map_err(|_| {
-                        AppError::Validation(
-                            "Download artifact redirect location was invalid.".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REDIRECT_LOCATION_INVALID, "Download artifact redirect location was invalid.")
                     })?;
                 if next.scheme() == "magnet" && is_valid_magnet_uri(next.as_str()) {
                     let uri = next.to_string();
@@ -1030,8 +1035,9 @@ impl IndexerArtifactTransport {
                     ));
                 }
                 if !visited.insert(next.clone()) {
-                    return Err(AppError::Validation(
-                        "The download artifact redirect looped.".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_LOOP,
+                        "The download artifact redirect looped.",
                     ));
                 }
                 current = next;
@@ -1058,8 +1064,9 @@ impl IndexerArtifactTransport {
                 headers,
             }));
         }
-        Err(AppError::Validation(
-            "The download artifact redirect loop was exhausted.".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ARTIFACT_REDIRECT_BUDGET_EXHAUSTED,
+            "The download artifact redirect loop was exhausted.",
         ))
     }
 }
@@ -1091,6 +1098,7 @@ fn map_artifact_outbound_error(
 ) -> AppError {
     match error {
         OutboundHttpError::RateLimited(rate_limited) => AppError::TemporaryUnavailable {
+            reason: None,
             message: "The download artifact destination is rate limited.".into(),
             retry_after: rate_limited.retry_after,
             rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
@@ -1124,6 +1132,7 @@ fn artifact_source_gone(status: reqwest::StatusCode) -> AppError {
 
 fn artifact_fetch_cancelled() -> AppError {
     AppError::TemporaryUnavailable {
+        reason: None,
         message: "nzb artifact resolution was cancelled".into(),
         retry_after: None,
         rate_limit_cooldown: RateLimitCooldownAction::None,
@@ -1191,6 +1200,7 @@ fn same_url_origin(base: &str, actual: &reqwest::Url) -> Option<bool> {
 fn rate_limited(headers: Option<&serde_json::Value>) -> AppError {
     let retry_after = solver::retry_after_from_solution_headers(headers);
     AppError::TemporaryUnavailable {
+        reason: None,
         message: solver::rate_limit_message_with_retry_after(retry_after),
         retry_after,
         rate_limit_cooldown: RateLimitCooldownAction::RecordFallback,
@@ -1247,10 +1257,10 @@ pub(crate) fn classify(
                 });
             }
             Some(910) => {
-                return Err(AppError::Validation(format!(
-                    "{name} returned Newznab error 910: {}.",
-                    error.message
-                )));
+                return Err(AppError::NewznabQuotaExceeded {
+                    code: 910,
+                    message: format!("{name} returned Newznab error 910: {}.", error.message),
+                });
             }
             _ => {}
         }
@@ -1269,9 +1279,10 @@ pub(crate) fn classify(
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("application/x-nzb"))
     {
         if !looks_nzb(&bytes) {
-            return Err(AppError::Validation(format!(
-                "{name} resolved invalid NZB bytes."
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_RESOLVED_NZB_INVALID,
+                format!("{name} resolved invalid NZB bytes."),
+            ));
         }
         return Ok(ResolvedDownloadArtifact::Nzb {
             password_candidates: nzb_header_passwords(headers),
@@ -1299,9 +1310,12 @@ pub(crate) fn classify(
             info_hash_hint,
         });
     }
-    Err(AppError::Validation(format!(
-        "{name} resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_TYPE_UNSUPPORTED,
+        format!(
+            "{name} resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
+        ),
+    ))
 }
 
 pub(crate) fn nzb_header_passwords(
@@ -1955,6 +1969,7 @@ mod tests {
     fn test_config(base_url: &str, proxy_id: Option<&str>) -> IndexerConfig {
         let now = Utc::now();
         IndexerConfig {
+            last_error_code: None,
             id: "indexer".into(),
             name: "fixture".into(),
             provider_type: "newznab".into(),
@@ -2587,9 +2602,10 @@ mod tests {
                     error,
                     AppError::NewznabQuotaExceeded { code: 501, .. }
                 )),
-                _ => assert!(
-                    matches!(error, AppError::Validation(message) if message.contains("910"))
-                ),
+                _ => assert!(matches!(
+                    error,
+                    AppError::NewznabQuotaExceeded { code: 910, .. }
+                )),
             }
             assert_eq!(
                 server.received_requests().await.unwrap().len(),
@@ -2843,7 +2859,10 @@ mod tests {
             None,
         )
         .expect_err("disabled API must not be treated as an artifact");
-        assert!(matches!(error, AppError::Validation(message) if message.contains("910")));
+        assert!(matches!(
+            error,
+            AppError::NewznabQuotaExceeded { code: 910, .. }
+        ));
     }
 
     #[test]

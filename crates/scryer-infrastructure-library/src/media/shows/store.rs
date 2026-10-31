@@ -244,7 +244,10 @@ impl ShowRepository for ShowStore {
                         load_series_movie_link_tx(tx, &link_id)
                             .await?
                             .ok_or_else(|| {
-                                AppError::NotFound(format!("series movie link {link_id}"))
+                                AppError::not_found_reason(
+                                    crate::error_reasons::MEDIA_SERIES_MOVIE_LINK_NOT_FOUND,
+                                    format!("series movie link {link_id}"),
+                                )
                             })?;
                     let mut tags = existing.tags.clone();
                     apply_user_tag_patch(&mut tags, &add, &remove)?;
@@ -333,14 +336,21 @@ impl ShowRepository for ShowStore {
             let update = update.clone();
             Box::pin(async move {
                 if collection_update_is_empty(&update) {
-                    return Err(AppError::Validation(
-                        "at least one collection field must be provided".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_COLLECTION_UPDATE_EMPTY,
+                        "at least one collection field must be provided",
                     ));
                 }
 
-                let mut collection = load_collection_tx(tx, &collection_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("collection {collection_id}")))?;
+                let mut collection =
+                    load_collection_tx(tx, &collection_id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::not_found_reason(
+                                crate::error_reasons::MEDIA_COLLECTION_NOT_FOUND,
+                                format!("collection {collection_id}"),
+                            )
+                        })?;
 
                 apply_collection_update(&mut collection, update);
                 persist_collection_tx(tx, &collection).await?;
@@ -504,14 +514,18 @@ impl ShowRepository for ShowStore {
             let update = update.clone();
             Box::pin(async move {
                 if !update.has_changes() {
-                    return Err(AppError::Validation(
-                        "at least one episode field must be provided".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_EPISODE_UPDATE_EMPTY,
+                        "at least one episode field must be provided",
                     ));
                 }
 
-                let mut episode = load_episode_tx(tx, &episode_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+                let mut episode = load_episode_tx(tx, &episode_id).await?.ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::MEDIA_EPISODE_NOT_FOUND,
+                        format!("episode {episode_id}"),
+                    )
+                })?;
 
                 apply_episode_update(&mut episode, update);
                 persist_episode_tx(tx, &episode).await?;
@@ -1655,7 +1669,10 @@ async fn delete_collection_tx(tx: &mut SqlTx<'_>, collection_id: &str) -> AppRes
         )
         .await?;
     if rows == 0 {
-        return Err(AppError::NotFound(format!("collection {collection_id}")));
+        return Err(AppError::not_found_reason(
+            crate::error_reasons::MEDIA_COLLECTION_NOT_FOUND,
+            format!("collection {collection_id}"),
+        ));
     }
     Ok(())
 }
@@ -1850,7 +1867,10 @@ async fn delete_episode_tx(tx: &mut SqlTx<'_>, episode_id: &str) -> AppResult<()
         )
         .await?;
     if rows == 0 {
-        return Err(AppError::NotFound(format!("episode {episode_id}")));
+        return Err(AppError::not_found_reason(
+            crate::error_reasons::MEDIA_EPISODE_NOT_FOUND,
+            format!("episode {episode_id}"),
+        ));
     }
     Ok(())
 }

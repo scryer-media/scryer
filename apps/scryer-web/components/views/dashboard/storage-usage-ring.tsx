@@ -36,7 +36,10 @@ export function StorageUsageRing({
   return (
     <span
       aria-hidden="true"
-      className={cn("relative inline-block h-8 w-8 shrink-0 rounded-full", className)}
+      className={cn(
+        "relative inline-block h-8 w-8 shrink-0 rounded-full",
+        className,
+      )}
       style={{
         background: `conic-gradient(${fill} 0 ${clamped}%, ${track} ${clamped}% 100%)`,
       }}

@@ -371,7 +371,10 @@ async fn enabling_a_rule_set_needs_catalog_settings_authority() {
         .set_request_rule_enabled(&viewer, &detail.rule_set.id, true)
         .await
         .expect_err("enabling a rule is catalog administration");
-    assert!(matches!(refusal, AppError::Unauthorized(_)));
+    assert!(matches!(
+        refusal,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
 
@@ -394,7 +397,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
         .await
         .expect_err("a person-targeting rule needs permission authority");
     assert!(
-        matches!(refusal, AppError::Unauthorized(ref message)
+        matches!(refusal, AppError::Unauthorized(ref message) | AppError::UnauthorizedReason { ref message, .. }
             if message.contains("input.requester.username")),
         "unexpected refusal: {refusal:?}"
     );
@@ -630,7 +633,10 @@ async fn an_unauthorized_requester_is_refused_before_any_rule_runs() {
         .submit_media_request(&stranger, media_request_input(library_id, 9042))
         .await
         .expect_err("a requester without Request permission is refused");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
     assert!(
         harness.request_rule_decisions.recorded().await.is_empty(),
         "no rule may run for a request that was never allowed"
@@ -1054,7 +1060,10 @@ async fn preflight_requires_the_request_permission() {
         .preview_my_request_decision(&stranger, media_request_input(library_id, 9053))
         .await
         .expect_err("a preview is not an oracle for a library you may not ask about");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
 }
 
 // ── The Auto-Approve Requests permission ────────────────────────────────────
@@ -1298,7 +1307,7 @@ async fn an_approver_may_not_mint_a_reserved_tag() {
         .await
         .expect_err("the reserved prefix is refused");
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("scryer:")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("scryer:")),
         "unexpected error: {error:?}"
     );
 }
@@ -1497,7 +1506,7 @@ async fn an_approver_may_not_apply_an_undefined_tag() {
         .await
         .expect_err("an undefined label is refused, not silently dropped");
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("not a defined tag")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("not a defined tag")),
         "unexpected error: {error:?}"
     );
     assert!(
@@ -1519,7 +1528,7 @@ async fn an_out_of_range_lease_is_refused_at_submit() {
         .await
         .expect_err("a ten-year cap applies to requested leases");
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("at most")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("at most")),
         "unexpected error: {error:?}"
     );
 }
@@ -1686,7 +1695,10 @@ async fn administrator_claim_operations_require_manage_titles() {
             .err(),
     ] {
         assert!(
-            matches!(error, Some(AppError::Unauthorized(_))),
+            matches!(
+                error,
+                Some(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+            ),
             "unexpected result: {error:?}"
         );
     }
@@ -1751,7 +1763,12 @@ async fn an_administrator_can_extend_convert_and_release_a_claim() {
         .convert_title_claim_to_permanent(&harness.manager, &claim_id)
         .await
         .expect_err("a converted lease cannot convert again");
-    assert!(matches!(again, AppError::Validation(_)));
+    assert!(matches!(
+        again,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
 
     // Releasing withdraws a lease outright.
     let harness = bootstrap_media_request_app();
@@ -1778,7 +1795,12 @@ async fn an_administrator_can_extend_convert_and_release_a_claim() {
         .release_title_claim(&harness.manager, &lease_id, "   ")
         .await
         .expect_err("a release reason is required");
-    assert!(matches!(blank, AppError::Validation(_)));
+    assert!(matches!(
+        blank,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

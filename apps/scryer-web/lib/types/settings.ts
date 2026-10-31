@@ -19,9 +19,15 @@ export type SubtitleSettings = {
   syncMaxOffsetSeconds: number;
 };
 
-export const MOVIE_AVAILABILITY_VALUES = ["announced", "in_cinemas", "released"] as const;
+export const MOVIE_AVAILABILITY_VALUES = [
+  "announced",
+  "in_cinemas",
+  "released",
+] as const;
 
-export function isMovieAvailabilityValue(value: string | null | undefined): value is string {
+export function isMovieAvailabilityValue(
+  value: string | null | undefined,
+): value is string {
   return MOVIE_AVAILABILITY_VALUES.some((candidate) => candidate === value);
 }
 
@@ -107,7 +113,16 @@ export type UiTableColumnSetting = {
   visible: boolean;
 };
 
-export type UiPalette = "CLASSIC" | "SCRYER_DEFAULT" | "SLATE" | "OCEAN" | "FOREST" | "PLUM" | "EMBER" | "GRAPHITE" | "PAPYRUS";
+export type UiPalette =
+  | "CLASSIC"
+  | "SCRYER_DEFAULT"
+  | "SLATE"
+  | "OCEAN"
+  | "FOREST"
+  | "PLUM"
+  | "EMBER"
+  | "GRAPHITE"
+  | "PAPYRUS";
 
 export type UiSettings = {
   palette: UiPalette;
@@ -118,8 +133,6 @@ export type UiSettings = {
   highContrastMode: boolean;
   reduceMotion: boolean;
   hideSponsorButton: boolean;
-  /** Turns off the decorative accent glow. */
-  noGlow: boolean;
   density: "COMPACT" | "COMFORTABLE";
   sidebarMode: "EXPANDED" | "COLLAPSED";
   defaultLandingView:
@@ -136,7 +149,34 @@ export type UiSettings = {
   language: string | null;
   tableColumns: UiTableColumnSetting[];
   catalogViews: UiCatalogViewSetting[];
+  /**
+   * Dashboard grid layouts saved per breakpoint. A breakpoint with no entry
+   * shows the default layout.
+   */
+  dashboardLayouts: UiDashboardLayout[];
 };
+
+/** Dashboard grid breakpoints, keyed on the viewport width as the old media queries were. */
+export type UiDashboardBreakpoint = "XS" | "SM" | "MD" | "LG";
+
+/** One panel's place on the dashboard grid, in grid units. */
+export type UiDashboardLayoutItem = {
+  panelId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type UiDashboardLayout = {
+  breakpoint: UiDashboardBreakpoint;
+  /** Column count the items were laid out against. */
+  columns: number;
+  items: UiDashboardLayoutItem[];
+};
+
+/** Replaces the saved layout for one breakpoint, leaving the others alone. */
+export type SetMyDashboardLayoutInput = UiDashboardLayout;
 
 export type UiCatalogViewSetting = {
   deviceClass: UiDeviceClass;
@@ -151,7 +191,7 @@ export type UiCatalogViewSetting = {
  */
 export type SetMyUiSettingsInput = Omit<
   UiSettings,
-  "language" | "tableColumns" | "catalogViews"
+  "language" | "tableColumns" | "catalogViews" | "dashboardLayouts"
 > & {
   language?: string;
 };
@@ -229,10 +269,7 @@ export type PlexServerDiscovery = {
 };
 
 export type EmbyConnectAddressStatus =
-  | "REACHABLE"
-  | "UNREACHABLE"
-  | "INVALID_URL"
-  | "SERVER_ID_MISMATCH";
+  "REACHABLE" | "UNREACHABLE" | "INVALID_URL" | "SERVER_ID_MISMATCH";
 export type EmbyConnectServer = {
   serverId: string;
   name: string;
@@ -247,9 +284,7 @@ export type EmbyConnectServer = {
 };
 
 export type MediaServerUserGroupStatus =
-  | "READY"
-  | "MISSING_CREDENTIALS"
-  | "ERROR";
+  "READY" | "MISSING_CREDENTIALS" | "ERROR";
 
 export type MediaServerUser = {
   id: string;
@@ -345,6 +380,10 @@ export type PluginAutoUpdateSettings = {
 };
 
 export type AuthRuntimeState = {
+  initialAuthenticationStage?:
+    "choice" | "password_replacement" | "complete" | null;
+  initialAuthenticationCodeRequired?: boolean;
+  passwordMinLength?: number;
   effectiveFormLoginEnabled: boolean;
   skipLoginForLocalIps: boolean;
   passkeyEnabled: boolean;

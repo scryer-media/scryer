@@ -70,20 +70,26 @@ function listedPlugins(plugins: RegistryPluginRecord[]) {
 export function resolveSetupPluginRecommendations(
   plugins: RegistryPluginRecord[],
 ): ResolvedSetupPluginRecommendation[] {
-  const byId = new Map(listedPlugins(plugins).map((plugin) => [plugin.id, plugin]));
+  const byId = new Map(
+    listedPlugins(plugins).map((plugin) => [plugin.id, plugin]),
+  );
   return SETUP_PLUGIN_RECOMMENDATIONS.flatMap((recommendation) => {
     const resolved = recommendation.pluginIds.flatMap((id) => {
       const plugin = byId.get(id);
       return plugin ? [plugin] : [];
     });
-    return resolved.length > 0 ? [{ ...recommendation, plugins: resolved }] : [];
+    return resolved.length > 0
+      ? [{ ...recommendation, plugins: resolved }]
+      : [];
   });
 }
 
 /** The listed plugins that no recommendation already shows. */
 export function otherSetupPlugins(plugins: RegistryPluginRecord[]) {
   const recommended = new Set(
-    SETUP_PLUGIN_RECOMMENDATIONS.flatMap((recommendation) => recommendation.pluginIds),
+    SETUP_PLUGIN_RECOMMENDATIONS.flatMap(
+      (recommendation) => recommendation.pluginIds,
+    ),
   );
   return listedPlugins(plugins).filter((plugin) => !recommended.has(plugin.id));
 }
@@ -116,7 +122,9 @@ function activeMembers(pack: TrackedRulePackRecord): TrackedRulePackMember[] {
 
 /** Whether an installed pack scores anything: any of its rules is on. */
 export function rulePackEnabled(pack: TrackedRulePackRecord | undefined) {
-  return pack ? activeMembers(pack).some((member) => member.enabled === true) : false;
+  return pack
+    ? activeMembers(pack).some((member) => member.enabled === true)
+    : false;
 }
 
 export function enabledRulePackTemplateIds(pack: TrackedRulePackRecord) {
@@ -134,7 +142,9 @@ export function defaultRulePackTemplateIds(
   templates: Array<{ id: string; defaultEnabled: boolean }>,
 ) {
   const defaults = templates.filter((template) => template.defaultEnabled);
-  return (defaults.length > 0 ? defaults : templates).map((template) => template.id);
+  return (defaults.length > 0 ? defaults : templates).map(
+    (template) => template.id,
+  );
 }
 
 /**

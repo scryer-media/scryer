@@ -53,10 +53,14 @@ export function buildDownloadClientRoutingState(
   return {
     routing,
     order: [
-      ...new Set(routingEntries
-        .map((entry) => entry.clientId)
-        .filter((id) => clients.some((client) => client.id === id))),
-      ...clients.filter((client) => !parsedRouting[client.id]).map((client) => client.id),
+      ...new Set(
+        routingEntries
+          .map((entry) => entry.clientId)
+          .filter((id) => clients.some((client) => client.id === id)),
+      ),
+      ...clients
+        .filter((client) => !parsedRouting[client.id])
+        .map((client) => client.id),
     ],
   };
 }

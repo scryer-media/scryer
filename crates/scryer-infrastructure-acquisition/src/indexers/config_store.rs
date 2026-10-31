@@ -21,7 +21,7 @@ const INDEXER_COLUMNS: &str =
     proxy_config_id, download_client_id, seeding_profile_id, managed_parent_config_id,
     managed_child_key,
     managed_metadata_json,
-    caps_snapshot_json, last_health_status, last_error_message, last_error_at, config_json,
+    caps_snapshot_json, last_health_status, last_error_message, last_error_code, last_error_at, config_json,
     created_at, updated_at, max_queries_per_minute";
 
 const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
@@ -29,11 +29,11 @@ const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     rate_limit_burst, disabled_until, is_enabled, enable_interactive_search,
     enable_auto_search, proxy_config_id, download_client_id, seeding_profile_id,
     managed_parent_config_id, managed_child_key,
-    managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message,
+    managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message, last_error_code,
     last_error_at, config_json, created_at, updated_at, max_queries_per_minute
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
 )";
 
 #[derive(Clone)]
@@ -249,8 +249,9 @@ impl IndexerConfigStore {
         }
 
         if assignments.len() == 1 {
-            return Err(AppError::Validation(
-                "at least one indexer config field must be provided".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_UPDATE_EMPTY,
+                "at least one indexer config field must be provided",
             ));
         }
 
@@ -273,12 +274,15 @@ impl IndexerConfigStore {
                 let rows = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
                 if rows == 0 {
                     return Err(if expected_updated_at.is_some() {
-                        AppError::Validation(
-                            "Indexer settings changed during validation; reload and try again"
-                                .into(),
+                        AppError::validation_refused(
+                            crate::error_reasons::ACQUISITION_INDEXER_SETTINGS_STALE,
+                            "Indexer settings changed during validation; reload and try again",
                         )
                     } else {
-                        AppError::NotFound(format!("indexer config {id}"))
+                        AppError::not_found_reason(
+                            crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
+                            format!("indexer config {id}"),
+                        )
                     });
                 }
                 fetch_optional_indexer(
@@ -288,7 +292,12 @@ impl IndexerConfigStore {
                     encryption_key.as_ref(),
                 )
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("indexer config {id}")))
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
+                        format!("indexer config {id}"),
+                    )
+                })
             })
         })
         .await
@@ -365,21 +374,28 @@ impl IndexerConfigRepository for IndexerConfigStore {
         .await
     }
 
-    async fn record_last_error(&self, id: &str, message: Option<String>) -> AppResult<()> {
+    async fn record_last_error(
+        &self,
+        id: &str,
+        message: Option<String>,
+        code: Option<String>,
+    ) -> AppResult<()> {
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "record_indexer_last_error", move |tx| {
             let id = id.clone();
             let message = message.clone();
+            let code = code.clone();
             Box::pin(async move {
                 let now = Utc::now();
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "UPDATE indexers
-                     SET last_error_at = {}, last_error_message = {}
+                     SET last_error_at = {}, last_error_message = {}, last_error_code = {}
                      WHERE id = {}",
                     &[
                         SqlArg::Timestamp(now),
                         SqlArg::OptText(message),
+                        SqlArg::OptText(code),
                         SqlArg::Text(id),
                     ],
                 )
@@ -398,7 +414,7 @@ impl IndexerConfigRepository for IndexerConfigStore {
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "UPDATE indexers
-                     SET last_error_at = NULL, last_error_message = NULL, last_health_status = NULL
+                     SET last_error_at = NULL, last_error_message = NULL, last_error_code = NULL, last_health_status = NULL
                      WHERE id = {}",
                     &[SqlArg::Text(id)],
                 )
@@ -413,15 +429,20 @@ impl IndexerConfigRepository for IndexerConfigStore {
         &self,
         expected: &IndexerConfig,
         message: Option<String>,
+        code: Option<String>,
     ) -> AppResult<bool> {
         let (assignments, mut args) = if let Some(message) = message {
             (
-                "last_error_at = {}, last_error_message = {}",
-                vec![SqlArg::Timestamp(Utc::now()), SqlArg::Text(message)],
+                "last_error_at = {}, last_error_message = {}, last_error_code = {}",
+                vec![
+                    SqlArg::Timestamp(Utc::now()),
+                    SqlArg::Text(message),
+                    SqlArg::OptText(code),
+                ],
             )
         } else {
             (
-                "last_error_at = NULL, last_error_message = NULL, last_health_status = NULL",
+                "last_error_at = NULL, last_error_message = NULL, last_error_code = NULL, last_health_status = NULL",
                 Vec::new(),
             )
         };
@@ -437,6 +458,10 @@ impl IndexerConfigRepository for IndexerConfigStore {
             (
                 "last_error_message",
                 expected.last_error_message.clone().map(SqlArg::Text),
+            ),
+            (
+                "last_error_code",
+                expected.last_error_code.clone().map(SqlArg::Text),
             ),
             (
                 "last_health_status",
@@ -594,7 +619,10 @@ impl IndexerConfigRepository for IndexerConfigStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("indexer config {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
+                        format!("indexer config {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -629,6 +657,7 @@ fn indexer_insert_args(
         SqlArg::OptText(config.caps_snapshot_json.clone()),
         SqlArg::OptText(config.last_health_status.clone()),
         SqlArg::OptText(config.last_error_message.clone()),
+        SqlArg::OptText(config.last_error_code.clone()),
         SqlArg::OptTimestamp(config.last_error_at),
         SqlArg::OptText(stored_config_json),
         SqlArg::Timestamp(config.created_at),
@@ -693,6 +722,7 @@ fn row_to_indexer_config(
         caps_snapshot_json: row.opt_text("caps_snapshot_json")?,
         last_health_status: row.opt_text("last_health_status")?,
         last_error_message: row.opt_text("last_error_message")?,
+        last_error_code: row.opt_text("last_error_code")?,
         last_error_at: row.opt_timestamp("last_error_at")?,
         config_json: decrypt_optional_value(
             encryption_key,
@@ -752,6 +782,7 @@ mod tests {
                 caps_snapshot_json TEXT,
                 last_health_status TEXT,
                 last_error_message TEXT,
+                last_error_code TEXT,
                 last_error_at TEXT,
                 config_json TEXT,
                 created_at TEXT NOT NULL,
@@ -834,6 +865,7 @@ mod tests {
             .record_last_error(
                 "idx-error",
                 Some("HTTP 429: Indexer query limit reached; retry after 321s".to_string()),
+                None,
             )
             .await
             .expect("record should succeed");
@@ -1233,31 +1265,40 @@ mod tests {
         let initial = store.create(config).await.unwrap();
         assert!(
             store
-                .set_last_error_if_unchanged(&initial, Some("caps failed".into()))
+                .set_last_error_if_unchanged(
+                    &initial,
+                    Some("caps failed".into()),
+                    Some("INDEXER_CAPS_REFRESH_FAILED".into())
+                )
                 .await
                 .unwrap()
         );
         let caps_failed = store.get_by_id(&initial.id).await.unwrap().unwrap();
+        assert_eq!(
+            caps_failed.last_error_code.as_deref(),
+            Some("INDEXER_CAPS_REFRESH_FAILED")
+        );
         assert!(
             store
-                .set_last_error_if_unchanged(&caps_failed, None)
+                .set_last_error_if_unchanged(&caps_failed, None, None)
                 .await
                 .unwrap()
         );
         let before_search = store.get_by_id(&initial.id).await.unwrap().unwrap();
+        assert!(before_search.last_error_code.is_none());
         store
-            .record_last_error(&initial.id, Some("new search failed".into()))
+            .record_last_error(&initial.id, Some("new search failed".into()), None)
             .await
             .unwrap();
         assert!(
             !store
-                .set_last_error_if_unchanged(&before_search, None)
+                .set_last_error_if_unchanged(&before_search, None, None)
                 .await
                 .unwrap()
         );
         assert!(
             !store
-                .set_last_error_if_unchanged(&before_search, Some("old caps failed".into()))
+                .set_last_error_if_unchanged(&before_search, Some("old caps failed".into()), None)
                 .await
                 .unwrap()
         );
@@ -1276,13 +1317,17 @@ mod tests {
             .unwrap();
         assert!(
             !store
-                .set_last_error_if_unchanged(&search_failed, None)
+                .set_last_error_if_unchanged(&search_failed, None, None)
                 .await
                 .unwrap()
         );
         assert!(
             !store
-                .set_last_error_if_unchanged(&search_failed, Some("old endpoint failed".into()))
+                .set_last_error_if_unchanged(
+                    &search_failed,
+                    Some("old endpoint failed".into()),
+                    None
+                )
                 .await
                 .unwrap()
         );

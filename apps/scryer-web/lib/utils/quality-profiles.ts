@@ -1,6 +1,4 @@
-import {
-  DEFAULT_QUALITY_PROFILE_QUALITY_TIERS,
-} from "@/lib/constants/quality-profiles";
+import { DEFAULT_QUALITY_PROFILE_QUALITY_TIERS } from "@/lib/constants/quality-profiles";
 import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
 import type {
   FacetScoringPersonaSelectionRecord,
@@ -48,7 +46,9 @@ export function buildDefaultCategoryPersonaSelections(
   };
 }
 
-export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityProfileEntry | null {
+export function normalizeQualityProfileEntry(
+  rawEntry: unknown,
+): ParsedQualityProfileEntry | null {
   if (!rawEntry || typeof rawEntry !== "object") {
     return null;
   }
@@ -59,7 +59,8 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
     return null;
   }
 
-  const rawName = typeof candidate.name === "string" ? candidate.name.trim() : "";
+  const rawName =
+    typeof candidate.name === "string" ? candidate.name.trim() : "";
   const name = rawName || rawId;
 
   const rawCriteria = candidate.criteria;
@@ -69,24 +70,32 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
 
   const criteria = rawCriteria as ProfileRawRecord;
 
-  const qualityTiers = parseStringArrayValue(criteria.quality_tiers).map((value) =>
-    value.toUpperCase(),
+  const qualityTiers = parseStringArrayValue(criteria.quality_tiers).map(
+    (value) => value.toUpperCase(),
   );
   const resolvedQualityTiers = qualityTiers.length > 0 ? qualityTiers : [];
 
-  const rawArchivalQuality = typeof criteria.archival_quality === "string" ? criteria.archival_quality.trim() : "";
+  const rawArchivalQuality =
+    typeof criteria.archival_quality === "string"
+      ? criteria.archival_quality.trim()
+      : "";
 
   const readBoolean = (rawValue: unknown, fallback: boolean) =>
     typeof rawValue === "boolean" ? rawValue : fallback;
 
-  const readList = (rawValue: unknown): string[] => parseStringArrayValue(rawValue);
+  const readList = (rawValue: unknown): string[] =>
+    parseStringArrayValue(rawValue);
 
   return {
     id: rawId,
     name,
     criteria: {
-      quality_tiers: dedupeOrdered(resolvedQualityTiers.map((value) => value.toUpperCase())),
-      archival_quality: rawArchivalQuality ? rawArchivalQuality.toUpperCase() : null,
+      quality_tiers: dedupeOrdered(
+        resolvedQualityTiers.map((value) => value.toUpperCase()),
+      ),
+      archival_quality: rawArchivalQuality
+        ? rawArchivalQuality.toUpperCase()
+        : null,
       allow_unknown_quality: readBoolean(criteria.allow_unknown_quality, false),
       source_allowlist: readList(criteria.source_allowlist),
       source_blocklist: readList(criteria.source_blocklist),
@@ -99,14 +108,16 @@ export function normalizeQualityProfileEntry(rawEntry: unknown): ParsedQualityPr
       prefer_remux: readBoolean(criteria.prefer_remux, false),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
-    ignore_proper_repack: readBoolean(criteria.ignore_proper_repack, false),
+      ignore_proper_repack: readBoolean(criteria.ignore_proper_repack, false),
       scoring_overrides: readScoringOverrides(criteria.scoring_overrides),
-      cutoff_tier: typeof criteria.cutoff_tier === "string" && criteria.cutoff_tier.trim()
-        ? criteria.cutoff_tier.trim().toUpperCase()
-        : null,
-      min_score_to_grab: typeof criteria.min_score_to_grab === "number"
-        ? criteria.min_score_to_grab
-        : null,
+      cutoff_tier:
+        typeof criteria.cutoff_tier === "string" && criteria.cutoff_tier.trim()
+          ? criteria.cutoff_tier.trim().toUpperCase()
+          : null,
+      min_score_to_grab:
+        typeof criteria.min_score_to_grab === "number"
+          ? criteria.min_score_to_grab
+          : null,
     },
   };
 }
@@ -130,7 +141,9 @@ function scoringOverridesFromGraph(raw: unknown): ScoringOverridesPayload {
   return result;
 }
 
-function scoringOverridesToGraphInput(overrides: ScoringOverridesPayload | undefined | null): Record<string, boolean | null> {
+function scoringOverridesToGraphInput(
+  overrides: ScoringOverridesPayload | undefined | null,
+): Record<string, boolean | null> {
   if (!overrides) return {};
   const result: Record<string, boolean | null> = {};
   const mapping: [keyof ScoringOverridesPayload, string][] = [
@@ -156,12 +169,19 @@ export function qualityProfileEntryFromGraph(
     name: profile.name.trim() || profile.id.trim(),
     criteria: {
       quality_tiers: dedupeOrdered(
-        profile.criteria.qualityTiers.map((value) => value.trim().toUpperCase()),
+        profile.criteria.qualityTiers.map((value) =>
+          value.trim().toUpperCase(),
+        ),
       ),
-      archival_quality: profile.criteria.archivalQuality?.trim().toUpperCase() || null,
+      archival_quality:
+        profile.criteria.archivalQuality?.trim().toUpperCase() || null,
       allow_unknown_quality: profile.criteria.allowUnknownQuality,
-      source_allowlist: dedupeOrdered(profile.criteria.sourceAllowlist.map((value) => value.trim())),
-      source_blocklist: dedupeOrdered(profile.criteria.sourceBlocklist.map((value) => value.trim())),
+      source_allowlist: dedupeOrdered(
+        profile.criteria.sourceAllowlist.map((value) => value.trim()),
+      ),
+      source_blocklist: dedupeOrdered(
+        profile.criteria.sourceBlocklist.map((value) => value.trim()),
+      ),
       video_codec_allowlist: dedupeOrdered(
         profile.criteria.videoCodecAllowlist.map((value) => value.trim()),
       ),
@@ -179,8 +199,10 @@ export function qualityProfileEntryFromGraph(
       prefer_remux: profile.criteria.preferRemux,
       allow_bd_disk: profile.criteria.allowBdDisk,
       allow_upgrades: profile.criteria.allowUpgrades,
-    ignore_proper_repack: profile.criteria.ignoreProperRepack ?? false,
-      scoring_overrides: scoringOverridesFromGraph(profile.criteria.scoringOverrides),
+      ignore_proper_repack: profile.criteria.ignoreProperRepack ?? false,
+      scoring_overrides: scoringOverridesFromGraph(
+        profile.criteria.scoringOverrides,
+      ),
       cutoff_tier: profile.criteria.cutoffTier?.trim().toUpperCase() || null,
       min_score_to_grab: profile.criteria.minScoreToGrab,
     },
@@ -196,7 +218,9 @@ export function qualityProfileSettingsToEntries(
 export function qualityProfileSettingsToCatalogText(
   payload: QualityProfileSettingsPayload | null | undefined,
 ): string {
-  return normalizeQualityProfilesForUi(JSON.stringify(qualityProfileSettingsToEntries(payload)));
+  return normalizeQualityProfilesForUi(
+    JSON.stringify(qualityProfileSettingsToEntries(payload)),
+  );
 }
 
 export function qualityProfileSettingsToCategoryOverrides(
@@ -248,7 +272,9 @@ function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
   return result;
 }
 
-export function resolveQualityProfileCatalogState(rawValue: string): ProfileCatalogParseResult {
+export function resolveQualityProfileCatalogState(
+  rawValue: string,
+): ProfileCatalogParseResult {
   const normalizedText = normalizeQualityProfilesForUi(rawValue);
   const parsedEntries = parseQualityProfileCatalogEntries(normalizedText);
   const parsedProfiles = parseQualityProfileCatalog(normalizedText);
@@ -271,9 +297,9 @@ export function resolveQualityProfileCatalogState(rawValue: string): ProfileCata
 }
 
 export function extractPrimaryNumber(value: string): number | null {
-  const numericMatches = Array.from(value.matchAll(/\d+/g), (match) => Number(match[0])).filter(
-    (parsed) => Number.isFinite(parsed),
-  );
+  const numericMatches = Array.from(value.matchAll(/\d+/g), (match) =>
+    Number(match[0]),
+  ).filter((parsed) => Number.isFinite(parsed));
   if (numericMatches.length > 0) {
     return numericMatches[numericMatches.length - 1];
   }
@@ -303,7 +329,8 @@ export function extractQualitySortValue(value: string): number | null {
 
 export function sortStringByNumericDesc(left: string, right: string): number {
   const leftNumber = extractQualitySortValue(left) ?? Number.NEGATIVE_INFINITY;
-  const rightNumber = extractQualitySortValue(right) ?? Number.NEGATIVE_INFINITY;
+  const rightNumber =
+    extractQualitySortValue(right) ?? Number.NEGATIVE_INFINITY;
   if (leftNumber === rightNumber) {
     return left.localeCompare(right);
   }
@@ -330,7 +357,10 @@ export function normalizeProfileIdFromName(name: string): string {
   return slug.length > 0 ? slug : "quality-profile";
 }
 
-export function createUniqueProfileId(base: string, existingIds: string[]): string {
+export function createUniqueProfileId(
+  base: string,
+  existingIds: string[],
+): string {
   const taken = new Set(existingIds.map((value) => value.toLowerCase()));
   let candidate = base;
   let suffix = 1;
@@ -360,7 +390,9 @@ export function normalizeExclusiveProfileLists(
 } {
   const deniedSet = new Set(dedupeOrdered(deniedValues));
   return {
-    allowed: dedupeOrdered(allowedValues).filter((value) => !deniedSet.has(value)),
+    allowed: dedupeOrdered(allowedValues).filter(
+      (value) => !deniedSet.has(value),
+    ),
     denied: Array.from(deniedSet),
   };
 }
@@ -382,9 +414,18 @@ export function normalizeQualityTierList(raw: unknown): string[] {
   );
 }
 
-export function moveQualityTier(tiers: string[], tier: string, targetIndex: number): string[] {
+export function moveQualityTier(
+  tiers: string[],
+  tier: string,
+  targetIndex: number,
+): string[] {
   const sourceIndex = tiers.indexOf(tier);
-  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= tiers.length || sourceIndex === targetIndex) {
+  if (
+    sourceIndex < 0 ||
+    targetIndex < 0 ||
+    targetIndex >= tiers.length ||
+    sourceIndex === targetIndex
+  ) {
     return tiers;
   }
   const reordered = [...tiers];
@@ -393,7 +434,10 @@ export function moveQualityTier(tiers: string[], tier: string, targetIndex: numb
   return reordered;
 }
 
-export function buildQualityProfileTemplate(profileId: string, profileName: string): QualityProfileDraft {
+export function buildQualityProfileTemplate(
+  profileId: string,
+  profileName: string,
+): QualityProfileDraft {
   return {
     id: profileId,
     name: profileName,
@@ -441,7 +485,10 @@ export function toQualityProfileDraft(
   );
 
   return {
-    id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : fallbackId,
+    id:
+      typeof entry.id === "string" && entry.id.trim()
+        ? entry.id.trim()
+        : fallbackId,
     name:
       typeof entry.name === "string" && entry.name.trim().length > 0
         ? entry.name.trim()
@@ -453,11 +500,13 @@ export function toQualityProfileDraft(
     audio_codec_allowlist: audioCodecLists.allowed,
     audio_codec_blocklist: audioCodecLists.denied,
     quality_tiers:
-      typeof entry.criteria.quality_tiers === "undefined" || entry.criteria.quality_tiers === null
+      typeof entry.criteria.quality_tiers === "undefined" ||
+      entry.criteria.quality_tiers === null
         ? [...DEFAULT_QUALITY_PROFILE_QUALITY_TIERS]
         : normalizeQualityTierList(entry.criteria.quality_tiers),
     archival_quality:
-      typeof entry.criteria.archival_quality === "string" && entry.criteria.archival_quality.trim().length > 0
+      typeof entry.criteria.archival_quality === "string" &&
+      entry.criteria.archival_quality.trim().length > 0
         ? entry.criteria.archival_quality.trim().toUpperCase()
         : "2160P",
     allow_unknown_quality:
@@ -473,14 +522,22 @@ export function toQualityProfileDraft(
         ? entry.criteria.detected_hdr_allowed
         : true,
     prefer_remux:
-      typeof entry.criteria.prefer_remux === "boolean" ? entry.criteria.prefer_remux : false,
-    allow_bd_disk: typeof entry.criteria.allow_bd_disk === "boolean" ? entry.criteria.allow_bd_disk : true,
+      typeof entry.criteria.prefer_remux === "boolean"
+        ? entry.criteria.prefer_remux
+        : false,
+    allow_bd_disk:
+      typeof entry.criteria.allow_bd_disk === "boolean"
+        ? entry.criteria.allow_bd_disk
+        : true,
     allow_upgrades:
-      typeof entry.criteria.allow_upgrades === "boolean" ? entry.criteria.allow_upgrades : true,
+      typeof entry.criteria.allow_upgrades === "boolean"
+        ? entry.criteria.allow_upgrades
+        : true,
     ignore_proper_repack: entry.criteria.ignore_proper_repack === true,
     scoring_overrides: readScoringOverrides(entry.criteria.scoring_overrides),
     cutoff_tier:
-      typeof entry.criteria.cutoff_tier === "string" && entry.criteria.cutoff_tier.trim()
+      typeof entry.criteria.cutoff_tier === "string" &&
+      entry.criteria.cutoff_tier.trim()
         ? entry.criteria.cutoff_tier.trim().toUpperCase()
         : "",
     min_score_to_grab:
@@ -490,8 +547,13 @@ export function toQualityProfileDraft(
   };
 }
 
-export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft): ParsedQualityProfileEntry {
-  const sourceLists = normalizeExclusiveProfileLists(draft.source_allowlist, draft.source_blocklist);
+export function qualityProfileCatalogEntryFromDraft(
+  draft: QualityProfileDraft,
+): ParsedQualityProfileEntry {
+  const sourceLists = normalizeExclusiveProfileLists(
+    draft.source_allowlist,
+    draft.source_blocklist,
+  );
   const videoCodecLists = normalizeExclusiveProfileLists(
     draft.video_codec_allowlist,
     draft.video_codec_blocklist,
@@ -519,7 +581,7 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
-    ignore_proper_repack: draft.ignore_proper_repack,
+      ignore_proper_repack: draft.ignore_proper_repack,
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
@@ -527,7 +589,9 @@ export function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft):
   };
 }
 
-export function qualityProfileEntryToMutationInput(entry: ParsedQualityProfileEntry) {
+export function qualityProfileEntryToMutationInput(
+  entry: ParsedQualityProfileEntry,
+) {
   return {
     id: entry.id,
     name: entry.name,
@@ -546,8 +610,10 @@ export function qualityProfileEntryToMutationInput(entry: ParsedQualityProfileEn
       preferRemux: entry.criteria.prefer_remux,
       allowBdDisk: entry.criteria.allow_bd_disk,
       allowUpgrades: entry.criteria.allow_upgrades,
-    ignoreProperRepack: entry.criteria.ignore_proper_repack,
-      scoringOverrides: scoringOverridesToGraphInput(entry.criteria.scoring_overrides),
+      ignoreProperRepack: entry.criteria.ignore_proper_repack,
+      scoringOverrides: scoringOverridesToGraphInput(
+        entry.criteria.scoring_overrides,
+      ),
       cutoffTier: entry.criteria.cutoff_tier,
       minScoreToGrab: entry.criteria.min_score_to_grab,
     },
@@ -564,7 +630,10 @@ export function normalizeQualityProfilesForUi(rawValue: string): string {
     return JSON.stringify(JSON.parse(rawValue), null, 2);
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to format quality profiles JSON for UI", { rawValue, error });
+      console.warn("Failed to format quality profiles JSON for UI", {
+        rawValue,
+        error,
+      });
     }
     return rawValue;
   }
@@ -575,13 +644,18 @@ export function normalizeQualityProfilesForSave(rawValue: string): string {
     return JSON.stringify(JSON.parse(rawValue));
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to format quality profiles JSON for save", { rawValue, error });
+      console.warn("Failed to format quality profiles JSON for save", {
+        rawValue,
+        error,
+      });
     }
     return rawValue;
   }
 }
 
-export function parseQualityProfileCatalogEntries(rawValue: string): ParsedQualityProfileEntry[] {
+export function parseQualityProfileCatalogEntries(
+  rawValue: string,
+): ParsedQualityProfileEntry[] {
   if (!rawValue.trim()) {
     return [];
   }
@@ -595,13 +669,18 @@ export function parseQualityProfileCatalogEntries(rawValue: string): ParsedQuali
       : [];
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse quality profile catalog entries", { rawValue, error });
+      console.warn("Failed to parse quality profile catalog entries", {
+        rawValue,
+        error,
+      });
     }
     return [];
   }
 }
 
-export function parseQualityProfileCatalog(rawValue: string): ParsedQualityProfile[] {
+export function parseQualityProfileCatalog(
+  rawValue: string,
+): ParsedQualityProfile[] {
   if (!rawValue.trim()) {
     return [];
   }
@@ -622,7 +701,8 @@ export function parseQualityProfileCatalog(rawValue: string): ParsedQualityProfi
 
         return {
           id: cast.id.trim(),
-          name: typeof cast.name === "string" ? cast.name.trim() : cast.id.trim(),
+          name:
+            typeof cast.name === "string" ? cast.name.trim() : cast.id.trim(),
         } satisfies ParsedQualityProfile;
       })
       .filter((entry): entry is ParsedQualityProfile => entry !== null);
@@ -630,7 +710,10 @@ export function parseQualityProfileCatalog(rawValue: string): ParsedQualityProfi
     return normalized;
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse quality profile catalog", { rawValue, error });
+      console.warn("Failed to parse quality profile catalog", {
+        rawValue,
+        error,
+      });
     }
     return [];
   }
@@ -694,7 +777,10 @@ export function toProfileOptions(profiles: ParsedQualityProfile[]) {
   return deduped;
 }
 
-export function isValidProfileSelection(profiles: ParsedQualityProfile[], profileId: string) {
+export function isValidProfileSelection(
+  profiles: ParsedQualityProfile[],
+  profileId: string,
+) {
   if (profileId === QUALITY_PROFILE_INHERIT_VALUE) {
     return true;
   }

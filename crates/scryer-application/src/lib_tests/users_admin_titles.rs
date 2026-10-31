@@ -82,7 +82,10 @@ async fn create_user_with_app_permission_grants_requires_manage_permissions() {
         )
         .await;
 
-    assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+    ));
 }
 
 #[tokio::test]
@@ -104,7 +107,10 @@ async fn create_user_with_library_permission_grants_requires_manage_permissions(
         )
         .await;
 
-    assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+    ));
 }
 
 #[tokio::test]
@@ -169,7 +175,12 @@ async fn create_user_rejects_recovery_admin_username() {
         )
         .await;
 
-    assert!(matches!(result, Err(AppError::Validation(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
+    ));
 }
 
 #[tokio::test]
@@ -186,9 +197,16 @@ async fn create_user_rejects_anonymous_username() {
         )
         .await;
 
-    let Err(AppError::Validation(message)) = result else {
+    let Err(AppError::ValidationRefused {
+        message, reason, ..
+    }) = result
+    else {
         panic!("anonymous username should be reserved");
     };
+    assert_eq!(
+        reason,
+        crate::error_reasons::security::ANONYMOUS_RESERVED_AUTHLESS_AUDIT_ATTRIBUTION
+    );
     assert!(message.contains("anonymous is reserved"));
 }
 
@@ -198,9 +216,16 @@ async fn ensure_default_admin_rejects_anonymous_username() {
 
     let result = app.ensure_default_admin("anonymous", "password123").await;
 
-    let Err(AppError::Validation(message)) = result else {
+    let Err(AppError::ValidationRefused {
+        message, reason, ..
+    }) = result
+    else {
         panic!("anonymous default admin username should be reserved");
     };
+    assert_eq!(
+        reason,
+        crate::error_reasons::security::ANONYMOUS_RESERVED_AUTHLESS_AUDIT_ATTRIBUTION
+    );
     assert!(message.contains("anonymous is reserved"));
 }
 
@@ -384,7 +409,10 @@ async fn title_deletion_job_runs_are_visible_to_actor_without_system_settings() 
     );
 
     let denied = app.list_job_runs(&manager, JobKey::Housekeeping, 10).await;
-    assert!(matches!(denied, Err(AppError::Unauthorized(_))));
+    assert!(matches!(
+        denied,
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+    ));
 
     let admin_runs = app
         .list_job_runs(&admin, JobKey::TitleDeletion, 10)
@@ -912,6 +940,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "queue-direct".to_string(),
             download_id: None,
@@ -952,6 +981,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "queue-active".to_string(),
             download_id: None,
@@ -992,6 +1022,7 @@ async fn delete_title_leaves_active_submission_for_unmatched_import() {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "queue-unrelated".to_string(),
             download_id: None,
@@ -2476,7 +2507,10 @@ async fn recovery_row_removal_requires_permission_in_the_titles_library() {
                 .await
                 .unwrap_err();
             assert!(
-                matches!(error, AppError::Unauthorized(_)),
+                matches!(
+                    error,
+                    AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+                ),
                 "unexpected error: {error:?}"
             );
             assert_eq!(registry.download_id_for(&locator).await, Some(id));

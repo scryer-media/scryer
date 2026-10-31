@@ -10,6 +10,9 @@ test("scoring persona choices cover every persona id with an English label", () 
     ["BALANCED", "AUDIOPHILE", "EFFICIENT", "COMPATIBLE"],
   );
   for (const choice of SCORING_PERSONA_CHOICES) {
-    assert.ok(en[choice.labelKey], `missing English label for ${choice.labelKey}`);
+    assert.ok(
+      en[choice.labelKey],
+      `missing English label for ${choice.labelKey}`,
+    );
   }
 });

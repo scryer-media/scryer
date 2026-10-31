@@ -11,7 +11,10 @@ export type CatalogTableViewMode = "COMPACT" | "POSTER_TABLE";
 export type CatalogColumnsInput = NonNullable<SetMyCatalogViewInput["columns"]>;
 
 /** The column choices both table layouts share, in display order. */
-const TABLE_VIEW_MODES: readonly CatalogTableViewMode[] = ["COMPACT", "POSTER_TABLE"];
+const TABLE_VIEW_MODES: readonly CatalogTableViewMode[] = [
+  "COMPACT",
+  "POSTER_TABLE",
+];
 
 export function catalogDeviceClass(isMobile: boolean): UiDeviceClass {
   return isMobile ? "MOBILE" : "DESKTOP";
@@ -30,7 +33,9 @@ export function catalogFacetForView(view: string): CatalogFacet | null {
   }
 }
 
-export function catalogViewModeToProfile(mode: CatalogContentViewMode): UiCatalogViewMode {
+export function catalogViewModeToProfile(
+  mode: CatalogContentViewMode,
+): UiCatalogViewMode {
   switch (mode) {
     case "compact":
       return "COMPACT";
@@ -41,7 +46,9 @@ export function catalogViewModeToProfile(mode: CatalogContentViewMode): UiCatalo
   }
 }
 
-function catalogViewModeFromProfile(mode: string): CatalogContentViewMode | null {
+function catalogViewModeFromProfile(
+  mode: string,
+): CatalogContentViewMode | null {
   switch (mode) {
     case "COMPACT":
       return "compact";
@@ -89,7 +96,8 @@ export function savedCatalogVisibleColumns<K extends string>(
   },
 ): Record<K, boolean> | null {
   const slice = settings.tableColumns.filter(
-    (row) => row.deviceClass === options.deviceClass && row.facet === options.facet,
+    (row) =>
+      row.deviceClass === options.deviceClass && row.facet === options.facet,
   );
   const active = tableViewModeFor(options.viewMode);
   const preferred = slice.filter((row) => row.tableViewMode === active);

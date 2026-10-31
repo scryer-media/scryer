@@ -1,27 +1,27 @@
-import * as React from "react"
+import * as React from "react";
 
-import { Button } from "@/components/ui/button"
-import { ActionTooltip } from "@/components/ui/tooltip"
+import { Button } from "@/components/ui/button";
+import { ActionTooltip } from "@/components/ui/tooltip";
 import {
   boxedActionButtonBaseClass,
   boxedActionButtonToneClass,
   type BoxedActionButtonTone,
-} from "@/lib/utils/action-button-styles"
-import { cn } from "@/lib/utils"
+} from "@/lib/utils/action-button-styles";
+import { cn } from "@/lib/utils";
 
 type IconButtonProps = Omit<
   React.ComponentProps<typeof Button>,
   "size" | "variant"
 > & {
-  label: string
-  appearance?: "boxed" | "ghost"
-  tone?: BoxedActionButtonTone
-  showTitleAttribute?: boolean
-  tooltip?: React.ReactNode | false
-  tooltipSide?: React.ComponentProps<typeof ActionTooltip>["side"]
-  tooltipClassName?: string
-  tooltipUseProvider?: boolean
-}
+  label: string;
+  appearance?: "boxed" | "ghost";
+  tone?: BoxedActionButtonTone;
+  showTitleAttribute?: boolean;
+  tooltip?: React.ReactNode | false;
+  tooltipSide?: React.ComponentProps<typeof ActionTooltip>["side"];
+  tooltipClassName?: string;
+  tooltipUseProvider?: boolean;
+};
 
 function IconButton({
   label,
@@ -37,10 +37,10 @@ function IconButton({
   children,
   ...props
 }: IconButtonProps) {
-  const ariaLabel = props["aria-label"] ?? label
-  let tooltipContent = tooltip
+  const ariaLabel = props["aria-label"] ?? label;
+  let tooltipContent = tooltip;
   if (tooltipContent === undefined) {
-    tooltipContent = showTitleAttribute === false ? false : title ?? label
+    tooltipContent = showTitleAttribute === false ? false : (title ?? label);
   }
 
   const button = (
@@ -59,7 +59,7 @@ function IconButton({
     >
       {children}
     </Button>
-  )
+  );
 
   return (
     <ActionTooltip
@@ -75,8 +75,8 @@ function IconButton({
     >
       {button}
     </ActionTooltip>
-  )
+  );
 }
 
-export { IconButton }
-export type { IconButtonProps }
+export { IconButton };
+export type { IconButtonProps };

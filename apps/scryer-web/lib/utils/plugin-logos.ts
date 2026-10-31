@@ -157,11 +157,9 @@ function hasPluginLogoSlug(slug: string): boolean {
 export function resolvePluginLogoSlug(
   identity: PluginVisualIdentity,
 ): string | null {
-  const candidates = [
-    identity.providerType,
-    identity.id,
-    identity.name,
-  ].filter((value): value is string => Boolean(value?.trim()));
+  const candidates = [identity.providerType, identity.id, identity.name].filter(
+    (value): value is string => Boolean(value?.trim()),
+  );
 
   for (const candidate of candidates) {
     for (const variant of candidateVariants(candidate)) {

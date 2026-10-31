@@ -165,16 +165,19 @@ impl ListSubscriptionRepository for ListStore {
                 )
                 .await?;
                 if changed == 0 {
-                    return Err(AppError::NotFound(format!(
-                        "list subscription {}",
-                        subscription.id
-                    )));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::MEDIA_LIST_SUBSCRIPTION_NOT_FOUND,
+                        format!("list subscription {}", subscription.id),
+                    ));
                 }
                 replace_routes_tx(tx, &subscription.id, route_rows).await?;
                 load_subscription_tx(tx, &subscription.id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("list subscription {}", subscription.id))
+                        AppError::not_found_reason(
+                            crate::error_reasons::MEDIA_LIST_SUBSCRIPTION_NOT_FOUND,
+                            format!("list subscription {}", subscription.id),
+                        )
                     })
             })
         })
@@ -262,7 +265,10 @@ impl ListSubscriptionRepository for ListStore {
             SqlRuntime::execute_write(&self.datastore, "record_list_sync", RECORD_SYNC_SQL, args)
                 .await?;
         if changed == 0 {
-            return Err(AppError::NotFound(format!("list subscription {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LIST_SUBSCRIPTION_NOT_FOUND,
+                format!("list subscription {id}"),
+            ));
         }
         Ok(())
     }
@@ -295,7 +301,12 @@ impl ListSubscriptionRepository for ListStore {
                     &[SqlArg::Text(id.clone())],
                 )
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("list subscription {id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::MEDIA_LIST_SUBSCRIPTION_NOT_FOUND,
+                        format!("list subscription {id}"),
+                    )
+                })?;
                 let stored_next_at = row.opt_timestamp("next_sync_at")?;
                 if stored_next_at != read_next_at {
                     // A sync was asked for while this one ran; keep it.
@@ -320,7 +331,10 @@ impl ListSubscriptionRepository for ListStore {
         )
         .await?;
         if changed == 0 {
-            return Err(AppError::NotFound(format!("list subscription {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LIST_SUBSCRIPTION_NOT_FOUND,
+                format!("list subscription {id}"),
+            ));
         }
         Ok(())
     }

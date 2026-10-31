@@ -659,7 +659,10 @@ async fn discover_title_folder_boundaries(
     sender: &tokio::sync::mpsc::Sender<AppResult<Vec<TitleFolderBoundary>>>,
 ) -> AppResult<()> {
     if batch_size == 0 {
-        return Err(AppError::Validation("batch size must be positive".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::BATCH_SIZE_OUT_OF_RANGE,
+            "batch size must be positive",
+        ));
     }
     let resolved_root = tokio::fs::canonicalize(&root)
         .await
@@ -1052,7 +1055,10 @@ pub(crate) async fn ensure_existing_title_boundary(
     )
     .await?;
     if !content.has_media || content.has_child_titles {
-        return Err(AppError::Validation("selected folder is an organizing folder or mixed title layout; select the title folder containing its media".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT,
+            "selected folder is an organizing folder or mixed title layout; select the title folder containing its media",
+        ));
     }
     Ok(())
 }
@@ -1069,7 +1075,10 @@ pub(crate) async fn ensure_folder_holds_no_child_titles(
     )
     .await?;
     if content.has_child_titles {
-        return Err(AppError::Validation("destination folder already contains other title folders; it is an organizing folder, not a title folder".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::FOLDER_NOT_TITLE_BOUNDARY,
+            "destination folder already contains other title folders; it is an organizing folder, not a title folder",
+        ));
     }
     Ok(())
 }
@@ -1130,8 +1139,9 @@ async fn verify_scan_boundary(
                 .as_ref()
                 .is_some_and(|identity| identity.conflicts_with(&owner.identity))
         {
-            return Err(AppError::Validation(
-                "media identity conflicts with the proposed title folder".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER,
+                "media identity conflicts with the proposed title folder",
             ));
         }
         let entry = frame
@@ -1157,17 +1167,16 @@ async fn verify_scan_boundary(
                 continue;
             }
             if kind.is_symlink() {
-                return Err(AppError::Validation(
-                    "linked folder requires explicit ownership resolution before scanning".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING, "linked folder requires explicit ownership resolution before scanning"));
             }
             if !kind.is_dir() {
                 continue;
             }
             let depth = frame.depth + 1;
             if depth > MAX_UNOWNED_TITLE_DEPTH {
-                return Err(AppError::Validation(
-                    "automatic title discovery depth limit reached".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::AUTOMATIC_TITLE_DISCOVERY_DEPTH_LIMIT_REACHED,
+                    "automatic title discovery depth limit reached",
                 ));
             }
             let season = episodic && !frame.part && conventional_season(&child);
@@ -1188,16 +1197,12 @@ async fn verify_scan_boundary(
                 continue;
             }
             if parent.part {
-                return Err(AppError::Validation(
-                    "destination folder contains an independent or unresolved title boundary"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY, "destination folder contains an independent or unresolved title boundary"
+                        ));
             }
             if !episodic || !child.is_episode_container_of(parent, Some(&owner)) {
-                return Err(AppError::Validation(
-                    "destination folder contains an independent or unresolved title boundary"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY, "destination folder contains an independent or unresolved title boundary"
+                        ));
             }
             parent.evidence.merge(child.evidence);
         }

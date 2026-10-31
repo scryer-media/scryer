@@ -176,59 +176,97 @@ async fn restore_bundle_parts_into_postgres_pool(
         AppError::Repository(format!("failed to begin PostgreSQL restore: {error}"))
     })?;
 
-    for table in restore_tables.iter().rev() {
-        let sql = format!("DELETE FROM {}", quote_identifier(table));
-        sqlx::query(sqlx::AssertSqlSafe(&*sql))
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to clear restore table {table}: {error}"))
-            })?;
-    }
+    let deadline = scryer_application::current_restore_deadline();
+    let restore_work = async {
+        if let Some(deadline) = &deadline {
+            configure_restore_transaction(&mut tx, deadline).await?;
+        }
+        for table in restore_tables.iter().rev() {
+            let sql = format!("DELETE FROM {}", quote_identifier(table));
+            sqlx::query(sqlx::AssertSqlSafe(&*sql))
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!("failed to clear restore table {table}: {error}"))
+                })?;
+        }
 
-    for table in export_tables
-        .iter()
-        .filter(|table| row_counts.contains_key(*table))
-    {
-        import_table_part(
-            &mut tx,
-            table,
-            &tables_dir.join(backup_table_part_filename(table)),
-        )
-        .await?;
-    }
+        if let Some(progress) = &deadline {
+            progress.begin_import(
+                row_counts
+                    .values()
+                    .copied()
+                    .fold(0_u64, u64::saturating_add),
+            );
+        }
+        for table in export_tables
+            .iter()
+            .filter(|table| row_counts.contains_key(*table))
+        {
+            import_table_part(
+                &mut tx,
+                table,
+                &tables_dir.join(backup_table_part_filename(table)),
+            )
+            .await?;
+        }
 
-    rebuild_title_search_projection(&mut tx).await?;
-    repair_sequences(&mut tx).await?;
+        if let Some(progress) = &deadline {
+            progress.finish_import();
+        }
+        rebuild_title_search_projection(&mut tx).await?;
+        repair_sequences(&mut tx).await?;
 
-    for table in export_tables
-        .iter()
-        .filter(|table| row_counts.contains_key(*table))
-    {
-        let expected_rows = row_counts.get(table).ok_or_else(|| {
-            AppError::Validation(format!(
+        for table in export_tables
+            .iter()
+            .filter(|table| row_counts.contains_key(*table))
+        {
+            let expected_rows = row_counts.get(table).ok_or_else(|| {
+            AppError::validation_refused(crate::error_reasons::DATASTORE_BACKUP_TABLE_SET_MISMATCH, format!(
                 "backup bundle table set does not match the current restore catalog: missing [{}], unexpected []",
                 table
             ))
         })?;
-        let sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(table));
-        let actual_rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to validate restored table {table}: {error}"
-                ))
-            })?;
-        if actual_rows as u64 != *expected_rows {
-            return Err(AppError::Validation(format!(
-                "restored table {table} row count mismatch: expected {expected_rows}, got {actual_rows}"
-            )));
+            let sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(table));
+            let actual_rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to validate restored table {table}: {error}"
+                    ))
+                })?;
+            if actual_rows as u64 != *expected_rows {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_RESTORED_TABLE_ROW_COUNT_MISMATCH,
+                    format!(
+                        "restored table {table} row count mismatch: expected {expected_rows}, got {actual_rows}"
+                    ),
+                ));
+            }
         }
-    }
 
+        scryer_application::check_restore_deadline()?;
+        Ok(())
+    };
+    let result = match &deadline {
+        Some(deadline) => deadline.run(restore_work).await,
+        None => restore_work.await,
+    };
+    if let Err(error) = result {
+        tx.rollback().await.map_err(|rollback| {
+            AppError::validation_refused(
+                scryer_application::restore_refusal::RESTORE_RECOVERY_REQUIRED,
+                format!("restore rollback failed: {rollback}"),
+            )
+        })?;
+        return Err(error);
+    }
     tx.commit().await.map_err(|error| {
-        AppError::Repository(format!("failed to commit PostgreSQL restore: {error}"))
+        AppError::validation_refused(
+            scryer_application::restore_refusal::RESTORE_RECOVERY_REQUIRED,
+            format!("failed to commit PostgreSQL restore: {error}"),
+        )
     })?;
 
     Ok(())
@@ -617,28 +655,35 @@ async fn import_table_part(
         .map(PgColumnInfo::import_rule)
         .collect::<Vec<_>>();
     let file = File::open(part_path).map_err(|error| {
-        AppError::Validation(format!("backup table payload missing for {table}: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
+            format!("backup table payload missing for {table}: {error}"),
+        )
     })?;
-    let reader = BufReader::new(file);
+    let reader = BufReader::new(scryer_application::RestoreReader::new(file));
+    let progress = scryer_application::current_restore_deadline();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line.map_err(|error| {
-            AppError::Validation(format!(
-                "failed to read backup row {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_UNREADABLE,
+                format!("failed to read backup row {table}:{line_number}: {error}"),
+            )
         })?;
         if line.trim().is_empty() {
             continue;
         }
         let value: JsonValue = serde_json::from_str(&line).map_err(|error| {
-            AppError::Validation(format!(
-                "invalid backup row for {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID,
+                format!("invalid backup row for {table}:{line_number}: {error}"),
+            )
         })?;
         let mut object = value.as_object().cloned().ok_or_else(|| {
-            AppError::Validation(format!(
-                "backup row for {table}:{line_number} is not an object"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_NOT_OBJECT,
+                format!("backup row for {table}:{line_number} is not an object"),
+            )
         })?;
         normalize_import_object_for_target(
             table,
@@ -678,10 +723,14 @@ async fn import_table_part(
             query = bind_pg_value(query, column, value)?;
         }
         query.execute(&mut **tx).await.map_err(|error| {
-            AppError::Validation(format!(
-                "failed to import backup row for {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
+                format!("failed to import backup row for {table}:{line_number}: {error}"),
+            )
         })?;
+        if let Some(progress) = &progress {
+            progress.imported_row();
+        }
     }
 
     Ok(())
@@ -797,15 +846,22 @@ fn blob_bytes(value: &JsonValue) -> AppResult<Option<Vec<u8>>> {
                 .get("base64")
                 .and_then(JsonValue::as_str)
                 .ok_or_else(|| {
-                    AppError::Validation("backup blob payload is missing base64 bytes".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_BLOB_BYTES_MISSING,
+                        "backup blob payload is missing base64 bytes",
+                    )
                 })?;
             STANDARD.decode(encoded).map(Some).map_err(|error| {
-                AppError::Validation(format!("backup blob payload is invalid base64: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_BLOB_BASE64_INVALID,
+                    format!("backup blob payload is invalid base64: {error}"),
+                )
             })
         }
         JsonValue::String(value) => Ok(Some(value.as_bytes().to_vec())),
-        _ => Err(AppError::Validation(
-            "backup row contains an unsupported PostgreSQL bytea value".into(),
+        _ => Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_BACKUP_BYTEA_UNSUPPORTED,
+            "backup row contains an unsupported PostgreSQL bytea value",
         )),
     }
 }
@@ -919,4 +975,134 @@ fn quote_identifier(value: &str) -> String {
 
 fn repo_err(error: impl std::fmt::Display) -> AppError {
     AppError::Repository(error.to_string())
+}
+
+async fn configure_restore_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    deadline: &scryer_application::RestoreDeadline,
+) -> AppResult<()> {
+    deadline.check()?;
+    let milliseconds = deadline.remaining().as_millis().max(1).to_string();
+    sqlx::query("SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $1, true)")
+        .bind(&milliseconds).execute(&mut **tx).await.map_err(repo_err)?;
+    // PostgreSQL 17+ also has a total transaction limit. SET LOCAL restores
+    // the caller's settings on both commit and rollback.
+    sqlx::query("SELECT set_config('transaction_timeout', $1, true) WHERE current_setting('transaction_timeout', true) IS NOT NULL")
+        .bind(&milliseconds).execute(&mut **tx).await.map_err(repo_err)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires SCRYER_TEST_POSTGRES_URL pointing to an isolated PostgreSQL fixture"]
+    async fn background_restore_postgres_import_rollback_progress_and_timeouts() -> AppResult<()> {
+        let raw_url = std::env::var("SCRYER_TEST_POSTGRES_URL").expect("isolated fixture URL");
+        tokio::time::timeout(std::time::Duration::from_secs(180), async {
+            let admin = PgPool::connect(&raw_url).await.map_err(repo_err)?;
+            let schema = format!(
+                "restore_test_{}",
+                scryer_domain::Id::new().0.replace('-', "_")
+            );
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+                .execute(&admin)
+                .await
+                .map_err(repo_err)?;
+            let mut url = url::Url::parse(&raw_url).unwrap();
+            url.query_pairs_mut()
+                .append_pair("options", &format!("-csearch_path={schema}"));
+            let services =
+                PostgresServices::new_with_mode(url.as_str(), crate::MigrationMode::Apply).await?;
+            let pool = services.pool();
+            let tables = ordered_export_tables(pool).await?;
+            let directory = tempfile::tempdir().unwrap();
+            let mut counts = BTreeMap::new();
+            let mut tx = pool.begin().await.map_err(repo_err)?;
+            for table in &tables {
+                let (rows, _) = export_table_part(&mut tx, table, directory.path()).await?;
+                counts.insert(table.clone(), rows);
+            }
+            tx.rollback().await.map_err(repo_err)?;
+            let deadline = scryer_application::RestoreDeadline::new();
+            deadline
+                .scope(restore_bundle_parts_into_postgres_pool(
+                    pool,
+                    &counts,
+                    None,
+                    directory.path(),
+                ))
+                .await?;
+            assert_eq!(deadline.import_percent(), Some(100));
+
+            // A bad row is encountered after the transaction clears its tables.
+            // The failed import must restore every original row count.
+            let part = directory
+                .path()
+                .join(backup_table_part_filename(&tables[0]));
+            std::fs::write(part, b"not-json\n").unwrap();
+            let retry = scryer_application::RestoreDeadline::new();
+            assert!(
+                retry
+                    .scope(restore_bundle_parts_into_postgres_pool(
+                        pool,
+                        &counts,
+                        None,
+                        directory.path()
+                    ))
+                    .await
+                    .is_err()
+            );
+            for (table, expected) in &counts {
+                let actual: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT COUNT(*) FROM {}",
+                    quote_identifier(table)
+                )))
+                .fetch_one(pool)
+                .await
+                .map_err(repo_err)?;
+                assert_eq!(actual as u64, *expected, "{table}");
+            }
+
+            let mut connection = pool.acquire().await.map_err(repo_err)?;
+            sqlx::query("SET statement_timeout = '310s'")
+                .execute(&mut *connection)
+                .await
+                .map_err(repo_err)?;
+            use sqlx::Acquire;
+            let mut tx = connection.begin().await.map_err(repo_err)?;
+            configure_restore_transaction(&mut tx, &deadline).await?;
+            let configured: String =
+                sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(repo_err)?;
+            assert_ne!(configured, "310s");
+            let seconds: f64 = sqlx::query_scalar(
+                "SELECT EXTRACT(EPOCH FROM current_setting('statement_timeout')::interval)::float8",
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            assert!(seconds > 310.0 && seconds <= 3600.0);
+            tx.rollback().await.map_err(repo_err)?;
+            let restored: String =
+                sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+                    .fetch_one(&mut *connection)
+                    .await
+                    .map_err(repo_err)?;
+            assert_eq!(restored, "310s");
+            drop(connection);
+            pool.close().await;
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+                .execute(&admin)
+                .await
+                .map_err(repo_err)?;
+            admin.close().await;
+            Ok(())
+        })
+        .await
+        .expect("isolated PostgreSQL restore test must finish")
+    }
 }

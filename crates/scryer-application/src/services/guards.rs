@@ -2,6 +2,88 @@ use super::*;
 
 const CACHED_SUBMISSION_STATE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// RSS admission and background yielding share one lock, including when they
+/// arrive simultaneously. A yielded generation is never reused by a later walk.
+#[derive(Clone, Default)]
+pub(crate) struct AcquisitionWalkPriority {
+    state: Arc<std::sync::Mutex<AcquisitionWalkPriorityState>>,
+}
+
+#[derive(Default)]
+struct AcquisitionWalkPriorityState {
+    rss: usize,
+    background: Option<tokio_util::sync::CancellationToken>,
+}
+
+pub(crate) struct RssWalkPriorityGuard(AcquisitionWalkPriority);
+
+impl Drop for RssWalkPriorityGuard {
+    fn drop(&mut self) {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rss -= 1;
+    }
+}
+
+impl AcquisitionWalkPriority {
+    pub(crate) fn begin_rss(&self) -> RssWalkPriorityGuard {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.rss += 1;
+        if let Some(background) = &state.background {
+            background.cancel();
+        }
+        RssWalkPriorityGuard(self.clone())
+    }
+
+    pub(crate) fn begin_background(&self) -> Option<tokio_util::sync::CancellationToken> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.rss > 0 {
+            return None;
+        }
+        let token = tokio_util::sync::CancellationToken::new();
+        state.background = Some(token.clone());
+        Some(token)
+    }
+}
+
+#[cfg(test)]
+mod walk_priority_tests {
+    use super::*;
+
+    #[test]
+    fn rss_priority_is_held_until_every_visit_drops_and_never_poisons_a_new_walk() {
+        let priority = AcquisitionWalkPriority::default();
+        let previous = priority.begin_background().unwrap();
+        let first = priority.begin_rss();
+        let second = priority.begin_rss();
+        assert!(previous.is_cancelled());
+        assert!(priority.begin_background().is_none());
+        drop(first);
+        assert!(priority.begin_background().is_none());
+        drop(second);
+        let next = priority.begin_background().unwrap();
+        assert!(!next.is_cancelled());
+        let priority_for_panic = priority.clone();
+        assert!(
+            std::panic::catch_unwind(move || {
+                let _guard = priority_for_panic.begin_rss();
+                panic!("synthetic RSS failure");
+            })
+            .is_err()
+        );
+        assert!(next.is_cancelled());
+        assert!(!priority.begin_background().unwrap().is_cancelled());
+    }
+}
+
 /// Per-title exclusion for the staged acquisition walk.
 ///
 /// Two walkers can reach one title: the background convergence cycle and an
@@ -200,6 +282,7 @@ pub struct DownloadSubmissionGuardTable {
     locks: Arc<tokio::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
     uncertain_titles: Arc<std::sync::Mutex<HashMap<String, UncertainDownloadSubmissionClaim>>>,
     title_states: Arc<std::sync::Mutex<HashMap<String, CanonicalSubmissionTitleState>>>,
+    snapshot_generation: Arc<std::sync::atomic::AtomicU64>,
     client_snapshot: Arc<std::sync::Mutex<Option<CachedDownloadClientSnapshot>>>,
     acquisition_snapshot: Arc<std::sync::Mutex<Option<CachedAcquisitionClientSnapshot>>>,
 }
@@ -241,6 +324,7 @@ impl CanonicalSubmissionTitleState {
 
 #[derive(Clone)]
 struct CachedDownloadClientSnapshot {
+    generation: u64,
     refreshed_at: std::time::Instant,
     snapshot: DownloadClientSnapshotOutcome,
 }
@@ -252,6 +336,7 @@ struct CachedDownloadClientSnapshot {
 /// thousand-item history is not worth copying each time.
 #[derive(Clone)]
 struct CachedAcquisitionClientSnapshot {
+    generation: u64,
     refreshed_at: std::time::Instant,
     snapshot: Arc<crate::acquisition_workflow::DownloadClientSnapshot>,
 }
@@ -379,6 +464,29 @@ impl DownloadSubmissionGuardTable {
         self.invalidate_client_snapshots();
     }
 
+    /// A missing submission keeps its identity, but no longer claims an
+    /// accepted client job. Preserve other submissions accepted for this title.
+    pub(crate) fn release_missing_claim(
+        &self,
+        title_id: &str,
+        download_id: scryer_domain::download_identity::DownloadId,
+    ) {
+        if let Some(state) = self
+            .title_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(title_id)
+        {
+            state.accepted_download_ids.remove(&download_id);
+        }
+        self.invalidate_client_snapshots();
+    }
+
+    pub(crate) fn client_snapshot_generation(&self) -> u64 {
+        self.snapshot_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Both client-state caches stop describing the clients: a grab was just
     /// submitted, or a download settled. The next reader re-asks.
     ///
@@ -389,6 +497,8 @@ impl DownloadSubmissionGuardTable {
     /// answer could say "free" about a scope that is now claimed, and that is
     /// precisely the double-submit the guard exists to prevent.
     pub(crate) fn invalidate_client_snapshots(&self) {
+        self.snapshot_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *self
             .client_snapshot
             .lock()
@@ -416,7 +526,10 @@ impl DownloadSubmissionGuardTable {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .filter(|cached| cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE)
+            .filter(|cached| {
+                cached.generation == self.client_snapshot_generation()
+                    && cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE
+            })
             .map(|cached| cached.snapshot.clone())
     }
 
@@ -430,33 +543,51 @@ impl DownloadSubmissionGuardTable {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .filter(|cached| cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE)
+            .filter(|cached| {
+                cached.generation == self.client_snapshot_generation()
+                    && cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE
+            })
             .map(|cached| Arc::clone(&cached.snapshot))
     }
 
     pub(crate) fn store_acquisition_snapshot(
         &self,
+        generation: u64,
         snapshot: Arc<crate::acquisition_workflow::DownloadClientSnapshot>,
-    ) {
-        *self
+    ) -> bool {
+        let mut cached = self
             .acquisition_snapshot
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(CachedAcquisitionClientSnapshot {
-                refreshed_at: std::time::Instant::now(),
-                snapshot,
-            });
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if generation != self.client_snapshot_generation() {
+            return false;
+        }
+        *cached = Some(CachedAcquisitionClientSnapshot {
+            generation,
+            refreshed_at: std::time::Instant::now(),
+            snapshot,
+        });
+        true
     }
 
-    pub(crate) fn store_client_snapshot(&self, snapshot: DownloadClientSnapshotOutcome) {
-        *self
+    pub(crate) fn store_client_snapshot(
+        &self,
+        generation: u64,
+        snapshot: DownloadClientSnapshotOutcome,
+    ) -> bool {
+        let mut cached = self
             .client_snapshot
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(CachedDownloadClientSnapshot {
-                refreshed_at: std::time::Instant::now(),
-                snapshot,
-            });
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if generation != self.client_snapshot_generation() {
+            return false;
+        }
+        *cached = Some(CachedDownloadClientSnapshot {
+            generation,
+            refreshed_at: std::time::Instant::now(),
+            snapshot,
+        });
+        true
     }
 
     pub(crate) fn mark_uncertain(&self, title_id: &str, claim: UncertainDownloadSubmissionClaim) {
@@ -601,5 +732,27 @@ impl PluginOperationGuardTable {
         };
 
         lock.lock_owned().await
+    }
+}
+
+#[cfg(test)]
+mod missing_claim_tests {
+    use super::*;
+
+    #[test]
+    fn missing_claim_releases_only_its_own_accepted_job() {
+        let guards = DownloadSubmissionGuardTable::default();
+        let missing = scryer_domain::download_identity::DownloadId::new();
+        let other = scryer_domain::download_identity::DownloadId::new();
+        let mut state = CanonicalSubmissionTitleState::new(Vec::new(), Vec::new());
+        state.accepted_download_ids.extend([missing, other]);
+        guards.store_title_state("title", state);
+        guards.release_missing_claim("title", missing);
+        guards.release_missing_claim("title", missing);
+        let states = guards.title_states.lock().unwrap();
+        assert_eq!(
+            states["title"].accepted_download_ids,
+            HashSet::from([other])
+        );
     }
 }

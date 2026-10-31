@@ -54,28 +54,43 @@ export const LIST_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   LIST_ACCOUNT_KEY_REJECTED: "lists.refusal.accountKeyRejected",
   LIST_ACCOUNT_AUTH_UNAVAILABLE: "lists.refusal.accountAuthUnavailable",
   LIST_ACCOUNT_AUTH_ACCESS_DENIED: "lists.refusal.accountAuthAccessDenied",
-  LIST_ACCOUNT_AUTH_AUTHORIZATION_FAILED: "lists.refusal.accountAuthAuthorizationFailed",
+  LIST_ACCOUNT_AUTH_AUTHORIZATION_FAILED:
+    "lists.refusal.accountAuthAuthorizationFailed",
   LIST_ACCOUNT_AUTH_BUSY: "lists.refusal.accountAuthBusy",
   // Both are trouble between this server and Scryer's sign-in service.
-  LIST_ACCOUNT_AUTH_INSTANCE_AUTH_REQUIRED: "lists.refusal.accountAuthInstanceUnrecognized",
-  LIST_ACCOUNT_AUTH_INSTANCE_AUTH_UNAVAILABLE: "lists.refusal.accountAuthInstanceUnrecognized",
-  LIST_ACCOUNT_AUTH_INVALID_PROVIDER_APP: "lists.refusal.accountAuthInvalidProviderApp",
-  LIST_ACCOUNT_AUTH_INVALID_PROVIDER_RESPONSE: "lists.refusal.accountAuthInvalidProviderResponse",
+  LIST_ACCOUNT_AUTH_INSTANCE_AUTH_REQUIRED:
+    "lists.refusal.accountAuthInstanceUnrecognized",
+  LIST_ACCOUNT_AUTH_INSTANCE_AUTH_UNAVAILABLE:
+    "lists.refusal.accountAuthInstanceUnrecognized",
+  LIST_ACCOUNT_AUTH_INVALID_PROVIDER_APP:
+    "lists.refusal.accountAuthInvalidProviderApp",
+  LIST_ACCOUNT_AUTH_INVALID_PROVIDER_RESPONSE:
+    "lists.refusal.accountAuthInvalidProviderResponse",
   LIST_ACCOUNT_AUTH_INVALID_REQUEST: "lists.refusal.accountAuthInvalidRequest",
-  LIST_ACCOUNT_AUTH_PROVIDER_NOT_CONFIGURED: "lists.refusal.accountAuthProviderNotConfigured",
-  LIST_ACCOUNT_AUTH_PROVIDER_REJECTED: "lists.refusal.accountAuthProviderRejected",
-  LIST_ACCOUNT_AUTH_PROVIDER_UNAVAILABLE: "lists.refusal.accountAuthProviderUnavailable",
+  LIST_ACCOUNT_AUTH_PROVIDER_NOT_CONFIGURED:
+    "lists.refusal.accountAuthProviderNotConfigured",
+  LIST_ACCOUNT_AUTH_PROVIDER_REJECTED:
+    "lists.refusal.accountAuthProviderRejected",
+  LIST_ACCOUNT_AUTH_PROVIDER_UNAVAILABLE:
+    "lists.refusal.accountAuthProviderUnavailable",
   LIST_ACCOUNT_AUTH_RATE_LIMITED: "lists.refusal.accountAuthRateLimited",
-  LIST_ACCOUNT_AUTH_RECONNECT_REQUIRED: "lists.refusal.accountAuthReconnectRequired",
-  LIST_ACCOUNT_AUTH_RELAY_UNAVAILABLE: "lists.refusal.accountAuthRelayUnavailable",
-  LIST_ACCOUNT_AUTH_TRANSPORT_UNAVAILABLE: "lists.refusal.accountAuthTransportUnavailable",
+  LIST_ACCOUNT_AUTH_RECONNECT_REQUIRED:
+    "lists.refusal.accountAuthReconnectRequired",
+  LIST_ACCOUNT_AUTH_RELAY_UNAVAILABLE:
+    "lists.refusal.accountAuthRelayUnavailable",
+  LIST_ACCOUNT_AUTH_TRANSPORT_UNAVAILABLE:
+    "lists.refusal.accountAuthTransportUnavailable",
   // Each is a sign-in step the provider's kind of connection does not have.
-  LIST_ACCOUNT_AUTH_UNSUPPORTED_EXCHANGE: "lists.refusal.accountAuthUnsupported",
+  LIST_ACCOUNT_AUTH_UNSUPPORTED_EXCHANGE:
+    "lists.refusal.accountAuthUnsupported",
   LIST_ACCOUNT_AUTH_UNSUPPORTED_POLL: "lists.refusal.accountAuthUnsupported",
-  LIST_ACCOUNT_AUTH_UNSUPPORTED_PROVIDER: "lists.refusal.accountAuthUnsupported",
-  LIST_ACCOUNT_AUTH_UNSUPPORTED_PROVIDER_APP: "lists.refusal.accountAuthUnsupportedProviderApp",
+  LIST_ACCOUNT_AUTH_UNSUPPORTED_PROVIDER:
+    "lists.refusal.accountAuthUnsupported",
+  LIST_ACCOUNT_AUTH_UNSUPPORTED_PROVIDER_APP:
+    "lists.refusal.accountAuthUnsupportedProviderApp",
   LIST_PROVIDER_APP_UNSUPPORTED: "lists.refusal.providerAppUnsupported",
-  LIST_PROVIDER_APP_REDIRECT_INVALID: "lists.refusal.providerAppRedirectInvalid",
+  LIST_PROVIDER_APP_REDIRECT_INVALID:
+    "lists.refusal.providerAppRedirectInvalid",
   LIST_PROVIDER_APP_INCOMPLETE: "lists.refusal.providerAppIncomplete",
 };
 
@@ -94,7 +109,11 @@ export function listRefusalKey(error: unknown): string | null {
  * server named one this client knows, otherwise the server's own sentence, and
  * `fallback` when the failure carries no usable sentence.
  */
-export function listErrorMessage(error: unknown, t: Translate, fallback: string): string {
+export function listErrorMessage(
+  error: unknown,
+  t: Translate,
+  fallback: string,
+): string {
   const key = listRefusalKey(error);
-  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback);
+  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback, t);
 }

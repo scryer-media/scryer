@@ -52,14 +52,36 @@ pub struct IndexerSearchResultPayload {
     // Torrent-specific fields
     /// Torrent seeder count, or null for non-torrent results.
     pub seeders: Option<i32>,
-    /// Torrent peer count, or null for non-torrent results.
+    /// Torrent peer count, or null for non-torrent results. Seeders plus
+    /// leechers when the indexer reported those but no peer count.
     pub peers: Option<i32>,
+    /// Torrent leecher count, or null when not reported.
+    pub leechers: Option<i32>,
     /// Torrent info hash, or null for non-torrent results.
     pub info_hash: Option<String>,
-    /// Whether the torrent is marked freeleech, or null for non-torrent results.
+    /// Whether the torrent is freeleech: the indexer's explicit claim, or else
+    /// whether the download volume factor is zero. Null when neither is known.
     pub freeleech: Option<bool>,
     /// Torrent download volume factor, or null for non-torrent results.
     pub download_volume_factor: Option<f64>,
+    /// Torrent upload volume factor, or null when not reported.
+    pub upload_volume_factor: Option<f64>,
+    /// Minimum seed ratio the tracker requires, or null when not reported.
+    pub minimum_seed_ratio: Option<f64>,
+    /// Minimum seed time the tracker requires in minutes, or null when not reported.
+    pub minimum_seed_time_minutes: Option<i32>,
+    /// Indexer flags such as freeleech or internal, in indexer order.
+    pub indexer_flags: Vec<String>,
+    /// Audio languages the indexer reported for the release.
+    pub languages: Vec<String>,
+    /// Subtitle languages the indexer reported for the release.
+    pub subtitles: Vec<String>,
+    /// Number of files in the release, or null when not reported.
+    pub files: Option<i32>,
+    /// Release year the indexer reported, or null when not reported.
+    pub year: Option<i32>,
+    /// Poster or cover image URL the indexer reported, or null when not reported.
+    pub poster_url: Option<String>,
     /// Opaque token accepted when queuing this candidate, or null when unavailable.
     pub candidate_token: Option<String>,
     /// Acquisition scope targeted by this result, or null when no scope was inferred.
@@ -773,8 +795,13 @@ pub struct SearchReleasesInput {
     pub episode: Option<String>,
     /// Optional limit. A title search lists at most this many results
     /// (default 50, max 200); a `query` search asks each indexer for this many
-    /// (default 100, 1 to 500) and lists everything returned.
+    /// (default 100, 1 to 500); `aggregatePageSize` sets how many merged results
+    /// each page lists.
     pub limit: Option<i32>,
+    /// Results per page for a `query` search, after merging every indexer's
+    /// results (default 100, 1 to 100). Later pages use the `first` argument
+    /// of `continueInteractiveReleaseSearch`.
+    pub aggregate_page_size: Option<i32>,
     /// Raw operator query sent as typed to each indexer, without a catalog title.
     pub query: Option<String>,
     /// Optional indexer configuration identities to restrict the search to.
@@ -1713,6 +1740,25 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     NoTextSearch,
 }
 
+/// How Scryer obtained the capabilities it used to search an indexer.
+/// Capability provenance never changes the indexer's search outcome.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum IndexerCapsSourceValue {
+    /// A cached capability snapshot that is still current.
+    Fresh,
+    /// Capabilities supplied by the managing indexer.
+    ManagedMetadata,
+    /// Capabilities fetched again for this search.
+    Refreshed,
+    /// An expired snapshot, used because refreshing it did not succeed.
+    Stale,
+    /// No snapshot was available, so the requested search was attempted as asked.
+    Permissive,
+    /// Capabilities the provider plugin declares for itself.
+    ProviderDeclarations,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Per-indexer progress and result count for an interactive release search.
 pub struct InteractiveReleaseSearchIndexerPayload {
@@ -1725,13 +1771,23 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     /// Current indexer lifecycle state.
     pub status: InteractiveReleaseSearchIndexerStatusValue,
     /// The indexer's result count. A title search counts its own batch, before
-    /// cross-indexer dedup; a query search counts what it contributed to the
-    /// listing, after exact duplicates are removed.
+    /// cross-indexer dedup. A `query` search counts every result the indexer
+    /// has returned to the search so far, across all of its pages, whether or
+    /// not those results have reached the page being shown.
     pub result_count: i32,
     /// Wall time of this indexer's own call in milliseconds, or null before it answered.
     pub elapsed_ms: Option<i32>,
     /// Failure reason, or null when the indexer did not fail.
     pub failure_reason: Option<String>,
+    /// How the capabilities used for this indexer were obtained, or null
+    /// before they were resolved.
+    pub caps_source: Option<IndexerCapsSourceValue>,
+    /// Stable reason code for why capability discovery fell back to stale or
+    /// permissive data, or null when it did not.
+    pub caps_reason: Option<String>,
+    /// Seconds the provider asked Scryer to wait before discovering
+    /// capabilities again, when it said so.
+    pub caps_retry_after_seconds: Option<i32>,
     /// True when the indexer asked Scryer to slow down rather than failing.
     /// Searching resumes on its own, so this reads as a cooldown, not an error.
     pub rate_limited: bool,
@@ -1756,6 +1812,17 @@ pub struct InteractiveReleaseSearchPayload {
     pub started_at: DateTime<Utc>,
     /// UTC completion time, or null while running.
     pub completed_at: Option<DateTime<Utc>>,
+    /// Opaque cursor for the following page of a query search, or null when
+    /// there is no following page. Pass it to `continueInteractiveReleaseSearch`.
+    pub next_cursor: Option<String>,
+    /// True when a query search page was returned at its time bound while some
+    /// indexers were still searching.
+    pub deadline_reached: bool,
+    /// Human-readable reason a query search could not complete, or null when it
+    /// did not fail. Shown only when the client does not know the code.
+    pub failure_reason: Option<String>,
+    /// Stable failure condition separate from the human-readable reason.
+    pub failure_reason_code: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -186,9 +186,11 @@ impl NzbgetDownloadClient {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            return Err(AppError::Repository(format!(
-                "nzbget rpc call {method} failed with error code {code}: {message}"
-            )));
+            return Err(nzbget_rpc_failure(
+                code,
+                message,
+                format!("nzbget rpc call {method} failed with error code {code}: {message}"),
+            ));
         }
 
         response_json
@@ -255,9 +257,11 @@ impl NzbgetDownloadClient {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            return Err(AppError::Repository(format!(
-                "nzbget test call failed with error code {code}: {message}"
-            )));
+            return Err(nzbget_rpc_failure(
+                code,
+                message,
+                format!("nzbget test call failed with error code {code}: {message}"),
+            ));
         }
         let result = response_json.get("result");
         if result.is_none() {
@@ -442,9 +446,11 @@ impl NzbgetDownloadClient {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            return Err(AppError::Repository(format!(
-                "nzbget API error {code}: {message}"
-            )));
+            return Err(nzbget_rpc_failure(
+                code,
+                message,
+                format!("nzbget API error {code}: {message}"),
+            ));
         }
 
         let result = response_json
@@ -740,6 +746,7 @@ impl NzbgetDownloadClient {
                 let remaining_seconds = extract_remaining_seconds_from_entry(group);
 
                 Some(DownloadQueueItem {
+                    attention_reason_code: None,
                     id: nzb_id.to_string(),
                     title_id: scryer_parameters.title_id,
                     episode_id: None,
@@ -952,6 +959,7 @@ impl NzbgetDownloadClient {
                 }
 
                 items.push(DownloadQueueItem {
+                    attention_reason_code: None,
                     id: id.clone(),
                     title_id: scryer_parameters.title_id,
                     episode_id: None,
@@ -1158,7 +1166,7 @@ fn history_queue_item_from_nzbget_entry(entry: &Value) -> Option<DownloadQueueIt
         .unwrap_or("");
     let status_upper = status.to_ascii_uppercase();
 
-    let (state, attention_reason) = map_history_state(&status_upper, entry)?;
+    let (state, attention_reason, password_failure) = map_history_state(&status_upper, entry)?;
     let history_ts = extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
     let title_name = entry
         .get("Name")
@@ -1173,6 +1181,7 @@ fn history_queue_item_from_nzbget_entry(entry: &Value) -> Option<DownloadQueueIt
     let scryer_parameters = extract_nzbget_parameters(entry);
 
     Some(DownloadQueueItem {
+        attention_reason_code: password_failure.map(|failure| failure.reason_code().to_string()),
         id: nzb_id.to_string(),
         title_id: scryer_parameters.title_id,
         episode_id: None,
@@ -1545,16 +1554,22 @@ impl DownloadClient for NzbgetDownloadClient {
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
-        let nzb_id: i64 = id
-            .parse()
-            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
+        let nzb_id: i64 = id.parse().map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_NZBGET_QUEUE_ID_INVALID,
+                format!("invalid nzbget queue id: {id}"),
+            )
+        })?;
         self.edit_queue("GroupPause", vec![nzb_id]).await
     }
 
     async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
-        let nzb_id: i64 = id
-            .parse()
-            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
+        let nzb_id: i64 = id.parse().map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_NZBGET_QUEUE_ID_INVALID,
+                format!("invalid nzbget queue id: {id}"),
+            )
+        })?;
         self.edit_queue("GroupResume", vec![nzb_id]).await
     }
 
@@ -1564,14 +1579,16 @@ impl DownloadClient for NzbgetDownloadClient {
         password: &str,
     ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
         use scryer_application::DownloadClientRetryOutcome as Outcome;
-        let nzb_id: i64 = id
-            .parse()
-            .ok()
-            .filter(|id| *id > 0)
-            .ok_or_else(|| AppError::Validation("invalid nzbget job ID".into()))?;
+        let nzb_id: i64 = id.parse().ok().filter(|id| *id > 0).ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_NZBGET_JOB_ID_INVALID,
+                "invalid nzbget job ID",
+            )
+        })?;
         if password.is_empty() {
-            return Err(AppError::Validation(
-                "replacement password is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_REPLACEMENT_PASSWORD_REQUIRED,
+                "replacement password is required",
             ));
         }
         let update = self
@@ -1621,9 +1638,12 @@ impl DownloadClient for NzbgetDownloadClient {
         is_history: bool,
         _remove_data: bool,
     ) -> AppResult<()> {
-        let nzb_id: i64 = id
-            .parse()
-            .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
+        let nzb_id: i64 = id.parse().map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_NZBGET_QUEUE_ID_INVALID,
+                format!("invalid nzbget queue id: {id}"),
+            )
+        })?;
         let (hinted, fallback) = nzbget_delete_commands(is_history);
         if self.try_edit_queue(hinted, vec![nzb_id]).await? {
             return Ok(());
@@ -1721,7 +1741,7 @@ impl DownloadClient for NzbgetDownloadClient {
             .to_ascii_uppercase();
         // A recovered or stale cleanup claim must recheck the current state.
         // None is reserved for actual absence; a retained job must stop cleanup.
-        if !map_history_state(&status, entry).is_some_and(|(state, _)| {
+        if !map_history_state(&status, entry).is_some_and(|(state, _, _)| {
             matches!(
                 state,
                 DownloadQueueState::Completed | DownloadQueueState::Failed
@@ -1856,7 +1876,7 @@ fn completed_download_from_nzbget_history_entry(
     let status_upper = status.to_ascii_uppercase();
 
     if !map_history_state(&status_upper, entry)
-        .is_some_and(|(state, _)| state == DownloadQueueState::Completed)
+        .is_some_and(|(state, _, _)| state == DownloadQueueState::Completed)
     {
         return None;
     }
@@ -2281,12 +2301,16 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
 fn map_history_state(
     status_upper: &str,
     entry: &serde_json::Map<String, Value>,
-) -> Option<(DownloadQueueState, Option<String>)> {
+) -> Option<(
+    DownloadQueueState,
+    Option<String>,
+    Option<scryer_domain::DownloadPasswordFailure>,
+)> {
     use DownloadQueueState::{Completed, Failed, Warning};
     // An unreadable state is retained for attention: never importable, never
     // cleanup-authorized, and never hidden as if the job were absent.
     if let Err(error) = validate_nzbget_history_state(entry) {
-        return Some((Warning, Some(nzbget_state_problem_message(error))));
+        return Some((Warning, Some(nzbget_state_problem_message(error)), None));
     }
     let field = |upper, lower| {
         history_field_str(entry, upper, lower)
@@ -2296,7 +2320,8 @@ fn map_history_state(
     let delete = field("DeleteStatus", "deleteStatus");
     let mark = field("MarkStatus", "markStatus");
     if delete == "MANUAL" {
-        return (mark == "BAD").then(|| (Failed, Some("marked bad and manually deleted".into())));
+        return (mark == "BAD")
+            .then(|| (Failed, Some("marked bad and manually deleted".into()), None));
     }
     let par = field("ParStatus", "parStatus");
     let unpack = field("UnpackStatus", "unpackStatus");
@@ -2311,6 +2336,7 @@ fn map_history_state(
                     .message()
                     .into(),
             ),
+            Some(scryer_domain::DownloadPasswordFailure::Required),
         ));
     }
     let mut decision = (Completed, None);
@@ -2340,6 +2366,7 @@ fn map_history_state(
         return Some((
             Failed,
             Some(format!("NZBGet terminal failure: {status_upper}")),
+            None,
         ));
     }
     if decision.0 == Completed {
@@ -2368,7 +2395,7 @@ fn map_history_state(
             _ => decision,
         };
     }
-    Some(decision)
+    Some((decision.0, decision.1, None))
 }
 
 /// Reject incomplete or unrecognized observations instead of treating an
@@ -2524,7 +2551,7 @@ fn validate_nzbget_state_alias(
 /// as a retained row's attention reason.
 fn nzbget_state_problem_message(error: AppError) -> String {
     match error {
-        AppError::Repository(message) => message,
+        AppError::Repository(message) | AppError::RepositoryFailure { message, .. } => message,
         other => other.to_string(),
     }
 }
@@ -2704,8 +2731,21 @@ fn nzbget_queue_priority(raw_priority: Option<&str>) -> i32 {
     }
 }
 
+/// NZBGet has used both JSON-RPC's method-not-found code and a legacy
+/// diagnostic for incompatible append signatures. Classify once on decode.
+fn nzbget_rpc_failure(code: i64, message: &str, diagnostic: String) -> AppError {
+    if code == -32601 || message.contains("Invalid procedure") {
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_NZBGET_METHOD_UNAVAILABLE,
+            diagnostic,
+        )
+    } else {
+        AppError::Repository(diagnostic)
+    }
+}
+
 fn is_nzbget_invalid_procedure_error(err: &AppError) -> bool {
-    matches!(err, AppError::Repository(message) if message.contains("Invalid procedure"))
+    err.reason() == Some(crate::error_reasons::ACQUISITION_NZBGET_METHOD_UNAVAILABLE)
 }
 
 fn sanitize_filename_with_nzb_ext(name: &str) -> String {
@@ -2778,6 +2818,17 @@ mod state_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_rpc_procedure_is_classified_once_before_downstream_routing() {
+        let numeric = super::nzbget_rpc_failure(-32601, "wording may change", "opaque".into());
+        assert!(super::is_nzbget_invalid_procedure_error(&numeric));
+        let legacy = super::nzbget_rpc_failure(0, "Invalid procedure", "opaque".into());
+        assert!(super::is_nzbget_invalid_procedure_error(&legacy));
+        let unrelated =
+            super::nzbget_rpc_failure(0, "unrelated failure", "Invalid procedure".into());
+        assert!(!super::is_nzbget_invalid_procedure_error(&unrelated));
+    }
+
     use super::state_tests::history_entry;
     use super::*;
     use wiremock::matchers::{body_partial_json, method, path};
@@ -3228,6 +3279,7 @@ mod tests {
         };
 
         let matching = DownloadQueueItem {
+            attention_reason_code: None,
             id: "queue-1".to_string(),
             title_id: Some("title-1".to_string()),
             episode_id: None,
@@ -3268,11 +3320,13 @@ mod tests {
             seeding: None,
         };
         let wrong_release = DownloadQueueItem {
+            attention_reason_code: None,
             title_name: "Bluey.S02.720p.WEB-DL.AV1.AAC2.0-NTb".to_string(),
             download_client_item_id: "43".to_string(),
             ..matching.clone()
         };
         let wrong_title = DownloadQueueItem {
+            attention_reason_code: None,
             title_id: Some("title-2".to_string()),
             download_client_item_id: "44".to_string(),
             ..matching.clone()

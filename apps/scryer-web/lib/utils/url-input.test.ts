@@ -70,12 +70,18 @@ test("anything we should not touch is left alone rather than half-read", () => {
   // A scheme that is not http(s) is a real mistake, not a paste to forgive.
   assert.equal(parseHostInput("ftp://files.example.com"), null);
   assert.equal(parseHostInput("   "), null);
-  assert.equal(normalizeUrlInput("  ftp://files.example.com "), "ftp://files.example.com");
+  assert.equal(
+    normalizeUrlInput("  ftp://files.example.com "),
+    "ftp://files.example.com",
+  );
 });
 
 test("the scheme is only guessed when none was written", () => {
   // A service someone stood up themselves, on a port they chose.
-  assert.equal(normalizeUrlInput("192.168.1.5:8080"), "http://192.168.1.5:8080");
+  assert.equal(
+    normalizeUrlInput("192.168.1.5:8080"),
+    "http://192.168.1.5:8080",
+  );
   assert.equal(normalizeUrlInput("10.0.0.5:9117"), "http://10.0.0.5:9117");
   assert.equal(normalizeUrlInput("100.64.0.3:8080"), "http://100.64.0.3:8080");
   assert.equal(normalizeUrlInput("localhost:6789"), "http://localhost:6789");
@@ -84,11 +90,17 @@ test("the scheme is only guessed when none was written", () => {
   assert.equal(normalizeUrlInput("nzbget.lan"), "http://nzbget.lan");
   // A name on the public internet.
   assert.equal(normalizeUrlInput("nzbgeek.info"), "https://nzbgeek.info");
-  assert.equal(normalizeUrlInput("api.nzbgeek.info/api"), "https://api.nzbgeek.info/api");
+  assert.equal(
+    normalizeUrlInput("api.nzbgeek.info/api"),
+    "https://api.nzbgeek.info/api",
+  );
   assert.equal(normalizeUrlInput("example.com:443"), "https://example.com:443");
   // What the operator wrote always wins.
   assert.equal(normalizeUrlInput("http://nzbgeek.info"), "http://nzbgeek.info");
-  assert.equal(normalizeUrlInput("https://192.168.1.5:8080/"), "https://192.168.1.5:8080");
+  assert.equal(
+    normalizeUrlInput("https://192.168.1.5:8080/"),
+    "https://192.168.1.5:8080",
+  );
   assert.equal(defaultSchemeFor("fd00::1", ""), "http");
   assert.equal(defaultSchemeFor("seedbox.example.com", ""), "https");
 });

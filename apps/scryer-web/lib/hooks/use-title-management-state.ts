@@ -12,7 +12,8 @@ export function useTitleManagementState() {
     Record<string, boolean>
   >({});
   const [libraryScanLoading, setLibraryScanLoading] = useState(false);
-  const [libraryScanSummary, setLibraryScanSummary] = useState<LibraryScanSummary | null>(null);
+  const [libraryScanSummary, setLibraryScanSummary] =
+    useState<LibraryScanSummary | null>(null);
 
   return {
     titleFilter,

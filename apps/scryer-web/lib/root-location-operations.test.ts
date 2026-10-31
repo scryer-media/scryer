@@ -152,10 +152,15 @@ test("a blocked title stops the start, and unexplained content does not", () => 
     rootPlanCanStart(plan(), accounting({ blocked: 1, blocksStart: true })),
     false,
   );
-  assert.equal(rootPlanCanStart(plan({ blocksStart: true }), accounting()), false);
+  assert.equal(
+    rootPlanCanStart(plan({ blocksStart: true }), accounting()),
+    false,
+  );
   assert.equal(
     rootPlanCanStart(
-      plan({ classification: { groups: [], titlesTotal: 2, blocksStart: true } }),
+      plan({
+        classification: { groups: [], titlesTotal: 2, blocksStart: true },
+      }),
       accounting(),
     ),
     false,
@@ -257,7 +262,8 @@ test("every uniqued folder is listed by the name it had and the name it gets", (
           titleId: "title-1",
           mediaFileId: "file-1",
           sourcePath: "/old/Blade Runner (1982)/br.mkv",
-          destinationPath: "/new/Blade Runner (1982) (from old-disk)/br (2).mkv",
+          destinationPath:
+            "/new/Blade Runner (1982) (from old-disk)/br (2).mkv",
           sizeBytes: 100,
           sameVolume: null,
           reasonCode: "collision_renamed",

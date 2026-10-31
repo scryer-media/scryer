@@ -19,7 +19,9 @@ export function formatDate(
   return formatUiDate(iso, dateTimeFormat, { fallback: "—" });
 }
 
-export function formatRuntimeFromMinutes(runtimeMinutes: number | null | undefined) {
+export function formatRuntimeFromMinutes(
+  runtimeMinutes: number | null | undefined,
+) {
   if (!runtimeMinutes || runtimeMinutes <= 0) {
     return null;
   }
@@ -31,7 +33,9 @@ export function formatRuntimeFromMinutes(runtimeMinutes: number | null | undefin
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
-export function formatRuntimeFromSeconds(runtimeSeconds: number | null | undefined) {
+export function formatRuntimeFromSeconds(
+  runtimeSeconds: number | null | undefined,
+) {
   if (!runtimeSeconds || runtimeSeconds <= 0) {
     return null;
   }
@@ -61,7 +65,10 @@ export function formatFileSize(bytes: number) {
 }
 
 export function deriveMediaFileQualityLabel(
-  file: Pick<EpisodeMediaFile, "qualityLabel" | "resolution" | "videoWidth" | "videoHeight">,
+  file: Pick<
+    EpisodeMediaFile,
+    "qualityLabel" | "resolution" | "videoWidth" | "videoHeight"
+  >,
 ) {
   if (file.videoWidth != null && file.videoWidth > 0) {
     if (file.videoWidth >= 3840) return "4K";
@@ -81,19 +88,27 @@ export function parseSeasonSortValue(collection: TitleCollection) {
   if (!match) {
     const fallback = `${collection.collectionIndex ?? ""} ${collection.label ?? ""}`;
     const fallbackMatch = fallback.match(/\d+/);
-    return fallbackMatch ? Number.parseInt(fallbackMatch[0], 10) : Number.MAX_SAFE_INTEGER;
+    return fallbackMatch
+      ? Number.parseInt(fallbackMatch[0], 10)
+      : Number.MAX_SAFE_INTEGER;
   }
   return Number.parseFloat(match[0]);
 }
 
 export function isSpecialsCollection(collection: TitleCollection) {
-  return collection.collectionType === "SPECIALS"
-    || (collection.collectionType === "SEASON" && parseSeasonSortValue(collection) === 0);
+  return (
+    collection.collectionType === "SPECIALS" ||
+    (collection.collectionType === "SEASON" &&
+      parseSeasonSortValue(collection) === 0)
+  );
 }
 
 export function seasonHeading(
   collection: TitleCollection,
-  t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string,
+  t: (
+    key: string,
+    values?: Record<string, string | number | boolean | null | undefined>,
+  ) => string,
 ) {
   const label = collection.label?.trim();
   if (isSpecialsCollection(collection)) {
@@ -150,7 +165,9 @@ export function isEpisodeCountableForProgress(episode: CollectionEpisode) {
   return normalizedTitle !== "TBA" && normalizedTitle !== "TBD";
 }
 
-export function parseNumberToken(raw: string | null | undefined): number | null {
+export function parseNumberToken(
+  raw: string | null | undefined,
+): number | null {
   const match = raw?.match(/\d+/);
   if (!match) {
     return null;
@@ -163,7 +180,9 @@ export function episodeKey(season: number, episode: number): string {
   return `${season}-${episode}`;
 }
 
-export function extractEpisodeKeysFromReleaseTitle(raw: string | null | undefined): Set<string> {
+export function extractEpisodeKeysFromReleaseTitle(
+  raw: string | null | undefined,
+): Set<string> {
   if (!raw) {
     return new Set();
   }
@@ -218,7 +237,9 @@ export function blocklistEntryMatchesEpisode(
     return true;
   }
 
-  const season = parseNumberToken(episode.seasonNumber) ?? parseNumberToken(collection.collectionIndex);
+  const season =
+    parseNumberToken(episode.seasonNumber) ??
+    parseNumberToken(collection.collectionIndex);
   const episodeNumber = parseNumberToken(episode.episodeNumber);
   if (season == null || episodeNumber == null) {
     return false;
@@ -286,8 +307,10 @@ function compareSeriesTimelineItems(
   left: SeriesTimelineItem,
   right: SeriesTimelineItem,
 ) {
-  const leftSpecials = left.kind === "collection" && isSpecialsCollection(left.collection);
-  const rightSpecials = right.kind === "collection" && isSpecialsCollection(right.collection);
+  const leftSpecials =
+    left.kind === "collection" && isSpecialsCollection(left.collection);
+  const rightSpecials =
+    right.kind === "collection" && isSpecialsCollection(right.collection);
   if (leftSpecials !== rightSpecials) {
     return leftSpecials ? 1 : -1;
   }
@@ -301,13 +324,18 @@ function compareSeriesTimelineItems(
   }
 
   if (left.kind === "collection" && right.kind === "collection") {
-    return right.collection.collectionIndex.localeCompare(left.collection.collectionIndex)
-      || right.collection.id.localeCompare(left.collection.id);
+    return (
+      right.collection.collectionIndex.localeCompare(
+        left.collection.collectionIndex,
+      ) || right.collection.id.localeCompare(left.collection.id)
+    );
   }
 
   if (left.kind === "seriesMovie" && right.kind === "seriesMovie") {
-    return left.link.movie.title.localeCompare(right.link.movie.title)
-      || left.link.id.localeCompare(right.link.id);
+    return (
+      left.link.movie.title.localeCompare(right.link.movie.title) ||
+      left.link.id.localeCompare(right.link.id)
+    );
   }
 
   return 0;
@@ -330,14 +358,14 @@ export function sortDbCollections(collections: TitleCollection[]) {
 /**
  * Find the key of the most recent (highest-numbered, non-specials) season to auto-expand.
  */
-export function findLatestSeasonKey(collections: TitleCollection[]): string | null {
+export function findLatestSeasonKey(
+  collections: TitleCollection[],
+): string | null {
   if (collections.length === 0) return null;
   const nonSpecials = collections.filter((c) => !isSpecialsCollection(c));
   if (nonSpecials.length === 0) return null;
   const latest = nonSpecials.reduce((best, current) =>
-    parseSeasonSortValue(current) > parseSeasonSortValue(best)
-      ? current
-      : best,
+    parseSeasonSortValue(current) > parseSeasonSortValue(best) ? current : best,
   );
   return `s-${latest.id}`;
 }

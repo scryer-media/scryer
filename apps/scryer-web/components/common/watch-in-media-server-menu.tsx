@@ -49,7 +49,9 @@ export function WatchInMediaServerMenu({
     event.stopPropagation();
   };
   const openPlaybackLink = (connectionId: string) => {
-    const link = links.find((candidate) => candidate.connectionId === connectionId);
+    const link = links.find(
+      (candidate) => candidate.connectionId === connectionId,
+    );
     if (!link) return;
     window.open(link.href, "_blank", "noopener,noreferrer");
   };
@@ -72,7 +74,11 @@ export function WatchInMediaServerMenu({
           >
             <SelectValue placeholder={`${t("label.watchIn")}…`} />
           </SelectTrigger>
-          <SelectContent position="popper" align="end" className="min-w-[12rem]">
+          <SelectContent
+            position="popper"
+            align="end"
+            className="min-w-[12rem]"
+          >
             {links.map((link) => {
               const provider = providerLabel[link.provider];
               return (

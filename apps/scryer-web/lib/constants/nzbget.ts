@@ -1,6 +1,7 @@
 import type { DownloadClientRoutingSettings } from "@/lib/types/download-clients";
 
-export const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY = "download_client.default_category";
+export const DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY =
+  "download_client.default_category";
 export const LEGACY_NZBGET_CATEGORY_SETTING_KEY = "nzbget.category";
 export const NZBGET_RECENT_PRIORITY_SETTING_KEY = "nzbget.recent_priority";
 export const NZBGET_OLDER_PRIORITY_SETTING_KEY = "nzbget.older_priority";

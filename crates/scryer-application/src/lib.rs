@@ -11,6 +11,8 @@ mod download_client_config;
 mod download_client_path_mappings;
 mod download_identity;
 pub mod http_release_refusal;
+pub mod indexer_clients;
+pub mod initial_auth;
 pub mod login_challenge_refusal;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
@@ -41,10 +43,12 @@ pub use download_identity::{
     accepted_download_submission_identity, download_id_from_info_hash,
     download_submission_identity_is_empty, normalize_torrent_info_hash, observed_download_identity,
 };
+pub mod error_reasons;
 pub mod escalation_backoff;
 mod events;
 pub mod external_import;
 pub mod file_source_signature;
+mod folder_create;
 mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
@@ -107,6 +111,7 @@ pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
     IndexerSearchNumberingContext, TitleOptionsPatch,
 };
+pub use ports::{ClientPresenceScopeUpdate, ClientPresenceTransition};
 pub use ports::{
     DOWNLOAD_PASSWORD_AMBIGUOUS_REASON, DOWNLOAD_PASSWORD_REQUIRED_REASON,
     DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT, DOWNLOAD_PASSWORD_RETRY_REASON,
@@ -117,8 +122,13 @@ pub use ports::{
     DownloadCleanupClaim, DownloadCleanupPayload, DownloadCleanupRecord, DownloadClientObservation,
 };
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
+pub use ports::{
+    IndexerFacetLearningPolicy, IndexerFacetLearningState, IndexerFacetSearchOutcome,
+    IndexerFacetTransition,
+};
 mod quality;
 mod rate_limit_signal;
+mod release_facts;
 pub mod request_rules;
 mod rules;
 pub use rules::preview::{
@@ -216,6 +226,10 @@ pub use import::failed_download as failed_download_handler;
 pub use import::post_processing as app_usecase_post_processing;
 pub use import::srrdb::{SRRDB_API_BASE_URL, SrrdbHttpFilenameLookup};
 pub use import::upgrade;
+pub use integration::indexer_caps_cache::{
+    CapsRequestCache, IndexerCapsDiagnostic, IndexerCapsRefreshContext, IndexerCapsSource,
+    ResolvedIndexerCaps, cached_indexer_caps,
+};
 pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
 pub use library::leftover_title_folders::EmptyDuplicateTitleFolderReport;
@@ -245,6 +259,7 @@ pub use quality::release_dedup;
 pub use quality::release_listing::{
     ReleaseListingView, release_listing_view, search_result_listing_json,
 };
+pub use release_facts::{ReleaseExternalIds, ReleaseFacts};
 pub use rules::metrics::describe_rule_metrics;
 pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
@@ -338,6 +353,8 @@ pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchIndexerView, InteractiveReleaseSearchRequest,
     InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState,
     InteractiveSearchArtifactBundle, InteractiveSearchArtifactTarget, QueueUnlinkedReleaseOutcome,
+    RAW_SEARCH_PAGE_SIZE, RawSearchOutputLease, RawSearchPage, RawSearchRow,
+    RawSearchSourceProgress, SearchPrincipal,
 };
 pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
@@ -466,6 +483,15 @@ pub use security::backup_bundle::{
     validate_restore_manifest_table_set,
 };
 pub use security::external_accounts::{ExternalAuthRuntimeConnection, ExternalAuthRuntimeSettings};
+pub use security::restore_control::refusal as restore_refusal;
+pub use security::restore_control::{
+    RESTORE_WORK_BUDGET, RestoreDeadline, RestoreReader, check_restore_deadline,
+    current_restore_deadline,
+};
+pub use security::restore_job::{
+    RESTORE_JOB_FILENAME, RestoreCoordinator, RestoreJobKind, RestoreJobPhase, RestoreJobStatus,
+    read_restore_job,
+};
 pub use settings::settings::{
     AcquisitionSettings, AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
     ExternalImportLibraryPathsSelection, ExternalImportLibrarySettingsAutoApplyDraft,
@@ -496,8 +522,9 @@ pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
     HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
     accepted_inputs_for_client, background_worker_priority, blake3_identity_hex,
-    http_capabilities_for_client, is_reserved_title_tag, nice_thread, normalize_release_name,
-    normalize_release_password, normalize_user_title_tag, normalize_user_title_tags,
+    http_capabilities_for_client, indexer_listing_page_fingerprint, is_reserved_title_tag,
+    nice_thread, normalize_release_name, normalize_release_password, normalize_user_title_tag,
+    normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
@@ -621,8 +648,10 @@ pub use ports::{
     ImportRetryFinishOutcome, IndexerAccountingContext, IndexerArtifactResolver,
     IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository, IndexerDispatchGate,
     IndexerGrabClient, IndexerGrabSelection, IndexerLoginChallenge, IndexerManagementClient,
-    IndexerPluginProvider, IndexerSearchCandidateWrite, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerPluginProvider, IndexerSearchCandidateWrite, IndexerSearchLearningBatch,
+    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchListing, IndexerSearchListingClaim,
+    IndexerSearchListingReader, IndexerSearchListingScope, IndexerSearchListingStrategy,
     IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
     JobRunRepository, LibraryProbeRepository, LibraryRepository,
     LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LifecycleClaimRepository,
@@ -771,7 +800,7 @@ pub use types::{
     LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
     LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
     ManualImportSelection, ManualImportSelectionCandidate, MdblistSummary, MediaFileAssociations,
-    MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
+    MediaFileCutoffSummary, MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
     MissingSeriesMovieLinkCandidate, MissingTitleCandidate, MovieAvailabilityDecision,
     MovieAvailabilityProjection, MovieAvailabilityStatus, OAuthAuthorizationCodeRecord,
     OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
@@ -797,24 +826,25 @@ pub use types::{
     TitleTagMembershipCounts, TitleTagRewriteCounts, TotpCredentialRecord,
     TotpEnrollmentChallengeRecord, TotpEnrollmentComplete, TotpEnrollmentStart,
     TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus, UiCatalogViewMode,
-    UiCatalogViewSetting, UiCatalogViewUpdate, UiDateTimeFormat, UiDefaultLandingView, UiDensity,
-    UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
-    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
-    UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings,
-    VerifiedLocalCredentials, WantedKind, WantedStatusCount, WebauthnChallengePurpose,
-    WebauthnChallengeRecord, WebauthnChallengeStart, WebauthnChallengeType,
-    WebauthnCredentialRecord,
+    UiCatalogViewSetting, UiCatalogViewUpdate, UiDashboardBreakpoint, UiDashboardLayout,
+    UiDashboardLayoutItem, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiDeviceClass,
+    UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting,
+    UiTableViewMode, UiTheme, UpdateRecycleBinSettings, UpdateVerificationSettings,
+    UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials,
+    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
-    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
+    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_PAGE_CURSOR_MAX_BYTES,
     IndexerErrorClassification, IndexerErrorDetail, IndexerErrorOperation, IndexerErrorPage,
-    IndexerErrorSummary, IndexerQueryOutcome, IndexerResponseAttributes, IndexerRssCatchUp,
-    IndexerSearchCompletion, IndexerSearchIncompleteReason, IndexerSearchOutcome,
-    IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
+    IndexerErrorSummary, IndexerFirstPageGate, IndexerFirstPageVerdict, IndexerQueryOutcome,
+    IndexerResponseAttributes, IndexerRssCatchUp, IndexerSearchCompletion,
+    IndexerSearchIncompleteReason, IndexerSearchOutcome, IndexerSearchPage,
+    IndexerSearchPageMetadata, IndexerSearchPageReservation, IndexerSearchPageSink,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
     IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
     IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
-    RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
+    RawTextSearchPage, RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
     ReleaseStrategyKind, extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };
@@ -859,10 +889,35 @@ impl RefusalFact {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+pub use scryer_rules::ReleaseProtocol;
+/// Rule source facts retained by both validation and save refusals.
+pub use scryer_rules::validation::ValidationDiagnostic as RuleValidationDiagnostic;
+
+/// Driver-independent classification retained at the repository boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepositoryErrorKind {
+    UniqueViolation,
+    TitleExternalIdConflict,
+    ForeignKeyViolation,
+    NotNullViolation,
+    CheckViolation,
+    Busy,
+    StartupWindowExhausted,
+    MissingTable,
+    Other,
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum AppError {
     #[error("unauthorized: {0}")]
     Unauthorized(String),
+
+    /// An authorization failure with a stable public condition.
+    #[error("unauthorized: {message}")]
+    UnauthorizedReason {
+        message: String,
+        reason: &'static str,
+    },
 
     #[error("validation: {0}")]
     Validation(String),
@@ -886,6 +941,15 @@ pub enum AppError {
         message: String,
         reason: &'static str,
         facts: Vec<RefusalFact>,
+        diagnostics: Vec<RuleValidationDiagnostic>,
+    },
+
+    /// A named refusal carrying the candidate count needed to confirm again.
+    #[error("validation: {message}")]
+    ValidationRefusedWithCount {
+        message: String,
+        reason: &'static str,
+        current_count: i64,
     },
 
     /// A title mutation is deferred until its location operation releases ownership.
@@ -943,6 +1007,13 @@ pub enum AppError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// A missing resource with a stable public condition.
+    #[error("not found: {message}")]
+    NotFoundReason {
+        message: String,
+        reason: &'static str,
+    },
+
     #[error("{0}")]
     DownloadFeedbackTimeout(String),
 
@@ -999,6 +1070,7 @@ pub enum AppError {
     #[error("{message}")]
     TemporaryUnavailable {
         message: String,
+        reason: Option<&'static str>,
         retry_after: Option<std::time::Duration>,
         rate_limit_cooldown: RateLimitCooldownAction,
     },
@@ -1066,6 +1138,13 @@ pub enum AppError {
     #[error("repository: {0}")]
     Repository(String),
 
+    /// A repository failure with a driver-independent kind; its text stays internal.
+    #[error("repository: {message}")]
+    RepositoryFailure {
+        message: String,
+        kind: RepositoryErrorKind,
+    },
+
     /// A repository fault with a stable workflow reason. The diagnostic remains
     /// internal; API adapters mask it just like `Repository` while exposing the reason.
     #[error("repository: {message}")]
@@ -1076,6 +1155,46 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub fn not_found_reason(reason: &'static str, message: impl Into<String>) -> Self {
+        Self::NotFoundReason {
+            message: message.into(),
+            reason,
+        }
+    }
+
+    pub fn unauthorized_reason(reason: &'static str, message: impl Into<String>) -> Self {
+        Self::UnauthorizedReason {
+            message: message.into(),
+            reason,
+        }
+    }
+
+    pub fn repository_failure(kind: RepositoryErrorKind, message: impl Into<String>) -> Self {
+        Self::RepositoryFailure {
+            message: message.into(),
+            kind,
+        }
+    }
+
+    pub fn repository_kind(&self) -> Option<RepositoryErrorKind> {
+        match self {
+            Self::RepositoryFailure { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    pub fn validation_refused_with_count(
+        reason: &'static str,
+        message: impl Into<String>,
+        current_count: i64,
+    ) -> Self {
+        Self::ValidationRefusedWithCount {
+            message: message.into(),
+            reason,
+            current_count,
+        }
+    }
+
     pub fn canceled(message: impl Into<String>) -> Self {
         Self::Canceled(message.into())
     }
@@ -1087,6 +1206,7 @@ impl AppError {
             message: message.into(),
             reason,
             facts: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -1101,6 +1221,21 @@ impl AppError {
             message: message.into(),
             reason,
             facts,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// A source validation refusal retains diagnostics at the save boundary.
+    pub fn validation_refused_with_diagnostics(
+        reason: &'static str,
+        message: impl Into<String>,
+        diagnostics: Vec<RuleValidationDiagnostic>,
+    ) -> Self {
+        Self::ValidationRefused {
+            message: message.into(),
+            reason,
+            facts: Vec::new(),
+            diagnostics,
         }
     }
 
@@ -1115,7 +1250,8 @@ impl AppError {
     /// The stable reason a validation failure names, if it names one.
     pub fn validation_reason(&self) -> Option<&'static str> {
         match self {
-            Self::ValidationRefused { reason, .. } => Some(reason),
+            Self::ValidationRefused { reason, .. }
+            | Self::ValidationRefusedWithCount { reason, .. } => Some(reason),
             _ => None,
         }
     }
@@ -1123,7 +1259,10 @@ impl AppError {
     /// The stable condition named by a validation or repository failure.
     pub fn reason(&self) -> Option<&'static str> {
         match self {
-            Self::RepositoryFailed { reason, .. } => Some(reason),
+            Self::RepositoryFailed { reason, .. }
+            | Self::NotFoundReason { reason, .. }
+            | Self::UnauthorizedReason { reason, .. } => Some(reason),
+            Self::TemporaryUnavailable { reason, .. } => *reason,
             _ => self.validation_reason(),
         }
     }
@@ -1195,6 +1334,7 @@ impl AppError {
     ) -> Self {
         Self::TemporaryUnavailable {
             message: message.into(),
+            reason: None,
             retry_after,
             rate_limit_cooldown: RateLimitCooldownAction::None,
         }
@@ -1207,8 +1347,23 @@ impl AppError {
     ) -> Self {
         Self::TemporaryUnavailable {
             message: message.into(),
+            reason: None,
             retry_after,
             rate_limit_cooldown,
+        }
+    }
+
+    /// Retryable failure with a stable condition beside its retry policy.
+    pub fn temporary_unavailable_reason(
+        reason: &'static str,
+        message: impl Into<String>,
+        retry_after: Option<std::time::Duration>,
+    ) -> Self {
+        Self::TemporaryUnavailable {
+            message: message.into(),
+            reason: Some(reason),
+            retry_after,
+            rate_limit_cooldown: RateLimitCooldownAction::None,
         }
     }
 

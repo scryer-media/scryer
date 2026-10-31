@@ -469,7 +469,7 @@ pub(crate) struct AutoCandidateEvaluationContext<'a> {
     pub(crate) now: &'a DateTime<Utc>,
     pub(crate) dl_snapshot: Option<&'a crate::acquisition_workflow::DownloadClientSnapshot>,
     pub(crate) db_blocklist: &'a crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
-    pub(crate) existing_files: &'a [TitleMediaFile],
+    pub(crate) existing_files: &'a [crate::MediaFileCutoffSummary],
     pub(crate) delay_profiles: &'a [DelayProfile],
     pub(crate) failed_routes: Option<&'a [crate::acquisition_workflow::DownloadRouteKey]>,
     /// Admission threshold per indexer id, resolved once for the batch.
@@ -690,6 +690,7 @@ pub(crate) fn series_movie_search_title(
         .map(|alias| scryer_domain::TaggedAlias {
             name: alias.clone(),
             language: "und".to_string(),
+            country: None,
         })
         .collect();
     search_title
@@ -1456,28 +1457,58 @@ fn normalized_release_identity(value: &str) -> String {
 /// direction that matters: `Show.S01E01.1080p-GRP` is a substring of
 /// `/data/TV/Show/Show.S01E01.1080p-GRP.PROPER.mkv`, so the PROPER of a release
 /// already on disk reported "already active" and could never be grabbed.
-fn release_identities(file: &TitleMediaFile) -> impl Iterator<Item = String> + '_ {
-    [
-        file.grabbed_release_title.as_deref(),
-        file.scene_name.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .map(normalized_release_identity)
-    .chain(
-        [
-            file.original_file_path.as_deref(),
-            Some(file.file_path.as_str()),
-        ]
+fn release_identities(file: &impl ReleaseIdentityFile) -> impl Iterator<Item = String> + '_ {
+    file.release_names()
         .into_iter()
         .flatten()
-        .filter_map(|path| {
-            std::path::Path::new(path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(normalized_release_identity)
-        }),
-    )
+        .map(normalized_release_identity)
+        .chain(
+            file.release_paths()
+                .into_iter()
+                .flatten()
+                .filter_map(|path| {
+                    std::path::Path::new(path)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(normalized_release_identity)
+                }),
+        )
+}
+
+trait ReleaseIdentityFile {
+    fn file_id(&self) -> &str;
+    fn release_names(&self) -> [Option<&str>; 2];
+    fn release_paths(&self) -> [Option<&str>; 2];
+}
+
+impl ReleaseIdentityFile for TitleMediaFile {
+    fn file_id(&self) -> &str {
+        &self.id
+    }
+    fn release_names(&self) -> [Option<&str>; 2] {
+        [
+            self.grabbed_release_title.as_deref(),
+            self.scene_name.as_deref(),
+        ]
+    }
+    fn release_paths(&self) -> [Option<&str>; 2] {
+        [self.original_file_path.as_deref(), Some(&self.file_path)]
+    }
+}
+
+impl ReleaseIdentityFile for crate::MediaFileCutoffSummary {
+    fn file_id(&self) -> &str {
+        &self.id
+    }
+    fn release_names(&self) -> [Option<&str>; 2] {
+        [
+            self.grabbed_release_title.as_deref(),
+            self.scene_name.as_deref(),
+        ]
+    }
+    fn release_paths(&self) -> [Option<&str>; 2] {
+        [self.original_file_path.as_deref(), Some(&self.file_path)]
+    }
 }
 
 /// Has this exact release already landed in the scope? The anti-loop guard: a
@@ -1490,9 +1521,9 @@ fn release_identities(file: &TitleMediaFile) -> impl Iterator<Item = String> + '
 /// the row's scalar column. The subject already holds exactly the primary files
 /// occupying the scope, whatever its shape, so membership by file id is
 /// span-correct by construction.
-fn candidate_matches_existing_media_file(
+fn candidate_matches_existing_media_file<F: ReleaseIdentityFile>(
     candidate: &IndexerSearchResult,
-    existing_files: &[TitleMediaFile],
+    existing_files: &[F],
     subject: &crate::admission::AdmissionSubject,
 ) -> bool {
     let release_title = normalized_release_identity(&candidate.title);
@@ -1510,7 +1541,7 @@ fn candidate_matches_existing_media_file(
 
     existing_files
         .iter()
-        .filter(|file| in_scope.contains(file.id.as_str()))
+        .filter(|file| in_scope.contains(file.file_id()))
         .any(|file| release_identities(file).any(|identity| identity == release_title))
 }
 
@@ -2393,12 +2424,16 @@ impl AppUseCase {
             });
             if let Some((season, number)) = official
                 && let (Ok(season), Ok(number)) = (i32::try_from(season), i32::try_from(number))
-                && let Ok(bridge) = self
-                    .services
-                    .catalog
-                    .shows
-                    .get_anime_numbering_bridge(&title.id)
-                    .await
+                && let Ok(bridge) = match reads.filter(|reads| reads.covers(&title.id)) {
+                    Some(reads) => reads.anime_numbering_bridge(self).await,
+                    None => {
+                        self.services
+                            .catalog
+                            .shows
+                            .get_anime_numbering_bridge(&title.id)
+                            .await
+                    }
+                }
                 && let Some(anidb_id) =
                     community_cour_anidb_id(title, season, number, bridge.as_ref())
             {
@@ -2545,13 +2580,15 @@ impl AppUseCase {
                 &episodes,
             )
         }) {
-            return Err(AppError::Validation(
-                "Acquisition is paused for content covered by this release. Resume it before searching.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::PAUSED_CONTENT_COVERED_RELEASE,
+                "Acquisition is paused for content covered by this release. Resume it before searching.",
             ));
         }
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn evaluate_search_results_for_subject(
         &self,
         title: &Title,
@@ -2578,9 +2615,29 @@ impl AppUseCase {
         &self,
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
+        results: Vec<IndexerSearchResult>,
+        user_invoked: bool,
+        reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        self.evaluate_search_results_for_subject_with_missing_history(
+            title,
+            subject,
+            results,
+            user_invoked,
+            reads,
+            !user_invoked,
+        )
+        .await
+    }
+
+    pub(crate) async fn evaluate_search_results_for_subject_with_missing_history(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
         mut results: Vec<IndexerSearchResult>,
         user_invoked: bool,
         reads: &crate::acquisition::title_reads::TitleCatalogReads,
+        include_recent_missing: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         let fresh;
         let reads = if reads.covers(&title.id) {
@@ -2604,14 +2661,7 @@ impl AppUseCase {
             .await;
 
         let dl_snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let existing_files = reads
-            .media_files(self)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .filter(|file| file.role.is_primary())
-            .cloned()
-            .collect::<Vec<_>>();
+        let existing_files = reads.primary_file_cutoffs(self).await.unwrap_or_default();
         let delay_profiles = self.load_delay_profiles().await;
         let now = Utc::now();
         let movie_availability = if title.facet == MediaFacet::Movie {
@@ -2744,10 +2794,13 @@ impl AppUseCase {
                 title,
                 &membership.view(),
                 &scoring_context,
-                &catalog_episodes,
-                &catalog_collections,
+                crate::quality::canonical_context::ReleaseCoverageCatalog {
+                    episodes: &catalog_episodes,
+                    collections: &catalog_collections,
+                },
+                include_recent_missing,
             )
-            .await;
+            .await?;
         admission = admission.with_queued(queued);
         let has_active_pending_overlap = if user_invoked {
             false
@@ -2767,7 +2820,7 @@ impl AppUseCase {
                     .services
                     .workflow
                     .pending_releases
-                    .list_pending_releases_for_title(&title.id)
+                    .list_active_pending_releases_for_title(&title.id, &[])
                     .await
                     .unwrap_or_default()
                     .iter()
@@ -2876,10 +2929,13 @@ impl AppUseCase {
                         title,
                         &membership.view(),
                         &scoring_context,
-                        &catalog_episodes,
-                        &catalog_collections,
+                        crate::quality::canonical_context::ReleaseCoverageCatalog {
+                            episodes: &catalog_episodes,
+                            collections: &catalog_collections,
+                        },
+                        include_recent_missing,
                     )
-                    .await;
+                    .await?;
                 self.admission_subject_for_scope_with_reads(
                     title,
                     scope,
@@ -3016,8 +3072,9 @@ impl AppUseCase {
             tvdb_id.as_deref(),
             anidb_id.as_deref(),
         ) {
-            return Err(AppError::Validation(
-                "title has no name or external IDs".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::TITLE_NO_NAME_EXTERNAL_IDS,
+                "title has no name or external IDs",
             ));
         }
 
@@ -3082,8 +3139,9 @@ impl AppUseCase {
         let season = season.trim();
         let episode = episode.trim();
         if season.is_empty() || episode.is_empty() {
-            return Err(AppError::Validation(
-                "season and episode are required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::SEASON_EPISODE_REQUIRED,
+                "season and episode are required",
             ));
         }
 
@@ -3096,17 +3154,24 @@ impl AppUseCase {
             .filter(|value| value.is_ascii_digit())
             .collect();
         if season_digits.is_empty() || episode_digits.is_empty() {
-            return Err(AppError::Validation(
-                "season and episode must include numeric values".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::SEASON_EPISODE_INVALID,
+                "season and episode must include numeric values",
             ));
         }
 
-        let season_num = season_digits
-            .parse::<u32>()
-            .map_err(|_| AppError::Validation("invalid season value".into()))?;
-        let episode_num = episode_digits
-            .parse::<u32>()
-            .map_err(|_| AppError::Validation("invalid episode value".into()))?;
+        let season_num = season_digits.parse::<u32>().map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::acquisition::SEASON_VALUE_INVALID,
+                "invalid season value",
+            )
+        })?;
+        let episode_num = episode_digits.parse::<u32>().map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::acquisition::EPISODE_VALUE_INVALID,
+                "invalid episode value",
+            )
+        })?;
 
         let episode_record = self
             .services
@@ -3338,9 +3403,7 @@ impl AppUseCase {
             queries.push(String::new());
         }
         if queries.is_empty() {
-            return Err(AppError::Validation(
-                "season pack search subject has no searchable title or external IDs".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::SEASON_PACK_SEARCH_SUBJECT_NO_SEARCHABLE_TITLE_EXTERNAL_IDS, "season pack search subject has no searchable title or external IDs"));
         }
 
         Ok(PendingReleaseSearchSubject {
@@ -3384,8 +3447,9 @@ impl AppUseCase {
     ) -> AppResult<(Title, ResolvedReleaseSearchSubject)> {
         let search_title = series_movie_search_title(title, link);
         if search_title.name.trim().is_empty() {
-            return Err(AppError::Validation(
-                "series movie search subject has no searchable title".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::SERIES_MOVIE_SEARCH_SUBJECT_NO_SEARCHABLE_TITLE,
+                "series movie search subject has no searchable title",
             ));
         }
 
@@ -3449,12 +3513,30 @@ impl AppUseCase {
         item: &AcquisitionScopeState,
         episode: Option<&Episode>,
     ) -> AppResult<ResolvedReleaseSearchSubject> {
-        self.resolve_pending_release_search_subject_for_wanted_item(
+        self.resolve_release_search_subject_for_wanted_item_with_reads(
             owner_title,
             search_title,
             item,
             episode,
             None,
+        )
+        .await
+    }
+
+    pub(crate) async fn resolve_release_search_subject_for_wanted_item_with_reads(
+        &self,
+        owner_title: &Title,
+        search_title: &Title,
+        item: &AcquisitionScopeState,
+        episode: Option<&Episode>,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
+    ) -> AppResult<ResolvedReleaseSearchSubject> {
+        self.resolve_pending_release_search_subject_for_wanted_item(
+            owner_title,
+            search_title,
+            item,
+            episode,
+            reads,
         )
         .await?
         .resolve(self)
@@ -3476,13 +3558,17 @@ impl AppUseCase {
         // Anime whose community numbering differs from TVDB's needs the extra
         // community-numbered query forms; every other title reads `None` here
         // and searches exactly as before.
-        let anime_numbering_bridge = self
-            .services
-            .catalog
-            .shows
-            .get_anime_numbering_bridge(&search_title.id)
-            .await
-            .unwrap_or_default();
+        let anime_numbering_bridge = match reads.filter(|reads| reads.covers(&search_title.id)) {
+            Some(reads) => reads.anime_numbering_bridge(self).await,
+            None => {
+                self.services
+                    .catalog
+                    .shows
+                    .get_anime_numbering_bridge(&search_title.id)
+                    .await
+            }
+        }
+        .unwrap_or_default();
         // Every absolute number this subject carries is on the title's one
         // absolute scale; see `AbsoluteScale`. A failed read fails this item
         // rather than guessing the raw scale: a contiguous title searched on
@@ -3663,11 +3749,17 @@ fn absolute_scale_known_without_lookup(
 fn whole_season_number(season: &str) -> AppResult<u32> {
     let season = season.trim();
     if season.is_empty() || !season.chars().all(|value| value.is_ascii_digit()) {
-        return Err(AppError::Validation("season must be a whole number".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::SEASON_INVALID,
+            "season must be a whole number",
+        ));
     }
-    season
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("invalid season value".into()))
+    season.parse::<u32>().map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::acquisition::SEASON_VALUE_INVALID,
+            "invalid season value",
+        )
+    })
 }
 
 /// Expected runtime of a whole-season pack, the basis its size is scored on:
@@ -3774,7 +3866,12 @@ mod tests {
         assert_eq!(whole_season_number(" 02 ").ok(), Some(2));
         for rejected in ["-1", "2x5", "", "  ", "S02", "1.5"] {
             assert!(
-                matches!(whole_season_number(rejected), Err(AppError::Validation(_))),
+                matches!(
+                    whole_season_number(rejected),
+                    Err(AppError::Validation(_)
+                        | AppError::ValidationRefused { .. }
+                        | AppError::ValidationRefusedWithCount { .. })
+                ),
                 "{rejected:?} must be refused"
             );
         }
@@ -3798,6 +3895,33 @@ mod tests {
             crate::import_title_resolution::MonitoredTitleMatcher::over_titles(library.to_vec());
         canonical_title_evidence(title)
             .with_ambiguity(matcher.evidence_ambiguity(title).await.expect("ambiguity"))
+    }
+
+    #[tokio::test]
+    async fn parenthetical_qualifiers_cannot_anchor_a_different_title() {
+        for (name, qualified) in [
+            ("The Office", "The Office (US)"),
+            ("The Office", "The Office (UK)"),
+            ("Love", "Love (ft. Marriage and Divorce)"),
+        ] {
+            let mut title = spelling_title(name, "eng");
+            title.facet = MediaFacet::Series;
+            title.year = None;
+            title.imdb_id = None;
+            title.aliases.clear();
+            let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
+            let raw = format!("{qualified} S01E12 1080p");
+            assert!(
+                candidate_title_match(&make_candidate(&raw, None), &evidence).is_none(),
+                "{raw}"
+            );
+            title.name = qualified.into();
+            let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
+            assert!(
+                candidate_title_match(&make_candidate(&raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4013,6 +4137,7 @@ mod tests {
             name: "Hagane no Renkinjutsushi Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
                 .into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
 
@@ -4049,6 +4174,7 @@ mod tests {
         title.tagged_aliases = vec![scryer_domain::TaggedAlias {
             name: "Hoshizora no Kanata dewa Nemurenai".into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
 
@@ -4090,6 +4216,7 @@ mod tests {
             name: "Hagane no Renkinjutsushi Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
                 .into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let mut rival = title.clone();
         rival.id = "rival".to_string();
@@ -4098,6 +4225,7 @@ mod tests {
             name: "Hagane no Renkinjutsushi Saigo no Gasshoo o Utau Toki no Hikari to Kage no Uta"
                 .into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let evidence = spelling_evidence(&title, &[title.clone(), rival]).await;
 
@@ -4123,6 +4251,7 @@ mod tests {
         spaced.tagged_aliases = vec![scryer_domain::TaggedAlias {
             name: "Kumori no Oka to wa Iwanai".into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let mut joined = spaced.clone();
         joined.id = "joined".to_string();
@@ -4130,6 +4259,7 @@ mod tests {
         joined.tagged_aliases = vec![scryer_domain::TaggedAlias {
             name: "Kumori no Oka towa Iwanai".into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let library = [spaced.clone(), joined.clone()];
         let spaced_evidence = spelling_evidence(&spaced, &library).await;
@@ -4326,6 +4456,7 @@ mod tests {
         title.tagged_aliases.push(TaggedAlias {
             name: "Die zwei Päpste".to_string(),
             language: "deu".to_string(),
+            country: None,
         });
         let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
         assert_eq!(
@@ -4409,6 +4540,7 @@ mod tests {
             tagged_aliases: vec![TaggedAlias {
                 name: "Nightfall Heavy Chorus Dark Lantern".to_string(),
                 language: "eng".to_string(),
+                country: None,
             }],
             metadata_language: None,
             metadata_fetched_at: None,
@@ -5696,6 +5828,7 @@ mod tests {
         title.tagged_aliases = vec![TaggedAlias {
             name: "Fixture Sitcom Television Series".to_string(),
             language: "eng".to_string(),
+            country: None,
         }];
         let evidence = canonical_title_evidence(&title);
 
@@ -6413,6 +6546,7 @@ mod tests {
         title.tagged_aliases = vec![TaggedAlias {
             name: "Silver Horizon Beyond the Vale".to_string(),
             language: "eng".to_string(),
+            country: None,
         }];
 
         let candidate = make_candidate(
@@ -6476,6 +6610,16 @@ mod tests {
         ));
         assert!(!candidate_matches_existing_media_file(
             &candidate, &existing, &elsewhere
+        ));
+        let compact: Vec<_> = existing
+            .iter()
+            .map(crate::MediaFileCutoffSummary::from)
+            .collect();
+        assert!(candidate_matches_existing_media_file(
+            &candidate, &compact, &occupied
+        ));
+        assert!(!candidate_matches_existing_media_file(
+            &candidate, &compact, &elsewhere
         ));
     }
 
@@ -7310,6 +7454,12 @@ mod tests {
                     ),
                     "the identical release was not recognised: {file:?}"
                 );
+                let compact = crate::MediaFileCutoffSummary::from(&file);
+                assert!(candidate_matches_existing_media_file(
+                    &make_candidate(release, None),
+                    std::slice::from_ref(&compact),
+                    &subject,
+                ));
             }
         }
 

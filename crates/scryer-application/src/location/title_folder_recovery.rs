@@ -76,8 +76,14 @@ pub fn eligible(folder: Option<&str>, roots: &[LibraryRoot]) -> bool {
         })
 }
 
-fn fail(reason: impl Into<String>) -> AppError {
-    AppError::Validation(reason.into())
+fn fail(reason: &'static str, message: impl Into<String>) -> AppError {
+    AppError::validation_refused(reason, message)
+}
+
+// Filesystem and serialization diagnostics are relayed at this boundary; no
+// application condition is inferred from the external sentence.
+fn relay_failure(message: String) -> AppError {
+    AppError::Validation(message)
 }
 
 fn path_key(path: &str) -> String {
@@ -94,18 +100,29 @@ fn overlaps(left: &str, right: &str) -> bool {
 /// are not evidence that another title owns these exact files.
 pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppResult<()> {
     if plan.version != RECOVERY_VERSION || plan.roots != catalog.roots {
-        return Err(fail("Library roots changed; recovery needs a new plan"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_ROOTS_CHANGED,
+            "Library roots changed; recovery needs a new plan",
+        ));
     }
     let owner = catalog
         .owners
         .iter()
         .find(|o| o.id == plan.title.id)
-        .ok_or_else(|| fail("The title no longer exists"))?;
+        .ok_or_else(|| {
+            fail(
+                crate::error_reasons::location::RECOVERY_TITLE_NOT_FOUND,
+                "The title no longer exists",
+            )
+        })?;
     if owner.library_id != plan.title.library_id
         || owner.folder_path != plan.title.folder_path
         || owner.revision != plan.owner_revision
     {
-        return Err(fail("Title ownership changed; originals preserved"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_OWNERSHIP_CHANGED,
+            "Title ownership changed; originals preserved",
+        ));
     }
     let mut media: Vec<_> = catalog
         .media
@@ -115,21 +132,31 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
         .collect();
     media.sort_by(|a, b| a.id.cmp(&b.id));
     if media != plan.expected_media {
-        return Err(fail("Tracked media changed; originals preserved"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_TRACKED_MEDIA_CHANGED,
+            "Tracked media changed; originals preserved",
+        ));
     }
-    let destination = plan
-        .destination
-        .as_deref()
-        .ok_or_else(|| fail("No proven destination"))?;
-    let root = plan
-        .destination_root
-        .as_ref()
-        .ok_or_else(|| fail("No proven destination root"))?;
+    let destination = plan.destination.as_deref().ok_or_else(|| {
+        fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_UNPROVEN,
+            "No proven destination",
+        )
+    })?;
+    let root = plan.destination_root.as_ref().ok_or_else(|| {
+        fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_ROOT_UNPROVEN,
+            "No proven destination root",
+        )
+    })?;
     if root.library_id != plan.title.library_id
         || !path_is_strictly_within(destination, &root.path)
         || eligible(Some(destination), &catalog.roots)
     {
-        return Err(fail("Recovery destination is not a valid title folder"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_BOUNDARY_INVALID,
+            "Recovery destination is not a valid title folder",
+        ));
     }
     for other in &catalog.owners {
         if other.id != plan.title.id
@@ -137,7 +164,10 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
             && !eligible(Some(folder), &catalog.roots)
             && overlaps(destination, folder)
         {
-            return Err(fail("Another title owns an overlapping destination folder"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_DESTINATION_OWNERSHIP_CONFLICT,
+                "Another title owns an overlapping destination folder",
+            ));
         }
     }
     for media in &catalog.media {
@@ -148,7 +178,10 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
                     .iter()
                     .any(|f| folder_paths_match(&f.media.file_path, &media.file_path)))
         {
-            return Err(fail("Another title tracks a source or destination file"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_FILE_OWNERSHIP_CONFLICT,
+                "Another title tracks a source or destination file",
+            ));
         }
         if plan
             .files
@@ -156,6 +189,7 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
             .any(|f| f.media.id != media.id && folder_paths_match(&f.destination, &media.file_path))
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_DESTINATION_RECORD_CONFLICT,
                 "A destination is already associated with another media record",
             ));
         }
@@ -166,6 +200,7 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
             || !destinations.insert(path_key(&file.destination))
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_DESTINATION_PATH_INVALID,
                 "Recovery file destinations collide or escape the title folder",
             ));
         }
@@ -177,7 +212,10 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
 /// Missing final components are allowed only for a destination about to be created.
 pub(super) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<()> {
     if !path.is_absolute() {
-        return Err(fail("Recovery requires an absolute native filesystem path"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_NATIVE_ABSOLUTE_PATH_REQUIRED,
+            "Recovery requires an absolute native filesystem path",
+        ));
     }
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -185,7 +223,10 @@ pub(super) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<
             component,
             std::path::Component::ParentDir | std::path::Component::CurDir
         ) {
-            return Err(fail("Recovery does not follow dot-segment paths"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_DOT_SEGMENT_PATH_FORBIDDEN,
+                "Recovery does not follow dot-segment paths",
+            ));
         }
         current.push(component);
         match tokio::fs::symlink_metadata(&current).await {
@@ -194,15 +235,26 @@ pub(super) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<
                 {
                     use std::os::windows::fs::MetadataExt;
                     if meta.file_attributes() & 0x400 != 0 {
-                        return Err(fail("Recovery does not follow reparse points"));
+                        return Err(fail(
+                            crate::error_reasons::location::RECOVERY_REPARSE_POINT_FORBIDDEN,
+                            "Recovery does not follow reparse points",
+                        ));
                     }
                 }
                 if meta.file_type().is_symlink() {
-                    return Err(fail("Recovery does not follow symbolic links"));
+                    return Err(fail(
+                        crate::error_reasons::location::RECOVERY_SYMLINK_FORBIDDEN,
+                        "Recovery does not follow symbolic links",
+                    ));
                 }
             }
             Err(e) if allow_missing && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(fail(format!("Recovery path is unavailable: {e}"))),
+            Err(e) => {
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_PATH_UNAVAILABLE,
+                    format!("Recovery path is unavailable: {e}"),
+                ));
+            }
         }
     }
     Ok(())
@@ -214,9 +266,12 @@ async fn recovery_file_version(path: &Path) -> AppResult<String> {
     inspect_path(path, false).await?;
     let metadata = tokio::fs::symlink_metadata(path)
         .await
-        .map_err(|e| fail(e.to_string()))?;
+        .map_err(|e| relay_failure(e.to_string()))?;
     if !metadata.is_file() {
-        return Err(fail("Recovery requires a regular file"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_REGULAR_FILE_REQUIRED,
+            "Recovery requires a regular file",
+        ));
     }
     #[cfg(unix)]
     let identity = {
@@ -231,12 +286,19 @@ async fn recovery_file_version(path: &Path) -> AppResult<String> {
     };
     #[cfg(windows)]
     let identity = {
-        let (volume, index) = super::transfer::windows_file_identity(path)
-            .ok_or_else(|| fail("Filesystem identity is unavailable"))?;
+        let (volume, index) = super::transfer::windows_file_identity(path).ok_or_else(|| {
+            fail(
+                crate::error_reasons::location::RECOVERY_FILE_IDENTITY_UNAVAILABLE,
+                "Filesystem identity is unavailable",
+            )
+        })?;
         format!("{volume}:{index}")
     };
     #[cfg(not(any(unix, windows)))]
-    return Err(fail("Filesystem identity is unsupported"));
+    return Err(fail(
+        crate::error_reasons::location::RECOVERY_FILE_IDENTITY_UNSUPPORTED,
+        "Filesystem identity is unsupported",
+    ));
     #[cfg(any(unix, windows))]
     Ok(format!(
         "{identity}:{}",
@@ -322,11 +384,14 @@ async fn folder_identity_matches(
                     tokio::fs::read_to_string(&file)
                         .await
                         .map(Some)
-                        .map_err(|e| fail(e.to_string()))
+                        .map_err(|e| relay_failure(e.to_string()))
                 }
-                Ok(_) => Err(fail("Identity sidecar is unsupported or too large")),
+                Ok(_) => Err(fail(
+                    crate::error_reasons::location::RECOVERY_IDENTITY_SIDECAR_INVALID,
+                    "Identity sidecar is unsupported or too large",
+                )),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(fail(e.to_string())),
+                Err(e) => Err(relay_failure(e.to_string())),
             }
         }
         .await;
@@ -359,7 +424,10 @@ async fn folder_identity_matches(
             .collect();
         if values.len() > 1 {
             return if relevant {
-                Err(fail("Folder identity evidence conflicts"))
+                Err(fail(
+                    crate::error_reasons::location::RECOVERY_IDENTITY_EVIDENCE_CONFLICT,
+                    "Folder identity evidence conflicts",
+                ))
             } else {
                 Ok(false)
             };
@@ -380,7 +448,10 @@ async fn folder_identity_matches(
             })
         })
     {
-        return Err(fail("Tracked folder identity contradicts the title"));
+        return Err(fail(
+            crate::error_reasons::location::RECOVERY_FOLDER_TITLE_IDENTITY_MISMATCH,
+            "Tracked folder identity contradicts the title",
+        ));
     }
     Ok(external_ids_match(title, &ids))
 }
@@ -398,15 +469,18 @@ async fn locate_hashed_destination(
         inspect_path(&directory, false).await?;
         let mut entries = tokio::fs::read_dir(&directory)
             .await
-            .map_err(|e| fail(e.to_string()))?;
+            .map_err(|e| relay_failure(e.to_string()))?;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|e| fail(e.to_string()))?
+            .map_err(|e| relay_failure(e.to_string()))?
         {
             seen += 1;
             if seen > MAX_DISCOVERY_ENTRIES {
-                return Err(fail("Content discovery limit reached"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_CONTENT_DISCOVERY_LIMIT_REACHED,
+                    "Content discovery limit reached",
+                ));
             }
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -425,7 +499,7 @@ async fn locate_hashed_destination(
             inspect_path(&path, false).await?;
             let metadata = tokio::fs::symlink_metadata(&path)
                 .await
-                .map_err(|e| fail(e.to_string()))?;
+                .map_err(|e| relay_failure(e.to_string()))?;
             if metadata.is_dir() {
                 pending.push(path);
                 continue;
@@ -440,11 +514,15 @@ async fn locate_hashed_destination(
             )
             .await?;
             if recovery_file_version(&path).await? != before {
-                return Err(fail("Destination changed during content discovery"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_CHANGED,
+                    "Destination changed during content discovery",
+                ));
             }
             if proof.full_blake3 == hash {
                 if found.is_some() {
                     return Err(fail(
+                        crate::error_reasons::location::RECOVERY_DESTINATION_HASH_AMBIGUOUS,
                         "Multiple destination files match the missing source hash",
                     ));
                 }
@@ -452,7 +530,12 @@ async fn locate_hashed_destination(
             }
         }
     }
-    found.ok_or_else(|| fail("No destination matches the missing source's full-content hash"))
+    found.ok_or_else(|| {
+        fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_HASH_NOT_FOUND,
+            "No destination matches the missing source's full-content hash",
+        )
+    })
 }
 
 impl AppUseCase {
@@ -502,10 +585,13 @@ impl AppUseCase {
         catalog: &RecoveryCatalog,
     ) -> AppResult<()> {
         if !eligible(plan.title.folder_path.as_deref(), &catalog.roots) {
-            return Err(fail("Title ownership is not a root corruption case"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_ROOT_CORRUPTION_REQUIRED,
+                "Title ownership is not a root corruption case",
+            ));
         }
         if let Some(reason) = self.active_work_blocking_a_move(&plan.title).await? {
-            return Err(fail(reason));
+            return Err(fail(crate::error_reasons::location::OWNERSHIP_BUSY, reason));
         }
         let roots: Vec<_> = catalog
             .roots
@@ -514,7 +600,10 @@ impl AppUseCase {
             .cloned()
             .collect();
         if roots.is_empty() {
-            return Err(fail("Title library has no configured roots"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_ROOTS_REQUIRED,
+                "Title library has no configured roots",
+            ));
         }
         let tracked = self
             .services
@@ -559,17 +648,23 @@ impl AppUseCase {
             inspect_path(&path, false).await?;
             let mut entries = tokio::fs::read_dir(&path)
                 .await
-                .map_err(|e| fail(e.to_string()))?;
+                .map_err(|e| relay_failure(e.to_string()))?;
             while let Some(entry) = entries
                 .next_entry()
                 .await
-                .map_err(|e| fail(e.to_string()))?
+                .map_err(|e| relay_failure(e.to_string()))?
             {
                 seen += 1;
                 if seen > MAX_DISCOVERY_ENTRIES {
-                    return Err(fail("Folder discovery limit reached; no automatic repair"));
+                    return Err(fail(
+                        crate::error_reasons::location::RECOVERY_FOLDER_DISCOVERY_LIMIT_REACHED,
+                        "Folder discovery limit reached; no automatic repair",
+                    ));
                 }
-                let kind = entry.file_type().await.map_err(|e| fail(e.to_string()))?;
+                let kind = entry
+                    .file_type()
+                    .await
+                    .map_err(|e| relay_failure(e.to_string()))?;
                 if !kind.is_dir() || kind.is_symlink() {
                     continue;
                 }
@@ -592,32 +687,52 @@ impl AppUseCase {
             }
         }
         if candidates.len() > 1 {
-            return Err(fail("Multiple folders identify this title"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_FOLDER_IDENTITY_AMBIGUOUS,
+                "Multiple folders identify this title",
+            ));
         }
         let destination = if let Some(folder) = candidates.into_values().next() {
             folder
         } else {
             plan.generated_destination = true;
             if live.is_empty() {
-                return Err(fail("No media or exact-ID folder establishes ownership"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_FOLDER_OWNERSHIP_UNPROVEN,
+                    "No media or exact-ID folder establishes ownership",
+                ));
             }
             let root = roots
                 .iter()
                 .find(|r| r.id == plan.title.root_folder_id)
-                .ok_or_else(|| fail("Selected root is missing; no default-root substitution"))?;
+                .ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_SELECTED_ROOT_NOT_FOUND,
+                        "Selected root is missing; no default-root substitution",
+                    )
+                })?;
             let corrupt = plan.title.folder_path.as_deref().unwrap_or_default();
             if !path_is_strictly_within(&root.path, corrupt)
                 && !folder_paths_match(&root.path, corrupt)
             {
-                return Err(fail("Selected root is not below the corrupt ancestor"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_SELECTED_ROOT_OUTSIDE_ANCESTOR,
+                    "Selected root is not below the corrupt ancestor",
+                ));
             }
             for media in &live {
                 let source = stored_path_to_path_buf(&media.file_path);
-                let parent = source
-                    .parent()
-                    .ok_or_else(|| fail("Media has no parent folder"))?;
+                let parent = source.parent().ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_MEDIA_PARENT_REQUIRED,
+                        "Media has no parent folder",
+                    )
+                })?;
                 if !folder_paths_match(&path_to_stored_string(parent), corrupt) {
-                    return Err(fail("Media is not loose at the corrupt ancestor"));
+                    return Err(fail(
+                        crate::error_reasons::location::RECOVERY_MEDIA_NOT_LOOSE_AT_ANCESTOR,
+                        "Media is not loose at the corrupt ancestor",
+                    ));
                 }
             }
             let template = self.title_folder_template_for(&plan.title.facet).await?;
@@ -633,6 +748,7 @@ impl AppUseCase {
             .is_some_and(|recycle| overlaps(&destination, recycle))
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_RECYCLE_STORAGE_OVERLAP,
                 "Recovery destination overlaps configured recycle storage",
             ));
         }
@@ -640,7 +756,12 @@ impl AppUseCase {
             .iter()
             .filter(|r| path_is_strictly_within(&destination, &r.path))
             .max_by_key(|r| r.path.len())
-            .ok_or_else(|| fail("Destination is outside the title library"))?;
+            .ok_or_else(|| {
+                fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_OUTSIDE_LIBRARY,
+                    "Destination is outside the title library",
+                )
+            })?;
         plan.destination = Some(destination.clone());
         plan.destination_root = Some(root.clone());
         if let Some(previous) = self
@@ -650,8 +771,8 @@ impl AppUseCase {
             .get_location_operation_plan_json(&plan.operation_id())
             .await?
         {
-            let previous: RecoveryPlan =
-                serde_json::from_str(&previous).map_err(|error| fail(error.to_string()))?;
+            let previous: RecoveryPlan = serde_json::from_str(&previous)
+                .map_err(|error| relay_failure(error.to_string()))?;
             if previous.generated_destination && previous.destination == plan.destination {
                 plan.generated_destination = true;
             }
@@ -663,33 +784,41 @@ impl AppUseCase {
             let mut target = if stored_path_is_inside_folder(&destination, &media.file_path) {
                 source.clone()
             } else {
-                let parent = source
-                    .parent()
-                    .ok_or_else(|| fail("Source parent is unavailable"))?;
+                let parent = source.parent().ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_SOURCE_PARENT_UNAVAILABLE,
+                        "Source parent is unavailable",
+                    )
+                })?;
                 if !folder_paths_match(
                     &path_to_stored_string(parent),
                     plan.title.folder_path.as_deref().unwrap_or_default(),
                 ) {
                     return Err(fail(
+                        crate::error_reasons::location::RECOVERY_SOURCE_LOCATION_UNPROVEN,
                         "Tracked source is neither in the proven folder nor loose at the corrupt ancestor",
                     ));
                 }
-                destination_path.join(
-                    source
-                        .file_name()
-                        .ok_or_else(|| fail("Source filename is unavailable"))?,
-                )
+                destination_path.join(source.file_name().ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_SOURCE_FILENAME_REQUIRED,
+                        "Source filename is unavailable",
+                    )
+                })?)
             };
             let source_version = match tokio::fs::symlink_metadata(&source).await {
                 Ok(meta) => {
                     inspect_path(&source, false).await?;
                     if !meta.is_file() || meta.len() != media.size_bytes.max(0) as u64 {
-                        return Err(fail("Source size or type changed"));
+                        return Err(fail(
+                            crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+                            "Source size or type changed",
+                        ));
                     }
                     Some(recovery_file_version(&source).await?)
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(fail(e.to_string())),
+                Err(e) => return Err(relay_failure(e.to_string())),
             };
             let expected_hash = media
                 .content_hashes
@@ -697,15 +826,21 @@ impl AppUseCase {
                 .filter(|h| h.hash_computed_at.is_some())
                 .map(|h| h.full_blake3.clone());
             if source_version.is_none() && expected_hash.is_none() {
-                return Err(fail("Missing source has no attested full hash"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_SOURCE_FULL_HASH_REQUIRED,
+                    "Missing source has no attested full hash",
+                ));
             }
             if source_version.is_none() {
                 target = locate_hashed_destination(
                     &destination_path,
                     media.size_bytes.max(0) as u64,
-                    expected_hash
-                        .as_deref()
-                        .ok_or_else(|| fail("Missing full hash"))?,
+                    expected_hash.as_deref().ok_or_else(|| {
+                        fail(
+                            crate::error_reasons::location::RECOVERY_FULL_HASH_REQUIRED,
+                            "Missing full hash",
+                        )
+                    })?,
                     custom_recycle.as_deref(),
                 )
                 .await?;
@@ -730,10 +865,12 @@ impl AppUseCase {
         &self,
         plan: &RecoveryPlan,
     ) -> AppResult<()> {
-        let destination = plan
-            .destination
-            .as_deref()
-            .ok_or_else(|| fail("Recovery destination missing"))?;
+        let destination = plan.destination.as_deref().ok_or_else(|| {
+            fail(
+                crate::error_reasons::location::RECOVERY_DESTINATION_NOT_FOUND,
+                "Recovery destination missing",
+            )
+        })?;
         if self
             .read_setting_string_value_for_scope(
                 crate::SETTINGS_SCOPE_MEDIA,
@@ -745,6 +882,7 @@ impl AppUseCase {
             .is_some_and(|recycle| overlaps(destination, recycle))
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_RECYCLE_STORAGE_OVERLAP,
                 "Recovery destination overlaps configured recycle storage",
             ));
         }
@@ -754,9 +892,12 @@ impl AppUseCase {
         let path = stored_path_to_path_buf(destination);
         match tokio::fs::symlink_metadata(&path).await {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(fail(error.to_string())),
+            Err(error) => return Err(relay_failure(error.to_string())),
             Ok(meta) if !meta.is_dir() => {
-                return Err(fail("Generated destination is not a directory"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_GENERATED_DESTINATION_NOT_DIRECTORY,
+                    "Generated destination is not a directory",
+                ));
             }
             Ok(_) => {}
         }
@@ -766,15 +907,19 @@ impl AppUseCase {
             .get_location_operation_plan_json(&plan.operation_id())
             .await?
             .ok_or_else(|| {
-                fail("Generated destination already exists without ownership evidence")
+                fail(
+                    crate::error_reasons::location::RECOVERY_GENERATED_DESTINATION_UNCLAIMED,
+                    "Generated destination already exists without ownership evidence",
+                )
             })?;
         let previous: RecoveryPlan =
-            serde_json::from_str(&previous).map_err(|error| fail(error.to_string()))?;
+            serde_json::from_str(&previous).map_err(|error| relay_failure(error.to_string()))?;
         if !previous.generated_destination
             || previous.operation_id() != plan.operation_id()
             || previous.destination.as_deref() != Some(destination)
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_GENERATED_DESTINATION_IDENTITY_MISMATCH,
                 "Generated destination is not this recovery's recorded folder",
             ));
         }
@@ -792,27 +937,31 @@ impl AppUseCase {
         );
         let mut entries = tokio::fs::read_dir(&path)
             .await
-            .map_err(|error| fail(error.to_string()))?;
+            .map_err(|error| relay_failure(error.to_string()))?;
         let mut seen = 0usize;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|error| fail(error.to_string()))?
+            .map_err(|error| relay_failure(error.to_string()))?
         {
             seen += 1;
             if seen > MAX_DISCOVERY_ENTRIES {
-                return Err(fail("Generated destination inventory limit exceeded"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED,
+                    "Generated destination inventory limit exceeded",
+                ));
             }
             let entry_path = entry.path();
             inspect_path(&entry_path, false).await?;
             if !entry
                 .file_type()
                 .await
-                .map_err(|error| fail(error.to_string()))?
+                .map_err(|error| relay_failure(error.to_string()))?
                 .is_file()
                 || !allowed.contains(&path_key(&path_to_stored_string(&entry_path)))
             {
                 return Err(fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_UNRELATED_CONTENT,
                     "Generated destination contains unrelated content; ownership remains unresolved",
                 ));
             }

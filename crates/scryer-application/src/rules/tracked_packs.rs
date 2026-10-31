@@ -122,9 +122,7 @@ impl AppUseCase {
             .apply_rule_pack_installation(&installation, None, &changed, &history)
             .await?
         {
-            return Err(AppError::Validation(
-                "bundled rule pack installation conflicted with another change".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::rules::BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE, "bundled rule pack installation conflicted with another change".to_string()));
         }
         self.swap_user_rules_engine(engine);
         Ok(())
@@ -190,8 +188,9 @@ impl AppUseCase {
                 .iter()
                 .any(|id| !pack.templates.iter().any(|template| &template.id == *id))
         {
-            return Err(AppError::Validation(
-                "enabled templates must be unique members of the selected pack".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::ENABLED_TEMPLATES_INVALID,
+                "enabled templates must be unique members of the selected pack",
             ));
         }
         let _mutation = self.services.customization.rule_mutation_lock.lock().await;
@@ -203,9 +202,10 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(format!(
-                "rule pack {pack_id} is already installed"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_ALREADY_INSTALLED,
+                format!("rule pack {pack_id} is already installed"),
+            ));
         }
         let installation = new_installation(pack);
         let (installation, changed) =
@@ -219,7 +219,8 @@ impl AppUseCase {
             .apply_rule_pack_installation(&installation, None, &changed, &history)
             .await?
         {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE,
                 "rule pack installation conflicted with another change".to_string(),
             ));
         }
@@ -239,10 +240,8 @@ impl AppUseCase {
             .fetch_verified_rule_pack_version(actor, pack_id, version)
             .await?;
         if pack.registry.version != version || pack.registry.digest != digest {
-            return Err(AppError::Validation(
-                "rule pack version or digest did not match the verified catalog release"
-                    .to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::rules::PACK_VERSION_DIGEST_DID_NOT_MATCH_VERIFIED_CATALOG_RELEASE, "rule pack version or digest did not match the verified catalog release"
+                    .to_string()));
         }
         self.apply_verified_tracked_pack_update(actor, &pack, expected_revision, false)
             .await
@@ -265,19 +264,26 @@ impl AppUseCase {
             .rule_sets
             .get_rule_pack_installation(pack_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("tracked rule pack {pack_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::TRACKED_RULE_PACK_NOT_FOUND,
+                    format!("tracked rule pack {pack_id}"),
+                )
+            })?;
         if installation.revision != expected_revision {
             return Err(stale_pack_revision());
         }
         let enabled: BTreeSet<_> = enabled_template_ids.iter().cloned().collect();
         if enabled.len() != enabled_template_ids.len() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_TEMPLATE_ID_DUPLICATED,
                 "duplicate rule pack template ID".to_string(),
             ));
         }
         let priority_by_template: BTreeMap<_, _> = priorities.iter().cloned().collect();
         if priority_by_template.len() != priorities.len() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_PRIORITY_TEMPLATE_ID_DUPLICATED,
                 "duplicate rule pack priority template ID".to_string(),
             ));
         }
@@ -292,7 +298,8 @@ impl AppUseCase {
                 .keys()
                 .any(|id| !active.contains(id.as_str()))
         {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_SETTINGS_REFERENCE_UNKNOWN_REMOVED_TEMPLATE,
                 "rule pack settings reference an unknown or removed template".to_string(),
             ));
         }
@@ -312,7 +319,10 @@ impl AppUseCase {
                 .find(|rule| rule.id == member.rule_set_id)
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::Validation(format!("tracked rule {} is missing", member.rule_set_id))
+                    AppError::validation_refused(
+                        crate::error_reasons::rules::TRACKED_RULE_REQUIRED,
+                        format!("tracked rule {} is missing", member.rule_set_id),
+                    )
                 })?;
             let next_enabled = enabled.contains(&member.template_id);
             let next_priority = priority_by_template
@@ -387,10 +397,14 @@ impl AppUseCase {
             .find_rule_pack_installation_by_rule_set_id(rule_set_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation("rule set is not tracked by a rule pack".to_string())
+                AppError::validation_refused(
+                    crate::error_reasons::rules::SET_NOT_TRACKED_RULE_PACK,
+                    "rule set is not tracked by a rule pack".to_string(),
+                )
             })?;
         if !installation.customizable {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::RULES_PACK_CANNOT_COPIED,
                 "rules from this pack cannot be copied".to_string(),
             ));
         }
@@ -400,7 +414,12 @@ impl AppUseCase {
             .rule_sets
             .get_rule_set(rule_set_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("rule set {rule_set_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::SET_NOT_FOUND,
+                    format!("rule set {rule_set_id}"),
+                )
+            })?;
         let id = Id::new_rego_safe().0;
         let source = validate_pack_source(&source, &id)?;
         let now = Utc::now();
@@ -413,6 +432,7 @@ impl AppUseCase {
             priority,
             evaluation_phase: original.evaluation_phase,
             exclusive_group: original.exclusive_group.clone(),
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets: facets,
             created_at: now,
@@ -471,7 +491,12 @@ impl AppUseCase {
             .rule_sets
             .get_rule_pack_installation(pack_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("tracked rule pack {pack_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::TRACKED_RULE_PACK_NOT_FOUND,
+                    format!("tracked rule pack {pack_id}"),
+                )
+            })?;
         if installation.revision != expected_revision {
             return Err(stale_pack_revision());
         }
@@ -545,19 +570,26 @@ impl AppUseCase {
             .rule_sets
             .get_rule_pack_installation(&pack.registry.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("tracked rule pack {}", pack.registry.id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::TRACKED_RULE_PACK_NOT_FOUND,
+                    format!("tracked rule pack {}", pack.registry.id),
+                )
+            })?;
         if current.revision != expected_revision {
             return Err(stale_pack_revision());
         }
         if automatic && !current.auto_update {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TRACKED_RULE_PACK_AUTOMATIC_UPDATES_DISABLED,
                 "tracked rule pack automatic updates are disabled".to_string(),
             ));
         }
         let next_version = parse_rule_pack_version(&pack.registry.version, "rule pack")?;
         let current_version = parse_rule_pack_version(&current.version, "installed rule pack")?;
         if !next_version.cmp_precedence(&current_version).is_gt() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PACK_UPDATE_INVALID,
                 "rule pack update must be a newer version".to_string(),
             ));
         }
@@ -567,10 +599,8 @@ impl AppUseCase {
                 || next_version.major != current_version.major
                 || next_version.minor != current_version.minor)
         {
-            return Err(AppError::Validation(
-                "automatic rule pack updates require a stable patch on the installed major/minor"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::rules::AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR, "automatic rule pack updates require a stable patch on the installed major/minor"
+                    ));
         }
         let existing_rules = self
             .services
@@ -585,7 +615,10 @@ impl AppUseCase {
                 .iter()
                 .find(|rule| rule.id == member.rule_set_id)
                 .ok_or_else(|| {
-                    AppError::Validation(format!("tracked rule {} is missing", member.rule_set_id))
+                    AppError::validation_refused(
+                        crate::error_reasons::rules::TRACKED_RULE_REQUIRED,
+                        format!("tracked rule {} is missing", member.rule_set_id),
+                    )
                 })?;
             if !member.removed && rule.enabled {
                 enabled.push(member.template_id.clone());
@@ -660,7 +693,10 @@ fn new_installation(pack: &VerifiedRulePack) -> RulePackInstallation {
 
 fn parse_rule_pack_version(raw: &str, subject: &str) -> AppResult<semver::Version> {
     semver::Version::parse(raw.trim().trim_start_matches('v')).map_err(|_| {
-        AppError::Validation(format!("{subject} version is not valid semantic version"))
+        AppError::validation_refused(
+            crate::error_reasons::rules::VERSION_INVALID,
+            format!("{subject} version is not valid semantic version"),
+        )
     })
 }
 
@@ -688,9 +724,10 @@ fn adopted_legacy_locale_members(
             continue;
         }
         if by_template.insert(template_id.to_string(), rule).is_some() {
-            return Err(AppError::Validation(format!(
-                "cannot adopt duplicate legacy locale rules for {template_id}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES,
+                format!("cannot adopt duplicate legacy locale rules for {template_id}"),
+            ));
         }
     }
     let mut enabled = super::builtin_trash::default_template_ids(pack);
@@ -742,17 +779,18 @@ fn retired_rules(existing: &[RuleSet]) -> AppResult<Vec<RuleSet>> {
         .iter()
         .filter_map(|rule| {
             let fields = retired_release_input_fields(&rule.rego_source)
-                .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")));
+                .map_err(|error| AppError::validation_refused(crate::error_reasons::rules::VALIDATION_FAILED, format!("rule validation failed: {error}")));
             match fields {
                 Ok(fields) if fields.is_empty() => None,
                 Err(_) if !rule.enabled => None,
                 Ok(_) => {
                     const REASON: &str = "uses retired input.release.guide_facts; update the rule source before enabling it";
-                    if !rule.enabled && rule.disabled_reason.as_deref().is_some_and(|reason| reason.contains(REASON)) {
+                    if !rule.enabled && rule.disabled_reason_code.as_deref() == Some(crate::error_reasons::rules::INPUT_RETIRED) {
                         return None;
                     }
                     let mut retired = rule.clone();
                     retired.enabled = false;
+                    retired.disabled_reason_code = Some(crate::error_reasons::rules::INPUT_RETIRED.to_string());
                     retired.disabled_reason = Some(match rule.disabled_reason.as_deref() {
                         Some(reason) if !reason.is_empty() => format!("{reason}; {REASON}"),
                         _ => REASON.to_string(),
@@ -771,13 +809,18 @@ fn rule_pack_preview(
     installation: Option<&RulePackInstallation>,
     rules: &[RuleSet],
 ) -> AppResult<TrackedRulePackPreview> {
-    let installation = installation
-        .ok_or_else(|| AppError::NotFound(format!("tracked rule pack {}", pack.registry.id)))?;
+    let installation = installation.ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::rules::TRACKED_RULE_PACK_NOT_FOUND,
+            format!("tracked rule pack {}", pack.registry.id),
+        )
+    })?;
     let version = parse_rule_pack_version(&pack.registry.version, "rule pack")?;
     let installed = parse_rule_pack_version(&installation.version, "installed rule pack")?;
     if !version.cmp_precedence(&installed).is_gt() {
-        return Err(AppError::Validation(
-            "rule pack is already up to date".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::PACK_UP_TO_DATE,
+            "rule pack is already up to date",
         ));
     }
     let known = installation
@@ -874,6 +917,7 @@ fn prepare_pack_rules(
             priority: priorities.get(&template.id).copied().unwrap_or(0),
             evaluation_phase: template.evaluation_phase,
             exclusive_group: template.exclusive_group.clone(),
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets: facets,
             created_at: Utc::now(),
@@ -908,22 +952,30 @@ fn parse_facets(values: &[String]) -> AppResult<Vec<MediaFacet>> {
     values
         .iter()
         .map(|value| {
-            MediaFacet::parse(value)
-                .ok_or_else(|| AppError::Validation(format!("invalid rule pack facet {value}")))
+            MediaFacet::parse(value).ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::rules::PACK_FACET_INVALID,
+                    format!("invalid rule pack facet {value}"),
+                )
+            })
         })
         .collect()
 }
 fn validate_pack_source(source: &str, id: &str) -> AppResult<String> {
     let source = scryer_rules::rewrite_package_declaration(source, id);
-    let result = validate_user_rule(&source, id)
-        .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
+    let result = validate_user_rule(&source, id).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::rules::VALIDATION_FAILED,
+            format!("rule validation failed: {error}"),
+        )
+    })?;
     if result.valid {
         Ok(source)
     } else {
-        Err(AppError::Validation(format!(
-            "rule validation failed: {}",
-            result.errors.join("; ")
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::rules::VALIDATION_FAILED,
+            format!("rule validation failed: {}", result.errors.join("; ")),
+        ))
     }
 }
 fn history_for(rules: &[RuleSet], action: &str, actor_id: &str) -> Vec<RuleSetHistoryChange> {
@@ -938,7 +990,10 @@ fn history_for(rules: &[RuleSet], action: &str, actor_id: &str) -> Vec<RuleSetHi
         .collect()
 }
 fn stale_pack_revision() -> AppError {
-    AppError::Validation("tracked rule pack changed; reload and retry".to_string())
+    AppError::validation_refused(
+        crate::error_reasons::rules::TRACKED_RULE_PACK_CHANGED,
+        "tracked rule pack changed; reload and retry".to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -957,6 +1012,7 @@ mod builtin_trash_tests {
             priority: 17,
             evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
             exclusive_group: None,
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets: vec![],
             created_at: now,

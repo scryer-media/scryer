@@ -20,7 +20,9 @@ type CatalogAddDraft = {
   rootFolderId?: string;
 };
 
-function explicitProfileId(profileId: string | null | undefined): string | undefined {
+function explicitProfileId(
+  profileId: string | null | undefined,
+): string | undefined {
   const normalized = profileId?.trim();
   return normalized || undefined;
 }
@@ -29,10 +31,14 @@ export function effectiveCatalogQualityProfileId(
   library: LibraryQualityProfile | null | undefined,
   fallbackProfileId: string,
 ): string {
-  return explicitProfileId(library?.qualityProfileId) ?? fallbackProfileId.trim();
+  return (
+    explicitProfileId(library?.qualityProfileId) ?? fallbackProfileId.trim()
+  );
 }
 
-export function catalogQualityProfileSelectValue(profileId: string | null | undefined): string {
+export function catalogQualityProfileSelectValue(
+  profileId: string | null | undefined,
+): string {
   return explicitProfileId(profileId) ?? INHERIT_CATALOG_QUALITY_PROFILE_VALUE;
 }
 
@@ -42,8 +48,12 @@ export function inheritedCatalogQualityProfileLabel(
   profiles: readonly QualityProfileOption[],
   inheritLabel: string,
 ): string {
-  const profileId = effectiveCatalogQualityProfileId(library, fallbackProfileId);
-  const profileName = profiles.find((profile) => profile.id === profileId)?.name ?? profileId;
+  const profileId = effectiveCatalogQualityProfileId(
+    library,
+    fallbackProfileId,
+  );
+  const profileName =
+    profiles.find((profile) => profile.id === profileId)?.name ?? profileId;
   return profileName ? `${inheritLabel} — ${profileName}` : inheritLabel;
 }
 
@@ -51,8 +61,8 @@ export function defaultCatalogRootFolderId(
   rootFolders: readonly RootFolder[],
 ): string | undefined {
   return (
-    rootFolders.find((rootFolder) => rootFolder.isDefault && rootFolder.id)?.id ||
-    rootFolders.find((rootFolder) => rootFolder.id)?.id
+    rootFolders.find((rootFolder) => rootFolder.isDefault && rootFolder.id)
+      ?.id || rootFolders.find((rootFolder) => rootFolder.id)?.id
   );
 }
 
@@ -68,7 +78,9 @@ export function draftForCatalogLibrary<T extends CatalogAddDraft>(
   };
 }
 
-export function catalogAddOptionsForSubmit<T extends CatalogAddDraft>(draft: T): T {
+export function catalogAddOptionsForSubmit<T extends CatalogAddDraft>(
+  draft: T,
+): T {
   const qualityProfileId = explicitProfileId(draft.qualityProfileId);
   if (qualityProfileId) {
     return { ...draft, qualityProfileId };

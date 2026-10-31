@@ -13,7 +13,10 @@ test("library root normalization preserves filesystem roots", () => {
   assert.equal(trimLibraryRootPath(" / "), "/");
   assert.equal(trimLibraryRootPath("C:\\"), "C:\\");
   assert.equal(trimLibraryRootPath("C:/"), "C:/");
-  assert.equal(trimLibraryRootPath("\\\\server\\share\\"), "\\\\server\\share\\");
+  assert.equal(
+    trimLibraryRootPath("\\\\server\\share\\"),
+    "\\\\server\\share\\",
+  );
   assert.equal(trimLibraryRootPath("/media/movies/"), "/media/movies");
   assert.equal(normalizeComparableLibraryRootPath("C:\\", "windows"), "c:/");
   assert.equal(
@@ -48,10 +51,7 @@ test("draft dedupe preserves Unix case variants and folds Windows variants", () 
 
 test("cross-library conflicts and invalid badges respect Unix case", () => {
   const conflicts = findConflictingLibraryNamesByRootPath(
-    [
-      { path: "/data/TV" },
-      { path: "/data/tv" },
-    ],
+    [{ path: "/data/TV" }, { path: "/data/tv" }],
     [
       {
         id: "other",
@@ -83,7 +83,9 @@ test("root validation distinguishes invalid paths from unavailable validation", 
     ["/valid", "/missing", "/unreadable", "/unknown"],
     async (path) => {
       if (path === "/missing" || path === "/unreadable") {
-        return { graphQLErrors: [{ extensions: { code: "VALIDATION_ERROR" } }] };
+        return {
+          graphQLErrors: [{ extensions: { code: "VALIDATION_ERROR" } }],
+        };
       }
       if (path === "/unknown") {
         return { graphQLErrors: [{ extensions: { code: "RATE_LIMITED" } }] };

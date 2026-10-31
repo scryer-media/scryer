@@ -1,4 +1,5 @@
-export type ScriptLanguageValue = "SHELL" | "PYTHON" | "POWERSHELL" | "BATCH" | "GO";
+export type ScriptLanguageValue =
+  "SHELL" | "PYTHON" | "POWERSHELL" | "BATCH" | "GO";
 
 export const SCRIPT_LANGUAGES: readonly ScriptLanguageValue[] = [
   "SHELL",
@@ -11,7 +12,8 @@ export const SCRIPT_LANGUAGES: readonly ScriptLanguageValue[] = [
 /** What starts a script: an import finishing, or its own schedule. */
 export type ScriptTriggerValue = "POST_IMPORT" | "SCHEDULE";
 
-export type ScriptScheduleKindValue = "MANUAL" | "INTERVAL" | "DAILY" | "WEEKLY" | "CRON";
+export type ScriptScheduleKindValue =
+  "MANUAL" | "INTERVAL" | "DAILY" | "WEEKLY" | "CRON";
 
 export type ScheduleWeekdayValue =
   | "MONDAY"

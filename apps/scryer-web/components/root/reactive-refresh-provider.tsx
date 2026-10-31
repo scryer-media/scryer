@@ -125,7 +125,9 @@ function actionInputFromPendingAction(
       };
     default: {
       const exhaustiveCheck: never = action;
-      throw new Error(`unsupported reactive refresh action: ${exhaustiveCheck}`);
+      throw new Error(
+        `unsupported reactive refresh action: ${exhaustiveCheck}`,
+      );
     }
   }
 }
@@ -144,9 +146,7 @@ function applyReactiveRefreshActionResult(
         { kind: "catalogTitles" }
       >;
       const titlesPayload = payload[typedActionPlan.titlesAlias] as
-        | { items?: unknown[] }
-        | null
-        | undefined;
+        { items?: unknown[] } | null | undefined;
       action.apply((titlesPayload?.items ?? []) as TitleRecord[]);
       return;
     }
@@ -167,36 +167,42 @@ function applyReactiveRefreshActionResult(
         { kind: "titleSidePanelOverview" }
       >;
       const titleHistoryPage = typedActionPlan.titleHistoryAlias
-        ? payload[typedActionPlan.titleHistoryAlias] as
-        | { items?: unknown[] }
-        | null
-        | undefined
+        ? (payload[typedActionPlan.titleHistoryAlias] as
+            { items?: unknown[] } | null | undefined)
         : null;
       action.apply({
         title: payload[typedActionPlan.titleAlias] ?? null,
         acquisitionDiagnostics: null,
-        titleHistory: (titleHistoryPage?.items ?? []) as TitleSidePanelOverviewSnapshot<
+        titleHistory: (titleHistoryPage?.items ??
+          []) as TitleSidePanelOverviewSnapshot<
           unknown,
           unknown,
           unknown,
           unknown,
           unknown
         >["titleHistory"],
-        titleReleaseBlocklist: (payload[typedActionPlan.titleReleaseBlocklistAlias] ?? []) as TitleSidePanelOverviewSnapshot<
+        titleReleaseBlocklist: (payload[
+          typedActionPlan.titleReleaseBlocklistAlias
+        ] ?? []) as TitleSidePanelOverviewSnapshot<
           unknown,
           unknown,
           unknown,
           unknown,
           unknown
         >["titleReleaseBlocklist"],
-        externalSubtitles: (payload[typedActionPlan.externalSubtitlesAlias] ?? []) as TitleSidePanelOverviewSnapshot<
+        externalSubtitles: (payload[typedActionPlan.externalSubtitlesAlias] ??
+          []) as TitleSidePanelOverviewSnapshot<
           unknown,
           unknown,
           unknown,
           unknown,
           unknown
         >["externalSubtitles"],
-        hasDownloadClients: (payload[typedActionPlan.setupStatusAlias] as { hasDownloadClients?: boolean } | null | undefined)?.hasDownloadClients !== false,
+        hasDownloadClients:
+          (
+            payload[typedActionPlan.setupStatusAlias] as
+              { hasDownloadClients?: boolean } | null | undefined
+          )?.hasDownloadClients !== false,
       });
       return;
     }
@@ -206,10 +212,12 @@ function applyReactiveRefreshActionResult(
         { kind: "titleOverviewDownloadFeedback" }
       >;
       action.apply({
-        downloadQueueItems:
-          (payload[typedActionPlan.downloadQueueItemsAlias] ?? []) as TitleOverviewDownloadFeedbackSnapshot["downloadQueueItems"],
-        completedDownloadQueueItems:
-          (payload[typedActionPlan.completedDownloadQueueItemsAlias] ?? []) as TitleOverviewDownloadFeedbackSnapshot["completedDownloadQueueItems"],
+        downloadQueueItems: (payload[typedActionPlan.downloadQueueItemsAlias] ??
+          []) as TitleOverviewDownloadFeedbackSnapshot["downloadQueueItems"],
+        completedDownloadQueueItems: (payload[
+          typedActionPlan.completedDownloadQueueItemsAlias
+        ] ??
+          []) as TitleOverviewDownloadFeedbackSnapshot["completedDownloadQueueItems"],
         downloadFeedbackWarning,
       });
       return;
@@ -226,7 +234,9 @@ function applyReactiveRefreshActionResult(
     }
     default: {
       const exhaustiveCheck: never = action;
-      throw new Error(`unsupported reactive refresh action: ${exhaustiveCheck}`);
+      throw new Error(
+        `unsupported reactive refresh action: ${exhaustiveCheck}`,
+      );
     }
   }
 }
@@ -256,13 +266,19 @@ function reactiveRefreshActionAliases(
       return [actionPlan.importHistoryAlias];
     default: {
       const exhaustiveCheck: never = actionPlan;
-      throw new Error(`unsupported reactive refresh action: ${exhaustiveCheck}`);
+      throw new Error(
+        `unsupported reactive refresh action: ${exhaustiveCheck}`,
+      );
     }
   }
 }
 
 function graphQlErrorAlias(value: unknown): string | null {
-  if (!isRecord(value) || !Array.isArray(value.path) || value.path.length === 0) {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.path) ||
+    value.path.length === 0
+  ) {
     return null;
   }
 
@@ -272,13 +288,19 @@ function graphQlErrorAlias(value: unknown): string | null {
 function isTitleSidePanelPartialHistoryError(
   actionPlan: ReactiveRefreshQueryActionPlan,
   graphQlErrors: CombinedError["graphQLErrors"],
-): actionPlan is Extract<ReactiveRefreshQueryActionPlan, { kind: "titleSidePanelOverview" }> {
-  return actionPlan.kind === "titleSidePanelOverview"
-    && Boolean(actionPlan.titleHistoryAlias)
-    && graphQlErrors.length > 0
-    && graphQlErrors.every(
-      (graphQlError) => graphQlErrorAlias(graphQlError) === actionPlan.titleHistoryAlias,
-    );
+): actionPlan is Extract<
+  ReactiveRefreshQueryActionPlan,
+  { kind: "titleSidePanelOverview" }
+> {
+  return (
+    actionPlan.kind === "titleSidePanelOverview" &&
+    Boolean(actionPlan.titleHistoryAlias) &&
+    graphQlErrors.length > 0 &&
+    graphQlErrors.every(
+      (graphQlError) =>
+        graphQlErrorAlias(graphQlError) === actionPlan.titleHistoryAlias,
+    )
+  );
 }
 
 function routeActionScopedErrors(
@@ -350,7 +372,9 @@ export function ReactiveRefreshProvider({
   enabled?: boolean;
 }) {
   const client = useClient();
-  const pendingActionsRef = useRef<Map<string, ReactiveRefreshAction>>(new Map());
+  const pendingActionsRef = useRef<Map<string, ReactiveRefreshAction>>(
+    new Map(),
+  );
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushInFlightRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -366,95 +390,119 @@ export function ReactiveRefreshProvider({
     ReactiveRefreshContextValue["registerReactiveRefresh"]
   >((registration) => engine.register(registration), [engine]);
 
-  const flushPendingActionGroup = useCallback(async (queuedActions: ReactiveRefreshAction[]) => {
-    if (queuedActions.length === 0) {
-      return;
-    }
-
-    try {
-      const queryPlan = buildReactiveRefreshQuery(
-        queuedActions.map(actionInputFromPendingAction),
-      );
-      const requestEpoch = reactiveRefreshEpoch();
-      const { data, error } = await client
-        .query(queryPlan.query, queryPlan.variables, {
-          requestPolicy: "network-only",
-        })
-        .toPromise();
-      const payload = isRecord(data) ? data : {};
-      if (!isMountedRef.current) {
+  const flushPendingActionGroup = useCallback(
+    async (queuedActions: ReactiveRefreshAction[]) => {
+      if (queuedActions.length === 0) {
         return;
       }
 
-      const actionsByKey = new Map(queuedActions.map((action) => [action.key, action]));
-      const actionPlansByKey = new Map(
-        queryPlan.actionPlans.map((actionPlan) => [actionPlan.key, actionPlan]),
-      );
-      const failedActionKeys = new Set<string>();
-      const actionErrorsByKey = new Map<string, CombinedError>();
-      const titleOverviewDownloadFeedbackWarningsByKey = new Map<string, string>();
-
-      if (error) {
-        if (error.networkError || !isRecord(data)) {
-          throw error;
+      try {
+        const queryPlan = buildReactiveRefreshQuery(
+          queuedActions.map(actionInputFromPendingAction),
+        );
+        const requestEpoch = reactiveRefreshEpoch();
+        const { data, error } = await client
+          .query(queryPlan.query, queryPlan.variables, {
+            requestPolicy: "network-only",
+          })
+          .toPromise();
+        const payload = isRecord(data) ? data : {};
+        if (!isMountedRef.current) {
+          return;
         }
 
-        const routedErrors = routeActionScopedErrors(queryPlan.actionPlans, error);
-        if (routedErrors.hasUnscopedGraphQlErrors) {
-          throw error;
-        }
+        const actionsByKey = new Map(
+          queuedActions.map((action) => [action.key, action]),
+        );
+        const actionPlansByKey = new Map(
+          queryPlan.actionPlans.map((actionPlan) => [
+            actionPlan.key,
+            actionPlan,
+          ]),
+        );
+        const failedActionKeys = new Set<string>();
+        const actionErrorsByKey = new Map<string, CombinedError>();
+        const titleOverviewDownloadFeedbackWarningsByKey = new Map<
+          string,
+          string
+        >();
 
-        routedErrors.actionErrorsByKey.forEach((actionError, actionKey) => {
-          const actionPlan = actionPlansByKey.get(actionKey);
-          if (actionPlan?.kind === "titleOverviewDownloadFeedback") {
-            const warning = extractDownloadFeedbackWarning(actionError.graphQLErrors, [
-              actionPlan.downloadQueueItemsAlias,
-              actionPlan.completedDownloadQueueItemsAlias,
-            ]);
-            if (warning) {
-              titleOverviewDownloadFeedbackWarningsByKey.set(actionKey, warning);
+        if (error) {
+          if (error.networkError || !isRecord(data)) {
+            throw error;
+          }
+
+          const routedErrors = routeActionScopedErrors(
+            queryPlan.actionPlans,
+            error,
+          );
+          if (routedErrors.hasUnscopedGraphQlErrors) {
+            throw error;
+          }
+
+          routedErrors.actionErrorsByKey.forEach((actionError, actionKey) => {
+            const actionPlan = actionPlansByKey.get(actionKey);
+            if (actionPlan?.kind === "titleOverviewDownloadFeedback") {
+              const warning = extractDownloadFeedbackWarning(
+                actionError.graphQLErrors,
+                [
+                  actionPlan.downloadQueueItemsAlias,
+                  actionPlan.completedDownloadQueueItemsAlias,
+                ],
+              );
+              if (warning) {
+                titleOverviewDownloadFeedbackWarningsByKey.set(
+                  actionKey,
+                  warning,
+                );
+                return;
+              }
+            }
+            if (
+              actionPlan &&
+              isTitleSidePanelPartialHistoryError(
+                actionPlan,
+                actionError.graphQLErrors,
+              )
+            ) {
               return;
             }
-          }
-          if (
-            actionPlan
-            && isTitleSidePanelPartialHistoryError(actionPlan, actionError.graphQLErrors)
-          ) {
+
+            failedActionKeys.add(actionKey);
+            actionErrorsByKey.set(actionKey, actionError);
+          });
+        }
+
+        queryPlan.actionPlans.forEach((actionPlan) => {
+          if (failedActionKeys.has(actionPlan.key)) {
             return;
           }
 
-          failedActionKeys.add(actionKey);
-          actionErrorsByKey.set(actionKey, actionError);
+          const action = actionsByKey.get(actionPlan.key);
+          if (!action) {
+            return;
+          }
+          applyReactiveRefreshActionResult(
+            action,
+            actionPlan,
+            payload,
+            requestEpoch,
+            titleOverviewDownloadFeedbackWarningsByKey.get(actionPlan.key) ??
+              null,
+          );
+        });
+
+        actionErrorsByKey.forEach((actionError, actionKey) => {
+          actionsByKey.get(actionKey)?.onError?.(actionError);
+        });
+      } catch (error) {
+        queuedActions.forEach((action) => {
+          action.onError?.(error);
         });
       }
-
-      queryPlan.actionPlans.forEach((actionPlan) => {
-        if (failedActionKeys.has(actionPlan.key)) {
-          return;
-        }
-
-        const action = actionsByKey.get(actionPlan.key);
-        if (!action) {
-          return;
-        }
-        applyReactiveRefreshActionResult(
-          action,
-          actionPlan,
-          payload,
-          requestEpoch,
-          titleOverviewDownloadFeedbackWarningsByKey.get(actionPlan.key) ?? null,
-        );
-      });
-
-      actionErrorsByKey.forEach((actionError, actionKey) => {
-        actionsByKey.get(actionKey)?.onError?.(actionError);
-      });
-    } catch (error) {
-      queuedActions.forEach((action) => {
-        action.onError?.(error);
-      });
-    }
-  }, [client]);
+    },
+    [client],
+  );
 
   const flushPendingActions = useCallback(async () => {
     if (flushInFlightRef.current) {
@@ -470,7 +518,10 @@ export function ReactiveRefreshProvider({
     flushInFlightRef.current = true;
 
     try {
-      const groupedActions = new Map<ReactiveRefreshBatchGroup, ReactiveRefreshAction[]>();
+      const groupedActions = new Map<
+        ReactiveRefreshBatchGroup,
+        ReactiveRefreshAction[]
+      >();
       queuedActions.forEach((action) => {
         const batchGroup = reactiveRefreshBatchGroup(action);
         const existingGroup = groupedActions.get(batchGroup);
@@ -483,7 +534,7 @@ export function ReactiveRefreshProvider({
 
       await Promise.all(
         Array.from(groupedActions.values()).map((actionGroup) =>
-          flushPendingActionGroup(actionGroup)
+          flushPendingActionGroup(actionGroup),
         ),
       );
     } finally {

@@ -8,77 +8,55 @@
     },
     {
       "name": "scryer.size_gib",
-      "args": [
-        "bytes"
-      ],
+      "args": ["bytes"],
       "returns": "number",
       "descKey": "settings.regoHelper.sizeGib"
     },
     {
       "name": "scryer.lang_matches",
-      "args": [
-        "code",
-        "pattern"
-      ],
+      "args": ["code", "pattern"],
       "returns": "bool",
       "descKey": "settings.regoHelper.langMatches"
     },
     {
       "name": "scryer.normalize_source",
-      "args": [
-        "source"
-      ],
+      "args": ["source"],
       "returns": "string",
       "descKey": "settings.regoHelper.normalizeSource"
     },
     {
       "name": "scryer.normalize_codec",
-      "args": [
-        "codec"
-      ],
+      "args": ["codec"],
       "returns": "string",
       "descKey": "settings.regoHelper.normalizeCodec"
     },
     {
       "name": "lower",
-      "args": [
-        "value"
-      ],
+      "args": ["value"],
       "returns": "string",
       "descKey": "settings.regoHelper.lower"
     },
     {
       "name": "upper",
-      "args": [
-        "value"
-      ],
+      "args": ["value"],
       "returns": "string",
       "descKey": "settings.regoHelper.upper"
     },
     {
       "name": "count",
-      "args": [
-        "value"
-      ],
+      "args": ["value"],
       "returns": "number",
       "descKey": "settings.regoHelper.count"
     },
     {
       "name": "object.get",
-      "args": [
-        "object",
-        "key",
-        "default"
-      ],
+      "args": ["object", "key", "default"],
       "returns": "any",
       "descKey": "settings.regoHelper.objectGet"
     },
     {
       "name": "startswith",
-      "args": [
-        "value",
-        "prefix"
-      ],
+      "args": ["value", "prefix"],
       "returns": "bool",
       "descKey": "settings.regoHelper.startsWith"
     }

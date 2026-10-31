@@ -32,7 +32,11 @@ import {
 } from "@/lib/utils/activity-utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { diskSpaceReason, importTitleHref, isWaitingForDiskSpace } from "@/lib/utils/import-row";
+import {
+  diskSpaceReason,
+  importTitleHref,
+  isWaitingForDiskSpace,
+} from "@/lib/utils/import-row";
 
 export type QueueRowItemProps = {
   queueItem: DownloadQueueItem;
@@ -120,7 +124,8 @@ export const QueueRowItem = memo(function QueueRowItem({
               releaseTitle={row.releaseTitle}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              {queueItem.clientName || queueItem.clientType} • {queueItem.clientType}
+              {queueItem.clientName || queueItem.clientType} •{" "}
+              {queueItem.clientType}
               {queueItem.sourceProvider ? (
                 <span
                   data-ui="activity-source-provider"
@@ -144,10 +149,13 @@ export const QueueRowItem = memo(function QueueRowItem({
           />
         </div>
       </div>
-      {(isWaitingForDiskSpace(queueItem) ||
-        ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) && !row.hasStatusDetails)) ? (
+      {isWaitingForDiskSpace(queueItem) ||
+      ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) &&
+        !row.hasStatusDetails) ? (
         <p className="mt-2 break-words text-xs text-[var(--scry-danger-text-soft)]">
-          {isWaitingForDiskSpace(queueItem) ? diskSpaceReason(queueItem) : queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
+          {isWaitingForDiskSpace(queueItem)
+            ? diskSpaceReason(queueItem)
+            : (queueItem.deleteErrorMessage ?? queueItem.importErrorMessage)}
         </p>
       ) : null}
       {row.hasExpandableDetails && isExpanded ? (
@@ -156,7 +164,9 @@ export const QueueRowItem = memo(function QueueRowItem({
             detailId={detailId}
             releaseTitle={row.releaseTitle}
             errorCode={queueItem.importErrorCode}
-            failureReason={isWaitingForDiskSpace(queueItem) ? "" : row.failureReason}
+            failureReason={
+              isWaitingForDiskSpace(queueItem) ? "" : row.failureReason
+            }
             t={t}
           />
         </div>
@@ -181,9 +191,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             className={`flex-1 ${rowActionVisualClass}`}
             disabled={isRowFullyBusy}
             onClick={() => {
-              if (
-                isActionLoading || isRowBlocked
-              ) {
+              if (isActionLoading || isRowBlocked) {
                 return;
               }
               onPause();
@@ -201,30 +209,37 @@ export const QueueRowItem = memo(function QueueRowItem({
             className={`flex-1 ${rowActionVisualClass}`}
             disabled={isRowFullyBusy}
             onClick={() => {
-              if (
-                isActionLoading || isRowBlocked
-              ) {
+              if (isActionLoading || isRowBlocked) {
                 return;
               }
               onResume();
             }}
           >
             <Play className="h-4 w-4" />
-            <span>{t(canRetryDownloadPassword(queueItem) ? "importHistory.retryWithPassword" : "queue.resume")}</span>
+            <span>
+              {t(
+                canRetryDownloadPassword(queueItem)
+                  ? "importHistory.retryWithPassword"
+                  : "queue.resume",
+              )}
+            </span>
           </Button>
         )}
         {(row.canInteractiveManualImport || row.canDirectManualImport) && (
           <Button
-            id={selectorId("activity", activeTab, "manual-import", rowSelectorKey)}
+            id={selectorId(
+              "activity",
+              activeTab,
+              "manual-import",
+              rowSelectorKey,
+            )}
             type="button"
             size="sm"
             variant="secondary"
             className={`flex-1 ${rowActionVisualClass}`}
             disabled={isRowFullyBusy}
             onClick={() => {
-              if (
-                isActionLoading || isRowBlocked
-              ) {
+              if (isActionLoading || isRowBlocked) {
                 return;
               }
               onManualImport();
@@ -244,16 +259,19 @@ export const QueueRowItem = memo(function QueueRowItem({
         )}
         {row.canAssignTitle && (
           <Button
-            id={selectorId("activity", activeTab, "assign-title", rowSelectorKey)}
+            id={selectorId(
+              "activity",
+              activeTab,
+              "assign-title",
+              rowSelectorKey,
+            )}
             type="button"
             size="sm"
             variant="secondary"
             className={`flex-1 ${rowActionVisualClass}`}
             disabled={isRowFullyBusy}
             onClick={() => {
-              if (
-                isActionLoading || isRowBlocked
-              ) {
+              if (isActionLoading || isRowBlocked) {
                 return;
               }
               onAssignTitle();
@@ -276,9 +294,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             className={`flex-1 ${rowActionVisualClass}`}
             disabled={isRowFullyBusy}
             onClick={() => {
-              if (
-                isActionLoading || isRowBlocked
-              ) {
+              if (isActionLoading || isRowBlocked) {
                 return;
               }
               onIgnore();
@@ -291,7 +307,12 @@ export const QueueRowItem = memo(function QueueRowItem({
         {canReleaseHeldSources(queueItem) && (
           <Button
             type="button"
-            id={selectorId("activity", activeTab, "release-held-sources", rowSelectorKey)}
+            id={selectorId(
+              "activity",
+              activeTab,
+              "release-held-sources",
+              rowSelectorKey,
+            )}
             size="sm"
             variant="secondary"
             className={`flex-1 ${rowActionVisualClass}`}
@@ -347,12 +368,11 @@ export const QueueRowItem = memo(function QueueRowItem({
           type="button"
           size="sm"
           variant="destructive"
+          id={selectorId("activity", activeTab, "delete", rowSelectorKey)}
           className={`flex-1 ${rowActionVisualClass}`}
           disabled={isRowFullyBusy}
           onClick={() => {
-            if (
-              isActionLoading || isRowBlocked
-            ) {
+            if (isActionLoading || isRowBlocked) {
               return;
             }
             onRequestDelete();

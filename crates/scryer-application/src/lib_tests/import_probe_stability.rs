@@ -185,7 +185,7 @@ async fn probe_stability_missing_source_has_distinct_retryable_reason() {
     assert!(rejection.requires_review());
     assert_eq!(
         rejection.review_hold_skip_reason(),
-        scryer_domain::ImportSkipReason::PolicyMismatch
+        scryer_domain::ImportSkipReason::SourceUnavailable
     );
     assert!(rejection.message.contains("failed to stat import source"));
     eprintln!("{}", rejection.message);

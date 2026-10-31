@@ -41,7 +41,9 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   subtitles: "subtitles",
 };
 
-const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
+const AUTOMATION_SETTINGS_SECTION_PATH: Partial<
+  Record<SettingsSection, string>
+> = {
   acquisition: "acquisition",
   subtitles: "subtitles",
   "post-processing": "post-processing",
@@ -70,13 +72,19 @@ const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
 /// Panes of the Maintenance Rules page. The rule list is the default and has no
 /// segment of its own, so `/automation/rules/maintenance` keeps resolving to
 /// the list an existing maintenance-rules link expected.
-export const MAINTENANCE_RULES_SECTION_PATH: Record<MaintenanceRulesSection, string> = {
+export const MAINTENANCE_RULES_SECTION_PATH: Record<
+  MaintenanceRulesSection,
+  string
+> = {
   rules: "",
   candidates: "candidates",
   history: "history",
 };
 
-const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSection> = {
+const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<
+  string,
+  MaintenanceRulesSection
+> = {
   rules: "rules",
   candidates: "candidates",
   history: "history",
@@ -94,7 +102,9 @@ const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSecti
 /// only when the instance has opted into experimental features. Scoring is
 /// always present, so a single-entry result also tells the page there is no
 /// kind to switch between and the rail can be dropped.
-export function rulesSectionsFor(experimentalFeaturesEnabled: boolean): RulesSection[] {
+export function rulesSectionsFor(
+  experimentalFeaturesEnabled: boolean,
+): RulesSection[] {
   return experimentalFeaturesEnabled
     ? ["scoring", "maintenance", "request"]
     : ["scoring"];
@@ -128,24 +138,32 @@ export function buildRulesPath(
 
 export function rulesSectionFromPath(pathname: string): RulesSection {
   const segments = pathname.split("/").filter(Boolean);
-  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  const rulesAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "rules",
+  );
   if (rulesAt < 0) {
     return "scoring";
   }
-  return RULES_SECTION_BY_SEGMENT[segments[rulesAt + 1]?.toLowerCase() ?? ""] ?? "scoring";
+  return (
+    RULES_SECTION_BY_SEGMENT[segments[rulesAt + 1]?.toLowerCase() ?? ""] ??
+    "scoring"
+  );
 }
 
 export function maintenanceRulesSectionFromPath(
   pathname: string,
 ): MaintenanceRulesSection {
   const segments = pathname.split("/").filter(Boolean);
-  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  const rulesAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "rules",
+  );
   if (rulesAt < 0) {
     return "rules";
   }
   return (
-    MAINTENANCE_RULES_SECTION_BY_SEGMENT[segments[rulesAt + 2]?.toLowerCase() ?? ""] ??
-    "rules"
+    MAINTENANCE_RULES_SECTION_BY_SEGMENT[
+      segments[rulesAt + 2]?.toLowerCase() ?? ""
+    ] ?? "rules"
   );
 }
 
@@ -171,14 +189,21 @@ export function buildListsPath(section: ListsSection): string {
 
 export function listsSectionFromPath(pathname: string): ListsSection {
   const segments = pathname.split("/").filter(Boolean);
-  const listsAt = segments.findIndex((segment) => segment.toLowerCase() === "lists");
+  const listsAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "lists",
+  );
   if (listsAt < 0) {
     return "public";
   }
-  return LISTS_SECTION_BY_SEGMENT[segments[listsAt + 1]?.toLowerCase() ?? ""] ?? "public";
+  return (
+    LISTS_SECTION_BY_SEGMENT[segments[listsAt + 1]?.toLowerCase() ?? ""] ??
+    "public"
+  );
 }
 
-const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
+const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<
+  Record<SettingsSection, string>
+> = {
   indexers: "indexers",
   downloadClients: "download-clients",
   proxies: "proxies",
@@ -197,11 +222,13 @@ const SYSTEM_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
 export const INDEXER_TAB_PATH: Record<IndexerSettingsTab, string> = {
   indexers: "",
   search: "search",
+  clients: "clients",
   seedingProfiles: "seeding-profiles",
 };
 
 const INDEXER_TAB_BY_SEGMENT: Record<string, IndexerSettingsTab> = {
   search: "search",
+  clients: "clients",
   "seeding-profiles": "seedingProfiles",
   seedingprofiles: "seedingProfiles",
 };
@@ -215,25 +242,36 @@ const MOVED_INDEXER_PROXY_SEGMENTS = new Set(["proxies", "indexer-proxies"]);
 /// its own, so `/settings/seeding-profiles` still redirects here.
 export function buildIndexerSettingsPath(tab: IndexerSettingsTab): string {
   const segment = INDEXER_TAB_PATH[tab];
-  return segment ? `/integrations/indexers/${segment}` : "/integrations/indexers";
+  return segment
+    ? `/integrations/indexers/${segment}`
+    : "/integrations/indexers";
 }
 
-export function indexerSettingsTabFromPath(pathname: string): IndexerSettingsTab {
+export function indexerSettingsTabFromPath(
+  pathname: string,
+): IndexerSettingsTab {
   const segments = pathname.split("/").filter(Boolean);
-  const indexerAt = segments.findIndex((segment) => segment.toLowerCase() === "indexers");
+  const indexerAt = segments.findIndex(
+    (segment) => segment.toLowerCase() === "indexers",
+  );
   if (indexerAt < 0) {
     return "indexers";
   }
-  return INDEXER_TAB_BY_SEGMENT[segments[indexerAt + 1]?.toLowerCase() ?? ""] ?? "indexers";
+  return (
+    INDEXER_TAB_BY_SEGMENT[segments[indexerAt + 1]?.toLowerCase() ?? ""] ??
+    "indexers"
+  );
 }
 
 /// Which panes the Indexers page offers on this instance.
 ///
-/// The panes of the Indexers page. Indexer search is in beta and always
-/// present; the page header says so.
-export function indexerSettingsTabs(): IndexerSettingsTab[] {
-  return ["indexers", "search", "seedingProfiles"];
-}
+/// Indexer search stays available; client management requires the instance opt-in.
+export const INDEXER_SETTINGS_TABS: readonly IndexerSettingsTab[] = [
+  "indexers",
+  "search",
+  "clients",
+  "seedingProfiles",
+];
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {
   overview: "overview",
@@ -293,11 +331,13 @@ export function buildViewPath(
     if (rulesSection) {
       return buildRulesPath(rulesSection);
     }
-    const automationPath = AUTOMATION_SETTINGS_SECTION_PATH[nextSettingsSection];
+    const automationPath =
+      AUTOMATION_SETTINGS_SECTION_PATH[nextSettingsSection];
     if (automationPath) {
       return `/automation/${automationPath}`;
     }
-    const integrationsPath = INTEGRATIONS_SETTINGS_SECTION_PATH[nextSettingsSection];
+    const integrationsPath =
+      INTEGRATIONS_SETTINGS_SECTION_PATH[nextSettingsSection];
     if (integrationsPath) {
       return `/integrations/${integrationsPath}`;
     }
@@ -307,7 +347,11 @@ export function buildViewPath(
     }
     return `${base}/${SETTINGS_SECTION_PATH[nextSettingsSection]}`;
   }
-  if (nextView === "system" && nextSystemSection && nextSystemSection !== "overview") {
+  if (
+    nextView === "system" &&
+    nextSystemSection &&
+    nextSystemSection !== "overview"
+  ) {
     return `${base}/${SYSTEM_SECTION_PATH[nextSystemSection]}`;
   }
   if (nextView === "logs") {
@@ -487,12 +531,17 @@ function parsedRoute(
 }
 
 function locationSuffix(search: string, hash: string): string {
-  const normalizedSearch = search && !search.startsWith("?") ? `?${search}` : search;
+  const normalizedSearch =
+    search && !search.startsWith("?") ? `?${search}` : search;
   const normalizedHash = hash && !hash.startsWith("#") ? `#${hash}` : hash;
   return `${normalizedSearch}${normalizedHash}`;
 }
 
-function redirectTo(path: string, search: string, hash: string): AppRouteResolution {
+function redirectTo(
+  path: string,
+  search: string,
+  hash: string,
+): AppRouteResolution {
   return { kind: "redirect", to: `${path}${locationSuffix(search, hash)}` };
 }
 
@@ -580,7 +629,12 @@ function resolveMediaRoute(
   hash: string,
 ): AppRouteResolution {
   if (rawSegments.length === 1) {
-    return canonicalOrRedirect(currentPath, parsedRoute(`/${view}`, view), search, hash);
+    return canonicalOrRedirect(
+      currentPath,
+      parsedRoute(`/${view}`, view),
+      search,
+      hash,
+    );
   }
 
   const section = normalizedSegments[1];
@@ -591,7 +645,9 @@ function resolveMediaRoute(
     if (section === "import") {
       return canonicalOrRedirect(
         currentPath,
-        parsedRoute(`/${view}/import`, view, { contentSettingsSection: "import" }),
+        parsedRoute(`/${view}/import`, view, {
+          contentSettingsSection: "import",
+        }),
         search,
         hash,
       );
@@ -628,7 +684,9 @@ function resolveMediaRoute(
     const canonicalPath = `/${view}/${CONTENT_SECTION_PATH[contentSection]}`;
     return canonicalOrRedirect(
       currentPath,
-      parsedRoute(canonicalPath, view, { contentSettingsSection: contentSection }),
+      parsedRoute(canonicalPath, view, {
+        contentSettingsSection: contentSection,
+      }),
       search,
       hash,
     );
@@ -660,7 +718,9 @@ export function resolveAppRoute(
   const currentPath = pathname?.trim() || "/";
   const trimmed = currentPath.replace(/^\/+|\/+$/g, "");
   const rawSegments = trimmed ? trimmed.split("/").filter(Boolean) : [];
-  const normalizedSegments = rawSegments.map((segment) => segment.toLowerCase());
+  const normalizedSegments = rawSegments.map((segment) =>
+    segment.toLowerCase(),
+  );
   const root = normalizedSegments[0] ?? "";
 
   if (!root) {
@@ -690,8 +750,18 @@ export function resolveAppRoute(
     );
   }
 
-  if (root === "settings" && normalizedSegments[1] === "lists" && normalizedSegments[2] === "provider-apps" && rawSegments.length === 3) {
-    return canonicalOrRedirect(currentPath, parsedRoute(buildListsPath("providerApps"), "lists"), search, hash);
+  if (
+    root === "settings" &&
+    normalizedSegments[1] === "lists" &&
+    normalizedSegments[2] === "provider-apps" &&
+    rawSegments.length === 3
+  ) {
+    return canonicalOrRedirect(
+      currentPath,
+      parsedRoute(buildListsPath("providerApps"), "lists"),
+      search,
+      hash,
+    );
   }
 
   if (root === "lists") {
@@ -716,7 +786,12 @@ export function resolveAppRoute(
     );
   }
 
-  if (root === "discovery" || root === "requests" || root === "calendar" || root === "api-explorer") {
+  if (
+    root === "discovery" ||
+    root === "requests" ||
+    root === "calendar" ||
+    root === "api-explorer"
+  ) {
     if (rawSegments.length !== 1) {
       return { kind: "not-found" };
     }
@@ -730,7 +805,10 @@ export function resolveAppRoute(
 
   if (root === "activity") {
     const section = normalizedSegments[1] ?? "activity";
-    if (rawSegments.length > 2 || !["activity", "import", "history"].includes(section)) {
+    if (
+      rawSegments.length > 2 ||
+      !["activity", "import", "history"].includes(section)
+    ) {
       return { kind: "not-found" };
     }
     const activitySection = section as ActivitySection;
@@ -756,7 +834,14 @@ export function resolveAppRoute(
       const wantedSegment = normalizedSegments[2] ?? "items";
       if (wantedSegment === "history" && rawSegments.length === 3) {
         return redirectTo(
-          buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+          buildViewPath(
+            "activity",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "history",
+          ),
           search,
           hash,
         );
@@ -781,7 +866,13 @@ export function resolveAppRoute(
     }
 
     if (section === "rules") {
-      return resolveRulesRoute(currentPath, rawSegments, normalizedSegments, search, hash);
+      return resolveRulesRoute(
+        currentPath,
+        rawSegments,
+        normalizedSegments,
+        search,
+        hash,
+      );
     }
 
     if (MOVED_MAINTENANCE_RULES_SEGMENTS.has(section)) {
@@ -792,11 +883,17 @@ export function resolveAppRoute(
     if (!settingsSection || rawSegments.length !== 2) {
       return { kind: "not-found" };
     }
-    return canonicalOrRedirect(currentPath, settingsRoute(settingsSection), search, hash);
+    return canonicalOrRedirect(
+      currentPath,
+      settingsRoute(settingsSection),
+      search,
+      hash,
+    );
   }
 
   if (root === "integrations") {
-    const settingsSection = INTEGRATION_SETTINGS_BY_SEGMENT[normalizedSegments[1] ?? ""];
+    const settingsSection =
+      INTEGRATION_SETTINGS_BY_SEGMENT[normalizedSegments[1] ?? ""];
     if (!settingsSection) {
       return { kind: "not-found" };
     }
@@ -823,14 +920,26 @@ export function resolveAppRoute(
     if (rawSegments.length !== 2) {
       return { kind: "not-found" };
     }
-    return canonicalOrRedirect(currentPath, settingsRoute(settingsSection), search, hash);
+    return canonicalOrRedirect(
+      currentPath,
+      settingsRoute(settingsSection),
+      search,
+      hash,
+    );
   }
 
   if (root === "wanted") {
     const wantedSegment = normalizedSegments[1] ?? "items";
     if (wantedSegment === "history" && rawSegments.length === 2) {
       return redirectTo(
-        buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+        buildViewPath(
+          "activity",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "history",
+        ),
         search,
         hash,
       );
@@ -849,7 +958,14 @@ export function resolveAppRoute(
   if (root === "history") {
     return rawSegments.length === 1
       ? redirectTo(
-          buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+          buildViewPath(
+            "activity",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "history",
+          ),
           search,
           hash,
         )
@@ -866,7 +982,12 @@ export function resolveAppRoute(
     const section = normalizedSegments[1];
     const localSection = LOCAL_SETTINGS_BY_SEGMENT[section];
     if (localSection) {
-      return canonicalOrRedirect(currentPath, settingsRoute(localSection), search, hash);
+      return canonicalOrRedirect(
+        currentPath,
+        settingsRoute(localSection),
+        search,
+        hash,
+      );
     }
     const movedRulesSection = MOVED_SETTINGS_RULES_BY_SEGMENT[section];
     if (movedRulesSection) {
@@ -909,14 +1030,22 @@ export function resolveAppRoute(
     if (section === "recycle-bin" || section === "recyclebin") {
       return canonicalOrRedirect(
         currentPath,
-        parsedRoute("/system/recycle-bin", "system", { systemSection: "recycleBin" }),
+        parsedRoute("/system/recycle-bin", "system", {
+          systemSection: "recycleBin",
+        }),
         search,
         hash,
       );
     }
-    const systemSetting = SYSTEM_SETTINGS_BY_SEGMENT[section === "backups" ? "backup" : section];
+    const systemSetting =
+      SYSTEM_SETTINGS_BY_SEGMENT[section === "backups" ? "backup" : section];
     if (systemSetting) {
-      return canonicalOrRedirect(currentPath, settingsRoute(systemSetting), search, hash);
+      return canonicalOrRedirect(
+        currentPath,
+        settingsRoute(systemSetting),
+        search,
+        hash,
+      );
     }
     if (section === "logs") {
       return redirectTo("/logs", search, hash);
@@ -954,7 +1083,9 @@ export function resolveAppRoute(
   return { kind: "not-found" };
 }
 
-export function parseLanguageFromParam(value: string | null): LocaleCode | null {
+export function parseLanguageFromParam(
+  value: string | null,
+): LocaleCode | null {
   if (!value) {
     return null;
   }
@@ -967,7 +1098,9 @@ export function parseLanguageFromParam(value: string | null): LocaleCode | null 
  * Navigation state the header's "Enable login" entry attaches when it sends
  * the user to Security, so the page opens the enable flow on arrival.
  */
-export const ENABLE_FORM_LOGIN_LOCATION_STATE = { enableFormLogin: true } as const;
+export const ENABLE_FORM_LOGIN_LOCATION_STATE = {
+  enableFormLogin: true,
+} as const;
 
 export function readEnableFormLoginIntent(state: unknown): boolean {
   return (

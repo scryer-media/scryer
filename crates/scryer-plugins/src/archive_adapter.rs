@@ -9,6 +9,7 @@ use scryer_plugin_sdk::{
     ArchivePluginProcessResponse, PluginDescriptor,
 };
 
+use crate::guest_path::guest_child_path;
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
 use crate::wasmtime_host::ArchiveInvocation;
 use crate::wasmtime_host::archive_component_host::process_archive_component_with_limits;
@@ -248,20 +249,25 @@ fn map_child_path(root: &Path, path: &Path) -> AppResult<String> {
         root.join(path)
     };
     let relative = path.strip_prefix(root).map_err(|_| {
-        AppError::Validation(format!(
-            "archive plugin path '{}' is outside allowed root '{}'",
-            scryer_application::redact_archive_diagnostic(&path.to_string_lossy()),
-            scryer_application::redact_archive_diagnostic(&root.to_string_lossy())
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::PLUGIN_ARCHIVE_PATH_OUTSIDE_ROOT,
+            format!(
+                "archive plugin path '{}' is outside allowed root '{}'",
+                scryer_application::redact_archive_diagnostic(&path.to_string_lossy()),
+                scryer_application::redact_archive_diagnostic(&root.to_string_lossy())
+            ),
+        )
     })?;
     if !is_safe_relative_plugin_path(relative) {
-        return Err(AppError::Validation(format!(
-            "archive plugin path '{}' is not a safe relative path",
-            scryer_application::redact_archive_diagnostic(&path.to_string_lossy())
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::PLUGIN_ARCHIVE_PATH_UNSAFE,
+            format!(
+                "archive plugin path '{}' is not a safe relative path",
+                scryer_application::redact_archive_diagnostic(&path.to_string_lossy())
+            ),
+        ));
     }
-    let guest_path = Path::new(GUEST_SOURCE_ROOT).join(relative);
-    Ok(guest_path.to_string_lossy().into_owned())
+    Ok(guest_child_path(GUEST_SOURCE_ROOT, relative))
 }
 
 fn is_safe_relative_plugin_path(path: &Path) -> bool {
@@ -310,6 +316,19 @@ mod tests {
         assert_eq!(
             map_child_path(root, Path::new("release{{synthetic-secret}}.rar")).unwrap(),
             "/scryer/source/release{{synthetic-secret}}.rar"
+        );
+    }
+
+    #[test]
+    fn guest_archive_paths_use_forward_slashes_on_every_host() {
+        let root = std::env::temp_dir().join("synthetic-subtitle-scratch");
+        let nested = root.join("Season Pack").join("synthetic-pack.zip");
+        let guest = map_child_path(&root, &nested).unwrap();
+        assert_eq!(guest, "/scryer/source/Season Pack/synthetic-pack.zip");
+        assert!(!guest.contains('\\'), "{guest}");
+        assert_eq!(
+            guest_child_path(GUEST_SOURCE_ROOT, Path::new("./synthetic-pack.zip")),
+            "/scryer/source/synthetic-pack.zip"
         );
     }
 }

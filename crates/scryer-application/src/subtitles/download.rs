@@ -30,16 +30,21 @@ impl std::fmt::Debug for SubtitleDownloadSelection {
 
 /// Normalize a language code and ensure it's safe for use in filenames.
 fn normalize_language(lang: &str) -> AppResult<String> {
-    let normalized = normalize_subtitle_language_code(lang)
-        .ok_or_else(|| AppError::Validation(format!("invalid subtitle language code: {lang:?}")))?;
+    let normalized = normalize_subtitle_language_code(lang).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_LANGUAGE_CODE_INVALID,
+            format!("invalid subtitle language code: {lang:?}"),
+        )
+    })?;
 
     if normalized.len() < 2
         || normalized.len() > 3
         || !normalized.chars().all(|c| c.is_ascii_alphanumeric())
     {
-        return Err(AppError::Validation(format!(
-            "invalid subtitle language code: {lang:?}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_LANGUAGE_CODE_INVALID,
+            format!("invalid subtitle language code: {lang:?}"),
+        ));
     }
 
     Ok(normalized)
@@ -48,9 +53,10 @@ fn normalize_language(lang: &str) -> AppResult<String> {
 /// Validate that a subtitle format is safe for use in filenames.
 fn validate_format(fmt: &str) -> AppResult<()> {
     if !is_supported_subtitle_format(fmt) {
-        return Err(AppError::Validation(format!(
-            "unsupported subtitle format: {fmt:?}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_FORMAT_UNSUPPORTED,
+            format!("unsupported subtitle format: {fmt:?}"),
+        ));
     }
     Ok(())
 }
@@ -118,9 +124,62 @@ pub async fn download_and_save_with_selection(
     hearing_impaired: bool,
     selection: SubtitleDownloadSelection,
 ) -> AppResult<(PathBuf, SubtitleFile)> {
-    let language = normalize_language(language)?;
+    download_and_save_staged(
+        provider,
+        provider_file_id,
+        video_path,
+        language,
+        forced,
+        hearing_impaired,
+        selection,
+    )
+    .await
+    .map_err(|failure| failure.error)
+}
+
+/// The step of a subtitle download that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubtitleDownloadStage {
+    /// The provider's own download call.
+    Provider,
+    /// Unpacking and checking what the provider returned.
+    Extraction,
+    /// Naming and writing the subtitle next to the video.
+    Save,
+}
+
+/// A failed subtitle download and the step it failed at, so a caller can tell
+/// a provider failure from a problem with the file it returned.
+#[derive(Debug)]
+pub struct SubtitleDownloadFailure {
+    pub stage: SubtitleDownloadStage,
+    pub error: AppError,
+}
+
+impl SubtitleDownloadFailure {
+    fn at(stage: SubtitleDownloadStage) -> impl FnOnce(AppError) -> Self {
+        move |error| Self { stage, error }
+    }
+}
+
+/// [`download_and_save_with_selection`], reporting which step failed.
+pub async fn download_and_save_staged(
+    provider: &dyn SubtitleProvider,
+    provider_file_id: &str,
+    video_path: &Path,
+    language: &str,
+    forced: bool,
+    hearing_impaired: bool,
+    selection: SubtitleDownloadSelection,
+) -> Result<(PathBuf, SubtitleFile), SubtitleDownloadFailure> {
+    let language = normalize_language(language)
+        .map_err(SubtitleDownloadFailure::at(SubtitleDownloadStage::Save))?;
+    let downloaded = provider
+        .download(provider_file_id)
+        .await
+        .map_err(SubtitleDownloadFailure::at(SubtitleDownloadStage::Provider))?;
     let file = normalize_downloaded_subtitle_with_passwords(
-        provider.download(provider_file_id).await?,
+        downloaded,
         SubtitleExtractionContext {
             language: Some(language.clone()),
             episode: selection.episode,
@@ -130,15 +189,33 @@ pub async fn download_and_save_with_selection(
         selection.archive_provider,
         "",
     )
-    .await?;
-    validate_format(&file.format)?;
-    let dest = build_subtitle_path(
+    .await
+    .map_err(SubtitleDownloadFailure::at(
+        SubtitleDownloadStage::Extraction,
+    ))?;
+    validate_format(&file.format).map_err(SubtitleDownloadFailure::at(
+        SubtitleDownloadStage::Extraction,
+    ))?;
+    save_subtitle_file(
+        provider,
         video_path,
         &language,
-        &file.format,
         forced,
         hearing_impaired,
-    );
+        file,
+    )
+    .map_err(SubtitleDownloadFailure::at(SubtitleDownloadStage::Save))
+}
+
+fn save_subtitle_file(
+    provider: &dyn SubtitleProvider,
+    video_path: &Path,
+    language: &str,
+    forced: bool,
+    hearing_impaired: bool,
+    file: SubtitleFile,
+) -> AppResult<(PathBuf, SubtitleFile)> {
+    let dest = build_subtitle_path(video_path, language, &file.format, forced, hearing_impaired);
 
     // Ensure parent directory exists
     if let Some(parent) = dest.parent()

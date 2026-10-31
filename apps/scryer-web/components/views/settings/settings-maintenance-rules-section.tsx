@@ -24,7 +24,11 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { IconButton } from "@/components/ui/icon-button";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
@@ -86,8 +90,12 @@ type SettingsMaintenanceRulesSectionProps = {
   isEditorOpen: boolean;
   editingRuleSetId: string | null;
   ruleSetDraft: MaintenanceRuleSetDraft;
-  setRuleSetDraft: React.Dispatch<React.SetStateAction<MaintenanceRuleSetDraft>>;
-  submitRuleSet: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  setRuleSetDraft: React.Dispatch<
+    React.SetStateAction<MaintenanceRuleSetDraft>
+  >;
+  submitRuleSet: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingRuleSetId: string | null;
   resetRuleSetDraft: () => void;
   startCreateRuleSet: () => void;
@@ -121,7 +129,10 @@ type SettingsMaintenanceRulesSectionProps = {
   /// The two instance-wide switches, rendered by the container above every
   /// pane so what the instance may do is never scrolled past.
   instanceSwitches: React.ReactNode;
-  setRuleState: (record: MaintenanceRuleSetRecord, state: MaintenanceRuleState) => void;
+  setRuleState: (
+    record: MaintenanceRuleSetRecord,
+    state: MaintenanceRuleState,
+  ) => void;
   /// Which pane of the maintenance gutter is open. Only the rule list wants the
   /// editor, the preview and the reference rail; the operational panes are a
   /// single panel each and read better across the full width.
@@ -142,11 +153,7 @@ function ActionLabel({ kind }: { kind: string }) {
   return <>{labelKey ? t(labelKey) : kind}</>;
 }
 
-function ActionSummary({
-  record,
-}: {
-  record: MaintenanceRuleSetRecord;
-}) {
+function ActionSummary({ record }: { record: MaintenanceRuleSetRecord }) {
   const t = useTranslate();
   if (!record.actionSequence) {
     return <ActionLabel kind={record.actionSpec.kind} />;
@@ -199,9 +206,14 @@ function ActionSequencePreview({
             } else if (step.kind === "SEARCH") {
               parameters =
                 step.parameters.searchCondition === "PREVIOUS_PROFILE_CHANGED"
-                  ? t("settings.maintenanceSequenceSearchPreviousProfileChanged")
+                  ? t(
+                      "settings.maintenanceSequenceSearchPreviousProfileChanged",
+                    )
                   : t("settings.maintenanceSequenceSearchUnconditional");
-            } else if (step.kind === "ADD_TAGS" || step.kind === "REMOVE_TAGS") {
+            } else if (
+              step.kind === "ADD_TAGS" ||
+              step.kind === "REMOVE_TAGS"
+            ) {
               parameters = step.parameters.tags.join(", ") || "—";
             }
             return (
@@ -347,7 +359,9 @@ function MaintenanceTemplateCard({
     <button
       id={selectorId("settings-maintenance-template", template.id)}
       type="button"
-      data-maintenance-template-destructive={template.destructive ? "true" : "false"}
+      data-maintenance-template-destructive={
+        template.destructive ? "true" : "false"
+      }
       className="group flex flex-col rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
       onClick={() => onApply(template)}
       title={t("settings.maintenanceTemplateApply")}
@@ -424,7 +438,10 @@ function MaintenanceTemplateGallery({
         </p>
       </CardHeader>
       {open ? (
-        <CardContent id="settings-maintenance-template-gallery" className="@container">
+        <CardContent
+          id="settings-maintenance-template-gallery"
+          className="@container"
+        >
           <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2 @[900px]:grid-cols-3">
             {MAINTENANCE_RULE_TEMPLATES.map((template) => (
               <MaintenanceTemplateCard
@@ -447,7 +464,9 @@ function PreviewOutcomeCell({ title }: { title: MaintenancePreviewTitle }) {
   const t = useTranslate();
   if (title.error) {
     return (
-      <Badge tone="negative">{t("settings.maintenancePreviewOutcomeError")}</Badge>
+      <Badge tone="negative">
+        {t("settings.maintenancePreviewOutcomeError")}
+      </Badge>
     );
   }
   const labelKey = title.outcome ? previewOutcomeLabelKey(title.outcome) : null;
@@ -501,16 +520,31 @@ function MaintenancePreviewPanel({
 >) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const storedRule = ruleSetRecords.find((rule) => rule.id === previewRuleSetId);
-  const scope = previewSource === "draft" ? draftScope : storedRule?.subjectKind ?? "TITLE";
-  const sequence = previewSource === "draft" ? draftActionSequence : storedRule?.actionSequence;
-  const [selectedSubject, setSelectedSubject] = React.useState<MaintenanceTestSubject | undefined>();
+  const storedRule = ruleSetRecords.find(
+    (rule) => rule.id === previewRuleSetId,
+  );
+  const scope =
+    previewSource === "draft"
+      ? draftScope
+      : (storedRule?.subjectKind ?? "TITLE");
+  const sequence =
+    previewSource === "draft"
+      ? draftActionSequence
+      : storedRule?.actionSequence;
+  const [selectedSubject, setSelectedSubject] = React.useState<
+    MaintenanceTestSubject | undefined
+  >();
   const [targetPending, setTargetPending] = React.useState(false);
   const [manualTarget, setManualTarget] = React.useState(false);
-  React.useEffect(() => { setSelectedSubject(undefined); setTargetPending(false); setManualTarget(false); }, [previewSource, previewRuleSetId, previewLibraryId, draftName, scope]);
+  React.useEffect(() => {
+    setSelectedSubject(undefined);
+    setTargetPending(false);
+    setManualTarget(false);
+  }, [previewSource, previewRuleSetId, previewLibraryId, draftName, scope]);
   const canPreviewDraft = isEditorOpen;
   const canRun =
-    !previewing && !targetPending &&
+    !previewing &&
+    !targetPending &&
     Boolean(previewLibraryId || selectedSubject) &&
     (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
 
@@ -549,7 +583,9 @@ function MaintenancePreviewPanel({
             <SingleSelectField
               id="settings-maintenance-preview-rule"
               label={t("settings.maintenancePreviewRuleSelect")}
-              placeholder={t("settings.maintenancePreviewRuleSelectPlaceholder")}
+              placeholder={t(
+                "settings.maintenancePreviewRuleSelectPlaceholder",
+              )}
               value={previewRuleSetId}
               onValueChange={setPreviewRuleSetId}
               options={ruleSetRecords.map((record) => ({
@@ -603,17 +639,36 @@ function MaintenancePreviewPanel({
 
         {sequence ? <ActionSequencePreview sequence={sequence} /> : null}
 
-        <MaintenanceSubjectPicker key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
-          scope={scope} onChange={(subject, pending, active) => { setSelectedSubject(subject); setTargetPending(pending); setManualTarget(active); }} />
+        <MaintenanceSubjectPicker
+          key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
+          scope={scope}
+          onChange={(subject, pending, active) => {
+            setSelectedSubject(subject);
+            setTargetPending(pending);
+            setManualTarget(active);
+          }}
+        />
         {!manualTarget && previewResult?.titles.length ? (
           <SingleSelectField
             id="settings-maintenance-preview-subject"
             label={t("settings.maintenancePreviewSubject")}
             value={selectedSubject?.subjectId ?? "all"}
-            onValueChange={(id) => setSelectedSubject(previewResult.titles.find((subject) => subject.subjectId === id))}
+            onValueChange={(id) =>
+              setSelectedSubject(
+                previewResult.titles.find(
+                  (subject) => subject.subjectId === id,
+                ),
+              )
+            }
             options={[
               { value: "all", label: t("settings.maintenancePreviewSample") },
-              ...previewResult.titles.map((subject) => ({ value: subject.subjectId, label: subject.subjectKind === "title" ? subject.titleName : `${subject.titleName} · ${subject.subjectLabel}` })),
+              ...previewResult.titles.map((subject) => ({
+                value: subject.subjectId,
+                label:
+                  subject.subjectKind === "title"
+                    ? subject.titleName
+                    : `${subject.titleName} · ${subject.subjectLabel}`,
+              })),
             ]}
           />
         ) : null}
@@ -639,7 +694,10 @@ function MaintenancePreviewPanel({
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
               {t("settings.maintenancePreviewMeta", {
-                time: formatUiDateTime(previewResult.evaluatedAt, dateTimeFormat),
+                time: formatUiDateTime(
+                  previewResult.evaluatedAt,
+                  dateTimeFormat,
+                ),
                 hash: previewResult.matcherContentHash.slice(0, 12),
               })}
             </p>
@@ -668,22 +726,53 @@ function MaintenancePreviewPanel({
                     >
                       <TableCell className="font-medium">
                         {title.titleName}
-                        {title.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{title.subjectLabel}</div>}
-                        <div className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: title.fileCount, size: formatBytes(title.totalSizeBytes) })}</div>
+                        {title.subjectKind !== "title" && (
+                          <div className="text-sm text-muted-foreground">
+                            {title.subjectLabel}
+                          </div>
+                        )}
+                        <div className="text-xs text-muted-foreground">
+                          {t("settings.maintenanceFileSummary", {
+                            count: title.fileCount,
+                            size: formatBytes(title.totalSizeBytes),
+                          })}
+                        </div>
                         {title.storageRootFileCount !== null &&
                         title.storageRootTotalSizeBytes !== null ? (
                           <div className="text-xs text-muted-foreground">
                             {t("settings.maintenanceStorageRootFileSummary", {
                               count: title.storageRootFileCount,
-                              size: formatBytes(title.storageRootTotalSizeBytes),
+                              size: formatBytes(
+                                title.storageRootTotalSizeBytes,
+                              ),
                             })}
                           </div>
                         ) : null}
                       </TableCell>
                       <TableCell>
                         <PreviewOutcomeCell title={title} />
-                        {title.excluded && <div><Badge tone="warning">{t("settings.maintenancePreviewExcluded")}</Badge></div>}
-                        {title.dueAt && <div className="mt-1 text-xs text-muted-foreground">{t(title.dueAtIsEstimate ? "settings.maintenancePreviewEstimatedDue" : "settings.maintenancePreviewDue", { time: formatUiDateTime(title.dueAt, dateTimeFormat) })}</div>}
+                        {title.excluded && (
+                          <div>
+                            <Badge tone="warning">
+                              {t("settings.maintenancePreviewExcluded")}
+                            </Badge>
+                          </div>
+                        )}
+                        {title.dueAt && (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {t(
+                              title.dueAtIsEstimate
+                                ? "settings.maintenancePreviewEstimatedDue"
+                                : "settings.maintenancePreviewDue",
+                              {
+                                time: formatUiDateTime(
+                                  title.dueAt,
+                                  dateTimeFormat,
+                                ),
+                              },
+                            )}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {title.error ? (
@@ -754,11 +843,16 @@ function MaintenanceRuleAdvanced({
           type="button"
           className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ChevronRight className={cn("h-4 w-4 transition-transform", open && "rotate-90")} />
+          <ChevronRight
+            className={cn("h-4 w-4 transition-transform", open && "rotate-90")}
+          />
           {t("settings.advancedConfig")}
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent id="settings-maintenance-rule-advanced" className="space-y-3 pt-3">
+      <CollapsibleContent
+        id="settings-maintenance-rule-advanced"
+        className="space-y-3 pt-3"
+      >
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -804,7 +898,10 @@ export function SettingsMaintenanceRulesSection({
   // being written for the reference rail to describe.
   if (section !== "rules") {
     return (
-      <div id="settings-maintenance-rules-section" className="space-y-4 text-sm">
+      <div
+        id="settings-maintenance-rules-section"
+        className="space-y-4 text-sm"
+      >
         <div className="mx-auto w-full max-w-[1600px] space-y-4">
           {instanceSwitches}
           {operationsPanels}
@@ -829,7 +926,9 @@ export function SettingsMaintenanceRulesSection({
                   id="settings-maintenance-rules-ai-prompt"
                   ruleKind="maintenance"
                   inputContract={maintenanceInputContract}
-                  outputContract={'Define match if { ... }. You may also add reasons contains "stable_reason" if { match }.'}
+                  outputContract={
+                    'Define match if { ... }. You may also add reasons contains "stable_reason" if { match }.'
+                  }
                 />
               </div>
               <div className="overflow-x-auto">
@@ -838,7 +937,9 @@ export function SettingsMaintenanceRulesSection({
                     <TableRow>
                       <TableHead>{t("label.name")}</TableHead>
                       <TableHead>{t("settings.ruleDescription")}</TableHead>
-                      <TableHead>{t("settings.maintenanceRuleAction")}</TableHead>
+                      <TableHead>
+                        {t("settings.maintenanceRuleAction")}
+                      </TableHead>
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleGraceDays")}
                       </TableHead>
@@ -860,7 +961,10 @@ export function SettingsMaintenanceRulesSection({
                         <TableRow
                           data-ui="settings-table-row"
                           key={record.id}
-                          id={selectorId("settings-maintenance-rule-row", record.id)}
+                          id={selectorId(
+                            "settings-maintenance-rule-row",
+                            record.id,
+                          )}
                         >
                           <TableCell className="font-medium">
                             <span
@@ -872,11 +976,22 @@ export function SettingsMaintenanceRulesSection({
                               {record.name}
                             </span>
                             {record.systemOwned ? (
-                              <Badge tone="neutral" className="ml-2 text-[10px]">
+                              <Badge
+                                tone="neutral"
+                                className="ml-2 text-[10px]"
+                              >
                                 {t("settings.maintenanceRuleSystemOwned")}
                               </Badge>
                             ) : null}
-                            {record.subjectKind !== "TITLE" && <div className="text-xs text-muted-foreground">{t(record.subjectKind === "SEASON" ? "settings.maintenanceScopeSeason" : "settings.maintenanceScopeEpisode")}</div>}
+                            {record.subjectKind !== "TITLE" && (
+                              <div className="text-xs text-muted-foreground">
+                                {t(
+                                  record.subjectKind === "SEASON"
+                                    ? "settings.maintenanceScopeSeason"
+                                    : "settings.maintenanceScopeEpisode",
+                                )}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="max-w-[200px] truncate text-muted-foreground">
                             {record.description || "—"}
@@ -898,16 +1013,21 @@ export function SettingsMaintenanceRulesSection({
                                 value={record.state}
                                 disabled={mutatingRuleSetId === record.id}
                                 onValueChange={(value) =>
-                                  setRuleState(record, value as MaintenanceRuleState)
+                                  setRuleState(
+                                    record,
+                                    value as MaintenanceRuleState,
+                                  )
                                 }
-                                options={ruleStateOptionsFor(record).map((state) => {
-                                  const key = ruleStateLabelKey(state);
-                                  return {
-                                    value: state,
-                                    ariaLabel: state,
-                                    label: key ? t(key) : state,
-                                  };
-                                })}
+                                options={ruleStateOptionsFor(record).map(
+                                  (state) => {
+                                    const key = ruleStateLabelKey(state);
+                                    return {
+                                      value: state,
+                                      ariaLabel: state,
+                                      label: key ? t(key) : state,
+                                    };
+                                  },
+                                )}
                               />
                               {record.editedSinceEnabled ? (
                                 <p
@@ -917,7 +1037,9 @@ export function SettingsMaintenanceRulesSection({
                                   )}
                                   className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2 py-1 text-xs text-[var(--scry-warning-text)]"
                                 >
-                                  {t("settings.maintenanceRuleEditedSinceEnabled")}
+                                  {t(
+                                    "settings.maintenanceRuleEditedSinceEnabled",
+                                  )}
                                 </p>
                               ) : stateHelpKey ? (
                                 <p className="text-xs text-muted-foreground">
@@ -974,7 +1096,10 @@ export function SettingsMaintenanceRulesSection({
                     })}
                     {ruleSetRecords.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-muted-foreground">
+                        <TableCell
+                          colSpan={9}
+                          className="text-muted-foreground"
+                        >
                           {t("settings.noMaintenanceRulesFound")}
                         </TableCell>
                       </TableRow>
@@ -1040,7 +1165,9 @@ export function SettingsMaintenanceRulesSection({
                       <SingleSelectField
                         id="settings-maintenance-rule-template"
                         label={t("settings.maintenanceRuleTemplate")}
-                        placeholder={t("settings.maintenanceRuleTemplatePlaceholder")}
+                        placeholder={t(
+                          "settings.maintenanceRuleTemplatePlaceholder",
+                        )}
                         value=""
                         onValueChange={(id) => {
                           const template = MAINTENANCE_RULE_TEMPLATES.find(
@@ -1070,8 +1197,18 @@ export function SettingsMaintenanceRulesSection({
                             regoSource: value,
                           }))
                         }
-                        diagnostics={regoDiagnostics(ruleSetDraft.regoSource, validationResult)}
-                        feedback={<EditorValidationStatus id="settings-maintenance-rule-validation" checking={validating} result={validationResult} />}
+                        diagnostics={regoDiagnostics(
+                          ruleSetDraft.regoSource,
+                          validationResult,
+                          t,
+                        )}
+                        feedback={
+                          <EditorValidationStatus
+                            id="settings-maintenance-rule-validation"
+                            checking={validating}
+                            result={validationResult}
+                          />
+                        }
                         minLines={12}
                         maxLines={35}
                       />
@@ -1086,16 +1223,19 @@ export function SettingsMaintenanceRulesSection({
                       </p>
                     ) : null}
                     <fieldset disabled={editingSystemOwned}>
-                    <MaintenanceActionSequenceEditor
-                      sequence={ruleSetDraft.actionSequence}
-                      descriptors={actionStepDescriptors}
-                      subjectKind={ruleSetDraft.subjectKind}
-                      storageRootId={ruleSetDraft.storageRootId}
-                      qualityProfiles={qualityProfiles}
-                      onChange={(actionSequence) =>
-                        setRuleSetDraft((prev) => ({ ...prev, actionSequence }))
-                      }
-                    />
+                      <MaintenanceActionSequenceEditor
+                        sequence={ruleSetDraft.actionSequence}
+                        descriptors={actionStepDescriptors}
+                        subjectKind={ruleSetDraft.subjectKind}
+                        storageRootId={ruleSetDraft.storageRootId}
+                        qualityProfiles={qualityProfiles}
+                        onChange={(actionSequence) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            actionSequence,
+                          }))
+                        }
+                      />
                     </fieldset>
 
                     <label className="block md:max-w-[50%]">
@@ -1144,7 +1284,9 @@ export function SettingsMaintenanceRulesSection({
                                 "settings-maintenance-rule-library",
                                 library.id,
                               )}
-                              checked={ruleSetDraft.libraryIds.includes(library.id)}
+                              checked={ruleSetDraft.libraryIds.includes(
+                                library.id,
+                              )}
                               onCheckedChange={(value) => {
                                 setRuleSetDraft((prev) => ({
                                   ...prev,
@@ -1175,24 +1317,38 @@ export function SettingsMaintenanceRulesSection({
                         label={t("settings.maintenanceRuleScope")}
                         value={ruleSetDraft.subjectKind}
                         disabled={Boolean(editingRuleSetId)}
-                        onValueChange={(value) => setRuleSetDraft((prev) => ({
-                          ...prev,
-                          subjectKind: value as MaintenanceRuleSetDraft["subjectKind"],
-                        }))}
+                        onValueChange={(value) =>
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            subjectKind:
+                              value as MaintenanceRuleSetDraft["subjectKind"],
+                          }))
+                        }
                         options={[
                           { value: "TITLE", label: t("label.title") },
-                          { value: "SEASON", label: t("settings.maintenanceScopeSeason") },
-                          { value: "EPISODE", label: t("settings.maintenanceScopeEpisode") },
+                          {
+                            value: "SEASON",
+                            label: t("settings.maintenanceScopeSeason"),
+                          },
+                          {
+                            value: "EPISODE",
+                            label: t("settings.maintenanceScopeEpisode"),
+                          },
                         ]}
                       />
                       <div>
                         <SingleSelectField
                           id="settings-maintenance-rule-storage-root"
                           label={t("settings.maintenanceRuleStorageRoot")}
-                          placeholder={t("settings.maintenanceRuleStorageRootNone")}
+                          placeholder={t(
+                            "settings.maintenanceRuleStorageRootNone",
+                          )}
                           value={ruleSetDraft.storageRootId}
                           onValueChange={(storageRootId) =>
-                            setRuleSetDraft((prev) => ({ ...prev, storageRootId }))
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              storageRootId,
+                            }))
                           }
                           options={storageRoots.map((root) => ({
                             value: root.id,
@@ -1208,7 +1364,9 @@ export function SettingsMaintenanceRulesSection({
                               id="settings-maintenance-rule-storage-root-retention"
                               className="text-xs text-[var(--scry-warning-text)]"
                             >
-                              {t("settings.maintenanceRuleStorageRootUnmonitorHelp")}
+                              {t(
+                                "settings.maintenanceRuleStorageRootUnmonitorHelp",
+                              )}
                             </p>
                             <Button
                               id="settings-maintenance-rule-storage-root-clear"
@@ -1216,7 +1374,10 @@ export function SettingsMaintenanceRulesSection({
                               size="sm"
                               variant="secondary"
                               onClick={() =>
-                                setRuleSetDraft((prev) => ({ ...prev, storageRootId: "" }))
+                                setRuleSetDraft((prev) => ({
+                                  ...prev,
+                                  storageRootId: "",
+                                }))
                               }
                             >
                               {t("settings.maintenanceRuleStorageRootClear")}

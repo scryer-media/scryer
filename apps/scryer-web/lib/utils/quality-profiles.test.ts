@@ -6,17 +6,21 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith("@/lib/")) {
       const path = specifier.slice("@/lib/".length);
-      return nextResolve(new URL(`../${path}.ts`, import.meta.url).href, context);
+      return nextResolve(
+        new URL(`../${path}.ts`, import.meta.url).href,
+        context,
+      );
     }
     return nextResolve(specifier, context);
   },
 });
-const {
-  commitQualityProfileDraftToEntries,
-  hasDuplicateQualityProfileName,
-} = await import("./quality-profile-draft-commit.ts");
+const { commitQualityProfileDraftToEntries, hasDuplicateQualityProfileName } =
+  await import("./quality-profile-draft-commit.ts");
 import { QUALITY_TIER_CHOICES } from "../constants/quality-profiles.ts";
-import type { ParsedQualityProfileEntry, QualityProfileDraft } from "@/lib/types";
+import type {
+  ParsedQualityProfileEntry,
+  QualityProfileDraft,
+} from "@/lib/types";
 
 function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
   return {
@@ -37,7 +41,7 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       prefer_remux: false,
       allow_bd_disk: true,
       allow_upgrades: true,
-    ignore_proper_repack: false,
+      ignore_proper_repack: false,
       scoring_overrides: {},
       cutoff_tier: null,
       min_score_to_grab: null,
@@ -106,7 +110,10 @@ test("hasDuplicateQualityProfileName ignores the current profile id during renam
   ];
 
   assert.equal(hasDuplicateQualityProfileName(entries, "4K", "default"), false);
-  assert.equal(hasDuplicateQualityProfileName(entries, " anime max ", "default"), true);
+  assert.equal(
+    hasDuplicateQualityProfileName(entries, " anime max ", "default"),
+    true,
+  );
 });
 
 test("quality profile choices expose 8k", () => {
@@ -117,11 +124,20 @@ test("quality profile choices expose 8k", () => {
   );
 });
 
-
 test("profile draft save and clone preserve Ignore PROPER/REPACK", () => {
-  const draft = { ...makeDraft("default", "Cinema"), ignore_proper_repack: true };
-  const saved = commitQualityProfileDraftToEntries([makeEntry("default", "Cinema")], draft);
+  const draft = {
+    ...makeDraft("default", "Cinema"),
+    ignore_proper_repack: true,
+  };
+  const saved = commitQualityProfileDraftToEntries(
+    [makeEntry("default", "Cinema")],
+    draft,
+  );
   assert.equal(saved.catalogEntries[0]?.criteria.ignore_proper_repack, true);
-  const cloned = commitQualityProfileDraftToEntries(saved.catalogEntries, { ...draft, id: "", name: "Clone" });
+  const cloned = commitQualityProfileDraftToEntries(saved.catalogEntries, {
+    ...draft,
+    id: "",
+    name: "Clone",
+  });
   assert.equal(cloned.draftEntry.criteria.ignore_proper_repack, true);
 });

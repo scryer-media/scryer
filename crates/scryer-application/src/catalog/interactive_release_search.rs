@@ -10,6 +10,16 @@
 
 use super::*;
 
+pub(crate) mod memory;
+mod raw;
+pub(crate) mod scope_filter;
+mod scoped;
+pub(crate) use raw::RawSearchSource;
+pub use raw::{
+    RAW_SEARCH_PAGE_SIZE, RawSearchOutputLease, RawSearchPage, RawSearchRow,
+    RawSearchSourceProgress,
+};
+
 use super::release_search::{
     QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
     incomplete_indexer_reason,
@@ -33,7 +43,7 @@ const COMPLETED_JOB_TTL_MINUTES: i64 = 5;
 /// Defensive cap: running jobs older than this are cancelled and evicted.
 const RUNNING_JOB_TTL_MINUTES: i64 = 10;
 /// Per-actor cap on concurrently running jobs.
-const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
+pub(crate) const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
 /// Releases one browser download may bundle. Each one is a separate
 /// upstream fetch, so the cap bounds how long a single request can hold.
 const MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS: usize = 50;
@@ -108,6 +118,7 @@ pub struct InteractiveReleaseSearchIndexerView {
     /// Wall time of this indexer's own call, once it has answered.
     pub elapsed_ms: Option<i64>,
     pub failure_reason: Option<String>,
+    pub caps: Option<crate::IndexerCapsDiagnostic>,
     /// The indexer asked Scryer to slow down rather than failing. It is a
     /// cooldown that lifts on its own, so the UI reads it as "cooling down"
     /// instead of an error.
@@ -204,11 +215,7 @@ fn dedupe_exact_duplicate_releases(results: Vec<IndexerSearchResult>) -> Vec<Ind
 
 /// A listing's publish time, if it parses.
 fn published_instant(result: &IndexerSearchResult) -> Option<DateTime<Utc>> {
-    let value = result.published_at.as_deref()?.trim();
-    DateTime::parse_from_rfc3339(value)
-        .or_else(|_| DateTime::parse_from_rfc2822(value))
-        .ok()
-        .map(|instant| instant.with_timezone(&Utc))
+    scryer_domain::publish_time::parse_publish_time(result.published_at.as_deref()?)
 }
 
 /// Newest listing first; undated listings last. Ties go by indexer name,
@@ -234,12 +241,33 @@ pub struct InteractiveReleaseSearchSnapshot {
     pub id: String,
     pub state: InteractiveReleaseSearchState,
     pub results: Vec<IndexerSearchResult>,
+    /// Raw pages share their original payload and its reservation. The legacy
+    /// vector remains the scored title-search representation only.
+    pub raw_page: Option<Arc<RawSearchPage>>,
+    pub raw_failure_reason: Option<&'static str>,
     pub indexers: Vec<InteractiveReleaseSearchIndexerView>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     /// How many results the payload lists: a title search's capped limit, or
     /// `None` for a raw query, whose limit is the per-indexer page size.
     pub limit: Option<i32>,
+}
+
+impl InteractiveReleaseSearchSnapshot {
+    pub fn result_iter(&self) -> impl Iterator<Item = &IndexerSearchResult> {
+        self.results.iter().chain(
+            self.raw_page
+                .iter()
+                .flat_map(|page| page.rows.iter().map(RawSearchRow::result)),
+        )
+    }
+
+    pub fn raw_continuation(&self) -> Option<String> {
+        use base64::Engine;
+        let page = self.raw_page.as_ref().filter(|page| !page.terminal)?;
+        let next = page.offset.checked_add(page.rows.len())?;
+        Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("{}:{next}", self.id)))
+    }
 }
 
 /// Start request — mirrors `SearchReleasesInput` field-for-field. Exactly one
@@ -253,6 +281,8 @@ pub struct InteractiveReleaseSearchRequest {
     pub episode: Option<String>,
     /// A title search's result limit, or a raw query's per-indexer page size.
     pub limit: Option<i32>,
+    /// Displayed raw-search page size; independent of the source page hint.
+    pub aggregate_page_size: Option<i32>,
     /// Raw operator query; required (and only meaningful) without a title.
     pub query: Option<String>,
     /// Restricts the fan-out to these indexer config ids (both subjects).
@@ -273,12 +303,39 @@ pub struct QueueUnlinkedReleaseOutcome {
     pub source_title: String,
 }
 
+/// Search ownership is independent of user authentication. Indexer clients
+/// carry their own key and grant generations and never impersonate a user.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SearchPrincipal {
+    User {
+        user_id: String,
+    },
+    IndexerClient {
+        client_id: String,
+        key_generation: u64,
+        grants_generation: String,
+    },
+}
+
+impl SearchPrincipal {
+    fn is_user(&self, id: &str) -> bool {
+        matches!(self, Self::User { user_id } if user_id == id)
+    }
+}
+
 pub(crate) struct InteractiveReleaseSearchJobEntry {
     pub(crate) snapshot: InteractiveReleaseSearchSnapshot,
-    pub(crate) actor_id: String,
+    pub(crate) principal: SearchPrincipal,
     pub(crate) scope_key: String,
     pub(crate) cancel: CancellationToken,
+    pub(crate) raw: Option<Arc<raw::RawSearchGeneration>>,
+    raw_page_request: u64,
+    raw_starts_at_zero: bool,
+    _raw_registry_charge: Option<memory::MemoryCharge>,
 }
+
+type InteractiveReleaseSearchRegistry =
+    tokio::sync::Mutex<HashMap<String, InteractiveReleaseSearchJobEntry>>;
 
 /// Evict stale registry entries: terminal jobs past their TTL, plus (defensive)
 /// running jobs older than the running TTL, whose tokens are cancelled first.
@@ -286,8 +343,19 @@ fn evict_stale_entries(
     entries: &mut HashMap<String, InteractiveReleaseSearchJobEntry>,
     now: DateTime<Utc>,
 ) {
-    entries.retain(|_, entry| match entry.snapshot.state {
-        InteractiveReleaseSearchState::Running => {
+    let previous_len = entries.len();
+    entries.retain(|_, entry| match (&entry.raw, entry.snapshot.state) {
+        (Some(raw), _) => {
+            if raw.idle_expired(tokio::time::Instant::now()) {
+                // Source tasks retain the generation while awaiting admission.
+                // Removing lookup ownership alone does not release their work.
+                entry.cancel.cancel();
+                false
+            } else {
+                true
+            }
+        }
+        (None, InteractiveReleaseSearchState::Running) => {
             if now - entry.snapshot.started_at > Duration::minutes(RUNNING_JOB_TTL_MINUTES) {
                 entry.cancel.cancel();
                 false
@@ -299,6 +367,9 @@ fn evict_stale_entries(
             now - completed <= Duration::minutes(COMPLETED_JOB_TTL_MINUTES)
         }),
     });
+    if entries.len() != previous_len {
+        entries.shrink_to_fit();
+    }
 }
 
 /// Replace key: starting a search cancels the actor's running job for the same
@@ -380,7 +451,12 @@ impl AppUseCase {
                     .titles
                     .get_by_id(title_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                            format!("title {title_id}"),
+                        )
+                    })?;
                 self.require_library_permission(
                     actor,
                     &title.library_id,
@@ -448,10 +524,14 @@ impl AppUseCase {
                 )
             }
             (None, Some(_)) => {
-                return Err(AppError::Validation("search query is required".to_string()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::catalog::SEARCH_QUERY_REQUIRED,
+                    "search query is required".to_string(),
+                ));
             }
             _ => {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::catalog::PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY,
                     "provide exactly one of title id or query".to_string(),
                 ));
             }
@@ -474,7 +554,10 @@ impl AppUseCase {
                 .map(|config| config.id.as_str())
                 .collect::<HashSet<_>>();
             if let Some(unknown) = requested.iter().find(|id| !known.contains(id.as_str())) {
-                return Err(AppError::Validation(format!("unknown indexer {unknown}")));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::catalog::INDEXER_UNKNOWN,
+                    format!("unknown indexer {unknown}"),
+                ));
             }
         }
 
@@ -487,6 +570,7 @@ impl AppUseCase {
         let now = self.runtime.environment.now();
         let mut indexer_views = Vec::new();
         let mut dispatch = Vec::new();
+        let mut raw_sources = Vec::new();
         let requested_indexers = request
             .indexer_ids
             .as_ref()
@@ -528,6 +612,35 @@ impl AppUseCase {
             }
             if skip.is_none() {
                 dispatch.push(config.id.clone());
+                if let InteractiveReleaseSearchSubject::Query {
+                    query,
+                    categories,
+                    page_size,
+                } = &subject
+                {
+                    let paged = self
+                        .services
+                        .integrations
+                        .plugin_provider
+                        .available()
+                        .is_some_and(|provider| {
+                            provider
+                                .capabilities_for_provider(&config.provider_type)
+                                .limits
+                                .is_some_and(|limits| limits.paged_search)
+                        });
+                    raw_sources.push(raw::RawSearchSource {
+                        id: config.id.clone(),
+                        paged,
+                        result_scope: Default::default(),
+                        request: crate::RawTextSearchRequest {
+                            query: query.clone(),
+                            categories: categories.clone(),
+                            limit: Some(*page_size),
+                            ..Default::default()
+                        },
+                    });
+                }
             }
             indexer_views.push(InteractiveReleaseSearchIndexerView {
                 priority: indexer_priority_by_name
@@ -544,6 +657,7 @@ impl AppUseCase {
                 result_count: 0,
                 elapsed_ms: None,
                 failure_reason: skip.map(|(reason, _)| reason.describe(None)),
+                caps: None,
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
                 skipped_until: skip.and_then(|(_, until)| until),
@@ -552,11 +666,30 @@ impl AppUseCase {
 
         let job_id = Id::new().0;
         let scope_key = interactive_release_search_scope_key(&request);
-        let cancel = CancellationToken::new();
+        let cancel = self.restore_coordinator().shutdown_workers.child_token();
+        let raw = if is_query {
+            Some(
+                raw::RawSearchGeneration::new(
+                    raw_sources,
+                    self.services.integrations.indexer_client.clone(),
+                    self.runtime.acquisition.raw_search_budget.clone(),
+                    cancel.clone(),
+                    Some(Arc::downgrade(
+                        &self.runtime.acquisition.interactive_release_searches,
+                    )),
+                    self.restore_coordinator().clone(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         let snapshot = InteractiveReleaseSearchSnapshot {
             id: job_id.clone(),
             state: InteractiveReleaseSearchState::Running,
             results: Vec::new(),
+            raw_page: None,
+            raw_failure_reason: None,
             indexers: indexer_views,
             started_at: now,
             completed_at: None,
@@ -566,6 +699,43 @@ impl AppUseCase {
                     .unwrap_or(TITLE_DEFAULT_RESULT_LIMIT)
                     .clamp(1, TITLE_MAX_RESULT_LIMIT)
             }),
+        };
+
+        let raw_registry_charge = if is_query {
+            let bytes = std::mem::size_of::<InteractiveReleaseSearchJobEntry>()
+                + 1024
+                + job_id.capacity() * 3
+                + actor.id.len()
+                + scope_key.capacity()
+                + snapshot.indexers.capacity()
+                    * (std::mem::size_of::<InteractiveReleaseSearchIndexerView>() + 1024)
+                + snapshot
+                    .indexers
+                    .iter()
+                    .map(|view| {
+                        view.indexer_id.capacity()
+                            + view.name.capacity()
+                            + view.failure_reason.as_ref().map_or(0, String::capacity)
+                    })
+                    .sum::<usize>();
+            Some(
+                raw::RawSearchGeneration::reserve_reclaiming(
+                    &self.runtime.acquisition.raw_search_budget,
+                    bytes,
+                    Some(&Arc::downgrade(
+                        &self.runtime.acquisition.interactive_release_searches,
+                    )),
+                )
+                .await
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::raw_search::RETAINED_STATE_FULL,
+                        "Raw search retained-state capacity is full; retry the search",
+                    )
+                })?,
+            )
+        } else {
+            None
         };
 
         {
@@ -580,7 +750,7 @@ impl AppUseCase {
             // cancelled before the new one is inserted.
             for entry in registry.values_mut() {
                 if entry.snapshot.state == InteractiveReleaseSearchState::Running
-                    && entry.actor_id == actor.id
+                    && entry.principal.is_user(&actor.id)
                     && entry.scope_key == scope_key
                 {
                     entry.cancel.cancel();
@@ -591,12 +761,13 @@ impl AppUseCase {
             let running_for_actor = registry
                 .values()
                 .filter(|entry| {
-                    entry.actor_id == actor.id
+                    entry.principal.is_user(&actor.id)
                         && entry.snapshot.state == InteractiveReleaseSearchState::Running
                 })
                 .count();
             if running_for_actor >= MAX_RUNNING_JOBS_PER_ACTOR {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::catalog::TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES,
                     "too many concurrent interactive searches".to_string(),
                 ));
             }
@@ -604,11 +775,28 @@ impl AppUseCase {
                 job_id.clone(),
                 InteractiveReleaseSearchJobEntry {
                     snapshot: snapshot.clone(),
-                    actor_id: actor.id.clone(),
+                    principal: SearchPrincipal::User {
+                        user_id: actor.id.clone(),
+                    },
                     scope_key,
                     cancel: cancel.clone(),
+                    raw: raw.clone(),
+                    raw_page_request: 0,
+                    raw_starts_at_zero: true,
+                    _raw_registry_charge: raw_registry_charge,
                 },
             );
+        }
+
+        if let Some(raw) = raw {
+            let page_size = request.aggregate_page_size.unwrap_or(100).clamp(1, 100) as usize;
+            let app = self.clone();
+            // The entry stays Running, and so counts toward the actor's cap
+            // and replace key, until this page task writes its outcome.
+            self.restore_coordinator().spawn_task(async move {
+                app.run_raw_search_page(job_id, raw, 0, page_size, 0).await;
+            });
+            return Ok(snapshot);
         }
 
         let context = InteractiveReleaseSearchJobContext {
@@ -666,7 +854,7 @@ impl AppUseCase {
             );
         });
         let app = self.clone();
-        tokio::spawn(
+        self.restore_coordinator().spawn_task(
             async move {
                 app.run_interactive_release_search_job(context).await;
             }
@@ -674,6 +862,183 @@ impl AppUseCase {
         );
 
         Ok(snapshot)
+    }
+
+    async fn run_raw_search_page(
+        &self,
+        id: String,
+        generation: Arc<raw::RawSearchGeneration>,
+        offset: usize,
+        limit: usize,
+        page_request: u64,
+    ) {
+        let response = generation.page_or_rebuild(offset, limit).await;
+        let active_generation = response
+            .as_ref()
+            .map(|(rebuilt, _)| rebuilt)
+            .unwrap_or(&generation);
+        let progress = active_generation.source_progress().await;
+        let mut registry = self
+            .runtime
+            .acquisition
+            .interactive_release_searches
+            .lock()
+            .await;
+        let Some(entry) = registry.get_mut(&id) else {
+            return;
+        };
+        // A cancelled or replaced job keeps its terminal state, and a page
+        // superseded by a later continuation leaves the job to that page.
+        if entry.cancel.is_cancelled()
+            || entry.raw_page_request != page_request
+            || entry.snapshot.state != InteractiveReleaseSearchState::Running
+        {
+            return;
+        }
+        entry.snapshot.state = InteractiveReleaseSearchState::Completed;
+        entry.snapshot.completed_at = Some(self.runtime.environment.now());
+        match response {
+            Ok((generation, page)) => {
+                entry.raw = Some(generation);
+                entry.snapshot.raw_failure_reason = None;
+                entry.snapshot.raw_page = Some(Arc::new(page));
+            }
+            Err(error) => {
+                entry.snapshot.raw_failure_reason = Some(
+                    error
+                        .reason()
+                        .unwrap_or(crate::error_reasons::raw_search::SEARCH_FAILED),
+                );
+                entry.snapshot.raw_page = None;
+            }
+        }
+        for source in progress {
+            let Some(view) = entry
+                .snapshot
+                .indexers
+                .iter_mut()
+                .find(|view| view.indexer_id == source.indexer_id)
+            else {
+                continue;
+            };
+            // Every row the source has handed the generation so far, whether
+            // or not it has reached the page being shown.
+            view.result_count = source.delivered;
+            view.elapsed_ms = source
+                .elapsed_ms
+                .map(|elapsed| elapsed.min(i64::MAX as u64) as i64);
+            view.caps = source.page.as_ref().and_then(|page| page.caps);
+            let skip = source
+                .outcome
+                .and_then(InteractiveIndexerSkipReason::from_outcome);
+            view.skip_reason = skip.map(|(reason, _)| reason);
+            view.skipped_until = skip.and_then(|(_, until)| until);
+            view.rate_limited = matches!(
+                source.outcome,
+                Some(
+                    crate::IndexerSearchOutcome::Deferred { .. }
+                        | crate::IndexerSearchOutcome::Skipped { .. }
+                        | crate::IndexerSearchOutcome::Partial {
+                            reason: Some(
+                                crate::IndexerSearchIncompleteReason::RateLimited
+                                    | crate::IndexerSearchIncompleteReason::QueryBudgetExhausted
+                            ),
+                            ..
+                        }
+                )
+            );
+            view.status = if source.pending {
+                InteractiveReleaseSearchIndexerStatus::Searching
+            } else if skip.is_some() {
+                InteractiveReleaseSearchIndexerStatus::Skipped
+            } else if source.stopped {
+                InteractiveReleaseSearchIndexerStatus::Failed
+            } else {
+                InteractiveReleaseSearchIndexerStatus::Completed
+            };
+            view.failure_reason =
+                skip.map(|(reason, until)| reason.describe(until))
+                    .or_else(|| {
+                        source
+                            .outcome
+                            .and_then(incomplete_indexer_reason)
+                            .map(|reason| reason.message)
+                    });
+        }
+    }
+
+    /// Continue one owner's raw generation through the same background/poll
+    /// lifecycle as its initial page. The caller never handles source cursors.
+    pub async fn continue_interactive_release_search(
+        &self,
+        actor: &User,
+        id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> AppResult<InteractiveReleaseSearchSnapshot> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let mut registry = self
+            .runtime
+            .acquisition
+            .interactive_release_searches
+            .lock()
+            .await;
+        evict_stale_entries(&mut registry, self.runtime.environment.now());
+        let entry = registry
+            .get_mut(id)
+            .filter(|entry| {
+                entry.principal.is_user(&actor.id)
+                    && entry.raw.is_some()
+                    && !entry.cancel.is_cancelled()
+            })
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::INTERACTIVE_RELEASE_SEARCH_NOT_FOUND,
+                    "Raw search is no longer available",
+                )
+            })?;
+        let generation = entry.raw.as_ref().expect("checked raw generation").clone();
+        entry.raw_page_request = entry.raw_page_request.checked_add(1).ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::raw_search::RETAINED_STATE_FULL,
+                "Raw search continuation capacity is full; retry the search",
+            )
+        })?;
+        let page_request = entry.raw_page_request;
+        entry.snapshot.state = InteractiveReleaseSearchState::Running;
+        entry.snapshot.completed_at = None;
+        let snapshot = entry.snapshot.clone();
+        let app = self.clone();
+        let id = id.to_owned();
+        self.restore_coordinator().spawn_task(async move {
+            app.run_raw_search_page(id, generation, offset, limit, page_request)
+                .await;
+        });
+        Ok(snapshot)
+    }
+
+    pub async fn continue_interactive_release_search_cursor(
+        &self,
+        actor: &User,
+        continuation: &str,
+        limit: usize,
+    ) -> AppResult<InteractiveReleaseSearchSnapshot> {
+        use base64::Engine;
+        let invalid = || {
+            AppError::validation_refused(
+                crate::error_reasons::raw_search::OFFSET_INVALID,
+                "Raw search continuation is invalid",
+            )
+        };
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(continuation)
+            .map_err(|_| invalid())?;
+        let decoded = std::str::from_utf8(&decoded).map_err(|_| invalid())?;
+        let (id, offset) = decoded.rsplit_once(':').ok_or_else(invalid)?;
+        let offset = offset.parse::<usize>().map_err(|_| invalid())?;
+        self.continue_interactive_release_search(actor, id, offset, limit)
+            .await
     }
 
     /// Poll a job snapshot. `None` for unknown, evicted, or another actor's
@@ -692,12 +1057,22 @@ impl AppUseCase {
         evict_stale_entries(&mut registry, self.runtime.environment.now());
         Ok(registry
             .get(id)
-            .filter(|entry| entry.actor_id == actor.id)
-            .map(|entry| entry.snapshot.clone()))
+            .filter(|entry| entry.principal.is_user(&actor.id))
+            .map(|entry| {
+                if let Some(raw) = &entry.raw {
+                    raw.touch();
+                }
+                entry.snapshot.clone()
+            }))
     }
 
-    /// Cancel a running job. `false` (not an error) when the job is unknown,
-    /// foreign, or already finished.
+    /// Retained coordinator state; excludes transport and plugin execution memory.
+    pub fn raw_search_retained_bytes(&self) -> usize {
+        self.runtime.acquisition.raw_search_budget.used()
+    }
+
+    /// Cancel a job, including source reads still pending after a raw page's
+    /// response deadline. Unknown, foreign or already-cancelled jobs return false.
     pub async fn cancel_interactive_release_search(
         &self,
         actor: &User,
@@ -715,8 +1090,10 @@ impl AppUseCase {
             let Some(entry) = registry.get_mut(id) else {
                 return Ok(false);
             };
-            if entry.actor_id != actor.id
-                || entry.snapshot.state != InteractiveReleaseSearchState::Running
+            if !entry.principal.is_user(&actor.id)
+                || entry.cancel.is_cancelled()
+                || (entry.raw.is_none()
+                    && entry.snapshot.state != InteractiveReleaseSearchState::Running)
             {
                 return Ok(false);
             }
@@ -873,7 +1250,9 @@ impl AppUseCase {
                             &job_id,
                             &indexer_id,
                             InteractiveReleaseSearchIndexerStatus::Failed,
-                            Some(error.to_string()),
+                            Some(super::release_search::IncompleteIndexerReason::failed(
+                                error.to_string(),
+                            )),
                             Some(elapsed_ms),
                         )
                         .await;
@@ -925,7 +1304,7 @@ impl AppUseCase {
         job_id: &str,
         indexer_id: &str,
         status: InteractiveReleaseSearchIndexerStatus,
-        failure_reason: Option<String>,
+        failure_reason: Option<super::release_search::IncompleteIndexerReason>,
         elapsed_ms: Option<i64>,
     ) {
         let mut registry = self
@@ -948,9 +1327,9 @@ impl AppUseCase {
         {
             indexer.status = status;
             indexer.rate_limited = failure_reason
-                .as_deref()
+                .as_ref()
                 .is_some_and(super::release_search::reason_is_rate_limit);
-            indexer.failure_reason = failure_reason;
+            indexer.failure_reason = failure_reason.map(|reason| reason.message);
             if elapsed_ms.is_some() {
                 indexer.elapsed_ms = elapsed_ms;
             }
@@ -1093,7 +1472,7 @@ impl AppUseCase {
         cancel_token: CancellationToken,
     ) -> AppResult<(
         Vec<IndexerSearchResult>,
-        Option<String>,
+        Option<super::release_search::IncompleteIndexerReason>,
         Option<IndexerSkip>,
     )> {
         let response = self
@@ -1106,6 +1485,8 @@ impl AppUseCase {
                     categories: categories.to_vec(),
                     indexer_ids: Some(HashSet::from([indexer_id.to_string()])),
                     limit: Some(page_size),
+                    page: None,
+                    ..Default::default()
                 },
                 cancel_token,
             )
@@ -1166,7 +1547,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1216,9 +1602,12 @@ impl AppUseCase {
         let result = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
-        let (_, source_kind) = result
-            .canonical_download_source()
-            .ok_or_else(|| AppError::Validation("release has no usable download source".into()))?;
+        let (_, source_kind) = result.canonical_download_source().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::catalog::RELEASE_NO_USABLE_DOWNLOAD_SOURCE,
+                "release has no usable download source",
+            )
+        })?;
         let title = if let Some(id) = title_id {
             let title = self
                 .services
@@ -1226,7 +1615,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {id}"),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -1324,18 +1718,20 @@ impl AppUseCase {
             .get_by_id(download_client_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "download client {download_client_id} does not exist"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::catalog::DOWNLOAD_CLIENT_DOES_NOT_EXIST,
+                    format!("download client {download_client_id} does not exist"),
+                )
             })?;
         if !client.is_enabled {
-            return Err(AppError::Validation(format!(
-                "download client {} is disabled",
-                client.name
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::DOWNLOAD_CLIENT_DISABLED,
+                format!("download client {} is disabled", client.name),
+            ));
         }
         let Some((source_hint, source_kind)) = result.canonical_download_source() else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::RELEASE_NO_USABLE_DOWNLOAD_SOURCE,
                 "release has no usable download source".to_string(),
             ));
         };
@@ -1526,6 +1922,9 @@ impl AppUseCase {
             .await
         {
             Ok(disposition) => {
+                self.runtime
+                    .acquisition
+                    .invalidate_download_registry_observations();
                 self.record_grabbed_file_names(&download_id, &grab).await;
                 disposition
             }
@@ -1535,11 +1934,6 @@ impl AppUseCase {
                 )));
             }
         };
-        // The store minted or re-bound this download's binding in its own
-        // transaction; memoized observation resolutions are retired.
-        self.runtime
-            .acquisition
-            .invalidate_download_registry_observations();
         if let crate::CanonicalDownloadIdentityDisposition::AdoptedExisting {
             download_id: effective_download_id,
         } = disposition
@@ -1599,14 +1993,18 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         if targets.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::RELEASE_DOWNLOAD_REQUIRED,
                 "select at least one release to download".to_string(),
             ));
         }
         if targets.len() > MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS {
-            return Err(AppError::Validation(format!(
-                "at most {MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS} releases can be downloaded at once"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::MOST_RELEASES_DOWNLOADED_ONCE,
+                format!(
+                    "at most {MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS} releases can be downloaded at once"
+                ),
+            ));
         }
 
         let now = self.runtime.environment.now();
@@ -1617,10 +2015,10 @@ impl AppUseCase {
                 .find_interactive_search_result(actor, &target.search_id, &target.download_url)
                 .await?;
             let Some((source_hint, source_kind)) = result.canonical_download_source() else {
-                return Err(AppError::Validation(format!(
-                    "{} has no usable download source",
-                    result.title
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::catalog::NO_USABLE_DOWNLOAD_SOURCE,
+                    format!("{} has no usable download source", result.title),
+                ));
             };
             // With no title there is no owner facet; read one exactly as the
             // unlinked grab does.
@@ -1635,36 +2033,14 @@ impl AppUseCase {
                 .services
                 .integrations
                 .download_client
-                .fetch_release_artifact(&DownloadClientAddRequest {
-                    http: None,
-                    title: stand_in_title.clone(),
+                .fetch_release_artifact(&IndexerArtifactResolutionRequest {
                     search_facet: None,
-                    purpose: DownloadSubmissionPurpose::OperatorQueued,
-                    // Nothing is submitted, so there is no download identity to
-                    // mint and nothing for the tracker to reconcile later.
-                    download_id: None,
-                    source_hint: Some(source_hint.clone()),
-                    staged_nzb: None,
-                    resolved_download_artifact: None,
+                    title_id: None,
+                    source_url: source_hint.clone(),
                     source_kind: Some(source_kind),
-                    source_title: Some(result.title.clone()),
-                    source_password: result.password_hint.clone(),
-                    category: None,
-                    queue_priority: None,
-                    download_directory: None,
-                    release_title: None,
-                    indexer_name: Some(result.source.clone()),
                     indexer_id: result.indexer_id.clone(),
                     info_hash_hint,
-                    seed_goal_ratio: None,
-                    seed_goal_seconds: None,
-                    tracker_min_seed_ratio: None,
-                    tracker_min_seed_time_minutes: None,
-                    season_pack_seed_ratio: None,
-                    season_pack_seed_time_minutes: None,
-                    is_recent: None,
-                    season_pack: None,
-                    pinned_download_client_id: None,
+                    cancellation: CancellationToken::new(),
                 })
                 .await
                 .map_err(|error| prefix_app_error(error, &result.title))?;
@@ -1690,17 +2066,18 @@ impl AppUseCase {
                     ..
                 } => (".torrent", "application/x-bittorrent", bytes, content_type),
                 ResolvedDownloadArtifact::Magnet { .. } => {
-                    return Err(AppError::Validation(format!(
-                        "{} is a magnet link and has no file to download",
-                        result.title
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::catalog::MAGNET_LINK_NO_FILE_DOWNLOAD,
+                        format!(
+                            "{} is a magnet link and has no file to download",
+                            result.title
+                        ),
+                    ));
                 }
             };
             total_bytes = total_bytes.saturating_add(bytes.len());
             if total_bytes > MAX_INTERACTIVE_SEARCH_ARTIFACT_BYTES {
-                return Err(AppError::Validation(
-                    "selected release files exceed the 64 MiB download bundle limit".to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::SELECTED_RELEASE_FILES_EXCEED_64_MIB_DOWNLOAD_BUNDLE_LIMIT, "selected release files exceed the 64 MiB download bundle limit".to_string()));
             }
             // Nothing was submitted, so there is no download client to name.
             let release_facts = self
@@ -1818,12 +2195,16 @@ impl AppUseCase {
         evict_stale_entries(&mut registry, self.runtime.environment.now());
         let entry = registry
             .get(search_id)
-            .filter(|entry| entry.actor_id == actor.id)
-            .ok_or_else(|| AppError::NotFound(format!("interactive release search {search_id}")))?;
-        let result = entry
+            .filter(|entry| entry.principal.is_user(&actor.id))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::INTERACTIVE_RELEASE_SEARCH_NOT_FOUND,
+                    format!("interactive release search {search_id}"),
+                )
+            })?;
+        let mut result = entry
             .snapshot
-            .results
-            .iter()
+            .result_iter()
             .find(|result| {
                 result
                     .download_url
@@ -1832,7 +2213,15 @@ impl AppUseCase {
                     .is_some_and(|value| value == download_url)
             })
             .cloned()
-            .ok_or_else(|| AppError::NotFound("release is no longer in this search".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::RELEASE_NO_LONGER_SEARCH_NOT_FOUND,
+                    "release is no longer in this search".to_string(),
+                )
+            })?;
+        if result.parsed_release_metadata.is_none() {
+            result.parsed_release_metadata = Some(crate::parse_release_metadata(&result.title));
+        }
         Ok(result)
     }
 
@@ -1849,7 +2238,8 @@ impl AppUseCase {
         episode: Option<&str>,
     ) -> AppResult<(Title, ResolvedReleaseSearchSubject, bool)> {
         if season.is_some() && title.facet == MediaFacet::Movie {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::MOVIE_SEARCHES_CANNOT_INCLUDE_SEASON_EPISODE,
                 "movie searches cannot include season or episode".to_string(),
             ));
         }
@@ -1862,11 +2252,15 @@ impl AppUseCase {
                     .get_series_movie_link_by_id(series_movie_link_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("series movie {series_movie_link_id}"))
+                        AppError::not_found_reason(
+                            crate::error_reasons::catalog::SERIES_MOVIE_NOT_FOUND,
+                            format!("series movie {series_movie_link_id}"),
+                        )
                     })?;
                 if link.series_title_id != title.id {
-                    return Err(AppError::Validation(
-                        "series movie does not belong to title".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::catalog::SERIES_MOVIE_DOES_NOT_BELONG_TITLE,
+                        "series movie does not belong to title",
                     ));
                 }
                 let (search_title, subject) = self
@@ -2088,10 +2482,12 @@ fn validate_interactive_search_subject_shape(
         | (None, Some(_), Some(_))
         | (None, Some(_), None)
         | (None, None, None) => Ok(()),
-        (None, None, Some(_)) => Err(AppError::Validation(
+        (None, None, Some(_)) => Err(AppError::validation_refused(
+            crate::error_reasons::catalog::EPISODE_SEARCHES_REQUIRE_SEASON,
             "episode searches require a season".to_string(),
         )),
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(AppError::Validation(
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(AppError::validation_refused(
+            crate::error_reasons::catalog::SERIES_MOVIE_SEARCHES_CANNOT_INCLUDE_SEASON_EPISODE,
             "series movie searches cannot include season or episode".to_string(),
         )),
     }
@@ -2114,7 +2510,15 @@ mod subject_shape_tests {
     fn an_episode_without_a_season_is_rejected() {
         let error = validate_interactive_search_subject_shape(None, None, Some("5"))
             .expect_err("episode without season");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -2122,7 +2526,15 @@ mod subject_shape_tests {
         for (season, episode) in [(Some("1"), None), (Some("1"), Some("2")), (None, Some("2"))] {
             let error = validate_interactive_search_subject_shape(Some("link-1"), season, episode)
                 .expect_err("series movie with season or episode");
-            assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+            assert!(
+                matches!(
+                    error,
+                    AppError::Validation(_)
+                        | AppError::ValidationRefused { .. }
+                        | AppError::ValidationRefusedWithCount { .. }
+                ),
+                "{error:?}"
+            );
         }
         validate_interactive_search_subject_shape(Some("link-1"), None, None)
             .expect("series movie subject");

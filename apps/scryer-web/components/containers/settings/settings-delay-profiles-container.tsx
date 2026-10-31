@@ -24,12 +24,16 @@ export function SettingsDelayProfilesContainer() {
   const manager = useDelayProfilesManager();
   const t = useTranslate();
   const [isEditorOpen, setIsEditorOpen] = React.useState(false);
-  const [editorMode, setEditorMode] = React.useState<"create" | "edit">("create");
+  const [editorMode, setEditorMode] = React.useState<"create" | "edit">(
+    "create",
+  );
   const [pendingEditorAction, setPendingEditorAction] =
     React.useState<PendingDelayProfileEditorAction>(null);
-  const [pendingDeleteProfileId, setPendingDeleteProfileId] = React.useState<string | null>(null);
-  const [draftBaseline, setDraftBaseline] = React.useState<DelayProfileDraft>(() =>
-    cloneDelayProfileDraft(manager.draft),
+  const [pendingDeleteProfileId, setPendingDeleteProfileId] = React.useState<
+    string | null
+  >(null);
+  const [draftBaseline, setDraftBaseline] = React.useState<DelayProfileDraft>(
+    () => cloneDelayProfileDraft(manager.draft),
   );
   const [awaitingBaselineSync, setAwaitingBaselineSync] = React.useState(false);
 
@@ -122,7 +126,11 @@ export function SettingsDelayProfilesContainer() {
   const confirmDeleteProfile = React.useCallback(async () => {
     if (!pendingDeleteProfileId) return;
     const deleted = await manager.deleteProfile(pendingDeleteProfileId);
-    if (deleted && editorMode === "edit" && manager.draft.id === pendingDeleteProfileId) {
+    if (
+      deleted &&
+      editorMode === "edit" &&
+      manager.draft.id === pendingDeleteProfileId
+    ) {
       setIsEditorOpen(false);
       setEditorMode("create");
       manager.resetDraft();
@@ -167,6 +175,9 @@ export function SettingsDelayProfilesContainer() {
       />
       <ConfirmDialog
         open={pendingDeleteProfileId !== null}
+        contentId="settings-delay-profile-delete-dialog"
+        confirmButtonId="settings-delay-profile-delete-confirm"
+        cancelButtonId="settings-delay-profile-delete-cancel"
         title={t("label.delete")}
         description={t("settings.delayProfileDeleteConfirm")}
         confirmLabel={t("label.delete")}

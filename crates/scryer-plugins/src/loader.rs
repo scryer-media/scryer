@@ -835,7 +835,12 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         }
         crate::newznab_profiles::resolve_newznab_profile(indexer, provider_type, Some(config_json))
             .map(|_| ())
-            .map_err(|error| AppError::Validation(error.to_string()))
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::PLUGIN_NEWZNAB_PROFILE_INVALID,
+                    error.to_string(),
+                )
+            })
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -999,6 +1004,22 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         proxy_config: Option<&ProxyConfig>,
         accounting: Option<&scryer_application::IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerClient>> {
+        // The bare provider has no environment clock; `DynamicPluginProvider`
+        // supplies its injected clock through `client_for_provider_at`.
+        self.client_for_provider_at(config, proxy_config, accounting, chrono::Utc::now())
+    }
+}
+
+impl WasmIndexerPluginProvider {
+    /// Build an indexer client whose cached-capability freshness is judged at
+    /// `now`, the caller's environment clock.
+    pub(crate) fn client_for_provider_at(
+        &self,
+        config: &IndexerConfig,
+        proxy_config: Option<&ProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Arc<dyn IndexerClient>> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
 
@@ -1054,6 +1075,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                 proxy_config.cloned(),
                 Arc::clone(&self.indexer_error_recorder),
                 &loaded.settings,
+                now,
             ),
             other => Err(AppError::Repository(format!(
                 "runtime {other:?} is not valid for an indexer descriptor"
@@ -1110,14 +1132,26 @@ fn indexer_runtime_backing(
 pub struct DynamicPluginProvider {
     inner: std::sync::RwLock<WasmIndexerPluginProvider>,
     client_cache: IndexerClientCache,
+    clock: PluginClock,
 }
+
+/// Time source for capability-cache freshness. The composition root supplies
+/// the application environment's clock; it defaults to the wall clock.
+pub type PluginClock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
 
 impl DynamicPluginProvider {
     pub fn new(provider: WasmIndexerPluginProvider) -> Self {
         Self {
             inner: std::sync::RwLock::new(provider),
             client_cache: std::sync::Mutex::new(HashMap::new()),
+            clock: Arc::new(chrono::Utc::now),
         }
+    }
+
+    /// Judge cached capability freshness with the environment's clock.
+    pub fn with_clock(mut self, clock: PluginClock) -> Self {
+        self.clock = clock;
+        self
     }
 
     fn invalidate_provider_keys(&self, provider_keys: &[String]) {
@@ -1214,10 +1248,11 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         let (proxy_id, proxy_revision) = proxy_config
             .map(|config| (config.id.clone(), config.updated_at.to_rfc3339()))
             .unwrap_or_else(|| (String::new(), String::new()));
+        let now = (self.clock)();
         let cache_key = (
             provider_key.clone(),
             config.id.clone(),
-            config.updated_at.to_rfc3339(),
+            indexer_client_revision(config, now),
             proxy_id,
             proxy_revision,
         );
@@ -1234,7 +1269,12 @@ impl IndexerPluginProvider for DynamicPluginProvider {
             .inner
             .read()
             .expect("DynamicPluginProvider lock poisoned");
-        let client = guard.client_for_provider_with_proxy(config, proxy_config)?;
+        let client = guard.client_for_provider_at(
+            config,
+            proxy_config,
+            scryer_application::IndexerAccountingContext::for_config(config).as_ref(),
+            now,
+        )?;
 
         if let Ok(mut cache) = self.client_cache.lock() {
             return Some(insert_indexer_client_cache(
@@ -1258,7 +1298,7 @@ impl IndexerPluginProvider for DynamicPluginProvider {
         self.inner
             .read()
             .expect("DynamicPluginProvider lock poisoned")
-            .client_for_provider_with_accounting(config, proxy_config, accounting)
+            .client_for_provider_at(config, proxy_config, accounting, (self.clock)())
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -3110,8 +3150,9 @@ impl WasmArchiveExtractorPluginProvider {
             .filter(|loaded| Self::provider_supports_format(loaded, format));
         let selected = eligible.next();
         if eligible.next().is_some() {
-            return Err(AppError::Validation(
-                "Multiple enabled archive extraction plugins support this format. Disable one in Settings → Plugins.".into()
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_ARCHIVE_EXTRACTOR_CONFLICT,
+                "Multiple enabled archive extraction plugins support this format. Disable one in Settings → Plugins.",
             ));
         }
         Ok(selected)
@@ -3295,6 +3336,18 @@ fn cache_fingerprint(value: &str) -> String {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn indexer_client_revision(config: &IndexerConfig, now: chrono::DateTime<chrono::Utc>) -> String {
+    let caps = scryer_application::cached_indexer_caps(config, now).snapshot;
+    let caps = serde_json::to_string(&caps).expect("capabilities are JSON serializable");
+    // Caps write-back deliberately leaves updated_at unchanged. Replace a
+    // retained client only when its capability content changes, not its TTL.
+    format!(
+        "{}:{}",
+        config.updated_at.to_rfc3339(),
+        cache_fingerprint(&caps)
+    )
 }
 
 pub fn build_subtitle_plugin_provider(
@@ -3760,8 +3813,9 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
         if serde_json::to_value(&initialized_descriptor).ok()
             != serde_json::to_value(&descriptor).ok()
         {
-            return Err(AppError::Validation(
-                "Initialized component descriptor differs from embedded metadata".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_COMPONENT_DESCRIPTOR_MISMATCH,
+                "Initialized component descriptor differs from embedded metadata",
             ));
         }
         Ok(descriptor)
@@ -5287,6 +5341,36 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &duplicate));
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn indexer_client_revision_tracks_caps_content_but_not_cache_timestamp() {
+        let mut config: IndexerConfig = serde_json::from_value(serde_json::json!({
+            "id": "caps-client", "name": "Synthetic", "provider_type": "newznab",
+            "base_url": "https://indexer.example.test", "is_enabled": true,
+            "enable_auto_search": true, "enable_interactive_search": true,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+        }))
+        .unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-02-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let missing = indexer_client_revision(&config, now);
+        let mut caps = serde_json::json!({
+            "parser_version": scryer_domain::INDEXER_CAPS_PARSER_VERSION,
+            "searching_present": true, "search": { "available": true, "supported_params": ["q"] },
+            "cache_fetched_at": now.to_rfc3339(),
+        });
+        config.caps_snapshot_json = Some(caps.to_string());
+        let fresh = indexer_client_revision(&config, now);
+        assert_ne!(missing, fresh);
+        caps["cache_fetched_at"] =
+            serde_json::json!((now - chrono::Duration::hours(1)).to_rfc3339());
+        config.caps_snapshot_json = Some(caps.to_string());
+        assert_eq!(fresh, indexer_client_revision(&config, now));
+        caps["search"]["available"] = serde_json::json!(false);
+        config.caps_snapshot_json = Some(caps.to_string());
+        assert_ne!(fresh, indexer_client_revision(&config, now));
     }
 
     #[test]

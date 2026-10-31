@@ -126,13 +126,9 @@ fn validate_max_queries_per_minute(
     syncs_managed_children: bool,
 ) -> AppResult<Option<i64>> {
     match value {
-        Some(budget) if budget < 1 => Err(AppError::Validation(
-            "max queries per minute must be at least 1, or empty for no budget".into(),
-        )),
-        Some(_) if syncs_managed_children => Err(AppError::Validation(
-            "max queries per minute is set on each managed indexer, not on the indexer that syncs them"
-                .into(),
-        )),
+        Some(budget) if budget < 1 => Err(AppError::validation_refused(crate::error_reasons::integration::MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE, "max queries per minute must be at least 1, or empty for no budget")),
+        Some(_) if syncs_managed_children => Err(AppError::validation_refused(crate::error_reasons::integration::MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM, "max queries per minute is set on each managed indexer, not on the indexer that syncs them"
+                )),
         other => Ok(other),
     }
 }
@@ -171,12 +167,18 @@ fn parse_indexer_config_json(
         return Ok(serde_json::Map::new());
     }
 
-    let parsed: serde_json::Value =
-        serde_json::from_str(raw).map_err(|error| AppError::Validation(error.to_string()))?;
-    parsed
-        .as_object()
-        .cloned()
-        .ok_or_else(|| AppError::Validation("indexer config_json must be a JSON object".into()))
+    let parsed: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::integration::INDEXER_CONFIG_INVALID,
+            error.to_string(),
+        )
+    })?;
+    parsed.as_object().cloned().ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::integration::INDEXER_CONFIG_JSON_INVALID,
+            "indexer config_json must be a JSON object",
+        )
+    })
 }
 fn indexer_connection_url_field(
     fields: &[scryer_domain::ConfigFieldDef],
@@ -188,9 +190,7 @@ fn indexer_connection_url_field(
         return Ok(None);
     };
     if connection_fields.next().is_some() {
-        return Err(AppError::Validation(
-            "indexer provider declares multiple connection_url config fields".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_PROVIDER_DECLARES_MULTIPLE_CONNECTION_URL_CONFIG_FIELDS, "indexer provider declares multiple connection_url config fields"));
     }
     Ok(Some(field))
 }
@@ -213,7 +213,12 @@ pub(crate) fn derive_indexer_base_url_from_config_fields(
                 .map(str::to_string)
         })
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::Validation("indexer connection URL is required".into()))?;
+        .ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_CONNECTION_URL_REQUIRED,
+                "indexer connection URL is required",
+            )
+        })?;
 
     if (field.key.contains("feed") || field.key.contains("rss"))
         && let Some(origin) = extract_base_url_origin(&raw)
@@ -297,9 +302,7 @@ pub(crate) fn normalize_indexer_config_json(
             {
                 object.insert(field.key.clone(), stored.clone());
             } else if masked {
-                return Err(AppError::Validation(
-                    "API key appears to be a masked placeholder — enter the real key".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::API_KEY_APPEARS_MASKED_PLACEHOLDER_ENTER_REAL_KEY, "API key appears to be a masked placeholder — enter the real key"));
             }
         }
     }
@@ -356,10 +359,10 @@ pub(crate) fn normalize_indexer_config_json(
         if scryer_domain::config_field_is_required(field, value_of)
             && config_value_is_empty(object.get(&field.key))
         {
-            return Err(AppError::Validation(format!(
-                "{} is required",
-                field.label.trim()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::FIELD_REQUIRED,
+                format!("{} is required", field.label.trim()),
+            ));
         }
     }
 
@@ -367,10 +370,10 @@ pub(crate) fn normalize_indexer_config_json(
         && let Some(connection_field) = connection_url_field
         && config_value_is_empty(object.get(&connection_field.key))
     {
-        return Err(AppError::Validation(format!(
-            "{} is required",
-            connection_field.label.trim()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::integration::FIELD_REQUIRED,
+            format!("{} is required", connection_field.label.trim()),
+        ));
     }
 
     serde_json::to_string(&serde_json::Value::Object(object))
@@ -383,8 +386,9 @@ impl AppUseCase {
     ) -> AppResult<Vec<scryer_domain::ConfigFieldDef>> {
         let normalized = provider_type.trim().to_lowercase();
         let Some(provider) = self.services.integrations.plugin_provider.available() else {
-            return Err(AppError::Validation(
-                "indexer provider is unavailable".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_PROVIDER_UNAVAILABLE,
+                "indexer provider is unavailable",
             ));
         };
         if !provider
@@ -392,9 +396,10 @@ impl AppUseCase {
             .into_iter()
             .any(|value| value == normalized)
         {
-            return Err(AppError::Validation(format!(
-                "unsupported indexer provider type '{provider_type}'"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_PROVIDER_TYPE_UNSUPPORTED,
+                format!("unsupported indexer provider type '{provider_type}'"),
+            ));
         }
 
         let fields = provider.config_fields_for_provider(&normalized);
@@ -464,10 +469,16 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(proxy_config_id)
             .await?
-            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND,
+                    "Proxy configuration was not found.",
+                )
+            })?;
         if !proxy.is_enabled {
-            return Err(AppError::Validation(
-                "Proxy is disabled for this indexer.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_DISABLED_INDEXER,
+                "Proxy is disabled for this indexer.",
             ));
         }
         Ok(Some(proxy))
@@ -487,29 +498,20 @@ impl AppUseCase {
         else {
             return Ok(None);
         };
-        if let Some(snapshot) =
-            crate::integration::indexer_caps_cache::fresh_snapshot(config, Utc::now())
-        {
-            return Ok(Some(snapshot));
-        }
         self.services
             .integrations
             .indexer_caps_cache
-            .fetch(config, async {
-                let Some(snapshot) = refresher
-                    .fetch_for_config_with_accounting(config, proxy, accounting)
-                    .await?
-                else {
-                    if config.is_direct_nab() {
-                        return Err(AppError::Repository(
-                            "caps refresh returned no Newznab caps snapshot".into(),
-                        ));
-                    }
-                    return Ok(None);
-                };
-                crate::integration::indexer_caps_cache::serialize_snapshot(&snapshot, Utc::now())
-                    .map(Some)
-            })
+            .refresh(
+                config,
+                crate::integration::indexer_caps_cache::IndexerCapsRefreshContext {
+                    configs: self.services.integrations.indexer_configs.as_ref(),
+                    refresher: refresher.as_ref(),
+                    proxy,
+                    accounting,
+                    intent: crate::SchedulerIntent::Maintenance,
+                    now: self.runtime.environment.now(),
+                },
+            )
             .await
     }
 }
@@ -536,12 +538,16 @@ impl AppUseCase {
     }
 
     async fn record_caps_refresh_failure(&self, config: &IndexerConfig, error: &AppError) {
-        let message = format!("{} {error}", crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX);
+        let message = format!("Indexer capability refresh failed: {error}");
         match self
             .services
             .integrations
             .indexer_configs
-            .set_last_error_if_unchanged(config, Some(message))
+            .set_last_error_if_unchanged(
+                config,
+                Some(message),
+                Some(crate::error_reasons::indexer_caps::REFRESH_FAILED.to_string()),
+            )
             .await
         {
             Ok(true) => {}
@@ -578,7 +584,8 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ));
         }
@@ -641,14 +648,15 @@ impl AppUseCase {
 
             match self.fetch_caps_snapshot_json_for_config(&config).await {
                 Ok(Some(snapshot_json)) => {
-                    if !indexer_configs
-                        .save_caps_if_unchanged(&config, &snapshot_json)
-                        .await?
+                    let Some(updated) = indexer_configs.get_by_id(&config.id).await? else {
+                        continue;
+                    };
+                    if crate::integration::indexer_caps_cache::connection_identity(&updated)
+                        != crate::integration::indexer_caps_cache::connection_identity(&config)
+                        || updated.caps_snapshot_json.as_deref() != Some(snapshot_json.as_str())
                     {
                         continue;
                     }
-                    let mut updated = config.clone();
-                    updated.caps_snapshot_json = Some(snapshot_json);
                     if crate::indexer_search_identity(&config, None)
                         != crate::indexer_search_identity(&updated, None)
                     {
@@ -658,14 +666,14 @@ impl AppUseCase {
                         )
                         .await;
                     }
-                    if config.last_error_message.as_deref().is_some_and(|message| {
-                        message.starts_with(crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX)
-                    }) && let Err(error) = self
-                        .services
-                        .integrations
-                        .indexer_configs
-                        .set_last_error_if_unchanged(&config, None)
-                        .await
+                    if updated.last_error_code.as_deref()
+                        == Some(crate::error_reasons::indexer_caps::REFRESH_FAILED)
+                        && let Err(error) = self
+                            .services
+                            .integrations
+                            .indexer_configs
+                            .set_last_error_if_unchanged(&updated, None, None)
+                            .await
                     {
                         tracing::warn!(config_id = %config.id, error = %error, "failed to clear recovered indexer caps error");
                     }
@@ -726,8 +734,9 @@ impl AppUseCase {
     ) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "proxy config id cannot be empty".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED,
+                "proxy config id cannot be empty",
             ));
         }
         let config = self
@@ -736,19 +745,25 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND,
+                    "Proxy configuration was not found.",
+                )
+            })?;
         if !config.is_enabled {
-            return Err(AppError::Validation(
-                "Proxy is disabled for this indexer.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_DISABLED_INDEXER,
+                "Proxy is disabled for this indexer.",
             ));
         }
         // Prowlarr owns challenge handling for the indexers it fronts, so a
         // challenge solver can never sit in front of it. Transport and tunnel
         // proxies only carry bytes and remain allowed.
         if config.is_challenge_solver() && provider_type.trim().eq_ignore_ascii_case("prowlarr") {
-            return Err(AppError::Validation(
-                "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
-                    .into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS,
+                "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling.",
             ));
         }
         Ok(config.id)
@@ -780,12 +795,18 @@ impl AppUseCase {
 
         let name = input.name.trim().to_string();
         if name.is_empty() {
-            return Err(AppError::Validation("indexer name is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_NAME_REQUIRED,
+                "indexer name is required",
+            ));
         }
 
         let provider_type = input.provider_type.trim().to_lowercase();
         if provider_type.is_empty() {
-            return Err(AppError::Validation("provider type is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROVIDER_TYPE_REQUIRED,
+                "provider type is required",
+            ));
         }
 
         let fields = self
@@ -861,6 +882,7 @@ impl AppUseCase {
             managed_metadata_json: None,
             caps_snapshot_json,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(normalized_config_json),
@@ -875,7 +897,10 @@ impl AppUseCase {
                 .get_by_id(client_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("download client config '{client_id}' not found"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                        format!("download client config '{client_id}' not found"),
+                    )
                 })?;
             self.validate_indexer_download_client_mapping(&config, &client)?;
         }
@@ -920,11 +945,15 @@ impl AppUseCase {
             .await?;
         let config_id = update.id.trim();
         if config_id.is_empty() {
-            return Err(AppError::Validation("indexer config id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_CONFIG_ID_REQUIRED,
+                "indexer config id is required",
+            ));
         }
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one indexer field must be provided".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_FIELD_REQUIRED,
+                "at least one indexer field must be provided",
             ));
         }
         // A managed child owns its enabled flag, its search flags and its rate
@@ -952,14 +981,20 @@ impl AppUseCase {
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
         if normalized_name.as_ref().is_some_and(String::is_empty) {
-            return Err(AppError::Validation("indexer name cannot be empty".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_NAME_REQUIRED,
+                "indexer name cannot be empty",
+            ));
         }
 
         let normalized_provider = update
             .provider_type
             .map(|value| value.trim().to_lowercase());
         if normalized_provider.as_ref().is_some_and(String::is_empty) {
-            return Err(AppError::Validation("provider type cannot be empty".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROVIDER_TYPE_REQUIRED,
+                "provider type cannot be empty",
+            ));
         }
 
         let existing = self
@@ -968,13 +1003,16 @@ impl AppUseCase {
             .indexer_configs
             .get_by_id(config_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                    format!("indexer config '{config_id}' not found"),
+                )
+            })?;
         if existing.managed_parent_config_id.is_some() {
             if !managed_local_only {
-                return Err(AppError::Validation(
-                    "managed child indexers are controlled by their parent sync and cannot be edited directly"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::MANAGED_CHILD_INDEXERS_CONTROLLED_THEIR_PARENT_SYNC_CANNOT_EDITED_DIRECTLY, "managed child indexers are controlled by their parent sync and cannot be edited directly"
+                        ));
             }
             let mut updated = existing.clone();
             if managed_local_update.has_changes() {
@@ -1063,8 +1101,9 @@ impl AppUseCase {
         let mut normalized_proxy_config_id = match update.proxy_config_id.clone() {
             Some(Some(id)) => {
                 if existing.managed_parent_config_id.is_some() {
-                    return Err(AppError::Validation(
-                        "managed indexers cannot use a proxy; the managing application owns challenge solving".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::MANAGED_INDEXERS_CANNOT_USE_PROXY,
+                        "managed indexers cannot use a proxy; the managing application owns challenge solving",
                     ));
                 }
                 Some(Some(
@@ -1137,6 +1176,7 @@ impl AppUseCase {
                 .unwrap_or_else(|| existing.managed_metadata_json.clone()),
             caps_snapshot_json: existing.caps_snapshot_json.clone(),
             last_health_status: existing.last_health_status.clone(),
+            last_error_code: None,
             last_error_message: existing.last_error_message.clone(),
             last_error_at: existing.last_error_at,
             config_json: normalized_config_json
@@ -1155,9 +1195,10 @@ impl AppUseCase {
                 .get_by_id(client_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "mapped download client '{client_id}' no longer exists"
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::integration::MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS,
+                        format!("mapped download client '{client_id}' no longer exists"),
+                    )
                 })?;
             self.validate_indexer_download_client_mapping(&preview_config, &client)?;
         }
@@ -1287,7 +1328,7 @@ impl AppUseCase {
             let mut observed_health = existing.clone();
             observed_health.updated_at = updated.updated_at;
             if indexer_configs
-                .set_last_error_if_unchanged(&observed_health, None)
+                .set_last_error_if_unchanged(&observed_health, None, None)
                 .await?
             {
                 // A save that just passed validation is the operator's "try again":
@@ -1341,11 +1382,14 @@ impl AppUseCase {
             .indexer_configs
             .get_by_id(config_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                    format!("indexer config '{config_id}' not found"),
+                )
+            })?;
         if config.managed_parent_config_id.is_some() && !allow_managed_child {
-            return Err(AppError::Validation(
-                "managed child indexers are controlled by their parent sync".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::MANAGED_CHILD_INDEXERS_CONTROLLED_THEIR_PARENT_SYNC, "managed child indexers are controlled by their parent sync"));
         }
 
         let configs = self
@@ -1488,7 +1532,10 @@ impl AppUseCase {
 
         let config_id = config_id.trim();
         if config_id.is_empty() {
-            return Err(AppError::Validation("indexer config id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_CONFIG_ID_REQUIRED,
+                "indexer config id is required",
+            ));
         }
 
         let _sync_guard = self
@@ -1519,10 +1566,16 @@ impl AppUseCase {
             .indexer_configs
             .get_by_id(config_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                    format!("indexer config '{config_id}' not found"),
+                )
+            })?;
         if parent.managed_parent_config_id.is_some() {
-            return Err(AppError::Validation(
-                "managed child indexers cannot be synced directly".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::MANAGED_CHILD_INDEXERS_CANNOT_SYNCED_DIRECTLY,
+                "managed child indexers cannot be synced directly",
             ));
         }
 
@@ -1535,7 +1588,7 @@ impl AppUseCase {
         let management_capabilities =
             provider.management_capabilities_for_provider(&parent.provider_type);
         if !management_capabilities.supports_managed_children_sync {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC, format!(
                 "provider type '{}' does not support managed child sync",
                 parent.provider_type
             )));
@@ -1561,7 +1614,7 @@ impl AppUseCase {
 
         let client = try_sync_step!(provider.management_client_for_provider(&parent).ok_or_else(
             || {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::integration::NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE, format!(
                     "no indexer management client available for provider type '{}'",
                     parent.provider_type
                 ))
@@ -1720,6 +1773,7 @@ impl AppUseCase {
                             managed_metadata_json: desired.managed_metadata_json.clone(),
                             caps_snapshot_json: desired.caps_snapshot_json.clone(),
                             last_health_status: None,
+                            last_error_code: None,
                             last_error_message: None,
                             last_error_at: None,
                             config_json: Some(desired.config_json.clone()),
@@ -1802,7 +1856,12 @@ impl AppUseCase {
             .indexer_configs
             .get_by_id(&child_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer config '{child_id}' not found")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                    format!("indexer config '{child_id}' not found"),
+                )
+            })
     }
 
     async fn set_managed_child_local_disable(
@@ -1826,13 +1885,22 @@ impl AppUseCase {
                 .get_by_id(&child_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("indexer config '{child_id}' not found"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                        format!("indexer config '{child_id}' not found"),
+                    )
                 })?;
             let parent_id = current.managed_parent_config_id.clone().ok_or_else(|| {
-                AppError::Validation("managed child indexer requires a parent".into())
+                AppError::validation_refused(
+                    crate::error_reasons::integration::MANAGED_CHILD_INDEXER_REQUIRES_PARENT,
+                    "managed child indexer requires a parent",
+                )
             })?;
             let child_key = current.managed_child_key.as_deref().ok_or_else(|| {
-                AppError::Validation("managed child indexer requires a child key".into())
+                AppError::validation_refused(
+                    crate::error_reasons::integration::MANAGED_CHILD_INDEXER_REQUIRES_CHILD_KEY,
+                    "managed child indexer requires a child key",
+                )
             })?;
             let parent = self
                 .services
@@ -1841,7 +1909,10 @@ impl AppUseCase {
                 .get_by_id(&parent_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("indexer config '{parent_id}' not found"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                        format!("indexer config '{parent_id}' not found"),
+                    )
                 })?;
             let metadata = with_managed_child_local_disable(
                 parent.managed_metadata_json.as_deref(),
@@ -2101,15 +2172,13 @@ impl AppUseCase {
         if indexer.provider_type.eq_ignore_ascii_case("prowlarr")
             && indexer.managed_parent_config_id.is_none()
         {
-            return Err(AppError::Validation(
-                "Prowlarr management parents cannot be mapped to a download client".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT, "Prowlarr management parents cannot be mapped to a download client"));
         }
 
         let required_families = self
             .indexer_download_mapping_families(&indexer.provider_type)
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::integration::INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY, format!(
                     "indexer provider '{}' does not declare a supported protocol family",
                     indexer.provider_type
                 ))
@@ -2126,7 +2195,7 @@ impl AppUseCase {
             &required_families,
             indexer_http.as_ref(),
         ) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER, format!(
                 "download client '{}' does not support all protocol families required by indexer '{}'",
                 client.name, indexer.name
             )));
@@ -2144,7 +2213,10 @@ impl AppUseCase {
             .await?;
         let indexer_id = indexer_id.trim();
         if indexer_id.is_empty() {
-            return Err(AppError::Validation("indexer id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::INDEXER_ID_REQUIRED,
+                "indexer id is required",
+            ));
         }
         let normalized_client_id = download_client_id
             .map(str::trim)
@@ -2157,7 +2229,10 @@ impl AppUseCase {
             .get_by_id(indexer_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("indexer config '{indexer_id}' not found"))
+                AppError::not_found_reason(
+                    crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                    format!("indexer config '{indexer_id}' not found"),
+                )
             })?;
         if let Some(client_id) = normalized_client_id.as_deref() {
             let client = self
@@ -2167,7 +2242,10 @@ impl AppUseCase {
                 .get_by_id(client_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("download client config '{client_id}' not found"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                        format!("download client config '{client_id}' not found"),
+                    )
                 })?;
             self.validate_indexer_download_client_mapping(&existing, &client)?;
         }

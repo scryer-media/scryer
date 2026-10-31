@@ -19,10 +19,7 @@ test("rewriting an opaque media-image route preserves its token and base path", 
 
 test("episode stills select the optimized w300 media variant", () => {
   assert.equal(
-    selectMediaImageVariantUrl(
-      "/images/media/episode-token/original",
-      "w300",
-    ),
+    selectMediaImageVariantUrl("/images/media/episode-token/original", "w300"),
     "/images/media/episode-token/w300",
   );
 });
@@ -49,7 +46,10 @@ test("rewriting a local poster variant drops the source variant version token", 
 
 test("selecting the current local poster variant preserves its version token", () => {
   assert.equal(
-    selectPosterVariantUrl("/images/titles/title-1/poster/w250?v=posterw250digest", "w250"),
+    selectPosterVariantUrl(
+      "/images/titles/title-1/poster/w250?v=posterw250digest",
+      "w250",
+    ),
     "/images/titles/title-1/poster/w250?v=posterw250digest",
   );
 });

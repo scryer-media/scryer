@@ -17,6 +17,7 @@ query HistoryItems($filter: QueueFilterInput, $first: Int, $after: String) {
       value
     }
     attention {
+      code
       message
     }
   }

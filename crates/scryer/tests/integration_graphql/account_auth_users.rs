@@ -4865,6 +4865,7 @@ async fn graphql_local_password_login_with_voluntary_totp_requires_and_accepts_c
     assert!(matches!(
         error,
         scryer_application::AppError::Unauthorized(_)
+            | scryer_application::AppError::UnauthorizedReason { .. }
     ));
 }
 

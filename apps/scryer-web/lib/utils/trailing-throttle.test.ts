@@ -22,7 +22,11 @@ test("a burst runs once at once and once more after the interval", (t) => {
   t.mock.timers.tick(799);
   assert.equal(runs, 1);
   t.mock.timers.tick(1);
-  assert.equal(runs, 2, "one trailing run follows the burst at the interval's end");
+  assert.equal(
+    runs,
+    2,
+    "one trailing run follows the burst at the interval's end",
+  );
 
   t.mock.timers.tick(5_000);
   assert.equal(runs, 2, "nothing else runs without a new request");

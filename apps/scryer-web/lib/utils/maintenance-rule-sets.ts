@@ -1,3 +1,4 @@
+import { graphQlErrorNumberExtension } from "../graphql/error-message.ts";
 import type {
   MaintenanceActionDescriptor,
   MaintenanceActionKind,
@@ -51,8 +52,10 @@ const DEFAULT_ACTION_KIND: MaintenanceActionKind = "DO_NOTHING";
 const MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION = 2;
 
 export function maintenanceActionSequenceStepId(
-  randomUuid: (() => string) | null | undefined =
-    globalThis.crypto?.randomUUID?.bind(globalThis.crypto),
+  randomUuid:
+    (() => string) | null | undefined = globalThis.crypto?.randomUUID?.bind(
+    globalThis.crypto,
+  ),
   now: () => number = Date.now,
   random: () => number = Math.random,
 ): string {
@@ -90,7 +93,10 @@ export function maintenanceActionSequenceFromLegacySpec(
   const deleteFiles = (id: string) => sequenceStep(id, "DELETE_FILES", empty);
   switch (spec.kind) {
     case "DO_NOTHING":
-      return { schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION, steps: [] };
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [],
+      };
     case "UNMONITOR_SCOPE_KEEP_FILES":
       return {
         schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
@@ -99,13 +105,18 @@ export function maintenanceActionSequenceFromLegacySpec(
     case "DELETE_TITLE_AND_FILES":
       return {
         schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [sequenceStep("legacy-delete-title", "DELETE_TITLE_AND_FILES", empty)],
+        steps: [
+          sequenceStep("legacy-delete-title", "DELETE_TITLE_AND_FILES", empty),
+        ],
       };
     case "UNMONITOR_TITLE_DELETE_ALL_FILES":
     case "UNMONITOR_SHOW_DELETE_EXISTING_FILES":
       return {
         schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [unmonitor("legacy-unmonitor", true), deleteFiles("legacy-delete-files")],
+        steps: [
+          unmonitor("legacy-unmonitor", true),
+          deleteFiles("legacy-delete-files"),
+        ],
       };
     case "UNMONITOR_SCOPE_DELETE_FILES":
     case "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY":
@@ -138,15 +149,28 @@ export function maintenanceActionSequenceFromLegacySpec(
     case "ADD_TAGS":
       return {
         schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [sequenceStep("legacy-add-tags", "ADD_TAGS", { ...empty, tags: spec.tags })],
+        steps: [
+          sequenceStep("legacy-add-tags", "ADD_TAGS", {
+            ...empty,
+            tags: spec.tags,
+          }),
+        ],
       };
     case "REMOVE_TAGS":
       return {
         schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [sequenceStep("legacy-remove-tags", "REMOVE_TAGS", { ...empty, tags: spec.tags })],
+        steps: [
+          sequenceStep("legacy-remove-tags", "REMOVE_TAGS", {
+            ...empty,
+            tags: spec.tags,
+          }),
+        ],
       };
     case "ACTION_SEQUENCE":
-      return { schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION, steps: [] };
+      return {
+        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
+        steps: [],
+      };
   }
 }
 
@@ -230,24 +254,35 @@ export function normalizedActionTags(tags: readonly string[]): string[] {
   const normalized = tags
     .map((tag) => normalizeTitleTagLabel(tag))
     .filter((tag) => tag.length > 0 && !isReservedTitleTag(tag));
-  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(normalized)].sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 /// Maps the editor's full parameter object onto the closed GraphQL input shape.
 /// Omitted fields are meaningful: the server rejects a parameter for the wrong
 /// primitive instead of quietly carrying stale data to another step.
-export function maintenanceActionSequenceInput(sequence: MaintenanceActionSequence) {
+export function maintenanceActionSequenceInput(
+  sequence: MaintenanceActionSequence,
+) {
   return {
     schemaVersion: sequence.schemaVersion,
     steps: sequence.steps.map((step) => {
       const parameters = (() => {
         switch (step.kind) {
           case "UNMONITOR":
-            return { includeDescendants: Boolean(step.parameters.includeDescendants) };
+            return {
+              includeDescendants: Boolean(step.parameters.includeDescendants),
+            };
           case "CHANGE_QUALITY_PROFILE":
-            return { targetQualityProfileId: step.parameters.targetQualityProfileId || undefined };
+            return {
+              targetQualityProfileId:
+                step.parameters.targetQualityProfileId || undefined,
+            };
           case "SEARCH":
-            return { searchCondition: step.parameters.searchCondition || undefined };
+            return {
+              searchCondition: step.parameters.searchCondition || undefined,
+            };
           case "ADD_TAGS":
           case "REMOVE_TAGS":
             return { tags: normalizedActionTags(step.parameters.tags) };
@@ -307,9 +342,12 @@ export function updateMaintenanceRuleMetadataInput(
 
 /// The API owns the supported scope/action matrix.
 export function scopedActionDescriptors(
-  descriptors: MaintenanceActionDescriptor[], scope: MaintenanceRuleScope,
+  descriptors: MaintenanceActionDescriptor[],
+  scope: MaintenanceRuleScope,
 ): MaintenanceActionDescriptor[] {
-  return descriptors.filter((descriptor) => descriptor.supportedRuleScopes?.includes(scope));
+  return descriptors.filter((descriptor) =>
+    descriptor.supportedRuleScopes?.includes(scope),
+  );
 }
 
 /// The server advertises which actions retain their safety guarantees when a
@@ -326,7 +364,9 @@ export function storageScopedActionDescriptors(
     : scoped;
 }
 
-export function titleScopedActionDescriptors(descriptors: MaintenanceActionDescriptor[]) {
+export function titleScopedActionDescriptors(
+  descriptors: MaintenanceActionDescriptor[],
+) {
   return scopedActionDescriptors(descriptors, "TITLE");
 }
 
@@ -341,7 +381,10 @@ export function actionRequiresTargetQualityProfile(
   descriptors: MaintenanceActionDescriptor[],
   kind: MaintenanceActionKind,
 ): boolean {
-  return descriptorForActionKind(descriptors, kind)?.requiresTargetQualityProfile ?? false;
+  return (
+    descriptorForActionKind(descriptors, kind)?.requiresTargetQualityProfile ??
+    false
+  );
 }
 
 /// Whether the selected action needs tags. Read from the descriptor rather than
@@ -357,7 +400,10 @@ export function clampMaintenancePreviewLimit(limit: number): number {
   if (!Number.isFinite(limit)) {
     return MAINTENANCE_PREVIEW_LIMIT_DEFAULT;
   }
-  return Math.min(MAINTENANCE_PREVIEW_LIMIT_MAX, Math.max(1, Math.trunc(limit)));
+  return Math.min(
+    MAINTENANCE_PREVIEW_LIMIT_MAX,
+    Math.max(1, Math.trunc(limit)),
+  );
 }
 
 type MaintenancePreviewInputOptions = {
@@ -397,7 +443,10 @@ export function maintenancePreviewInput({
       : {};
   const subjects =
     titleIds && titleIds.length > 0
-      ? { titleIds: [...titleIds], ...(subjectIds?.length ? { subjectIds: [...subjectIds] } : {}) }
+      ? {
+          titleIds: [...titleIds],
+          ...(subjectIds?.length ? { subjectIds: [...subjectIds] } : {}),
+        }
       : {
           libraryId: libraryId || undefined,
           limit: clampMaintenancePreviewLimit(
@@ -441,13 +490,15 @@ export function previewOutcomeBadgeTone(
 
 const ACTION_KIND_LABEL_KEYS: Record<MaintenanceActionKind, string> = {
   DO_NOTHING: "settings.maintenanceActionDoNothing",
-  UNMONITOR_SCOPE_KEEP_FILES: "settings.maintenanceActionUnmonitorScopeKeepFiles",
+  UNMONITOR_SCOPE_KEEP_FILES:
+    "settings.maintenanceActionUnmonitorScopeKeepFiles",
   DELETE_TITLE_AND_FILES: "settings.maintenanceActionDeleteTitleAndFiles",
   UNMONITOR_TITLE_DELETE_ALL_FILES:
     "settings.maintenanceActionUnmonitorTitleDeleteAllFiles",
   UNMONITOR_SHOW_DELETE_EXISTING_FILES:
     "settings.maintenanceActionUnmonitorShowDeleteExistingFiles",
-  UNMONITOR_SCOPE_DELETE_FILES: "settings.maintenanceActionUnmonitorScopeDeleteFiles",
+  UNMONITOR_SCOPE_DELETE_FILES:
+    "settings.maintenanceActionUnmonitorScopeDeleteFiles",
   UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY:
     "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty",
   UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY:
@@ -468,7 +519,8 @@ export function actionKindLabelKey(kind: string): string | null {
 const ACTION_STEP_KIND_LABEL_KEYS: Record<MaintenanceActionStepKind, string> = {
   UNMONITOR: "settings.maintenanceSequenceStepUnmonitor",
   DELETE_FILES: "settings.maintenanceSequenceStepDeleteFiles",
-  CHANGE_QUALITY_PROFILE: "settings.maintenanceSequenceStepChangeQualityProfile",
+  CHANGE_QUALITY_PROFILE:
+    "settings.maintenanceSequenceStepChangeQualityProfile",
   SEARCH: "settings.maintenanceSequenceStepSearch",
   ADD_TAGS: "settings.maintenanceSequenceStepAddTags",
   REMOVE_TAGS: "settings.maintenanceSequenceStepRemoveTags",
@@ -497,7 +549,9 @@ const PREVIEW_OUTCOME_LABEL_KEYS: Record<MaintenancePreviewOutcome, string> = {
 };
 
 export function previewOutcomeLabelKey(outcome: string): string | null {
-  return PREVIEW_OUTCOME_LABEL_KEYS[outcome as MaintenancePreviewOutcome] ?? null;
+  return (
+    PREVIEW_OUTCOME_LABEL_KEYS[outcome as MaintenancePreviewOutcome] ?? null
+  );
 }
 
 // ── Operating a rule: state and switches ──────────────────────────────
@@ -512,7 +566,10 @@ export function effectArmingLabelKey(arming: string): string | null {
   return EFFECT_ARMING_LABEL_KEYS[arming as MaintenanceEffectArming] ?? null;
 }
 
-const RULE_STATE_KEYS: Record<MaintenanceRuleState, { label: string; help: string }> = {
+const RULE_STATE_KEYS: Record<
+  MaintenanceRuleState,
+  { label: string; help: string }
+> = {
   DISABLED: {
     label: "settings.maintenanceRuleStateDisabled",
     help: "settings.maintenanceRuleStateDisabledHelp",
@@ -616,9 +673,9 @@ export const MAINTENANCE_NON_TERMINAL_CANDIDATE_STATES = [
 ] as const satisfies readonly MaintenanceCandidateState[];
 
 export function isNonTerminalCandidateState(state: string): boolean {
-  return (MAINTENANCE_NON_TERMINAL_CANDIDATE_STATES as readonly string[]).includes(
-    state,
-  );
+  return (
+    MAINTENANCE_NON_TERMINAL_CANDIDATE_STATES as readonly string[]
+  ).includes(state);
 }
 
 /// How many of a rule's candidates the handler could still act on. This is the
@@ -626,8 +683,9 @@ export function isNonTerminalCandidateState(state: string): boolean {
 export function nonTerminalCandidateCount(
   candidates: Pick<MaintenanceCandidate, "state">[],
 ): number {
-  return candidates.filter((candidate) => isNonTerminalCandidateState(candidate.state))
-    .length;
+  return candidates.filter((candidate) =>
+    isNonTerminalCandidateState(candidate.state),
+  ).length;
 }
 
 const MINUTE_MS = 60_000;
@@ -724,7 +782,8 @@ export function maintenanceSearchHistoryState(
 ): string {
   if (
     progress?.receipts.some(
-      (receipt) => receipt.state === "accepted" || receipt.state === "completed",
+      (receipt) =>
+        receipt.state === "accepted" || receipt.state === "completed",
     )
   ) {
     return "accepted";
@@ -732,22 +791,16 @@ export function maintenanceSearchHistoryState(
   return progress?.run?.state.toLowerCase() ?? "waiting";
 }
 
-/// The server rejects enabling a deleting rule whose acknowledged count no
-/// longer matches, and puts the current count in the message. Pull it out so the
-/// confirm dialog can re-ask against the number the server actually has,
-/// instead of making the operator refresh the page to find out.
-///
-/// Pinned shape:
-/// `destructive arming requires acknowledging the current candidate count (N)`
+/** Candidate count travels as a numeric extension beside the stable refusal. */
 export function parseAcknowledgedCandidateCountMismatch(
-  message: string,
+  error: unknown,
 ): number | null {
-  const match = /acknowledging the current candidate count \((\d+)\)/i.exec(message);
-  if (!match) {
-    return null;
-  }
-  const count = Number.parseInt(match[1], 10);
-  return Number.isFinite(count) ? count : null;
+  return graphQlErrorNumberExtension(
+    error,
+    "VALIDATION_ERROR",
+    "MAINTENANCE_ARM_COUNT_MISMATCH",
+    "currentCount",
+  );
 }
 
 export function setMaintenanceRuleStateVariables(
@@ -784,7 +837,9 @@ export function excludeMaintenanceSubjectInput(options: {
   const reason = options.reason?.trim();
   return {
     titleId: options.titleId,
-    ...(options.subjectKind ? { subjectKind: options.subjectKind.toUpperCase() } : {}),
+    ...(options.subjectKind
+      ? { subjectKind: options.subjectKind.toUpperCase() }
+      : {}),
     ...(options.subjectId ? { subjectId: options.subjectId } : {}),
     ruleSetId: options.ruleSetId || undefined,
     reason: reason || undefined,

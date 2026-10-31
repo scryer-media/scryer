@@ -3,7 +3,11 @@ import { Check, ChevronsUpDown, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useTranslate } from "@/lib/context/translate-context";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
@@ -55,7 +59,10 @@ function EpisodeTargetPickerContent({
   const t = useTranslate();
   const [query, setQuery] = React.useState("");
   const searchRef = React.useRef<HTMLInputElement>(null);
-  const selectedEpisodeIds = React.useMemo(() => new Set(episodeTargetIds(value)), [value]);
+  const selectedEpisodeIds = React.useMemo(
+    () => new Set(episodeTargetIds(value)),
+    [value],
+  );
   const isSelected = (rowValue: string) => {
     const ids = episodeTargetIds(rowValue);
     if (ids.length === 0) return rowValue === value;
@@ -72,11 +79,16 @@ function EpisodeTargetPickerContent({
     const next = new Set(selectedEpisodeIds);
     if (next.has(episodeId)) next.delete(episodeId);
     else next.add(episodeId);
-    onSelect(next.size === 0 ? UNASSIGNED_TARGET : episodeTargetValue(Array.from(next)));
+    onSelect(
+      next.size === 0
+        ? UNASSIGNED_TARGET
+        : episodeTargetValue(Array.from(next)),
+    );
   };
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const rows = React.useMemo(
-    () => buildEpisodeTargetRows(groupedEpisodes, seriesMovies, query, t, labels),
+    () =>
+      buildEpisodeTargetRows(groupedEpisodes, seriesMovies, query, t, labels),
     [groupedEpisodes, labels, query, seriesMovies, t],
   );
   React.useEffect(() => {
@@ -141,7 +153,9 @@ function EpisodeTargetPickerContent({
                         : row.value.startsWith(SERIES_MOVIE_TARGET_PREFIX)
                           ? selectorId(
                               `${idPrefix}-series-movie-option`,
-                              row.value.slice(SERIES_MOVIE_TARGET_PREFIX.length),
+                              row.value.slice(
+                                SERIES_MOVIE_TARGET_PREFIX.length,
+                              ),
                             )
                           : selectorId(
                               `${idPrefix}-episode-option`,
@@ -199,7 +213,10 @@ export const EpisodeTargetSelect = React.memo(function EpisodeTargetSelect({
   onChange,
 }: EpisodeTargetSelectProps) {
   const [open, setOpen] = React.useState(false);
-  const selectedEpisodeIds = React.useMemo(() => episodeTargetIds(value), [value]);
+  const selectedEpisodeIds = React.useMemo(
+    () => episodeTargetIds(value),
+    [value],
+  );
   // A selection of several episodes opens the picker already in multi-select
   // mode, so "change" edits the set instead of replacing it.
   const [multiple, setMultiple] = React.useState(selectedEpisodeIds.length > 1);
@@ -221,9 +238,14 @@ export const EpisodeTargetSelect = React.memo(function EpisodeTargetSelect({
           {selectedEpisodeIds.length > 1 ? (
             <span className="flex min-w-0 flex-wrap items-center gap-1">
               {selectedEpisodeIds.map((episodeId) => (
-                <Badge key={episodeId} tone="info" className="max-w-full px-1.5 text-[10px]">
+                <Badge
+                  key={episodeId}
+                  tone="info"
+                  className="max-w-full px-1.5 text-[10px]"
+                >
                   <span className="truncate">
-                    {targetLabels.get(episodeTargetValue([episodeId])) ?? episodeId}
+                    {targetLabels.get(episodeTargetValue([episodeId])) ??
+                      episodeId}
                   </span>
                 </Badge>
               ))}

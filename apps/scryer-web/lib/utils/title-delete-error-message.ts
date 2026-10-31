@@ -1,5 +1,8 @@
 import type { Translate } from "@/components/root/types";
-import { graphQlErrorExtension, userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import {
+  graphQlErrorExtension,
+  userFacingGraphQlErrorMessage,
+} from "../graphql/error-message.ts";
 
 export const TITLE_DELETE_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   TITLE_DELETE_EMPTY_REQUEST: "titleDelete.refusal.selection",
@@ -25,10 +28,17 @@ export const TITLE_DELETE_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   title_folder_unknown: "titleDelete.refusal.ownership",
 };
 
-export function titleDeleteErrorMessage(error: unknown, t: Translate, fallback: string): string {
-  const reason = graphQlErrorExtension(error, "VALIDATION_ERROR", "reason")
-    ?? graphQlErrorExtension(error, "INTERNAL_ERROR", "reason");
-  const key = reason && Object.hasOwn(TITLE_DELETE_REFUSAL_KEYS, reason)
-    ? TITLE_DELETE_REFUSAL_KEYS[reason] : null;
-  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback);
+export function titleDeleteErrorMessage(
+  error: unknown,
+  t: Translate,
+  fallback: string,
+): string {
+  const reason =
+    graphQlErrorExtension(error, "VALIDATION_ERROR", "reason") ??
+    graphQlErrorExtension(error, "INTERNAL_ERROR", "reason");
+  const key =
+    reason && Object.hasOwn(TITLE_DELETE_REFUSAL_KEYS, reason)
+      ? TITLE_DELETE_REFUSAL_KEYS[reason]
+      : null;
+  return key ? t(key) : userFacingGraphQlErrorMessage(error, fallback, t);
 }

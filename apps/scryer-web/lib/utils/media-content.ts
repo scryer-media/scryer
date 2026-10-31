@@ -25,7 +25,6 @@ export function getDefaultRoutingOrder(): NzbgetRoutingOrder {
   };
 }
 
-
 export function areNzbgetRoutingSettingsEqual(
   left: DownloadClientRoutingSettings,
   right: DownloadClientRoutingSettings,
@@ -77,7 +76,9 @@ export function buildRoutingOrder(
 ): string[] {
   const clientIdSet = new Set(Object.keys(scopeRouting));
 
-  const configuredIds = clientIds.filter((clientId) => clientIdSet.has(clientId));
+  const configuredIds = clientIds.filter((clientId) =>
+    clientIdSet.has(clientId),
+  );
   const unknownIds = clientIds.filter((clientId) => !clientIdSet.has(clientId));
   return [...configuredIds, ...unknownIds];
 }

@@ -5,7 +5,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { OverviewTitleTarget, ViewId } from "@/components/root/types";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { TitleRecord } from "@/lib/types";
@@ -34,15 +40,22 @@ type AddTitleFormProps = {
   setSeasonFoldersForQueue: (value: boolean) => void;
   minAvailabilityForQueue: string;
   setMinAvailabilityForQueue: (value: string) => void;
-  onAddSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  onAddSubmit: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   tvdbCandidates: TvdbSearchItem[];
-  addTvdbCandidateToCatalog: (candidate: TvdbSearchItem) => Promise<void> | void;
+  addTvdbCandidateToCatalog: (
+    candidate: TvdbSearchItem,
+  ) => Promise<void> | void;
   titleFilter: string;
   onTitleFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onRefreshTitles: () => void;
   titleLoading: boolean;
   monitoredTitles: TitleRecord[];
-  onOpenOverview: (targetView: ViewId, overviewTarget: OverviewTitleTarget) => void;
+  onOpenOverview: (
+    targetView: ViewId,
+    overviewTarget: OverviewTitleTarget,
+  ) => void;
   queueExisting: (title: TitleRecord) => Promise<void> | void;
 };
 
@@ -116,9 +129,15 @@ export function AddTitleForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MOVIE">{t("search.facetMovie")}</SelectItem>
-                  <SelectItem value="SERIES">{t("search.facetSeries")}</SelectItem>
-                  <SelectItem value="ANIME">{t("search.facetAnime")}</SelectItem>
+                  <SelectItem value="MOVIE">
+                    {t("search.facetMovie")}
+                  </SelectItem>
+                  <SelectItem value="SERIES">
+                    {t("search.facetSeries")}
+                  </SelectItem>
+                  <SelectItem value="ANIME">
+                    {t("search.facetAnime")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -133,16 +152,29 @@ export function AddTitleForm({
             </label>
             {queueFacet === "MOVIE" && (
               <label>
-                <Label className="mb-2 block">{t("settings.minAvailabilityLabel")}</Label>
-                <Select value={minAvailabilityForQueue} onValueChange={setMinAvailabilityForQueue}>
+                <Label className="mb-2 block">
+                  {t("settings.minAvailabilityLabel")}
+                </Label>
+                <Select
+                  value={minAvailabilityForQueue}
+                  onValueChange={setMinAvailabilityForQueue}
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default">{t("settings.minAvailability.default")}</SelectItem>
-                    <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
-                    <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
-                    <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                    <SelectItem value="default">
+                      {t("settings.minAvailability.default")}
+                    </SelectItem>
+                    <SelectItem value="announced">
+                      {t("settings.minAvailability.announced")}
+                    </SelectItem>
+                    <SelectItem value="in_cinemas">
+                      {t("settings.minAvailability.in_cinemas")}
+                    </SelectItem>
+                    <SelectItem value="released">
+                      {t("settings.minAvailability.released")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </label>
@@ -155,11 +187,15 @@ export function AddTitleForm({
                     setSeasonFoldersForQueue(checked === true)
                   }
                 />
-                <span className="text-sm">{t("search.addConfigSeasonFolder")}</span>
+                <span className="text-sm">
+                  {t("search.addConfigSeasonFolder")}
+                </span>
               </label>
             )}
             <div className="flex justify-end lg:col-span-5">
-              <Button type="submit" className="w-full sm:w-auto">{t("tvdb.searchByTvdb")}</Button>
+              <Button type="submit" className="w-full sm:w-auto">
+                {t("tvdb.searchByTvdb")}
+              </Button>
             </div>
           </form>
         </CardContent>
@@ -171,7 +207,9 @@ export function AddTitleForm({
         </CardHeader>
         <CardContent>
           {tvdbCandidates.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t("tvdb.searchPrompt")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("tvdb.searchPrompt")}
+            </p>
           ) : (
             <div className="space-y-2">
               {tvdbCandidates.map((result) => (
@@ -195,10 +233,15 @@ export function AddTitleForm({
                         />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground">{result.name}</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {result.name}
+                        </p>
                         <p className="text-xs text-muted-foreground">
-                          {result.type || t("label.unknownType")} • {result.year ? result.year : t("label.yearUnknown")} •{" "}
-                          {result.sortTitle || result.slug || t("label.unknown")}
+                          {result.type || t("label.unknownType")} •{" "}
+                          {result.year ? result.year : t("label.yearUnknown")} •{" "}
+                          {result.sortTitle ||
+                            result.slug ||
+                            t("label.unknown")}
                         </p>
                         {result.overview ? (
                           <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
@@ -240,43 +283,63 @@ export function AddTitleForm({
               value={titleFilter}
               onChange={onTitleFilterChange}
             />
-            <Button className="w-full sm:w-auto" variant="primary" onClick={onRefreshTitles} disabled={titleLoading}>
+            <Button
+              className="w-full sm:w-auto"
+              variant="primary"
+              onClick={onRefreshTitles}
+              disabled={titleLoading}
+            >
               {t("label.refresh")}
             </Button>
           </div>
           {isMobile ? (
             <div className="space-y-2">
               {monitoredTitles.map((item) => {
-                const overviewTargetView = item.facet === "MOVIE"
-                  ? "movies"
-                  : item.facet === "SERIES"
-                    ? "series"
-                    : item.facet === "ANIME"
-                      ? "anime"
-                      : null;
+                const overviewTargetView =
+                  item.facet === "MOVIE"
+                    ? "movies"
+                    : item.facet === "SERIES"
+                      ? "series"
+                      : item.facet === "ANIME"
+                        ? "anime"
+                        : null;
                 return (
-                  <div key={item.id} className="rounded-lg border border-border p-3">
+                  <div
+                    key={item.id}
+                    className="rounded-lg border border-border p-3"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         {overviewTargetView ? (
                           <button
                             type="button"
-                            onClick={() => onOpenOverview(overviewTargetView, item)}
+                            onClick={() =>
+                              onOpenOverview(overviewTargetView, item)
+                            }
                             className="block text-left text-sm font-medium text-foreground hover:underline"
                           >
                             {item.name}
                           </button>
                         ) : (
-                          <p className="text-sm font-medium text-foreground">{item.name}</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {item.name}
+                          </p>
                         )}
                         <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <span className="rounded bg-muted px-2 py-0.5 capitalize">{item.facet}</span>
+                          <span className="rounded bg-muted px-2 py-0.5 capitalize">
+                            {item.facet}
+                          </span>
                           <span className="rounded bg-muted px-2 py-0.5">
                             {item.monitored ? t("label.yes") : t("label.no")}
                           </span>
                         </div>
                       </div>
-                      <Button variant="secondary" size="sm" className="shrink-0" onClick={() => queueExisting(item)}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => queueExisting(item)}
+                      >
                         {t("title.queueLatest")}
                       </Button>
                     </div>
@@ -284,7 +347,9 @@ export function AddTitleForm({
                 );
               })}
               {monitoredTitles.length === 0 && !titleLoading ? (
-                <p className="text-sm text-muted-foreground">{t("title.noManaged")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("title.noManaged")}
+                </p>
               ) : null}
             </div>
           ) : (
@@ -294,25 +359,30 @@ export function AddTitleForm({
                   <TableHead>{t("label.name")}</TableHead>
                   <TableHead>{t("title.table.facet")}</TableHead>
                   <TableHead>{t("title.table.monitored")}</TableHead>
-                  <TableHead className="text-right">{t("label.actions")}</TableHead>
+                  <TableHead className="text-right">
+                    {t("label.actions")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {monitoredTitles.map((item) => {
-                  const overviewTargetView = item.facet === "MOVIE"
-                    ? "movies"
-                    : item.facet === "SERIES"
-                      ? "series"
-                      : item.facet === "ANIME"
-                        ? "anime"
-                        : null;
+                  const overviewTargetView =
+                    item.facet === "MOVIE"
+                      ? "movies"
+                      : item.facet === "SERIES"
+                        ? "series"
+                        : item.facet === "ANIME"
+                          ? "anime"
+                          : null;
                   return (
                     <TableRow key={item.id}>
                       <TableCell>
                         {overviewTargetView ? (
                           <button
                             type="button"
-                            onClick={() => onOpenOverview(overviewTargetView, item)}
+                            onClick={() =>
+                              onOpenOverview(overviewTargetView, item)
+                            }
                             className="hover:text-foreground hover:underline"
                           >
                             {item.name}
@@ -322,9 +392,15 @@ export function AddTitleForm({
                         )}
                       </TableCell>
                       <TableCell>{item.facet}</TableCell>
-                      <TableCell>{item.monitored ? t("label.yes") : t("label.no")}</TableCell>
+                      <TableCell>
+                        {item.monitored ? t("label.yes") : t("label.no")}
+                      </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => queueExisting(item)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => queueExisting(item)}
+                        >
                           {t("title.queueLatest")}
                         </Button>
                       </TableCell>

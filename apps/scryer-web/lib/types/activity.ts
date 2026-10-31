@@ -45,7 +45,7 @@ export type ActivityEvent = {
   channels: ActivityChannel[];
   eventType?: ActivityKind;
   message: string;
-  actorKind?: 'USER' | 'ANONYMOUS' | 'SYSTEM' | null;
+  actorKind?: "USER" | "ANONYMOUS" | "SYSTEM" | null;
   actorUserId?: string | null;
   actorDisplayName?: string | null;
   titleId?: string | null;

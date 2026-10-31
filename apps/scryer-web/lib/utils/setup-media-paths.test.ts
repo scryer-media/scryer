@@ -21,7 +21,11 @@ function library(id: string, facet: string, paths: string[], isDefault = true) {
     id,
     facet: facet as "MOVIE",
     isDefault,
-    roots: paths.map((path, i) => ({ id: `${id}-${i}`, path, isDefault: i === 0 })),
+    roots: paths.map((path, i) => ({
+      id: `${id}-${i}`,
+      path,
+      isDefault: i === 0,
+    })),
   };
 }
 
@@ -123,11 +127,17 @@ test("editing roots keeps one default and no duplicates", () => {
   assert.equal(roots.length, 2);
 
   roots = setDefaultSetupRoot(roots, 1);
-  assert.deepEqual(roots.map((root) => root.isDefault), [false, true]);
+  assert.deepEqual(
+    roots.map((root) => root.isDefault),
+    [false, true],
+  );
 
   assert.equal(replaceSetupRoot(roots, 0, "/media/films-4k"), roots);
   roots = replaceSetupRoot(roots, 0, "/media/movies");
-  assert.deepEqual(roots.map((root) => root.path), ["/media/movies", "/media/films-4k"]);
+  assert.deepEqual(
+    roots.map((root) => root.path),
+    ["/media/movies", "/media/films-4k"],
+  );
 
   roots = removeSetupRoot(roots, 1);
   assert.deepEqual(roots, [{ path: "/media/movies", isDefault: true }]);

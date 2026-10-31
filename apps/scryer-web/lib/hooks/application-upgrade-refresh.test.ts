@@ -32,9 +32,15 @@ function load(file: string, overrides: Record<string, unknown>) {
       const index = cursor++;
       const slot = (slots[index] ??= {});
       if (!slot.set) {
-        slot.value = typeof initial === "function" ? (initial as () => unknown)() : initial;
+        slot.value =
+          typeof initial === "function"
+            ? (initial as () => unknown)()
+            : initial;
         slot.set = (next: unknown) => {
-          slot.value = typeof next === "function" ? (next as (v: unknown) => unknown)(slot.value) : next;
+          slot.value =
+            typeof next === "function"
+              ? (next as (v: unknown) => unknown)(slot.value)
+              : next;
           stateWrites.push([index, slot.value]);
         };
       }
@@ -78,7 +84,11 @@ function load(file: string, overrides: Record<string, unknown>) {
       assert.ok(resolved, id);
       return loadFile(resolved);
     };
-    new Function("require", "module", "exports", code)(localRequire, module, module.exports);
+    new Function("require", "module", "exports", code)(
+      localRequire,
+      module,
+      module.exports,
+    );
     cache.set(target, module.exports);
     return module.exports;
   }
@@ -151,8 +161,10 @@ function loadStatusHook() {
     options?: { settingsSubscriptionEnabled?: boolean },
   ) => unknown;
   return {
-    render: (enabled?: boolean, options?: { settingsSubscriptionEnabled?: boolean }) =>
-      harness.render(() => hook(enabled, options)),
+    render: (
+      enabled?: boolean,
+      options?: { settingsSubscriptionEnabled?: boolean },
+    ) => harness.render(() => hook(enabled, options)),
     queryNumber: (n: number) => queries[n - 1]!.promise,
     queryCount: () => queryCount,
     subscriptions,
@@ -169,7 +181,11 @@ test("the upgrade status refetches when the stored update notice changes", async
   assert.equal(subscription.options.enabled, true);
 
   subscription.onChanged(["some.other_key"]);
-  assert.equal(hook.queryCount(), 1, "unrelated settings do not refetch the status");
+  assert.equal(
+    hook.queryCount(),
+    1,
+    "unrelated settings do not refetch the status",
+  );
 
   subscription.onChanged([NOTICE_KEY]);
   await hook.queryNumber(2);
@@ -179,7 +195,10 @@ test("the upgrade status refetches when the stored update notice changes", async
 test("the upgrade status subscription follows the enabled flags", () => {
   const withoutSubscription = loadStatusHook();
   withoutSubscription.render(true, { settingsSubscriptionEnabled: false });
-  assert.equal(withoutSubscription.subscriptions.at(-1)?.options.enabled, false);
+  assert.equal(
+    withoutSubscription.subscriptions.at(-1)?.options.enabled,
+    false,
+  );
 
   const disabled = loadStatusHook();
   disabled.render(false);
@@ -235,18 +254,30 @@ function loadUpgradeAction() {
         info: (message: string) => infoToast.resolve(message),
       },
     },
-    "@/lib/context/translate-context": { useTranslate: () => (key: string) => key },
-    "@/lib/context/ui-settings-context": { useUiDateTimeFormat: () => "default" },
-    "@/lib/graphql/queries": { startApplicationUpgradeMutation: "mutation Start" },
-    "@/lib/hooks/use-application-upgrade-status": { useApplicationUpgradeStatus: () => ({}) },
+    "@/lib/context/translate-context": {
+      useTranslate: () => (key: string) => key,
+    },
+    "@/lib/context/ui-settings-context": {
+      useUiDateTimeFormat: () => "default",
+    },
+    "@/lib/graphql/queries": {
+      startApplicationUpgradeMutation: "mutation Start",
+    },
+    "@/lib/hooks/use-application-upgrade-status": {
+      useApplicationUpgradeStatus: () => ({}),
+    },
     "@/lib/utils/activity-utils": { formatByteCount: String },
     "@/lib/utils/application-upgrade-progress": {
       normalizeApplicationUpgradeProgress: () => null,
     },
     "@/lib/utils/date-format": { formatUiDateTime: String },
-    "@/lib/utils/job-runs": { normalizeJobRun: (value: unknown) => value ?? null },
+    "@/lib/utils/job-runs": {
+      normalizeJobRun: (value: unknown) => value ?? null,
+    },
   });
-  const Action = harness.exports.ApplicationUpgradeAction as (props: object) => unknown;
+  const Action = harness.exports.ApplicationUpgradeAction as (
+    props: object,
+  ) => unknown;
   return {
     confirm(props: object) {
       const tree = harness.render(() => Action(props));
@@ -297,7 +328,11 @@ test("starting an upgrade stops when the refetched status is no longer startable
   });
 
   assert.equal(await action.infoToast, "appUpgrade.targetChanged");
-  assert.equal(action.mutations.length, 0, "no mutation is sent for a stale target");
+  assert.equal(
+    action.mutations.length,
+    0,
+    "no mutation is sent for a stale target",
+  );
   assert.equal(statusChanged, 1);
   // The dialog's open flag is the action's first piece of state.
   assert.deepEqual(

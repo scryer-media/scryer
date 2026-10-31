@@ -121,7 +121,9 @@ export function useTitleMoreLikeThisActions({
         };
         if ((search.librariesByFacet[facet] ?? []).length > 0) {
           setAddDialogTarget(target);
-        } else if ((search.requestableLibrariesByFacet[facet] ?? []).length > 0) {
+        } else if (
+          (search.requestableLibrariesByFacet[facet] ?? []).length > 0
+        ) {
           setRequestDialogTarget(target);
         } else {
           setGlobalStatus(t("status.permissionDenied"));
@@ -133,11 +135,7 @@ export function useTitleMoreLikeThisActions({
         );
       }
     },
-    [
-      search,
-      setGlobalStatus,
-      t,
-    ],
+    [search, setGlobalStatus, t],
   );
 
   const handleOpenResolved = React.useCallback(

@@ -114,6 +114,8 @@ pub struct TitlePayload {
     pub country: Option<String>,
     /// Alternate title strings from catalog metadata.
     pub aliases: Vec<String>,
+    /// Alternate titles with their source language and country, when known.
+    pub tagged_aliases: Vec<TitleAliasPayload>,
     /// Language used for the latest metadata fetch, or null when not recorded.
     pub metadata_language: Option<String>,
     /// Time of the latest metadata fetch in UTC, or null before a fetch completes.
@@ -139,6 +141,17 @@ pub struct TitlePayload {
     /// Which episode numbering this title's releases are read in, or null when
     /// the title follows the default (`AUTO`).
     pub release_numbering: Option<ReleaseNumberingValue>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Alternate title metadata associated with a catalog title.
+pub struct TitleAliasPayload {
+    /// Alternate title text.
+    pub name: String,
+    /// Language code for this title, or an empty string when unknown.
+    pub language: String,
+    /// Country code associated with this title, or null when unknown.
+    pub country: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -730,6 +743,8 @@ pub struct DownloadQueueItemPayload {
     pub attention_required: bool,
     /// Reason for the attention flag, or null when no attention is required.
     pub attention_reason: Option<String>,
+    /// Stable condition explaining why attention is needed.
+    pub attention_reason_code: Option<String>,
     /// Stable password-related download failure classification; never contains credentials.
     pub password_failure_code: Option<DownloadPasswordFailureCodeValue>,
     /// Client-local item identifier; together with `client_id` it identifies the remote item.

@@ -511,9 +511,7 @@ impl AppUseCase {
             .into_iter()
             .collect::<HashSet<_>>();
         if manageable_library_ids.is_empty() {
-            return Err(AppError::Unauthorized(
-                "You do not have permission to view recycle bin settings".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED, "You do not have permission to view recycle bin settings".to_string()));
         }
 
         self.load_recycle_bin_settings(Some(&manageable_library_ids))
@@ -537,7 +535,7 @@ impl AppUseCase {
                     .ok()
                     .filter(|days| (1..=RECYCLE_BIN_MAX_RETENTION_DAYS).contains(days))
                     .ok_or_else(|| {
-                        AppError::Validation(format!(
+                        AppError::validation_refused(crate::error_reasons::settings::RECYCLE_BIN_RETENTION_OUT_OF_RANGE, format!(
                             "recycle bin retention must be between 1 and {RECYCLE_BIN_MAX_RETENTION_DAYS} days"
                         ))
                     })?,
@@ -567,7 +565,7 @@ impl AppUseCase {
             if let Some(error) =
                 Self::recycle_bin_validation_error(Path::new(path), true, &configured_roots)
             {
-                return Err(AppError::Validation(error));
+                return Err(AppError::validation_refused(crate::error_reasons::settings::RECYCLE_BIN_PATH_UNSAFE, error));
             }
         }
         let bins_before_path_change = match path {

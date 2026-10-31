@@ -37,7 +37,8 @@ export type NotificationSubscription = {
   updatedAt: string;
 };
 
-export type NotificationTargetKind = "plugin_channel" | "media_server_connection";
+export type NotificationTargetKind =
+  "plugin_channel" | "media_server_connection";
 
 export type NotificationTarget = {
   id: string;

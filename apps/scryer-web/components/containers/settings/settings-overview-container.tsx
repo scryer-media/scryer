@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { PublicUrlPanel } from "@/components/containers/settings/public-url-panel";
 import { TrustedProxiesPanel } from "@/components/containers/settings/trusted-proxies-panel";
@@ -69,9 +70,13 @@ export function SettingsOverviewContainer({
     saveUiSettings,
   } = useUiSettings();
   const refreshInstanceFeatures = useRefreshInstanceFeatures();
-  const [pendingLanguage, setPendingLanguage] = React.useState<string | null>(null);
-  const [experimentalFeaturesConfirmationOpen, setExperimentalFeaturesConfirmationOpen] =
-    React.useState(false);
+  const [pendingLanguage, setPendingLanguage] = React.useState<string | null>(
+    null,
+  );
+  const [
+    experimentalFeaturesConfirmationOpen,
+    setExperimentalFeaturesConfirmationOpen,
+  ] = React.useState(false);
   const [rehydrating, setRehydrating] = React.useState(false);
   const [uiSettingsSaving, setUiSettingsSaving] = React.useState(false);
   const [generalSettings, setGeneralSettings] = React.useState<GeneralSettings>(
@@ -82,7 +87,8 @@ export function SettingsOverviewContainer({
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
   // FR-040–FR-047: the import-copy verification depth. Its own query and
   // mutation, so it loads and saves independently of the general settings blob.
-  const [verificationDepth, setVerificationDepth] = React.useState<VerificationDepth>("QUICK");
+  const [verificationDepth, setVerificationDepth] =
+    React.useState<VerificationDepth>("QUICK");
   const [verificationLoading, setVerificationLoading] = React.useState(true);
   const [verificationSaving, setVerificationSaving] = React.useState(false);
 
@@ -90,7 +96,9 @@ export function SettingsOverviewContainer({
     let cancelled = false;
     (async () => {
       try {
-        const { data, error } = await client.query(generalSettingsQuery, {}).toPromise();
+        const { data, error } = await client
+          .query(generalSettingsQuery, {})
+          .toPromise();
         if (error) throw error;
         if (cancelled) return;
         setGeneralSettings({
@@ -140,7 +148,11 @@ export function SettingsOverviewContainer({
 
   const handleVerificationDepthChange = React.useCallback(
     async (depth: VerificationDepth) => {
-      if (verificationLoading || verificationSaving || depth === verificationDepth) {
+      if (
+        verificationLoading ||
+        verificationSaving ||
+        depth === verificationDepth
+      ) {
         return;
       }
       const previous = verificationDepth;
@@ -148,31 +160,42 @@ export function SettingsOverviewContainer({
       setVerificationSaving(true);
       try {
         const { data, error } = await client
-          .mutation<{ updateVerificationSettings: { depth: VerificationDepth } }>(
-            updateVerificationSettingsMutation,
-            { input: { depth } },
-          )
+          .mutation<{
+            updateVerificationSettings: { depth: VerificationDepth };
+          }>(updateVerificationSettingsMutation, { input: { depth } })
           .toPromise();
         if (error) throw error;
         setVerificationDepth(data?.updateVerificationSettings.depth ?? depth);
-        setGlobalStatus(t("settings.verificationDepthSaved"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.verificationDepthSaved"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setVerificationDepth(previous);
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
         setVerificationSaving(false);
       }
     },
-    [client, setGlobalStatus, t, verificationDepth, verificationLoading, verificationSaving],
+    [
+      client,
+      setGlobalStatus,
+      t,
+      verificationDepth,
+      verificationLoading,
+      verificationSaving,
+    ],
   );
 
-  const handleLanguageSelect = React.useCallback((code: string) => {
-    if (code === uiLanguage) return;
-    setPendingLanguage(code);
-  }, [uiLanguage]);
+  const handleLanguageSelect = React.useCallback(
+    (code: string) => {
+      if (code === uiLanguage) return;
+      setPendingLanguage(code);
+    },
+    [uiLanguage],
+  );
 
   const handleConfirmLanguageChange = React.useCallback(async () => {
     if (!pendingLanguage) return;
@@ -182,19 +205,23 @@ export function SettingsOverviewContainer({
       onSelectLanguage(pendingLanguage);
 
       // Trigger backend metadata rehydration
-      const { error } = await client.mutation(
-        rehydrateAllMetadataMutation,
-        { input: { language: pendingLanguage } },
-      ).toPromise();
+      const { error } = await client
+        .mutation(rehydrateAllMetadataMutation, {
+          input: { language: pendingLanguage },
+        })
+        .toPromise();
 
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else {
         setGlobalStatus(t("settings.metadataRehydrationStarted"));
       }
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -204,7 +231,8 @@ export function SettingsOverviewContainer({
   }, [client, onSelectLanguage, pendingLanguage, setGlobalStatus, t]);
 
   const pendingLanguageLabel = pendingLanguage
-    ? availableLanguages.find((l) => l.code === pendingLanguage)?.label ?? pendingLanguage
+    ? (availableLanguages.find((l) => l.code === pendingLanguage)?.label ??
+      pendingLanguage)
     : "";
 
   const handleDateTimeFormatChange = React.useCallback(
@@ -232,7 +260,7 @@ export function SettingsOverviewContainer({
         setGlobalStatus(t("settings.uiSaved"), { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -251,48 +279,57 @@ export function SettingsOverviewContainer({
     ],
   );
 
-  const handleSaveGeneralSettings = React.useCallback(async (update: GeneralSettingsUpdate) => {
-    if (update.historyRetentionDays !== undefined && update.historyRetentionDays < 1) {
-      setGlobalStatus(t("settings.historyRetentionValidation"));
-      return;
-    }
-    if (update.imageCacheMaxSizeMb !== undefined && update.imageCacheMaxSizeMb < 1) {
-      setGlobalStatus(t("settings.imageCacheMaxSizeValidation"));
-      return;
-    }
-
-    setGeneralSaving(true);
-    try {
-      const { data, error } = await client
-        .mutation(updateGeneralSettingsMutation, {
-          input: update,
-        })
-        .toPromise();
-      if (error) throw error;
-      setGeneralSettings({
-        ...DEFAULT_GENERAL_SETTINGS,
-        ...data?.updateGeneralSettings,
-      });
-      setGlobalStatus(t("settings.generalSaved"), { level: "SUCCESS" });
-      // The instance-wide switches are read app-wide through their own
-      // actor-only query, so a save has to push the new value into the
-      // provider for the gated surfaces to react without a reload.
+  const handleSaveGeneralSettings = React.useCallback(
+    async (update: GeneralSettingsUpdate) => {
       if (
-        update.apiExplorerEnabled !== undefined ||
-        update.experimentalFeaturesEnabled !== undefined ||
-        update.personalizedDiscoveryEnabled !== undefined
+        update.historyRetentionDays !== undefined &&
+        update.historyRetentionDays < 1
       ) {
-        await refreshInstanceFeatures();
+        setGlobalStatus(t("settings.historyRetentionValidation"));
+        return;
       }
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
-        { level: "ERROR" },
-      );
-    } finally {
-      setGeneralSaving(false);
-    }
-  }, [client, refreshInstanceFeatures, setGlobalStatus, t]);
+      if (
+        update.imageCacheMaxSizeMb !== undefined &&
+        update.imageCacheMaxSizeMb < 1
+      ) {
+        setGlobalStatus(t("settings.imageCacheMaxSizeValidation"));
+        return;
+      }
+
+      setGeneralSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation(updateGeneralSettingsMutation, {
+            input: update,
+          })
+          .toPromise();
+        if (error) throw error;
+        setGeneralSettings({
+          ...DEFAULT_GENERAL_SETTINGS,
+          ...data?.updateGeneralSettings,
+        });
+        setGlobalStatus(t("settings.generalSaved"), { level: "SUCCESS" });
+        // The instance-wide switches are read app-wide through their own
+        // actor-only query, so a save has to push the new value into the
+        // provider for the gated surfaces to react without a reload.
+        if (
+          update.apiExplorerEnabled !== undefined ||
+          update.experimentalFeaturesEnabled !== undefined ||
+          update.personalizedDiscoveryEnabled !== undefined
+        ) {
+          await refreshInstanceFeatures();
+        }
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        setGeneralSaving(false);
+      }
+    },
+    [client, refreshInstanceFeatures, setGlobalStatus, t],
+  );
 
   const handleExperimentalFeaturesChange = React.useCallback(
     (enabled: boolean) => {
@@ -322,12 +359,16 @@ export function SettingsOverviewContainer({
     if (imageCacheClearing) return;
     setImageCacheClearing(true);
     try {
-      const { error } = await client.mutation(clearTitleImageCacheMutation, {}).toPromise();
+      const { error } = await client
+        .mutation(clearTitleImageCacheMutation, {})
+        .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.imageCacheClearQueued"), { level: "SUCCESS" });
+      setGlobalStatus(t("settings.imageCacheClearQueued"), {
+        level: "SUCCESS",
+      });
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -363,6 +404,9 @@ export function SettingsOverviewContainer({
       <TrustedProxiesPanel />
       <ConfirmDialog
         open={experimentalFeaturesConfirmationOpen}
+        contentId="settings-general-experimental-features-dialog"
+        confirmButtonId="settings-general-experimental-features-confirm"
+        cancelButtonId="settings-general-experimental-features-cancel"
         title={t("settings.experimentalFeaturesLabel")}
         description={t("settings.experimentalFeaturesHelp")}
         confirmLabel={t("label.enable")}
@@ -375,7 +419,9 @@ export function SettingsOverviewContainer({
       <ConfirmDialog
         open={pendingLanguage !== null}
         title={t("settings.languageChangeTitle")}
-        description={t("settings.languageChangeWarning", { language: pendingLanguageLabel })}
+        description={t("settings.languageChangeWarning", {
+          language: pendingLanguageLabel,
+        })}
         confirmLabel={t("settings.languageChangeConfirm")}
         cancelLabel={t("label.cancel")}
         isBusy={rehydrating}

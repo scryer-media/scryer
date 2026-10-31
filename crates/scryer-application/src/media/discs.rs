@@ -55,10 +55,20 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media::FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         self.get_title_for_management(actor, &file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", file.title_id),
+                )
+            })?;
         let path = crate::stored_paths::stored_path_to_path_buf(&file.file_path);
         let selection = file
             .analysis_details
@@ -99,12 +109,16 @@ impl AppUseCase {
             None
         };
         if let Some(id) = file_id {
-            let saved = expected
-                .as_ref()
-                .ok_or_else(|| AppError::NotFound(format!("media file {id}")))?;
+            let saved = expected.as_ref().ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media::FILE_NOT_FOUND,
+                    format!("media file {id}"),
+                )
+            })?;
             if crate::stored_paths::stored_path_to_path_buf(&saved.file_path) != path {
-                return Err(AppError::Validation(
-                    "registered media path changed before inspection".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
+                    "registered media path changed before inspection",
                 ));
             }
         }
@@ -121,8 +135,9 @@ impl AppUseCase {
             .analyze_file_with_selection(path.clone(), selection)
             .await?;
         if source != MediaSourceVersion::read(&path).await? {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_CHANGED_DURING_INSPECTION,
+                "media source changed during inspection",
             ));
         }
         Ok(CataloguedMediaAnalysis {
@@ -143,11 +158,21 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media::FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         let title = self
             .get_title_for_management(actor, &file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", file.title_id),
+                )
+            })?;
         if title.facet == scryer_domain::MediaFacet::Movie {
             return Ok(Vec::new());
         }
@@ -164,8 +189,9 @@ impl AppUseCase {
         disc: &mut scryer_media_types::DiscMetadata,
     ) -> AppResult<()> {
         if disc.selection.episode_mappings.len() > 512 {
-            return Err(AppError::Validation(
-                "disc episode mapping limit exceeded".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::DISC_EPISODE_MAPPING_LIMIT_EXCEEDED,
+                "disc episode mapping limit exceeded",
             ));
         }
         let mut episode_ids = std::collections::HashSet::new();
@@ -173,7 +199,10 @@ impl AppUseCase {
         let mut canonical_titles = Vec::with_capacity(disc.selection.episode_mappings.len());
         for mapping in &disc.selection.episode_mappings {
             let [episode_id] = mapping.episode_ids.as_slice() else {
-                return Err(AppError::Validation("map each complete disc title to one episode; combined episodes require separate authored playback titles".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE,
+                    "map each complete disc title to one episode; combined episodes require separate authored playback titles",
+                ));
             };
             let authored = disc
                 .titles
@@ -183,21 +212,25 @@ impl AppUseCase {
                         || item.aliases.contains(&mapping.disc_title_id)
                 })
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "mapped disc title {} no longer exists; review the mapping",
-                        mapping.disc_title_id
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::media::MAPPED_DISC_TITLE_NO_LONGER_EXISTS,
+                        format!(
+                            "mapped disc title {} no longer exists; review the mapping",
+                            mapping.disc_title_id
+                        ),
+                    )
                 })?;
             if authored.report.status != scryer_media_types::ProbeStatus::Complete {
-                return Err(AppError::Validation(format!(
-                    "mapped disc title {} has incomplete or unsupported analysis",
-                    authored.id
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS,
+                    format!(
+                        "mapped disc title {} has incomplete or unsupported analysis",
+                        authored.id
+                    ),
+                ));
             }
             if !episode_ids.insert(episode_id.clone()) || !title_ids.insert(authored.id.clone()) {
-                return Err(AppError::Validation(
-                    "each episode and distinct playback title can occur in only one mapping".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::media::EACH_EPISODE_DISTINCT_PLAYBACK_TITLE_OCCUR_ONLY_ONE_MAPPING, "each episode and distinct playback title can occur in only one mapping"));
             }
             let episode = self
                 .services
@@ -207,7 +240,10 @@ impl AppUseCase {
                 .await?
                 .filter(|episode| episode.title_id == title.id)
                 .ok_or_else(|| {
-                    AppError::Validation("mapped episode does not belong to this title".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::media::MAPPED_EPISODE_DOES_NOT_BELONG_TITLE,
+                        "mapped episode does not belong to this title",
+                    )
                 })?;
             let special = episode
                 .season_number
@@ -228,19 +264,25 @@ impl AppUseCase {
                 .duration_seconds
                 .filter(|value| value.is_finite() && *value > 0.0)
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "mapped disc title {} has no established runtime",
-                        authored.id
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::media::MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME,
+                        format!(
+                            "mapped disc title {} has no established runtime",
+                            authored.id
+                        ),
+                    )
                 })?;
             let plausible = expected.map_or(actual >= 60.0, |expected| {
                 actual >= expected as f64 / 2.0 && actual <= expected as f64 * 2.0
             });
             if !plausible {
-                return Err(AppError::Validation(format!(
-                    "disc title {} runtime ({actual:.3} seconds) is implausible for episode {episode_id}",
-                    authored.id
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE,
+                    format!(
+                        "disc title {} runtime ({actual:.3} seconds) is implausible for episode {episode_id}",
+                        authored.id
+                    ),
+                ));
             }
             canonical_titles.push(authored.id.clone());
         }
@@ -265,14 +307,17 @@ impl AppUseCase {
         source: &MediaSourceVersion,
         analysis: &mut crate::MediaFileAnalysis,
     ) -> AppResult<()> {
-        let disc =
-            analysis.details.disc.as_mut().ok_or_else(|| {
-                AppError::Validation("image has no recognized disc titles".into())
-            })?;
+        let disc = analysis.details.disc.as_mut().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::media::IMAGE_NO_RECOGNIZED_DISC_TITLES,
+                "image has no recognized disc titles",
+            )
+        })?;
         let validation = self.validate_disc_episode_mappings(title, disc).await;
         if *source != MediaSourceVersion::read(path).await? {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_CHANGED_DURING_INSPECTION,
+                "media source changed during inspection",
             ));
         }
         if let Err(error) = validation {
@@ -304,28 +349,38 @@ impl AppUseCase {
         mappings: Vec<scryer_media_types::DiscEpisodeMapping>,
     ) -> AppResult<TitleMediaFile> {
         if mappings.len() > 512 {
-            return Err(AppError::Validation(
-                "disc episode mapping limit exceeded".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::DISC_EPISODE_MAPPING_LIMIT_EXCEEDED,
+                "disc episode mapping limit exceeded",
             ));
         }
         let files = &self.services.library.media_files;
-        let expected = files
-            .get_media_file_by_id(file_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        let expected = files.get_media_file_by_id(file_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::media::FILE_NOT_FOUND,
+                format!("media file {file_id}"),
+            )
+        })?;
         let title = self
             .get_title_for_management(actor, &expected.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", expected.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", expected.title_id),
+                )
+            })?;
         if title.facet == scryer_domain::MediaFacet::Movie {
-            return Err(AppError::Validation(
-                "episode mappings require a series title".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::EPISODE_MAPPINGS_REQUIRE_SERIES_TITLE,
+                "episode mappings require a series title",
             ));
         }
         let path = crate::stored_paths::stored_path_to_path_buf(&expected.file_path);
         if !scryer_domain::is_disc_image(&path) {
-            return Err(AppError::Validation(
-                "disc episode mappings require an ISO image".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::DISC_EPISODE_MAPPINGS_REQUIRE_ISO_IMAGE,
+                "disc episode mappings require an ISO image",
             ));
         }
         let mut selection = expected
@@ -343,8 +398,9 @@ impl AppUseCase {
             .analyze_file_with_selection(path.clone(), selection)
             .await?;
         if source != MediaSourceVersion::read(&path).await? {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_CHANGED_DURING_INSPECTION,
+                "media source changed during inspection",
             ));
         }
         let mut analysis = match outcome {
@@ -353,16 +409,20 @@ impl AppUseCase {
                 files
                     .record_media_analysis_attempt(&expected, &analysis)
                     .await?;
-                return Err(AppError::Validation(
-                    "disc analysis requires review before episodes can be made available".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::media::DISC_ANALYSIS_REQUIRES_REVIEW_BEFORE_EPISODES_MADE_AVAILABLE, "disc analysis requires review before episodes can be made available"));
             }
             MediaAnalysisOutcome::NoVideo => {
-                return Err(AppError::Validation(
-                    MediaAnalysisOutcome::NO_VIDEO_MESSAGE.to_string(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::VIDEO_NOT_FOUND,
+                    MediaAnalysisOutcome::NO_VIDEO_MESSAGE,
                 ));
             }
-            MediaAnalysisOutcome::Invalid(error) => return Err(AppError::Validation(error)),
+            MediaAnalysisOutcome::Invalid(error) => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::ANALYSIS_INVALID,
+                    error,
+                ));
+            }
         };
         self.validate_disc_selection_update(&title, &expected, &path, &source, &mut analysis)
             .await?;
@@ -370,14 +430,17 @@ impl AppUseCase {
             .update_media_file_analysis_if_unchanged(&expected, *analysis)
             .await?
         {
-            return Err(AppError::Validation(
-                "media source or selection changed during mapping; refresh and retry".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_SELECTION_CHANGED_DURING_MAPPING,
+                "media source or selection changed during mapping; refresh and retry",
             ));
         }
-        files
-            .get_media_file_by_id(file_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))
+        files.get_media_file_by_id(file_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::media::FILE_NOT_FOUND,
+                format!("media file {file_id}"),
+            )
+        })
     }
 
     /// Change a registered physical image's playback title without moving or copying it.
@@ -388,25 +451,34 @@ impl AppUseCase {
         title_id: Option<String>,
     ) -> AppResult<TitleMediaFile> {
         let files = &self.services.library.media_files;
-        let expected = files
-            .get_media_file_by_id(file_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        let expected = files.get_media_file_by_id(file_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::media::FILE_NOT_FOUND,
+                format!("media file {file_id}"),
+            )
+        })?;
         let title = self
             .get_title_for_management(actor, &expected.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", expected.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", expected.title_id),
+                )
+            })?;
         let path = crate::stored_paths::stored_path_to_path_buf(&expected.file_path);
         if !scryer_domain::is_disc_image(&path) {
-            return Err(AppError::Validation(
-                "disc selection requires an ISO image".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::DISC_SELECTION_REQUIRES_ISO_IMAGE,
+                "disc selection requires an ISO image",
             ));
         }
         if title_id.as_deref().is_some_and(|id| {
             id.is_empty() || id.len() > 16 || !id.bytes().all(|byte| byte.is_ascii_digit())
         }) {
-            return Err(AppError::Validation(
-                "invalid numeric disc title identity".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::NUMERIC_DISC_TITLE_IDENTITY_INVALID,
+                "invalid numeric disc title identity",
             ));
         }
         let mut selection = expected
@@ -424,8 +496,9 @@ impl AppUseCase {
             .analyze_file_with_selection(path.clone(), selection)
             .await?;
         if source != MediaSourceVersion::read(&path).await? {
-            return Err(AppError::Validation(
-                "media source changed during inspection".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_CHANGED_DURING_INSPECTION,
+                "media source changed during inspection",
             ));
         }
         let mut analysis = match outcome {
@@ -434,14 +507,23 @@ impl AppUseCase {
                 files
                     .record_media_analysis_attempt(&expected, &analysis)
                     .await?;
-                return Err(AppError::Validation("the requested disc title could not be established; review its inspection status".into()));
-            }
-            MediaAnalysisOutcome::NoVideo => {
-                return Err(AppError::Validation(
-                    MediaAnalysisOutcome::NO_VIDEO_MESSAGE.to_string(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::REQUESTED_DISC_TITLE_COULD_NOT_ESTABLISHED,
+                    "the requested disc title could not be established; review its inspection status",
                 ));
             }
-            MediaAnalysisOutcome::Invalid(error) => return Err(AppError::Validation(error)),
+            MediaAnalysisOutcome::NoVideo => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::VIDEO_NOT_FOUND,
+                    MediaAnalysisOutcome::NO_VIDEO_MESSAGE,
+                ));
+            }
+            MediaAnalysisOutcome::Invalid(error) => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media::ANALYSIS_INVALID,
+                    error,
+                ));
+            }
         };
         if analysis
             .details
@@ -449,8 +531,9 @@ impl AppUseCase {
             .as_ref()
             .is_none_or(|disc| disc.selected_title_id.is_none())
         {
-            return Err(AppError::Validation(
-                "the requested disc title does not exist".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::REQUESTED_DISC_TITLE_DOES_NOT_EXIST,
+                "the requested disc title does not exist",
             ));
         }
         self.validate_disc_selection_update(&title, &expected, &path, &source, &mut analysis)
@@ -459,14 +542,17 @@ impl AppUseCase {
             .update_media_file_analysis_if_unchanged(&expected, *analysis)
             .await?
         {
-            return Err(AppError::Validation(
-                "media source or selection changed during inspection; refresh and retry".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media::SOURCE_SELECTION_CHANGED_DURING_INSPECTION,
+                "media source or selection changed during inspection; refresh and retry",
             ));
         }
-        files
-            .get_media_file_by_id(file_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))
+        files.get_media_file_by_id(file_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::media::FILE_NOT_FOUND,
+                format!("media file {file_id}"),
+            )
+        })
     }
 }
 
@@ -484,7 +570,9 @@ mod media_source_version_tests {
             .expect_err("missing file must fail");
 
         match error {
-            AppError::Repository(message) => {
+            AppError::Repository(message)
+            | AppError::RepositoryFailure { message, .. }
+            | AppError::RepositoryFailed { message, .. } => {
                 assert!(
                     message.contains("failed to read media source metadata"),
                     "{message}"

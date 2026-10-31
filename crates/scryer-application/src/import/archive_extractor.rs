@@ -476,7 +476,7 @@ pub async fn extract_archives_if_needed(
         return Ok(None);
     }
     let Some(destination) = destination else {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT, format!(
             "archive extraction requires a resolved import destination before staging output for {}",
             redact_archive_diagnostic(&dir.to_string_lossy())
         )));
@@ -524,12 +524,21 @@ fn classify_archive_failure(error: AppError) -> AppError {
         return error;
     }
     match error {
-        AppError::Validation(message) | AppError::ArchiveExtractionFailed { message } => {
-            AppError::ArchiveExtractionFailed {
-                message: redact_archive_diagnostic(&message),
-            }
-        }
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. }
+        | AppError::ArchiveExtractionFailed { message } => AppError::ArchiveExtractionFailed {
+            message: redact_archive_diagnostic(&message),
+        },
         AppError::Repository(message) => AppError::Repository(redact_archive_diagnostic(&message)),
+        AppError::RepositoryFailed { message, reason } => AppError::RepositoryFailed {
+            message: redact_archive_diagnostic(&message),
+            reason,
+        },
+        AppError::RepositoryFailure { message, kind } => AppError::RepositoryFailure {
+            message: redact_archive_diagnostic(&message),
+            kind,
+        },
         error => error,
     }
 }
@@ -602,15 +611,19 @@ async fn extract_into_workspace(
             break;
         }
         if depth > MAX_NESTED_ARCHIVE_DEPTH {
-            return Err(AppError::Validation(format!(
-                "archive holds archives nested more than {MAX_NESTED_ARCHIVE_DEPTH} levels deep"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP,
+                format!(
+                    "archive holds archives nested more than {MAX_NESTED_ARCHIVE_DEPTH} levels deep"
+                ),
+            ));
         }
         nested_archives += inner_sets.len();
         if nested_archives > MAX_NESTED_ARCHIVES {
-            return Err(AppError::Validation(format!(
-                "archive holds more than {MAX_NESTED_ARCHIVES} nested archives"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES,
+                format!("archive holds more than {MAX_NESTED_ARCHIVES} nested archives"),
+            ));
         }
         info!(
             depth,
@@ -659,9 +672,10 @@ fn nested_archive_sets(outputs: &[PathBuf]) -> AppResult<Vec<(PathBuf, ArchiveTy
     for output in outputs {
         sets.extend(find_archive_sets(output)?);
         if sets.len() > MAX_NESTED_ARCHIVES {
-            return Err(AppError::Validation(format!(
-                "archive holds more than {MAX_NESTED_ARCHIVES} nested archives"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES,
+                format!("archive holds more than {MAX_NESTED_ARCHIVES} nested archives"),
+            ));
         }
     }
     Ok(sets)
@@ -805,10 +819,13 @@ enum ArchiveAttempt {
 /// already exists and is empty.
 async fn prepare_workspace_output_dir(workspace_root: &Path, output_dir: &Path) -> AppResult<()> {
     if output_dir.parent() != Some(workspace_root) {
-        return Err(AppError::Validation(format!(
-            "archive output directory {} is not inside the staging workspace",
-            redact_archive_diagnostic(&output_dir.to_string_lossy())
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE,
+            format!(
+                "archive output directory {} is not inside the staging workspace",
+                redact_archive_diagnostic(&output_dir.to_string_lossy())
+            ),
+        ));
     }
     match tokio::fs::create_dir(output_dir).await {
         Ok(()) => Ok(()),
@@ -821,10 +838,13 @@ async fn prepare_workspace_output_dir(workspace_root: &Path, output_dir: &Path) 
             })?;
             match entries.next_entry().await {
                 Ok(None) => Ok(()),
-                _ => Err(AppError::Validation(format!(
-                    "archive staging output directory {} is not empty",
-                    redact_archive_diagnostic(&output_dir.to_string_lossy())
-                ))),
+                _ => Err(AppError::validation_refused(
+                    crate::error_reasons::import::ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY,
+                    format!(
+                        "archive staging output directory {} is not empty",
+                        redact_archive_diagnostic(&output_dir.to_string_lossy())
+                    ),
+                )),
             }
         }
         Err(error) => Err(AppError::Repository(format!(
@@ -873,10 +893,13 @@ fn ensure_source_outside_output(source_dir: &Path, output_dir: &Path) -> AppResu
         })
     };
     if canonical(source_dir)?.starts_with(canonical(output_dir)?) {
-        return Err(AppError::Validation(format!(
-            "archive source {} lies inside its own extraction output",
-            redact_archive_diagnostic(&source_dir.to_string_lossy())
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT,
+            format!(
+                "archive source {} lies inside its own extraction output",
+                redact_archive_diagnostic(&source_dir.to_string_lossy())
+            ),
+        ));
     }
     Ok(())
 }
@@ -908,8 +931,9 @@ fn plan_archive_extraction(
         AppError::Repository(format!("archive source inspection failed: {error}"))
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(
-            "archive source must not be a symlink".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_SOURCE_SYMLINK_FORBIDDEN,
+            "archive source must not be a symlink",
         ));
     }
     if metadata.is_file() {
@@ -921,9 +945,10 @@ fn plan_archive_extraction(
 
     let sets = find_archive_sets(dir)?;
     if sets.len() > MAX_ARCHIVE_SETS {
-        return Err(AppError::Validation(format!(
-            "download holds more than {MAX_ARCHIVE_SETS} archive sets"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS,
+            format!("download holds more than {MAX_ARCHIVE_SETS} archive sets"),
+        ));
     }
     Ok(sets)
 }
@@ -1081,8 +1106,9 @@ fn archive_storage_is_shared(output: &Path, scratch: &Path) -> bool {
 
 fn validate_reported_sources(source_dir: &Path, paths: &[String]) -> AppResult<Vec<PathBuf>> {
     if paths.len() > MAX_PLUGIN_OUTPUT_ENTRIES {
-        return Err(AppError::Validation(
-            "archive source metadata exceeds entry limit".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_SOURCE_METADATA_EXCEEDS_ENTRY_LIMIT,
+            "archive source metadata exceeds entry limit",
         ));
     }
     let source = source_dir
@@ -1095,17 +1121,13 @@ fn validate_reported_sources(source_dir: &Path, paths: &[String]) -> AppResult<V
             if !std::fs::symlink_metadata(&path)
                 .is_ok_and(|metadata| metadata.file_type().is_file())
             {
-                return Err(AppError::Validation(
-                    "archive source metadata must identify a regular file".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_SOURCE_METADATA_MUST_IDENTIFY_REGULAR_FILE, "archive source metadata must identify a regular file"));
             }
             let canonical = path
                 .canonicalize()
                 .map_err(|error| AppError::Repository(error.to_string()))?;
             if !canonical.starts_with(&source) {
-                return Err(AppError::Validation(
-                    "archive source metadata escapes its source directory".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY, "archive source metadata escapes its source directory"));
             }
             Ok(canonical)
         })
@@ -1341,10 +1363,13 @@ fn handle_archive_plugin_response(
                 }
             }
         }
-        ArchivePluginStatus::UnsupportedFormat => Err(AppError::Validation(format!(
-            "archive plugin does not support {} extraction",
-            archive_type.as_str()
-        ))),
+        ArchivePluginStatus::UnsupportedFormat => Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION,
+            format!(
+                "archive plugin does not support {} extraction",
+                archive_type.as_str()
+            ),
+        )),
         ArchivePluginStatus::PasswordRequired => Err(AppError::ArchivePasswordRequired {
             message: format!("{} archive requires a password", archive_type.as_str()),
         }),
@@ -1442,19 +1467,25 @@ fn validate_archive_plugin_output(
             ))
         })?;
         if !metadata.file_type().is_file() {
-            return Err(AppError::Validation(format!(
-                "archive plugin manifest output is not a regular file: {}",
-                redact_archive_diagnostic(&path.to_string_lossy())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE,
+                format!(
+                    "archive plugin manifest output is not a regular file: {}",
+                    redact_archive_diagnostic(&path.to_string_lossy())
+                ),
+            ));
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
         if let Some(expected_size) = file.size
             && expected_size != metadata.len()
         {
-            return Err(AppError::Validation(format!(
-                "archive plugin manifest size mismatch for {}",
-                redact_archive_diagnostic(&path.to_string_lossy())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH,
+                format!(
+                    "archive plugin manifest size mismatch for {}",
+                    redact_archive_diagnostic(&path.to_string_lossy())
+                ),
+            ));
         }
     }
 
@@ -1470,7 +1501,8 @@ fn validate_archive_plugin_output(
     while let Some(path) = stack.pop() {
         entry_count += 1;
         if entry_count > MAX_PLUGIN_OUTPUT_ENTRIES {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_ENTRIES,
                 "archive plugin output contains too many entries".to_string(),
             ));
         }
@@ -1481,18 +1513,19 @@ fn validate_archive_plugin_output(
             ))
         })?;
         if metadata.file_type().is_symlink() {
-            return Err(AppError::Validation(format!(
-                "archive plugin output contains a symlink: {}",
-                redact_archive_diagnostic(&path.to_string_lossy())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_SYMLINK,
+                format!(
+                    "archive plugin output contains a symlink: {}",
+                    redact_archive_diagnostic(&path.to_string_lossy())
+                ),
+            ));
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
         if metadata.is_dir() {
             directory_count += 1;
             if directory_count > MAX_PLUGIN_OUTPUT_DIRECTORIES {
-                return Err(AppError::Validation(
-                    "archive plugin output contains too many directories".to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_DIRECTORIES, "archive plugin output contains too many directories".to_string()));
             }
             for entry in std::fs::read_dir(&path).map_err(|error| {
                 AppError::Repository(format!(
@@ -1506,35 +1539,43 @@ fn validate_archive_plugin_output(
                     ))
                 })?;
                 if entry_count + stack.len() >= MAX_PLUGIN_OUTPUT_ENTRIES {
-                    return Err(AppError::Validation(
-                        "archive plugin output contains too many entries".to_string(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_ENTRIES, "archive plugin output contains too many entries".to_string()));
                 }
                 stack.push(entry.path());
             }
             continue;
         }
         if !metadata.is_file() {
-            return Err(AppError::Validation(format!(
-                "archive plugin output is not a regular file: {}",
-                redact_archive_diagnostic(&path.to_string_lossy())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_NOT_REGULAR_FILE,
+                format!(
+                    "archive plugin output is not a regular file: {}",
+                    redact_archive_diagnostic(&path.to_string_lossy())
+                ),
+            ));
         }
 
         file_count += 1;
         if file_count > MAX_PLUGIN_OUTPUT_FILES {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_FILES,
                 "archive plugin output contains too many files".to_string(),
             ));
         }
         expanded_bytes = expanded_bytes.checked_add(metadata.len()).ok_or_else(|| {
-            AppError::Validation("archive plugin output is too large".to_string())
+            AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE,
+                "archive plugin output is too large".to_string(),
+            )
         })?;
         if expanded_bytes > MAX_PLUGIN_OUTPUT_BYTES {
-            return Err(AppError::Validation(format!(
-                "archive plugin output exceeds {} bytes",
-                MAX_PLUGIN_OUTPUT_BYTES
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES,
+                format!(
+                    "archive plugin output exceeds {} bytes",
+                    MAX_PLUGIN_OUTPUT_BYTES
+                ),
+            ));
         }
     }
 
@@ -1550,9 +1591,10 @@ fn validate_archive_plugin_output(
 
 fn safe_archive_output_path(output_dir: &Path, entry_name: &str) -> AppResult<PathBuf> {
     if entry_name.trim().is_empty() || entry_name.contains('\\') {
-        return Err(AppError::Validation(format!(
-            "unsafe archive entry path: {entry_name}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::UNSAFE_ARCHIVE_ENTRY_PATH,
+            format!("unsafe archive entry path: {entry_name}"),
+        ));
     }
 
     let mut relative = PathBuf::new();
@@ -1561,17 +1603,19 @@ fn safe_archive_output_path(output_dir: &Path, entry_name: &str) -> AppResult<Pa
             Component::Normal(part) => relative.push(part),
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(AppError::Validation(format!(
-                    "unsafe archive entry path: {entry_name}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::UNSAFE_ARCHIVE_ENTRY_PATH,
+                    format!("unsafe archive entry path: {entry_name}"),
+                ));
             }
         }
     }
 
     if relative.as_os_str().is_empty() {
-        return Err(AppError::Validation(format!(
-            "unsafe archive entry path: {entry_name}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::UNSAFE_ARCHIVE_ENTRY_PATH,
+            format!("unsafe archive entry path: {entry_name}"),
+        ));
     }
 
     Ok(output_dir.join(relative))
@@ -1585,10 +1629,13 @@ fn ensure_path_under_output_with_root(path: &Path, output_root: &Path) -> AppRes
         ))
     })?;
     if !canonical.starts_with(output_root) {
-        return Err(AppError::Validation(format!(
-            "archive entry escapes extraction directory: {}",
-            redact_archive_diagnostic(&path.to_string_lossy())
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY,
+            format!(
+                "archive entry escapes extraction directory: {}",
+                redact_archive_diagnostic(&path.to_string_lossy())
+            ),
+        ));
     }
     Ok(())
 }
@@ -1633,8 +1680,9 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
     let io_error = |error| AppError::Repository(format!("archive discovery failed: {error}"));
     let metadata = std::fs::symlink_metadata(dir).map_err(io_error)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(
-            "archive source is not a regular directory".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::ARCHIVE_SOURCE_NOT_REGULAR_DIRECTORY,
+            "archive source is not a regular directory",
         ));
     }
     let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), 0usize)]);
@@ -1647,8 +1695,9 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
             let entry = entry.map_err(io_error)?;
             entries_seen += 1;
             if entries_seen > MAX_PLUGIN_OUTPUT_ENTRIES {
-                return Err(AppError::Validation(
-                    "archive discovery entry limit exceeded".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::ARCHIVE_DISCOVERY_ENTRY_LIMIT_EXCEEDED,
+                    "archive discovery entry limit exceeded",
                 ));
             }
             let kind = entry.file_type().map_err(io_error)?;
@@ -1656,9 +1705,7 @@ fn archive_inventory(dir: &Path, max_depth: usize) -> AppResult<Vec<PathBuf>> {
             if kind.is_dir() && !is_excluded_archive_discovery_dir(&path) {
                 directories += 1;
                 if depth >= max_depth || directories > MAX_ARCHIVE_DISCOVERY_DIRECTORIES {
-                    return Err(AppError::Validation(
-                        "archive discovery directory or depth limit exceeded".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_DISCOVERY_DIRECTORY_DEPTH_LIMIT_EXCEEDED, "archive discovery directory or depth limit exceeded"));
                 }
                 children.push(path);
             } else if kind.is_file() {
@@ -4281,7 +4328,15 @@ mod tests {
     #[test]
     fn archive_plugin_failure_keeps_the_error_code_alongside_the_message() {
         let error = archive_plugin_failure_error(Some("par2_scan_failed"), Some("bad header"));
-        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Repository(_)
+                    | AppError::RepositoryFailure { .. }
+                    | AppError::RepositoryFailed { .. }
+            ),
+            "{error:?}"
+        );
         let text = error.to_string();
         assert!(text.contains("par2_scan_failed"), "{text}");
         assert!(text.contains("bad header"), "{text}");

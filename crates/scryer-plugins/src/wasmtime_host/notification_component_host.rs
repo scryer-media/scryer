@@ -486,6 +486,7 @@ fn finish_error(
     error::to_app_error(
         failure,
         &error::InvocationContext {
+            plugin_kind: error::PluginHostKind::Notification,
             plugin_id: invocation.plugin_id,
             plugin_version: invocation.plugin_version,
             operation: invocation.operation,

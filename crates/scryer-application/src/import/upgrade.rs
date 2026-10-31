@@ -81,10 +81,13 @@ pub(crate) async fn resolve_old_file_recycle_context(
         .collect::<Vec<_>>();
 
     if media_roots.is_empty() {
-        return Err(AppError::Validation(format!(
-            "refusing to upgrade {} because library {} has no configured media roots for old-file cleanup",
-            title.name, title.library_id
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::MEDIA_ROOT_REQUIRED,
+            format!(
+                "refusing to upgrade {} because library {} has no configured media roots for old-file cleanup",
+                title.name, title.library_id
+            ),
+        ));
     }
 
     let source_roots = media_roots
@@ -94,7 +97,7 @@ pub(crate) async fn resolve_old_file_recycle_context(
     let old_file_media_root =
         crate::fs_safety::most_specific_containing_root(&old_path, &source_roots).ok_or_else(
             || {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::import::PATH_OUTSIDE_LIBRARY_ROOT, format!(
                     "refusing to upgrade {} because old file {} is outside the current media roots for library {}; keep the old root configured until existing files are moved, replaced, or deleted",
                     title.name,
                     old_path.display(),
@@ -121,7 +124,7 @@ pub(crate) async fn resolve_old_file_recycle_context(
             }
         })
         .ok_or_else(|| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::import::RECYCLE_BIN_CONFIG_REQUIRED, format!(
                 "refusing to upgrade {} because no recycle bin config could be resolved for old file root {}",
                 title.name,
                 old_file_media_root.display()
@@ -698,16 +701,22 @@ async fn same_path_guard_regular_file_exists(path: &Path, role: &str) -> AppResu
         }
     };
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "refusing same-path upgrade recovery because {role} is a symlink: {}",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SYMLINK_REFUSED,
+            format!(
+                "refusing same-path upgrade recovery because {role} is a symlink: {}",
+                path.display()
+            ),
+        ));
     }
     if !metadata.is_file() {
-        return Err(AppError::Validation(format!(
-            "refusing same-path upgrade recovery because {role} is not a regular file: {}",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::REGULAR_FILE_REQUIRED,
+            format!(
+                "refusing same-path upgrade recovery because {role} is not a regular file: {}",
+                path.display()
+            ),
+        ));
     }
     Ok(true)
 }
@@ -971,19 +980,20 @@ fn ensure_old_file_disposition_ready(
     old_path: &Path,
 ) -> AppResult<()> {
     if recycle_config.source_roots.is_empty() {
-        return Err(AppError::Validation(
-            "refusing to upgrade because no configured media roots are available for old-file cleanup"
-                .to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::MEDIA_ROOT_REQUIRED, "refusing to upgrade because no configured media roots are available for old-file cleanup"
+                .to_string()));
     }
     if recycle_config.enabled && !recycle_config.cleanup_enabled {
-        return Err(AppError::Validation(format!(
-            "refusing to upgrade because the recycle bin path is unsafe: {}",
-            recycle_config
-                .validation_error
-                .as_deref()
-                .unwrap_or("invalid recycle bin configuration")
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::UPGRADE_RECYCLE_BIN_PATH_UNSAFE,
+            format!(
+                "refusing to upgrade because the recycle bin path is unsafe: {}",
+                recycle_config
+                    .validation_error
+                    .as_deref()
+                    .unwrap_or("invalid recycle bin configuration")
+            ),
+        ));
     }
     recycle_bin::ensure_source_within_roots(recycle_config, old_path)?;
     Ok(())
@@ -1362,16 +1372,22 @@ async fn prepare_old_file_disposition_for_upgrade(
         }
     };
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "refusing to dispose old upgrade file {} because it is a symlink",
-            old_file_source_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SYMLINK_REFUSED,
+            format!(
+                "refusing to dispose old upgrade file {} because it is a symlink",
+                old_file_source_path.display()
+            ),
+        ));
     }
     if !metadata.is_file() {
-        return Err(AppError::Validation(format!(
-            "refusing to dispose old upgrade file {} because it is not a regular file",
-            old_file_source_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::REGULAR_FILE_REQUIRED,
+            format!(
+                "refusing to dispose old upgrade file {} because it is not a regular file",
+                old_file_source_path.display()
+            ),
+        ));
     }
 
     let backup_path = sibling_guard_path(old_file_source_path, "old");
@@ -1442,11 +1458,14 @@ fn resolve_same_path_upgrade_guard_root(
         if recycle_bin::restore_destination_is_under_configured_root(old_path, &root) {
             return Ok(root);
         }
-        return Err(AppError::Validation(format!(
-            "refusing same-path upgrade guard because old file {} is outside media root {}",
-            old_path.display(),
-            root.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::PATH_OUTSIDE_LIBRARY_ROOT,
+            format!(
+                "refusing same-path upgrade guard because old file {} is outside media root {}",
+                old_path.display(),
+                root.display()
+            ),
+        ));
     }
 
     recycle_config
@@ -1455,10 +1474,13 @@ fn resolve_same_path_upgrade_guard_root(
         .find(|root| recycle_bin::restore_destination_is_under_configured_root(old_path, root))
         .cloned()
         .ok_or_else(|| {
-            AppError::Validation(format!(
-                "refusing same-path upgrade guard because no configured media root contains {}",
-                old_path.display()
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::import::MEDIA_ROOT_REQUIRED,
+                format!(
+                    "refusing same-path upgrade guard because no configured media root contains {}",
+                    old_path.display()
+                ),
+            )
         })
 }
 
@@ -1902,11 +1924,14 @@ async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppR
 async fn restore_backup_to_absent_path(final_path: &Path, backup_path: &Path) -> AppResult<()> {
     match tokio::fs::symlink_metadata(final_path).await {
         Ok(_) => {
-            return Err(AppError::Validation(format!(
-                "refusing to restore old upgrade backup {} because destination is occupied: {}",
-                backup_path.display(),
-                final_path.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::DESTINATION_OCCUPIED,
+                format!(
+                    "refusing to restore old upgrade backup {} because destination is occupied: {}",
+                    backup_path.display(),
+                    final_path.display()
+                ),
+            ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {

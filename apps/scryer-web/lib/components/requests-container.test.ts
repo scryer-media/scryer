@@ -46,14 +46,18 @@ function mountContainer(adminRequests: unknown[]) {
       deps === undefined ||
       previous.deps === undefined ||
       deps.length !== previous.deps.length ||
-      deps.some((value, position) => !Object.is(value, previous.deps?.[position]))
+      deps.some(
+        (value, position) => !Object.is(value, previous.deps?.[position]),
+      )
     );
   };
   const react = {
     useState(initial: unknown) {
       const index = cursor++;
       if (!(index in slots)) {
-        slots[index] = { value: typeof initial === "function" ? initial() : initial };
+        slots[index] = {
+          value: typeof initial === "function" ? initial() : initial,
+        };
       }
       const slot = slots[index] as { value: unknown };
       return [
@@ -132,17 +136,22 @@ function mountContainer(adminRequests: unknown[]) {
       titleClaimsQuery: "titleClaims",
     },
     "@/lib/context/global-status-context": {
-      useGlobalStatus: () => (message: string, options?: { level?: string }) => {
-        statuses.push({ message, level: options?.level });
-      },
+      useGlobalStatus:
+        () => (message: string, options?: { level?: string }) => {
+          statuses.push({ message, level: options?.level });
+        },
     },
-    "@/lib/context/translate-context": { useTranslate: () => (key: string) => key },
+    "@/lib/context/translate-context": {
+      useTranslate: () => (key: string) => key,
+    },
     "@/lib/events/navigation-badges": {
       dispatchNavigationBadgesRefresh: () => {},
       NAVIGATION_BADGES_REFRESH_EVENT: "navigation-badges-refresh",
     },
     "@/lib/hooks/use-auth": { useAuth: () => auth },
-    "@/lib/hooks/use-media-requests-subscription": { useMediaRequestsSubscription: () => {} },
+    "@/lib/hooks/use-media-requests-subscription": {
+      useMediaRequestsSubscription: () => {},
+    },
     "@/lib/utils/permissions": {
       hasAnyLibraryPermission: () => true,
       LIBRARY_PERMISSIONS: { manageTitles: "manage_titles" },
@@ -155,16 +164,25 @@ function mountContainer(adminRequests: unknown[]) {
       createTrailingThrottle: () => ({ request: () => {}, cancel: () => {} }),
     },
   };
-  const file = new URL("../../components/containers/requests-container.tsx", import.meta.url);
+  const file = new URL(
+    "../../components/containers/requests-container.tsx",
+    import.meta.url,
+  );
   const code = ts.transpileModule(readFileSync(file, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
   }).outputText;
   const module = {
     exports: {} as {
       RequestsContainer: (props: object) => { props: RequestsViewProps };
     },
   };
-  const fakeWindow = { addEventListener: () => {}, removeEventListener: () => {} };
+  const fakeWindow = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
   new Function("require", "module", "exports", "window", code)(
     (id: string) => overrides[id] ?? require(id),
     module,
@@ -198,7 +216,10 @@ test("reopening a collapsed row reopens every request it stands for", async (t) 
   screen.render();
   await settle();
   let view = screen.render();
-  assert.deepEqual(view.requests.map((request) => request.id), ["request-early"]);
+  assert.deepEqual(
+    view.requests.map((request) => request.id),
+    ["request-early"],
+  );
 
   view.onReopen(view.requests[0]);
   await settle();
@@ -229,7 +250,9 @@ test("switching accounts clears the queue filters chosen by the previous account
   view.onSelectedLibraryIdsChange(["library-1"]);
   screen.render();
   await settle();
-  const filtered = screen.queries.filter((call) => call.query === "mediaRequests").at(-1);
+  const filtered = screen.queries
+    .filter((call) => call.query === "mediaRequests")
+    .at(-1);
   assert.equal(filtered?.variables.requesterUserId, "requester-of-a");
 
   screen.auth.user = { id: "manager-b" };
@@ -240,7 +263,9 @@ test("switching accounts clears the queue filters chosen by the previous account
 
   assert.equal(view.selectedRequesterId, null);
   assert.deepEqual(view.selectedLibraryIds, []);
-  const latest = screen.queries.filter((call) => call.query === "mediaRequests").at(-1);
+  const latest = screen.queries
+    .filter((call) => call.query === "mediaRequests")
+    .at(-1);
   assert.equal(latest?.variables.requesterUserId, null);
   assert.equal(latest?.variables.libraryIds, null);
 });

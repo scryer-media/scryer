@@ -1,7 +1,16 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 
 import { memo, type ReactNode, useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
-import { ChevronRight, Recycle, ScrollText, Server, TextSearch, Timer, type LucideIcon } from "lucide-react";
+import {
+  ChevronRight,
+  Recycle,
+  ScrollText,
+  Server,
+  TextSearch,
+  Timer,
+  type LucideIcon,
+} from "lucide-react";
 import { SystemLogsView, SystemView } from "@/components/views/system-view";
 import { SystemAuditContainer } from "@/components/containers/system-audit-container";
 import { SystemJobsContainer } from "@/components/containers/system-jobs-container";
@@ -71,12 +80,21 @@ export const SystemContainer = memo(function SystemContainer({
   const refreshSystem = useCallback(async () => {
     setSystemLoading(true);
     try {
-      const { data, error } = await client.query(systemHealthQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(systemHealthQuery, {})
+        .toPromise();
       if (error) throw error;
       setSystemHealth(data?.systemHealth ?? null);
-      setGlobalStatus(data?.systemHealth?.serviceReady ? t("system.loaded") : t("system.notReady"));
+      setGlobalStatus(
+        data?.systemHealth?.serviceReady
+          ? t("system.loaded")
+          : t("system.notReady"),
+      );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setSystemLoading(false);
     }

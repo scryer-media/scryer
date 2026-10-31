@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,7 +47,7 @@ export function ProxyTestForm({
       setResult(await onTest(proxy, url.trim()));
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : t("status.proxyTestFailed"),
+        userFacingGraphQlErrorMessage(error, t("status.proxyTestFailed"), t),
       );
     } finally {
       setIsTesting(false);
@@ -145,6 +146,7 @@ export function ProxyTestForm({
               type="button"
               variant="secondary"
               disabled={isTesting}
+              id="settings-proxy-test-close"
               onClick={onClose}
             >
               {t("label.close")}

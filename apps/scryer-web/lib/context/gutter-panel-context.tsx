@@ -5,4 +5,6 @@ import { createContext } from "react";
  * from elsewhere in the tree, drop its own card frame and offer the panel's
  * close button in its header.
  */
-export const GutterPanelContext = createContext<{ close: () => void } | null>(null);
+export const GutterPanelContext = createContext<{ close: () => void } | null>(
+  null,
+);

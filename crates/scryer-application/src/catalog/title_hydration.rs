@@ -548,8 +548,8 @@ pub async fn start_background_title_hydration_loop(
                     "title hydration loop: batch failed"
                 );
                 let reason = error.to_string();
-                let non_retryable =
-                    crate::catalog_workflow::is_non_retryable_hydration_failure(&reason);
+                let non_retryable = error.repository_kind()
+                    == Some(crate::RepositoryErrorKind::TitleExternalIdConflict);
                 for title_id in title_ids {
                     metrics::counter!("scryer_title_metadata_hydration_failure_total").increment(1);
                     if let Some((previous_attempt_count, facet)) =
@@ -697,29 +697,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn external_id_conflicts_are_not_retryable() {
+    fn external_id_conflicts_are_not_retryable_without_matching_messages() {
+        let failure =
+            crate::catalog_workflow::HydrationFailure::from(crate::AppError::repository_failure(
+                crate::RepositoryErrorKind::TitleExternalIdConflict,
+                "translated database failure",
+            ));
         assert!(crate::catalog_workflow::is_non_retryable_hydration_failure(
-            "repository error: UNIQUE constraint failed: title_external_ids.library_id, title_external_ids.source, title_external_ids.external_id"
+            &failure
         ));
-        assert!(crate::catalog_workflow::is_non_retryable_hydration_failure(
-            "duplicate key value violates unique constraint \"idx_title_external_ids_library_lookup\""
-        ));
-    }
-
-    #[test]
-    fn transient_and_unrelated_failures_stay_retryable() {
-        for reason in [
-            "metadata could not be persisted",
-            "bulk metadata response missing title",
-            "database is locked",
-            "UNIQUE constraint failed: titles.id",
-            "duplicate key value violates unique constraint \"titles_pkey\"",
-        ] {
-            assert!(
-                !crate::catalog_workflow::is_non_retryable_hydration_failure(reason),
-                "{reason} should stay retryable"
-            );
-        }
+        let unrelated =
+            crate::catalog_workflow::HydrationFailure::from(crate::AppError::repository_failure(
+                crate::RepositoryErrorKind::UniqueViolation,
+                "title_external_ids words do not change the kind",
+            ));
+        assert!(!crate::catalog_workflow::is_non_retryable_hydration_failure(&unrelated));
+        let text = crate::catalog_workflow::HydrationFailure::from(
+            "UNIQUE constraint failed: title_external_ids".to_string(),
+        );
+        assert!(!crate::catalog_workflow::is_non_retryable_hydration_failure(&text));
     }
 
     #[test]

@@ -22,6 +22,8 @@ mod full_admin_manage_lists_upgrade_tests;
 pub mod hook_ids;
 #[cfg(test)]
 mod imdb_user_list_follows_upgrade_tests;
+#[cfg(test)]
+mod initial_auth_tests;
 pub mod known_bad;
 #[cfg(test)]
 mod legacy_monitor_snapshot_upgrade_tests;
@@ -201,6 +203,7 @@ pub async fn replay_catalog_into_fresh_db(
         through_version,
         enable_baselines,
         &MigrationHookContext::default(),
+        false,
     )
     .await
 }
@@ -212,6 +215,7 @@ async fn replay_catalog_into_fresh_db_with_context(
     through_version: Option<i64>,
     enable_baselines: bool,
     hook_context: &MigrationHookContext,
+    initialize_authentication: bool,
 ) -> AppResult<()> {
     ensure_migration_ledger_shape(conn).await?;
 
@@ -232,7 +236,14 @@ async fn replay_catalog_into_fresh_db_with_context(
         && let Some(baseline) =
             catalog.latest_baseline_at_or_below(target_version, EngineScope::Sqlite)
     {
-        apply_baseline(conn, catalog, payload_bytes, baseline).await?;
+        apply_baseline(
+            conn,
+            catalog,
+            payload_bytes,
+            baseline,
+            initialize_authentication,
+        )
+        .await?;
         start_version = baseline.through_version + 1;
     }
 
@@ -279,10 +290,13 @@ pub async fn run_migrations_with_hook_context(
     }
 
     if matches!(mode, MigrationMode::ValidateOnly) {
-        return Err(AppError::Validation(format!(
-            "database migration check failed; pending migrations: {}",
-            pending.join(", ")
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_DATABASE_MIGRATION_CHECK_FAILED,
+            format!(
+                "database migration check failed; pending migrations: {}",
+                pending.join(", ")
+            ),
+        ));
     }
 
     let install_kind = detect_install_kind(conn, &applied).await?;
@@ -295,6 +309,7 @@ pub async fn run_migrations_with_hook_context(
                 None,
                 true,
                 &hook_context,
+                true,
             )
             .await?;
         }
@@ -694,6 +709,7 @@ async fn apply_baseline(
     catalog: &CompiledMigrationCatalog,
     payload_bytes: &[u8],
     baseline: &CompiledBaseline,
+    initialize_authentication: bool,
 ) -> AppResult<()> {
     let sql = baseline
         .payload
@@ -715,6 +731,17 @@ async fn apply_baseline(
             .execute(&mut *tx)
             .await
             .map_err(|error| AppError::Repository(error.to_string()))?;
+    }
+
+    // Persist the first-run requirement with the fresh schema, before any later
+    // migration can fail and cause the next boot to take the upgrade path.
+    if initialize_authentication {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(
+            include_str!("initial_auth_seed.sql").to_owned(),
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
     }
 
     for migration in catalog
@@ -777,72 +804,84 @@ async fn apply_single_migration(
     install_kind: MigrationInstallKind,
     hook_context: &MigrationHookContext,
 ) -> AppResult<()> {
+    scryer_application::check_restore_deadline()?;
     let start = Instant::now();
     let mut tx = conn
         .begin()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
 
-    if let Some(quarantined) = known_bad::known_bad_migration(migration.version) {
-        // Recorded exactly as if it had run (same version/description/checksum,
-        // so ledger validation on every later boot is unchanged), but none of
-        // its steps execute. The replacement version carries the safe work.
-        tracing::warn!(
-            version = migration.version,
-            replacement_version = quarantined.replacement_version,
-            reason = quarantined.reason,
-            "skipping quarantined migration; recording it as applied without executing its steps"
-        );
-        insert_applied_migration(&mut tx, migration, 0).await?;
-        tx.commit()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
-        return Ok(());
-    }
-
-    for step in &migration.steps {
-        if !step.engine().applies_to(EngineScope::Sqlite) {
-            continue;
+    let work = async {
+        if let Some(quarantined) = known_bad::known_bad_migration(migration.version) {
+            // Recorded exactly as if it had run (same version/description/checksum,
+            // so ledger validation on every later boot is unchanged), but none of
+            // its steps execute. The replacement version carries the safe work.
+            tracing::warn!(
+                version = migration.version,
+                replacement_version = quarantined.replacement_version,
+                reason = quarantined.reason,
+                "skipping quarantined migration; recording it as applied without executing its steps"
+            );
+            insert_applied_migration(&mut tx, migration, 0).await?;
+            return Ok(());
         }
 
-        if !step.scope().applies_to(install_kind) {
-            continue;
-        }
+        for step in &migration.steps {
+            if !step.engine().applies_to(EngineScope::Sqlite) {
+                continue;
+            }
 
-        match step {
-            CompiledMigrationStep::Sql { payload, .. } => {
-                let sql = payload
-                    .text(payload_bytes)
-                    .map_err(AppError::Repository)?
-                    .to_owned();
-                if sql.trim().is_empty() {
-                    continue;
+            if !step.scope().applies_to(install_kind) {
+                continue;
+            }
+
+            match step {
+                CompiledMigrationStep::Sql { payload, .. } => {
+                    let sql = payload
+                        .text(payload_bytes)
+                        .map_err(AppError::Repository)?
+                        .to_owned();
+                    if sql.trim().is_empty() {
+                        continue;
+                    }
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(map_migration_execute_error(
+                                migration.version,
+                                error.to_string(),
+                            ))
+                        })?;
                 }
-                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|error| {
-                        AppError::Repository(map_migration_execute_error(
-                            migration.version,
-                            error.to_string(),
-                        ))
-                    })?;
-            }
-            CompiledMigrationStep::Rust { hook_id, .. } => {
-                run_rust_hook(
-                    hook_id.clone(),
-                    &mut tx,
-                    migration.version,
-                    install_kind,
-                    hook_context,
-                )
-                .await?;
+                CompiledMigrationStep::Rust { hook_id, .. } => {
+                    run_rust_hook(
+                        hook_id.clone(),
+                        &mut tx,
+                        migration.version,
+                        install_kind,
+                        hook_context,
+                    )
+                    .await?;
+                }
             }
         }
-    }
 
-    let elapsed_ns = start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
-    insert_applied_migration(&mut tx, migration, elapsed_ns).await?;
+        let elapsed_ns = start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+        insert_applied_migration(&mut tx, migration, elapsed_ns).await?;
+        scryer_application::check_restore_deadline()?;
+        Ok(())
+    };
+    let result = match scryer_application::current_restore_deadline() {
+        Some(deadline) => deadline.run(work).await,
+        None => work.await,
+    };
+    if let Err(error) = result {
+        tx.rollback().await.map_err(|rollback| {
+            AppError::Repository(format!("failed to roll back migration: {rollback}"))
+        })?;
+        return Err(error);
+    }
     tx.commit()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;

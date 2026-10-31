@@ -79,7 +79,12 @@ export function useDeferredWsSubscription<TResult>({
       queryText,
       variables: requestOperation.variables,
     });
-  }, [requestKey, requestOperation.operationName, requestOperation.variables, queryText]);
+  }, [
+    requestKey,
+    requestOperation.operationName,
+    requestOperation.variables,
+    queryText,
+  ]);
 
   useEffect(() => {
     if (!enabled) {

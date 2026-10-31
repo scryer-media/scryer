@@ -1,11 +1,7 @@
 import type { LibraryScanProgress } from "./library-scans";
 
 export type JobCategory =
-  | "LIBRARY"
-  | "ACQUISITION"
-  | "MAINTENANCE"
-  | "SUBTITLES"
-  | "SYSTEM";
+  "LIBRARY" | "ACQUISITION" | "MAINTENANCE" | "SUBTITLES" | "SYSTEM";
 
 export type JobSection = "PRIMARY" | "MAINTENANCE";
 
@@ -25,12 +21,7 @@ export type JobTriggerSource =
   | "SYSTEM_INTERNAL";
 
 export type JobRunStatus =
-  | "QUEUED"
-  | "DISCOVERING"
-  | "RUNNING"
-  | "COMPLETED"
-  | "WARNING"
-  | "FAILED";
+  "QUEUED" | "DISCOVERING" | "RUNNING" | "COMPLETED" | "WARNING" | "FAILED";
 
 export type JobKey =
   | "LIBRARY_SCAN_MOVIES"

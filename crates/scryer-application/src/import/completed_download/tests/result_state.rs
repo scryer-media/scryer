@@ -237,12 +237,14 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
     assert_eq!(retry.attempts, 1);
     assert!(retry.next_retry_at > Utc::now());
     assert!(
-        td.status_messages[0].starts_with("Import partially completed"),
+        td.status_messages[0]
+            .text
+            .starts_with("Import partially completed"),
         "{:?}",
         td.status_messages
     );
     assert!(
-        td.status_messages[0].contains("Retrying at"),
+        td.status_messages[0].text.contains("Retrying at"),
         "{:?}",
         td.status_messages
     );
@@ -583,7 +585,7 @@ async fn apply_result_keeps_rejected_already_imported_result_blocked() {
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec!["existing episode file is equal or better".to_string()]
     );
 }
@@ -600,7 +602,7 @@ async fn apply_result_marks_burned_rejection_failed() {
     assert_eq!(td.state, TrackedDownloadState::Failed);
     assert_eq!(td.status, TrackedDownloadStatus::Error);
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec!["release language does not match the title".to_string()]
     );
     assert!(td.burned_by_import_gate);
@@ -620,7 +622,7 @@ async fn apply_result_treats_burned_rule_block_as_final() {
     assert_eq!(td.status, TrackedDownloadStatus::Error);
     assert!(td.import_execution_retry.is_none());
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec!["post-download rule(s) blocked import: language policy".to_string()]
     );
 }
@@ -867,7 +869,7 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec!["Import was cancelled. Use Manual Import to resume it.".to_string()]
     );
     assert!(td.import_execution_retry.is_none());
@@ -918,7 +920,10 @@ async fn apply_result_blocks_post_download_rule_error_hold_for_operator_review()
         );
         assert_eq!(td.state, TrackedDownloadState::ImportBlocked, "{reason}");
         assert_eq!(td.status, TrackedDownloadStatus::Warning, "{reason}");
-        assert_eq!(td.status_messages, vec![reason.to_string()]);
+        assert_eq!(
+            crate::tracked_downloads::status_texts(&td.status_messages),
+            vec![reason.to_string()]
+        );
         assert!(!td.burned_by_import_gate, "{reason}");
         assert!(td.import_execution_retry.is_none(), "{reason}");
     }
@@ -956,7 +961,10 @@ async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
-    assert_eq!(td.status_messages, vec![reason.to_string()]);
+    assert_eq!(
+        crate::tracked_downloads::status_texts(&td.status_messages),
+        vec![reason.to_string()]
+    );
 }
 
 #[tokio::test]
@@ -989,7 +997,11 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
-    assert!(td.status_messages[0].contains("Retrying automatically"));
+    assert!(
+        td.status_messages[0]
+            .text
+            .contains("Retrying automatically")
+    );
     assert_eq!(td.no_video_import_retry.as_ref().unwrap().attempts, 1);
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -997,6 +1009,9 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
     assert_eq!(td.no_video_import_retry.as_ref().unwrap().attempts, 2);
 
+    // Unchanged checks past the two fast retries keep retrying at the slow
+    // cadence until the 48-hour ceiling.
+    const { assert!(5 < NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS) };
     for attempt in 3..=5 {
         let before = Utc::now();
         assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -1005,6 +1020,61 @@ async fn apply_result_keeps_retrying_no_video_import_after_unchanged_checks() {
         assert_eq!(retry.attempts, attempt);
         assert!(retry.next_retry_at >= before + Duration::minutes(15));
     }
+}
+
+#[tokio::test]
+async fn apply_result_blocks_no_video_import_once_slow_retries_reach_the_ceiling() {
+    assert_eq!(
+        i64::from(NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS),
+        2 + Duration::hours(48).num_seconds() / NO_VIDEO_SLOW_RETRY_DELAY_SECS
+    );
+    let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut td = build_tracked_download("title-1", "movie", "Paper.Lantern.2012.1080p.WEB-DL");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let result = ImportResult {
+        import_id: "import-1".to_string(),
+        decision: ImportDecision::Skipped,
+        skip_reason: Some(ImportSkipReason::NoVideoFiles),
+        title_id: Some("title-1".to_string()),
+        source_system: Some("nzbget".to_string()),
+        source_ref: Some("dl-1".to_string()),
+        source_title: Some("Paper.Lantern.2012.1080p.WEB-DL".to_string()),
+        source_path: temp_dir.path().to_string_lossy().into_owned(),
+        dest_path: None,
+        quality: None,
+        episode_ids: vec![],
+        file_size_bytes: None,
+        link_type: None,
+        error_message: Some("no eligible video files found".to_string()),
+        release_burned: false,
+        started_at: Utc::now(),
+        completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
+    };
+
+    // The first check records the unchanged source signature; then jump the
+    // count to just below the ceiling instead of running every slow retry.
+    assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
+    td.no_video_import_retry
+        .as_mut()
+        .expect("automatic retry")
+        .attempts = NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS - 2;
+
+    assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert_eq!(
+        td.no_video_import_retry.as_ref().unwrap().attempts,
+        NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS - 1
+    );
+
+    assert!(!apply_import_result(&app, &mut td, result, 0).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert_eq!(td.status, TrackedDownloadStatus::Warning);
+    assert!(td.no_video_import_retry.is_none());
+    assert!(td.status_messages[0].text.contains(&format!(
+        "after {NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS} unchanged checks"
+    )));
 }
 
 #[tokio::test]
@@ -1103,11 +1173,17 @@ async fn apply_result_retries_failed_execution_with_capped_backoff_and_never_blo
             "attempt {attempt}: expected ~{expected_delay_secs}s backoff, got {delay}s"
         );
         assert!(
-            td.status_messages[0].contains(&format!("Retrying automatically (attempt {attempt})")),
+            td.status_messages[0]
+                .text
+                .contains(&format!("Retrying automatically (attempt {attempt})")),
             "attempt {attempt}: {:?}",
             td.status_messages
         );
-        assert!(td.status_messages[0].starts_with("0 imported, 0 skipped"));
+        assert!(
+            td.status_messages[0]
+                .text
+                .starts_with("0 imported, 0 skipped")
+        );
         assert!(td.no_video_import_retry.is_none());
     }
 }
@@ -1124,7 +1200,7 @@ async fn imported_video_with_pending_subtitles_stays_successful_but_blocks_downl
     assert_eq!(td.status, TrackedDownloadStatus::Warning);
     assert!(td.import_execution_retry.is_none());
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING]
     );
 }
@@ -1141,7 +1217,7 @@ async fn apply_result_blocks_password_required_failure_without_retry() {
     assert_eq!(td.status, TrackedDownloadStatus::Error);
     assert!(td.import_execution_retry.is_none());
     assert_eq!(
-        td.status_messages,
+        crate::tracked_downloads::status_texts(&td.status_messages),
         vec!["archive requires a password".to_string()]
     );
 }
@@ -1349,7 +1425,10 @@ mod released_hold {
         let mut td = build_tracked_download("title-1", "series", BATCH_RELEASE);
         td.state = TrackedDownloadState::ImportBlocked;
         td.status = TrackedDownloadStatus::Warning;
-        td.status_messages = vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.into()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+            crate::tracked_downloads::TrackedStatusMessageKind::SceneSubtitlePending,
+            "rewritten subtitle hold explanation",
+        )];
         td.completed_source = Some(build_completed_download(
             BATCH_RELEASE,
             download_dir.to_string_lossy().as_ref(),
@@ -1463,7 +1542,7 @@ mod released_hold {
         );
         assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
         assert_eq!(
-            td.status_messages,
+            crate::tracked_downloads::status_texts(&td.status_messages),
             vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
         );
         assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
@@ -1494,15 +1573,14 @@ mod released_hold {
     async fn a_scryer_grab_whose_submission_cannot_be_resolved_is_left_untouched() {
         let download = held_download_dir();
         let app = batch_app(None, &["ep-301", "ep-302", "ep-303"]).await;
+        let original = held_download(download.path());
+        let original_status_messages = original.status_messages.clone();
 
-        let (settlement, td) = release(&app, held_download(download.path()), AUTOMATIC).await;
+        let (settlement, td) = release(&app, original, AUTOMATIC).await;
 
         assert!(settlement.is_err(), "{settlement:?}");
         assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
-        assert_eq!(
-            td.status_messages,
-            vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.to_string()]
-        );
+        assert_eq!(td.status_messages, original_status_messages);
     }
 
     #[tokio::test]
@@ -1634,7 +1712,7 @@ mod released_hold {
         assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
         assert!(!td.state.counts_as_imported());
         assert_eq!(
-            td.status_messages,
+            crate::tracked_downloads::status_texts(&td.status_messages),
             vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
         );
         assert!(td.import_execution_retry.is_none(), "no retry is scheduled");

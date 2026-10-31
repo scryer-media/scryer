@@ -810,6 +810,12 @@ impl TestContext {
         let db = SqliteServices::new(":memory:")
             .await
             .expect("failed to create in-memory SQLite");
+        // General integration fixtures represent an instance that has already
+        // made its authentication decision. First-run tests explicitly reopen it.
+        sqlx::query("UPDATE settings_values SET value_json = '{\"stage\":\"complete\"}' WHERE id = 'initial-authentication-setup'")
+            .execute(&db.pool)
+            .await
+            .expect("failed to complete fixture authentication decision");
         db.set_encryption_key(EncryptionKey::generate())
             .await
             .expect("failed to configure test encryption key");

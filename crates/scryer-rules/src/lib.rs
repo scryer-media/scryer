@@ -20,6 +20,7 @@
 //!   GraphQL, or stores.
 
 pub(crate) mod builtins;
+pub mod diagnostic_codes;
 pub mod maintenance;
 pub mod policy;
 mod release;

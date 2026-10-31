@@ -9,9 +9,16 @@ import {
 
 const t = (key: string) => en[key] ?? key;
 const refusal = (reason: string, extra: Record<string, string> = {}) => ({
-  graphQLErrors: [{ message: "unrelated wording", extensions: {
-    code: "VALIDATION_ERROR", reason, ...extra,
-  } }],
+  graphQLErrors: [
+    {
+      message: "unrelated wording",
+      extensions: {
+        code: "VALIDATION_ERROR",
+        reason,
+        ...extra,
+      },
+    },
+  ],
 });
 
 test("every server refusal reason has a translation", () => {
@@ -26,7 +33,10 @@ test("every server refusal reason has a translation", () => {
     "EPISODE_FILE_REASSIGN_RENAME_REFUSED",
     "EPISODE_FILE_REASSIGN_RENAME_FAILED",
   ];
-  assert.deepEqual(Object.keys(EPISODE_FILE_REASSIGN_REFUSAL_KEYS).sort(), [...serverReasons].sort());
+  assert.deepEqual(
+    Object.keys(EPISODE_FILE_REASSIGN_REFUSAL_KEYS).sort(),
+    [...serverReasons].sort(),
+  );
   for (const key of Object.values(EPISODE_FILE_REASSIGN_REFUSAL_KEYS)) {
     assert.ok(en[key], `missing en translation for ${key}`);
   }
@@ -34,7 +44,11 @@ test("every server refusal reason has a translation", () => {
 
 test("a reassignment refusal is translated by reason regardless of the sentence", () => {
   assert.equal(
-    episodeFileReassignErrorMessage(refusal("EPISODE_FILE_REASSIGN_DESTINATION_OCCUPIED"), t, "failed"),
+    episodeFileReassignErrorMessage(
+      refusal("EPISODE_FILE_REASSIGN_DESTINATION_OCCUPIED"),
+      t,
+      "failed",
+    ),
     en["episodeAssign.refusal.destinationOccupied"],
   );
 });
@@ -42,9 +56,17 @@ test("a reassignment refusal is translated by reason regardless of the sentence"
 test("an unknown reason keeps the server explanation", () => {
   assert.equal(
     episodeFileReassignErrorMessage(
-      { graphQLErrors: [{ message: "validation: new condition", extensions: {
-        code: "VALIDATION_ERROR", reason: "EPISODE_FILE_REASSIGN_FUTURE",
-      } }] },
+      {
+        graphQLErrors: [
+          {
+            message: "validation: new condition",
+            extensions: {
+              code: "VALIDATION_ERROR",
+              reason: "EPISODE_FILE_REASSIGN_FUTURE",
+            },
+          },
+        ],
+      },
       t,
       "failed",
     ),
@@ -55,13 +77,17 @@ test("an unknown reason keeps the server explanation", () => {
 test("the conflicting file id is read from its own field, only for a primary conflict", () => {
   assert.equal(
     episodeFileReassignConflictingFileId(
-      refusal("EPISODE_FILE_REASSIGN_PRIMARY_CONFLICT", { conflictingFileId: "file-7" }),
+      refusal("EPISODE_FILE_REASSIGN_PRIMARY_CONFLICT", {
+        conflictingFileId: "file-7",
+      }),
     ),
     "file-7",
   );
   assert.equal(
     episodeFileReassignConflictingFileId(
-      refusal("EPISODE_FILE_REASSIGN_RENAME_FAILED", { conflictingFileId: "file-7" }),
+      refusal("EPISODE_FILE_REASSIGN_RENAME_FAILED", {
+        conflictingFileId: "file-7",
+      }),
     ),
     null,
   );

@@ -5,6 +5,11 @@
       "path": "input.release",
       "fields": [
         {
+          "field": "protocol",
+          "type": "string?",
+          "descKey": "settings.refReleaseProtocol"
+        },
+        {
           "field": "raw_title",
           "type": "string",
           "descKey": "settings.refReleaseRawTitle"
@@ -250,10 +255,26 @@
       "titleKey": "settings.refSectionStereoscopy",
       "path": "input.release.stereoscopy",
       "fields": [
-        { "field": "presentation", "type": "string", "descKey": "settings.refStereoPresentation" },
-        { "field": "layout", "type": "string?", "descKey": "settings.refStereoLayout" },
-        { "field": "sampling", "type": "string?", "descKey": "settings.refStereoSampling" },
-        { "field": "encoding", "type": "string?", "descKey": "settings.refStereoEncoding" }
+        {
+          "field": "presentation",
+          "type": "string",
+          "descKey": "settings.refStereoPresentation"
+        },
+        {
+          "field": "layout",
+          "type": "string?",
+          "descKey": "settings.refStereoLayout"
+        },
+        {
+          "field": "sampling",
+          "type": "string?",
+          "descKey": "settings.refStereoSampling"
+        },
+        {
+          "field": "encoding",
+          "type": "string?",
+          "descKey": "settings.refStereoEncoding"
+        }
       ]
     },
     {
@@ -367,11 +388,31 @@
       "titleKey": "settings.refSectionScoringOverrides",
       "path": "input.profile.scoring_overrides",
       "fields": [
-        { "field": "allow_x265_non4k", "type": "bool?", "descKey": "settings.refOverrideX265" },
-        { "field": "block_dv_without_fallback", "type": "bool?", "descKey": "settings.refOverrideDolbyVision" },
-        { "field": "prefer_compact_encodes", "type": "bool?", "descKey": "settings.refOverrideCompact" },
-        { "field": "prefer_lossless_audio", "type": "bool?", "descKey": "settings.refOverrideLossless" },
-        { "field": "block_upscaled", "type": "bool?", "descKey": "settings.refOverrideUpscaled" }
+        {
+          "field": "allow_x265_non4k",
+          "type": "bool?",
+          "descKey": "settings.refOverrideX265"
+        },
+        {
+          "field": "block_dv_without_fallback",
+          "type": "bool?",
+          "descKey": "settings.refOverrideDolbyVision"
+        },
+        {
+          "field": "prefer_compact_encodes",
+          "type": "bool?",
+          "descKey": "settings.refOverrideCompact"
+        },
+        {
+          "field": "prefer_lossless_audio",
+          "type": "bool?",
+          "descKey": "settings.refOverrideLossless"
+        },
+        {
+          "field": "block_upscaled",
+          "type": "bool?",
+          "descKey": "settings.refOverrideUpscaled"
+        }
       ]
     },
     {

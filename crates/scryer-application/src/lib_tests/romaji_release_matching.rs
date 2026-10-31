@@ -124,6 +124,7 @@ async fn anime_with_romanization(romanization: &str, tagged: bool) -> (AppUseCas
                     vec![scryer_domain::TaggedAlias {
                         name: romanization.to_string(),
                         language: "x-jat".to_string(),
+                        country: None,
                     }]
                 } else {
                     Vec::new()

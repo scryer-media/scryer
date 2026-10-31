@@ -265,10 +265,13 @@ impl ListProviderClient for WasmListClient {
         // Member-only providers are never invoked on the instance's behalf:
         // without the member's own token there is no call to make.
         if self.requires_member_credential() && request.credential.is_none() {
-            return Err(AppError::Validation(format!(
-                "list provider {} reads only a member's own lists and needs that member's linked account",
-                self.descriptor.provider_type()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::PLUGIN_LIST_LINKED_ACCOUNT_REQUIRED,
+                format!(
+                    "list provider {} reads only a member's own lists and needs that member's linked account",
+                    self.descriptor.provider_type()
+                ),
+            ));
         }
         let spec = self.spec_for_fetch(&request);
         self.pacer

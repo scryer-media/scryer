@@ -6,9 +6,7 @@ pub fn validate_persisted_proxy_config(config: &scryer_domain::ProxyConfig) -> A
     validate_proxy_timeout(config.request_timeout_seconds)?;
     let protocol = resolve_new_proxy_protocol(config.provider_type, config.protocol)?;
     if protocol != config.protocol {
-        return Err(AppError::Validation(
-            "Stored proxy protocol does not match its provider".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::STORED_PROXY_PROTOCOL_DOES_NOT_MATCH_PROVIDER, "Stored proxy protocol does not match its provider"));
     }
     validate_proxy_credentials(
         config.provider_type,
@@ -138,12 +136,10 @@ impl AppUseCase {
             .await?;
         let id = update.id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("proxy config id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id is required"));
         }
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one proxy field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_FIELD_REQUIRED, "at least one proxy field must be provided"));
         }
 
         let proxy_assignment = self
@@ -158,7 +154,7 @@ impl AppUseCase {
             .proxy_configs
             .get_for_edit(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::PROXY_CONFIG_NOT_FOUND, format!("proxy config '{id}' not found")))?;
         if let Some(name) = update.name {
             config.name = normalize_proxy_name(&name)?;
         }
@@ -257,7 +253,7 @@ impl AppUseCase {
                 })
                 .count();
             if assigned_count > 0 {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S, format!(
                     "proxy config is assigned to {assigned_count} enabled indexer(s)"
                 )));
             }
@@ -274,7 +270,7 @@ impl AppUseCase {
                 .filter(|client| client.is_enabled && client.proxy_config_id.as_deref() == Some(id))
                 .count();
             if assigned_clients > 0 {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S, format!(
                     "proxy config is assigned to {assigned_clients} enabled download client(s)"
                 )));
             }
@@ -306,7 +302,7 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("proxy config id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id is required"));
         }
         let proxy_assignment = self
             .services
@@ -323,9 +319,7 @@ impl AppUseCase {
             .into_iter()
             .any(|indexer| indexer.proxy_config_id.as_deref() == Some(id));
         if assigned {
-            return Err(AppError::Validation(
-                "proxy config is assigned to one or more indexers".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS, "proxy config is assigned to one or more indexers"));
         }
         // Same rule for the other consumer family. Deletion refuses rather than
         // clearing assignments, which is how the indexer side has always
@@ -339,9 +333,7 @@ impl AppUseCase {
             .into_iter()
             .any(|client| client.proxy_config_id.as_deref() == Some(id));
         if assigned_clients {
-            return Err(AppError::Validation(
-                "proxy config is assigned to one or more download clients".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS, "proxy config is assigned to one or more download clients"));
         }
         self.services.integrations.proxy_configs.delete(id).await?;
         drop(proxy_assignment);
@@ -367,7 +359,7 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("proxy config id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id is required"));
         }
         let config = self
             .services
@@ -375,19 +367,15 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::PROXY_CONFIG_NOT_FOUND, format!("proxy config '{id}' not found")))?;
         if !config.is_tunnel() || config.provider_type == scryer_domain::ProxyProviderType::Http3 {
-            return Err(AppError::Validation(
-                "only SSH tunnel proxies pin a host key".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY, "only SSH tunnel proxies pin a host key"));
         }
         // WireGuard is a tunnel with no trust-on-first-use step: the peer's
         // public key *is* its identity and the operator configured it, so
         // there is nothing learned to forget.
         if config.provider_type == scryer_domain::ProxyProviderType::WireGuard {
-            return Err(AppError::Validation(
-                "WireGuard tunnels have no host key to reset".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_TUNNELS_NO_HOST_KEY_RESET, "WireGuard tunnels have no host key to reset"));
         }
         crate::tunnel_proxy::TunnelHostKeyLedger::shared()
             .begin_reset(&config)
@@ -403,7 +391,7 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(&config.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::PROXY_CONFIG_NOT_FOUND, format!("proxy config '{id}' not found")))?;
         crate::tunnel_proxy::TunnelHostKeyLedger::shared()
             .register(&config)
             .map_err(AppError::Repository)?;
@@ -427,11 +415,9 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound("proxy config not found".into()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::PROXY_CONFIG_NOT_FOUND, "proxy config not found"))?;
         if !config.is_enabled {
-            return Err(AppError::Validation(
-                "Enable this proxy before testing its outbound route.".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE, "Enable this proxy before testing its outbound route."));
         }
         let started = std::time::Instant::now();
         let timeout = crate::transport_proxy::transport_proxy_request_timeout(&config);
@@ -467,7 +453,7 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("proxy config id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id is required"));
         }
         let config = self
             .services
@@ -475,7 +461,7 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::PROXY_CONFIG_NOT_FOUND, format!("proxy config '{id}' not found")))?;
 
         let started = std::time::Instant::now();
         let result = match config.kind() {
@@ -557,9 +543,7 @@ impl AppUseCase {
                 )
             } else if config.provider_type == scryer_domain::ProxyProviderType::Http3 {
                 if destination.is_none() {
-                    return Err(AppError::Validation(
-                        "Assign an indexer to test HTTP/3 CONNECT through its destination".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::integration::ASSIGN_INDEXER_TEST_HTTP_3_CONNECT_THROUGH_DESTINATION, "Assign an indexer to test HTTP/3 CONNECT through its destination"));
                 }
                 (config.clone(), "HTTP/3 CONNECT".to_string())
             } else {
@@ -724,16 +708,14 @@ impl AppUseCase {
 
 fn normalize_proxy_test_url(raw: &str) -> AppResult<String> {
     let mut url = url::Url::parse(raw.trim()).map_err(|_| {
-        AppError::Validation("Test URL must be an absolute HTTP or HTTPS URL.".into())
+        AppError::validation_refused(crate::error_reasons::integration::TEST_URL_INVALID, "Test URL must be an absolute HTTP or HTTPS URL.")
     })?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return Err(AppError::Validation(
-            "Test URL must use HTTP or HTTPS and contain no credentials.".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::TEST_URL_INVALID, "Test URL must use HTTP or HTTPS and contain no credentials."));
     }
     url.set_fragment(None);
     Ok(url.to_string())
@@ -867,7 +849,7 @@ fn proxy_url_test_result(status: u16, body: &str, duration_ms: Option<u64>) -> P
 fn normalize_proxy_name(raw: &str) -> AppResult<String> {
     let name = raw.trim().to_string();
     if name.is_empty() {
-        return Err(AppError::Validation("proxy name is required".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_NAME_REQUIRED, "proxy name is required"));
     }
     Ok(name)
 }
@@ -972,22 +954,18 @@ fn ensure_url_scheme(scheme: &str, value: &str) -> String {
 fn normalize_proxy_base_url(raw: &str) -> AppResult<String> {
     let stripped = strip_config_assignment(raw, ENDPOINT_CONFIG_KEYS).trim_end_matches('/');
     if stripped.is_empty() {
-        return Err(AppError::Validation("proxy base URL is required".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_REQUIRED, "proxy base URL is required"));
     }
     // A solver is addressed as an ordinary URL, so a pasted `localhost:8191`
     // means http.
     let trimmed = ensure_url_scheme("http", stripped);
     let parsed = url::Url::parse(&trimmed)
-        .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, format!("invalid proxy base URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(AppError::Validation(
-            "proxy base URL must use http or https".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, "proxy base URL must use http or https"));
     }
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
-        return Err(AppError::Validation(
-            "proxy base URL must include a host".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_HOST_REQUIRED, "proxy base URL must include a host"));
     }
     Ok(trimmed)
 }
@@ -1022,23 +1000,19 @@ fn normalize_proxy_endpoint(
 
     let stripped = strip_config_assignment(raw, ENDPOINT_CONFIG_KEYS).trim_end_matches('/');
     if stripped.is_empty() {
-        return Err(AppError::Validation("proxy base URL is required".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_REQUIRED, "proxy base URL is required"));
     }
     let trimmed = ensure_url_scheme(default_proxy_scheme(provider_type), stripped);
     let parsed = url::Url::parse(&trimmed)
-        .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, format!("invalid proxy base URL: {error}")))?;
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
-        return Err(AppError::Validation(
-            "proxy base URL must include a host".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_HOST_REQUIRED, "proxy base URL must include a host"));
     }
     // Credentials belong in the username/password fields, which are encrypted
     // at rest. The base URL is stored in the clear.
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(AppError::Validation(
-            "proxy base URL must not embed credentials; use the username and password fields"
-                .into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_URL_CREDENTIALS_FORBIDDEN, "proxy base URL must not embed credentials; use the username and password fields"
+                ));
     }
 
     match (provider_type, parsed.scheme()) {
@@ -1048,16 +1022,14 @@ fn normalize_proxy_endpoint(
                 || parsed.fragment().is_some()
                 || parsed.port() == Some(0)
             {
-                return Err(AppError::Validation("HTTP/3 CONNECT endpoint must be https://host[:port] without a path, query or fragment".into()));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::HTTP_3_CONNECT_ENDPOINT_INVALID, "HTTP/3 CONNECT endpoint must be https://host[:port] without a path, query or fragment"));
             }
             Ok(NormalizedProxyEndpoint {
                 base_url: trimmed,
                 scheme_remote_dns: None,
             })
         }
-        (Provider::Http3, _) => Err(AppError::Validation(
-            "HTTP/3 CONNECT requires an https endpoint".into(),
-        )),
+        (Provider::Http3, _) => Err(AppError::validation_refused(crate::error_reasons::integration::HTTP_3_CONNECT_REQUIRES_HTTPS_ENDPOINT, "HTTP/3 CONNECT requires an https endpoint")),
         (Provider::Http, "http" | "https") => Ok(NormalizedProxyEndpoint {
             base_url: trimmed,
             scheme_remote_dns: None,
@@ -1067,15 +1039,11 @@ fn normalize_proxy_endpoint(
         // wrong thing.
         (Provider::SshTunnel, "ssh") => {
             if !matches!(parsed.path(), "" | "/") {
-                return Err(AppError::Validation(
-                    "SSH tunnel base URL must be ssh://host[:port] with no path".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNEL_BASE_URL_INVALID, "SSH tunnel base URL must be ssh://host[:port] with no path"));
             }
             if parsed.query().is_some() || parsed.fragment().is_some() {
-                return Err(AppError::Validation(
-                    "SSH tunnel base URL must be ssh://host[:port] with no query or fragment"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNEL_BASE_URL_INVALID, "SSH tunnel base URL must be ssh://host[:port] with no query or fragment"
+                        ));
             }
             Ok(NormalizedProxyEndpoint {
                 base_url: trimmed,
@@ -1086,15 +1054,11 @@ fn normalize_proxy_endpoint(
         // else, so the same rule as SSH: host, optional port, no resource.
         (Provider::WireGuard, "wireguard") => {
             if !matches!(parsed.path(), "" | "/") {
-                return Err(AppError::Validation(
-                    "WireGuard base URL must be wireguard://host[:port] with no path".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_BASE_URL_INVALID, "WireGuard base URL must be wireguard://host[:port] with no path"));
             }
             if parsed.query().is_some() || parsed.fragment().is_some() {
-                return Err(AppError::Validation(
-                    "WireGuard base URL must be wireguard://host[:port] with no query or fragment"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_BASE_URL_INVALID, "WireGuard base URL must be wireguard://host[:port] with no query or fragment"
+                        ));
             }
             Ok(NormalizedProxyEndpoint {
                 base_url: trimmed,
@@ -1118,28 +1082,18 @@ fn normalize_proxy_endpoint(
             };
             let mut canonical = parsed.clone();
             canonical.set_scheme(canonical_scheme).map_err(|_| {
-                AppError::Validation(format!("invalid {} proxy base URL", parsed.scheme()))
+                AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, format!("invalid {} proxy base URL", parsed.scheme()))
             })?;
             Ok(NormalizedProxyEndpoint {
                 base_url: canonical.as_str().trim_end_matches('/').to_string(),
                 scheme_remote_dns: Some(true),
             })
         }
-        (Provider::Http, _) => Err(AppError::Validation(
-            "HTTP proxy base URL must use http or https".into(),
-        )),
-        (Provider::Socks4, _) => Err(AppError::Validation(
-            "SOCKS4 proxy base URL must use socks4 or socks4a".into(),
-        )),
-        (Provider::Socks5, _) => Err(AppError::Validation(
-            "SOCKS5 proxy base URL must use socks5 or socks5h".into(),
-        )),
-        (Provider::SshTunnel, _) => Err(AppError::Validation(
-            "SSH tunnel base URL must use ssh".into(),
-        )),
-        (Provider::WireGuard, _) => Err(AppError::Validation(
-            "WireGuard base URL must use wireguard".into(),
-        )),
+        (Provider::Http, _) => Err(AppError::validation_refused(crate::error_reasons::integration::HTTP_PROXY_BASE_URL_INVALID, "HTTP proxy base URL must use http or https")),
+        (Provider::Socks4, _) => Err(AppError::validation_refused(crate::error_reasons::integration::SOCKS4_PROXY_BASE_URL_INVALID, "SOCKS4 proxy base URL must use socks4 or socks4a")),
+        (Provider::Socks5, _) => Err(AppError::validation_refused(crate::error_reasons::integration::SOCKS5_PROXY_BASE_URL_INVALID, "SOCKS5 proxy base URL must use socks5 or socks5h")),
+        (Provider::SshTunnel, _) => Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNEL_BASE_URL_INVALID, "SSH tunnel base URL must use ssh")),
+        (Provider::WireGuard, _) => Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_BASE_URL_INVALID, "WireGuard base URL must use wireguard")),
         (Provider::Byparr | Provider::Trawl, _) => unreachable!("handled by the solver branch"),
     }
 }
@@ -1158,7 +1112,7 @@ fn resolve_new_proxy_protocol(
         scryer_domain::ProxyKind::Transport | scryer_domain::ProxyKind::Tunnel
             if requested.is_some() =>
         {
-            Err(AppError::Validation(format!(
+            Err(AppError::validation_refused(crate::error_reasons::integration::PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL, format!(
                 "{} proxies do not use a challenge-solver protocol",
                 provider_type.as_str()
             )))
@@ -1178,9 +1132,7 @@ fn validate_proxy_credentials(
     password: Option<&str>,
 ) -> AppResult<()> {
     if provider_type.is_challenge_solver() && (username.is_some() || password.is_some()) {
-        return Err(AppError::Validation(
-            "challenge-solver proxies do not accept a username or password".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::CHALLENGE_SOLVER_PROXIES_DO_NOT_ACCEPT_USERNAME_PASSWORD, "challenge-solver proxies do not accept a username or password"));
     }
     // SOCKS4 authentication is not wired in our HTTP client (reqwest builds its
     // SOCKS4 connector without `with_auth`, so a username would be silently
@@ -1189,9 +1141,7 @@ fn validate_proxy_credentials(
     if provider_type == scryer_domain::ProxyProviderType::Socks4
         && (username.is_some() || password.is_some())
     {
-        return Err(AppError::Validation(
-            "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::SOCKS4_PROXIES_DO_NOT_CARRY_CREDENTIALS, "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy"));
     }
     if provider_type == scryer_domain::ProxyProviderType::Http3
         && let Some(username) = username
@@ -1200,12 +1150,10 @@ fn validate_proxy_credentials(
             username.into(),
             password.unwrap_or_default().into(),
         )
-        .map_err(|error| AppError::Validation(error.to_string()))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::PROXY_CREDENTIALS_INVALID, error.to_string()))?;
     }
     if password.is_some() && username.is_none() {
-        return Err(AppError::Validation(
-            "proxy password requires a username".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_PASSWORD_REQUIRES_USERNAME, "proxy password requires a username"));
     }
     Ok(())
 }
@@ -1225,10 +1173,8 @@ fn normalize_proxy_private_key(raw: Option<String>) -> Option<String> {
 fn validate_private_key_pem(pem: &str) -> AppResult<()> {
     let trimmed = pem.trim();
     let malformed = || {
-        AppError::Validation(
-            "private key must be a PEM block beginning with -----BEGIN and ending with -----"
-                .to_string(),
-        )
+        AppError::validation_refused(crate::error_reasons::integration::PRIVATE_KEY_INVALID, "private key must be a PEM block beginning with -----BEGIN and ending with -----"
+                .to_string())
     };
     if !trimmed.starts_with("-----BEGIN") {
         return Err(malformed());
@@ -1286,23 +1232,17 @@ fn validate_tunnel_auth(
     // Stated before the per-family rules so a value in the wrong field is
     // always reported as the wrong field rather than as a missing one.
     if provider_type != Provider::WireGuard && fields.has_wireguard_fields() {
-        return Err(AppError::Validation(
-            "only WireGuard tunnels take a peer public key, preshared key, tunnel addresses, \
+        return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_FIELDS_WRONG_TUNNEL_KIND, "only WireGuard tunnels take a peer public key, preshared key, tunnel addresses, \
              DNS servers, MTU or keepalive"
-                .into(),
-        ));
+                ));
     }
     if provider_type != Provider::SshTunnel && fields.private_key_passphrase.is_some() {
-        return Err(AppError::Validation(
-            "only SSH tunnels take a private key passphrase".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::ONLY_SSH_TUNNELS_TAKE_PRIVATE_KEY_PASSPHRASE, "only SSH tunnels take a private key passphrase"));
     }
     if !matches!(provider_type, Provider::SshTunnel | Provider::WireGuard)
         && fields.private_key.is_some()
     {
-        return Err(AppError::Validation(
-            "only tunnels take a private key".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::ONLY_TUNNELS_TAKE_PRIVATE_KEY, "only tunnels take a private key"));
     }
 
     match provider_type {
@@ -1314,25 +1254,19 @@ fn validate_tunnel_auth(
 
 fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
     if fields.username.is_none() {
-        return Err(AppError::Validation(
-            "SSH tunnels require a username".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNELS_REQUIRE_USERNAME, "SSH tunnels require a username"));
     }
     if fields.password.is_some() {
-        return Err(AppError::Validation(
-            "SSH tunnels do not accept passwords; use an Ed25519 private key".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNELS_DO_NOT_ACCEPT_PASSWORDS, "SSH tunnels do not accept passwords; use an Ed25519 private key"));
     }
     let Some(private_key) = fields.private_key else {
-        return Err(AppError::Validation(
-            "SSH tunnels require an Ed25519 private key".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::SSH_TUNNELS_REQUIRE_ED25519_PRIVATE_KEY, "SSH tunnels require an Ed25519 private key"));
     };
     validate_private_key_pem(private_key)?;
     // Parse with the engine so an unsupported key, unreadable paste or wrong
     // passphrase is refused at save time.
     scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
-        .map_err(|error| AppError::Validation(error.to_string()))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::SSH_PRIVATE_KEY_INVALID, error.to_string()))?;
     Ok(())
 }
 
@@ -1341,42 +1275,36 @@ fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
 /// are refused rather than ignored.
 fn validate_wireguard_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
     if fields.username.is_some() || fields.password.is_some() {
-        return Err(AppError::Validation(
-            "WireGuard tunnels authenticate with keys, not a username or password".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_TUNNELS_AUTHENTICATE_KEYS_NOT_USERNAME_PASSWORD, "WireGuard tunnels authenticate with keys, not a username or password"));
     }
     let Some(private_key) = fields.private_key else {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY, format!(
             "WireGuard tunnels require a private key; {}",
             crate::tunnel_proxy::WIREGUARD_KEY_MESSAGE
         )));
     };
     let Some(peer_public_key) = fields.peer_public_key else {
-        return Err(AppError::Validation(
-            "WireGuard tunnels require the peer's public key from the `[Peer]` section".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_TUNNELS_REQUIRE_PEER_S_PUBLIC_KEY_PEER_SECTION, "WireGuard tunnels require the peer's public key from the `[Peer]` section"));
     };
     // The same parser the connect path uses, so a key refused here is refused
     // for exactly the reason it would have failed later, and the message names
     // which of the three keys is wrong.
     scryer_tunnel::validate_wireguard_keys(private_key, peer_public_key, fields.preshared_key)
-        .map_err(|error| AppError::Validation(error.to_string()))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_KEYS_INVALID, error.to_string()))?;
 
     if fields.tunnel_addresses.is_empty() {
-        return Err(AppError::Validation(
-            "WireGuard tunnels require at least one interface address; copy the `Address` line \
+        return Err(AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_ADDRESS_REQUIRED, "WireGuard tunnels require at least one interface address; copy the `Address` line \
              from the WireGuard configuration (for example `10.6.0.2/32`)"
-                .into(),
-        ));
+                ));
     }
     for address in fields.tunnel_addresses {
         address
             .parse::<scryer_tunnel::IpCidr>()
-            .map_err(|error| AppError::Validation(error.to_string()))?;
+            .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_ADDRESS_INVALID, error.to_string()))?;
     }
     for server in fields.tunnel_dns_servers {
         server.parse::<std::net::IpAddr>().map_err(|_| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::integration::NOT_DNS_SERVER_ADDRESS, format!(
                 "`{server}` is not a DNS server address; the `DNS` line takes IP addresses"
             ))
         })?;
@@ -1384,7 +1312,7 @@ fn validate_wireguard_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
     if let Some(mtu) = fields.tunnel_mtu
         && !(scryer_tunnel::MIN_WIREGUARD_MTU..=scryer_tunnel::MAX_WIREGUARD_MTU).contains(&mtu)
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::integration::TUNNEL_MTU_OUT_OF_RANGE, format!(
             "the tunnel MTU must be between {} and {}; {mtu} is outside that range",
             scryer_tunnel::MIN_WIREGUARD_MTU,
             scryer_tunnel::MAX_WIREGUARD_MTU
@@ -1435,7 +1363,7 @@ fn derive_tunnel_public_key(
         return Ok(None);
     }
     private_key
-        .map(|key| crate::tunnel_proxy::wireguard_public_key(key).map_err(AppError::Validation))
+        .map(|key| crate::tunnel_proxy::wireguard_public_key(key).map_err(|message| AppError::validation_refused(crate::error_reasons::integration::WIREGUARD_KEYS_INVALID, message)))
         .transpose()
 }
 
@@ -1447,10 +1375,8 @@ fn resolve_remote_dns(
     scheme_remote_dns: Option<bool>,
 ) -> AppResult<bool> {
     if scheme_remote_dns == Some(true) && requested == Some(false) {
-        return Err(AppError::Validation(
-            "socks5h:// and socks4a:// resolve names at the proxy; use socks5:// or socks4:// to resolve them locally"
-                .into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::SOCKS5H_SOCKS4A_RESOLVE_NAMES_PROXY, "socks5h:// and socks4a:// resolve names at the proxy; use socks5:// or socks4:// to resolve them locally"
+                ));
     }
     let resolved = requested.or(scheme_remote_dns).unwrap_or(false);
     // SOCKS is the only family where Scryer chooses: reqwest expresses
@@ -1464,16 +1390,14 @@ fn resolve_remote_dns(
             scryer_domain::ProxyProviderType::Socks4 | scryer_domain::ProxyProviderType::Socks5
         )
     {
-        return Err(AppError::Validation(
-            "remote DNS applies only to SOCKS proxies".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::integration::REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES, "remote DNS applies only to SOCKS proxies"));
     }
     Ok(resolved)
 }
 
 fn validate_proxy_timeout(timeout: u32) -> AppResult<u32> {
     if !(1..=scryer_outbound_http::MAX_PROXY_TIMEOUT_SECONDS).contains(&timeout) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_TIMEOUT_OUT_OF_RANGE, format!(
             "proxy timeout must be between 1 and {} seconds",
             scryer_outbound_http::MAX_PROXY_TIMEOUT_SECONDS
         )));
@@ -1696,18 +1620,18 @@ pub(crate) fn transport_proxy_endpoint(
     config: &scryer_domain::ProxyConfig,
 ) -> AppResult<(String, u16)> {
     let parsed = url::Url::parse(config.base_url.trim())
-        .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, format!("invalid proxy base URL: {error}")))?;
     let host = parsed
         .host_str()
         .map(str::to_string)
         .filter(|host| !host.trim().is_empty())
-        .ok_or_else(|| AppError::Validation("proxy base URL must include a host".to_string()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_HOST_REQUIRED, "proxy base URL must include a host".to_string()))?;
     // SOCKS and ssh URLs carry no scheme-implied default in the URL crate, so
     // supply the same defaults our clients would.
     let port = parsed
         .port_or_known_default()
         .or_else(|| proxy_default_port(config.provider_type))
-        .ok_or_else(|| AppError::Validation("proxy base URL must include a port".to_string()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::integration::PROXY_BASE_URL_INVALID, "proxy base URL must include a port".to_string()))?;
     Ok((host, port))
 }
 

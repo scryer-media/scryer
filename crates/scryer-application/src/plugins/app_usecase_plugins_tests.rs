@@ -1353,9 +1353,9 @@ fn alpha_baseline_and_simd_catalog_json() -> String {
 }
 
 fn assert_not_available_from_catalog(err: AppError, plugin_id: &str) {
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
     match err {
-        AppError::NotFound(msg) => {
+        AppError::NotFound(msg) | AppError::NotFoundReason { message: msg, .. } => {
             assert!(msg.contains(plugin_id));
             assert!(msg.contains("plugin catalog"));
         }
@@ -1461,6 +1461,7 @@ fn make_indexer_config(provider_type: &str) -> IndexerConfig {
         managed_metadata_json: None,
         caps_snapshot_json: None,
         last_health_status: None,
+        last_error_code: None,
         last_error_message: None,
         last_error_at: None,
         config_json: None,
@@ -3289,7 +3290,7 @@ async fn list_uses_application_builtin_provider_types_over_catalog_flags() {
 async fn list_auth_rejects_viewer() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
     let err = h.app.list_available_plugins(&viewer()).await.unwrap_err();
-    assert!(matches!(err, AppError::Unauthorized(_)));
+    assert!(matches!(err, AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }));
 }
 
 // ── toggle_plugin ────────────────────────────────────────────────────────────
@@ -3423,7 +3424,7 @@ async fn toggle_not_found() {
         .toggle_plugin(&admin(), "nonexistent", true)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
 }
 
 #[tokio::test]
@@ -3434,7 +3435,7 @@ async fn toggle_auth_rejects_viewer() {
         .toggle_plugin(&viewer(), "alpha", true)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Unauthorized(_)));
+    assert!(matches!(err, AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }));
 }
 
 #[test]
@@ -3584,7 +3585,7 @@ async fn uninstall_not_found() {
         .uninstall_plugin(&admin(), "nonexistent")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
 }
 
 #[tokio::test]
@@ -3601,9 +3602,9 @@ async fn uninstall_builtin_rejected() {
         .uninstall_plugin(&admin(), "nzbgeek")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(err, AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::ValidationRefusedWithCount { .. }));
     match err {
-        AppError::Validation(msg) => {
+        AppError::Validation(msg) | AppError::ValidationRefused { message: msg, .. } | AppError::ValidationRefusedWithCount { message: msg, .. } => {
             assert!(msg.contains("disable"), "expected 'disable' hint: {msg}")
         }
         _ => panic!("expected Validation error"),
@@ -3618,7 +3619,7 @@ async fn uninstall_auth_rejects_viewer() {
         .uninstall_plugin(&viewer(), "alpha")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Unauthorized(_)));
+    assert!(matches!(err, AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }));
 }
 
 // ── install_plugin error paths ───────────────────────────────────────────────
@@ -3677,7 +3678,7 @@ async fn catalog_descriptor_mismatch_fails_before_installation_is_created() {
         Err(err) => err,
     };
 
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(err, AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::ValidationRefusedWithCount { .. }));
     assert_eq!(h.plugin_descriptor_loader.load_count(), 1);
     assert!(h.plugin_repo.installations.lock().await.is_empty());
 }
@@ -3697,7 +3698,7 @@ async fn install_not_in_catalog() {
         .unwrap();
 
     let err = h.app.install_plugin(&admin(), "alpha").await.unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
 }
 
 #[tokio::test]
@@ -3849,7 +3850,7 @@ async fn install_rejects_incompatible_sdk_line() {
 async fn install_auth_rejects_viewer() {
     let h = bootstrap_plugins(Some(MockPluginProvider::new()));
     let err = h.app.install_plugin(&viewer(), "alpha").await.unwrap_err();
-    assert!(matches!(err, AppError::Unauthorized(_)));
+    assert!(matches!(err, AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }));
 }
 
 // ── upgrade_plugin error paths ───────────────────────────────────────────────
@@ -3862,7 +3863,7 @@ async fn upgrade_not_found() {
         .upgrade_plugin(&admin(), "nonexistent")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
 }
 
 #[tokio::test]
@@ -3906,7 +3907,7 @@ async fn upgrade_not_in_catalog() {
         .unwrap();
 
     let err = h.app.upgrade_plugin(&admin(), "alpha").await.unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(err, AppError::NotFound(_) | AppError::NotFoundReason { .. }));
 }
 
 #[tokio::test]
@@ -3930,7 +3931,7 @@ async fn upgrade_already_at_latest() {
 
     let err = h.app.upgrade_plugin(&admin(), "alpha").await.unwrap_err();
     assert!(
-        matches!(err, AppError::Validation(message) if message.contains("already at version 0.2.0"))
+        matches!(err, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("already at version 0.2.0"))
     );
 }
 
@@ -4004,7 +4005,7 @@ fn validate_downloaded_plugin_descriptor_rejects_invalid_allowed_hosts() {
     )
     .unwrap_err();
     match err {
-        AppError::Validation(msg) => {
+        AppError::Validation(msg) | AppError::ValidationRefused { message: msg, .. } | AppError::ValidationRefusedWithCount { message: msg, .. } => {
             assert!(msg.contains("invalid network permission pattern"))
         }
         _ => panic!("expected Validation"),
@@ -4131,7 +4132,7 @@ fn validate_downloaded_plugin_descriptor_rejects_unverified_host_process_capabil
     )
     .unwrap_err();
     match err {
-        AppError::Validation(msg) => assert!(
+        AppError::Validation(msg) | AppError::ValidationRefused { message: msg, .. } | AppError::ValidationRefusedWithCount { message: msg, .. } => assert!(
             msg.contains("host-process capability"),
             "unexpected message: {msg}"
         ),
@@ -4188,7 +4189,7 @@ fn validate_downloaded_plugin_descriptor_allows_only_official_host_process_capab
     )
     .expect_err("verified community plugins must not install host-process plugins");
     match err {
-        AppError::Validation(msg) => assert!(
+        AppError::Validation(msg) | AppError::ValidationRefused { message: msg, .. } | AppError::ValidationRefusedWithCount { message: msg, .. } => assert!(
             msg.contains("official plugins"),
             "unexpected message: {msg}"
         ),
@@ -4398,7 +4399,7 @@ async fn install_uploaded_plugin_requires_risk_acknowledgement() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(err, AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::ValidationRefusedWithCount { .. }));
     assert!(err.to_string().contains("risk acknowledgement"));
 }
 
@@ -4432,7 +4433,7 @@ async fn install_uploaded_plugin_rejects_host_process_capability() {
         .unwrap_err();
 
     match err {
-        AppError::Validation(msg) => assert!(
+        AppError::Validation(msg) | AppError::ValidationRefused { message: msg, .. } | AppError::ValidationRefusedWithCount { message: msg, .. } => assert!(
             msg.contains("host-process capability"),
             "unexpected message: {msg}"
         ),

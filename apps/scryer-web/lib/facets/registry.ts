@@ -94,8 +94,12 @@ export const FACET_REGISTRY: FacetDefinition[] = [
 
 export const FACETS_BY_ID = new Map(FACET_REGISTRY.map((f) => [f.id, f]));
 export const FACETS_BY_VIEW = new Map(FACET_REGISTRY.map((f) => [f.viewId, f]));
-export const FACETS_BY_SCOPE = new Map(FACET_REGISTRY.map((f) => [f.scopeId, f]));
-export const FACETS_BY_METADATA_KEY = new Map(FACET_REGISTRY.map((f) => [f.metadataKey, f]));
+export const FACETS_BY_SCOPE = new Map(
+  FACET_REGISTRY.map((f) => [f.scopeId, f]),
+);
+export const FACETS_BY_METADATA_KEY = new Map(
+  FACET_REGISTRY.map((f) => [f.metadataKey, f]),
+);
 
 export const MEDIA_VIEW_IDS = FACET_REGISTRY.map((f) => f.viewId);
 export const FACET_IDS = FACET_REGISTRY.map((f) => f.id);
@@ -126,6 +130,8 @@ export function facetByMetadataKey(
 export function metadataFacetGraphqlValue(
   metadataFacet: string | null | undefined,
 ): Facet {
-  const metadataKey = (metadataFacet ?? "").trim().toLowerCase() as MetadataFacetKey;
+  const metadataKey = (metadataFacet ?? "")
+    .trim()
+    .toLowerCase() as MetadataFacetKey;
   return facetByMetadataKey(metadataKey)?.id ?? "SERIES";
 }

@@ -1,10 +1,21 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
-import { CalendarClock, FileText, Import as ImportIcon, SlidersVertical } from "lucide-react";
+import {
+  CalendarClock,
+  FileText,
+  Import as ImportIcon,
+  SlidersVertical,
+} from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   FILE_CHMOD_PRESETS,
   FOLDER_CHMOD_PRESETS,
@@ -50,7 +61,9 @@ function GeneralSettingsSection({
     <section className="rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
-        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">{title}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">
+          {title}
+        </h2>
       </div>
       {description ? (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--scry-muted3)]">
@@ -159,12 +172,14 @@ export function GeneralSettingsPanel({
   const [chownGroupDraft, setChownGroupDraft] = useState(
     chownGroup[activeQualityScopeId] ?? "",
   );
-  const permissionsEnabled = setPermissionsLinux[activeQualityScopeId] === "true";
+  const permissionsEnabled =
+    setPermissionsLinux[activeQualityScopeId] === "true";
   const showUnixPermissions = localPathStyle !== "windows";
   const permissionFieldsDisabled = mediaSettingsLoading || !permissionsEnabled;
   const selectedFileChmod =
     fileChmod[activeQualityScopeId]?.trim() || FILE_CHMOD_DERIVED_VALUE;
-  const selectedFolderChmod = folderChmod[activeQualityScopeId]?.trim() || "755";
+  const selectedFolderChmod =
+    folderChmod[activeQualityScopeId]?.trim() || "755";
   const customFileChmod =
     selectedFileChmod !== FILE_CHMOD_DERIVED_VALUE &&
     !isChmodPresetValue(FILE_CHMOD_PRESETS, selectedFileChmod)
@@ -199,7 +214,9 @@ export function GeneralSettingsPanel({
           <Label>{t("settings.importModeLabel")}</Label>
           <Select
             value={importMode[activeQualityScopeId]}
-            onValueChange={(value) => handleImportModeChange(value as ImportMode)}
+            onValueChange={(value) =>
+              handleImportModeChange(value as ImportMode)
+            }
             disabled={mediaSettingsLoading}
           >
             <SelectTrigger className="w-full">
@@ -370,9 +387,7 @@ export function GeneralSettingsPanel({
         >
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <div className="space-y-2">
-              <Label>
-                {t("settings.fillerPolicyLabel")}
-              </Label>
+              <Label>{t("settings.fillerPolicyLabel")}</Label>
               <Select
                 value={categoryFillerPolicies[activeQualityScopeId]}
                 onValueChange={handleFillerPolicyChange}
@@ -392,9 +407,7 @@ export function GeneralSettingsPanel({
             </div>
 
             <div className="space-y-2">
-              <Label>
-                {t("settings.recapPolicyLabel")}
-              </Label>
+              <Label>{t("settings.recapPolicyLabel")}</Label>
               <Select
                 value={categoryRecapPolicies[activeQualityScopeId]}
                 onValueChange={handleRecapPolicyChange}
@@ -418,21 +431,27 @@ export function GeneralSettingsPanel({
             <ToggleSettingRow
               label={t("settings.monitorSpecialsLabel")}
               description={t("settings.monitorSpecialsDescription")}
-              checked={categoryMonitorSpecials[activeQualityScopeId] !== "false"}
+              checked={
+                categoryMonitorSpecials[activeQualityScopeId] !== "false"
+              }
               disabled={mediaSettingsLoading}
               onChange={handleMonitorSpecialsChange}
             />
             <ToggleSettingRow
               label={t("settings.interSeasonMoviesLabel")}
               description={t("settings.interSeasonMoviesDescription")}
-              checked={categoryInterSeasonMovies[activeQualityScopeId] !== "false"}
+              checked={
+                categoryInterSeasonMovies[activeQualityScopeId] !== "false"
+              }
               disabled={mediaSettingsLoading}
               onChange={handleInterSeasonMoviesChange}
             />
             <ToggleSettingRow
               label={t("settings.monitorFillerMoviesLabel")}
               description={t("settings.monitorFillerMoviesDescription")}
-              checked={categoryMonitorFillerMovies[activeQualityScopeId] === "true"}
+              checked={
+                categoryMonitorFillerMovies[activeQualityScopeId] === "true"
+              }
               disabled={mediaSettingsLoading}
               onChange={handleMonitorFillerMoviesChange}
             />

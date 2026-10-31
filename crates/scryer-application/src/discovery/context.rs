@@ -110,7 +110,7 @@ impl DiscoveryLibraryContext {
     ) -> AppResult<DiscoveryContextChangesInput> {
         let resolved_key_count = pending_context_changes_resolved_key_count(pending_changes)?;
         if resolved_key_count > DISCOVERY_CONTEXT_CHANGES_MAX_CHANGED_SUBJECTS {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::discovery::INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT, format!(
                 "discovery incremental reload resolves to {resolved_key_count} changed subjects, above SMG limit {}",
                 DISCOVERY_CONTEXT_CHANGES_MAX_CHANGED_SUBJECTS
             )));

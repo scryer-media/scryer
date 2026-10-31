@@ -630,7 +630,13 @@ async fn authoring_a_watch_rule_needs_permission_management() {
         .await
         .expect_err("a rule about people needs permission-management authority");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     let message = error.to_string();
     assert!(
         message.contains("watched_by_all_requesters"),
@@ -659,7 +665,10 @@ async fn every_person_targeted_fact_trips_the_bar_and_is_named() {
             .unwrap_or_else(|| panic!("{fact} must be gated"));
 
         assert!(
-            matches!(error, AppError::Unauthorized(_)),
+            matches!(
+                error,
+                AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+            ),
             "{fact}: {error:?}"
         );
         assert!(error.to_string().contains(fact), "{fact}: {error}");
@@ -733,7 +742,13 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
         .await
         .expect_err("a revision is authoring, and the bar is on authoring");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error.to_string().contains("watched_by_all_requesters"),
         "{error}"
@@ -760,7 +775,13 @@ async fn previewing_a_person_fact_draft_needs_permission_management() {
         .await
         .expect_err("previewing a rule about people needs the same authority as saving one");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     let message = error.to_string();
     assert!(
         message.contains("watched_by_all_requesters"),
@@ -829,7 +850,13 @@ async fn previewing_a_stored_person_fact_rule_is_gated_too() {
         .await
         .expect_err("a stored rule is no less of an oracle than a draft");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error.to_string().contains("watched_by_all_requesters"),
         "{error}"

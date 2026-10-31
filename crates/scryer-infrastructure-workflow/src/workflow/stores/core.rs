@@ -1339,6 +1339,12 @@ pub fn build_title_history_filter_sql(
                             DomainEventType::SeedingCompleted.as_str().into(),
                         ));
                     }
+                    TitleHistoryEventType::DownloadMissing => {
+                        parts.push("event_type = {}".to_string());
+                        args.push(SqlArg::Text(
+                            DomainEventType::DownloadMissing.as_str().into(),
+                        ));
+                    }
                     TitleHistoryEventType::DownloadIgnored => {
                         parts.push("event_type = {}".to_string());
                         args.push(SqlArg::Text(
@@ -1462,6 +1468,7 @@ pub const TITLE_HISTORY_PAGE_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
     DomainEventType::ImportRejected,
     DomainEventType::DownloadFailed,
     DomainEventType::DownloadIgnored,
+    DomainEventType::DownloadMissing,
     DomainEventType::ReleaseBlocklisted,
     DomainEventType::MediaFileAnalyzed,
     DomainEventType::MediaFileUpgraded,
@@ -2146,8 +2153,7 @@ pub fn parse_datetime_or_now(value: Option<&str>) -> DateTime<Utc> {
 }
 
 pub fn map_snapshot_chunk_error(error: AppError) -> AppError {
-    let message = error.to_string();
-    if message.contains("no such table: external_import_monitor_snapshot_chunks") {
+    if error.repository_kind() == Some(scryer_application::RepositoryErrorKind::MissingTable) {
         return AppError::Repository(
             "database is missing external_import_monitor_snapshot_chunks; restart with a build that includes migration 0117_external_import_monitor_snapshot_chunks and let migrations complete".into(),
         );

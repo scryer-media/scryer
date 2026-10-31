@@ -2,13 +2,19 @@ import * as React from "react";
 import { useClient } from "urql";
 
 import { toast } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
-import { acquisitionProgress, automaticSearchOutcomeKey, shouldRestoreAutomaticSearch } from "@/lib/utils/automatic-search";
+import {
+  acquisitionProgress,
+  automaticSearchOutcomeKey,
+  shouldRestoreAutomaticSearch,
+} from "@/lib/utils/automatic-search";
 import {
   activeJobRunsQuery,
   jobRunsQuery,
   jobRunEventsSubscription,
 } from "@/lib/graphql/queries";
+import { cancelAcquisitionSearchMutation } from "@/lib/graphql/mutations";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upgrade-progress";
 import {
@@ -27,13 +33,16 @@ const APPLICATION_UPGRADE_RUN_STORAGE_KEY = "scryer:application-upgrade-run";
 type JobRunToastContextValue = {
   /** Every run the stream and the active-runs load have surfaced, newest state each. */
   runs: JobRun[];
+  cancelAcquisitionSearch: (runId: string) => Promise<void>;
   registerInteractiveJobRun: (
     run: JobRun,
     onTerminal?: (run: JobRun) => void,
   ) => () => void;
 };
 
-const JobRunToastContext = React.createContext<JobRunToastContextValue | null>(null);
+const JobRunToastContext = React.createContext<JobRunToastContextValue | null>(
+  null,
+);
 
 function usesDedicatedLibraryScanToast(jobKey: JobKey): boolean {
   return (
@@ -51,7 +60,9 @@ function readRememberedApplicationUpgradeRunId(): string | null {
     return null;
   }
   try {
-    const value = window.sessionStorage.getItem(APPLICATION_UPGRADE_RUN_STORAGE_KEY);
+    const value = window.sessionStorage.getItem(
+      APPLICATION_UPGRADE_RUN_STORAGE_KEY,
+    );
     return value?.trim() || null;
   } catch {
     return null;
@@ -120,19 +131,53 @@ export function JobRunProvider({
 }) {
   const client = useClient();
   const t = useTranslate();
+  const cancelAcquisitionSearch = React.useCallback(
+    async (runId: string) => {
+      try {
+        const { data, error } = await client
+          .mutation(cancelAcquisitionSearchMutation, { id: runId })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+        const payload = data?.cancelAcquisitionSearch as
+          { accepted?: unknown } | undefined;
+        toast.info(
+          t(
+            payload?.accepted === true
+              ? "jobs.cancelSearchRequested"
+              : "jobs.cancelSearchNotRunning",
+          ),
+        );
+      } catch (error) {
+        console.error("[job-runs] failed to cancel acquisition search:", error);
+        toast.error(t("jobs.cancelSearchFailed"));
+      }
+    },
+    [client, t],
+  );
   const [runsById, setRunsById] = React.useState<Record<string, JobRun>>({});
   // A terminal event can arrive and leave the visible list before its start response.
   const terminalSnapshotsRef = React.useRef(new Map<string, JobRun>());
-  const dismissTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const reconcileTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>[]>>({});
-  const reconcileIntervalsRef = React.useRef<Record<string, ReturnType<typeof setInterval>>>({});
+  const dismissTimersRef = React.useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
+  const reconcileTimersRef = React.useRef<
+    Record<string, ReturnType<typeof setTimeout>[]>
+  >({});
+  const reconcileIntervalsRef = React.useRef<
+    Record<string, ReturnType<typeof setInterval>>
+  >({});
   const interactiveRunIdsRef = React.useRef(new Set<string>());
   const terminalCallbacksRef = React.useRef<
     Record<string, Set<(run: JobRun) => void>>
   >({});
 
   const upsertRun = React.useCallback((run: JobRun) => {
-    const accepted = preferJobRunSnapshot(terminalSnapshotsRef.current.get(run.id), run);
+    const accepted = preferJobRunSnapshot(
+      terminalSnapshotsRef.current.get(run.id),
+      run,
+    );
     if (isTerminalJobRunStatus(accepted.status)) {
       terminalSnapshotsRef.current.set(run.id, accepted);
       if (terminalSnapshotsRef.current.size > 100) {
@@ -180,7 +225,9 @@ export function JobRunProvider({
           throw error;
         }
 
-        const authoritativeRun = (Array.isArray(data?.jobRuns) ? data.jobRuns : [])
+        const authoritativeRun = (
+          Array.isArray(data?.jobRuns) ? data.jobRuns : []
+        )
           .map(normalizeJobRun)
           .find((candidate): candidate is JobRun => candidate?.id === run.id);
         if (!authoritativeRun) {
@@ -205,11 +252,12 @@ export function JobRunProvider({
         return;
       }
 
-      reconcileTimersRef.current[run.id] = INTERACTIVE_JOB_RECONCILE_DELAYS_MS.map((delayMs) =>
-        setTimeout(() => {
-          void reconcileInteractiveRun(run);
-        }, delayMs),
-      );
+      reconcileTimersRef.current[run.id] =
+        INTERACTIVE_JOB_RECONCILE_DELAYS_MS.map((delayMs) =>
+          setTimeout(() => {
+            void reconcileInteractiveRun(run);
+          }, delayMs),
+        );
       reconcileIntervalsRef.current[run.id] = setInterval(() => {
         void reconcileInteractiveRun(run);
       }, INTERACTIVE_JOB_RECONCILE_INTERVAL_MS);
@@ -219,7 +267,10 @@ export function JobRunProvider({
 
   const registerInteractiveJobRun = React.useCallback(
     (snapshot: JobRun, onTerminal?: (run: JobRun) => void) => {
-      const run = preferJobRunSnapshot(terminalSnapshotsRef.current.get(snapshot.id), snapshot);
+      const run = preferJobRunSnapshot(
+        terminalSnapshotsRef.current.get(snapshot.id),
+        snapshot,
+      );
       interactiveRunIdsRef.current.add(run.id);
       rememberApplicationUpgradeRun(run);
       upsertRun(run);
@@ -253,7 +304,9 @@ export function JobRunProvider({
     }
     let cancelled = false;
     (async () => {
-      const { data, error } = await client.query(activeJobRunsQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(activeJobRunsQuery, {})
+        .toPromise();
       if (cancelled || error) {
         if (error) {
           console.error("[job-runs] failed to load active jobs:", error);
@@ -261,7 +314,9 @@ export function JobRunProvider({
         return;
       }
 
-      const rawRuns: unknown[] = Array.isArray(data?.activeJobRuns) ? data.activeJobRuns : [];
+      const rawRuns: unknown[] = Array.isArray(data?.activeJobRuns)
+        ? data.activeJobRuns
+        : [];
       const normalizedRuns = rawRuns
         .map(normalizeJobRun)
         .filter((run): run is JobRun => run !== null);
@@ -295,7 +350,10 @@ export function JobRunProvider({
         const { data, error } = await client
           .query<{ jobRuns?: unknown[] }>(
             jobRunsQuery,
-            { jobKey: "APPLICATION_UPGRADE", limit: INTERACTIVE_JOB_RECONCILE_LIMIT },
+            {
+              jobKey: "APPLICATION_UPGRADE",
+              limit: INTERACTIVE_JOB_RECONCILE_LIMIT,
+            },
             { requestPolicy: "network-only" },
           )
           .toPromise();
@@ -314,7 +372,10 @@ export function JobRunProvider({
         upsertRun(run);
         scheduleInteractiveRunReconciliation(run);
       } catch (error) {
-        console.error("[job-runs] failed to reconcile application upgrade:", error);
+        console.error(
+          "[job-runs] failed to reconcile application upgrade:",
+          error,
+        );
       }
     })();
 
@@ -389,17 +450,25 @@ export function JobRunProvider({
       const title = upgradeToast?.title ?? run.displayName;
       const outcomeKey = automaticSearchOutcomeKey(run);
       const searchProgress = acquisitionProgress(run);
-      const description = run.errorText ?? (outcomeKey ? t(outcomeKey, {
-        processed: Number(searchProgress.processed ?? 0),
-        grabbed: Number(searchProgress.grabbedCount ?? 0),
-        failed: Number(searchProgress.failedCount ?? 0),
-      }) : run.jobKey === "ACQUISITION_SEARCH" && !isTerminalJobRunStatus(run.status)
-        ? t("wanted.searchJobProgress", {
-          processed: Number(searchProgress.processed ?? 0),
-          total: Number(searchProgress.total ?? 0),
-          title: typeof searchProgress.currentTitle === "string" ? searchProgress.currentTitle : "",
-        })
-        : upgradeToast?.description ?? defaultDescription);
+      const description =
+        run.errorText ??
+        (outcomeKey
+          ? t(outcomeKey, {
+              processed: Number(searchProgress.processed ?? 0),
+              grabbed: Number(searchProgress.grabbedCount ?? 0),
+              failed: Number(searchProgress.failedCount ?? 0),
+            })
+          : run.jobKey === "ACQUISITION_SEARCH" &&
+              !isTerminalJobRunStatus(run.status)
+            ? t("wanted.searchJobProgress", {
+                processed: Number(searchProgress.processed ?? 0),
+                total: Number(searchProgress.total ?? 0),
+                title:
+                  typeof searchProgress.currentTitle === "string"
+                    ? searchProgress.currentTitle
+                    : "",
+              })
+            : (upgradeToast?.description ?? defaultDescription));
 
       if (run.status === "FAILED") {
         toast.error(title, {
@@ -432,6 +501,19 @@ export function JobRunProvider({
         id: run.id,
         description,
         duration: Infinity,
+        action:
+          run.jobKey === "ACQUISITION_SEARCH" ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              aria-label={t("label.cancel")}
+              title={t("label.cancel")}
+              onClick={() => void cancelAcquisitionSearch(run.id)}
+            >
+              {t("label.cancel")}
+            </Button>
+          ) : undefined,
       });
     }
 
@@ -445,7 +527,7 @@ export function JobRunProvider({
         return next;
       });
     }
-  }, [clearReconcileTimers, runsById, t]);
+  }, [cancelAcquisitionSearch, clearReconcileTimers, runsById, t]);
 
   React.useEffect(
     () => () => {
@@ -469,10 +551,14 @@ export function JobRunProvider({
 
   const runs = React.useMemo(() => Object.values(runsById), [runsById]);
 
-  const contextValue = React.useMemo<JobRunToastContextValue>(() => ({
-    runs,
-    registerInteractiveJobRun,
-  }), [registerInteractiveJobRun, runs]);
+  const contextValue = React.useMemo<JobRunToastContextValue>(
+    () => ({
+      runs,
+      cancelAcquisitionSearch,
+      registerInteractiveJobRun,
+    }),
+    [cancelAcquisitionSearch, registerInteractiveJobRun, runs],
+  );
 
   return (
     <JobRunToastContext.Provider value={contextValue}>

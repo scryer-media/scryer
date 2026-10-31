@@ -261,10 +261,12 @@ impl AppUseCase {
         if requested_limit == 0 {
             return Ok(Vec::new());
         }
-        let source_title = self
-            .get_title(actor, title_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        let source_title = self.get_title(actor, title_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                format!("title {title_id}"),
+            )
+        })?;
         if let Err(error) = self
             .queue_title_more_like_this_refresh_if_due(
                 &source_title,
@@ -761,7 +763,10 @@ impl AppUseCase {
             return Ok(());
         };
         let Some(mut candidate) = candidates_by_id.get(&hero_id).cloned() else {
-            return Err(AppError::NotFound(format!("discovery home hero {hero_id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::discovery::HOME_HERO_NOT_FOUND,
+                format!("discovery home hero {hero_id}"),
+            ));
         };
         self.services
             .library

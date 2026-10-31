@@ -17,7 +17,9 @@ type OAuthErrorLike = {
   graphQLErrors?: readonly GraphQlErrorLike[];
 };
 
-export function oauthAuthorizationRequestFromSearch(search: string): OAuthAuthorizationRequest {
+export function oauthAuthorizationRequestFromSearch(
+  search: string,
+): OAuthAuthorizationRequest {
   const params = new URLSearchParams(search);
   return {
     responseType: params.get("response_type") ?? "",
@@ -30,7 +32,8 @@ export function oauthAuthorizationRequestFromSearch(search: string): OAuthAuthor
   };
 }
 
-const PENDING_OAUTH_DECISION_KEY = "scryer.oauth.pending-authorization-decision";
+const PENDING_OAUTH_DECISION_KEY =
+  "scryer.oauth.pending-authorization-decision";
 /** A stored approval only survives the sign-in round trip, never a later visit. */
 export const PENDING_OAUTH_DECISION_TTL_MS = 5 * 60 * 1000;
 
@@ -50,21 +53,24 @@ export async function oauthAuthorizationRequestFingerprint(
 ): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) {
-    throw new Error("Secure browser hashing is required to retain OAuth approval.");
+    throw new Error(
+      "Secure browser hashing is required to retain OAuth approval.",
+    );
   }
-  const input = new TextEncoder().encode(JSON.stringify([
-    request.responseType,
-    request.clientId,
-    request.redirectUri,
-    request.scope ?? "",
-    request.state ?? "",
-    request.codeChallenge,
-    request.codeChallengeMethod,
-  ]));
+  const input = new TextEncoder().encode(
+    JSON.stringify([
+      request.responseType,
+      request.clientId,
+      request.redirectUri,
+      request.scope ?? "",
+      request.state ?? "",
+      request.codeChallenge,
+      request.codeChallengeMethod,
+    ]),
+  );
   const digest = await subtle.digest("SHA-256", input.slice());
-  return Array.from(
-    new Uint8Array(digest),
-    (byte) => byte.toString(16).padStart(2, "0"),
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
   ).join("");
 }
 
@@ -76,10 +82,10 @@ export function isReplayablePendingOAuthDecision(
   if (!stored || typeof stored !== "object") return false;
   const candidate = stored as Partial<PendingOAuthDecision>;
   return (
-    candidate.approved === true
-    && candidate.fingerprint === fingerprint
-    && typeof candidate.expiresAt === "number"
-    && candidate.expiresAt > now
+    candidate.approved === true &&
+    candidate.fingerprint === fingerprint &&
+    typeof candidate.expiresAt === "number" &&
+    candidate.expiresAt > now
   );
 }
 
@@ -147,8 +153,10 @@ export function isOAuthAuthenticationError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as OAuthErrorLike;
   if (candidate.response?.status === 401) return true;
-  return candidate.graphQLErrors?.some((graphQlError) => {
-    const code = graphQlError.extensions?.code;
-    return code === "UNAUTHORIZED" || code === "AUTHENTICATION_REQUIRED";
-  }) ?? false;
+  return (
+    candidate.graphQLErrors?.some((graphQlError) => {
+      const code = graphQlError.extensions?.code;
+      return code === "UNAUTHORIZED" || code === "AUTHENTICATION_REQUIRED";
+    }) ?? false
+  );
 }

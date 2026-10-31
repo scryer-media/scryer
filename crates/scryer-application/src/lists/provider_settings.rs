@@ -362,9 +362,18 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
         let descriptor = list_descriptor_for(self.services.lists.plugins.as_ref(), provider)
-            .ok_or_else(|| AppError::NotFound(format!("list provider '{provider}'")))?;
-        let provider_type = provider_type_of(&descriptor)
-            .ok_or_else(|| AppError::NotFound(format!("list provider '{provider}'")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::PROVIDER_NOT_FOUND,
+                    format!("list provider '{provider}'"),
+                )
+            })?;
+        let provider_type = provider_type_of(&descriptor).ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::lists::PROVIDER_NOT_FOUND,
+                format!("list provider '{provider}'"),
+            )
+        })?;
         let stored = self.stored_list_provider_config(&provider_type).await?;
         let merged = merge_provider_settings(&descriptor, &stored, &changes)?;
         self.upsert_scoped_system_setting_json(

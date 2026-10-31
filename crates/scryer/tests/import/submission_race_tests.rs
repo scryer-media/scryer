@@ -198,6 +198,7 @@ impl RaceHarness {
         ];
         let name = "Race.Fixture.Movie.2024.Extras.1080p.WEB-DL".to_string();
         let item = DownloadQueueItem {
+            attention_reason_code: None,
             id: RACE_JOB_ID.to_string(),
             title_id: Some(self.title.id.clone()),
             episode_id: None,

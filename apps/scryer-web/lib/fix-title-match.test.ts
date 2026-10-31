@@ -23,11 +23,14 @@ test("Fix Match search variables use canonical GraphQL facet enums", () => {
     ["anime", "ANIME"],
     [" ANIME ", "ANIME"],
   ] as const) {
-    assert.deepEqual(buildFixTitleMatchSearchVariables("Quiet Meridian", facet), {
-      query: "Quiet Meridian",
-      type: expected,
-      limit: 8,
-    });
+    assert.deepEqual(
+      buildFixTitleMatchSearchVariables("Quiet Meridian", facet),
+      {
+        query: "Quiet Meridian",
+        type: expected,
+        limit: 8,
+      },
+    );
   }
 });
 
@@ -43,8 +46,12 @@ test("Fix Match dialog identity is stable across equivalent title objects", () =
 });
 
 test("Fix Match applies a result that has an SMG id, a TVDB id or both", () => {
-  assert.deepEqual(fixTitleMatchTarget({ smgId: 4101, tvdbId: "" }), { smgId: 4101 });
-  assert.deepEqual(fixTitleMatchTarget({ smgId: null, tvdbId: " 72001 " }), { tvdbId: "72001" });
+  assert.deepEqual(fixTitleMatchTarget({ smgId: 4101, tvdbId: "" }), {
+    smgId: 4101,
+  });
+  assert.deepEqual(fixTitleMatchTarget({ smgId: null, tvdbId: " 72001 " }), {
+    tvdbId: "72001",
+  });
   assert.deepEqual(fixTitleMatchTarget({ smgId: 4101, tvdbId: "72001" }), {
     smgId: 4101,
     tvdbId: "72001",
@@ -56,7 +63,9 @@ test("Fix Match cannot apply a result without a usable identity", () => {
   assert.equal(fixTitleMatchTarget(undefined), null);
   assert.equal(fixTitleMatchTarget({ smgId: null, tvdbId: "  " }), null);
   assert.equal(fixTitleMatchTarget({ smgId: 0, tvdbId: "" }), null);
-  assert.deepEqual(fixTitleMatchTarget({ smgId: -3, tvdbId: "72001" }), { tvdbId: "72001" });
+  assert.deepEqual(fixTitleMatchTarget({ smgId: -3, tvdbId: "72001" }), {
+    tvdbId: "72001",
+  });
 });
 
 test("Fix Match completion refreshes before reporting success", async () => {
@@ -67,7 +76,8 @@ test("Fix Match completion refreshes before reporting success", async () => {
     refreshTitleDetail: async () => {
       events.push("refresh");
     },
-    setGlobalStatus: (message, options) => events.push(`${options?.level}:${message}`),
+    setGlobalStatus: (message, options) =>
+      events.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });
@@ -83,7 +93,8 @@ test("Fix Match completion reports warnings after refreshing", async () => {
     refreshTitleDetail: async () => {
       events.push("refresh");
     },
-    setGlobalStatus: (message, options) => events.push(`${options?.level}:${message}`),
+    setGlobalStatus: (message, options) =>
+      events.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });
@@ -102,7 +113,8 @@ test("Fix Match completion surfaces refresh failures without false success", asy
     refreshTitleDetail: async () => {
       throw new Error("movie refresh failed");
     },
-    setGlobalStatus: (message, options) => messages.push(`${options?.level}:${message}`),
+    setGlobalStatus: (message, options) =>
+      messages.push(`${options?.level}:${message}`),
     t: translate,
     titleName: "Correct Movie",
   });

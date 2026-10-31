@@ -99,10 +99,10 @@ impl SeedingProfileRepository for SeedingProfileStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!(
-                        "seeding profile {}",
-                        profile.id
-                    )));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_SEEDING_PROFILE_NOT_FOUND,
+                        format!("seeding profile {}", profile.id),
+                    ));
                 }
                 Ok(profile)
             })
@@ -122,7 +122,10 @@ impl SeedingProfileRepository for SeedingProfileStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("seeding profile {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_SEEDING_PROFILE_NOT_FOUND,
+                        format!("seeding profile {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -141,9 +144,10 @@ async fn ensure_unique_name(exec: SqlExec<'_, '_>, name: &str, id: &str) -> AppR
     )
     .await?;
     if conflict.is_some() {
-        return Err(AppError::Validation(format!(
-            "seeding profile name '{name}' is already in use"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_SEEDING_PROFILE_NAME_CONFLICT,
+            format!("seeding profile name '{name}' is already in use"),
+        ));
     }
     Ok(())
 }
@@ -359,7 +363,7 @@ mod tests {
             .await
             .expect_err("duplicate name should be rejected");
         assert!(
-            matches!(conflict, AppError::Validation(message) if message.contains("already in use"))
+            matches!(conflict, AppError::Validation(message) | AppError::ValidationRefused { message, .. } if message.contains("already in use"))
         );
 
         store
@@ -377,7 +381,7 @@ mod tests {
             .await
             .expect_err("rename onto an existing name should be rejected");
         assert!(
-            matches!(conflict, AppError::Validation(message) if message.contains("already in use"))
+            matches!(conflict, AppError::Validation(message) | AppError::ValidationRefused { message, .. } if message.contains("already in use"))
         );
     }
 

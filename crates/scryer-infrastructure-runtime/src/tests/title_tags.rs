@@ -113,7 +113,7 @@ async fn assert_title_tag_registry_behaviour(
         TitleRepository::create_title_tag_definition(catalog, &tag_definition("tag-other", "keep"))
             .await;
     assert!(
-        matches!(duplicate, Err(AppError::Validation(ref message)) if message.contains("keep")),
+        matches!(duplicate, Err(AppError::ValidationRefused { ref message, reason: "TAG_ALREADY_EXISTS", .. }) if message.contains("keep")),
         "{duplicate:?}"
     );
 
@@ -314,7 +314,7 @@ async fn assert_title_tag_registry_behaviour(
     // A missing row is a not-found, not a silent success.
     assert!(matches!(
         TitleRepository::delete_title_tag_definition(catalog, "tag-absent").await,
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
 
     Ok(())

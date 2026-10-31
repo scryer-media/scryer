@@ -17,8 +17,16 @@ import {
 
 test("rename policies preserve every supported selection through loading and resaving", () => {
   for (const [normalize, values, fallback] of [
-    [normalizeRenameCollisionPolicy, ["SKIP", "ERROR", "REPLACE_IF_BETTER"], "SKIP"],
-    [normalizeRenameMissingMetadataPolicy, ["SKIP", "FALLBACK_TITLE"], "FALLBACK_TITLE"],
+    [
+      normalizeRenameCollisionPolicy,
+      ["SKIP", "ERROR", "REPLACE_IF_BETTER"],
+      "SKIP",
+    ],
+    [
+      normalizeRenameMissingMetadataPolicy,
+      ["SKIP", "FALLBACK_TITLE"],
+      "FALLBACK_TITLE",
+    ],
   ] as const) {
     for (const value of values) {
       assert.equal(normalize(value), value);
@@ -48,12 +56,18 @@ test("media settings loading and saving both request the persisted season-folder
     );
     assert.ok(operation);
     const settings = operation.selectionSet.selections.find(
-      (selection) => selection.kind === Kind.FIELD && selection.name.value === fieldName,
+      (selection) =>
+        selection.kind === Kind.FIELD && selection.name.value === fieldName,
     );
     assert.ok(settings?.kind === Kind.FIELD);
-    assert.ok(settings.selectionSet?.selections.some(
-      (selection) => selection.kind === Kind.FIELD && selection.name.value === "useSeasonFolders",
-    ), `${fieldName} must return an explicitly disabled season-folder setting`);
+    assert.ok(
+      settings.selectionSet?.selections.some(
+        (selection) =>
+          selection.kind === Kind.FIELD &&
+          selection.name.value === "useSeasonFolders",
+      ),
+      `${fieldName} must return an explicitly disabled season-folder setting`,
+    );
   }
 });
 
@@ -75,12 +89,19 @@ for (const enabled of [true, false]) {
       monitorFillerMovies: String(enabled),
     });
     for (const value of Object.values(settings)) {
-      const previous = { MOVIE: "movie value", SERIES: "series value", ANIME: "old value" };
+      const previous = {
+        MOVIE: "movie value",
+        SERIES: "series value",
+        ANIME: "old value",
+      };
       const next = updateFacetScopedStringRecord(previous, scope, value);
       assert.deepEqual(next, { ...previous, ANIME: value });
       assert.equal(Object.hasOwn(next, "anime"), false);
       assert.equal(previous.ANIME, "old value");
-      assert.strictEqual(updateFacetScopedStringRecord(next, scope, value), next);
+      assert.strictEqual(
+        updateFacetScopedStringRecord(next, scope, value),
+        next,
+      );
     }
   });
 }
@@ -108,13 +129,16 @@ test("missing anime settings retain established boolean and policy defaults", ()
     monitorFillerMovies: "false",
   };
   assert.deepEqual(normalizeAnimeMediaSettings({}), defaults);
-  assert.deepEqual(normalizeAnimeMediaSettings({
-    fillerPolicy: null,
-    recapPolicy: null,
-    monitorSpecials: null,
-    interSeasonMovies: null,
-    monitorFillerMovies: null,
-  }), defaults);
+  assert.deepEqual(
+    normalizeAnimeMediaSettings({
+      fillerPolicy: null,
+      recapPolicy: null,
+      monitorSpecials: null,
+      interSeasonMovies: null,
+      monitorFillerMovies: null,
+    }),
+    defaults,
+  );
 });
 
 test("hydrated anime selections survive normalization for a subsequent settings save", () => {
@@ -132,10 +156,13 @@ test("hydrated anime selections survive normalization for a subsequent settings 
     "ANIME",
     loaded.recapPolicy,
   );
-  assert.deepEqual({
-    fillerPolicy: normalizeFillerPolicy(filler.ANIME),
-    recapPolicy: normalizeRecapPolicy(recap.ANIME),
-  }, { fillerPolicy: "SKIP_FILLER", recapPolicy: "SKIP_RECAP" });
+  assert.deepEqual(
+    {
+      fillerPolicy: normalizeFillerPolicy(filler.ANIME),
+      recapPolicy: normalizeRecapPolicy(recap.ANIME),
+    },
+    { fillerPolicy: "SKIP_FILLER", recapPolicy: "SKIP_RECAP" },
+  );
 });
 
 test("saving an anime rename template updates the anime bucket", () => {
@@ -143,7 +170,8 @@ test("saving an anime rename template updates the anime bucket", () => {
   const templates = {
     MOVIE: "{title} ({year}) - {quality}.{ext}",
     SERIES: "{title} - S{season:2}E{episode:2} - {quality}.{ext}",
-    ANIME: "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
+    ANIME:
+      "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}",
   };
 
   const next = updateFacetScopedStringRecord(
@@ -152,7 +180,10 @@ test("saving an anime rename template updates the anime bucket", () => {
     "{title} - {episode_title} - {source} - {group} - {quality}.{ext}",
   );
 
-  assert.equal(next.ANIME, "{title} - {episode_title} - {source} - {group} - {quality}.{ext}");
+  assert.equal(
+    next.ANIME,
+    "{title} - {episode_title} - {source} - {group} - {quality}.{ext}",
+  );
   assert.equal(next.SERIES, templates.SERIES);
   assert.equal(next.MOVIE, templates.MOVIE);
 });
@@ -182,7 +213,10 @@ test("reloading anime media settings restores values into anime scope rather tha
   );
 
   assert.equal(nextTemplates.SERIES, "SERIES CURRENT TEMPLATE");
-  assert.equal(nextTemplates.ANIME, "{title} - {episode_title} [{quality}].{ext}");
+  assert.equal(
+    nextTemplates.ANIME,
+    "{title} - {episode_title} [{quality}].{ext}",
+  );
   assert.deepEqual(nextAudioLanguages.SERIES, ["eng"]);
   assert.deepEqual(nextAudioLanguages.ANIME, ["eng", "jpn"]);
 });

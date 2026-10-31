@@ -217,8 +217,9 @@ pub fn root_scope_destination(
     match (destination_path, destination_root_id) {
         (Some(path), None) => Ok(RootScopeCallDestination::Path(path)),
         (None, Some(root_id)) => Ok(RootScopeCallDestination::Root(root_id.to_string())),
-        _ => Err(AppError::Validation(
-            "name exactly one of a destination path or a destination root".to_string(),
+        _ => Err(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_LOCATION_DESTINATION_INVALID,
+            "name exactly one of a destination path or a destination root",
         )),
     }
 }

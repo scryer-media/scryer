@@ -2,7 +2,10 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const appRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const ENGLISH_DICTIONARY = "lib/i18n/locales/en.ts";
 const SCAN_DIRECTORIES = ["app", "components", "lib", "src", "workers"];
 const SCANNED_EXTENSIONS = new Set([".ts", ".tsx"]);
@@ -96,7 +99,11 @@ export function dictionaryKeysInSource(source) {
   const keys = new Set();
   for (const line of source.split("\n")) {
     const trimmed = line.trimStart();
-    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+    if (
+      trimmed.startsWith("//") ||
+      trimmed.startsWith("*") ||
+      trimmed.startsWith("/*")
+    ) {
       continue;
     }
     const match = DICTIONARY_ENTRY.exec(trimmed);
@@ -130,7 +137,10 @@ async function sourceFiles(directory) {
       }
       continue;
     }
-    if (SCANNED_EXTENSIONS.has(path.extname(entry.name)) && !TEST_FILE.test(entry.name)) {
+    if (
+      SCANNED_EXTENSIONS.has(path.extname(entry.name)) &&
+      !TEST_FILE.test(entry.name)
+    ) {
       files.push(full);
     }
   }

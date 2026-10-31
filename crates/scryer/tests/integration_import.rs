@@ -2768,6 +2768,7 @@ fn tracked_movie_download(
         client_id: completed.client_id.clone(),
         client_type: completed.client_type.clone(),
         client_item: scryer_domain::DownloadQueueItem {
+            attention_reason_code: None,
             id: Id::new().0,
             title_id: Some(title_id.to_string()),
             episode_id: None,

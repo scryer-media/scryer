@@ -36,8 +36,7 @@ type MaintenanceActionSequenceEditorProps = {
 };
 
 type MaintenanceActionSequencePreset =
-  | "PROFILE_THEN_CONDITIONAL_SEARCH"
-  | "UNMONITOR_DESCENDANTS_THEN_DELETE_FILES";
+  "PROFILE_THEN_CONDITIONAL_SEARCH" | "UNMONITOR_DESCENDANTS_THEN_DELETE_FILES";
 
 /// A response may be missing while a saved sequence already contains steps.
 /// Never make those effects disappear from the editor: callers use this to
@@ -115,11 +114,12 @@ function newStep(
     kind: descriptor.kind,
     parameters: {
       ...emptyStepParameters(),
-      includeDescendants: descriptor.parameterSchema === "unmonitor"
-        ? subjectKind === "TITLE"
-          ? false
-          : true
-        : null,
+      includeDescendants:
+        descriptor.parameterSchema === "unmonitor"
+          ? subjectKind === "TITLE"
+            ? false
+            : true
+          : null,
       searchCondition:
         descriptor.parameterSchema === "search" ? "UNCONDITIONAL" : null,
     },
@@ -202,7 +202,9 @@ function ActionSequenceStep({
   const needsSearchCondition = descriptor.parameterSchema === "search";
   const mayChooseDescendants =
     subjectKind === "TITLE" && descriptor.parameterSchema === "unmonitor";
-  const { definitions, loading } = useTitleTagDefinitions({ enabled: needsTags });
+  const { definitions, loading } = useTitleTagDefinitions({
+    enabled: needsTags,
+  });
 
   const replaceParameters = (parameters: MaintenanceActionStep["parameters"]) =>
     update({ ...step, parameters });
@@ -215,9 +217,13 @@ function ActionSequenceStep({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{t(stepKindLabelKey(step.kind))}</span>
+            <span className="font-medium">
+              {t(stepKindLabelKey(step.kind))}
+            </span>
             {descriptor.terminal ? (
-              <Badge tone="negative">{t("settings.maintenanceSequenceTerminal")}</Badge>
+              <Badge tone="negative">
+                {t("settings.maintenanceSequenceTerminal")}
+              </Badge>
             ) : null}
             <Badge tone="neutral">
               {descriptor.completionPolicy === "accepted"
@@ -250,11 +256,7 @@ function ActionSequenceStep({
           >
             <ChevronDown className="h-4 w-4" />
           </IconButton>
-          <IconButton
-            type="button"
-            label={t("label.delete")}
-            onClick={remove}
-          >
+          <IconButton type="button" label={t("label.delete")} onClick={remove}>
             <Trash2 className="h-4 w-4" />
           </IconButton>
         </div>
@@ -284,7 +286,10 @@ function ActionSequenceStep({
               placeholder={t("settings.maintenanceRuleTargetProfileHelp")}
               value={step.parameters.targetQualityProfileId ?? ""}
               onValueChange={(targetQualityProfileId) =>
-                replaceParameters({ ...step.parameters, targetQualityProfileId })
+                replaceParameters({
+                  ...step.parameters,
+                  targetQualityProfileId,
+                })
               }
               options={qualityProfiles.map((profile) => ({
                 value: profile.id,
@@ -297,7 +302,10 @@ function ActionSequenceStep({
                 {t("settings.maintenanceRuleTargetProfile")}
               </Label>
               <Input
-                id={selectorId("settings-maintenance-sequence-profile", step.id)}
+                id={selectorId(
+                  "settings-maintenance-sequence-profile",
+                  step.id,
+                )}
                 value={step.parameters.targetQualityProfileId ?? ""}
                 onChange={(event) =>
                   replaceParameters({
@@ -316,7 +324,9 @@ function ActionSequenceStep({
 
       {needsTags ? (
         <div className="mt-3">
-          <Label className="mb-2 block">{t("settings.maintenanceRuleTags")}</Label>
+          <Label className="mb-2 block">
+            {t("settings.maintenanceRuleTags")}
+          </Label>
           <TitleTagsPicker
             value={step.parameters.tags}
             onChange={(tags) => replaceParameters({ ...step.parameters, tags })}
@@ -331,13 +341,17 @@ function ActionSequenceStep({
       {needsSearchCondition ? (
         <div className="mt-3">
           <SingleSelectField
-            id={selectorId("settings-maintenance-sequence-search-condition", step.id)}
+            id={selectorId(
+              "settings-maintenance-sequence-search-condition",
+              step.id,
+            )}
             label={t("settings.maintenanceSequenceSearchCondition")}
             value={step.parameters.searchCondition ?? "UNCONDITIONAL"}
             onValueChange={(searchCondition) =>
               replaceParameters({
                 ...step.parameters,
-                searchCondition: searchCondition as MaintenanceActionStep["parameters"]["searchCondition"],
+                searchCondition:
+                  searchCondition as MaintenanceActionStep["parameters"]["searchCondition"],
               })
             }
             options={[
@@ -347,7 +361,9 @@ function ActionSequenceStep({
               },
               {
                 value: "PREVIOUS_PROFILE_CHANGED",
-                label: t("settings.maintenanceSequenceSearchPreviousProfileChanged"),
+                label: t(
+                  "settings.maintenanceSequenceSearchPreviousProfileChanged",
+                ),
               },
             ]}
           />
@@ -383,9 +399,12 @@ export function MaintenanceActionSequenceEditor({
       ),
     [descriptors, sequence.steps, storageRootId, subjectKind],
   );
-  const [selectedKind, setSelectedKind] = React.useState<MaintenanceActionStepKind | "">("");
-  const [selectedPreset, setSelectedPreset] =
-    React.useState<MaintenanceActionSequencePreset | "">("");
+  const [selectedKind, setSelectedKind] = React.useState<
+    MaintenanceActionStepKind | ""
+  >("");
+  const [selectedPreset, setSelectedPreset] = React.useState<
+    MaintenanceActionSequencePreset | ""
+  >("");
   const presetOptions = React.useMemo(
     () =>
       (
@@ -407,20 +426,28 @@ export function MaintenanceActionSequenceEditor({
   );
   const summary = React.useMemo(() => {
     const selected = sequence.steps
-      .map((step) => descriptors.find((descriptor) => descriptor.kind === step.kind))
-      .filter((descriptor): descriptor is MaintenanceActionStepDescriptor => Boolean(descriptor));
-    const effects = [...new Set(selected.flatMap((descriptor) => descriptor.effectClasses))];
-    const arming =
-      effects.includes("DELETE_FILES")
-        ? "DESTRUCTIVE"
-        : selected.length === 0
-          ? "NONE"
-          : "REVERSIBLE";
+      .map((step) =>
+        descriptors.find((descriptor) => descriptor.kind === step.kind),
+      )
+      .filter((descriptor): descriptor is MaintenanceActionStepDescriptor =>
+        Boolean(descriptor),
+      );
+    const effects = [
+      ...new Set(selected.flatMap((descriptor) => descriptor.effectClasses)),
+    ];
+    const arming = effects.includes("DELETE_FILES")
+      ? "DESTRUCTIVE"
+      : selected.length === 0
+        ? "NONE"
+        : "REVERSIBLE";
     return { effects, arming };
   }, [descriptors, sequence.steps]);
 
   React.useEffect(() => {
-    if (selectedKind && available.some((descriptor) => descriptor.kind === selectedKind)) {
+    if (
+      selectedKind &&
+      available.some((descriptor) => descriptor.kind === selectedKind)
+    ) {
       return;
     }
     setSelectedKind(available[0]?.kind ?? "");
@@ -437,7 +464,10 @@ export function MaintenanceActionSequenceEditor({
     onChange({ ...sequence, steps });
   };
   const remove = (index: number) =>
-    onChange({ ...sequence, steps: sequence.steps.filter((_, current) => current !== index) });
+    onChange({
+      ...sequence,
+      steps: sequence.steps.filter((_, current) => current !== index),
+    });
   const move = (index: number, offset: -1 | 1) => {
     const next = index + offset;
     if (next < 0 || next >= sequence.steps.length) return;
@@ -448,7 +478,10 @@ export function MaintenanceActionSequenceEditor({
   const add = () => {
     const descriptor = available.find((item) => item.kind === selectedKind);
     if (!descriptor) return;
-    onChange({ ...sequence, steps: [...sequence.steps, newStep(descriptor, subjectKind)] });
+    onChange({
+      ...sequence,
+      steps: [...sequence.steps, newStep(descriptor, subjectKind)],
+    });
   };
   const loadPreset = () => {
     if (!selectedPreset) return;
@@ -465,7 +498,9 @@ export function MaintenanceActionSequenceEditor({
   return (
     <section id="settings-maintenance-action-sequence" className="space-y-3">
       <div>
-        <Label className="mb-1 block">{t("settings.maintenanceSequenceTitle")}</Label>
+        <Label className="mb-1 block">
+          {t("settings.maintenanceSequenceTitle")}
+        </Label>
         <p className="text-xs text-muted-foreground">
           {t("settings.maintenanceSequenceHelp")}
         </p>
@@ -489,7 +524,9 @@ export function MaintenanceActionSequenceEditor({
           {t("settings.maintenanceSequenceSummaryEffects", {
             effects:
               summary.effects.length > 0
-                ? summary.effects.map((effect) => effect.replaceAll("_", " ")).join(", ")
+                ? summary.effects
+                    .map((effect) => effect.replaceAll("_", " "))
+                    .join(", ")
                 : t("settings.maintenanceSequenceObserveOnly"),
           })}
         </span>
@@ -502,7 +539,9 @@ export function MaintenanceActionSequenceEditor({
       ) : (
         <ol className="space-y-2">
           {sequence.steps.map((step, index) => {
-            const descriptor = descriptors.find((item) => item.kind === step.kind);
+            const descriptor = descriptors.find(
+              (item) => item.kind === step.kind,
+            );
             if (!descriptor) {
               return (
                 <li
@@ -577,14 +616,21 @@ export function MaintenanceActionSequenceEditor({
             label={t("settings.maintenanceSequenceAdd")}
             placeholder={t("settings.maintenanceSequenceAdd")}
             value={selectedKind}
-            onValueChange={(value) => setSelectedKind(value as MaintenanceActionStepKind)}
+            onValueChange={(value) =>
+              setSelectedKind(value as MaintenanceActionStepKind)
+            }
             options={available.map((descriptor) => ({
               value: descriptor.kind,
               label: t(stepKindLabelKey(descriptor.kind)),
             }))}
           />
         </div>
-        <Button type="button" variant="secondary" disabled={!selectedKind} onClick={add}>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={!selectedKind}
+          onClick={add}
+        >
           <Plus className="mr-2 h-4 w-4" />
           {t("label.add")}
         </Button>

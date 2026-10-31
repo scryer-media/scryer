@@ -1571,14 +1571,17 @@ mod tests {
                 TaggedAlias {
                     name: "Över Atlanten".into(),
                     language: "swe".into(),
+                    country: None,
                 },
                 TaggedAlias {
                     name: "Over Atlanten".into(),
                     language: "swe".into(),
+                    country: None,
                 },
                 TaggedAlias {
                     name: "Över Atlanten".into(),
                     language: "dan".into(),
+                    country: None,
                 },
             ],
             metadata_language: Some("eng".into()),

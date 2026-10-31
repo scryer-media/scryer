@@ -2273,6 +2273,51 @@ impl PendingReleaseRepository for PendingReleaseStore {
         .await
     }
 
+    async fn list_active_pending_releases_for_title(
+        &self,
+        title_id: &str,
+        replay_ids: &[String],
+    ) -> AppResult<Vec<PendingRelease>> {
+        let encryption_key = self.encryption_key()?;
+        let sql = format!(
+            "SELECT {PENDING_RELEASE_COLUMNS} FROM pending_releases
+             WHERE title_id = {{}} AND status IN ('waiting', 'standby', 'processing', 'needs_review')");
+        let mut rows = fetch_pending_releases(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(title_id.to_owned())],
+            encryption_key.as_ref(),
+        )
+        .await?;
+        let mut seen: std::collections::HashSet<String> =
+            rows.iter().map(|row| row.id.clone()).collect();
+        let ids: Vec<_> = replay_ids
+            .iter()
+            .filter(|id| seen.insert((*id).clone()))
+            .collect();
+        // Keep bind counts bounded even when a title has a large replay backlog.
+        for chunk in ids.chunks(400) {
+            let binds = vec!["{}"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT {PENDING_RELEASE_COLUMNS} FROM pending_releases
+                WHERE title_id = {{}} AND id IN ({binds})"
+            );
+            let mut args = vec![SqlArg::Text(title_id.to_owned())];
+            args.extend(chunk.iter().map(|id| SqlArg::Text(id.as_str().to_owned())));
+            rows.extend(
+                fetch_pending_releases(
+                    self.datastore.read_exec(),
+                    &sql,
+                    &args,
+                    encryption_key.as_ref(),
+                )
+                .await?,
+            );
+        }
+        rows.sort_by(|left, right| right.added_at.cmp(&left.added_at));
+        Ok(rows)
+    }
+
     async fn list_pending_releases_page(
         &self,
         query: PendingReleasesPageQuery,

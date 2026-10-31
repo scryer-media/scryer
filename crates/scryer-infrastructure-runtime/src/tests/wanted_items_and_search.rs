@@ -906,6 +906,7 @@ async fn title_search_matches_aliases_slug_and_typos_with_direct_priority() {
     direct_title.tagged_aliases = vec![TaggedAlias {
         name: "Lanternhouse Planet Earth".to_string(),
         language: "eng".to_string(),
+        country: None,
     }];
     TitleRepository::create(&catalog, direct_title.clone())
         .await
@@ -1063,6 +1064,7 @@ async fn title_search_projection_refreshes_after_hydrated_metadata_update_and_de
             tagged_aliases: vec![TaggedAlias {
                 name: "Earth Defenders".to_string(),
                 language: "eng".to_string(),
+                country: None,
             }],
             metadata_fetched_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()

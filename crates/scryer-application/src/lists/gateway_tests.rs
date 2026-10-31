@@ -459,7 +459,12 @@ async fn a_gateway_error_fails_the_whole_resolve() {
         .expect_err("gateway down");
     assert!(matches!(
         error,
-        AppError::Repository(_) | AppError::Validation(_)
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+            | AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
     ));
 }
 

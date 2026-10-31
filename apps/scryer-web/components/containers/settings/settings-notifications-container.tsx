@@ -1,5 +1,13 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
@@ -66,8 +74,12 @@ const SUBSCRIPTION_INITIAL_DRAFT: NotificationSubscriptionDraft = {
 
 const FACET_SCOPE_ORDER = ["movie", "series", "anime"] as const;
 
-function isFacetScopeId(value: string): value is (typeof FACET_SCOPE_ORDER)[number] {
-  return FACET_SCOPE_ORDER.includes(value as (typeof FACET_SCOPE_ORDER)[number]);
+function isFacetScopeId(
+  value: string,
+): value is (typeof FACET_SCOPE_ORDER)[number] {
+  return FACET_SCOPE_ORDER.includes(
+    value as (typeof FACET_SCOPE_ORDER)[number],
+  );
 }
 
 function parseFacetScopeIds(scopeId: string | null | undefined): string[] {
@@ -100,8 +112,19 @@ type NotificationSubscriptionSpec = {
   isEnabled: boolean;
 };
 
-function subscriptionSpecKey(spec: Pick<NotificationSubscriptionSpec, "targetKind" | "targetId" | "eventType" | "scope" | "scopeId">): string {
-  return [spec.targetKind, spec.targetId, spec.eventType, spec.scope, spec.scopeId ?? ""].join("::");
+function subscriptionSpecKey(
+  spec: Pick<
+    NotificationSubscriptionSpec,
+    "targetKind" | "targetId" | "eventType" | "scope" | "scopeId"
+  >,
+): string {
+  return [
+    spec.targetKind,
+    spec.targetId,
+    spec.eventType,
+    spec.scope,
+    spec.scopeId ?? "",
+  ].join("::");
 }
 
 function subscriptionRowKey(subscription: NotificationSubscription): string {
@@ -155,7 +178,9 @@ function buildNotificationSubscriptionSpecs(
   draft: NotificationSubscriptionDraft,
 ): NotificationSubscriptionSpec[] {
   const normalizedEventTypes = Array.from(
-    new Set(draft.eventTypes.map((eventType) => eventType.trim()).filter(Boolean)),
+    new Set(
+      draft.eventTypes.map((eventType) => eventType.trim()).filter(Boolean),
+    ),
   );
   const normalizedScope = draft.scope.trim();
   const normalizedFacetScopeId = serializeFacetScopeIds(draft.facetScopeIds);
@@ -203,7 +228,9 @@ type PendingNotificationSubscriptionEditorAction =
   | { type: "close" }
   | null;
 
-function cloneChannelDraft(draft: NotificationChannelDraft): NotificationChannelDraft {
+function cloneChannelDraft(
+  draft: NotificationChannelDraft,
+): NotificationChannelDraft {
   return {
     ...draft,
     configValues: { ...draft.configValues },
@@ -234,47 +261,73 @@ export function SettingsNotificationsContainer({
     LocalPathStyle | undefined
   >(undefined);
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
-  const [mutatingChannelId, setMutatingChannelId] = useState<string | null>(null);
-  const [pendingDeleteChannel, setPendingDeleteChannel] = useState<NotificationChannel | null>(null);
-  const [channelDraft, setChannelDraft] = useState<NotificationChannelDraft>(() => cloneChannelDraft(CHANNEL_INITIAL_DRAFT));
-  const [providerTypes, setProviderTypes] = useState<NotificationProviderType[]>([]);
+  const [mutatingChannelId, setMutatingChannelId] = useState<string | null>(
+    null,
+  );
+  const [pendingDeleteChannel, setPendingDeleteChannel] =
+    useState<NotificationChannel | null>(null);
+  const [channelDraft, setChannelDraft] = useState<NotificationChannelDraft>(
+    () => cloneChannelDraft(CHANNEL_INITIAL_DRAFT),
+  );
+  const [providerTypes, setProviderTypes] = useState<
+    NotificationProviderType[]
+  >([]);
   const [pluginsTarget, setPluginsTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setPluginsTarget(document.getElementById(SETTINGS_REFERENCE_SLOT_ID));
   }, []);
-  const [notificationTargets, setNotificationTargets] = useState<NotificationTarget[]>([]);
+  const [notificationTargets, setNotificationTargets] = useState<
+    NotificationTarget[]
+  >([]);
   const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
   const [isChannelEditorOpen, setIsChannelEditorOpen] = useState(false);
-  const [channelEditorMode, setChannelEditorMode] = useState<"create" | "edit">("create");
+  const [channelEditorMode, setChannelEditorMode] = useState<"create" | "edit">(
+    "create",
+  );
   const [pendingChannelEditorAction, setPendingChannelEditorAction] =
     useState<PendingNotificationChannelEditorAction>(null);
   const [channelDraftBaseline, setChannelDraftBaseline] =
-    useState<NotificationChannelDraft>(() => cloneChannelDraft(CHANNEL_INITIAL_DRAFT));
+    useState<NotificationChannelDraft>(() =>
+      cloneChannelDraft(CHANNEL_INITIAL_DRAFT),
+    );
   const [awaitingChannelBaselineSync, setAwaitingChannelBaselineSync] =
     useState(false);
 
   // --- Subscription state ---
-  const [subscriptions, setSubscriptions] = useState<NotificationSubscription[]>([]);
-  const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
-  const [mutatingSubscriptionId, setMutatingSubscriptionId] = useState<string | null>(null);
-  const [pendingDeleteSubscription, setPendingDeleteSubscription] = useState<NotificationSubscriptionRow | null>(null);
+  const [subscriptions, setSubscriptions] = useState<
+    NotificationSubscription[]
+  >([]);
+  const [editingSubscriptionId, setEditingSubscriptionId] = useState<
+    string | null
+  >(null);
+  const [mutatingSubscriptionId, setMutatingSubscriptionId] = useState<
+    string | null
+  >(null);
+  const [pendingDeleteSubscription, setPendingDeleteSubscription] =
+    useState<NotificationSubscriptionRow | null>(null);
   const [subscriptionDraft, setSubscriptionDraft] =
     useState<NotificationSubscriptionDraft>(() =>
       cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT),
     );
   const [eventTypes, setEventTypes] = useState<string[]>([]);
-  const [subscriptionTitlesById, setSubscriptionTitlesById] = useState<Record<string, TitleRecord | null>>({});
-  const [isSubscriptionEditorOpen, setIsSubscriptionEditorOpen] = useState(false);
-  const [subscriptionEditorMode, setSubscriptionEditorMode] =
-    useState<"create" | "edit">("create");
+  const [subscriptionTitlesById, setSubscriptionTitlesById] = useState<
+    Record<string, TitleRecord | null>
+  >({});
+  const [isSubscriptionEditorOpen, setIsSubscriptionEditorOpen] =
+    useState(false);
+  const [subscriptionEditorMode, setSubscriptionEditorMode] = useState<
+    "create" | "edit"
+  >("create");
   const [pendingSubscriptionEditorAction, setPendingSubscriptionEditorAction] =
     useState<PendingNotificationSubscriptionEditorAction>(null);
   const [subscriptionDraftBaseline, setSubscriptionDraftBaseline] =
     useState<NotificationSubscriptionDraft>(() =>
       cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT),
     );
-  const [awaitingSubscriptionBaselineSync, setAwaitingSubscriptionBaselineSync] =
-    useState(false);
+  const [
+    awaitingSubscriptionBaselineSync,
+    setAwaitingSubscriptionBaselineSync,
+  ] = useState(false);
   const providerCatalogVersionRef = useRef(providerCatalogVersion);
   const subscriptionRows = useMemo(
     () => buildNotificationSubscriptionRows(subscriptions),
@@ -285,7 +338,10 @@ export function SettingsNotificationsContainer({
       Array.from(
         new Set(
           subscriptions
-            .filter((subscription) => subscription.scope === "title" && !!subscription.scopeId)
+            .filter(
+              (subscription) =>
+                subscription.scope === "title" && !!subscription.scopeId,
+            )
             .map((subscription) => subscription.scopeId as string),
         ),
       ),
@@ -294,7 +350,8 @@ export function SettingsNotificationsContainer({
   const isChannelDraftDirty =
     JSON.stringify(channelDraft) !== JSON.stringify(channelDraftBaseline);
   const isSubscriptionDraftDirty =
-    JSON.stringify(subscriptionDraft) !== JSON.stringify(subscriptionDraftBaseline);
+    JSON.stringify(subscriptionDraft) !==
+    JSON.stringify(subscriptionDraftBaseline);
 
   useEffect(() => {
     if (!awaitingChannelBaselineSync) {
@@ -323,25 +380,39 @@ export function SettingsNotificationsContainer({
       if (error) throw error;
       setChannels(data.notificationChannels || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     }
   }, [client, setGlobalStatus, t]);
 
   const refreshSubscriptions = useCallback(async () => {
     try {
       const { data, error } = await client
-        .query(notificationSubscriptionsQuery, {}, { requestPolicy: "network-only" })
+        .query(
+          notificationSubscriptionsQuery,
+          {},
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       if (error) throw error;
       setSubscriptions(data.notificationSubscriptions || []);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     }
   }, [client, setGlobalStatus, t]);
 
   const refreshProviderTypes = useCallback(async () => {
     const { data, error } = await client
-      .query(notificationProviderTypesQuery, {}, { requestPolicy: "network-only" })
+      .query(
+        notificationProviderTypesQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
       .toPromise();
     if (error) throw error;
     setProviderTypes(data?.notificationProviderTypes || []);
@@ -352,7 +423,9 @@ export function SettingsNotificationsContainer({
       .query(notificationTargetsQuery, {}, { requestPolicy: "network-only" })
       .toPromise();
     if (error) throw error;
-    setNotificationTargets((data?.notificationTargets ?? []) as NotificationTarget[]);
+    setNotificationTargets(
+      (data?.notificationTargets ?? []) as NotificationTarget[],
+    );
   }, [client]);
 
   useEffect(() => {
@@ -362,10 +435,17 @@ export function SettingsNotificationsContainer({
         const { data, error } = await client
           .query(notificationsInitQuery, {}, { requestPolicy: "network-only" })
           .toPromise();
-        if (error && !data?.notificationChannels && !data?.notificationSubscriptions) throw error;
+        if (
+          error &&
+          !data?.notificationChannels &&
+          !data?.notificationSubscriptions
+        )
+          throw error;
         if (cancelled) return;
         setChannels(data?.notificationChannels || []);
-        setNotificationTargets((data?.notificationTargets ?? []) as NotificationTarget[]);
+        setNotificationTargets(
+          (data?.notificationTargets ?? []) as NotificationTarget[],
+        );
         setSubscriptions(data?.notificationSubscriptions || []);
         setProviderTypes(data?.notificationProviderTypes || []);
         setEventTypes(data?.notificationEventTypes || []);
@@ -373,7 +453,10 @@ export function SettingsNotificationsContainer({
           localPathStyleFromRuntimeValue(data?.runtimeInfo?.runtimePathStyle),
         );
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
       }
     };
     void load();
@@ -388,10 +471,22 @@ export function SettingsNotificationsContainer({
     }
 
     providerCatalogVersionRef.current = providerCatalogVersion;
-    void Promise.all([refreshProviderTypes(), refreshNotificationTargets()]).catch((error: unknown) => {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+    void Promise.all([
+      refreshProviderTypes(),
+      refreshNotificationTargets(),
+    ]).catch((error: unknown) => {
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     });
-  }, [providerCatalogVersion, refreshNotificationTargets, refreshProviderTypes, setGlobalStatus, t]);
+  }, [
+    providerCatalogVersion,
+    refreshNotificationTargets,
+    refreshProviderTypes,
+    setGlobalStatus,
+    t,
+  ]);
 
   useEffect(() => {
     setSubscriptionTitlesById((current) => {
@@ -407,7 +502,8 @@ export function SettingsNotificationsContainer({
 
   useEffect(() => {
     const unresolvedIds = titleScopedSubscriptionIds.filter(
-      (titleId) => !Object.prototype.hasOwnProperty.call(subscriptionTitlesById, titleId),
+      (titleId) =>
+        !Object.prototype.hasOwnProperty.call(subscriptionTitlesById, titleId),
     );
 
     if (unresolvedIds.length === 0) {
@@ -419,7 +515,10 @@ export function SettingsNotificationsContainer({
     void Promise.all(
       unresolvedIds.map(async (titleId) => {
         const { data, error } = await client
-      .query<{ title?: TitleRecord | null }>(titleAutocompleteSelectionQuery, { id: titleId })
+          .query<{ title?: TitleRecord | null }>(
+            titleAutocompleteSelectionQuery,
+            { id: titleId },
+          )
           .toPromise();
         if (error) {
           return [titleId, null] as const;
@@ -454,7 +553,9 @@ export function SettingsNotificationsContainer({
   const submitChannel = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const selectedProvider =
-      providerTypes.find((pt) => pt.providerType === channelDraft.channelType.trim()) ?? null;
+      providerTypes.find(
+        (pt) => pt.providerType === channelDraft.channelType.trim(),
+      ) ?? null;
     const payload = {
       name: channelDraft.name.trim(),
       channelType: channelDraft.channelType.trim(),
@@ -474,29 +575,37 @@ export function SettingsNotificationsContainer({
     setMutatingChannelId(editingChannelId || "new");
     try {
       if (editingChannelId) {
-        const { error } = await client.mutation(updateNotificationChannelMutation, {
-          input: {
-            id: editingChannelId,
-            name: payload.name,
-            mediaServerConnectionId: payload.mediaServerConnectionId ?? null,
-            config: payload.config,
-            isEnabled: payload.isEnabled,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(updateNotificationChannelMutation, {
+            input: {
+              id: editingChannelId,
+              name: payload.name,
+              mediaServerConnectionId: payload.mediaServerConnectionId ?? null,
+              config: payload.config,
+              isEnabled: payload.isEnabled,
+            },
+          })
+          .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.notificationChannelUpdated"), { level: "SUCCESS" });
+        setGlobalStatus(t("status.notificationChannelUpdated"), {
+          level: "SUCCESS",
+        });
       } else {
-        const { error } = await client.mutation(createNotificationChannelMutation, {
-          input: {
-            name: payload.name,
-            channelType: payload.channelType,
-            mediaServerConnectionId: payload.mediaServerConnectionId,
-            config: payload.config,
-            isEnabled: payload.isEnabled,
-          },
-        }).toPromise();
+        const { error } = await client
+          .mutation(createNotificationChannelMutation, {
+            input: {
+              name: payload.name,
+              channelType: payload.channelType,
+              mediaServerConnectionId: payload.mediaServerConnectionId,
+              config: payload.config,
+              isEnabled: payload.isEnabled,
+            },
+          })
+          .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.notificationChannelCreated"), { level: "SUCCESS" });
+        setGlobalStatus(t("status.notificationChannelCreated"), {
+          level: "SUCCESS",
+        });
       }
       resetChannelDraft();
       setIsChannelEditorOpen(false);
@@ -505,24 +614,34 @@ export function SettingsNotificationsContainer({
       await refreshChannels();
       await refreshNotificationTargets();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingChannelId(null);
     }
   };
 
-  const editChannel = useCallback((channel: NotificationChannel) => {
-    setEditingChannelId(channel.id);
-    const provider = providerTypes.find((pt) => pt.providerType === channel.channelType);
-    setChannelDraft({
-      name: provider?.name ?? channel.name,
-      channelType: channel.channelType,
-      mediaServerConnectionId: channel.mediaServerConnectionId ?? "",
-      isEnabled: channel.isEnabled,
-      configValues: providerConfigValuesToRecord(channel.config),
-    });
-    setGlobalStatus(t("status.editingNotificationChannel", { name: channel.name }));
-  }, [providerTypes, setGlobalStatus, t]);
+  const editChannel = useCallback(
+    (channel: NotificationChannel) => {
+      setEditingChannelId(channel.id);
+      const provider = providerTypes.find(
+        (pt) => pt.providerType === channel.channelType,
+      );
+      setChannelDraft({
+        name: provider?.name ?? channel.name,
+        channelType: channel.channelType,
+        mediaServerConnectionId: channel.mediaServerConnectionId ?? "",
+        isEnabled: channel.isEnabled,
+        configValues: providerConfigValuesToRecord(channel.config),
+      });
+      setGlobalStatus(
+        t("status.editingNotificationChannel", { name: channel.name }),
+      );
+    },
+    [providerTypes, setGlobalStatus, t],
+  );
 
   const openCreateChannelEditor = useCallback(() => {
     resetChannelDraft();
@@ -531,12 +650,15 @@ export function SettingsNotificationsContainer({
     setAwaitingChannelBaselineSync(true);
   }, [resetChannelDraft]);
 
-  const openEditChannelEditor = useCallback((channel: NotificationChannel) => {
-    editChannel(channel);
-    setChannelEditorMode("edit");
-    setIsChannelEditorOpen(true);
-    setAwaitingChannelBaselineSync(true);
-  }, [editChannel]);
+  const openEditChannelEditor = useCallback(
+    (channel: NotificationChannel) => {
+      editChannel(channel);
+      setChannelEditorMode("edit");
+      setIsChannelEditorOpen(true);
+      setAwaitingChannelBaselineSync(true);
+    },
+    [editChannel],
+  );
 
   const requestCreateChannelEditor = useCallback(() => {
     if (!isChannelEditorOpen || !isChannelDraftDirty) {
@@ -547,14 +669,17 @@ export function SettingsNotificationsContainer({
     setPendingChannelEditorAction({ type: "create" });
   }, [isChannelDraftDirty, isChannelEditorOpen, openCreateChannelEditor]);
 
-  const requestEditChannel = useCallback((channel: NotificationChannel) => {
-    if (!isChannelEditorOpen || !isChannelDraftDirty) {
-      openEditChannelEditor(channel);
-      return;
-    }
+  const requestEditChannel = useCallback(
+    (channel: NotificationChannel) => {
+      if (!isChannelEditorOpen || !isChannelDraftDirty) {
+        openEditChannelEditor(channel);
+        return;
+      }
 
-    setPendingChannelEditorAction({ type: "edit", channel });
-  }, [isChannelDraftDirty, isChannelEditorOpen, openEditChannelEditor]);
+      setPendingChannelEditorAction({ type: "edit", channel });
+    },
+    [isChannelDraftDirty, isChannelEditorOpen, openEditChannelEditor],
+  );
 
   const requestCloseChannelEditor = useCallback(() => {
     if (!isChannelEditorOpen) {
@@ -605,11 +730,16 @@ export function SettingsNotificationsContainer({
     const channel = pendingDeleteChannel;
     setMutatingChannelId(channel.id);
     try {
-      const { error } = await client.mutation(deleteNotificationChannelMutation, {
-        id: channel.id,
-      }).toPromise();
+      const { error } = await client
+        .mutation(deleteNotificationChannelMutation, {
+          id: channel.id,
+        })
+        .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.notificationChannelDeleted", { name: channel.name }), { level: "SUCCESS" });
+      setGlobalStatus(
+        t("status.notificationChannelDeleted", { name: channel.name }),
+        { level: "SUCCESS" },
+      );
       await refreshChannels();
       await refreshNotificationTargets();
       await refreshSubscriptions();
@@ -620,83 +750,120 @@ export function SettingsNotificationsContainer({
         setAwaitingChannelBaselineSync(true);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingChannelId(null);
       setPendingDeleteChannel(null);
     }
   };
 
-  const toggleChannelEnabled = useCallback(async (channel: NotificationChannel) => {
-    const nextIsEnabled = !channel.isEnabled;
-    setMutatingChannelId(channel.id);
-    setChannels((current) => current.map((existing) => (
-      existing.id === channel.id ? { ...existing, isEnabled: nextIsEnabled } : existing
-    )));
-    if (editingChannelId === channel.id) {
-      setChannelDraft((current) => ({
-        ...current,
-        isEnabled: nextIsEnabled,
-      }));
-    }
-    try {
-      const { error } = await client.mutation(updateNotificationChannelMutation, {
-        input: {
-          id: channel.id,
-          isEnabled: nextIsEnabled,
-        },
-      }).toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("status.notificationChannelUpdated"), { level: "SUCCESS" });
-      await refreshChannels();
-      await refreshNotificationTargets();
-    } catch (error) {
-      setChannels((current) => current.map((existing) => (
-        existing.id === channel.id ? { ...existing, isEnabled: channel.isEnabled } : existing
-      )));
+  const toggleChannelEnabled = useCallback(
+    async (channel: NotificationChannel) => {
+      const nextIsEnabled = !channel.isEnabled;
+      setMutatingChannelId(channel.id);
+      setChannels((current) =>
+        current.map((existing) =>
+          existing.id === channel.id
+            ? { ...existing, isEnabled: nextIsEnabled }
+            : existing,
+        ),
+      );
       if (editingChannelId === channel.id) {
         setChannelDraft((current) => ({
           ...current,
-          isEnabled: channel.isEnabled,
+          isEnabled: nextIsEnabled,
         }));
       }
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
-    } finally {
-      setMutatingChannelId(null);
-    }
-  }, [client, editingChannelId, refreshChannels, refreshNotificationTargets, setGlobalStatus, t]);
+      try {
+        const { error } = await client
+          .mutation(updateNotificationChannelMutation, {
+            input: {
+              id: channel.id,
+              isEnabled: nextIsEnabled,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.notificationChannelUpdated"), {
+          level: "SUCCESS",
+        });
+        await refreshChannels();
+        await refreshNotificationTargets();
+      } catch (error) {
+        setChannels((current) =>
+          current.map((existing) =>
+            existing.id === channel.id
+              ? { ...existing, isEnabled: channel.isEnabled }
+              : existing,
+          ),
+        );
+        if (editingChannelId === channel.id) {
+          setChannelDraft((current) => ({
+            ...current,
+            isEnabled: channel.isEnabled,
+          }));
+        }
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        setMutatingChannelId(null);
+      }
+    },
+    [
+      client,
+      editingChannelId,
+      refreshChannels,
+      refreshNotificationTargets,
+      setGlobalStatus,
+      t,
+    ],
+  );
 
-  const testChannel = useCallback(async (channel: NotificationChannel) => {
-    setTestingChannelId(channel.id);
-    try {
-      await runConnectionFeedback({
-        setGlobalStatus,
-        successMessage: t("settings.notificationTestSuccess"),
-        failureFallbackMessage: t("settings.notificationTestFailed"),
-        t,
-        run: async () => {
-          const { data, error } = await client.mutation(testNotificationChannelMutation, {
-            id: channel.id,
-          }).toPromise();
-          if (error) throw error;
-          const validation = data?.testNotificationChannel;
-          if (validation?.status !== "ok") {
-            throw new Error(validation?.message ?? t("settings.notificationTestFailed"));
-          }
-          return validation.message ?? t("settings.notificationTestSuccess");
-        },
-      });
-    } catch {
-      // Shared connection feedback already surfaced the failure.
-    } finally {
-      setTestingChannelId(null);
-    }
-  }, [client, setGlobalStatus, t]);
+  const testChannel = useCallback(
+    async (channel: NotificationChannel) => {
+      setTestingChannelId(channel.id);
+      try {
+        await runConnectionFeedback({
+          setGlobalStatus,
+          successMessage: t("settings.notificationTestSuccess"),
+          failureFallbackMessage: t("settings.notificationTestFailed"),
+          t,
+          run: async () => {
+            const { data, error } = await client
+              .mutation(testNotificationChannelMutation, {
+                id: channel.id,
+              })
+              .toPromise();
+            if (error) throw error;
+            const validation = data?.testNotificationChannel;
+            if (validation?.status !== "ok") {
+              throw new Error(
+                validation?.message ?? t("settings.notificationTestFailed"),
+              );
+            }
+            return validation.message ?? t("settings.notificationTestSuccess");
+          },
+        });
+      } catch {
+        // Shared connection feedback already surfaced the failure.
+      } finally {
+        setTestingChannelId(null);
+      }
+    },
+    [client, setGlobalStatus, t],
+  );
 
   // --- Subscription CRUD ---
   const resetSubscriptionDraft = useCallback(() => {
     setEditingSubscriptionId(null);
-    setSubscriptionDraft(() => cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT));
+    setSubscriptionDraft(() =>
+      cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT),
+    );
   }, []);
 
   const submitSubscription = async (event: FormEvent<HTMLFormElement>) => {
@@ -711,7 +878,9 @@ export function SettingsNotificationsContainer({
     setMutatingSubscriptionId(editingSubscriptionId || "new");
     try {
       if (editingSubscriptionId) {
-        const editingRow = subscriptionRows.find((row) => row.id === editingSubscriptionId);
+        const editingRow = subscriptionRows.find(
+          (row) => row.id === editingSubscriptionId,
+        );
         if (!editingRow) {
           throw new Error(t("status.failedToUpdate"));
         }
@@ -739,28 +908,35 @@ export function SettingsNotificationsContainer({
           const key = subscriptionSpecKey(spec);
           const existing = existingByKey.get(key);
           if (!existing) {
-            const { error } = await client.mutation(createNotificationSubscriptionMutation, {
-              input: {
-                channelId: spec.targetKind === "plugin_channel" ? spec.targetId : undefined,
-                targetKind: spec.targetKind,
-                targetId: spec.targetId,
-                eventType: spec.eventType,
-                scope: spec.scope,
-                scopeId: spec.scopeId,
-                isEnabled: spec.isEnabled,
-              },
-            }).toPromise();
+            const { error } = await client
+              .mutation(createNotificationSubscriptionMutation, {
+                input: {
+                  channelId:
+                    spec.targetKind === "plugin_channel"
+                      ? spec.targetId
+                      : undefined,
+                  targetKind: spec.targetKind,
+                  targetId: spec.targetId,
+                  eventType: spec.eventType,
+                  scope: spec.scope,
+                  scopeId: spec.scopeId,
+                  isEnabled: spec.isEnabled,
+                },
+              })
+              .toPromise();
             if (error) throw error;
             continue;
           }
 
           if (existing.isEnabled !== spec.isEnabled) {
-            const { error } = await client.mutation(updateNotificationSubscriptionMutation, {
-              input: {
-                id: existing.id,
-                isEnabled: spec.isEnabled,
-              },
-            }).toPromise();
+            const { error } = await client
+              .mutation(updateNotificationSubscriptionMutation, {
+                input: {
+                  id: existing.id,
+                  isEnabled: spec.isEnabled,
+                },
+              })
+              .toPromise();
             if (error) throw error;
           }
         }
@@ -777,29 +953,40 @@ export function SettingsNotificationsContainer({
             continue;
           }
 
-          const { error } = await client.mutation(deleteNotificationSubscriptionMutation, {
-            id: subscription.id,
-          }).toPromise();
+          const { error } = await client
+            .mutation(deleteNotificationSubscriptionMutation, {
+              id: subscription.id,
+            })
+            .toPromise();
           if (error) throw error;
         }
 
-        setGlobalStatus(t("status.notificationSubscriptionUpdated"), { level: "SUCCESS" });
+        setGlobalStatus(t("status.notificationSubscriptionUpdated"), {
+          level: "SUCCESS",
+        });
       } else {
         for (const spec of desiredSpecs) {
-          const { error } = await client.mutation(createNotificationSubscriptionMutation, {
-            input: {
-              channelId: spec.targetKind === "plugin_channel" ? spec.targetId : undefined,
-              targetKind: spec.targetKind,
-              targetId: spec.targetId,
-              eventType: spec.eventType,
-              scope: spec.scope,
-              scopeId: spec.scopeId,
-              isEnabled: spec.isEnabled,
-            },
-          }).toPromise();
+          const { error } = await client
+            .mutation(createNotificationSubscriptionMutation, {
+              input: {
+                channelId:
+                  spec.targetKind === "plugin_channel"
+                    ? spec.targetId
+                    : undefined,
+                targetKind: spec.targetKind,
+                targetId: spec.targetId,
+                eventType: spec.eventType,
+                scope: spec.scope,
+                scopeId: spec.scopeId,
+                isEnabled: spec.isEnabled,
+              },
+            })
+            .toPromise();
           if (error) throw error;
         }
-        setGlobalStatus(t("status.notificationSubscriptionCreated"), { level: "SUCCESS" });
+        setGlobalStatus(t("status.notificationSubscriptionCreated"), {
+          level: "SUCCESS",
+        });
       }
       resetSubscriptionDraft();
       setIsSubscriptionEditorOpen(false);
@@ -808,73 +995,92 @@ export function SettingsNotificationsContainer({
       await refreshSubscriptions();
     } catch (error) {
       await refreshSubscriptions().catch(() => undefined);
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingSubscriptionId(null);
     }
   };
 
-  const editSubscription = useCallback((sub: NotificationSubscriptionRow) => {
-    setEditingSubscriptionId(sub.id);
-    setSubscriptionDraft({
-      targetKind: sub.targetKind,
-      targetId: sub.targetId,
-      eventTypes: [...sub.eventTypes],
-      scope: sub.scope,
-      facetScopeIds: sub.scope === "facet" ? parseFacetScopeIds(sub.scopeId) : [],
-      titleScopeId: sub.scope === "title" ? sub.scopeId || "" : "",
-      titleScopeTitle:
-        sub.scope === "title" && sub.scopeId
-          ? subscriptionTitlesById[sub.scopeId] ?? null
-          : null,
-      isEnabled: sub.isEnabled,
-    });
-    setGlobalStatus(t("status.editingNotificationSubscription"));
-  }, [setGlobalStatus, subscriptionTitlesById, t]);
+  const editSubscription = useCallback(
+    (sub: NotificationSubscriptionRow) => {
+      setEditingSubscriptionId(sub.id);
+      setSubscriptionDraft({
+        targetKind: sub.targetKind,
+        targetId: sub.targetId,
+        eventTypes: [...sub.eventTypes],
+        scope: sub.scope,
+        facetScopeIds:
+          sub.scope === "facet" ? parseFacetScopeIds(sub.scopeId) : [],
+        titleScopeId: sub.scope === "title" ? sub.scopeId || "" : "",
+        titleScopeTitle:
+          sub.scope === "title" && sub.scopeId
+            ? (subscriptionTitlesById[sub.scopeId] ?? null)
+            : null,
+        isEnabled: sub.isEnabled,
+      });
+      setGlobalStatus(t("status.editingNotificationSubscription"));
+    },
+    [setGlobalStatus, subscriptionTitlesById, t],
+  );
 
-  const openCreateSubscriptionEditor = useCallback((target?: Pick<NotificationTarget, "targetKind" | "id">) => {
-    setSubscriptionDraft({
-      ...cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT),
-      targetKind: target?.targetKind ?? SUBSCRIPTION_INITIAL_DRAFT.targetKind,
-      targetId: target?.id ?? SUBSCRIPTION_INITIAL_DRAFT.targetId,
-    });
-    setSubscriptionEditorMode("create");
-    setIsSubscriptionEditorOpen(true);
-    setAwaitingSubscriptionBaselineSync(true);
-  }, []);
+  const openCreateSubscriptionEditor = useCallback(
+    (target?: Pick<NotificationTarget, "targetKind" | "id">) => {
+      setSubscriptionDraft({
+        ...cloneSubscriptionDraft(SUBSCRIPTION_INITIAL_DRAFT),
+        targetKind: target?.targetKind ?? SUBSCRIPTION_INITIAL_DRAFT.targetKind,
+        targetId: target?.id ?? SUBSCRIPTION_INITIAL_DRAFT.targetId,
+      });
+      setSubscriptionEditorMode("create");
+      setIsSubscriptionEditorOpen(true);
+      setAwaitingSubscriptionBaselineSync(true);
+    },
+    [],
+  );
 
-  const openEditSubscriptionEditor = useCallback((sub: NotificationSubscriptionRow) => {
-    editSubscription(sub);
-    setSubscriptionEditorMode("edit");
-    setIsSubscriptionEditorOpen(true);
-    setAwaitingSubscriptionBaselineSync(true);
-  }, [editSubscription]);
+  const openEditSubscriptionEditor = useCallback(
+    (sub: NotificationSubscriptionRow) => {
+      editSubscription(sub);
+      setSubscriptionEditorMode("edit");
+      setIsSubscriptionEditorOpen(true);
+      setAwaitingSubscriptionBaselineSync(true);
+    },
+    [editSubscription],
+  );
 
-  const requestCreateSubscriptionEditor = useCallback((target?: Pick<NotificationTarget, "targetKind" | "id">) => {
-    if (!isSubscriptionEditorOpen || !isSubscriptionDraftDirty) {
-      openCreateSubscriptionEditor(target);
-      return;
-    }
+  const requestCreateSubscriptionEditor = useCallback(
+    (target?: Pick<NotificationTarget, "targetKind" | "id">) => {
+      if (!isSubscriptionEditorOpen || !isSubscriptionDraftDirty) {
+        openCreateSubscriptionEditor(target);
+        return;
+      }
 
-    setPendingSubscriptionEditorAction({ type: "create", target });
-  }, [
-    isSubscriptionDraftDirty,
-    isSubscriptionEditorOpen,
-    openCreateSubscriptionEditor,
-  ]);
+      setPendingSubscriptionEditorAction({ type: "create", target });
+    },
+    [
+      isSubscriptionDraftDirty,
+      isSubscriptionEditorOpen,
+      openCreateSubscriptionEditor,
+    ],
+  );
 
-  const requestEditSubscription = useCallback((sub: NotificationSubscriptionRow) => {
-    if (!isSubscriptionEditorOpen || !isSubscriptionDraftDirty) {
-      openEditSubscriptionEditor(sub);
-      return;
-    }
+  const requestEditSubscription = useCallback(
+    (sub: NotificationSubscriptionRow) => {
+      if (!isSubscriptionEditorOpen || !isSubscriptionDraftDirty) {
+        openEditSubscriptionEditor(sub);
+        return;
+      }
 
-    setPendingSubscriptionEditorAction({ type: "edit", subscription: sub });
-  }, [
-    isSubscriptionDraftDirty,
-    isSubscriptionEditorOpen,
-    openEditSubscriptionEditor,
-  ]);
+      setPendingSubscriptionEditorAction({ type: "edit", subscription: sub });
+    },
+    [
+      isSubscriptionDraftDirty,
+      isSubscriptionEditorOpen,
+      openEditSubscriptionEditor,
+    ],
+  );
 
   const requestCloseSubscriptionEditor = useCallback(() => {
     if (!isSubscriptionEditorOpen) {
@@ -890,7 +1096,11 @@ export function SettingsNotificationsContainer({
     }
 
     setPendingSubscriptionEditorAction({ type: "close" });
-  }, [isSubscriptionDraftDirty, isSubscriptionEditorOpen, resetSubscriptionDraft]);
+  }, [
+    isSubscriptionDraftDirty,
+    isSubscriptionEditorOpen,
+    resetSubscriptionDraft,
+  ]);
 
   const confirmPendingSubscriptionEditorAction = useCallback(() => {
     if (!pendingSubscriptionEditorAction) {
@@ -926,12 +1136,16 @@ export function SettingsNotificationsContainer({
     setMutatingSubscriptionId(sub.id);
     try {
       for (const subscriptionId of sub.subscriptionIds) {
-        const { error } = await client.mutation(deleteNotificationSubscriptionMutation, {
-          id: subscriptionId,
-        }).toPromise();
+        const { error } = await client
+          .mutation(deleteNotificationSubscriptionMutation, {
+            id: subscriptionId,
+          })
+          .toPromise();
         if (error) throw error;
       }
-      setGlobalStatus(t("status.notificationSubscriptionDeleted"), { level: "SUCCESS" });
+      setGlobalStatus(t("status.notificationSubscriptionDeleted"), {
+        level: "SUCCESS",
+      });
       await refreshSubscriptions();
       if (editingSubscriptionId === sub.id) {
         resetSubscriptionDraft();
@@ -940,33 +1154,46 @@ export function SettingsNotificationsContainer({
         setAwaitingSubscriptionBaselineSync(true);
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingSubscriptionId(null);
       setPendingDeleteSubscription(null);
     }
   };
 
-  const toggleSubscriptionEnabled = useCallback(async (sub: NotificationSubscriptionRow) => {
-    setMutatingSubscriptionId(sub.id);
-    try {
-      for (const subscriptionId of sub.subscriptionIds) {
-        const { error } = await client.mutation(updateNotificationSubscriptionMutation, {
-          input: {
-            id: subscriptionId,
-            isEnabled: !sub.isEnabled,
-          },
-        }).toPromise();
-        if (error) throw error;
+  const toggleSubscriptionEnabled = useCallback(
+    async (sub: NotificationSubscriptionRow) => {
+      setMutatingSubscriptionId(sub.id);
+      try {
+        for (const subscriptionId of sub.subscriptionIds) {
+          const { error } = await client
+            .mutation(updateNotificationSubscriptionMutation, {
+              input: {
+                id: subscriptionId,
+                isEnabled: !sub.isEnabled,
+              },
+            })
+            .toPromise();
+          if (error) throw error;
+        }
+        setGlobalStatus(t("status.notificationSubscriptionUpdated"), {
+          level: "SUCCESS",
+        });
+        await refreshSubscriptions();
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        setMutatingSubscriptionId(null);
       }
-      setGlobalStatus(t("status.notificationSubscriptionUpdated"), { level: "SUCCESS" });
-      await refreshSubscriptions();
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
-    } finally {
-      setMutatingSubscriptionId(null);
-    }
-  }, [client, refreshSubscriptions, setGlobalStatus, t]);
+    },
+    [client, refreshSubscriptions, setGlobalStatus, t],
+  );
 
   return (
     <>
@@ -1034,7 +1261,11 @@ export function SettingsNotificationsContainer({
         open={pendingDeleteChannel !== null}
         title={t("label.delete")}
         description={
-          pendingDeleteChannel ? t("status.deletingNotificationChannel", { name: pendingDeleteChannel.name }) : ""
+          pendingDeleteChannel
+            ? t("status.deletingNotificationChannel", {
+                name: pendingDeleteChannel.name,
+              })
+            : ""
         }
         confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}
@@ -1045,7 +1276,9 @@ export function SettingsNotificationsContainer({
       <ConfirmDialog
         open={pendingSubscriptionEditorAction !== null}
         title={t("settings.notificationSubscriptionConfirmDiscardTitle")}
-        description={t("settings.notificationSubscriptionConfirmDiscardDescription")}
+        description={t(
+          "settings.notificationSubscriptionConfirmDiscardDescription",
+        )}
         confirmLabel={
           pendingSubscriptionEditorAction?.type === "create"
             ? t("settings.notificationSubscriptionCreateNew")

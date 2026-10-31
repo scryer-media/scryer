@@ -347,11 +347,11 @@ export function requestFilterArgument(value: string): string | undefined {
   return value === REQUEST_FILTER_ALL || !value ? undefined : value;
 }
 
-/// The API refuses a matcher that reads `input.requester.*` unless the author
-/// can manage permissions. The message is the server's, and it is shown
-/// verbatim, so this only recognises it well enough to mark the banner.
-export function isPersonTargetingRefusal(message: string): boolean {
-  return message.toLowerCase().includes("input.requester");
+/** Permission-sensitive targeting is explicitly named by validation. */
+export function isPersonTargetingRefusal(diagnostic: {
+  code: string;
+}): boolean {
+  return diagnostic.code === "RULE_TARGETS_PERSON";
 }
 
 const REQUESTER_REFERENCE_PATTERN =

@@ -28,11 +28,7 @@ export function locationOperationIdFromJobRun(
 }
 
 export type MoveToastVisualState =
-  | "moving"
-  | "success"
-  | "issues"
-  | "failed"
-  | "canceled";
+  "moving" | "success" | "issues" | "failed" | "canceled";
 
 /** How the toast reads an operation state; anything not settled is moving. */
 export function moveToastVisualState(

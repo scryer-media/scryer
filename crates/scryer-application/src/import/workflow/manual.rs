@@ -270,7 +270,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
                 &record.id,
                 &payload,
                 ImportStatus::Failed,
-                Some(classify_manual_import_error_message(&error.to_string())),
+                Some(classify_manual_import_error(&error)),
                 Some(error.to_string()),
                 Vec::new(),
             ),
@@ -301,7 +301,7 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
             result
                 .file_results
                 .iter()
-                .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+                .any(manual_file_has_scene_subtitle_hold)
         });
     let terminalized = if has_successful_import && !subtitles_pending {
         let canonical_download_id = match app
@@ -632,7 +632,7 @@ async fn manual_import_preview_targets(
 }
 
 fn manual_import_source_unavailable() -> AppError {
-    AppError::NotFound(MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string())
+    AppError::not_found_reason(crate::error_reasons::import::SOURCE_UNAVAILABLE, MANUAL_IMPORT_SOURCE_UNAVAILABLE.to_string())
 }
 
 pub(crate) async fn resolve_current_manual_import_source(
@@ -849,7 +849,7 @@ async fn manual_import_source_was_already_imported(
 
 fn source_path_canonical(source_path: &Path) -> AppResult<PathBuf> {
     std::fs::canonicalize(source_path).map_err(|err| {
-        AppError::Validation(format!(
+        manual_import_io_error(&err, format!(
             "manual import path is not accessible: {} ({err})",
             source_path.display()
         ))
@@ -858,13 +858,13 @@ fn source_path_canonical(source_path: &Path) -> AppResult<PathBuf> {
 
 fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> {
     let parent = source_path.parent().ok_or_else(|| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_INVALID, format!(
             "manual import file must have a parent directory: {}",
             source_path.display()
         ))
     })?;
     let file_name = source_path.file_name().ok_or_else(|| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_INVALID, format!(
             "manual import file must have a file name: {}",
             source_path.display()
         ))
@@ -878,19 +878,19 @@ fn canonical_manual_import_source_under_trusted_root(
     trusted_root: &Path,
 ) -> AppResult<PathBuf> {
     let trusted_root_metadata = std::fs::metadata(trusted_root).map_err(|err| {
-        AppError::Validation(format!(
+        manual_import_io_error(&err, format!(
             "manual import source root is not accessible: {} ({err})",
             trusted_root.display()
         ))
     })?;
     let canonical_trusted_root = std::fs::canonicalize(trusted_root).map_err(|err| {
-        AppError::Validation(format!(
+        manual_import_io_error(&err, format!(
             "manual import source root is not accessible: {} ({err})",
             trusted_root.display()
         ))
     })?;
     let canonical = std::fs::canonicalize(source_path).map_err(|err| {
-        AppError::Validation(format!(
+        manual_import_io_error(&err, format!(
             "manual import file is not accessible: {} ({err})",
             source_path.display()
         ))
@@ -900,13 +900,13 @@ fn canonical_manual_import_source_under_trusted_root(
         if canonical == canonical_trusted_root {
             return Ok(canonical);
         }
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
             "manual import file is outside the trusted source root: {}",
             source_path.display()
         )));
     }
     if !trusted_root_metadata.is_dir() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_ROOT_NOT_FILE_DIRECTORY, format!(
             "manual import source root is not a file or directory: {}",
             trusted_root.display()
         )));
@@ -916,27 +916,27 @@ fn canonical_manual_import_source_under_trusted_root(
     if source_entry_location != canonical_trusted_root
         && !source_entry_location.starts_with(&canonical_trusted_root)
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_PATH_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
             "manual import file path is outside the trusted source root: {}",
             source_path.display()
         )));
     }
 
     if canonical != canonical_trusted_root && !canonical.starts_with(&canonical_trusted_root) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
             "manual import file is outside the trusted source root: {}",
             source_path.display()
         )));
     }
 
     let metadata = std::fs::metadata(&canonical).map_err(|err| {
-        AppError::Validation(format!(
+        manual_import_io_error(&err, format!(
             "manual import file is not accessible: {} ({err})",
             source_path.display()
         ))
     })?;
     if !metadata.is_file() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_NOT_FILE, format!(
             "manual import source is not a file: {}",
             source_path.display()
         )));
@@ -966,13 +966,13 @@ pub(crate) async fn qualify_manual_import_video_candidate(
     let canonical_path =
         canonical_manual_import_source_under_trusted_root(source_path, trusted_root)?;
     let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
-        AppError::Validation(format!(
+        manual_import_io_error(&error, format!(
             "manual import file is not accessible: {} ({error})",
             source_path.display()
         ))
     })?;
     std::fs::File::open(&canonical_path).map_err(|error| {
-        AppError::Validation(format!(
+        manual_import_io_error(&error, format!(
             "manual import file is not accessible: {} ({error})",
             source_path.display()
         ))
@@ -1004,7 +1004,7 @@ pub(crate) async fn qualify_manual_import_video_candidate(
     .await
     .map_err(|error| AppError::Repository(format!("manual import media probe failed: {error}")))?
     .map_err(|error| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_UNAVAILABLE, format!(
             "manual import file is not accessible: {} ({error})",
             source_path.display()
         ))
@@ -1025,7 +1025,7 @@ async fn discover_manual_import_video_candidates(
     trusted_root: &Path,
 ) -> AppResult<Vec<QualifiedManualImportVideo>> {
     let root_metadata = std::fs::metadata(trusted_root).map_err(|error| {
-        AppError::Validation(format!(
+        manual_import_io_error(&error, format!(
             "manual import source root is not accessible: {} ({error})",
             trusted_root.display()
         ))
@@ -1822,9 +1822,7 @@ pub async fn begin_manual_import_selection(
         }
         crate::download_identity::ObservedClientJobResolution::Conflict
         | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
-            return Err(AppError::Validation(
-                "manual import source has a conflicting canonical download identity".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_CONFLICTING_CANONICAL_DOWNLOAD_IDENTITY, "manual import source has a conflicting canonical download identity".to_string()));
         }
         crate::download_identity::ObservedClientJobResolution::Unavailable => None,
     };
@@ -1833,10 +1831,8 @@ pub async fn begin_manual_import_selection(
     if let Some(submission_title_id) = release_evidence.title_id()
         && submission_title_id != title_id
     {
-        return Err(AppError::Validation(
-            "manual import title does not match the Scryer submission that grabbed this download"
-                .to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
+                .to_string()));
     }
     let release_evidence_json = serde_json::to_string(&release_evidence)
         .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -1909,7 +1905,7 @@ pub async fn begin_manual_import_selection(
         };
         if let Some(extracted_root) = extracted_root {
             trusted_root = std::fs::canonicalize(&extracted_root).map_err(|error| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::import::EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE, format!(
                     "extracted archive workspace is not accessible: {} ({error})",
                     extracted_root.display()
                 ))
@@ -2132,9 +2128,7 @@ fn manual_import_mapping_target<'a>(
 
     if let Some(selection) = &mapping.disc_selection {
         if !episode_ids.is_empty() || series_movie_link_id.is_some() {
-            return Err(AppError::Validation(
-                "disc selection cannot include a separate episode or series-movie target".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET, "disc selection cannot include a separate episode or series-movie target"));
         }
         let valid_id = |id: &str| {
             !id.is_empty() && id.len() <= 16 && id.bytes().all(|byte| byte.is_ascii_digit())
@@ -2145,9 +2139,7 @@ fn manual_import_mapping_target<'a>(
             .is_some_and(|id| !valid_id(id))
             || selection.episode_mappings.len() > 512
         {
-            return Err(AppError::Validation(
-                "invalid disc selection or mapping limit exceeded".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DISC_SELECTION_MAPPING_LIMIT_EXCEEDED_INVALID, "invalid disc selection or mapping limit exceeded"));
         }
         let mut episodes = std::collections::HashSet::new();
         for mapping in &selection.episode_mappings {
@@ -2156,9 +2148,7 @@ fn manual_import_mapping_target<'a>(
                 || mapping.episode_ids[0].trim().is_empty()
                 || !episodes.insert(&mapping.episode_ids[0])
             {
-                return Err(AppError::Validation(
-                    "disc titles require distinct, explicit single-episode mappings".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::DISC_TITLES_REQUIRE_DISTINCT_EXPLICIT_SINGLE_EPISODE_MAPPINGS, "disc titles require distinct, explicit single-episode mappings"));
             }
         }
         if matches!(facet, MediaFacet::Movie) && selection.episode_mappings.is_empty() {
@@ -2171,10 +2161,8 @@ fn manual_import_mapping_target<'a>(
                 first.episode_ids[0].as_str(),
             ]));
         }
-        return Err(AppError::Validation(
-            "episodic discs require playback-title mappings; movie discs cannot map episodes"
-                .into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::EPISODIC_DISCS_REQUIRE_PLAYBACK_TITLE_MAPPINGS, "episodic discs require playback-title mappings; movie discs cannot map episodes"
+                ));
     }
 
     match (episode_ids.is_empty(), series_movie_link_id) {
@@ -2183,13 +2171,9 @@ fn manual_import_mapping_target<'a>(
             Ok(ManualImportMappingTarget::SeriesMovie(series_movie_link_id))
         }
         (true, None) if matches!(facet, MediaFacet::Movie) => Ok(ManualImportMappingTarget::Movie),
-        (true, None) => Err(AppError::Validation(
-            "manual import mapping requires episode_id or series_movie_link_id".to_string(),
-        )),
-        (false, Some(_)) => Err(AppError::Validation(
-            "manual import mapping cannot include both episode_id and series_movie_link_id"
-                .to_string(),
-        )),
+        (true, None) => Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_MAPPING_REQUIRES_EPISODE_ID_SERIES_MOVIE_LINK_ID, "manual import mapping requires episode_id or series_movie_link_id".to_string())),
+        (false, Some(_)) => Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_MAPPING_CANNOT_INCLUDE_BOTH_EPISODE_ID_SERIES_MOVIE_LINK_ID, "manual import mapping cannot include both episode_id and series_movie_link_id"
+                .to_string())),
     }
 }
 
@@ -2242,22 +2226,16 @@ pub(crate) fn validate_manual_import_candidate_mapping_targets(
     facet: &MediaFacet,
 ) -> AppResult<()> {
     if files.is_empty() {
-        return Err(AppError::Validation(
-            "at least one manual import candidate is required".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_CANDIDATE_REQUIRED, "at least one manual import candidate is required".to_string()));
     }
     let mut candidate_ids = std::collections::HashSet::new();
     for mapping in files {
         let candidate_id = mapping.candidate_id.trim();
         if candidate_id.is_empty() {
-            return Err(AppError::Validation(
-                "manual import candidate id is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_CANDIDATE_ID_REQUIRED, "manual import candidate id is required".to_string()));
         }
         if !candidate_ids.insert(candidate_id) {
-            return Err(AppError::Validation(
-                "manual import candidate ids must be unique".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_CANDIDATE_IDS_INVALID, "manual import candidate ids must be unique".to_string()));
         }
         let target = ManualImportFileMapping {
             file_path: String::new(),
@@ -2315,12 +2293,12 @@ async fn validate_manual_import_target_scope(
             .get_episode_by_id(episode_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE, format!(
                     "manual import episode target is unavailable: {episode_id}"
                 ))
             })?;
         if episode.title_id != title_id {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE, format!(
                 "manual import episode target {episode_id} does not belong to title {title_id}"
             )));
         }
@@ -2334,12 +2312,12 @@ async fn validate_manual_import_target_scope(
             .get_series_movie_link_by_id(series_movie_link_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE, format!(
                     "manual import series movie target is unavailable: {series_movie_link_id}"
                 ))
             })?;
         if link.series_title_id != title_id {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE, format!(
                 "manual import series movie target {series_movie_link_id} does not belong to title {title_id}"
             )));
         }
@@ -2462,37 +2440,38 @@ fn manual_import_error_from_skip_reason(skip_reason: Option<ImportSkipReason>) -
         _ => ImportErrorCode::Unknown,
     }
 }
-fn classify_manual_import_error_message(message: &str) -> ImportErrorCode {
-    let normalized = message.trim().to_ascii_lowercase();
-    if normalized.contains("file not found") {
-        ImportErrorCode::FileNotFound
-    } else if normalized.contains("episode not found") {
-        ImportErrorCode::EpisodeNotFound
-    } else if normalized.contains("episode lookup failed") {
-        ImportErrorCode::EpisodeLookupFailed
-    } else if normalized.contains("source_job_failed")
-        || normalized.contains("source download failed")
-        || normalized.contains("source job failed")
-    {
-        ImportErrorCode::SourceJobFailed
-    } else if normalized.contains("permission denied")
-        || normalized.contains("operation not permitted")
-    {
-        ImportErrorCode::PermissionDenied
-    } else if normalized.contains("no space left")
-        || normalized.contains("disk full")
-        || normalized.contains("insufficient disk space")
-    {
-        ImportErrorCode::DiskFull
-    } else if normalized.is_empty() {
-        ImportErrorCode::Unknown
-    } else {
-        // String matching is only a fallback for unexpected error paths.
-        // Known manual-import failures should be classified structurally at
-        // the point where the skip reason or domain error is produced.
-        ImportErrorCode::IoFailed
+fn manual_import_io_error(error: &std::io::Error, message: String) -> AppError {
+    use crate::error_reasons::import as reason;
+    let code = match error.kind() {
+        std::io::ErrorKind::NotFound => reason::FILE_NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => reason::PERMISSION_DENIED,
+        std::io::ErrorKind::StorageFull => reason::DISK_FULL,
+        _ => reason::IO_FAILED,
+    };
+    AppError::validation_refused(code, message)
+}
+
+fn classify_manual_import_io_error(error: &std::io::Error) -> ImportErrorCode {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => ImportErrorCode::FileNotFound,
+        std::io::ErrorKind::PermissionDenied => ImportErrorCode::PermissionDenied,
+        std::io::ErrorKind::StorageFull => ImportErrorCode::DiskFull,
+        _ => ImportErrorCode::IoFailed,
     }
 }
+
+fn classify_manual_import_error(error: &AppError) -> ImportErrorCode {
+    match error.reason() {
+        Some("IMPORT_FILE_NOT_FOUND") => ImportErrorCode::FileNotFound,
+        Some("IMPORT_EPISODE_NOT_FOUND") => ImportErrorCode::EpisodeNotFound,
+        Some("IMPORT_EPISODE_LOOKUP_FAILED") => ImportErrorCode::EpisodeLookupFailed,
+        Some("IMPORT_SOURCE_JOB_FAILED") => ImportErrorCode::SourceJobFailed,
+        Some("IMPORT_PERMISSION_DENIED") => ImportErrorCode::PermissionDenied,
+        Some("IMPORT_DISK_FULL") => ImportErrorCode::DiskFull,
+        _ => ImportErrorCode::IoFailed,
+    }
+}
+
 pub(crate) fn manual_import_result_json(
     import_id: &str,
     payload: &ManualImportRequestPayload,
@@ -2533,7 +2512,7 @@ fn manual_import_pending_result_json(
         download_client_item_id: payload.download_client_item_id.clone(),
         title_id: payload.title_id.clone(),
         status: ImportStatus::Pending,
-        error_code: Some(classify_manual_import_error_message(&message)),
+        error_code: Some(ImportErrorCode::Unknown),
         error_message: Some(message),
         requires_reconciliation,
         retry_attempts,
@@ -2700,10 +2679,10 @@ fn manual_import_terminal_status_and_error(
     match first_failure {
         None if succeeded > 0 => (
             ImportStatus::Completed,
-            None,
+            results.iter().any(manual_file_has_scene_subtitle_hold).then_some(ImportErrorCode::SceneSubtitlePending),
             results
                 .iter()
-                .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+                .any(manual_file_has_scene_subtitle_hold)
                 .then(|| SCENE_SUBTITLE_PENDING_WARNING.into()),
         ),
         None => (
@@ -2892,7 +2871,7 @@ async fn execute_manual_series_movie_import(
             mapping,
             false,
             None,
-            Some(classify_manual_import_error_message(&error.to_string())),
+            Some(classify_manual_import_io_error(&error)),
             Some(format!(
                 "failed to create destination directory {}: {error}",
                 parent.display()
@@ -2926,7 +2905,7 @@ async fn execute_manual_series_movie_import(
                 mapping,
                 false,
                 None,
-                Some(classify_manual_import_error_message(&message)),
+                Some(classify_manual_import_error(&error)),
                 Some(message),
             ));
         }
@@ -2970,7 +2949,7 @@ async fn execute_manual_series_movie_import(
                 mapping,
                 false,
                 Some(path_to_stored_string(&dest_path)),
-                Some(classify_manual_import_error_message(&message)),
+                Some(classify_manual_import_error(&error)),
                 Some(message),
             ));
         }
@@ -3041,7 +3020,7 @@ async fn execute_manual_series_movie_import(
             mapping,
             false,
             Some(path_to_stored_string(&dest_path)),
-            Some(classify_manual_import_error_message(&message)),
+            Some(classify_manual_import_error(&error)),
             Some(message),
         ));
     }
@@ -3158,7 +3137,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         .all(|file| file.success)
         && !results
             .iter()
-            .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING));
+            .any(manual_file_has_scene_subtitle_hold);
     if can_release {
         let cleanup_succeeded = complete_deferred_import_source_cleanup(app, cleanups)
             .await
@@ -3174,6 +3153,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     .is_ok());
         if !hold_released {
             for file in results.iter_mut().filter(|file| file.success) {
+                file.error_code = Some(ImportErrorCode::SceneSubtitlePending);
                 file.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
             }
             record_manual_hold_reason(
@@ -3186,7 +3166,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         }
     } else if results
         .iter()
-        .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+        .any(manual_file_has_scene_subtitle_hold)
     {
         record_manual_hold_reason(
             app,
@@ -3236,10 +3216,8 @@ async fn execute_manual_import_with_release_evidence_inner(
     if let Some(submission_title_id) = release_evidence.title_id()
         && submission_title_id != title_id
     {
-        return Err(AppError::Validation(
-            "manual import title does not match the Scryer submission that grabbed this download"
-                .to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
+                .to_string()));
     }
     let title = app
         .services
@@ -3247,7 +3225,7 @@ async fn execute_manual_import_with_release_evidence_inner(
         .titles
         .get_by_id(title_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("title not found: {}", title_id)))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title not found: {}", title_id)))?;
     app.require_library_permission(
         actor,
         &title.library_id,
@@ -3276,9 +3254,9 @@ async fn execute_manual_import_with_release_evidence_inner(
     }
     let trusted_source_root = trusted_source_root
         .as_deref()
-        .ok_or_else(|| AppError::Validation("manual import source root is required".to_string()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_SOURCE_ROOT_REQUIRED, "manual import source root is required".to_string()))?;
     let trusted_source_root = std::fs::canonicalize(trusted_source_root).map_err(|error| {
-        AppError::Validation(format!(
+        manual_import_io_error(&error, format!(
             "manual import source root is not accessible: {} ({error})",
             trusted_source_root.display()
         ))
@@ -3417,7 +3395,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     Some(if !source.exists() {
                         ImportErrorCode::FileNotFound
                     } else {
-                        classify_manual_import_error_message(&err.to_string())
+                        classify_manual_import_error(&err)
                     }),
                     Some(err.to_string()),
                 ));
@@ -3538,7 +3516,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                             mapping,
                             false,
                             None,
-                            Some(classify_manual_import_error_message(&message)),
+                            Some(classify_manual_import_error(&error)),
                             Some(message),
                         )
                     }
@@ -3682,9 +3660,7 @@ async fn execute_manual_import_with_release_evidence_inner(
             let episodes = app.services.catalog.shows.get_episodes_by_ids(&ids).await?;
             if episodes.len() != ids.len() || episodes.iter().any(|item| item.title_id != title.id)
             {
-                return Err(AppError::Validation(
-                    "a mapped disc episode no longer belongs to the import title".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::MAPPED_DISC_EPISODE_NO_LONGER_BELONGS_IMPORT_TITLE, "a mapped disc episode no longer belongs to the import title"));
             }
             episodes
         } else {
@@ -3868,7 +3844,7 @@ async fn execute_manual_import_with_release_evidence_inner(
                     mapping,
                     false,
                     None,
-                    Some(classify_manual_import_error_message(&error_message)),
+                    Some(classify_manual_import_error(&err)),
                     Some(error_message),
                 ));
             }
@@ -3904,6 +3880,7 @@ async fn execute_manual_import_with_release_evidence_inner(
         || subtitle_plan.has_pending_sources(delivered_sources.iter().map(PathBuf::as_path))
     {
         for result in results.iter_mut().filter(|result| result.success) {
+            result.error_code = Some(ImportErrorCode::SceneSubtitlePending);
             result.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
         }
     }
@@ -4174,7 +4151,7 @@ fn completed_manual_import_recovery(
         || result.status != ImportStatus::Completed
         || attempted.is_empty()
         || attempted.iter().any(|file| {
-            !file.success || file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING)
+            !file.success || manual_file_has_scene_subtitle_hold(file)
         })
         || !result
             .client_type
@@ -4307,7 +4284,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
     let user_id = payload
         .requested_by_user_id
         .as_deref()
-        .ok_or_else(|| AppError::Validation("manual import request is missing an actor".into()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_REQUEST_MISSING_ACTOR, "manual import request is missing an actor"))?;
     let actor = app
         .services
         .identity
@@ -4315,7 +4292,7 @@ async fn execute_queued_manual_import_with_outcome_inner(
         .get_by_id(user_id)
         .await?
         .ok_or_else(|| {
-            AppError::Validation("manual import request actor no longer exists".into())
+            AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_REQUEST_ACTOR_NO_LONGER_EXISTS, "manual import request actor no longer exists")
         })?;
 
     let Some(title_id) = payload
@@ -4378,10 +4355,8 @@ async fn execute_queued_manual_import_with_outcome_inner(
     if let Some(submission_title_id) = release_evidence.title_id()
         && submission_title_id != title_id
     {
-        return Err(AppError::Validation(
-            "manual import title does not match the Scryer submission that grabbed this download"
-                .to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
+                .to_string()));
     }
     let trusted_source_root_result = match payload.trusted_source_root.as_deref() {
         Some(root) => std::fs::canonicalize(stored_path_to_path_buf(root)),
@@ -4923,7 +4898,7 @@ mod manual_import_recovery_tests {
         )];
         let (status, code, message) = manual_import_terminal_status_and_error(&results);
         assert_eq!(status, ImportStatus::Completed);
-        assert_eq!(code, None);
+        assert_eq!(code, Some(ImportErrorCode::SceneSubtitlePending));
         assert_eq!(message.as_deref(), Some(SCENE_SUBTITLE_PENDING_WARNING));
         let mut record = completed_manual_import_record("qbittorrent", true);
         let mut result: ManualImportExecutionResult =
@@ -5154,5 +5129,24 @@ mod manual_source_validation_tests {
                 .to_string()
                 .contains("file is outside the trusted source root")
         );
+    }
+}
+
+#[cfg(test)]
+mod reason_code_tests {
+    use super::*;
+    #[test]
+    fn manual_import_classification_uses_native_kind_and_reason_after_rewording() {
+        for (kind, expected, reason) in [
+            (std::io::ErrorKind::NotFound, ImportErrorCode::FileNotFound, crate::error_reasons::import::FILE_NOT_FOUND),
+            (std::io::ErrorKind::PermissionDenied, ImportErrorCode::PermissionDenied, crate::error_reasons::import::PERMISSION_DENIED),
+            (std::io::ErrorKind::StorageFull, ImportErrorCode::DiskFull, crate::error_reasons::import::DISK_FULL),
+        ] {
+            let native = std::io::Error::new(kind, "translated filesystem diagnostic");
+            assert_eq!(classify_manual_import_io_error(&native), expected);
+            assert_eq!(classify_manual_import_error(&manual_import_io_error(&native, "translated context".into())), expected);
+            assert_eq!(classify_manual_import_error(&AppError::RepositoryFailed { reason, message: "rewritten provider text".into() }), expected);
+        }
+        assert_eq!(classify_manual_import_error(&AppError::Repository("permission denied and disk full are only prose".into())), ImportErrorCode::IoFailed);
     }
 }

@@ -1,4 +1,3 @@
-
 import {
   ActivitySquare,
   ArrowDown,
@@ -29,7 +28,11 @@ import {
 import { DownloadClientTypeLogo } from "@/components/common/download-client-type-logo";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { QueueRowItem } from "@/components/views/activity/queue-row-item";
@@ -98,7 +101,10 @@ type ActivityViewState = {
   requestManualImport: (item: DownloadQueueItem) => Promise<void>;
   requestAssignTitle: (item: DownloadQueueItem) => Promise<void>;
   requestIgnore: (item: DownloadQueueItem) => Promise<void>;
-  requestMarkFailed: (item: DownloadQueueItem, skipReacquire: boolean) => Promise<void>;
+  requestMarkFailed: (
+    item: DownloadQueueItem,
+    skipReacquire: boolean,
+  ) => Promise<void>;
   requestIgnoreItems: (items: DownloadQueueItem[]) => Promise<void>;
   requestPause: (item: DownloadQueueItem) => Promise<void>;
   requestResume: (item: DownloadQueueItem) => Promise<void>;
@@ -151,44 +157,45 @@ const importFilterOptions: ActivityFilterChipOption<DownloadImportStatus>[] = [
   },
 ];
 
-const activityFilterOptions: ActivityFilterChipOption<DownloadActivityStatus>[] = [
-  {
-    value: "DOWNLOADING",
-    labelKey: "activity.activityFilter.downloading",
-    icon: ArrowDownToLine,
-    iconClassName: "text-[var(--scry-info-text-soft)]",
-  },
-  {
-    value: "QUEUED",
-    labelKey: "activity.activityFilter.queued",
-    icon: Clock3,
-    iconClassName: "text-[var(--scry-warning-text)]",
-  },
-  {
-    value: "PAUSED",
-    labelKey: "activity.activityFilter.paused",
-    icon: Pause,
-    iconClassName: "text-[var(--scry-warning-text)]",
-  },
-  {
-    value: "POST_PROCESSING",
-    labelKey: "activity.activityFilter.postProcessing",
-    icon: HardDrive,
-    iconClassName: "text-[var(--scry-info-text-soft)]",
-  },
-  {
-    value: "SEEDING",
-    labelKey: "activity.activityFilter.seeding",
-    icon: ArrowUp,
-    iconClassName: "text-[var(--scry-success-text)]",
-  },
-  {
-    value: "WARNING",
-    labelKey: "activity.activityFilter.warning",
-    icon: CircleAlert,
-    iconClassName: "text-[var(--scry-warning-text)]",
-  },
-];
+const activityFilterOptions: ActivityFilterChipOption<DownloadActivityStatus>[] =
+  [
+    {
+      value: "DOWNLOADING",
+      labelKey: "activity.activityFilter.downloading",
+      icon: ArrowDownToLine,
+      iconClassName: "text-[var(--scry-info-text-soft)]",
+    },
+    {
+      value: "QUEUED",
+      labelKey: "activity.activityFilter.queued",
+      icon: Clock3,
+      iconClassName: "text-[var(--scry-warning-text)]",
+    },
+    {
+      value: "PAUSED",
+      labelKey: "activity.activityFilter.paused",
+      icon: Pause,
+      iconClassName: "text-[var(--scry-warning-text)]",
+    },
+    {
+      value: "POST_PROCESSING",
+      labelKey: "activity.activityFilter.postProcessing",
+      icon: HardDrive,
+      iconClassName: "text-[var(--scry-info-text-soft)]",
+    },
+    {
+      value: "SEEDING",
+      labelKey: "activity.activityFilter.seeding",
+      icon: ArrowUp,
+      iconClassName: "text-[var(--scry-success-text)]",
+    },
+    {
+      value: "WARNING",
+      labelKey: "activity.activityFilter.warning",
+      icon: CircleAlert,
+      iconClassName: "text-[var(--scry-warning-text)]",
+    },
+  ];
 
 function ActivityFilterSection<T extends string>({
   title,
@@ -292,11 +299,7 @@ function ActivityBooleanFilterSection({
     <div className="flex flex-col gap-2">
       <p className="text-xs font-medium text-muted-foreground">{title}</p>
       <label className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-accent/50">
-        <Checkbox
-          checked={checked}
-          size="compact"
-          onCheckedChange={onToggle}
-        />
+        <Checkbox checked={checked} size="compact" onCheckedChange={onToggle} />
         <span>{label}</span>
       </label>
     </div>
@@ -358,21 +361,30 @@ export function ActivityView({
     requestRefresh,
     queueRefreshing,
   } = state;
-  const { request: requestReleaseHeldSources, dialog: releaseHeldSourcesDialog } =
-    useReleaseHeldSources(() => requestRefresh());
+  const {
+    request: requestReleaseHeldSources,
+    dialog: releaseHeldSourcesDialog,
+  } = useReleaseHeldSources(() => requestRefresh());
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
-  const [deleteConfirmItem, setDeleteConfirmItem] = useState<DownloadQueueItem | null>(null);
+  const [deleteConfirmItem, setDeleteConfirmItem] =
+    useState<DownloadQueueItem | null>(null);
   const [cancelImportConfirmStream, setCancelImportConfirmStream] =
     useState<ActiveImportStream | null>(null);
   const [cancelImportInProgress, setCancelImportInProgress] = useState(false);
-  const [bulkDeleteConfirmItems, setBulkDeleteConfirmItems] = useState<DownloadQueueItem[]>([]);
+  const [bulkDeleteConfirmItems, setBulkDeleteConfirmItems] = useState<
+    DownloadQueueItem[]
+  >([]);
   const [deleteInProgress, setDeleteInProgress] = useState(false);
-  const [bulkActionInProgress, setBulkActionInProgress] = useState<"ignore" | "delete" | null>(
-    null,
-  );
+  const [bulkActionInProgress, setBulkActionInProgress] = useState<
+    "ignore" | "delete" | null
+  >(null);
   const [rowActionBusy, setRowActionBusy] = useState<Record<string, true>>({});
-  const [expandedItemIds, setExpandedItemIds] = useState<Record<string, true>>({});
-  const [selectedImportItemKeys, setSelectedImportItemKeys] = useState<Record<string, true>>({});
+  const [expandedItemIds, setExpandedItemIds] = useState<Record<string, true>>(
+    {},
+  );
+  const [selectedImportItemKeys, setSelectedImportItemKeys] = useState<
+    Record<string, true>
+  >({});
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
   const rowActionBusyRef = useRef<Record<string, true>>({});
   const resultsScrollRef = useRef<HTMLDivElement>(null);
@@ -385,7 +397,9 @@ export function ActivityView({
     rowActionBusyRef.current = busy
       ? { ...rowActionBusyRef.current, [rowId]: true }
       : Object.fromEntries(
-          Object.entries(rowActionBusyRef.current).filter(([id]) => id !== rowId),
+          Object.entries(rowActionBusyRef.current).filter(
+            ([id]) => id !== rowId,
+          ),
         );
     setRowActionBusy((current) => {
       if (!busy) {
@@ -435,26 +449,31 @@ export function ActivityView({
       const next = Object.fromEntries(
         Object.entries(current).filter(([key]) => !keys.has(key)),
       );
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
     });
   }, []);
 
-  const handleBulkIgnore = useCallback(async (items: DownloadQueueItem[]) => {
-    if (items.length === 0) {
-      return;
-    }
+  const handleBulkIgnore = useCallback(
+    async (items: DownloadQueueItem[]) => {
+      if (items.length === 0) {
+        return;
+      }
 
-    const rowIds = items.map(downloadQueueItemIdentityKey);
-    rowIds.forEach((rowId) => setRowBusy(rowId, true));
-    setBulkActionInProgress("ignore");
-    try {
-      await requestIgnoreItems(items);
-      clearSelectedImportItems(items);
-    } finally {
-      rowIds.forEach((rowId) => setRowBusy(rowId, false));
-      setBulkActionInProgress(null);
-    }
-  }, [clearSelectedImportItems, requestIgnoreItems, setRowBusy]);
+      const rowIds = items.map(downloadQueueItemIdentityKey);
+      rowIds.forEach((rowId) => setRowBusy(rowId, true));
+      setBulkActionInProgress("ignore");
+      try {
+        await requestIgnoreItems(items);
+        clearSelectedImportItems(items);
+      } finally {
+        rowIds.forEach((rowId) => setRowBusy(rowId, false));
+        setBulkActionInProgress(null);
+      }
+    },
+    [clearSelectedImportItems, requestIgnoreItems, setRowBusy],
+  );
 
   const handleBulkDelete = useCallback(async () => {
     if (bulkDeleteConfirmItems.length === 0) {
@@ -503,13 +522,21 @@ export function ActivityView({
         !queueLoadingMore &&
         visibleHasMore &&
         !queueLoading &&
-        !queueRefreshing && !queueError &&
+        !queueRefreshing &&
+        !queueError &&
         element.scrollHeight - element.scrollTop - element.clientHeight <= 160
       ) {
         void requestMoreItems();
       }
     },
-    [queueLoading, queueLoadingMore, queueRefreshing, queueError, requestMoreItems, visibleHasMore],
+    [
+      queueLoading,
+      queueLoadingMore,
+      queueRefreshing,
+      queueError,
+      requestMoreItems,
+      visibleHasMore,
+    ],
   );
 
   const emptyStateLabel =
@@ -561,22 +588,30 @@ export function ActivityView({
           {fixedActivitySort ? (
             <span className="inline-flex w-full items-center gap-1 text-left font-medium text-foreground">
               <span>{label}</span>
-              {key === "PROGRESS" ? <ArrowDown className="h-3.5 w-3.5" /> : null}
+              {key === "PROGRESS" ? (
+                <ArrowDown className="h-3.5 w-3.5" />
+              ) : null}
             </span>
           ) : (
-          <button
-            type="button"
-            className="inline-flex w-full items-center gap-1 text-left font-medium text-foreground transition-colors hover:text-foreground/80"
-            onClick={() => handleSort(key)}
-          >
-            <span>{label}</span>
-            {renderSortIcon(key)}
-          </button>
+            <button
+              type="button"
+              className="inline-flex w-full items-center gap-1 text-left font-medium text-foreground transition-colors hover:text-foreground/80"
+              onClick={() => handleSort(key)}
+            >
+              <span>{label}</span>
+              {renderSortIcon(key)}
+            </button>
           )}
         </TableHead>
       );
     },
-    [activeSortConfig.direction, activeSortConfig.key, activeTab, handleSort, renderSortIcon],
+    [
+      activeSortConfig.direction,
+      activeSortConfig.key,
+      activeTab,
+      handleSort,
+      renderSortIcon,
+    ],
   );
 
   const sortedQueueItems = useMemo(() => {
@@ -592,17 +627,24 @@ export function ActivityView({
 
       switch (activeSortConfig.key) {
         case "TITLE": {
-          const leftTitle = leftItem.titleName.trim() || leftItem.downloadClientItemId.trim();
-          const rightTitle = rightItem.titleName.trim() || rightItem.downloadClientItemId.trim();
+          const leftTitle =
+            leftItem.titleName.trim() || leftItem.downloadClientItemId.trim();
+          const rightTitle =
+            rightItem.titleName.trim() || rightItem.downloadClientItemId.trim();
           comparison = compareStrings(leftTitle, rightTitle);
           break;
         }
         case "CLIENT": {
-          const leftClient = leftItem.clientName.trim() || leftItem.clientType.trim();
-          const rightClient = rightItem.clientName.trim() || rightItem.clientType.trim();
+          const leftClient =
+            leftItem.clientName.trim() || leftItem.clientType.trim();
+          const rightClient =
+            rightItem.clientName.trim() || rightItem.clientType.trim();
           comparison = compareStrings(leftClient, rightClient);
           if (comparison === 0) {
-            comparison = compareStrings(leftItem.clientType, rightItem.clientType);
+            comparison = compareStrings(
+              leftItem.clientType,
+              rightItem.clientType,
+            );
           }
           break;
         }
@@ -611,9 +653,13 @@ export function ActivityView({
             activityStatusRank(activeTab, leftItem.displayState) -
             activityStatusRank(activeTab, rightItem.displayState);
           if (comparison === 0) {
-            const leftStatus = t(queueStateLabels[leftItem.displayState.toLowerCase()] ?? "queue.state.unknown");
+            const leftStatus = t(
+              queueStateLabels[leftItem.displayState.toLowerCase()] ??
+                "queue.state.unknown",
+            );
             const rightStatus = t(
-              queueStateLabels[rightItem.displayState.toLowerCase()] ?? "queue.state.unknown",
+              queueStateLabels[rightItem.displayState.toLowerCase()] ??
+                "queue.state.unknown",
             );
             comparison = compareStrings(leftStatus, rightStatus);
           }
@@ -621,7 +667,8 @@ export function ActivityView({
         }
         case "PROGRESS": {
           comparison =
-            effectiveQueueItemProgress(leftItem) - effectiveQueueItemProgress(rightItem);
+            effectiveQueueItemProgress(leftItem) -
+            effectiveQueueItemProgress(rightItem);
           break;
         }
         case "SIZE": {
@@ -633,8 +680,10 @@ export function ActivityView({
       }
 
       if (comparison === 0) {
-        const leftTitle = leftItem.titleName.trim() || leftItem.downloadClientItemId.trim();
-        const rightTitle = rightItem.titleName.trim() || rightItem.downloadClientItemId.trim();
+        const leftTitle =
+          leftItem.titleName.trim() || leftItem.downloadClientItemId.trim();
+        const rightTitle =
+          rightItem.titleName.trim() || rightItem.downloadClientItemId.trim();
         comparison = compareStrings(leftTitle, rightTitle);
       }
 
@@ -642,7 +691,13 @@ export function ActivityView({
     });
 
     return items;
-  }, [activeSortConfig.direction, activeSortConfig.key, activeTab, queueItems, t]);
+  }, [
+    activeSortConfig.direction,
+    activeSortConfig.key,
+    activeTab,
+    queueItems,
+    t,
+  ]);
 
   const hiddenActiveImportCount = Math.max(0, activeImportStreams.length - 7);
   const visibleActiveImportStreams = activeImportsExpanded
@@ -657,18 +712,25 @@ export function ActivityView({
   const seedingQueueItems = useMemo(
     () =>
       activeTab === "activity"
-        ? sortedQueueItems.filter((item) => item.displayState === "IMPORTED_SEEDING")
+        ? sortedQueueItems.filter(
+            (item) => item.displayState === "IMPORTED_SEEDING",
+          )
         : [],
     [activeTab, sortedQueueItems],
   );
   const virtualQueueItems = useMemo(
     () =>
       activeTab === "activity" && seedingQueueItems.length > 0
-        ? sortedQueueItems.filter((item) => item.displayState !== "IMPORTED_SEEDING")
+        ? sortedQueueItems.filter(
+            (item) => item.displayState !== "IMPORTED_SEEDING",
+          )
         : sortedQueueItems,
     [activeTab, seedingQueueItems.length, sortedQueueItems],
   );
-  const hiddenSeedingCount = Math.max(0, seedingQueueItems.length - VISIBLE_SEEDING_ROW_LIMIT);
+  const hiddenSeedingCount = Math.max(
+    0,
+    seedingQueueItems.length - VISIBLE_SEEDING_ROW_LIMIT,
+  );
   const visibleSeedingQueueItems = seedingExpanded
     ? seedingQueueItems
     : seedingQueueItems.slice(0, VISIBLE_SEEDING_ROW_LIMIT);
@@ -677,7 +739,9 @@ export function ActivityView({
     : `Click to see ${hiddenSeedingCount} more seeding activities`;
   const activeImportLayoutKey = `${visibleActiveImportStreams
     .map((stream) => stream.id)
-    .join("|")}:${hiddenActiveImportCount}:${activeImportsExpanded}:${visibleSeedingQueueItems
+    .join(
+      "|",
+    )}:${hiddenActiveImportCount}:${activeImportsExpanded}:${visibleSeedingQueueItems
     .map((item) => {
       // Expanding a seeding row grows the prefix, so the key has to move with it.
       const key = downloadQueueItemIdentityKey(item);
@@ -696,7 +760,9 @@ export function ActivityView({
     }
 
     const prefixElements = Array.from(
-      scrollElement.querySelectorAll<HTMLElement>("[data-activity-virtual-prefix]"),
+      scrollElement.querySelectorAll<HTMLElement>(
+        "[data-activity-virtual-prefix]",
+      ),
     );
     const measurePrefix = () => {
       const nextMargin = prefixElements.reduce(
@@ -719,7 +785,9 @@ export function ActivityView({
     count: activeTab === "activity" ? virtualQueueItems.length : 0,
     getScrollElement: () => resultsScrollRef.current,
     getItemKey: (index) =>
-      downloadQueueItemIdentityKey(virtualQueueItems[index] ?? queueItems[index]),
+      downloadQueueItemIdentityKey(
+        virtualQueueItems[index] ?? queueItems[index],
+      ),
     estimateSize: () => (isMobile ? 180 : 64),
     measureElement: (element) => {
       const baseHeight = element.getBoundingClientRect().height;
@@ -732,7 +800,8 @@ export function ActivityView({
     scrollMargin: queueScrollMargin,
     overscan: 8,
   });
-  const virtualRows = activeTab === "activity" ? queueVirtualizer.getVirtualItems() : [];
+  const virtualRows =
+    activeTab === "activity" ? queueVirtualizer.getVirtualItems() : [];
   const firstVisibleQueueIndex = virtualRows.find(
     (virtualRow) => virtualRow.end > (queueVirtualizer.scrollOffset ?? 0),
   )?.index;
@@ -780,14 +849,18 @@ export function ActivityView({
     if (
       queueLoading ||
       queueLoadingMore ||
-      queueRefreshing || queueError ||
+      queueRefreshing ||
+      queueError ||
       !visibleHasMore ||
       autoFillAttemptsRef.current >= MAX_QUEUE_AUTO_FILL_PAGES
     ) {
       return;
     }
     const scrollElement = resultsScrollRef.current;
-    if (!scrollElement || scrollElement.scrollHeight > scrollElement.clientHeight + 160) {
+    if (
+      !scrollElement ||
+      scrollElement.scrollHeight > scrollElement.clientHeight + 160
+    ) {
       return;
     }
     autoFillAttemptsRef.current += 1;
@@ -809,7 +882,9 @@ export function ActivityView({
   );
   const selectedImportItems = useMemo(
     () =>
-      visibleImportItems.filter((item) => selectedImportItemKeys[downloadQueueItemIdentityKey(item)]),
+      visibleImportItems.filter(
+        (item) => selectedImportItemKeys[downloadQueueItemIdentityKey(item)],
+      ),
     [selectedImportItemKeys, visibleImportItems],
   );
   const selectedImportCount = selectedImportItems.length;
@@ -859,7 +934,9 @@ export function ActivityView({
       const next = Object.fromEntries(
         Object.entries(current).filter(([key]) => visibleKeys.has(key)),
       );
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
     });
   }, [activeTab, visibleImportKeys]);
 
@@ -906,7 +983,9 @@ export function ActivityView({
           title={t("queue.status")}
           options={importFilterOptions}
           selectedValues={selectedImportStatuses}
-          onToggle={(value) => toggleImportStatus(value as DownloadImportStatus)}
+          onToggle={(value) =>
+            toggleImportStatus(value as DownloadImportStatus)
+          }
           t={t}
         />
       );
@@ -918,7 +997,9 @@ export function ActivityView({
           title={t("queue.status")}
           options={activityFilterOptions}
           selectedValues={selectedActivityStatuses}
-          onToggle={(value) => toggleActivityStatus(value as DownloadActivityStatus)}
+          onToggle={(value) =>
+            toggleActivityStatus(value as DownloadActivityStatus)
+          }
           t={t}
         />
         <ActivityBooleanFilterSection
@@ -954,16 +1035,23 @@ export function ActivityView({
   const buildQueueRowProps = useCallback(
     (queueItem: DownloadQueueItem) => {
       const rowId = downloadQueueItemIdentityKey(queueItem);
-      const row: QueueRowPresentation = deriveQueueRowPresentation(queueItem, t);
+      const row: QueueRowPresentation = deriveQueueRowPresentation(
+        queueItem,
+        t,
+      );
       const rowSelectorKey = selectorId(
         downloadQueueItemRowSelectorKey(queueItem, rowId),
       );
       const isActionLoading = actionLoadingId === rowId;
       const isRowBusy = rowActionBusy[rowId] ?? false;
-      const isManualImportPending = row.displayStateKey.toLowerCase() === "importing";
+      const isManualImportPending =
+        row.displayStateKey.toLowerCase() === "importing";
       const isDeletePending = row.displayStateKey.toLowerCase() === "removing";
       const isRowBlocked =
-        isRowBusy || isManualImportPending || isDeletePending || isActionLoading;
+        isRowBusy ||
+        isManualImportPending ||
+        isDeletePending ||
+        isActionLoading;
       const isDeleteConfirming =
         deleteConfirmItem !== null &&
         downloadQueueItemIdentityKey(deleteConfirmItem) === rowId;
@@ -1019,7 +1107,9 @@ export function ActivityView({
           setRowBusy(rowId, true);
           void requestAssignTitle(queueItem).finally(() => {
             setRowBusy(rowId, false);
-            setActionLoadingId((current) => (current === rowId ? null : current));
+            setActionLoadingId((current) =>
+              current === rowId ? null : current,
+            );
           });
         },
         onIgnore: () => {
@@ -1027,7 +1117,9 @@ export function ActivityView({
           setRowBusy(rowId, true);
           void requestIgnore(queueItem).finally(() => {
             setRowBusy(rowId, false);
-            setActionLoadingId((current) => (current === rowId ? null : current));
+            setActionLoadingId((current) =>
+              current === rowId ? null : current,
+            );
           });
         },
         onReleaseHeldSources: () => requestReleaseHeldSources(queueItem),
@@ -1036,7 +1128,9 @@ export function ActivityView({
           setRowBusy(rowId, true);
           void requestMarkFailed(queueItem, false).finally(() => {
             setRowBusy(rowId, false);
-            setActionLoadingId((current) => (current === rowId ? null : current));
+            setActionLoadingId((current) =>
+              current === rowId ? null : current,
+            );
           });
         },
         onMarkFailedOnly: () => {
@@ -1044,7 +1138,9 @@ export function ActivityView({
           setRowBusy(rowId, true);
           void requestMarkFailed(queueItem, true).finally(() => {
             setRowBusy(rowId, false);
-            setActionLoadingId((current) => (current === rowId ? null : current));
+            setActionLoadingId((current) =>
+              current === rowId ? null : current,
+            );
           });
         },
         onRequestDelete: () => {
@@ -1093,7 +1189,9 @@ export function ActivityView({
   );
 
   const renderVirtualMobileQueueCards = () => (
-    <div style={{ height: queueVirtualizer.getTotalSize(), position: "relative" }}>
+    <div
+      style={{ height: queueVirtualizer.getTotalSize(), position: "relative" }}
+    >
       {virtualRows.map((virtualRow) => {
         const queueItem = virtualQueueItems[virtualRow.index];
         if (!queueItem) {
@@ -1137,7 +1235,8 @@ export function ActivityView({
     <>
       {items.map((queueItem, itemIndex) => {
         const rowProps = buildQueueRowProps(queueItem);
-        const virtualRow = activeTab === "activity" ? virtualRows[itemIndex] : undefined;
+        const virtualRow =
+          activeTab === "activity" ? virtualRows[itemIndex] : undefined;
         return (
           <QueueTableRow
             key={rowProps.rowId}
@@ -1152,7 +1251,9 @@ export function ActivityView({
       {showHistorySpinner ? (
         <TableRow>
           <TableCell
-            colSpan={activeTab === "activity" ? 6 : activeTab === "import" ? 7 : 5}
+            colSpan={
+              activeTab === "activity" ? 6 : activeTab === "import" ? 7 : 5
+            }
             className="py-4 text-center text-sm text-muted-foreground"
           >
             <span className="inline-flex items-center">
@@ -1167,75 +1268,95 @@ export function ActivityView({
   const renderActiveImportRows = () => (
     <>
       {visibleActiveImportStreams.map((stream) => {
-      const progress =
-        stream.totalBytes > 0
-          ? Math.min(100, Math.round((stream.bytes / stream.totalBytes) * 100))
-          : null;
-      const startedAt = stream.startedAt ?? stream.queuedAt;
-      const status = stream.cancellationRequested
-        ? "Cancelling"
-        : stream.phase === "QUEUED"
-          ? "Queued for import"
-          : stream.phase[0] + stream.phase.slice(1).toLowerCase();
-      const destinationName = stream.destinationPath.split(/[\\/]/).pop() || stream.destinationPath;
+        const progress =
+          stream.totalBytes > 0
+            ? Math.min(
+                100,
+                Math.round((stream.bytes / stream.totalBytes) * 100),
+              )
+            : null;
+        const startedAt = stream.startedAt ?? stream.queuedAt;
+        const status = stream.cancellationRequested
+          ? "Cancelling"
+          : stream.phase === "QUEUED"
+            ? "Queued for import"
+            : stream.phase[0] + stream.phase.slice(1).toLowerCase();
+        const destinationName =
+          stream.destinationPath.split(/[\\/]/).pop() || stream.destinationPath;
 
-      return (
-        <TableRow
-          key={`active-import-${stream.id}`}
-          className="bg-[var(--scry-accent-bg)]/25"
-          data-activity-virtual-prefix
-          data-ui="activity-row"
-        >
-          <TableCell className="min-w-0 align-middle">
-            <div className="truncate font-medium text-foreground" title={stream.destinationPath}>
-              {destinationName}
-            </div>
-            <div className="truncate text-xs text-muted-foreground" title={`${stream.sourcePath} → ${stream.destinationPath}`}>
-              {stream.sourcePath} → {stream.destinationPath}
-            </div>
-          </TableCell>
-          <TableCell className="text-sm text-muted-foreground">Filesystem</TableCell>
-          <TableCell className="text-sm">
-            <div>{status}</div>
-            <div className="text-xs text-muted-foreground">
-              Started {new Date(startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-            </div>
-          </TableCell>
-          <TableCell>
-            {progress === null ? (
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
-              </div>
-            ) : (
-              <div className="space-y-1">
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} />
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {formatByteCount(stream.bytes)} / {formatByteCount(stream.totalBytes)}
-                </div>
-              </div>
-            )}
-          </TableCell>
-          <TableCell className="text-center text-sm text-muted-foreground">
-            {stream.totalBytes > 0 ? formatByteCount(stream.totalBytes) : "—"}
-          </TableCell>
-          <TableCell className="text-center">
-            {stream.cancellable ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                aria-label="Cancel import"
-                title="Cancel import"
-                onClick={() => setCancelImportConfirmStream(stream)}
+        return (
+          <TableRow
+            key={`active-import-${stream.id}`}
+            className="bg-[var(--scry-accent-bg)]/25"
+            data-activity-virtual-prefix
+            data-ui="activity-row"
+          >
+            <TableCell className="min-w-0 align-middle">
+              <div
+                className="truncate font-medium text-foreground"
+                title={stream.destinationPath}
               >
-                <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
-              </Button>
-            ) : null}
-          </TableCell>
-        </TableRow>
-      );
+                {destinationName}
+              </div>
+              <div
+                className="truncate text-xs text-muted-foreground"
+                title={`${stream.sourcePath} → ${stream.destinationPath}`}
+              >
+                {stream.sourcePath} → {stream.destinationPath}
+              </div>
+            </TableCell>
+            <TableCell className="text-sm text-muted-foreground">
+              Filesystem
+            </TableCell>
+            <TableCell className="text-sm">
+              <div>{status}</div>
+              <div className="text-xs text-muted-foreground">
+                Started{" "}
+                {new Date(startedAt).toLocaleTimeString([], {
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
+              </div>
+            </TableCell>
+            <TableCell>
+              {progress === null ? (
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatByteCount(stream.bytes)} /{" "}
+                    {formatByteCount(stream.totalBytes)}
+                  </div>
+                </div>
+              )}
+            </TableCell>
+            <TableCell className="text-center text-sm text-muted-foreground">
+              {stream.totalBytes > 0 ? formatByteCount(stream.totalBytes) : "—"}
+            </TableCell>
+            <TableCell className="text-center">
+              {stream.cancellable ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Cancel import"
+                  title="Cancel import"
+                  onClick={() => setCancelImportConfirmStream(stream)}
+                >
+                  <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
+                </Button>
+              ) : null}
+            </TableCell>
+          </TableRow>
+        );
       })}
       {hiddenActiveImportCount > 0 ? (
         <TableRow data-activity-virtual-prefix>
@@ -1264,7 +1385,9 @@ export function ActivityView({
     <>
       {visibleSeedingQueueItems.map((queueItem) => {
         const rowProps = buildQueueRowProps(queueItem);
-        return <QueueTableRow key={rowProps.rowId} {...rowProps} isVirtualPrefix />;
+        return (
+          <QueueTableRow key={rowProps.rowId} {...rowProps} isVirtualPrefix />
+        );
       })}
       {hiddenSeedingCount > 0 ? (
         <TableRow data-activity-virtual-prefix>
@@ -1291,9 +1414,7 @@ export function ActivityView({
   );
 
   const activeActivityLabel =
-    activeTab === "import"
-      ? t("activity.import")
-      : t("activity.activity");
+    activeTab === "import" ? t("activity.import") : t("activity.activity");
 
   return (
     <>
@@ -1310,6 +1431,9 @@ export function ActivityView({
       />
       <ConfirmDialog
         open={deleteConfirmItem !== null}
+        contentId="activity-delete-dialog"
+        confirmButtonId="activity-delete-confirm"
+        cancelButtonId="activity-delete-cancel"
         title={t("queue.deleteConfirmTitle")}
         description={t("queue.deleteConfirmDescription")}
         confirmLabel={t("queue.removeFromDownloader")}
@@ -1359,345 +1483,423 @@ export function ActivityView({
             </div>
           </div>
           {operationPanel && <div className="mb-6">{operationPanel}</div>}
-        <Card
-          id={selectorId("activity-view", activeTab)}
-          className="min-h-0 flex-1 rounded-none border-0 bg-transparent shadow-none"
-        >
-          <CardContent className="space-y-3 p-0">
-          {queueError ? (
-            <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-2 text-sm text-[var(--scry-danger-text)]">
-              <span className="min-w-0 flex-1 break-words">{queueError}</span>
-              <Button size="sm" variant="secondary" disabled={queueRefreshing || queueLoadingMore} onClick={() => void requestRefresh()}>{t("activity.retry")}</Button>
-              {visibleHasMore ? <Button size="sm" variant="secondary" disabled={queueRefreshing || queueLoadingMore} onClick={() => void requestMoreItems()}>{t("activity.loadMore")}</Button> : null}
-            </div>
-          ) : null}
-          {queueStale ? (
-            <p className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-sm text-[var(--scry-warning-text)]">
-              {t(queueError ? "activity.staleData" : "activity.queueStale")}
-            </p>
-          ) : null}
-          <div
-            className={cn(
-              "flex flex-col gap-3 sm:flex-row sm:items-center",
-              activeTab === "import" && selectedImportCount > 0
-                ? "sm:justify-between"
-                : "sm:justify-end",
-            )}
+          <Card
+            id={selectorId("activity-view", activeTab)}
+            className="min-h-0 flex-1 rounded-none border-0 bg-transparent shadow-none"
           >
-            {activeTab === "import" && selectedImportCount > 0 ? (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                <span className="text-sm text-muted-foreground">
-                  {t("activity.selectedImportCount", { count: selectedImportCount })}
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={bulkActionInProgress !== null || selectedIgnoreItems.length === 0}
-                  onClick={() => {
-                    void handleBulkIgnore(selectedIgnoreItems);
-                  }}
+            <CardContent className="space-y-3 p-0">
+              {queueError ? (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-2 text-sm text-[var(--scry-danger-text)]"
                 >
-                  {bulkActionInProgress === "ignore" ? (
-                    <LoadingMark className="mr-2 h-4 w-4" />
-                  ) : (
-                    <CircleOff className="mr-2 h-4 w-4" />
-                  )}
-                  {t("queue.ignore")}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  disabled={bulkActionInProgress !== null || selectedDeleteItems.length === 0}
-                  onClick={() => {
-                    setBulkDeleteConfirmItems(selectedDeleteItems);
-                  }}
-                >
-                  {bulkActionInProgress === "delete" ? (
-                    <LoadingMark className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Trash2 className="mr-2 h-4 w-4" />
-                  )}
-                  {t("queue.removeFromDownloader")}
-                </Button>
-              </div>
-            ) : null}
-            <Popover open={filterPopoverOpen} onOpenChange={setFilterPopoverOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  id={selectorId("activity", activeTab, "filter-button")}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="inline-flex items-center gap-2"
-                  aria-label={t("activity.filterBarLabel")}
-                >
-                  <Filter className="h-4 w-4" />
-                  <span>{t("label.filters")}</span>
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-72 p-4">
-                {renderFilterPopoverContent()}
-              </PopoverContent>
-            </Popover>
-          </div>
-
-          {activeTab === "activity" && activeImportStreams.length > 0 ? (
-            <div className="space-y-2 sm:hidden">
-              {visibleActiveImportStreams.map((stream) => {
-                const progress =
-                  stream.totalBytes > 0
-                    ? Math.min(100, Math.round((stream.bytes / stream.totalBytes) * 100))
-                    : null;
-                const startedAt = stream.startedAt ?? stream.queuedAt;
-                return (
-                  <div
-                    key={`active-import-mobile-${stream.id}`}
-                    className="rounded-lg border border-primary/25 bg-primary/5 p-3"
+                  <span className="min-w-0 flex-1 break-words">
+                    {queueError}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={queueRefreshing || queueLoadingMore}
+                    onClick={() => void requestRefresh()}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">
-                          {stream.destinationPath.split(/[\\/]/).pop() || stream.destinationPath}
-                        </div>
-                        <div
-                          className="truncate text-xs text-muted-foreground"
-                          title={`${stream.sourcePath} → ${stream.destinationPath}`}
-                        >
-                          {stream.sourcePath} → {stream.destinationPath}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {stream.cancellationRequested
-                            ? "Cancelling"
-                            : stream.phase === "QUEUED"
-                              ? "Queued for import"
-                              : stream.phase[0] + stream.phase.slice(1).toLowerCase()}
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Started{" "}
-                          {new Date(startedAt).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </div>
-                        {progress === null ? (
-                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                            <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
-                          </div>
-                        ) : (
-                          <div className="mt-2 space-y-1">
-                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                              <div
-                                className="h-full rounded-full bg-primary"
-                                style={{ width: `${progress}%` }}
-                              />
+                    {t("activity.retry")}
+                  </Button>
+                  {visibleHasMore ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={queueRefreshing || queueLoadingMore}
+                      onClick={() => void requestMoreItems()}
+                    >
+                      {t("activity.loadMore")}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {queueStale ? (
+                <p className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-sm text-[var(--scry-warning-text)]">
+                  {t(queueError ? "activity.staleData" : "activity.queueStale")}
+                </p>
+              ) : null}
+              <div
+                className={cn(
+                  "flex flex-col gap-3 sm:flex-row sm:items-center",
+                  activeTab === "import" && selectedImportCount > 0
+                    ? "sm:justify-between"
+                    : "sm:justify-end",
+                )}
+              >
+                {activeTab === "import" && selectedImportCount > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                    <span className="text-sm text-muted-foreground">
+                      {t("activity.selectedImportCount", {
+                        count: selectedImportCount,
+                      })}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={
+                        bulkActionInProgress !== null ||
+                        selectedIgnoreItems.length === 0
+                      }
+                      onClick={() => {
+                        void handleBulkIgnore(selectedIgnoreItems);
+                      }}
+                    >
+                      {bulkActionInProgress === "ignore" ? (
+                        <LoadingMark className="mr-2 h-4 w-4" />
+                      ) : (
+                        <CircleOff className="mr-2 h-4 w-4" />
+                      )}
+                      {t("queue.ignore")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      disabled={
+                        bulkActionInProgress !== null ||
+                        selectedDeleteItems.length === 0
+                      }
+                      onClick={() => {
+                        setBulkDeleteConfirmItems(selectedDeleteItems);
+                      }}
+                    >
+                      {bulkActionInProgress === "delete" ? (
+                        <LoadingMark className="mr-2 h-4 w-4" />
+                      ) : (
+                        <Trash2 className="mr-2 h-4 w-4" />
+                      )}
+                      {t("queue.removeFromDownloader")}
+                    </Button>
+                  </div>
+                ) : null}
+                <Popover
+                  open={filterPopoverOpen}
+                  onOpenChange={setFilterPopoverOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      id={selectorId("activity", activeTab, "filter-button")}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="inline-flex items-center gap-2"
+                      aria-label={t("activity.filterBarLabel")}
+                    >
+                      <Filter className="h-4 w-4" />
+                      <span>{t("label.filters")}</span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-72 p-4">
+                    {renderFilterPopoverContent()}
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {activeTab === "activity" && activeImportStreams.length > 0 ? (
+                <div className="space-y-2 sm:hidden">
+                  {visibleActiveImportStreams.map((stream) => {
+                    const progress =
+                      stream.totalBytes > 0
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              (stream.bytes / stream.totalBytes) * 100,
+                            ),
+                          )
+                        : null;
+                    const startedAt = stream.startedAt ?? stream.queuedAt;
+                    return (
+                      <div
+                        key={`active-import-mobile-${stream.id}`}
+                        className="rounded-lg border border-primary/25 bg-primary/5 p-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">
+                              {stream.destinationPath.split(/[\\/]/).pop() ||
+                                stream.destinationPath}
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              {formatByteCount(stream.bytes)} / {formatByteCount(stream.totalBytes)}
+                            <div
+                              className="truncate text-xs text-muted-foreground"
+                              title={`${stream.sourcePath} → ${stream.destinationPath}`}
+                            >
+                              {stream.sourcePath} → {stream.destinationPath}
                             </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {stream.cancellationRequested
+                                ? "Cancelling"
+                                : stream.phase === "QUEUED"
+                                  ? "Queued for import"
+                                  : stream.phase[0] +
+                                    stream.phase.slice(1).toLowerCase()}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              Started{" "}
+                              {new Date(startedAt).toLocaleTimeString([], {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                            </div>
+                            {progress === null ? (
+                              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
+                              </div>
+                            ) : (
+                              <div className="mt-2 space-y-1">
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                                  <div
+                                    className="h-full rounded-full bg-primary"
+                                    style={{ width: `${progress}%` }}
+                                  />
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {formatByteCount(stream.bytes)} /{" "}
+                                  {formatByteCount(stream.totalBytes)}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
+                          {stream.cancellable ? (
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              onClick={() =>
+                                setCancelImportConfirmStream(stream)
+                              }
+                              aria-label="Cancel import"
+                            >
+                              <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
-                      {stream.cancellable ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => setCancelImportConfirmStream(stream)}
-                          aria-label="Cancel import"
-                        >
-                          <XCircle className="h-4 w-4 text-[var(--scry-danger-text)]" />
-                        </Button>
-                      ) : null}
+                    );
+                  })}
+                  {hiddenActiveImportCount > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2 text-xs text-muted-foreground"
+                      aria-expanded={activeImportsExpanded}
+                      onClick={() =>
+                        setActiveImportsExpanded((expanded) => !expanded)
+                      }
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "h-3.5 w-3.5 transition-transform",
+                          activeImportsExpanded && "rotate-90",
+                        )}
+                        aria-hidden="true"
+                      />
+                      {activeImportDisclosureLabel}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {isMobile &&
+              activeTab === "activity" &&
+              seedingQueueItems.length > 0 ? (
+                <div className="space-y-3">
+                  {visibleSeedingQueueItems.map((queueItem) => {
+                    const rowProps = buildQueueRowProps(queueItem);
+                    return <QueueRowItem key={rowProps.rowId} {...rowProps} />;
+                  })}
+                  {hiddenSeedingCount > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2 text-xs text-muted-foreground"
+                      aria-expanded={seedingExpanded}
+                      onClick={() =>
+                        setSeedingExpanded((expanded) => !expanded)
+                      }
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "h-3.5 w-3.5 transition-transform",
+                          seedingExpanded && "rotate-90",
+                        )}
+                        aria-hidden="true"
+                      />
+                      {seedingDisclosureLabel}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {isMobile ? (
+                sortedQueueItems.length === 0 && !queueLoading ? (
+                  activeTab === "activity" &&
+                  activeImportStreams.length > 0 ? null : queueError ? null : (
+                    <p className="text-sm text-muted-foreground">
+                      {emptyStateLabel}
+                    </p>
+                  )
+                ) : sortedQueueItems.length === 0 ? (
+                  <div className={`${scrollHeightClass} overflow-y-auto pr-1`}>
+                    <div className="rounded-xl border border-border/60 bg-card/30">
+                      <ActivityTableLoadingMask label={t("label.loading")} />
                     </div>
                   </div>
-                );
-              })}
-              {hiddenActiveImportCount > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full gap-2 text-xs text-muted-foreground"
-                  aria-expanded={activeImportsExpanded}
-                  onClick={() => setActiveImportsExpanded((expanded) => !expanded)}
-                >
-                  <ChevronRight
-                    className={cn(
-                      "h-3.5 w-3.5 transition-transform",
-                      activeImportsExpanded && "rotate-90",
-                    )}
-                    aria-hidden="true"
-                  />
-                  {activeImportDisclosureLabel}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {isMobile && activeTab === "activity" && seedingQueueItems.length > 0 ? (
-            <div className="space-y-3">
-              {visibleSeedingQueueItems.map((queueItem) => {
-                const rowProps = buildQueueRowProps(queueItem);
-                return <QueueRowItem key={rowProps.rowId} {...rowProps} />;
-              })}
-              {hiddenSeedingCount > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-full gap-2 text-xs text-muted-foreground"
-                  aria-expanded={seedingExpanded}
-                  onClick={() => setSeedingExpanded((expanded) => !expanded)}
-                >
-                  <ChevronRight
-                    className={cn(
-                      "h-3.5 w-3.5 transition-transform",
-                      seedingExpanded && "rotate-90",
-                    )}
-                    aria-hidden="true"
-                  />
-                  {seedingDisclosureLabel}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {isMobile ? (
-            sortedQueueItems.length === 0 && !queueLoading ? (
-              activeTab === "activity" && activeImportStreams.length > 0 ? null : (
-                queueError ? null : <p className="text-sm text-muted-foreground">{emptyStateLabel}</p>
-              )
-            ) : sortedQueueItems.length === 0 ? (
-              <div className={`${scrollHeightClass} overflow-y-auto pr-1`}>
-                <div className="rounded-xl border border-border/60 bg-card/30">
-                  <ActivityTableLoadingMask label={t("label.loading")} />
-                </div>
-              </div>
-            ) : (
+                ) : (
+                  <div
+                    ref={resultsScrollRef}
+                    onScroll={handleResultsScroll}
+                    className={`${scrollHeightClass} overflow-y-auto pr-1`}
+                  >
+                    {activeTab === "activity"
+                      ? renderVirtualMobileQueueCards()
+                      : renderMobileQueueCards(
+                          renderedQueueItems,
+                          queueLoadingMore,
+                        )}
+                  </div>
+                )
+              ) : (
                 <div
                   ref={resultsScrollRef}
                   onScroll={handleResultsScroll}
-                  className={`${scrollHeightClass} overflow-y-auto pr-1`}
+                  className={`${scrollHeightClass} overflow-y-auto rounded-xl border border-border/60`}
                 >
-                  {activeTab === "activity" ? (
-                    renderVirtualMobileQueueCards()
-                  ) : (
-                    renderMobileQueueCards(renderedQueueItems, queueLoadingMore)
-                  )}
-                </div>
-              )
-          ) : (
-            <div
-              ref={resultsScrollRef}
-              onScroll={handleResultsScroll}
-              className={`${scrollHeightClass} overflow-y-auto rounded-xl border border-border/60`}
-            >
-              <Table overflow="clip" layout="fixed" density="dense">
-                <TableHeader
-                  data-activity-virtual-prefix={activeTab === "activity" ? "" : undefined}
-                >
-                  <TableRow>
-                    {activeTab === "import" ? (
-                      <TableCheckboxHead>
-                        <Checkbox
-                          checked={
-                            allVisibleImportItemsSelected
-                              ? true
-                              : someVisibleImportItemsSelected
-                                ? "indeterminate"
-                                : false
-                          }
-                          disabled={visibleImportKeys.length === 0}
-                          aria-label={t("activity.selectAllImportItems")}
-                          onCheckedChange={toggleAllVisibleImportItemsSelected}
-                          size="table"
-                          className="mx-auto"
-                        />
-                      </TableCheckboxHead>
-                    ) : null}
-                    {renderSortableHeader(
-                      "TITLE",
-                      t("queue.title"),
-                      "w-[32%]",
-                    )}
-                    {renderSortableHeader(
-                      "CLIENT",
-                      t("queue.client"),
-                      "w-[13%]",
-                    )}
-                    {renderSortableHeader(
-                      "STATUS",
-                      t("queue.status"),
-                      "w-[15%]",
-                    )}
-                    {activeTab === "activity" || activeTab === "import"
-                      ? renderSortableHeader(
-                          "PROGRESS",
-                          t("queue.progress"),
-                          "w-[16%]",
-                        )
-                      : null}
-                    {renderSortableHeader(
-                      "SIZE",
-                      t("queue.size"),
-                      "w-28 text-center [&_button]:justify-center [&_button]:text-center",
-                    )}
-                    <TableHead className="w-52 text-center">
-                      {t("label.actions")}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedQueueItems.length === 0 &&
-                  !(activeTab === "activity" && activeImportStreams.length > 0) ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={
-                          activeTab === "activity"
-                            ? 6
-                            : activeTab === "import"
-                              ? 7
-                              : 5
-                        }
-                        className={
-                          queueLoading
-                            ? "p-0"
-                            : "text-sm text-muted-foreground"
-                        }
-                      >
-                        {queueLoading ? (
-                          <ActivityTableLoadingMask label={t("label.loading")} />
-                        ) : (
-                          queueError ? null : emptyStateLabel
+                  <Table overflow="clip" layout="fixed" density="dense">
+                    <TableHeader
+                      data-activity-virtual-prefix={
+                        activeTab === "activity" ? "" : undefined
+                      }
+                    >
+                      <TableRow>
+                        {activeTab === "import" ? (
+                          <TableCheckboxHead>
+                            <Checkbox
+                              checked={
+                                allVisibleImportItemsSelected
+                                  ? true
+                                  : someVisibleImportItemsSelected
+                                    ? "indeterminate"
+                                    : false
+                              }
+                              disabled={visibleImportKeys.length === 0}
+                              aria-label={t("activity.selectAllImportItems")}
+                              onCheckedChange={
+                                toggleAllVisibleImportItemsSelected
+                              }
+                              size="table"
+                              className="mx-auto"
+                            />
+                          </TableCheckboxHead>
+                        ) : null}
+                        {renderSortableHeader(
+                          "TITLE",
+                          t("queue.title"),
+                          "w-[32%]",
                         )}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    <>
-                      {activeTab === "activity" ? renderActiveImportRows() : null}
-                      {activeTab === "activity" ? renderSeedingRows() : null}
-                      {activeTab === "activity" && virtualPaddingTop > 0 ? (
-                        <TableRow aria-hidden="true">
-                          <TableCell colSpan={6} style={{ height: virtualPaddingTop, padding: 0 }} />
-                        </TableRow>
-                      ) : null}
-                      {renderDesktopQueueRows(renderedQueueItems, queueLoadingMore)}
-                      {activeTab === "activity" && virtualPaddingBottom > 0 ? (
-                        <TableRow aria-hidden="true">
+                        {renderSortableHeader(
+                          "CLIENT",
+                          t("queue.client"),
+                          "w-[13%]",
+                        )}
+                        {renderSortableHeader(
+                          "STATUS",
+                          t("queue.status"),
+                          "w-[15%]",
+                        )}
+                        {activeTab === "activity" || activeTab === "import"
+                          ? renderSortableHeader(
+                              "PROGRESS",
+                              t("queue.progress"),
+                              "w-[16%]",
+                            )
+                          : null}
+                        {renderSortableHeader(
+                          "SIZE",
+                          t("queue.size"),
+                          "w-28 text-center [&_button]:justify-center [&_button]:text-center",
+                        )}
+                        <TableHead className="w-52 text-center">
+                          {t("label.actions")}
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedQueueItems.length === 0 &&
+                      !(
+                        activeTab === "activity" &&
+                        activeImportStreams.length > 0
+                      ) ? (
+                        <TableRow>
                           <TableCell
-                            colSpan={6}
-                            style={{ height: virtualPaddingBottom, padding: 0 }}
-                          />
+                            colSpan={
+                              activeTab === "activity"
+                                ? 6
+                                : activeTab === "import"
+                                  ? 7
+                                  : 5
+                            }
+                            className={
+                              queueLoading
+                                ? "p-0"
+                                : "text-sm text-muted-foreground"
+                            }
+                          >
+                            {queueLoading ? (
+                              <ActivityTableLoadingMask
+                                label={t("label.loading")}
+                              />
+                            ) : queueError ? null : (
+                              emptyStateLabel
+                            )}
+                          </TableCell>
                         </TableRow>
-                      ) : null}
-                    </>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-          </CardContent>
-        </Card>
+                      ) : (
+                        <>
+                          {activeTab === "activity"
+                            ? renderActiveImportRows()
+                            : null}
+                          {activeTab === "activity"
+                            ? renderSeedingRows()
+                            : null}
+                          {activeTab === "activity" && virtualPaddingTop > 0 ? (
+                            <TableRow aria-hidden="true">
+                              <TableCell
+                                colSpan={6}
+                                style={{
+                                  height: virtualPaddingTop,
+                                  padding: 0,
+                                }}
+                              />
+                            </TableRow>
+                          ) : null}
+                          {renderDesktopQueueRows(
+                            renderedQueueItems,
+                            queueLoadingMore,
+                          )}
+                          {activeTab === "activity" &&
+                          virtualPaddingBottom > 0 ? (
+                            <TableRow aria-hidden="true">
+                              <TableCell
+                                colSpan={6}
+                                style={{
+                                  height: virtualPaddingBottom,
+                                  padding: 0,
+                                }}
+                              />
+                            </TableRow>
+                          ) : null}
+                        </>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
     </>

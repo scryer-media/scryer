@@ -3,10 +3,7 @@ import { Link, type LinkProps } from "react-router";
 import { cn } from "@/lib/utils";
 
 export type UnderlineFilterButtonTone =
-  | "neutral"
-  | "success"
-  | "danger"
-  | "muted";
+  "neutral" | "success" | "danger" | "muted";
 
 type UnderlineFilterButtonProps = Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
@@ -40,7 +37,8 @@ export const UnderlineFilterButton = React.forwardRef<
   },
   ref,
 ) {
-  const ariaLabel = buttonProps["aria-label"] ?? (badge ? `${label} (${badge})` : label);
+  const ariaLabel =
+    buttonProps["aria-label"] ?? (badge ? `${label} (${badge})` : label);
   const ariaPressed = buttonProps["aria-pressed"] ?? selected;
   const large = size === "lg";
 
@@ -77,9 +75,16 @@ export const UnderlineFilterButton = React.forwardRef<
         <span
           className={cn(
             "inline-flex justify-center rounded-[6px] font-bold leading-none tabular-nums",
-            large ? "min-w-[3ch] px-2 py-1 text-[12px]" : "min-w-[6ch] px-1.5 py-0.5 text-[11px]",
+            large
+              ? "min-w-[3ch] px-2 py-1 text-[12px]"
+              : "min-w-[6ch] px-1.5 py-0.5 text-[11px]",
             selected
-              ? cn("text-[var(--scry-accent-text)]", large ? "bg-[rgba(var(--scry-accent-rgb),0.3)]" : "bg-[rgba(var(--scry-accent-rgb),0.18)]")
+              ? cn(
+                  "text-[var(--scry-accent-text)]",
+                  large
+                    ? "bg-[rgba(var(--scry-accent-rgb),0.3)]"
+                    : "bg-[rgba(var(--scry-accent-rgb),0.18)]",
+                )
               : "bg-[var(--scry-chip)] text-[var(--scry-muted2)]",
           )}
         >
@@ -99,7 +104,10 @@ function underlineTabClassName(selected: boolean, large: boolean) {
       : "h-10 px-3.5 py-2.5 text-[13.5px]",
     selected
       ? cn("text-white", large && "bg-[rgba(var(--scry-accent-rgb),0.14)]")
-      : cn("text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]", large && "hover:bg-[var(--scry-hover)]"),
+      : cn(
+          "text-[var(--scry-muted)] hover:text-[var(--scry-ink2)]",
+          large && "hover:bg-[var(--scry-hover)]",
+        ),
   );
 }
 
@@ -125,6 +133,7 @@ function UnderlineIndicator({ large }: { large: boolean }) {
 type UnderlineTabLinkProps = Omit<LinkProps, "children" | "role"> & {
   selected: boolean;
   label: string;
+  icon?: React.ReactNode;
   /** A short tag after the label, such as one marking the pane as beta. */
   badge?: string;
 };
@@ -133,7 +142,14 @@ type UnderlineTabLinkProps = Omit<LinkProps, "children" | "role"> & {
  * A page section tab that is its own route: the large underline tab, as a
  * link. Place it in a `role="tablist"` row like the button form.
  */
-export function UnderlineTabLink({ selected, label, badge, className, ...linkProps }: UnderlineTabLinkProps) {
+export function UnderlineTabLink({
+  selected,
+  icon,
+  label,
+  badge,
+  className,
+  ...linkProps
+}: UnderlineTabLinkProps) {
   return (
     <Link
       {...linkProps}
@@ -142,6 +158,18 @@ export function UnderlineTabLink({ selected, label, badge, className, ...linkPro
       aria-current={selected ? "page" : undefined}
       className={cn(underlineTabClassName(selected, true), className)}
     >
+      {icon ? (
+        <span
+          className={cn(
+            "shrink-0",
+            selected
+              ? "text-[var(--scry-accent-text)]"
+              : "text-[var(--scry-muted2)]",
+          )}
+        >
+          {icon}
+        </span>
+      ) : null}
       <span className="whitespace-nowrap">{label}</span>
       {badge ? <UnderlineBadge label={badge} /> : null}
       {selected ? <UnderlineIndicator large /> : null}

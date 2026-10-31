@@ -5,6 +5,7 @@ use scryer_domain::{RuleEvaluationPhase, RulePackInstallation, RulePackMember, R
 fn managed_rule(id: &str) -> RuleSet {
     let now = Utc::now();
     RuleSet {
+        disabled_reason_code: None,
         id: id.to_string(),
         name: "Installed rule".to_string(),
         description: "A tracked rule".to_string(),

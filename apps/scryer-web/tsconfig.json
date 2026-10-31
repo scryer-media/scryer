@@ -2,10 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2025",
-    "lib": [
-      "DOM",
-      "ES2025"
-    ],
+    "lib": ["DOM", "ES2025"],
     "strict": true,
     "skipLibCheck": true,
     "strictNullChecks": true,
@@ -22,25 +19,13 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noUncheckedSideEffectImports": true,
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "verbatimModuleSyntax": true,
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"]
     },
     "allowJs": false
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "**/*.ts",
-    "**/*.tsx"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules", "dist"]
 }

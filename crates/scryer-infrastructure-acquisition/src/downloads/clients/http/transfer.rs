@@ -16,13 +16,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
-use scryer_application::AppResult;
+use scryer_application::{AppResult, http_release_refusal};
 use scryer_plugin_sdk::{PluginHttpResource, PluginHttpVerify};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::state::{HttpJobFile, RecordedValidator};
+use super::state::{HttpJobFile, PublicationCheckpoint, RecordedValidator};
 
 /// Redirect hops followed for one request before giving up.
 const MAX_REDIRECT_HOPS: usize = scryer_outbound_http::DEFAULT_TRUSTED_REDIRECT_HOPS;
@@ -120,6 +120,8 @@ pub(crate) enum TransferError {
     RetryAfter(Duration, String),
     /// Retrying cannot help.
     Permanent(String),
+    /// An actionable refusal, persisted separately from its explanation.
+    Refused(&'static str, String),
     /// `403 Forbidden`: often a geo block, sometimes a one-off refusal.
     Forbidden(String),
     /// Any other 4xx: this resource is not available to this client, though
@@ -129,11 +131,19 @@ pub(crate) enum TransferError {
 }
 
 impl TransferError {
+    pub(crate) fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Refused(reason, _) => Some(reason),
+            _ => None,
+        }
+    }
+
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Transient(message)
             | Self::RetryAfter(_, message)
             | Self::Permanent(message)
+            | Self::Refused(_, message)
             | Self::Forbidden(message)
             | Self::Rejected(message) => message.clone(),
             Self::Cancelled => String::new(),
@@ -696,6 +706,86 @@ fn has_expired(resource: &PluginHttpResource, now: chrono::DateTime<chrono::Utc>
         .is_some_and(|expires_at| expires_at.with_timezone(&chrono::Utc) <= now)
 }
 
+/// Permits for actual request hosts, shared by every file in an engine.
+pub(crate) struct HostLimiter {
+    state: std::sync::Mutex<(usize, std::collections::HashMap<String, usize>)>,
+    changed: tokio::sync::Notify,
+    #[cfg(test)]
+    pub(crate) blocked: tokio::sync::Notify,
+}
+
+impl HostLimiter {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            state: std::sync::Mutex::new((limit.max(1), Default::default())),
+            changed: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            blocked: tokio::sync::Notify::new(),
+        }
+    }
+
+    pub(crate) fn set_limit(&self, limit: usize) {
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).0 = limit.max(1);
+        self.changed.notify_waiters();
+    }
+
+    pub(crate) async fn acquire(
+        &self,
+        url: &reqwest::Url,
+        cancel: &CancellationToken,
+    ) -> Result<HostPermit<'_>, TransferError> {
+        let host = url
+            .host_str()
+            .unwrap_or_default()
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if cancel.is_cancelled() {
+                return Err(TransferError::Cancelled);
+            }
+            {
+                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                let limit = state.0;
+                if state.1.get(&host).copied().unwrap_or(0) < limit {
+                    *state.1.entry(host.clone()).or_default() += 1;
+                    return Ok(HostPermit {
+                        limiter: self,
+                        host,
+                    });
+                }
+            }
+            #[cfg(test)]
+            self.blocked.notify_one();
+            tokio::select! {
+                () = cancel.cancelled() => return Err(TransferError::Cancelled),
+                () = &mut changed => {}
+            }
+        }
+    }
+}
+
+pub(crate) struct HostPermit<'a> {
+    limiter: &'a HostLimiter,
+    host: String,
+}
+
+impl Drop for HostPermit<'_> {
+    fn drop(&mut self) {
+        let mut state = self.limiter.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(count) = state.1.get_mut(&self.host) {
+            *count -= 1;
+            if *count == 0 {
+                state.1.remove(&self.host);
+            }
+        }
+        drop(state);
+        self.limiter.changed.notify_waiters();
+    }
+}
+
 /// Everything one file transfer needs from its job and engine.
 pub(crate) struct TransferContext<'a> {
     pub egress: Egress,
@@ -703,6 +793,7 @@ pub(crate) struct TransferContext<'a> {
     pub cancel: &'a CancellationToken,
     pub live_bytes: &'a Arc<AtomicU64>,
     pub limiter: Option<&'a BandwidthLimiter>,
+    pub host_limiter: Option<&'a HostLimiter>,
     /// The first retry's wait; each further retry doubles it, up to a cap.
     pub backoff_unit: Duration,
     pub cadence: CheckpointCadence,
@@ -728,7 +819,8 @@ pub(crate) async fn transfer_file(
     if file.complete {
         return Ok(());
     }
-    if already_in_place(file).await? {
+    recover_legacy_partial(context, file).await?;
+    if already_in_place(context, file).await? {
         // Moved into place before an interruption kept the move from being
         // recorded: only the final checks are left, and nothing is fetched.
         if let Some(check) = &context.media_check {
@@ -780,18 +872,19 @@ pub(crate) async fn transfer_file(
             record(context, file).await?;
         }
 
-        let response = match open_resource(context, &file.resource, &resource_url, &range).await {
-            Ok(response) => response,
-            Err(TransferError::Cancelled) => return Err(TransferError::Cancelled),
-            Err(TransferError::Permanent(message)) => {
-                return Err(TransferError::Permanent(message));
-            }
-            Err(error) => {
-                transient_failures += 1;
-                wait_before_retry(context, &error, transient_failures).await?;
-                continue;
-            }
-        };
+        let (response, permit) =
+            match open_resource(context, &file.resource, &resource_url, &range).await {
+                Ok(response) => response,
+                Err(TransferError::Cancelled) => return Err(TransferError::Cancelled),
+                Err(TransferError::Permanent(message)) => {
+                    return Err(TransferError::Permanent(message));
+                }
+                Err(error) => {
+                    transient_failures += 1;
+                    wait_before_retry(context, &error, transient_failures).await?;
+                    continue;
+                }
+            };
 
         let offset = match judge_response(response.status(), response.headers(), &range) {
             ResponseVerdict::Fresh { total, validator } => {
@@ -834,6 +927,8 @@ pub(crate) async fn transfer_file(
                 return Err(TransferError::Rejected(message));
             }
             ResponseVerdict::Failed(TransferError::Forbidden(message)) => {
+                drop(response);
+                drop(permit);
                 file.forbidden_answers = file.forbidden_answers.saturating_add(1);
                 context
                     .checkpoint
@@ -844,13 +939,17 @@ pub(crate) async fn transfer_file(
                 continue;
             }
             ResponseVerdict::Failed(error) => {
+                drop(response);
+                drop(permit);
                 transient_failures += 1;
                 wait_before_retry(context, &error, transient_failures).await?;
                 continue;
             }
         };
 
-        match stream_body(context, file, response, offset).await {
+        let streamed = stream_body(context, file, response, offset).await;
+        drop(permit);
+        match streamed {
             Ok(()) => return finish_file(context, file).await,
             Err(StreamError::Cancelled) => return Err(TransferError::Cancelled),
             Err(StreamError::Permanent(message)) => return Err(TransferError::Permanent(message)),
@@ -877,24 +976,84 @@ pub(crate) async fn transfer_file(
     }
 }
 
-/// Every byte is recorded, no partial is left, and the final file holds
-/// exactly the recorded length: the rename happened and only its record was
-/// lost.
-async fn already_in_place(file: &HttpJobFile) -> Result<bool, TransferError> {
-    let Some(total) = file.total_bytes else {
-        return Ok(false);
-    };
-    if total == 0 || file.bytes_done != total {
-        return Ok(false);
+/// Older records derived the partial from the final name, even after a probe
+/// changed its extension. Recover only one unambiguous recorded attempt.
+async fn recover_legacy_partial(
+    context: &TransferContext<'_>,
+    file: &mut HttpJobFile,
+) -> Result<(), TransferError> {
+    if file.partial_path.is_some()
+        || file.publication.is_some()
+        || file.bytes_done == 0
+        || file.role != super::state::HttpFileRole::Media
+    {
+        return Ok(());
     }
+    let extension =
+        super::selection::extension_for(&file.resource, None).unwrap_or_else(|| "bin".into());
+    let original_final = file.final_path.with_extension(extension);
+    if original_final == file.final_path {
+        return Ok(());
+    }
+    let original_part = super::state::part_path_for(&original_final, file.attempt);
+    let metadata = match tokio::fs::symlink_metadata(&original_part).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(TransferError::Refused(
+                http_release_refusal::RECOVERY_UNVERIFIED,
+                error.to_string(),
+            ));
+        }
+    };
+    if !metadata.is_file()
+        || metadata.len() < file.bytes_done
+        || tokio::fs::try_exists(file.part_path())
+            .await
+            .unwrap_or(true)
+    {
+        return Err(TransferError::Refused(
+            http_release_refusal::RECOVERY_UNVERIFIED,
+            "the legacy partial path is ambiguous; all files were preserved".into(),
+        ));
+    }
+    file.partial_path = Some(original_part);
+    record(context, file).await
+}
+
+/// Recover only the exact output whose identity was durably recorded before
+/// publication. Legacy final-only files are preserved for operator attention.
+async fn already_in_place(
+    context: &TransferContext<'_>,
+    file: &HttpJobFile,
+) -> Result<bool, TransferError> {
     if tokio::fs::try_exists(file.part_path())
         .await
         .unwrap_or(true)
     {
         return Ok(false);
     }
-    match tokio::fs::metadata(&file.final_path).await {
-        Ok(metadata) => Ok(metadata.is_file() && metadata.len() == total),
+    match tokio::fs::symlink_metadata(&file.final_path).await {
+        Ok(metadata) => {
+            if let Some(proof) = &file.publication
+                && proof.attempt == file.attempt
+                && proof.partial_path == file.part_path()
+                && proof.final_path == file.final_path
+                && file.total_bytes == Some(proof.size)
+                && file.bytes_done == proof.size
+                && metadata.is_file()
+                && metadata.len() == proof.size
+                && hash_file(context, &file.final_path, ChecksumAlgorithm::Sha256).await?
+                    == proof.sha256
+            {
+                return Ok(true);
+            }
+            Err(TransferError::Refused(
+                http_release_refusal::RECOVERY_UNVERIFIED,
+                "the existing output could not be verified against this download; it was preserved"
+                    .into(),
+            ))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(TransferError::Permanent(format!(
             "cannot inspect {}: {error}",
@@ -933,6 +1092,8 @@ pub(crate) fn resume_range(file: &HttpJobFile, part_len: u64) -> RangeRequest {
 /// new `.part` file.
 pub(crate) fn start_new_attempt(file: &mut HttpJobFile) {
     file.attempt = file.attempt.saturating_add(1);
+    file.partial_path = None;
+    file.publication = None;
     file.bytes_done = 0;
     file.total_bytes = None;
     file.validator = None;
@@ -1028,15 +1189,22 @@ async fn sleep_unless_cancelled(
 
 /// Send the request, following redirects by hand so every hop is checked
 /// and the resource's headers stay on its own origin.
-async fn open_resource(
-    context: &TransferContext<'_>,
+async fn open_resource<'a>(
+    context: &'a TransferContext<'_>,
     resource: &PluginHttpResource,
     resource_url: &reqwest::Url,
     range: &RangeRequest,
-) -> Result<reqwest::Response, TransferError> {
+) -> Result<(reqwest::Response, Option<HostPermit<'a>>), TransferError> {
     let mut url = resource_url.clone();
     for _ in 0..=MAX_REDIRECT_HOPS {
-        let client = context.egress.client_for(&url).await?;
+        let permit = match context.host_limiter {
+            Some(limiter) => Some(limiter.acquire(&url, context.cancel).await?),
+            None => None,
+        };
+        let client = tokio::select! {
+            () = context.cancel.cancelled() => return Err(TransferError::Cancelled),
+            client = context.egress.client_for(&url) => client?,
+        };
         let mut request = client
             .get(url.clone())
             .headers(scoped_headers(resource, resource_url, &url))
@@ -1060,7 +1228,7 @@ async fn open_resource(
             },
         };
         if !response.status().is_redirection() || response.status() == StatusCode::NOT_MODIFIED {
-            return Ok(response);
+            return Ok((response, permit));
         }
         let location = response
             .headers()
@@ -1224,9 +1392,19 @@ async fn open_fresh_part(
             .open(&part_path)
             .await
         {
-            Ok(opened) => return Ok(opened),
+            Ok(opened) => {
+                file.partial_path = Some(part_path);
+                context
+                    .checkpoint
+                    .record(file)
+                    .await
+                    .map_err(|error| StreamError::Permanent(error.to_string()))?;
+                return Ok(opened);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 file.attempt = file.attempt.saturating_add(1);
+                file.partial_path = None;
+                file.publication = None;
                 context
                     .checkpoint
                     .record(file)
@@ -1307,9 +1485,14 @@ async fn finish_file(
     // under its final one.
     if let Some(check) = &context.media_check {
         let outcome = verify_media(check, &part_path).await?;
+        file.partial_path = Some(part_path.clone());
         // Named for what the probe read, so the import recognizes it.
         if let Some(named) = media_path_for_probed_container(&file.final_path, &outcome) {
             file.final_path = named;
+        }
+        if scryer_domain::canonical_video_extension(&file.final_path).is_none() {
+            return Err(TransferError::Refused(http_release_refusal::UNKNOWN_CONTAINER,
+                "the payload could not be identified as a supported video container; the partial was preserved".into()));
         }
     }
     // Recorded before the file is published, so an interruption between the
@@ -1319,6 +1502,25 @@ async fn finish_file(
     // part of a checkpoint.
     file.total_bytes = Some(total);
     file.bytes_done = total;
+    file.partial_path = Some(part_path.clone());
+    let publication = PublicationCheckpoint {
+        attempt: file.attempt,
+        partial_path: part_path.clone(),
+        final_path: file.final_path.clone(),
+        size: total,
+        sha256: hash_file(context, &part_path, ChecksumAlgorithm::Sha256).await?,
+    };
+    if file
+        .publication
+        .as_ref()
+        .is_some_and(|recorded| recorded != &publication)
+    {
+        return Err(TransferError::Refused(
+            http_release_refusal::RECOVERY_UNVERIFIED,
+            "the partial no longer matches its publication checkpoint; it was preserved".into(),
+        ));
+    }
+    file.publication = Some(publication);
     record(context, file).await?;
     publish_part(&part_path, &file.final_path).await?;
     file.complete = true;
@@ -1326,10 +1528,13 @@ async fn finish_file(
 }
 
 fn destination_exists(final_path: &Path) -> TransferError {
-    TransferError::Permanent(format!(
-        "{} already exists; it was left untouched",
-        final_path.display()
-    ))
+    TransferError::Refused(
+        http_release_refusal::DESTINATION_EXISTS,
+        format!(
+            "{} already exists; it was left untouched",
+            final_path.display()
+        ),
+    )
 }
 
 /// Give the checked partial its final name without ever replacing a file
@@ -1338,8 +1543,8 @@ fn destination_exists(final_path: &Path) -> TransferError {
 /// A hard link is created only when the name is free, atomically, so a file
 /// another writer puts under the final name in the meantime is kept. The
 /// partial name is then dropped; only the job's own `.part` is removed, and
-/// only once its bytes are reachable under the final name. Where the file
-/// system has no hard links, the name is checked and the partial renamed.
+/// only once its bytes are reachable under the final name. A filesystem that
+/// cannot hard-link refuses publication instead of risking replacement.
 pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<(), TransferError> {
     match tokio::fs::hard_link(part_path, final_path).await {
         Ok(()) => {}
@@ -1352,22 +1557,12 @@ pub(crate) async fn publish_part(part_path: &Path, final_path: &Path) -> Result<
             }
         }
         Err(link_error) => {
-            debug!(
-                path = %final_path.display(),
-                error = %link_error,
-                "HTTP download could not hard-link its finished file; renaming it instead"
-            );
-            if tokio::fs::try_exists(final_path).await.unwrap_or(true) {
-                return Err(destination_exists(final_path));
-            }
-            return tokio::fs::rename(part_path, final_path)
-                .await
-                .map_err(|error| {
-                    TransferError::Permanent(format!(
-                        "could not move {} into place: {error}",
-                        part_path.display()
-                    ))
-                });
+            return Err(TransferError::Refused(
+                http_release_refusal::PUBLICATION_FAILED,
+                format!(
+                    "could not publish without replacing a destination: {link_error}; the partial was preserved"
+                ),
+            ));
         }
     }
     tokio::fs::remove_file(part_path).await.map_err(|error| {
@@ -1386,14 +1581,14 @@ async fn same_contents(left: &Path, right: &Path) -> Result<bool, TransferError>
         TransferError::Permanent(format!("cannot inspect {}: {error}", path.display()))
     };
     let (left_meta, right_meta) = (
-        tokio::fs::metadata(left)
+        tokio::fs::symlink_metadata(left)
             .await
             .map_err(|error| inspect(left, error))?,
-        tokio::fs::metadata(right)
+        tokio::fs::symlink_metadata(right)
             .await
             .map_err(|error| inspect(right, error))?,
     );
-    if !right_meta.is_file() || left_meta.len() != right_meta.len() {
+    if !left_meta.is_file() || !right_meta.is_file() || left_meta.len() != right_meta.len() {
         return Ok(false);
     }
     let mut left_file = tokio::fs::File::open(left)

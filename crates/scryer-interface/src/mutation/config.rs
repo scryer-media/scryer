@@ -57,10 +57,10 @@ fn proxy_link_setting(value: Option<i32>, field: &str) -> GqlResult<Option<u16>>
     value
         .map(|value| {
             u16::try_from(value).map_err(|_| {
-                to_gql_error(AppError::Validation(format!(
-                    "{field} must be between 0 and {}",
-                    u16::MAX
-                )))
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_CONFIG_VALUE_OUT_OF_RANGE,
+                    format!("{field} must be between 0 and {}", u16::MAX),
+                ))
             })
         })
         .transpose()
@@ -88,9 +88,10 @@ fn parse_challenge_solver_protocol(
 ) -> GqlResult<Option<scryer_domain::ChallengeSolverProtocol>> {
     raw.map(|value| {
         scryer_domain::ChallengeSolverProtocol::parse(value).ok_or_else(|| {
-            to_gql_error(AppError::Validation(format!(
-                "unsupported proxy protocol '{value}'"
-            )))
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_PROXY_PROTOCOL_UNSUPPORTED,
+                format!("unsupported proxy protocol '{value}'"),
+            ))
         })
     })
     .transpose()
@@ -134,10 +135,19 @@ fn merge_omitted_provider_secrets(
     existing_json: &str,
     config_fields: &[scryer_domain::ConfigFieldDef],
 ) -> scryer_application::AppResult<String> {
-    let mut incoming = serde_json::from_str::<serde_json::Value>(&incoming_json)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))?;
-    let existing = serde_json::from_str::<serde_json::Value>(existing_json)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))?;
+    let mut incoming =
+        serde_json::from_str::<serde_json::Value>(&incoming_json).map_err(|error| {
+            scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_CONFIG_JSON_INVALID,
+                error.to_string(),
+            )
+        })?;
+    let existing = serde_json::from_str::<serde_json::Value>(existing_json).map_err(|error| {
+        scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_CONFIG_JSON_INVALID,
+            error.to_string(),
+        )
+    })?;
     let Some(incoming_object) = incoming.as_object_mut() else {
         return Ok(incoming_json);
     };
@@ -158,8 +168,12 @@ fn merge_omitted_provider_secrets(
         }
     }
 
-    serde_json::to_string(&incoming)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))
+    serde_json::to_string(&incoming).map_err(|error| {
+        scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_CONFIG_JSON_INVALID,
+            error.to_string(),
+        )
+    })
 }
 
 fn prepare_download_client_connection_test_config(
@@ -170,12 +184,18 @@ fn prepare_download_client_connection_test_config(
     config_fields: &[scryer_domain::ConfigFieldDef],
 ) -> scryer_application::AppResult<String> {
     let Some((existing_client_type, existing_json)) = existing else {
-        return Err(AppError::NotFound(format!("download client {id}")));
+        return Err(AppError::not_found_reason(
+            scryer_interface_core::refusal::INTERFACE_DOWNLOAD_CLIENT_NOT_FOUND,
+            format!("download client {id}"),
+        ));
     };
     if !existing_client_type.eq_ignore_ascii_case(requested_client_type) {
-        return Err(AppError::Validation(format!(
-            "download client {id} uses provider type '{existing_client_type}', not '{requested_client_type}'"
-        )));
+        return Err(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_DOWNLOAD_CLIENT_PROVIDER_MISMATCH,
+            format!(
+                "download client {id} uses provider type '{existing_client_type}', not '{requested_client_type}'"
+            ),
+        ));
     }
 
     merge_omitted_provider_secrets(incoming_json, existing_json, config_fields)
@@ -474,17 +494,18 @@ impl ConfigMutations {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let provider_type = ProxyProviderType::parse(&input.provider_type).ok_or_else(|| {
-            to_gql_error(AppError::Validation(format!(
-                "unsupported proxy provider '{}'",
-                input.provider_type
-            )))
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_PROXY_PROVIDER_UNSUPPORTED,
+                format!("unsupported proxy provider '{}'", input.provider_type),
+            ))
         })?;
         let request_timeout_seconds = input
             .request_timeout_seconds
             .map(|value| {
                 u32::try_from(value).map_err(|_| {
-                    to_gql_error(AppError::Validation(
-                        "request timeout seconds must be positive".into(),
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_PROXY_TIMEOUT_INVALID,
+                        "request timeout seconds must be positive",
                     ))
                 })
             })
@@ -537,8 +558,9 @@ impl ConfigMutations {
             .request_timeout_seconds
             .map(|value| {
                 u32::try_from(value).map_err(|_| {
-                    to_gql_error(AppError::Validation(
-                        "request timeout seconds must be positive".into(),
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_PROXY_TIMEOUT_INVALID,
+                        "request timeout seconds must be positive",
                     ))
                 })
             })
@@ -701,10 +723,10 @@ impl ConfigMutations {
             .await
             .map_err(to_gql_error)?
             .ok_or_else(|| {
-                to_gql_error(AppError::NotFound(format!(
-                    "download client {}",
-                    input.id.as_ref()
-                )))
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_DOWNLOAD_CLIENT_NOT_FOUND,
+                    format!("download client {}", input.id.as_ref()),
+                ))
             })?;
         let effective_client_type = input
             .client_type
@@ -819,6 +841,7 @@ impl ConfigMutations {
 
         let client_type = input.client_type.trim().to_lowercase();
         let config_json = provider_config_values_to_json(input.config).map_err(to_gql_error)?;
+        let client_id = input.id.as_ref().map(|id| id.to_string());
         let config_json = if let Some(id) = input.id {
             let existing = app
                 .get_download_client_config(&actor, id.as_ref())
@@ -840,6 +863,7 @@ impl ConfigMutations {
         };
         app.test_download_client_connection(
             &actor,
+            client_id.as_deref(),
             &client_type,
             &config_json,
             input.proxy_config_id.as_ref().map(|id| id.as_str()),
@@ -1178,7 +1202,7 @@ mod tests {
         .expect_err("missing client should fail");
 
         assert!(
-            matches!(error, AppError::NotFound(message) if message == "download client missing")
+            matches!(error, AppError::NotFoundReason { message, reason } if message == "download client missing" && reason == scryer_interface_core::refusal::INTERFACE_DOWNLOAD_CLIENT_NOT_FOUND)
         );
     }
 
@@ -1194,7 +1218,7 @@ mod tests {
         .expect_err("mismatched client should fail");
 
         assert!(
-            matches!(error, AppError::Validation(message) if message.contains("uses provider type 'sabnzbd', not 'qbittorrent'"))
+            matches!(error, AppError::ValidationRefused { message, .. } if message.contains("uses provider type 'sabnzbd', not 'qbittorrent'"))
         );
     }
 }

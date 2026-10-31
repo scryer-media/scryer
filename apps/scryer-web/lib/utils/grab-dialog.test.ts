@@ -47,7 +47,6 @@ test("partial-batch retries cannot change the selected import purpose", () => {
   }
 });
 
-
 test("an episodic title reports its missing monitored episodes", () => {
   assert.deepEqual(
     titleGapLabel(title({ episodesMonitored: 62, episodesOwned: 58 })),
@@ -82,7 +81,10 @@ test("a movie is wanted until it holds a file", () => {
 });
 
 test("replacing a file is only offered for a target that holds one", () => {
-  assert.equal(titleHoldsFile(title({ episodesOwned: 0, sizeBytes: 0 })), false);
+  assert.equal(
+    titleHoldsFile(title({ episodesOwned: 0, sizeBytes: 0 })),
+    false,
+  );
   assert.equal(titleHoldsFile(title({ episodesOwned: 1 })), true);
   assert.equal(titleHoldsFile(title({ sizeBytes: 1 })), true);
 });
@@ -118,7 +120,6 @@ test("rejection codes are de-duplicated across the batch", () => {
   ]);
   assert.deepEqual(codes, ["QUALITY_NOT_ALLOWED", "SIZE_TOO_LARGE"]);
 });
-
 
 test("a season/episode narrowing needs a season; a season alone is the whole season", () => {
   assert.deepEqual(episodeSubjectInput("", ""), {});

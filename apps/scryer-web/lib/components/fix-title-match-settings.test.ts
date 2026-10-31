@@ -47,38 +47,39 @@ async function renderWithTranslation(
   });
 
   try {
-    const [componentModule, contextModule, globalStatusModule] = await Promise.all([
-      server.ssrLoadModule(modulePath),
-      server.ssrLoadModule("/lib/context/translate-context.tsx"),
-      server.ssrLoadModule("/lib/context/global-status-context.tsx"),
-    ]);
+    const [componentModule, contextModule, globalStatusModule] =
+      await Promise.all([
+        server.ssrLoadModule(modulePath),
+        server.ssrLoadModule("/lib/context/translate-context.tsx"),
+        server.ssrLoadModule("/lib/context/global-status-context.tsx"),
+      ]);
     const Component = componentModule[exportName] as ComponentType<
       Record<string, unknown>
     >;
-    const TranslateContext = contextModule.TranslateContext as Context<
-      Translate | null
-    >;
-    const GlobalStatusContext = globalStatusModule.GlobalStatusContext as Context<
-      ((message: string) => void) | null
-    >;
+    const TranslateContext =
+      contextModule.TranslateContext as Context<Translate | null>;
+    const GlobalStatusContext =
+      globalStatusModule.GlobalStatusContext as Context<
+        ((message: string) => void) | null
+      >;
     let rendered: ReactNode = createElement(
       GlobalStatusContext.Provider,
       { value: () => {} },
       createElement(Component, props),
     );
     if (withGraphql) {
-      rendered = createElement(
-        Provider,
-        { value: {} as Client },
-        rendered,
-      );
+      rendered = createElement(Provider, { value: {} as Client }, rendered);
     }
     // Views render inside the app router; the tag picker links to settings.
     return renderToStaticMarkup(
       createElement(
         MemoryRouter,
         null,
-        createElement(TranslateContext.Provider, { value: translate }, rendered),
+        createElement(
+          TranslateContext.Provider,
+          { value: translate },
+          rendered,
+        ),
       ),
     );
   } finally {

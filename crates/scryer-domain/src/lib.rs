@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub mod download_identity;
 pub mod import_space;
 pub mod lists;
+pub mod publish_time;
 pub mod title_naming;
 pub mod title_normalization;
 pub use lists::*;
@@ -411,9 +412,21 @@ pub struct MediaRequest {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum AppPermission {
+// Keep enumeration and the complete permission set in one declaration. Gates
+// requiring every permission must automatically include future variants.
+macro_rules! app_permissions {
+    ($( $(#[$meta:meta])* $variant:ident ),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+        #[serde(rename_all = "snake_case")]
+        pub enum AppPermission { $( $(#[$meta])* $variant ),* }
+
+        impl AppPermission {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),*];
+        }
+    };
+}
+
+app_permissions! {
     ManageUsers,
     ManagePermissions,
     ManageSystemSettings,
@@ -518,6 +531,16 @@ impl AppPermissionMask {
     pub const MANAGE_SYSTEM_SETTINGS: Self = Self(1 << 2);
     pub const MANAGE_CATALOG_SETTINGS: Self = Self(1 << 3);
     pub const MANAGE_LISTS: Self = Self(1 << 4);
+    /// Every declared application permission, including future variants.
+    pub const ALL: Self = {
+        let mut bits = 0;
+        let mut index = 0;
+        while index < AppPermission::ALL.len() {
+            bits |= Self::from_permission(AppPermission::ALL[index]).0;
+            index += 1;
+        }
+        Self(bits)
+    };
 
     pub fn bits(self) -> u64 {
         self.0
@@ -527,7 +550,7 @@ impl AppPermissionMask {
         Self(bits)
     }
 
-    pub fn from_permission(permission: AppPermission) -> Self {
+    pub const fn from_permission(permission: AppPermission) -> Self {
         match permission {
             AppPermission::ManageUsers => Self::MANAGE_USERS,
             AppPermission::ManagePermissions => Self::MANAGE_PERMISSIONS,
@@ -999,6 +1022,8 @@ pub struct CanonicalMediaTag {
 pub struct TaggedAlias {
     pub name: String,
     pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 /// One admin-defined user tag.
@@ -1286,6 +1311,7 @@ impl AnimeNumberingBridge {
             aliases.push(TaggedAlias {
                 name: name.clone(),
                 language: language.to_string(),
+                country: None,
             });
         }
         aliases
@@ -2034,6 +2060,9 @@ pub struct IndexerConfig {
     pub caps_snapshot_json: Option<String>,
     pub last_health_status: Option<String>,
     pub last_error_message: Option<String>,
+    /// Stable cause of the latest failure; the sentence is display-only.
+    #[serde(default)]
+    pub last_error_code: Option<String>,
     pub last_error_at: Option<DateTime<Utc>>,
     pub config_json: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -2281,7 +2310,7 @@ impl NabTransportKind {
 pub fn is_nab_provider_type(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "amenzb" | "animetosho-xyz" | "dognzb" | "newznab" | "nzbgeek" | "torznab"
+        "amenzb" | "aninzb" | "animetosho-xyz" | "dognzb" | "newznab" | "nzbgeek" | "torznab"
     )
 }
 
@@ -2645,6 +2674,26 @@ pub enum DownloadQueueState {
 
 // ── TrackedDownloads ──────────────────────────────────────────────
 
+pub mod download_reason {
+    /// A successful client listing omitted an accepted download.
+    pub const CLIENT_ITEM_MISSING: &str = "DOWNLOAD_CLIENT_ITEM_MISSING";
+    pub const ALL: &[&str] = &[CLIENT_ITEM_MISSING];
+
+    #[test]
+    fn reasons_are_distinct_and_prefixed() {
+        let unique: std::collections::HashSet<_> = ALL.iter().collect();
+        assert_eq!(unique.len(), ALL.len());
+        for reason in ALL {
+            assert!(reason.starts_with("DOWNLOAD_"));
+            assert!(
+                reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            );
+        }
+    }
+}
+
 /// Scryer's internal workflow state for a download, independent of the
 /// download client's reported status.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -2652,6 +2701,8 @@ pub enum DownloadQueueState {
 pub enum TrackedDownloadState {
     /// Download in progress (queued, downloading, verifying, repairing, extracting).
     Downloading,
+    /// Accepted by the client but absent from its successful listing; not a failure.
+    Missing,
     /// Client reports completed; scryer validated path + title; queued for import.
     ImportPending,
     /// Import actively running.
@@ -2675,6 +2726,7 @@ impl TrackedDownloadState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Downloading => "downloading",
+            Self::Missing => "missing",
             Self::ImportPending => "import_pending",
             Self::Importing => "importing",
             Self::Imported => "imported",
@@ -2689,6 +2741,7 @@ impl TrackedDownloadState {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
             "downloading" => Some(Self::Downloading),
+            "missing" => Some(Self::Missing),
             "import_pending" => Some(Self::ImportPending),
             "importing" => Some(Self::Importing),
             "imported" => Some(Self::Imported),
@@ -2889,10 +2942,49 @@ impl DownloadPasswordFailure {
 
     pub fn message(self) -> &'static str {
         match self {
-            Self::Required => "ARCHIVE_PASSWORD_REQUIRED: a new archive password is required",
+            Self::Required => "a new archive password is required",
             Self::PasswordOrCorruption => {
-                "ARCHIVE_PASSWORD_OR_CORRUPTION: the password may be incorrect or the archive may be damaged"
+                "the password may be incorrect or the archive may be damaged"
             }
+        }
+    }
+}
+
+impl DownloadPasswordFailure {
+    pub const fn reason_code(self) -> &'static str {
+        match self {
+            Self::Required => "ARCHIVE_PASSWORD_REQUIRED",
+            Self::PasswordOrCorruption => "ARCHIVE_PASSWORD_OR_CORRUPTION",
+        }
+    }
+
+    pub fn from_reason_code(code: &str) -> Option<Self> {
+        match code {
+            "ARCHIVE_PASSWORD_REQUIRED" => Some(Self::Required),
+            "ARCHIVE_PASSWORD_OR_CORRUPTION" => Some(Self::PasswordOrCorruption),
+            _ => None,
+        }
+    }
+
+    /// Compatibility reader for queue snapshots and events written before codes
+    /// were stored separately. New producers never concatenate codes and prose.
+    pub fn from_legacy_reason(reason: &str) -> Option<Self> {
+        if reason == "archive_password_required" || reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:")
+        {
+            Some(Self::Required)
+        } else if reason == "archive_password_or_corruption"
+            || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:")
+        {
+            Some(Self::PasswordOrCorruption)
+        } else {
+            None
+        }
+    }
+
+    pub fn from_stored_reason(code: Option<&str>, reason: Option<&str>) -> Option<Self> {
+        match code {
+            Some(code) => Self::from_reason_code(code),
+            None => reason.and_then(Self::from_legacy_reason),
         }
     }
 }
@@ -2902,21 +2994,10 @@ impl DownloadQueueItem {
         if self.state != DownloadQueueState::Failed {
             return None;
         }
-        match self.attention_reason.as_deref() {
-            Some(reason)
-                if reason == "archive_password_required"
-                    || reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:") =>
-            {
-                Some(DownloadPasswordFailure::Required)
-            }
-            Some(reason)
-                if reason == "archive_password_or_corruption"
-                    || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:") =>
-            {
-                Some(DownloadPasswordFailure::PasswordOrCorruption)
-            }
-            _ => None,
-        }
+        DownloadPasswordFailure::from_stored_reason(
+            self.attention_reason_code.as_deref(),
+            self.attention_reason.as_deref(),
+        )
     }
 }
 
@@ -2950,6 +3031,9 @@ pub struct DownloadQueueItem {
     pub last_updated_at: Option<String>,
     pub attention_required: bool,
     pub attention_reason: Option<String>,
+    /// Stable attention condition, independent of the display sentence.
+    #[serde(default)]
+    pub attention_reason_code: Option<String>,
     pub download_client_item_id: String,
     #[serde(default)]
     pub download_id: Option<String>,
@@ -3366,6 +3450,7 @@ pub enum ImportErrorCode {
     EpisodeNotFound,
     EpisodeLookupFailed,
     SourceJobFailed,
+    SceneSubtitlePending,
     PolicyMismatch,
     IoFailed,
     PermissionDenied,
@@ -3380,6 +3465,7 @@ impl ImportErrorCode {
             Self::EpisodeNotFound => "episode_not_found",
             Self::EpisodeLookupFailed => "episode_lookup_failed",
             Self::SourceJobFailed => "source_job_failed",
+            Self::SceneSubtitlePending => "scene_subtitle_pending",
             Self::PolicyMismatch => "policy_mismatch",
             Self::IoFailed => "io_failed",
             Self::PermissionDenied => "permission_denied",
@@ -3394,6 +3480,7 @@ impl ImportErrorCode {
             "episode_not_found" => Some(Self::EpisodeNotFound),
             "episode_lookup_failed" => Some(Self::EpisodeLookupFailed),
             "source_job_failed" => Some(Self::SourceJobFailed),
+            "scene_subtitle_pending" => Some(Self::SceneSubtitlePending),
             "policy_mismatch" => Some(Self::PolicyMismatch),
             "io_failed" => Some(Self::IoFailed),
             "permission_denied" => Some(Self::PermissionDenied),
@@ -3442,6 +3529,12 @@ pub enum ImportSkipReason {
     /// grab delivered a program, not media.
     UnwantedExecutables,
     DownloadInProgress,
+    /// The source changed after its validation snapshot; retry with a fresh proof.
+    SourceChanged,
+    /// The source snapshot is temporarily unavailable.
+    SourceUnavailable,
+    /// Imported video still awaits scene subtitle delivery or source-hold release.
+    SceneSubtitlePending,
     DiskFull,
     PermissionDenied,
     PasswordRequired,
@@ -3461,6 +3554,9 @@ impl ImportSkipReason {
             Self::NoVideoFiles => "no_video_files",
             Self::UnwantedExecutables => "unwanted_executables",
             Self::DownloadInProgress => "download_in_progress",
+            Self::SourceChanged => "source_changed",
+            Self::SourceUnavailable => "source_unavailable",
+            Self::SceneSubtitlePending => "scene_subtitle_pending",
             Self::DiskFull => "disk_full",
             Self::PermissionDenied => "permission_denied",
             Self::PasswordRequired => "password_required",
@@ -3880,6 +3976,7 @@ pub enum TitleHistoryEventType {
     FileRenamed,
     TitleMoved,
     DownloadIgnored,
+    DownloadMissing,
     Rematched,
     /// A torrent was imported and its client entry is being retained while it
     /// seeds. Opens the seeding-retention window; recorded once per torrent.
@@ -3909,6 +4006,7 @@ impl TitleHistoryEventType {
             Self::FileRenamed => "file_renamed",
             Self::TitleMoved => "title_moved",
             Self::DownloadIgnored => "download_ignored",
+            Self::DownloadMissing => "download_missing",
             Self::Rematched => "rematched",
             Self::SeedingStarted => "seeding_started",
             Self::SeedingCompleted => "seeding_completed",
@@ -3934,6 +4032,7 @@ impl TitleHistoryEventType {
             "file_renamed" => Some(Self::FileRenamed),
             "title_moved" => Some(Self::TitleMoved),
             "download_ignored" => Some(Self::DownloadIgnored),
+            "download_missing" => Some(Self::DownloadMissing),
             "rematched" => Some(Self::Rematched),
             "seeding_started" => Some(Self::SeedingStarted),
             "seeding_completed" => Some(Self::SeedingCompleted),
@@ -3959,6 +4058,7 @@ impl TitleHistoryEventType {
         Self::FileRenamed,
         Self::TitleMoved,
         Self::DownloadIgnored,
+        Self::DownloadMissing,
         Self::Rematched,
         Self::SeedingStarted,
         Self::SeedingCompleted,
@@ -4049,6 +4149,9 @@ pub struct TitleHistoryRecord {
     #[serde(default)]
     pub retry_requires_password: bool,
     pub failure_reason: Option<String>,
+    /// Stable failure condition beside the explanation.
+    #[serde(default)]
+    pub failure_reason_code: Option<String>,
     pub blocklist_reason: Option<String>,
     #[serde(default)]
     pub source_path: Option<String>,
@@ -4220,6 +4323,7 @@ pub enum DomainEventType {
     DownloadQueueItemUpserted,
     DownloadQueueItemRemoved,
     DownloadIgnored,
+    DownloadMissing,
     SeedingStarted,
     SeedingCompleted,
     ListTitleAdded,
@@ -4284,6 +4388,7 @@ impl DomainEventType {
             Self::DownloadQueueItemUpserted => "download_queue_item_upserted",
             Self::DownloadQueueItemRemoved => "download_queue_item_removed",
             Self::DownloadIgnored => "download_ignored",
+            Self::DownloadMissing => "download_missing",
             Self::SeedingStarted => "seeding_started",
             Self::SeedingCompleted => "seeding_completed",
             Self::ListTitleAdded => "list_title_added",
@@ -4348,6 +4453,7 @@ impl DomainEventType {
             "download_queue_item_upserted" => Some(Self::DownloadQueueItemUpserted),
             "download_queue_item_removed" => Some(Self::DownloadQueueItemRemoved),
             "download_ignored" => Some(Self::DownloadIgnored),
+            "download_missing" => Some(Self::DownloadMissing),
             "seeding_started" => Some(Self::SeedingStarted),
             "seeding_completed" => Some(Self::SeedingCompleted),
             "list_title_added" => Some(Self::ListTitleAdded),
@@ -4645,6 +4751,9 @@ pub struct DownloadFailedEventData {
     pub quality: Option<String>,
     #[serde(default, alias = "error_message")]
     pub reason: Option<String>,
+    /// Stable failure condition for history and retry decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
     #[serde(default)]
     pub episode_ids: Vec<String>,
     #[serde(default)]
@@ -5142,6 +5251,19 @@ pub struct DownloadQueueItemRemovedEventData {
     pub client_type: Option<String>,
 }
 
+/// A successful client listing omitted an accepted download.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DownloadMissingEventData {
+    pub title: Option<TitleContextSnapshot>,
+    pub download_id: download_identity::DownloadId,
+    pub download_client_item_id: String,
+    pub client_id: Option<String>,
+    pub client_type: Option<String>,
+    pub source_title: Option<String>,
+    pub grabbed_at: DateTime<Utc>,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadIgnoredEventData {
     pub title: Option<TitleContextSnapshot>,
@@ -5257,6 +5379,7 @@ pub enum DomainEventPayload {
     DownloadQueueItemUpserted(Box<DownloadQueueItemUpsertedEventData>),
     DownloadQueueItemRemoved(DownloadQueueItemRemovedEventData),
     DownloadIgnored(DownloadIgnoredEventData),
+    DownloadMissing(DownloadMissingEventData),
     SeedingStarted(SeedingStartedEventData),
     SeedingCompleted(SeedingCompletedEventData),
     ListTitleAdded(ListTitleAddedEventData),
@@ -5323,6 +5446,7 @@ impl DomainEventPayload {
             Self::DownloadQueueItemUpserted(_) => DomainEventType::DownloadQueueItemUpserted,
             Self::DownloadQueueItemRemoved(_) => DomainEventType::DownloadQueueItemRemoved,
             Self::DownloadIgnored(_) => DomainEventType::DownloadIgnored,
+            Self::DownloadMissing(_) => DomainEventType::DownloadMissing,
             Self::SeedingStarted(_) => DomainEventType::SeedingStarted,
             Self::SeedingCompleted(_) => DomainEventType::SeedingCompleted,
             Self::ListTitleAdded(_) => DomainEventType::ListTitleAdded,
@@ -5643,6 +5767,9 @@ pub struct RuleSet {
     pub exclusive_group: Option<String>,
     #[serde(default)]
     pub disabled_reason: Option<String>,
+    /// Stable policy condition that disabled this rule.
+    #[serde(default)]
+    pub disabled_reason_code: Option<String>,
     /// Facets this rule applies to. Empty = all facets.
     pub applied_facets: Vec<MediaFacet>,
     pub created_at: DateTime<Utc>,
@@ -7315,8 +7442,17 @@ pub struct IndexerCapsSearchNode {
     pub search_engine: Option<String>,
 }
 
+/// Stored snapshots from an older parser must be refreshed before use as fresh caps.
+pub const INDEXER_CAPS_PARSER_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexerCapsSnapshot {
+    #[serde(default)]
+    pub parser_version: u32,
+    /// An absent searching block is permissive; an absent mode in a present
+    /// block is unavailable. Keep those cases distinct across the host boundary.
+    #[serde(default)]
+    pub searching_present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7405,6 +7541,9 @@ pub struct IndexerResponseFeatures {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexerProviderCapabilities {
+    /// The adapter accepts exact Nab operations and explicit recent paging.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub raw_nab_search: bool,
     #[serde(default = "default_true")]
     pub rss: bool,
 
@@ -8455,6 +8594,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tagged_alias_country_is_optional_for_existing_json() {
+        let legacy: TaggedAlias =
+            serde_json::from_str(r#"{"name":"Name in Japanese","language":"ja"}"#)
+                .expect("existing tagged aliases should deserialize without country");
+        assert_eq!(legacy.country, None);
+
+        let with_country: TaggedAlias =
+            serde_json::from_str(r#"{"name":"Name in Japanese","language":"ja","country":"JP"}"#)
+                .expect("new tagged aliases should deserialize country");
+        assert_eq!(with_country.country.as_deref(), Some("JP"));
+    }
+
+    #[test]
     fn import_completed_event_data_without_upgrade_field_reads_as_not_upgrade() {
         let data = ImportCompletedEventData {
             title: TitleContextSnapshot {
@@ -8644,6 +8796,7 @@ mod tests {
     fn direct_nab_provider_family_includes_specialized_newznab_indexers() {
         for provider_type in [
             "amenzb",
+            "aninzb",
             "animetosho-xyz",
             "dognzb",
             "newznab",
@@ -8652,7 +8805,6 @@ mod tests {
         ] {
             assert!(is_nab_provider_type(provider_type), "{provider_type}");
         }
-        assert!(!is_nab_provider_type("aninzb"));
         assert!(!is_nab_provider_type("torrent-rss"));
     }
 
@@ -8679,6 +8831,27 @@ mod tests {
                 .app
                 .contains(AppPermissionMask::MANAGE_USERS)
         );
+    }
+
+    #[test]
+    fn all_application_permissions_cover_every_declared_variant() {
+        let permissions = AppPermission::ALL;
+        let rebuilt = AppPermissionMask::from_permissions(permissions.iter().copied());
+        assert_eq!(AppPermissionMask::ALL, rebuilt);
+        assert_eq!(
+            AppPermissionMask::ALL.bits().count_ones() as usize,
+            permissions.len()
+        );
+        for permission in permissions {
+            assert!(
+                AppPermissionMask::ALL.contains(AppPermissionMask::from_permission(*permission))
+            );
+            let missing_one = AppPermissionMask::from_bits_retain(
+                AppPermissionMask::ALL.bits()
+                    & !AppPermissionMask::from_permission(*permission).bits(),
+            );
+            assert!(!missing_one.contains(AppPermissionMask::ALL));
+        }
     }
 }
 

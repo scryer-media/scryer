@@ -7,28 +7,29 @@ import type {
 
 export const DELAY_PROFILE_CATALOG_KEY = "acquisition.delay_profiles";
 
-const FACET_OPTIONS: readonly DelayProfileFacet[] = ["MOVIE", "SERIES", "ANIME"];
-
-export type DelayProfileProtocolMode =
-  | "preferUsenet"
-  | "preferTorrent"
-  | "onlyUsenet"
-  | "onlyTorrent";
-
-export const DELAY_PROFILE_PROTOCOL_MODES: readonly DelayProfileProtocolMode[] = [
-  "preferUsenet",
-  "preferTorrent",
-  "onlyUsenet",
-  "onlyTorrent",
+const FACET_OPTIONS: readonly DelayProfileFacet[] = [
+  "MOVIE",
+  "SERIES",
+  "ANIME",
 ];
 
-export function delayProfileProtocolMode(profile: Pick<
-  DelayProfileDraft,
-  "enable_usenet" | "enable_torrent" | "preferred_protocol"
->): DelayProfileProtocolMode {
+export type DelayProfileProtocolMode =
+  "preferUsenet" | "preferTorrent" | "onlyUsenet" | "onlyTorrent";
+
+export const DELAY_PROFILE_PROTOCOL_MODES: readonly DelayProfileProtocolMode[] =
+  ["preferUsenet", "preferTorrent", "onlyUsenet", "onlyTorrent"];
+
+export function delayProfileProtocolMode(
+  profile: Pick<
+    DelayProfileDraft,
+    "enable_usenet" | "enable_torrent" | "preferred_protocol"
+  >,
+): DelayProfileProtocolMode {
   if (!profile.enable_usenet) return "onlyTorrent";
   if (!profile.enable_torrent) return "onlyUsenet";
-  return profile.preferred_protocol === "USENET" ? "preferUsenet" : "preferTorrent";
+  return profile.preferred_protocol === "USENET"
+    ? "preferUsenet"
+    : "preferTorrent";
 }
 
 export function applyDelayProfileProtocolMode(
@@ -37,17 +38,39 @@ export function applyDelayProfileProtocolMode(
 ): DelayProfileDraft {
   switch (mode) {
     case "preferUsenet":
-      return { ...profile, enable_usenet: true, enable_torrent: true, preferred_protocol: "USENET" };
+      return {
+        ...profile,
+        enable_usenet: true,
+        enable_torrent: true,
+        preferred_protocol: "USENET",
+      };
     case "preferTorrent":
-      return { ...profile, enable_usenet: true, enable_torrent: true, preferred_protocol: "TORRENT" };
+      return {
+        ...profile,
+        enable_usenet: true,
+        enable_torrent: true,
+        preferred_protocol: "TORRENT",
+      };
     case "onlyUsenet":
-      return { ...profile, enable_usenet: true, enable_torrent: false, preferred_protocol: "USENET" };
+      return {
+        ...profile,
+        enable_usenet: true,
+        enable_torrent: false,
+        preferred_protocol: "USENET",
+      };
     case "onlyTorrent":
-      return { ...profile, enable_usenet: false, enable_torrent: true, preferred_protocol: "TORRENT" };
+      return {
+        ...profile,
+        enable_usenet: false,
+        enable_torrent: true,
+        preferred_protocol: "TORRENT",
+      };
   }
 }
 
-export function buildDelayProfileTemplate(existing: ParsedDelayProfile[]): DelayProfileDraft {
+export function buildDelayProfileTemplate(
+  existing: ParsedDelayProfile[],
+): DelayProfileDraft {
   const maxPriority = existing.reduce((max, p) => Math.max(max, p.priority), 0);
   return {
     id: "",
@@ -68,7 +91,10 @@ export function buildDelayProfileTemplate(existing: ParsedDelayProfile[]): Delay
   };
 }
 
-export function createDelayProfileId(name: string, existing: ParsedDelayProfile[]): string {
+export function createDelayProfileId(
+  name: string,
+  existing: ParsedDelayProfile[],
+): string {
   const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -82,7 +108,9 @@ export function createDelayProfileId(name: string, existing: ParsedDelayProfile[
   }
 }
 
-export function validateDelayProfileDraft(profile: DelayProfileDraft): string | null {
+export function validateDelayProfileDraft(
+  profile: DelayProfileDraft,
+): string | null {
   if (!profile.name.trim()) {
     return "Delay profile name is required.";
   }
@@ -95,7 +123,10 @@ export function validateDelayProfileDraft(profile: DelayProfileDraft): string | 
   if (profile.min_age_minutes < 0) {
     return "Minimum usenet age must be zero or greater.";
   }
-  if (profile.bypass_score_threshold != null && profile.bypass_score_threshold < 0) {
+  if (
+    profile.bypass_score_threshold != null &&
+    profile.bypass_score_threshold < 0
+  ) {
     return "Bypass score threshold must be zero or greater.";
   }
   return null;
@@ -111,7 +142,9 @@ export function parseDelayProfileCatalog(json: string): ParsedDelayProfile[] {
   }
 }
 
-function normalizeDelayProfile(raw: Record<string, unknown>): ParsedDelayProfile {
+function normalizeDelayProfile(
+  raw: Record<string, unknown>,
+): ParsedDelayProfile {
   const appliesToFacets = Array.isArray(raw.applies_to_facets)
     ? raw.applies_to_facets
         .map((value) => normalizeFacet(value))
@@ -123,8 +156,10 @@ function normalizeDelayProfile(raw: Record<string, unknown>): ParsedDelayProfile
     name: String(raw.name ?? "").trim(),
     usenet_delay_minutes: normalizeWholeNumber(raw.usenet_delay_minutes),
     torrent_delay_minutes: normalizeWholeNumber(raw.torrent_delay_minutes),
-    enable_usenet: typeof raw.enable_usenet === "boolean" ? raw.enable_usenet : true,
-    enable_torrent: typeof raw.enable_torrent === "boolean" ? raw.enable_torrent : true,
+    enable_usenet:
+      typeof raw.enable_usenet === "boolean" ? raw.enable_usenet : true,
+    enable_torrent:
+      typeof raw.enable_torrent === "boolean" ? raw.enable_torrent : true,
     preferred_protocol: normalizeProtocol(raw.preferred_protocol),
     min_age_minutes: normalizeWholeNumber(raw.min_age_minutes),
     bypass_score_threshold:
@@ -157,8 +192,12 @@ function normalizeDelayProfile(raw: Record<string, unknown>): ParsedDelayProfile
   };
 }
 
-export function serializeDelayProfileCatalog(profiles: ParsedDelayProfile[]): string {
-  return JSON.stringify(profiles.map((profile) => normalizeDelayProfile(profile)));
+export function serializeDelayProfileCatalog(
+  profiles: ParsedDelayProfile[],
+): string {
+  return JSON.stringify(
+    profiles.map((profile) => normalizeDelayProfile(profile)),
+  );
 }
 
 function normalizeProtocol(value: unknown): DelayProfileProtocol {

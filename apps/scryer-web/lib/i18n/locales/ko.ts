@@ -1,49 +1,82 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "이 릴리스의 세부 정보를 더 이상 사용할 수 없습니다. 다시 검색해서 가져오세요.",
-  "httpRelease.refusal.live": "이 릴리스는 라이브 스트림이므로 다운로드할 수 없습니다.",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "시스템 시계가 5분 이상 차이 나서 Scryer가 메타데이터 게이트웨이에 연결할 수 없습니다. 시스템 시계를 동기화한 후 Scryer를 다시 시작하세요.",
+  "httpRelease.refusal.detailsUnavailable":
+    "이 릴리스의 세부 정보를 더 이상 사용할 수 없습니다. 다시 검색해서 가져오세요.",
+  "httpRelease.refusal.live":
+    "이 릴리스는 라이브 스트림이므로 다운로드할 수 없습니다.",
   "httpRelease.refusal.upcoming": "이 릴리스는 아직 공개되지 않았습니다.",
   "httpRelease.refusal.removed": "이 릴리스는 제공자가 삭제했습니다.",
-  "httpRelease.refusal.unsupportedTransport": "이 릴리스는 HTTP 다운로더가 가져올 수 있는 형식으로 제공되지 않습니다.",
-  "httpRelease.refusal.separateTracks": "이 릴리스는 오디오와 비디오 트랙이 분리된 형태로만 제공되어 합칠 수 없습니다.",
-  "httpRelease.refusal.noMediaResource": "이 릴리스에는 다운로드할 미디어 파일이 없습니다.",
-  "httpRelease.refusal.noSubtitleResource": "이 릴리스에는 원하는 언어의 자막이 제공되지 않습니다.",
+  "httpRelease.refusal.unsupportedTransport":
+    "이 릴리스는 HTTP 다운로더가 가져올 수 있는 형식으로 제공되지 않습니다.",
+  "httpRelease.refusal.separateTracks":
+    "이 릴리스는 오디오와 비디오 트랙이 분리된 형태로만 제공되어 합칠 수 없습니다.",
+  "httpRelease.refusal.noMediaResource":
+    "이 릴리스에는 다운로드할 미디어 파일이 없습니다.",
+  "httpRelease.refusal.noSubtitleResource":
+    "이 릴리스에는 원하는 언어의 자막이 제공되지 않습니다.",
   "titleDelete.refusal.selection": "중복 없이 제목을 선택하세요.",
   "titleDelete.refusal.busy": "삭제가 이미 진행 중입니다.",
   "titleDelete.refusal.preview": "삭제 미리보기를 새로 고치고 확인하세요.",
   "titleDelete.refusal.confirmation": "삭제를 확인하려면 DELETE를 입력하세요.",
-  "titleDelete.refusal.boundary": "제목 폴더는 라이브러리 루트 내부에 있어야 하며 루트 자체일 수 없습니다.",
-  "titleDelete.refusal.ownership": "폴더의 소유 관계를 확인하지 못했습니다. 파일은 보존되었습니다.",
-  "titleDelete.refusal.layout": "폴더 또는 내용을 하나의 제목으로 안전하게 삭제할 수 없습니다.",
-  "titleDelete.refusal.unavailable": "라이브러리 루트에 접근할 수 없습니다. 접근을 복원하고 다시 미리보세요.",
-  "titleDelete.refusal.outsideRoots": "파일 경로가 구성된 모든 라이브러리 루트 밖에 있습니다. 라이브러리 루트나 타이틀 폴더를 수정하고 다시 미리보세요.",
-  "queue.attention.downloadPasswordRetry": "다운로드 비밀번호 재시도가 조정을 기다리고 있습니다. 클라이언트에 작업이 더 이상 없으면 이 다운로드를 제거하세요.",
-  "titleDelete.refusal.recycle": "제목은 삭제되었지만 일부 휴지통 항목을 영구 삭제하지 못했습니다.",
-  "titleDelete.refusal.retry": "카탈로그 정리에 실패했습니다. 새 미리보기를 받은 후 다시 시도하세요.",
+  "titleDelete.refusal.boundary":
+    "제목 폴더는 라이브러리 루트 내부에 있어야 하며 루트 자체일 수 없습니다.",
+  "titleDelete.refusal.ownership":
+    "폴더의 소유 관계를 확인하지 못했습니다. 파일은 보존되었습니다.",
+  "titleDelete.refusal.layout":
+    "폴더 또는 내용을 하나의 제목으로 안전하게 삭제할 수 없습니다.",
+  "titleDelete.refusal.unavailable":
+    "라이브러리 루트에 접근할 수 없습니다. 접근을 복원하고 다시 미리보세요.",
+  "titleDelete.refusal.outsideRoots":
+    "파일 경로가 구성된 모든 라이브러리 루트 밖에 있습니다. 라이브러리 루트나 타이틀 폴더를 수정하고 다시 미리보세요.",
+  "queue.attention.downloadPasswordRetry":
+    "다운로드 비밀번호 재시도가 조정을 기다리고 있습니다. 클라이언트에 작업이 더 이상 없으면 이 다운로드를 제거하세요.",
+  "titleDelete.refusal.recycle":
+    "제목은 삭제되었지만 일부 휴지통 항목을 영구 삭제하지 못했습니다.",
+  "titleDelete.refusal.retry":
+    "카탈로그 정리에 실패했습니다. 새 미리보기를 받은 후 다시 시도하세요.",
   "settings.downloadClientHttpDownloadDir": "다운로드 폴더",
-  "settings.downloadClientHttpDownloadDirHelp": "완료된 파일과 부분 파일이 기록되는 위치입니다(Scryer 기준 경로). 이 다운로더의 대기열은 그 안의 .scryer-http 폴더에 저장됩니다.",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "완료된 파일과 부분 파일이 기록되는 위치입니다(Scryer 기준 경로). 이 다운로더의 대기열은 그 안의 .scryer-http 폴더에 저장됩니다.",
   "settings.downloadClientHttpMaxConcurrentDownloads": "동시 다운로드",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "동시에 다운로드할 릴리스 수(1~8).",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "동시에 다운로드할 릴리스 수(1~8).",
   "settings.downloadClientHttpMaxConnectionsPerHost": "호스트당 연결 수",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "같은 서버에서 동시에 받을 수 있는 다운로드 수(1~8).",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "같은 서버에서 동시에 받을 수 있는 다운로드 수(1~8).",
   "settings.downloadClientHttpBandwidthLimit": "대역폭 제한(KB/s)",
-  "settings.downloadClientHttpBandwidthLimitHelp": "이 클라이언트의 모든 다운로드가 함께 사용합니다. 비워 두거나 0이면 제한이 없습니다.",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "이 클라이언트의 모든 다운로드가 함께 사용합니다. 비워 두거나 0이면 제한이 없습니다.",
   "settings.publicUrlTitle": "공개 URL",
-  "settings.publicUrlHelp": "사용자와 서비스가 Scryer에 접속할 때 쓰는 주소입니다(예: https://scryer.example.com). 계정 연결과 OAuth에는 변경 사항이 즉시 적용되고, 패스키에는 Scryer를 다시 시작한 후 적용됩니다.",
+  "settings.publicUrlHelp":
+    "사용자와 서비스가 Scryer에 접속할 때 쓰는 주소입니다(예: https://scryer.example.com). 계정 연결과 OAuth에는 변경 사항이 즉시 적용되고, 패스키에는 Scryer를 다시 시작한 후 적용됩니다.",
   "settings.publicUrlLabel": "공개 URL",
-  "settings.publicUrlEnvironmentLocked": "SCRYER_PUBLIC_URL로 설정되었습니다. 변경하려면 환경 변수를 수정하세요.",
-  "settings.publicUrlInvalid": "설정된 공개 URL이 유효하지 않아 사용되지 않습니다: {{error}}",
-  "settings.publicUrlError.invalid_url": "https://scryer.example.com 같은 절대 http 또는 https URL을 입력하세요.",
-  "settings.publicUrlError.wildcard_host": "공개 URL에는 와일드카드가 아닌 단일 호스트를 지정해야 합니다.",
-  "settings.publicUrlError.credentials": "공개 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다.",
-  "settings.publicUrlError.query_or_fragment": "공개 URL에 쿼리 문자열이나 프래그먼트를 포함할 수 없습니다.",
-  "settings.publicUrlError.path_not_allowed": "Scryer가 루트에서 제공되므로 공개 URL에 경로를 포함할 수 없습니다.",
-  "settings.publicUrlError.path_mismatch": "공개 URL 경로는 비워 두거나 Scryer의 기본 경로와 같아야 합니다.",
-  "settings.publicUrlError.environment_locked": "공개 URL은 SCRYER_PUBLIC_URL로 설정되어 있어 여기서 변경할 수 없습니다.",
-  "settings.publicUrlError.save_and_reset": "공개 URL 저장과 지우기를 동시에 할 수 없습니다.",
-  "settings.publicUrlError.passkey_acknowledgement_required": "이 변경으로 등록된 패스키가 더 이상 작동하지 않습니다. 저장하려면 확인하세요.",
-  "settings.publicUrlPasskeyRestart": "패스키는 Scryer를 다시 시작한 후 공개 URL 변경을 반영합니다.",
+  "settings.publicUrlEnvironmentLocked":
+    "SCRYER_PUBLIC_URL로 설정되었습니다. 변경하려면 환경 변수를 수정하세요.",
+  "settings.publicUrlInvalid":
+    "설정된 공개 URL이 유효하지 않아 사용되지 않습니다: {{error}}",
+  "settings.publicUrlError.invalid_url":
+    "https://scryer.example.com 같은 절대 http 또는 https URL을 입력하세요.",
+  "settings.publicUrlError.wildcard_host":
+    "공개 URL에는 와일드카드가 아닌 단일 호스트를 지정해야 합니다.",
+  "settings.publicUrlError.credentials":
+    "공개 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다.",
+  "settings.publicUrlError.query_or_fragment":
+    "공개 URL에 쿼리 문자열이나 프래그먼트를 포함할 수 없습니다.",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer가 루트에서 제공되므로 공개 URL에 경로를 포함할 수 없습니다.",
+  "settings.publicUrlError.path_mismatch":
+    "공개 URL 경로는 비워 두거나 Scryer의 기본 경로와 같아야 합니다.",
+  "settings.publicUrlError.environment_locked":
+    "공개 URL은 SCRYER_PUBLIC_URL로 설정되어 있어 여기서 변경할 수 없습니다.",
+  "settings.publicUrlError.save_and_reset":
+    "공개 URL 저장과 지우기를 동시에 할 수 없습니다.",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "이 변경으로 등록된 패스키가 더 이상 작동하지 않습니다. 저장하려면 확인하세요.",
+  "settings.publicUrlPasskeyRestart":
+    "패스키는 Scryer를 다시 시작한 후 공개 URL 변경을 반영합니다.",
   "settings.publicUrlClear": "공개 URL 지우기",
   "settings.publicUrlSaved": "공개 URL을 저장했습니다.",
   "settings.publicUrlLoadError": "공개 URL을 불러올 수 없습니다.",
@@ -63,17 +96,25 @@ const ko: LocaleDictionary = {
   "settings.publicUrlSourceSettings": "저장된 설정",
   "settings.publicUrlSourceDefault": "기본값",
   "settings.publicUrlSourcePublicUrl": "공개 URL",
-  "settings.publicUrlPasskeyWarningTitle": "기존 패스키가 더 이상 작동하지 않습니다",
-  "settings.publicUrlPasskeyWarningChanged": "{{rpId}}용 패스키가 등록되어 있습니다. 다음 재시작 후 패스키가 {{nextRpId}}(으)로 바뀌며 기존 패스키로는 더 이상 로그인할 수 없습니다.",
-  "settings.publicUrlPasskeyWarningDisabled": "{{rpId}}용 패스키가 등록되어 있습니다. 이 공개 URL로는 패스키를 사용할 수 없으므로(https 도메인 이름 또는 localhost 필요) 다음 재시작 후 패스키가 꺼지고 기존 패스키로는 더 이상 로그인할 수 없습니다.",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}}명의 사용자가 패스키를 보유하고 있습니다. 그중 {{passkeyOnly}}명은 두 번째 인증 수단으로 인증 앱이 없어 잠기게 되며, 인증 수단이 재설정될 때까지 전혀 로그인할 수 없습니다.",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer가 등록된 패스키 수를 확인하지 못했습니다. 일부 사용자가 잠길 수 있다고 가정하세요.",
-  "settings.publicUrlPasskeyWarningRecovery": "접근을 복구하려면 아직 로그인할 수 있는 관리자가 {{users}}을(를) 열고 잠긴 각 사용자에 대해 {{reset}}을(를) 사용하거나, 공개 URL을 되돌리고 Scryer를 다시 시작하거나, SCRYER_RECOVERY_ADMIN_PASSWORD로 Scryer를 시작해 복구 관리자로 로그인하세요.",
+  "settings.publicUrlPasskeyWarningTitle":
+    "기존 패스키가 더 이상 작동하지 않습니다",
+  "settings.publicUrlPasskeyWarningChanged":
+    "{{rpId}}용 패스키가 등록되어 있습니다. 다음 재시작 후 패스키가 {{nextRpId}}(으)로 바뀌며 기존 패스키로는 더 이상 로그인할 수 없습니다.",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "{{rpId}}용 패스키가 등록되어 있습니다. 이 공개 URL로는 패스키를 사용할 수 없으므로(https 도메인 이름 또는 localhost 필요) 다음 재시작 후 패스키가 꺼지고 기존 패스키로는 더 이상 로그인할 수 없습니다.",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}}명의 사용자가 패스키를 보유하고 있습니다. 그중 {{passkeyOnly}}명은 두 번째 인증 수단으로 인증 앱이 없어 잠기게 되며, 인증 수단이 재설정될 때까지 전혀 로그인할 수 없습니다.",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer가 등록된 패스키 수를 확인하지 못했습니다. 일부 사용자가 잠길 수 있다고 가정하세요.",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "접근을 복구하려면 아직 로그인할 수 있는 관리자가 {{users}}을(를) 열고 잠긴 각 사용자에 대해 {{reset}}을(를) 사용하거나, 공개 URL을 되돌리고 Scryer를 다시 시작하거나, SCRYER_RECOVERY_ADMIN_PASSWORD로 Scryer를 시작해 복구 관리자로 로그인하세요.",
   "settings.publicUrlPasskeyWarningConfirm": "그래도 저장",
   "scoring.mandatoryRejection": "필수 조건 미충족",
   "scoring.finalScoreRejection": "최종 점수 기준 미달",
-  "settings.refFnBlockScore": "다른 점수로 상쇄할 수 있는 -10000점 감점을 반환합니다",
-  "settings.arrImportBlockScoreHelp": "총점은 -9000을 초과하고 프로필의 최소 점수 이상이어야 합니다. 필수 조건은 계속 적용됩니다.",
+  "settings.refFnBlockScore":
+    "다른 점수로 상쇄할 수 있는 -10000점 감점을 반환합니다",
+  "settings.arrImportBlockScoreHelp":
+    "총점은 -9000을 초과하고 프로필의 최소 점수 이상이어야 합니다. 필수 조건은 계속 적용됩니다.",
   "label.ready": "준비됨",
   "label.moreInfo": "추가 정보",
   "label.search": "검색",
@@ -105,15 +146,57 @@ const ko: LocaleDictionary = {
   "label.cancel": "취소",
   "folderBrowser.selectPath": "경로 선택",
   "folderBrowser.go": "이동",
-  "folderBrowser.descriptionFileOrFolder": "Scryer 호스트의 경로를 탐색하여 파일 또는 폴더를 선택하세요.",
-  "folderBrowser.descriptionFile": "Scryer 호스트의 경로를 탐색하여 파일을 선택하세요.",
-  "folderBrowser.descriptionFolder": "Scryer 호스트의 경로를 탐색하여 폴더를 선택하세요.",
+  "folderBrowser.descriptionFileOrFolder":
+    "Scryer 호스트의 경로를 탐색하여 파일 또는 폴더를 선택하세요.",
+  "folderBrowser.descriptionFile":
+    "Scryer 호스트의 경로를 탐색하여 파일을 선택하세요.",
+  "folderBrowser.descriptionFolder":
+    "Scryer 호스트의 경로를 탐색하여 폴더를 선택하세요.",
   "folderBrowser.loading": "폴더 불러오는 중",
   "folderBrowser.emptyFilesAndFolders": "파일 또는 하위 디렉터리가 없습니다",
   "folderBrowser.emptyFolders": "하위 디렉터리가 없습니다",
   "folderBrowser.error": "경로를 탐색할 수 없습니다.",
   "folderBrowser.browseRoot": "/ 탐색",
   "folderBrowser.selectFolder": "폴더 선택",
+  "folderBrowser.newFolder": "새 폴더",
+  "folderBrowser.newFolderName": "폴더 이름",
+  "folderBrowser.create": "만들기",
+  "folderBrowser.newFolderFailed": "폴더를 만들 수 없습니다.",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED": "폴더 이름을 입력하세요.",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "예약된 이름이라 폴더 이름으로 사용할 수 없습니다.",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    '폴더 이름에는 / \\ : * ? " < > | 또는 제어 문자를 사용할 수 없습니다.',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT":
+    "폴더 이름은 점으로 끝날 수 없습니다.",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "폴더 이름은 점으로 시작할 수 없습니다. 폴더가 숨겨지기 때문입니다.",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG":
+    "이 드라이브에서 사용하기에는 이름이 너무 깁니다.",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "이 드라이브는 해당 이름을 허용하지 않습니다. 더 단순한 이름을 사용해 보세요.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE":
+    "절대 폴더 경로를 선택하세요.",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING":
+    "현재 폴더가 더 이상 없거나 접근할 수 없습니다.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "현재 경로는 폴더가 아니라 파일입니다.",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "같은 이름의 파일이나 폴더가 이미 있습니다. 일부 드라이브는 대소문자를 구분하지 않습니다.",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer에 이 위치에 폴더를 만들 권한이 없습니다. Scryer를 실행하는 사용자(Docker에서는 PUID와 PGID)에 대한 폴더 권한을 확인하세요.",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "이 드라이브는 읽기 전용입니다. Scryer를 Docker에서 실행 중이라면 볼륨이 읽기 전용(:ro)으로 마운트되지 않았는지 확인하세요.",
+  "error.reason.FOLDER_CREATE_DISK_FULL":
+    "드라이브가 가득 찼거나 저장 공간 할당량을 모두 사용했습니다.",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "이 폴더에는 드라이브가 허용하는 최대 개수의 하위 폴더가 이미 있습니다.",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED":
+    "이 위치에서는 폴더를 만들 수 없습니다.",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "드라이브 또는 네트워크 공유가 응답하지 않습니다. 연결 및 마운트 상태를 확인하세요.",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer가 폴더를 만들지 못했습니다. 자세한 내용은 서버 로그를 확인하세요.",
   "label.clear": "지우기",
   "label.add": "추가",
   "label.remove": "제거",
@@ -275,7 +358,6 @@ const ko: LocaleDictionary = {
   "settings.users": "사용자",
   "settings.indexers": "인덱서",
   "settings.indexerSearch": "인덱서 검색",
-  "settings.indexerSearchBetaNotice": "인덱서 검색은 베타 단계입니다. 동작과 결과는 릴리스 사이에 바뀔 수 있습니다.",
   "settings.pluginBeta": "베타",
   "settings.proxies": "프록시",
   "settings.proxyUsername": "사용자 이름",
@@ -290,7 +372,8 @@ const ko: LocaleDictionary = {
   "settings.proxyRemoteDns": "프록시에서 DNS 확인",
   "settings.proxyRemoteDnsHelp":
     "프록시에서 DNS를 확인하는 것은 socks5h 동작입니다. 이 컴퓨터가 아니라 프록시가 대상 호스트 이름을 조회합니다.",
-  "settings.proxiesHelp": "프록시는 할당된 인덱서와 다운로드 클라이언트의 트래픽을 전달합니다. 솔버는 브라우저 챌린지에 응답하고, 표준 프록시는 HTTP 또는 SOCKS 홉이며, 터널은 자체 전송 경로를 엽니다.",
+  "settings.proxiesHelp":
+    "프록시는 할당된 인덱서와 다운로드 클라이언트의 트래픽을 전달합니다. 솔버는 브라우저 챌린지에 응답하고, 표준 프록시는 HTTP 또는 SOCKS 홉이며, 터널은 자체 전송 경로를 엽니다.",
   "settings.proxyFamilySolver": "솔버",
   "settings.proxyFamilyStandard": "표준",
   "settings.proxyFamilyTunnel": "터널",
@@ -308,7 +391,8 @@ const ko: LocaleDictionary = {
   "settings.proxyDeleteConfirmDescription": "프록시 {{name}}을(를) 삭제할까요?",
   "settings.proxyValidation": "이름과 기본 URL은 필수입니다.",
   "settings.proxyEndpoint": "엔드포인트",
-  "settings.proxyEndpointHelp": "ssh://호스트:포트. 생략하면 포트 22를 사용합니다.",
+  "settings.proxyEndpointHelp":
+    "ssh://호스트:포트. 생략하면 포트 22를 사용합니다.",
   "settings.proxyAssignment": "프록시",
   "settings.proxyDirect": "직접 연결(프록시 없음)",
   "settings.proxyMissing": "프록시 없음",
@@ -316,64 +400,93 @@ const ko: LocaleDictionary = {
   "settings.proxyDisabledHelp": "할당된 프록시가 비활성화되어 있습니다.",
   "settings.proxyDisabledSuffix": "(비활성화됨)",
   "settings.proxyClearPassword": "저장된 비밀번호 지우기",
-  "settings.proxyTunnelAuthHelp": "SSH에는 사용자 이름과 Ed25519 개인 키가 필요합니다. 비밀번호 인증은 지원하지 않습니다.",
+  "settings.proxyTunnelAuthHelp":
+    "SSH에는 사용자 이름과 Ed25519 개인 키가 필요합니다. 비밀번호 인증은 지원하지 않습니다.",
   "settings.proxyPrivateKey": "개인 키",
-  "settings.proxyPrivateKeyHelp": "Ed25519 개인 키만 지원합니다. `ssh-keygen -t ed25519`로 생성한 뒤 OpenSSH 개인 키를 붙여넣으세요.",
+  "settings.proxyPrivateKeyHelp":
+    "Ed25519 개인 키만 지원합니다. `ssh-keygen -t ed25519`로 생성한 뒤 OpenSSH 개인 키를 붙여넣으세요.",
   "settings.proxyPrivateKeyStored": "개인 키 설정됨",
-  "settings.proxyPrivateKeyUnchanged": "개인 키가 저장되어 있습니다. 교체하려면 새 키를 붙여넣으세요.",
+  "settings.proxyPrivateKeyUnchanged":
+    "개인 키가 저장되어 있습니다. 교체하려면 새 키를 붙여넣으세요.",
   "settings.proxyClearPrivateKey": "저장된 개인 키 지우기",
   "settings.proxyPrivateKeyPassphrase": "키 암호",
-  "settings.proxyPrivateKeyPassphraseHelp": "개인 키가 암호로 보호된 경우에만 필요합니다.",
+  "settings.proxyPrivateKeyPassphraseHelp":
+    "개인 키가 암호로 보호된 경우에만 필요합니다.",
   "settings.proxyHostKey": "호스트 키",
   "settings.proxyHostKeyPinnedAt": "{{time}}에 고정됨.",
-  "settings.proxyHostKeyUnpinned": "아직 고정되지 않았습니다. 첫 연결에 성공하면 서버의 호스트 키를 고정합니다.",
+  "settings.proxyHostKeyUnpinned":
+    "아직 고정되지 않았습니다. 첫 연결에 성공하면 서버의 호스트 키를 고정합니다.",
   "settings.proxyHostKeyReset": "호스트 키 초기화",
-  "settings.proxyHostKeyResetDescription": "고정된 호스트 키를 잊습니다. 다음 연결에서 서버가 제시하는 키를 그대로 신뢰하고 고정하므로, 서버의 키가 실제로 바뀐 경우에만 실행하세요.",
-  "settings.proxyValidationTunnelUsername": "터널에는 사용자 이름이 필요합니다.",
-  "settings.proxyValidationTunnelAuth": "SSH 터널에는 Ed25519 개인 키가 필요합니다.",
-  "settings.downloadClientProxyHelp": "어떤 종류의 프록시든 할당할 수 있습니다. 네이티브 클라이언트의 요청은 플러그인이 보내지 않으므로 챌린지 솔버는 효과가 없습니다.",
+  "settings.proxyHostKeyResetDescription":
+    "고정된 호스트 키를 잊습니다. 다음 연결에서 서버가 제시하는 키를 그대로 신뢰하고 고정하므로, 서버의 키가 실제로 바뀐 경우에만 실행하세요.",
+  "settings.proxyValidationTunnelUsername":
+    "터널에는 사용자 이름이 필요합니다.",
+  "settings.proxyValidationTunnelAuth":
+    "SSH 터널에는 Ed25519 개인 키가 필요합니다.",
+  "settings.downloadClientProxyHelp":
+    "어떤 종류의 프록시든 할당할 수 있습니다. 네이티브 클라이언트의 요청은 플러그인이 보내지 않으므로 챌린지 솔버는 효과가 없습니다.",
   "status.proxyCreated": "프록시를 만들었습니다.",
   "status.proxyUpdated": "프록시를 업데이트했습니다.",
   "status.proxyDeleted": "프록시 {{name}}을(를) 삭제했습니다.",
   "status.proxyTestPassed": "프록시 테스트를 통과했습니다.",
   "status.proxyTestFailed": "프록시 테스트에 실패했습니다.",
   "status.editingProxy": "프록시 {{name}}을(를) 편집하는 중입니다.",
-  "status.proxyHostKeyReset": "{{name}}의 호스트 키를 초기화했습니다. 다음 연결에서 다시 고정됩니다.",
-  "settings.proxyEndpointHelpWireguard": "wireguard://호스트:포트. 생략하면 포트 51820을 사용합니다.",
-  "settings.proxyPrivateKeyHelpWireguard": "WireGuard 키는 32바이트 base64로, `wg genkey`가 출력하는 그대로입니다(`=`로 끝나는 44자)",
+  "status.proxyHostKeyReset":
+    "{{name}}의 호스트 키를 초기화했습니다. 다음 연결에서 다시 고정됩니다.",
+  "settings.proxyEndpointHelpWireguard":
+    "wireguard://호스트:포트. 생략하면 포트 51820을 사용합니다.",
+  "settings.proxyPrivateKeyHelpWireguard":
+    "WireGuard 키는 32바이트 base64로, `wg genkey`가 출력하는 그대로입니다(`=`로 끝나는 44자)",
   "settings.proxyPeerPublicKey": "피어 공개 키",
-  "settings.proxyPeerPublicKeyHelp": "서버 `[Peer]` 섹션의 `PublicKey` 줄입니다. 공개 키는 공개 정보이므로 전체가 표시됩니다.",
+  "settings.proxyPeerPublicKeyHelp":
+    "서버 `[Peer]` 섹션의 `PublicKey` 줄입니다. 공개 키는 공개 정보이므로 전체가 표시됩니다.",
   "settings.proxyPresharedKey": "사전 공유 키",
-  "settings.proxyPresharedKeyHelp": "선택 사항입니다. 서버가 사용하는 경우 `PresharedKey` 줄을 입력하세요.",
+  "settings.proxyPresharedKeyHelp":
+    "선택 사항입니다. 서버가 사용하는 경우 `PresharedKey` 줄을 입력하세요.",
   "settings.proxyPresharedKeyStored": "사전 공유 키 설정됨",
-  "settings.proxyPresharedKeyUnchanged": "사전 공유 키가 저장되어 있습니다. 교체하려면 새 키를 붙여넣으세요.",
+  "settings.proxyPresharedKeyUnchanged":
+    "사전 공유 키가 저장되어 있습니다. 교체하려면 새 키를 붙여넣으세요.",
   "settings.proxyClearPresharedKey": "저장된 사전 공유 키 지우기",
   "settings.proxyTunnelAddresses": "주소",
-  "settings.proxyTunnelAddressesHelp": "`[Interface]` 섹션의 `Address` 줄입니다(예: 10.6.0.2/32). 한 줄에 하나씩 또는 쉼표로 구분하세요.",
+  "settings.proxyTunnelAddressesHelp":
+    "`[Interface]` 섹션의 `Address` 줄입니다(예: 10.6.0.2/32). 한 줄에 하나씩 또는 쉼표로 구분하세요.",
   "settings.proxyTunnelDnsServers": "DNS 서버",
-  "settings.proxyTunnelDnsServersHelp": "터널을 통해 사용할 선택적 리졸버입니다. 한 줄에 하나씩 또는 쉼표로 구분하세요. 지정하지 않으면 대상을 IP로 지정해야 합니다.",
+  "settings.proxyTunnelDnsServersHelp":
+    "터널을 통해 사용할 선택적 리졸버입니다. 한 줄에 하나씩 또는 쉼표로 구분하세요. 지정하지 않으면 대상을 IP로 지정해야 합니다.",
   "settings.proxyTunnelMtu": "MTU",
-  "settings.proxyTunnelMtuHelp": "선택 사항이며 {{min}}에서 {{max}} 사이여야 합니다. 비워 두면 기본값 {{default}}을(를) 사용합니다.",
+  "settings.proxyTunnelMtuHelp":
+    "선택 사항이며 {{min}}에서 {{max}} 사이여야 합니다. 비워 두면 기본값 {{default}}을(를) 사용합니다.",
   "settings.proxyTunnelKeepalive": "킵얼라이브",
-  "settings.proxyTunnelKeepaliveHelp": "선택 사항이며 단위는 초입니다. 비워 두면 기본값 {{default}}을(를) 사용하고, 0을 지정하면 킵얼라이브를 끕니다.",
+  "settings.proxyTunnelKeepaliveHelp":
+    "선택 사항이며 단위는 초입니다. 비워 두면 기본값 {{default}}을(를) 사용하고, 0을 지정하면 킵얼라이브를 끕니다.",
   "settings.proxyTunnelPublicKey": "이 터널의 공개 키",
-  "settings.proxyTunnelPublicKeyHelp": "이 값을 서버 `[Peer]` 섹션의 `PublicKey` 줄로 붙여넣으세요.",
+  "settings.proxyTunnelPublicKeyHelp":
+    "이 값을 서버 `[Peer]` 섹션의 `PublicKey` 줄로 붙여넣으세요.",
   "settings.proxyTunnelPublicKeyPending": "개인 키를 저장하면 생성됩니다.",
   "settings.proxyTunnelPublicKeyCopy": "복사",
   "settings.proxyImportConfig": "WireGuard 구성 가져오기",
-  "settings.proxyImportConfigHelp": "VPN 제공업체에서 받은 구성 전체를 붙여넣거나 .conf 파일을 선택하면 아래 필드가 채워집니다. 각 필드는 한 줄만 붙여넣어도 됩니다.",
+  "settings.proxyImportConfigHelp":
+    "VPN 제공업체에서 받은 구성 전체를 붙여넣거나 .conf 파일을 선택하면 아래 필드가 채워집니다. 각 필드는 한 줄만 붙여넣어도 됩니다.",
   "settings.proxyImportConfigApply": "양식 채우기",
   "settings.proxyImportConfigFile": "파일 선택",
   "status.proxyImportConfigFilled": "WireGuard 구성에서 양식을 채웠습니다.",
   "status.proxyImportConfigUnreadable": "WireGuard 구성처럼 보이지 않습니다.",
-  "status.proxyImportConfigFirstPeer": "피어가 {{count}}개입니다. 첫 번째만 가져왔습니다.",
-  "status.proxyImportConfigIgnored": "{{keys}}은(는) 무시했습니다. 터널 프록시에서는 사용하지 않습니다.",
-  "settings.proxyValidationWireguardPrivateKey": "WireGuard에는 개인 키가 필요합니다.",
-  "settings.proxyValidationWireguardPeerPublicKey": "WireGuard에는 피어의 공개 키가 필요합니다.",
-  "settings.proxyValidationWireguardAddresses": "WireGuard에는 인터페이스 주소가 최소 하나 필요합니다(예: 10.6.0.2/32).",
-  "settings.proxyValidationWireguardKeyShape": "{{field}}이(가) WireGuard 키 형식이 아닙니다. 키는 32바이트 base64로, `wg genkey`가 출력하는 그대로입니다(`=`로 끝나는 44자).",
-  "settings.proxyValidationWireguardMtu": "터널 MTU는 {{min}}에서 {{max}} 사이여야 합니다.",
-  "settings.proxyValidationWireguardKeepalive": "킵얼라이브는 초 단위 정수이며 0을 지정하면 꺼집니다.",
+  "status.proxyImportConfigFirstPeer":
+    "피어가 {{count}}개입니다. 첫 번째만 가져왔습니다.",
+  "status.proxyImportConfigIgnored":
+    "{{keys}}은(는) 무시했습니다. 터널 프록시에서는 사용하지 않습니다.",
+  "settings.proxyValidationWireguardPrivateKey":
+    "WireGuard에는 개인 키가 필요합니다.",
+  "settings.proxyValidationWireguardPeerPublicKey":
+    "WireGuard에는 피어의 공개 키가 필요합니다.",
+  "settings.proxyValidationWireguardAddresses":
+    "WireGuard에는 인터페이스 주소가 최소 하나 필요합니다(예: 10.6.0.2/32).",
+  "settings.proxyValidationWireguardKeyShape":
+    "{{field}}이(가) WireGuard 키 형식이 아닙니다. 키는 32바이트 base64로, `wg genkey`가 출력하는 그대로입니다(`=`로 끝나는 44자).",
+  "settings.proxyValidationWireguardMtu":
+    "터널 MTU는 {{min}}에서 {{max}} 사이여야 합니다.",
+  "settings.proxyValidationWireguardKeepalive":
+    "킵얼라이브는 초 단위 정수이며 0을 지정하면 꺼집니다.",
   "status.proxyTunnelPublicKeyCopied": "공개 키를 복사했습니다.",
   "status.proxyTunnelPublicKeyCopyFailed": "공개 키를 복사할 수 없습니다.",
   "settings.qualityProfiles": "품질 프로필",
@@ -476,6 +589,10 @@ const ko: LocaleDictionary = {
   "jobs.column.status": "상태",
   "jobs.action.run": "실행",
   "jobs.action.runNow": "지금 실행",
+  "jobs.cancelSearchRequested":
+    "취소를 요청했습니다. 현재 검색 단계가 끝난 뒤 나머지 단계가 중지됩니다.",
+  "jobs.cancelSearchNotRunning": "이 검색은 더 이상 실행 중이 아닙니다.",
+  "jobs.cancelSearchFailed": "검색을 취소하지 못했습니다.",
   "jobs.status.idle": "유휴",
   "jobs.status.queued": "대기 중",
   "jobs.status.discovering": "탐색 중",
@@ -489,7 +606,8 @@ const ko: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "시스템 내부",
   "deletePreview.counting": "삭제할 파일 수를 계산하는 중...",
   "deletePreview.error": "삭제 미리보기를 준비할 수 없습니다.",
-  "deletePreview.folderUnknown": "이 작품의 파일이 어느 폴더에 있는지 알 수 없어 디스크에서 아무것도 삭제하지 않습니다.",
+  "deletePreview.folderUnknown":
+    "이 작품의 파일이 어느 폴더에 있는지 알 수 없어 디스크에서 아무것도 삭제하지 않습니다.",
   "deletePreview.removeFromCatalogOnly": "카탈로그에서만 제거",
   "deletePreview.files": "파일",
   "deletePreview.media": "메디아",
@@ -522,21 +640,28 @@ const ko: LocaleDictionary = {
   "settings.delayProfiles": "지연 프로필",
   "settings.acquisition": "수집",
   "settings.acquisitionSaved": "수집 설정이 저장되었습니다.",
-  "settings.acquisitionIntro": "RSS는 정상 상태의 수집 경로입니다. 각 항목은 인덱서마다 한 번씩 능동적으로 검색된 뒤 RSS로 감시됩니다. 능동 백필은 일정한 속도로 유한하게 실행됩니다.",
+  "settings.acquisitionIntro":
+    "RSS는 정상 상태의 수집 경로입니다. 각 항목은 인덱서마다 한 번씩 능동적으로 검색된 뒤 RSS로 감시됩니다. 능동 백필은 일정한 속도로 유한하게 실행됩니다.",
   "settings.acquisitionEnabled": "자동 수집 사용",
-  "settings.acquisitionEnabledHelp": "백그라운드 수집 루프(수렴 검색 및 RSS 매칭)를 실행합니다.",
+  "settings.acquisitionEnabledHelp":
+    "백그라운드 수집 루프(수렴 검색 및 RSS 매칭)를 실행합니다.",
   "settings.acquisitionThresholds": "업그레이드 임계값",
   "settings.acquisitionSameTierMinDelta": "동일 등급 최소 점수 차",
-  "settings.acquisitionSameTierMinDeltaHelp": "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
-  "settings.acquisitionPollIntervalSecondsHelp": "다운로드 클라이언트에서 실패한 다운로드를 확인하는 주기입니다.",
+  "settings.acquisitionPollIntervalSecondsHelp":
+    "다운로드 클라이언트에서 실패한 다운로드를 확인하는 주기입니다.",
   "settings.acquisitionWalkIntervalSeconds": "검색 순회 간격(초)",
-  "settings.acquisitionWalkIntervalSecondsHelp": "라이브러리에서 누락되었거나 업그레이드할 수 있는 미디어를 확인하고 타이틀 묶음을 검색하는 주기입니다. 타이틀 추가, 품질 프로필 편집 등의 변경은 즉시 순회를 시작합니다. 순회는 폴링 간격보다 자주 실행되지 않습니다.",
+  "settings.acquisitionWalkIntervalSecondsHelp":
+    "라이브러리에서 누락되었거나 업그레이드할 수 있는 미디어를 확인하고 타이틀 묶음을 검색하는 주기입니다. 타이틀 추가, 품질 프로필 편집 등의 변경은 즉시 순회를 시작합니다. 순회는 폴링 간격보다 자주 실행되지 않습니다.",
   "settings.acquisitionMaxScopesPerCycle": "사이클당 최대 평가 항목 수",
-  "settings.acquisitionMaxScopesPerCycleHelp": "한 번의 백필 사이클에서 평가하는 상한입니다. 실제 요청 속도는 이 값이 아니라 인덱서 속도 제한이 결정합니다.",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "한 번의 백필 사이클에서 평가하는 상한입니다. 실제 요청 속도는 이 값이 아니라 인덱서 속도 제한이 결정합니다.",
   "settings.acquisitionReconvergeDays": "재수렴 주기(일)",
-  "settings.acquisitionReconvergeDaysHelp": "0이면 비활성화(권장): 수렴된 항목은 RSS로 감시됩니다. 피드 누락이 확인된 경우에만 비상용 재확인으로 사용하세요.",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0이면 비활성화(권장): 수렴된 항목은 RSS로 감시됩니다. 피드 누락이 확인된 경우에만 비상용 재확인으로 사용하세요.",
   "settings.delayProfileExisting": "기존 지연 프로필",
   "settings.delayProfileNone":
     "지연 프로필이 설정되지 않았습니다. 릴리스가 즉시 다운로드됩니다.",
@@ -568,14 +693,16 @@ const ko: LocaleDictionary = {
   "settings.delayProfileBypassPlaceholder": "바이패스하지 않으려면 비워두세요",
   "settings.delayProfileBypassHelp":
     "선호 프로토콜의 릴리스 점수가 이 임계값 이상이면 지연에 관계없이 즉시 가져옵니다.",
-  "settings.delayProfileBypassHighestQualityLabel": "최고 품질에 대해 지연 우회",
+  "settings.delayProfileBypassHighestQualityLabel":
+    "최고 품질에 대해 지연 우회",
   "settings.delayProfileBypassHighestQualityHelp":
     "선호 프로토콜을 사용하는 최고 품질의 적격 릴리스를 즉시 가져옵니다.",
   "settings.delayProfileFacetsLabel": "적용 대상",
   "settings.delayProfileFacetsHelp":
     "이 프로필이 적용되는 콘텐츠 유형입니다. 모두 선택 해제하면 모든 유형에 적용됩니다.",
   "settings.delayProfileLibrariesLabel": "라이브러리",
-  "settings.delayProfileLibrariesHelp": "이 프로필이 적용되는 라이브러리입니다. 모두 선택된 상태로 두면 모든 라이브러리에 적용됩니다. 프로필의 마지막 라이브러리를 삭제하면 프로필이 비활성화됩니다.",
+  "settings.delayProfileLibrariesHelp":
+    "이 프로필이 적용되는 라이브러리입니다. 모두 선택된 상태로 두면 모든 라이브러리에 적용됩니다. 프로필의 마지막 라이브러리를 삭제하면 프로필이 비활성화됩니다.",
   "settings.delayProfileUnknownLibrary": "알 수 없는 라이브러리",
   "settings.delayProfileAllFacets": "전체",
   "settings.delayProfileTagsLabel": "태그",
@@ -694,7 +821,8 @@ const ko: LocaleDictionary = {
   "settings.renameSectionTitle": "파일 이름 변경",
   "settings.renameTokenTitle": "제목",
   "settings.renameTokenYear": "출시 연도",
-  "settings.renameTokenTitleWithYear": "제목 뒤에 연도 추가 (제목이 이미 연도로 끝나지 않을 때만)",
+  "settings.renameTokenTitleWithYear":
+    "제목 뒤에 연도 추가 (제목이 이미 연도로 끝나지 않을 때만)",
   "settings.renameTokenTitleWithoutYear": "끝에 붙은 연도를 뺀 제목",
   "settings.renameTokenQuality": "품질 (예: 1080p)",
   "settings.renameTokenEdition": "에디션 (예: 감독판)",
@@ -705,6 +833,9 @@ const ko: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "소스 (예: BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange": "다이내믹 레인지 (예: HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "릴리스 리비전 (Proper/REPACK)",
+  "settings.renameTokenIs3d": "3D 표시",
   "settings.renameTokenVideoCodec": "비디오 코덱 (예: x265)",
   "settings.renameTokenAudioCodec": "오디오 코덱 (예: DTS)",
   "settings.renameTokenAudioChannels": "오디오 채널 (예: 5.1)",
@@ -733,13 +864,17 @@ const ko: LocaleDictionary = {
   "settings.sectionTitle": "설정 • {{section}}",
   "settings.generalText": "일반 애플리케이션 설정.",
   "settings.verificationDepthTitle": "가져오기 복사본 검증",
-  "settings.verificationDepthHelp": "원본에 손대기 전에 복사된 파일을 얼마나 엄격하게 검증할지 정합니다.",
-  "settings.verificationDepthScope": "다운로드 클라이언트의 가져오기 복사본에만 적용됩니다. 라이브러리와 루트 이동은 여기서 무엇을 고르든 항상 전체 검증합니다.",
+  "settings.verificationDepthHelp":
+    "원본에 손대기 전에 복사된 파일을 얼마나 엄격하게 검증할지 정합니다.",
+  "settings.verificationDepthScope":
+    "다운로드 클라이언트의 가져오기 복사본에만 적용됩니다. 라이브러리와 루트 이동은 여기서 무엇을 고르든 항상 전체 검증합니다.",
   "settings.verificationDepthLabel": "검증 깊이",
   "settings.verificationDepthFull": "전체 다시 읽기",
-  "settings.verificationDepthFullHelp": "복사본을 전부 다시 읽어 복사 중에 계산한 체크섬과 비교합니다.",
+  "settings.verificationDepthFullHelp":
+    "복사본을 전부 다시 읽어 복사 중에 계산한 체크섬과 비교합니다.",
   "settings.verificationDepthQuick": "빠른 확인(기본값)",
-  "settings.verificationDepthQuickHelp": "파일 크기와 앞뒤 표본을 비교합니다. 더 빠르지만 보장 수준은 낮습니다.",
+  "settings.verificationDepthQuickHelp":
+    "파일 크기와 앞뒤 표본을 비교합니다. 더 빠르지만 보장 수준은 낮습니다.",
   "settings.verificationDepthSaved": "검증 깊이를 저장했습니다.",
   "settings.generalPlaceholder": "언어 및 기타 글로벌 환경 설정을 구성합니다.",
   "settings.historyRetentionTitle": "기록 보존",
@@ -758,7 +893,8 @@ const ko: LocaleDictionary = {
     "srrdb.com에서 난독화된 파일 이름 복구",
   "settings.srrdbFilenameRecoveryHelp":
     "SABnzbd 또는 NZBGet의 자동 가져오기에 난독화된 이름의 동영상 파일이 포함된 경우, Scryer는 각 파일의 CRC-32 체크섬과 크기를 제3자 서비스인 srrdb.com으로 보내 원래 파일 이름을 조회합니다. 라이브러리나 파일에 대한 다른 정보는 전송되지 않습니다. 디스크의 파일 이름은 절대 변경되지 않습니다.",
-  "discovery.personalizedDisabled": "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
+  "discovery.personalizedDisabled":
+    "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
   "settings.keepHistoryForever": "기록을 영구히 보존",
   "settings.historyRetentionDaysHeader": "기록 보존 기간",
   "settings.historyRetentionDaysSuffix": "일",
@@ -936,7 +1072,6 @@ const ko: LocaleDictionary = {
   "title.episodeRange": "에피소드 {{start}} - {{end}}",
   "title.episodeCountOne": "에피소드 {{count}}개",
   "title.episodeCountOther": "에피소드 {{count}}개",
-  "title.searchingReleases": "인덱서에서 릴리스를 검색하는 중…",
   "title.noReleasesFound": "{{name}}에 대한 릴리스를 찾지 못했습니다.",
   "title.searchNeedsDownloadClientTitle":
     "검색에는 다운로드 클라이언트가 필요합니다",
@@ -998,7 +1133,8 @@ const ko: LocaleDictionary = {
   "title.changeFolderBrowseFailed": "폴더 목록을 가져오지 못했습니다.",
   "title.changeFolderUp": "한 단계 위로",
   "title.changeFolderOpen": "열기",
-  "title.changeFolderSelectPrompt": "변경 내용을 미리 보려면 폴더를 선택하세요.",
+  "title.changeFolderSelectPrompt":
+    "변경 내용을 미리 보려면 폴더를 선택하세요.",
   "title.changeFolderPreviewLoading": "선택한 폴더를 확인하는 중…",
   "title.changeFolderPreviewFailed": "폴더 변경 미리보기에 실패했습니다.",
   "title.changeFolderSelectedFolder": "선택한 폴더",
@@ -1013,7 +1149,8 @@ const ko: LocaleDictionary = {
     "선택한 폴더의 추적 미디어: {{count}}",
   "title.changeFolderNoFilesMoved":
     "파일은 이동되지 않습니다. 폴더 일치와 그로부터 파생된 미디어 연결만 변경됩니다.",
-  "title.changeFolderConflictHeading": "이 폴더는 이미 다른 제목에 속해 있습니다",
+  "title.changeFolderConflictHeading":
+    "이 폴더는 이미 다른 제목에 속해 있습니다",
   "title.changeFolderChooseResolution":
     "계속하려면 '폴더 교환' 또는 '폴더 가져오기'를 선택하세요.",
   "title.changeFolderSwapAction": "폴더 교환",
@@ -1138,31 +1275,49 @@ const ko: LocaleDictionary = {
   "queue.ignoreFailed": "다운로드를 무시하지 못했습니다.",
   "queue.releaseHeldSources": "보류된 소스 해제",
   "queue.releaseHeldSourcesConfirmTitle": "보류된 소스를 해제할까요?",
-  "queue.releaseHeldSourcesConfirmDescription": "{{client}}의 {{download}} 가져오기는 완료되었지만 소스는 아직 보류 중입니다. 해제하면 이 다운로드의 모든 가져오기에 대한 보류가 풀립니다. 임시 압축 해제 폴더는 그 안의 모든 동영상을 가져왔고 다른 곳에서 사용하지 않을 때만 삭제됩니다.",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}}은(는) 완료된 다운로드를 제거하도록 설정되어 있습니다. Scryer가 가져오기를 확인하면 이 다운로드와 파일이 다운로드 클라이언트에서 제거됩니다.",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}}은(는) 완료된 다운로드를 유지하도록 설정되어 있으므로 이 다운로드는 다운로드 클라이언트에 남습니다.",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{client}}의 {{download}} 가져오기는 완료되었지만 소스는 아직 보류 중입니다. 해제하면 이 다운로드의 모든 가져오기에 대한 보류가 풀립니다. 임시 압축 해제 폴더는 그 안의 모든 동영상을 가져왔고 다른 곳에서 사용하지 않을 때만 삭제됩니다.",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}}은(는) 완료된 다운로드를 제거하도록 설정되어 있습니다. Scryer가 가져오기를 확인하면 이 다운로드와 파일이 다운로드 클라이언트에서 제거됩니다.",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}}은(는) 완료된 다운로드를 유지하도록 설정되어 있으므로 이 다운로드는 다운로드 클라이언트에 남습니다.",
   "queue.releaseHeldSourcesSuccess": "보류된 소스를 해제했습니다.",
   "queue.releaseHeldSourcesFailed": "보류된 소스를 해제하지 못했습니다.",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "아직 확인이 필요한 자막 때문에 소스를 보류하고 있습니다. 해제하면 대기를 멈추고 경고를 지웁니다.",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "이 가져오기로 대체된 파일의 제거가 끝나지 않아 소스를 보류하고 있습니다.",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "이 다운로드의 압축 해제에 실패했으며, 압축이 풀리지 않은 아카이브는 가져온 적이 없습니다. 해제해도 예상된 모든 파일을 가져온 것이 증명된 경우에만 다운로드가 가져옴으로 표시되어 다운로드 클라이언트가 제거할 수 있습니다. 가져온 적이 없는 항목은 다운로드와 함께 제거됩니다.",
-  "queue.releaseHeldSourcesReasonUnknown": "이 소스가 보류된 이유에 대한 기록이 없습니다. 해제해도 예상된 모든 파일을 가져온 것이 증명된 경우에만 다운로드가 가져옴으로 표시되어 다운로드 클라이언트가 제거할 수 있습니다. 이 다운로드에서 가져온 적이 없는 항목은 다운로드와 함께 제거됩니다.",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "아직 확인이 필요한 자막 때문에 소스를 보류하고 있습니다. 해제하면 대기를 멈추고 경고를 지웁니다.",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "이 가져오기로 대체된 파일의 제거가 끝나지 않아 소스를 보류하고 있습니다.",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "이 다운로드의 압축 해제에 실패했으며, 압축이 풀리지 않은 아카이브는 가져온 적이 없습니다. 해제해도 예상된 모든 파일을 가져온 것이 증명된 경우에만 다운로드가 가져옴으로 표시되어 다운로드 클라이언트가 제거할 수 있습니다. 가져온 적이 없는 항목은 다운로드와 함께 제거됩니다.",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "이 소스가 보류된 이유에 대한 기록이 없습니다. 해제해도 예상된 모든 파일을 가져온 것이 증명된 경우에만 다운로드가 가져옴으로 표시되어 다운로드 클라이언트가 제거할 수 있습니다. 이 다운로드에서 가져온 적이 없는 항목은 다운로드와 함께 제거됩니다.",
   "queue.releaseHeldSourcesTitles": "이 해제에 포함된 항목: {{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}}은(는) 시딩 요건을 충족한 완료된 다운로드를 제거합니다. Scryer가 가져오기를 확인하면 시딩이 끝날 때 이 다운로드와 파일이 제거됩니다.",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "해제 후 {{client}}이(가) 이 다운로드를 어떻게 처리할지 확인할 수 없습니다.",
-  "queue.releaseHeldSourcesAwaitingImport": "보류된 소스를 해제했습니다. 다운로드를 모두 가져오지 못해 가져오기로 되돌렸으며 아무것도 제거하지 않았습니다.",
-  "queue.releaseHeldSourcesNotSettled": "보류된 소스를 해제했지만 다운로드를 업데이트하지 못했습니다. 완료하려면 다시 해제하세요.",
-  "queue.releaseHeldSourcesUnproven": "보류된 소스를 해제했지만 다운로드의 모든 파일을 가져왔다는 증거가 없어 가져옴으로 표시하지 않았고 아무것도 정리하지 않았습니다. 나머지를 가져오거나 직접 제거하세요.",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "보류된 소스를 해제했지만 다운로드가 확정되지 않았으며 아무것도 정리되지 않았습니다.",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "일부 임시 압축 해제 폴더를 유지했습니다: {{reasons}}.",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}}은(는) 시딩 요건을 충족한 완료된 다운로드를 제거합니다. Scryer가 가져오기를 확인하면 시딩이 끝날 때 이 다운로드와 파일이 제거됩니다.",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "해제 후 {{client}}이(가) 이 다운로드를 어떻게 처리할지 확인할 수 없습니다.",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "보류된 소스를 해제했습니다. 다운로드를 모두 가져오지 못해 가져오기로 되돌렸으며 아무것도 제거하지 않았습니다.",
+  "queue.releaseHeldSourcesNotSettled":
+    "보류된 소스를 해제했지만 다운로드를 업데이트하지 못했습니다. 완료하려면 다시 해제하세요.",
+  "queue.releaseHeldSourcesUnproven":
+    "보류된 소스를 해제했지만 다운로드의 모든 파일을 가져왔다는 증거가 없어 가져옴으로 표시하지 않았고 아무것도 정리하지 않았습니다. 나머지를 가져오거나 직접 제거하세요.",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "보류된 소스를 해제했지만 다운로드가 확정되지 않았으며 아무것도 정리되지 않았습니다.",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "일부 임시 압축 해제 폴더를 유지했습니다: {{reasons}}.",
   "queue.releaseHeldSourcesPreservedNotOwned": "소유권을 확인할 수 없음",
-  "queue.releaseHeldSourcesPreservedUnsafe": "예상치 못하거나 읽을 수 없는 내용",
-  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "가져오지 않은 동영상이 있음",
+  "queue.releaseHeldSourcesPreservedUnsafe":
+    "예상치 못하거나 읽을 수 없는 내용",
+  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo":
+    "가져오지 않은 동영상이 있음",
   "queue.releaseHeldSourcesPreservedInUse": "다른 가져오기에서 아직 필요함",
   "queue.releaseHeldSourcesPreservedUnverified": "가져온 파일을 확인할 수 없음",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "제거 실패",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "다운로드 가져오기가 확인되지 않았습니다",
-  "queue.releaseHeldSourcesPreservedLookupIncomplete": "모든 폴더를 확인할 수 없음",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "다운로드 가져오기가 확인되지 않았습니다",
+  "queue.releaseHeldSourcesPreservedLookupIncomplete":
+    "모든 폴더를 확인할 수 없음",
   "queue.pause": "일시 중지",
   "queue.pauseSuccess": "다운로드가 일시 중지되었습니다.",
   "queue.pauseFailed": "다운로드 일시 중지 실패.",
@@ -1178,7 +1333,8 @@ const ko: LocaleDictionary = {
   "queue.manualUnavailableForResult":
     "이 결과는 수동 대기열 추가를 지원하지 않습니다.",
   "importHistory.retry": "가져오기 재시도",
-  "importHistory.retryHelp": "이미 다운로드한 파일을 현재 할당 및 품질 프로필로 다시 평가합니다. 다시 다운로드하지 않습니다.",
+  "importHistory.retryHelp":
+    "이미 다운로드한 파일을 현재 할당 및 품질 프로필로 다시 평가합니다. 다시 다운로드하지 않습니다.",
   "importHistory.retryWithPassword": "비밀번호로 가져오기 재시도",
   "importHistory.passwordRequired": "비밀번호 필요",
   "importHistory.passwordPlaceholder": "아카이브 비밀번호",
@@ -1218,7 +1374,8 @@ const ko: LocaleDictionary = {
   "settings.indexerStatus": "상태",
   "settings.indexerDisabledUntil": "백오프 {{time}}",
   "settings.indexerCoolingDownUntil": "대기 중 · {{time}} 재개",
-  "settings.indexerCoolingDownHelp": "인덱서가 Scryer에 속도를 늦춰 달라고 요청했습니다. 검색은 자동으로 재개됩니다.",
+  "settings.indexerCoolingDownHelp":
+    "인덱서가 Scryer에 속도를 늦춰 달라고 요청했습니다. 검색은 자동으로 재개됩니다.",
   "settings.indexerLastError": "오류 {{time}}",
   "settings.indexerLastSearched": "검색 {{time}}",
   "settings.indexerNoActivity": "활동 없음",
@@ -1228,21 +1385,29 @@ const ko: LocaleDictionary = {
   "settings.noIndexersFound": "인덱서를 찾을 수 없습니다.",
   "settings.indexerConfig": "플러그인 설정",
   "settings.indexerDynamicFieldsLoading": "이 선택에 대한 필드를 불러오는 중…",
-  "settings.indexerDynamicFieldsError": "이 선택에 대한 필드를 불러오지 못했습니다: {{error}}",
+  "settings.indexerDynamicFieldsError":
+    "이 선택에 대한 필드를 불러오지 못했습니다: {{error}}",
   "settings.indexerLoginChallengeLoading": "로그인 이미지를 불러오는 중…",
   "settings.indexerLoginChallengeImageAlt": "로그인 이미지",
-  "settings.indexerLoginChallengeError": "로그인 이미지를 불러오지 못했습니다: {{error}}",
+  "settings.indexerLoginChallengeError":
+    "로그인 이미지를 불러오지 못했습니다: {{error}}",
   "settings.indexerLoginChallengeRefresh": "새 이미지",
-  "settings.indexerLoginChallengeRefusal.malformed": "플러그인의 로그인 이미지를 읽을 수 없습니다.",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "이 인덱서는 Scryer가 표시할 수 없는 종류의 로그인 확인을 요구합니다.",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "로그인 이미지가 Scryer가 표시하지 않는 형식입니다.",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "로그인 이미지가 너무 커서 표시할 수 없습니다.",
+  "settings.indexerLoginChallengeRefusal.malformed":
+    "플러그인의 로그인 이미지를 읽을 수 없습니다.",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "이 인덱서는 Scryer가 표시할 수 없는 종류의 로그인 확인을 요구합니다.",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "로그인 이미지가 Scryer가 표시하지 않는 형식입니다.",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "로그인 이미지가 너무 커서 표시할 수 없습니다.",
   "settings.newPassword": "새 비밀번호",
   "settings.rules": "커스텀 규칙",
   "settings.noRulesFound": "커스텀 규칙이 설정되지 않았습니다.",
   "settings.trashPacksTitle": "TRaSH Guides 로케일 팩",
-  "settings.trashPacksHelp": "TRaSH Guides에서 파생된 점수 전용 팩입니다. 기본적으로 비활성화되어 있습니다. 활성화된 팩은 조건이 일치하는 모든 항목에 적용되며, 태그 필터를 설정하면 팩의 로케일 조건 또는 지정한 태그와 일치하는 항목으로 좁혀집니다.",
-  "settings.trashPackFrenchConflict": "“{{name}}”이(가) 이미 활성화되어 있습니다. 다른 프랑스어 팩을 활성화하기 전에 비활성화하세요.",
+  "settings.trashPacksHelp":
+    "TRaSH Guides에서 파생된 점수 전용 팩입니다. 기본적으로 비활성화되어 있습니다. 활성화된 팩은 조건이 일치하는 모든 항목에 적용되며, 태그 필터를 설정하면 팩의 로케일 조건 또는 지정한 태그와 일치하는 항목으로 좁혀집니다.",
+  "settings.trashPackFrenchConflict":
+    "“{{name}}”이(가) 이미 활성화되어 있습니다. 다른 프랑스어 팩을 활성화하기 전에 비활성화하세요.",
   "settings.ruleCreate": "규칙 생성",
   "settings.ruleUpdate": "규칙 업데이트",
   "settings.ruleDescription": "설명",
@@ -1375,7 +1540,8 @@ const ko: LocaleDictionary = {
   "status.pluginUninstalled": "'{{name}}' 플러그인이 제거되었습니다.",
   "status.pluginUpgraded":
     "'{{name}}' 플러그인이 v{{version}}으로 업그레이드되었습니다.",
-  "status.pluginAutoUpdateSettingsSaved": "플러그인 자동 업데이트 설정이 저장되었습니다.",
+  "status.pluginAutoUpdateSettingsSaved":
+    "플러그인 자동 업데이트 설정이 저장되었습니다.",
   "status.pluginToggled": "'{{name}}' 플러그인이 {{state}}되었습니다.",
   "form.indexerNamePlaceholder": "내 Newznab 인덱서",
   "form.providerTypePlaceholder": "제공자 유형",
@@ -1583,7 +1749,8 @@ const ko: LocaleDictionary = {
   "status.editingIndexer": "인덱서 {{name}} 편집 중",
   "status.editingDownloadClient": "다운로드 클라이언트 {{name}} 편집 중",
   "status.deletingUser": "사용자 {{name}}을(를) 삭제하시겠습니까?",
-  "status.deletingUserListsWarning": "이 사용자가 팔로우하는 목록과 해당 동기화 기록도 함께 삭제됩니다.",
+  "status.deletingUserListsWarning":
+    "이 사용자가 팔로우하는 목록과 해당 동기화 기록도 함께 삭제됩니다.",
   "status.deletingIndexer": "인덱서 {{name}}을(를) 삭제하시겠습니까?",
   "status.userRequired": "사용자명과 비밀번호가 필요합니다.",
   "status.passwordRequired": "비밀번호가 필요합니다.",
@@ -1600,32 +1767,53 @@ const ko: LocaleDictionary = {
   "status.titleMonitoringEnabled": "타이틀 모니터링이 활성화되었습니다.",
   "status.titleMonitoringDisabled": "타이틀 모니터링이 비활성화되었습니다.",
   "status.indexerDeleted": "인덱서 {{name}}이(가) 삭제되었습니다.",
-  "plugins.failure.invalidConfig": "플러그인이 이 설정을 사용할 수 없습니다. 설정을 확인한 후 다시 시도하세요.",
-  "plugins.failure.authFailed": "서비스가 로그인 정보를 거부했습니다. API 키, 사용자 이름 또는 비밀번호를 확인하세요.",
-  "plugins.failure.rateLimited": "서비스가 Scryer에 요청 속도를 줄여 달라고 했습니다. 잠시 후 다시 시도하세요.",
-  "plugins.failure.upstreamUnavailable": "서비스에 연결할 수 없거나 응답이 없습니다. 주소를 확인한 후 다시 시도하세요.",
+  "plugins.failure.invalidConfig":
+    "플러그인이 이 설정을 사용할 수 없습니다. 설정을 확인한 후 다시 시도하세요.",
+  "plugins.failure.authFailed":
+    "서비스가 로그인 정보를 거부했습니다. API 키, 사용자 이름 또는 비밀번호를 확인하세요.",
+  "plugins.failure.rateLimited":
+    "서비스가 Scryer에 요청 속도를 줄여 달라고 했습니다. 잠시 후 다시 시도하세요.",
+  "plugins.failure.upstreamUnavailable":
+    "서비스에 연결할 수 없거나 응답이 없습니다. 주소를 확인한 후 다시 시도하세요.",
   "plugins.failure.unsupported": "플러그인이 이 작업을 지원하지 않습니다.",
-  "plugins.failure.temporary": "플러그인에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도하세요.",
-  "plugins.failure.permanent": "플러그인이 이 요청을 완료하지 못했습니다. 상황이 바뀌기 전까지는 다시 시도해도 해결되지 않습니다.",
-  "plugins.failure.hostFailure": "플러그인이 예기치 않게 중지되었습니다. 자세한 내용은 Scryer 로그를 확인하세요.",
+  "plugins.failure.temporary":
+    "플러그인에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도하세요.",
+  "plugins.failure.permanent":
+    "플러그인이 이 요청을 완료하지 못했습니다. 상황이 바뀌기 전까지는 다시 시도해도 해결되지 않습니다.",
+  "plugins.failure.hostFailure":
+    "플러그인이 예기치 않게 중지되었습니다. 자세한 내용은 Scryer 로그를 확인하세요.",
   "plugins.failure.timedOut": "플러그인 응답 시간이 너무 오래 걸렸습니다.",
   "plugins.failure.resourceLimit": "플러그인의 메모리가 부족합니다.",
   "plugins.failure.withDetail": "{{reason}} 세부 정보: {{detail}}",
-  "plugins.failure.invalidUsernamePassword": "서비스가 사용자 이름 또는 비밀번호를 거부했습니다. 둘 다 확인한 후 다시 시도하세요.",
-  "plugins.failure.invalidApiKey": "서비스가 API 키를 거부했습니다. 키를 확인한 후 다시 시도하세요.",
-  "plugins.failure.invalidPasskey": "서비스가 패스키를 거부했습니다. 패스키를 확인한 후 다시 시도하세요.",
-  "plugins.failure.invalidCookie": "서비스가 세션 쿠키를 거부했습니다. 브라우저에서 새 쿠키를 복사한 후 다시 시도하세요.",
-  "plugins.failure.captchaRequired": "서비스가 CAPTCHA를 요구합니다. 서비스 웹사이트에서 한 번 로그인한 후 다시 시도하세요.",
-  "plugins.failure.twoFactorRequired": "이 로그인에는 2단계 인증 코드가 필요합니다. 대신 API 키나 앱 비밀번호를 사용하세요.",
-  "plugins.failure.accountBanned": "서비스가 이 계정을 차단했습니다. 해결하려면 서비스에 문의하세요.",
-  "plugins.failure.accountDisabled": "서비스가 이 계정을 비활성화했습니다. 서비스 웹사이트에서 계정을 확인하세요.",
-  "plugins.failure.endpointNotFound": "이 주소에서 서비스를 찾을 수 없습니다. URL과 기본 경로를 확인하세요.",
-  "plugins.failure.tlsError": "서비스와의 보안 연결에 실패했습니다. 주소와 인증서를 확인하세요.",
-  "plugins.failure.invalidResponse": "플러그인이 서비스의 응답을 읽을 수 없습니다. 주소가 올바른 서비스를 가리키는지 확인하세요.",
-  "plugins.failure.quotaExceeded": "계정이 서비스 할당량을 모두 사용했습니다. 초기화될 때까지 기다리거나 한도를 늘리세요.",
+  "plugins.failure.invalidUsernamePassword":
+    "서비스가 사용자 이름 또는 비밀번호를 거부했습니다. 둘 다 확인한 후 다시 시도하세요.",
+  "plugins.failure.invalidApiKey":
+    "서비스가 API 키를 거부했습니다. 키를 확인한 후 다시 시도하세요.",
+  "plugins.failure.invalidPasskey":
+    "서비스가 패스키를 거부했습니다. 패스키를 확인한 후 다시 시도하세요.",
+  "plugins.failure.invalidCookie":
+    "서비스가 세션 쿠키를 거부했습니다. 브라우저에서 새 쿠키를 복사한 후 다시 시도하세요.",
+  "plugins.failure.captchaRequired":
+    "서비스가 CAPTCHA를 요구합니다. 서비스 웹사이트에서 한 번 로그인한 후 다시 시도하세요.",
+  "plugins.failure.twoFactorRequired":
+    "이 로그인에는 2단계 인증 코드가 필요합니다. 대신 API 키나 앱 비밀번호를 사용하세요.",
+  "plugins.failure.accountBanned":
+    "서비스가 이 계정을 차단했습니다. 해결하려면 서비스에 문의하세요.",
+  "plugins.failure.accountDisabled":
+    "서비스가 이 계정을 비활성화했습니다. 서비스 웹사이트에서 계정을 확인하세요.",
+  "plugins.failure.endpointNotFound":
+    "이 주소에서 서비스를 찾을 수 없습니다. URL과 기본 경로를 확인하세요.",
+  "plugins.failure.tlsError":
+    "서비스와의 보안 연결에 실패했습니다. 주소와 인증서를 확인하세요.",
+  "plugins.failure.invalidResponse":
+    "플러그인이 서비스의 응답을 읽을 수 없습니다. 주소가 올바른 서비스를 가리키는지 확인하세요.",
+  "plugins.failure.quotaExceeded":
+    "계정이 서비스 할당량을 모두 사용했습니다. 초기화될 때까지 기다리거나 한도를 늘리세요.",
   "plugins.failure.itemNotFound": "서비스에 이 항목이 더 이상 없습니다.",
-  "plugins.failure.downloadRejected": "다운로드 클라이언트가 이 다운로드를 거부했습니다.",
-  "plugins.failure.pathNotWritable": "플러그인이 설정된 폴더에 쓸 수 없습니다. 폴더가 있고 쓰기 가능한지 확인하세요.",
+  "plugins.failure.downloadRejected":
+    "다운로드 클라이언트가 이 다운로드를 거부했습니다.",
+  "plugins.failure.pathNotWritable":
+    "플러그인이 설정된 폴더에 쓸 수 없습니다. 폴더가 있고 쓰기 가능한지 확인하세요.",
   "plugins.failure.unknown": "플러그인이 문제를 보고했습니다: {{code}}",
   "status.testingIndexerConnection": "연결 테스트 중…",
   "status.indexerConnectionTestPassed": "인덱서 연결 테스트를 통과했습니다.",
@@ -1643,8 +1831,10 @@ const ko: LocaleDictionary = {
     "{{client}} 연결 테스트를 통과했습니다.",
   "status.downloadClientConnectionTestFailed":
     "{{client}} 연결 테스트에 실패했습니다.",
-  "status.autoSearchNoCandidates": "{{name}}의 릴리스를 찾을 수 없습니다: 어떤 인덱서도 후보를 반환하지 않았습니다. 라우팅 카테고리와 인덱서 상태를 확인하세요.",
-  "status.autoSearchAllRejected": "{{name}}의 릴리스를 찾을 수 없습니다: 자동 검색이 {{count}}개의 후보를 모두 거부했습니다. {{reasons}}",
+  "status.autoSearchNoCandidates":
+    "{{name}}의 릴리스를 찾을 수 없습니다: 어떤 인덱서도 후보를 반환하지 않았습니다. 라우팅 카테고리와 인덱서 상태를 확인하세요.",
+  "status.autoSearchAllRejected":
+    "{{name}}의 릴리스를 찾을 수 없습니다: 자동 검색이 {{count}}개의 후보를 모두 거부했습니다. {{reasons}}",
   "status.queueFailed": "대기열 작업에 실패했습니다.",
   "status.apiError": "요청 실패",
   "user.created": "사용자 {{name}}이(가) 생성되었습니다.",
@@ -1671,14 +1861,18 @@ const ko: LocaleDictionary = {
   "wanted.colIndexers": "인덱서",
   "wanted.convergence.searching": "검색 중 {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS 감시 중",
-  "wanted.convergence.convergedHint": "모든 인덱서를 검색했습니다. 새 릴리스는 RSS로 도착합니다. 다시 확인하려면 검색을 실행하세요.",
+  "wanted.convergence.convergedHint":
+    "모든 인덱서를 검색했습니다. 새 릴리스는 RSS로 도착합니다. 다시 확인하려면 검색을 실행하세요.",
   "wanted.convergence.deferred": "인덱서 할당량 대기 중",
-  "wanted.convergence.deferredHint": "남은 인덱서가 모두 쿨다운 중이거나 할당량이 소진되었습니다. 검색은 자동으로 재개됩니다.",
+  "wanted.convergence.deferredHint":
+    "남은 인덱서가 모두 쿨다운 중이거나 할당량이 소진되었습니다. 검색은 자동으로 재개됩니다.",
   "wanted.convergence.queuedHot": "대기 중 · 최신",
   "wanted.convergence.queuedCold": "대기 중 · 롱테일",
   "wanted.searchJobStarted": "검색을 시작했습니다.",
-  "wanted.searchJobComplete": "검색 완료: {{processed}}개 검색, {{grabbed}}개 가져옴, {{failed}}개 실패.",
-  "wanted.searchJobCancelled": "{{processed}}개 처리 후 검색이 취소되었습니다. {{grabbed}}개 가져옴.",
+  "wanted.searchJobComplete":
+    "검색 완료: {{processed}}개 검색, {{grabbed}}개 가져옴, {{failed}}개 실패.",
+  "wanted.searchJobCancelled":
+    "{{processed}}개 처리 후 검색이 취소되었습니다. {{grabbed}}개 가져옴.",
   "wanted.colPhase": "단계",
   "wanted.colScore": "점수",
   "wanted.searchNow": "지금 검색",
@@ -1934,6 +2128,7 @@ const ko: LocaleDictionary = {
   "history.seedingStarted": "시딩 중",
   "history.seedingCompleted": "시딩 완료",
   "history.downloadIgnored": "무시됨",
+  "history.downloadMissing": "클라이언트에 표시되지 않음",
   "history.facet": "분류",
   "history.actions": "작업",
   "history.expandDetails": "이벤트 세부정보 펼치기",
@@ -1965,12 +2160,18 @@ const ko: LocaleDictionary = {
   "settings.recycleBinRecycled": "휴지통 이동 시간",
   "status.recycleBinEmptied": "휴지통을 비웠습니다({{count}}개 항목이 제거됨).",
   "status.recycleBinSettingsSaved": "휴지통 설정이 저장되었습니다.",
-  "settings.recycleBinPathExistingItems": "폴더를 변경하면 이미 휴지통에 있는 항목이 새 폴더로 이동됩니다. 이동할 수 없는 항목은 이전 폴더에 남으며 저장 후 여기에 표시됩니다.",
-  "settings.recycleBinRelocatedOne": "휴지통 항목 {{count}}개를 새 폴더로 이동했습니다.",
-  "settings.recycleBinRelocatedOther": "휴지통 항목 {{count}}개를 새 폴더로 이동했습니다.",
-  "settings.recycleBinRelocationFailedOne": "휴지통 항목 {{count}}개를 이동하지 못했습니다:",
-  "settings.recycleBinRelocationFailedOther": "휴지통 항목 {{count}}개를 이동하지 못했습니다:",
-  "status.recycleBinSettingsSavedWithRelocationFailures": "휴지통 설정이 저장되었지만 일부 항목을 이동하지 못했습니다.",
+  "settings.recycleBinPathExistingItems":
+    "폴더를 변경하면 이미 휴지통에 있는 항목이 새 폴더로 이동됩니다. 이동할 수 없는 항목은 이전 폴더에 남으며 저장 후 여기에 표시됩니다.",
+  "settings.recycleBinRelocatedOne":
+    "휴지통 항목 {{count}}개를 새 폴더로 이동했습니다.",
+  "settings.recycleBinRelocatedOther":
+    "휴지통 항목 {{count}}개를 새 폴더로 이동했습니다.",
+  "settings.recycleBinRelocationFailedOne":
+    "휴지통 항목 {{count}}개를 이동하지 못했습니다:",
+  "settings.recycleBinRelocationFailedOther":
+    "휴지통 항목 {{count}}개를 이동하지 못했습니다:",
+  "status.recycleBinSettingsSavedWithRelocationFailures":
+    "휴지통 설정이 저장되었지만 일부 항목을 이동하지 못했습니다.",
   "appUpgrade.title": "애플리케이션 업그레이드",
   "appUpgrade.subtitle": "버전 및 업그레이드 관리",
   "appUpgrade.upgradeNow": "지금 업그레이드",
@@ -1980,7 +2181,8 @@ const ko: LocaleDictionary = {
   "appUpgrade.restartNotice": "이 업그레이드 중에 Scryer가 다시 시작됩니다.",
   "appUpgrade.uacNotice": "Windows에서 로컬 권한 상승 메시지를 표시합니다.",
   "appUpgrade.startFailed": "업그레이드를 시작할 수 없습니다.",
-  "appUpgrade.targetChanged": "사용 가능한 업데이트가 변경되었습니다. 확인한 후 다시 시도하세요.",
+  "appUpgrade.targetChanged":
+    "사용 가능한 업데이트가 변경되었습니다. 확인한 후 다시 시도하세요.",
   "appUpgrade.loading": "업그레이드 상태를 불러오는 중…",
   "appUpgrade.currentVersion": "현재 버전",
   "appUpgrade.availableVersion": "사용 가능한 버전",
@@ -1990,19 +2192,31 @@ const ko: LocaleDictionary = {
   "appUpgrade.owner.inApp": "Scryer",
   "appUpgrade.owner.operator": "운영자",
   "appUpgrade.eligibility": "업그레이드 가능 여부",
-  "appUpgrade.eligibility.eligible": "이 설치는 앱에서 업그레이드할 수 있습니다.",
-  "appUpgrade.eligibility.managed_by_docker": "이 설치는 Docker에서 관리합니다.",
-  "appUpgrade.eligibility.managed_by_homebrew": "이 설치는 Homebrew에서 관리합니다.",
-  "appUpgrade.eligibility.managed_by_winget": "이 설치는 winget에서 관리합니다.",
-  "appUpgrade.eligibility.windows_supervised": "이 Windows 설치는 외부에서 관리합니다.",
-  "appUpgrade.eligibility.disabled_by_operator": "운영자가 앱 내 업그레이드를 비활성화했습니다.",
-  "appUpgrade.eligibility.unsupported_layout": "이 설치 레이아웃은 지원되지 않습니다.",
-  "appUpgrade.eligibility.install_dir_not_writable": "설치 디렉터리에 쓸 수 없습니다.",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS가 Scryer를 임시 사본에서 실행하고 있습니다. Scryer를 응용 프로그램 폴더로 옮긴 다음 실행하세요.",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer가 읽기 전용 볼륨에서 실행 중입니다. Scryer를 응용 프로그램 폴더로 끌어다 놓은 다음 실행하세요.",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "이 앱은 Scryer 앱이 시작한 것이 아니므로 업그레이드 후 다시 시작할 수 없습니다.",
+  "appUpgrade.eligibility.eligible":
+    "이 설치는 앱에서 업그레이드할 수 있습니다.",
+  "appUpgrade.eligibility.managed_by_docker":
+    "이 설치는 Docker에서 관리합니다.",
+  "appUpgrade.eligibility.managed_by_homebrew":
+    "이 설치는 Homebrew에서 관리합니다.",
+  "appUpgrade.eligibility.managed_by_winget":
+    "이 설치는 winget에서 관리합니다.",
+  "appUpgrade.eligibility.windows_supervised":
+    "이 Windows 설치는 외부에서 관리합니다.",
+  "appUpgrade.eligibility.disabled_by_operator":
+    "운영자가 앱 내 업그레이드를 비활성화했습니다.",
+  "appUpgrade.eligibility.unsupported_layout":
+    "이 설치 레이아웃은 지원되지 않습니다.",
+  "appUpgrade.eligibility.install_dir_not_writable":
+    "설치 디렉터리에 쓸 수 없습니다.",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS가 Scryer를 임시 사본에서 실행하고 있습니다. Scryer를 응용 프로그램 폴더로 옮긴 다음 실행하세요.",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer가 읽기 전용 볼륨에서 실행 중입니다. Scryer를 응용 프로그램 폴더로 끌어다 놓은 다음 실행하세요.",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "이 앱은 Scryer 앱이 시작한 것이 아니므로 업그레이드 후 다시 시작할 수 없습니다.",
   "appUpgrade.eligibility.unknown": "업그레이드 가능 여부를 알 수 없습니다.",
-  "appUpgrade.rebootRequired": "이 업그레이드를 완료하려면 Windows를 다시 시작하세요.",
+  "appUpgrade.rebootRequired":
+    "이 업그레이드를 완료하려면 Windows를 다시 시작하세요.",
   "appUpgrade.activeRun": "업그레이드 진행 중",
   "appUpgrade.latestRun": "최근 업그레이드",
   "appUpgrade.runStatusLabel": "상태: {{status}}",
@@ -2026,12 +2240,15 @@ const ko: LocaleDictionary = {
   "appUpgrade.operatorGuidance": "운영자가 관리하는 업그레이드",
   "appUpgrade.guidance.winget": "관리자 터미널에서 이 명령을 실행하세요.",
   "appUpgrade.guidance.wingetCommand": "winget upgrade ScryerMedia.Scryer",
-  "appUpgrade.guidance.docker": "새 이미지를 가져오고 배포 구성으로 컨테이너를 다시 만드세요.",
+  "appUpgrade.guidance.docker":
+    "새 이미지를 가져오고 배포 구성으로 컨테이너를 다시 만드세요.",
   "appUpgrade.guidance.homebrew": "터미널에서 이 명령을 실행하세요.",
   "appUpgrade.guidance.homebrewCommand": "brew upgrade scryer",
-  "appUpgrade.guidance.disabled": "환경 변수로 앱 내 업그레이드가 비활성화되었습니다.",
+  "appUpgrade.guidance.disabled":
+    "환경 변수로 앱 내 업그레이드가 비활성화되었습니다.",
   "appUpgrade.guidance.disabledVariable": "SCRYER_DISABLE_SELF_UPGRADE",
-  "appUpgrade.guidance.other": "이 설치의 운영자가 제공한 업그레이드 방법을 사용하세요.",
+  "appUpgrade.guidance.other":
+    "이 설치의 운영자가 제공한 업그레이드 방법을 사용하세요.",
   "appUpgrade.installationKind.portable": "휴대용",
   "appUpgrade.installationKind.directMsi": "직접 MSI",
   "appUpgrade.installationKind.macosAppBundle": "macOS 앱",
@@ -2050,25 +2267,33 @@ const ko: LocaleDictionary = {
   "settings.maintenanceNavRules": "규칙",
   "settings.maintenanceNavHistory": "기록",
   "settings.maintenanceRuleAction": "작업",
-  "settings.maintenanceRuleActionHelp": "유지 관리 작업이 켜지면 이 규칙이 수행할 동작입니다.",
+  "settings.maintenanceRuleActionHelp":
+    "유지 관리 작업이 켜지면 이 규칙이 수행할 동작입니다.",
   "settings.maintenanceRuleActionPlaceholder": "작업 선택",
   "settings.maintenanceRuleNoActions": "타이틀 범위의 작업이 없습니다.",
   "settings.maintenanceRuleGraceDays": "유예 일수",
-  "settings.maintenanceRuleGraceDaysHelp": "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
+  "settings.maintenanceRuleGraceDaysHelp":
+    "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
   "settings.maintenanceRuleTargetProfile": "대상 품질 프로필",
-  "settings.maintenanceRuleTargetProfileHelp": "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
+  "settings.maintenanceRuleTargetProfileHelp":
+    "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
   "settings.maintenanceRuleTargetProfileIdHelp": "품질 프로필 ID입니다.",
   "settings.maintenanceRuleLibraries": "라이브러리 범위",
-  "settings.maintenanceRuleLibrariesHelp": "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
+  "settings.maintenanceRuleLibrariesHelp":
+    "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
   "settings.maintenanceRuleLibrariesAll": "모든 라이브러리",
   "settings.maintenanceRuleCreate": "유지 관리 규칙 만들기",
   "settings.maintenanceRuleUpdate": "유지 관리 규칙 업데이트",
   "settings.maintenanceRuleCopy": "새 규칙으로 복사",
   "settings.maintenanceRuleCreateNew": "새 유지 관리 규칙 만들기",
-  "settings.maintenanceRuleValidationRequired": "이름, 매처 소스, 작업은 필수입니다.",
-  "settings.maintenanceRuleConfirmDiscardTitle": "저장하지 않은 변경 사항을 버릴까요?",
-  "settings.maintenanceRuleConfirmDiscardDescription": "유지 관리 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
-  "settings.maintenanceRuleDeleting": "유지 관리 규칙 {{name}}을(를) 삭제할까요?",
+  "settings.maintenanceRuleValidationRequired":
+    "이름, 매처 소스, 작업은 필수입니다.",
+  "settings.maintenanceRuleConfirmDiscardTitle":
+    "저장하지 않은 변경 사항을 버릴까요?",
+  "settings.maintenanceRuleConfirmDiscardDescription":
+    "유지 관리 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
+  "settings.maintenanceRuleDeleting":
+    "유지 관리 규칙 {{name}}을(를) 삭제할까요?",
   "settings.noMaintenanceRulesFound": "아직 유지 관리 규칙이 없습니다.",
   "settings.maintenanceRuleRevision": "리비전",
   "settings.maintenanceRuleRisk": "위험도",
@@ -2077,26 +2302,36 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRiskMedium": "중간 위험",
   "settings.maintenanceRiskHigh": "높은 위험",
   "settings.maintenanceActionDoNothing": "아무 작업도 하지 않음",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles": "범위 모니터링 해제, 파일 유지",
+  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+    "범위 모니터링 해제, 파일 유지",
   "settings.maintenanceActionDeleteTitleAndFiles": "타이틀과 해당 파일 삭제",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles": "타이틀 모니터링 해제, 모든 파일 삭제",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles": "시리즈 모니터링 해제, 기존 파일 삭제",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles": "범위 모니터링 해제, 해당 파일 삭제",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty": "시즌 모니터링 해제, 해당 파일 삭제, 시리즈가 비면 시리즈 삭제",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty": "시즌 모니터링 해제, 시리즈가 비면 시리즈 모니터링도 해제",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged": "품질 프로필을 변경하고, 변경된 경우 검색",
+  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+    "타이틀 모니터링 해제, 모든 파일 삭제",
+  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+    "시리즈 모니터링 해제, 기존 파일 삭제",
+  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+    "범위 모니터링 해제, 해당 파일 삭제",
+  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+    "시즌 모니터링 해제, 해당 파일 삭제, 시리즈가 비면 시리즈 삭제",
+  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+    "시즌 모니터링 해제, 시리즈가 비면 시리즈 모니터링도 해제",
+  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+    "품질 프로필을 변경하고, 변경된 경우 검색",
   "settings.maintenancePreviewTitle": "미리 보기",
-  "settings.maintenancePreviewSubtitle": "실제 타이틀에 매처를 실행합니다. 미리 보기는 읽기 전용이며, 무엇이 일치할지 보고할 뿐 아무것도 변경하지 않습니다.",
+  "settings.maintenancePreviewSubtitle":
+    "실제 타이틀에 매처를 실행합니다. 미리 보기는 읽기 전용이며, 무엇이 일치할지 보고할 뿐 아무것도 변경하지 않습니다.",
   "settings.maintenancePreviewSource": "매처",
   "settings.maintenancePreviewSourceStored": "저장된 규칙",
   "settings.maintenancePreviewSourceDraft": "편집기 초안",
   "settings.maintenancePreviewLibrary": "라이브러리",
   "settings.maintenancePreviewLibraryPlaceholder": "라이브러리 선택",
   "settings.maintenancePreviewLimit": "타이틀 수",
-  "settings.maintenancePreviewLimitHelp": "실행당 최대 {{max}}개의 타이틀입니다.",
+  "settings.maintenancePreviewLimitHelp":
+    "실행당 최대 {{max}}개의 타이틀입니다.",
   "settings.maintenancePreviewRun": "미리 보기 실행",
   "settings.maintenancePreviewRunning": "미리 보기 실행 중...",
-  "settings.maintenancePreviewEmpty": "라이브러리를 선택하고 미리 보기를 실행하세요.",
+  "settings.maintenancePreviewEmpty":
+    "라이브러리를 선택하고 미리 보기를 실행하세요.",
   "settings.maintenancePreviewNoTitles": "평가된 타이틀이 없습니다.",
   "settings.maintenancePreviewColOutcome": "결과",
   "settings.maintenancePreviewColReasons": "사유 코드",
@@ -2108,8 +2343,10 @@ const ko: LocaleDictionary = {
   "settings.maintenancePreviewRuleSelect": "규칙",
   "settings.maintenancePreviewRuleSelectPlaceholder": "저장된 규칙 선택",
   "settings.maintenanceRuleUpdated": "유지 관리 규칙을 업데이트했습니다.",
-  "settings.maintenanceRuleCreated": "유지 관리 규칙을 만들었으며 비활성 상태로 저장했습니다.",
-  "settings.maintenanceRuleDeleted": "유지 관리 규칙 {{name}}을(를) 삭제했습니다.",
+  "settings.maintenanceRuleCreated":
+    "유지 관리 규칙을 만들었으며 비활성 상태로 저장했습니다.",
+  "settings.maintenanceRuleDeleted":
+    "유지 관리 규칙 {{name}}을(를) 삭제했습니다.",
 
   // ── 유지 관리 규칙 — 인스턴스 상태 ──
 
@@ -2119,11 +2356,16 @@ const ko: LocaleDictionary = {
   "settings.maintenanceArmingNone": "효과 없음",
   "settings.maintenanceArmingReversible": "되돌릴 수 있음",
   "settings.maintenanceArmingDestructive": "파괴적",
-  "settings.maintenanceArmDestructiveLoading": "이 규칙이 이미 보유한 후보를 세는 중…",
-  "settings.maintenanceArmDestructiveCount": "후보 {{count}}건이 작업 대상이 될 수 있습니다.",
-  "settings.maintenanceArmDestructiveNoCandidates": "지금 이 규칙에는 작업 대상이 될 후보가 없습니다.",
-  "settings.maintenanceArmDestructiveCountChanged": "읽는 사이 수가 바뀌었습니다. 이 규칙은 이제 {{count}}건을 보유합니다. 숫자를 확인하고 다시 동의해 주세요.",
-  "settings.maintenanceArmDestructiveAcknowledge": "이 규칙이 타이틀 {{count}}건의 파일을 삭제할 수 있음을 이해합니다.",
+  "settings.maintenanceArmDestructiveLoading":
+    "이 규칙이 이미 보유한 후보를 세는 중…",
+  "settings.maintenanceArmDestructiveCount":
+    "후보 {{count}}건이 작업 대상이 될 수 있습니다.",
+  "settings.maintenanceArmDestructiveNoCandidates":
+    "지금 이 규칙에는 작업 대상이 될 후보가 없습니다.",
+  "settings.maintenanceArmDestructiveCountChanged":
+    "읽는 사이 수가 바뀌었습니다. 이 규칙은 이제 {{count}}건을 보유합니다. 숫자를 확인하고 다시 동의해 주세요.",
+  "settings.maintenanceArmDestructiveAcknowledge":
+    "이 규칙이 타이틀 {{count}}건의 파일을 삭제할 수 있음을 이해합니다.",
 
   // ── 유지 관리 규칙 — 후보 ──
   "settings.maintenanceCandidatesFilterRule": "규칙",
@@ -2158,7 +2400,8 @@ const ko: LocaleDictionary = {
 
   // ── 유지 관리 규칙 — 실행과 기록 ──
   "settings.maintenanceRunsTitle": "실행과 기록",
-  "settings.maintenanceRunsSubtitle": "최근 평가 실행과 작업 시도를 최신순으로 보여줍니다.",
+  "settings.maintenanceRunsSubtitle":
+    "최근 평가 실행과 작업 시도를 최신순으로 보여줍니다.",
   "settings.maintenanceRunScope": "범위",
   "settings.maintenanceRunScopeAll": "모든 규칙",
   "settings.maintenanceRunEvaluationNow": "지금 평가",
@@ -2166,9 +2409,11 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRunActionsNow": "지금 작업 실행",
   "settings.maintenanceRunActionsRunning": "작업 실행 중…",
   "settings.maintenanceRunStarted": "실행을 시작했습니다.",
-  "settings.maintenanceRunNotStarted": "아무것도 시작되지 않았습니다: {{message}}",
+  "settings.maintenanceRunNotStarted":
+    "아무것도 시작되지 않았습니다: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "평가 실행",
-  "settings.maintenanceEvaluationRunsEmpty": "아직 기록된 평가 실행이 없습니다.",
+  "settings.maintenanceEvaluationRunsEmpty":
+    "아직 기록된 평가 실행이 없습니다.",
   "settings.maintenanceActionRunsTitle": "작업 실행",
   "settings.maintenanceActionRunsEmpty": "아직 기록된 작업 실행이 없습니다.",
   "settings.maintenanceRunColStarted": "시작",
@@ -2176,7 +2421,8 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRunColCounts": "건수",
   "settings.maintenanceRunColDuration": "소요 시간",
   "settings.maintenanceRunColError": "오류",
-  "settings.maintenanceRunCounts": "평가 {{evaluated}} · 일치 {{matched}} · 불일치 {{noMatch}} · 알 수 없음 {{unknown}} · 오류 {{errors}}",
+  "settings.maintenanceRunCounts":
+    "평가 {{evaluated}} · 일치 {{matched}} · 불일치 {{noMatch}} · 알 수 없음 {{unknown}} · 오류 {{errors}}",
   "settings.maintenanceRunDuration": "{{seconds}}초",
   "settings.maintenanceRunRevision": "리비전 {{revision}}",
   "settings.maintenanceRunStatusRunning": "실행 중",
@@ -2190,7 +2436,8 @@ const ko: LocaleDictionary = {
 
   // ── 유지 관리 규칙 — 제외 ──
   "settings.maintenanceExclusionsTitle": "제외 목록",
-  "settings.maintenanceExclusionsSubtitle": "유지 관리 규칙이 절대 건드리면 안 되는 타이틀입니다. 전역 제외는 모든 규칙에 적용됩니다.",
+  "settings.maintenanceExclusionsSubtitle":
+    "유지 관리 규칙이 절대 건드리면 안 되는 타이틀입니다. 전역 제외는 모든 규칙에 적용됩니다.",
   "settings.maintenanceExclusionsEmpty": "제외 항목이 없습니다.",
   "settings.maintenanceExclusionColScope": "범위",
   "settings.maintenanceExclusionColReason": "사유",
@@ -2200,33 +2447,41 @@ const ko: LocaleDictionary = {
   "settings.maintenanceExclusionRemoved": "{{title}}의 제외를 해제했습니다.",
   "settings.maintenanceExclusionRemoving": "{{title}}의 제외를 해제할까요?",
   "settings.maintenanceExcludeTitle": "유지 관리에서 제외",
-  "settings.maintenanceExcludeBody": "{{title}}은(는) 다음 평가부터 제외되고, 해당 후보는 제외 상태로 바뀝니다.",
+  "settings.maintenanceExcludeBody":
+    "{{title}}은(는) 다음 평가부터 제외되고, 해당 후보는 제외 상태로 바뀝니다.",
   "settings.maintenanceExcludeScope": "범위",
   "settings.maintenanceExcludeScopeGlobal": "모든 규칙",
   "settings.maintenanceExcludeReason": "사유",
-  "settings.maintenanceExcludeReasonPlaceholder": "이 타이틀을 제외하는 이유 (선택)",
+  "settings.maintenanceExcludeReasonPlaceholder":
+    "이 타이틀을 제외하는 이유 (선택)",
   "settings.maintenanceExcludeConfirm": "제외",
   "settings.maintenanceExcluded": "{{title}}을(를) 유지 관리에서 제외했습니다.",
   "move.dialogTitle": "타이틀 이동",
-  "move.dialogDescription": "선택한 {{count}}개 타이틀의 계획을 확인한 뒤 이동하세요.",
+  "move.dialogDescription":
+    "선택한 {{count}}개 타이틀의 계획을 확인한 뒤 이동하세요.",
   "move.destinationLibrary": "대상 라이브러리",
   "move.destinationRoot": "대상 루트",
   "move.destinationRootPlaceholder": "루트 선택",
   "move.actionHeading": "이동 위치…",
-  "move.actionDescription": "이 타이틀의 파일을 다른 루트 폴더 또는 다른 라이브러리로 이동합니다.",
+  "move.actionDescription":
+    "이 타이틀의 파일을 다른 루트 폴더 또는 다른 라이브러리로 이동합니다.",
   "move.actionButton": "이동…",
   "move.wizardKindDescription": "이 타이틀을 어디로 옮길지 선택하세요.",
   "move.kindRootHeading": "다른 루트로 이동",
-  "move.kindRootHelp": "타이틀은 이 라이브러리에 그대로 두고 파일만 같은 라이브러리의 다른 루트 폴더로 옮깁니다.",
+  "move.kindRootHelp":
+    "타이틀은 이 라이브러리에 그대로 두고 파일만 같은 라이브러리의 다른 루트 폴더로 옮깁니다.",
   "move.kindLibraryHeading": "다른 라이브러리로 이동",
-  "move.kindLibraryHelp": "타이틀을 다른 라이브러리의 루트 중 하나로 전송합니다.",
+  "move.kindLibraryHelp":
+    "타이틀을 다른 라이브러리의 루트 중 하나로 전송합니다.",
   "move.noOtherRoots":
     "이 라이브러리에는 옮길 다른 루트 폴더가 없습니다. 라이브러리에 루트를 추가하거나 타이틀을 다른 라이브러리로 옮기세요.",
   "move.back": "뒤로",
   "move.next": "다음",
-  "move.destinationRootHelp": "대상을 바꾸면 타이틀을 저장하는 대신 이동 절차가 열립니다.",
+  "move.destinationRootHelp":
+    "대상을 바꾸면 타이틀을 저장하는 대신 이동 절차가 열립니다.",
   "move.destinationNoSelection": "선택된 타이틀이 없습니다.",
-  "move.destinationMixedSourceLibraries": "선택 항목이 여러 라이브러리에 걸쳐 있습니다. 라이브러리별로 이동하세요.",
+  "move.destinationMixedSourceLibraries":
+    "선택 항목이 여러 라이브러리에 걸쳐 있습니다. 라이브러리별로 이동하세요.",
   "move.destinationCrossLibraryNotice":
     "이 타이틀들은 현재 라이브러리를 떠나 {{library}}에 속하게 됩니다.",
   "move.destinationLibraryInMoveWorkflow":
@@ -2243,7 +2498,8 @@ const ko: LocaleDictionary = {
   "move.mergeNoDetails": "이 병합에서 그 밖에 옮겨지는 항목은 없습니다.",
   "move.mergeBlockedHeading":
     "이 병합을 실행할 수 없습니다: 다음 레코드를 옮길 수 없습니다.",
-  "move.mergeCarried": "미디어 파일 {{files}}개와 기록 {{history}}개가 함께 옮겨집니다.",
+  "move.mergeCarried":
+    "미디어 파일 {{files}}개와 기록 {{history}}개가 함께 옮겨집니다.",
   "move.mergeDropped":
     "병합되는 제목의 다른 레코드 {{count}}개는 넘겨받지 않고 제목과 함께 사라집니다.",
   "move.mergeRoleChangesHeading": "파일 {{demotions}}개가 추가 사본이 됩니다",
@@ -2259,41 +2515,53 @@ const ko: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "이 파일들은 여기서는 두 에피소드에 등록되어 있지만 대상에서는 하나의 에피소드입니다. 대상에서는 각 파일이 한 번만 등록됩니다.",
   "move.mergeRoleUnnamedFile": "파일 {{id}}",
-  "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
+  "move.operationTransferNote":
+    "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
   "move.mode.FILES_ALREADY_THERE": "파일이 이미 그곳에 있음",
-  "move.modeHelp.MOVE_WITH_SCRYER": "Scryer가 파일을 옮기거나 복사하고, 카탈로그를 바꾸기 전에 모든 파일을 검증합니다.",
-  "move.modeHelp.FILES_ALREADY_THERE": "Scryer가 대상 위치를 검사하여 직접 옮긴 파일을 인수합니다.",
-  "move.catalogOnlyFastPath": "이 타이틀에는 디스크상의 파일이 없으므로 카탈로그만 재할당됩니다. 아무것도 이동하지 않으며 모드를 고를 필요도 없습니다.",
+  "move.modeHelp.MOVE_WITH_SCRYER":
+    "Scryer가 파일을 옮기거나 복사하고, 카탈로그를 바꾸기 전에 모든 파일을 검증합니다.",
+  "move.modeHelp.FILES_ALREADY_THERE":
+    "Scryer가 대상 위치를 검사하여 직접 옮긴 파일을 인수합니다.",
+  "move.catalogOnlyFastPath":
+    "이 타이틀에는 디스크상의 파일이 없으므로 카탈로그만 재할당됩니다. 아무것도 이동하지 않으며 모드를 고를 필요도 없습니다.",
   "move.selectDestinationPrompt": "계획을 보려면 대상 루트를 선택하세요.",
   "move.previewLoading": "계획을 만드는 중…",
   "move.previewFailed": "이동 미리보기에 실패했습니다.",
-  "move.planChanged": "미리 본 이후 계획이 바뀌었습니다. 확인하기 전에 새 계획을 검토하세요.",
+  "move.planChanged":
+    "미리 본 이후 계획이 바뀌었습니다. 확인하기 전에 새 계획을 검토하세요.",
   "move.rePreview": "다시 미리보기",
   "move.summaryTitles": "타이틀",
   "move.summaryFiles": "파일",
   "move.summarySize": "총 크기",
   "move.sampledItems": "표본",
   "move.blockedHeading": "{{count}}개 타이틀은 아직 이동할 수 없습니다",
-  "move.blockedHelp": "선택을 해제하면 나머지를 이동할 수 있습니다. 또는 해당 작업이 끝날 때까지 기다리세요.",
+  "move.blockedHelp":
+    "선택을 해제하면 나머지를 이동할 수 있습니다. 또는 해당 작업이 끝날 때까지 기다리세요.",
   "move.deselect": "선택 해제",
   "move.deselectedCount": "{{count}}개 타이틀을 이 이동에서 제외했습니다.",
   "move.restoreSelection": "선택 복원",
   "move.titleFileSummary": "파일 {{files}}개 · {{size}}",
-  "move.freeSpaceRequired": "대상에 {{required}}가 필요하며 {{available}}가 남아 있습니다.",
+  "move.freeSpaceRequired":
+    "대상에 {{required}}가 필요하며 {{available}}가 남아 있습니다.",
   "move.freeSpaceUnknown": "알 수 없음",
   "move.freeSpaceInsufficient": "대상에 여유 공간이 충분하지 않습니다.",
   "move.startRefusedNoSpace":
     "대상에 이 이동을 수행할 여유 공간이 충분하지 않습니다. 공간을 확보하거나 더 적은 수의 작품을 이동한 후 다시 시도하세요.",
   "move.freeSpaceNotProbed": "대상 볼륨을 측정할 수 없었습니다.",
-  "move.freeSpaceRecycleOtherVolume": "휴지통이 다른 볼륨에 있어 {{required}}가 필요합니다.",
-  "move.verificationStatementFull": "{{files}}개 파일({{bytes}}) 전부를 다시 읽어 비교합니다.",
-  "move.verificationStatementQuick": "{{files}}개 파일({{bytes}})을 앞부분, 뒷부분, 크기로 확인합니다.",
-  "move.verificationNotApplicable": "이동하는 파일이 없어 검증할 것이 없습니다.",
+  "move.freeSpaceRecycleOtherVolume":
+    "휴지통이 다른 볼륨에 있어 {{required}}가 필요합니다.",
+  "move.verificationStatementFull":
+    "{{files}}개 파일({{bytes}}) 전부를 다시 읽어 비교합니다.",
+  "move.verificationStatementQuick":
+    "{{files}}개 파일({{bytes}})을 앞부분, 뒷부분, 크기로 확인합니다.",
+  "move.verificationNotApplicable":
+    "이동하는 파일이 없어 검증할 것이 없습니다.",
   "move.verificationStampFull": "검증됨(전체)",
   "move.verificationStampQuick": "검증됨(빠름)",
-  "move.verificationFallbackCount": "{{count}}개 파일이 빠른 검사로 대체되었습니다",
+  "move.verificationFallbackCount":
+    "{{count}}개 파일이 빠른 검사로 대체되었습니다",
   "move.typedConfirmationPrompt": "확인하려면 문구를 입력하세요",
   "move.confirm": "이동 시작",
   "move.startFailed": "이동을 시작하지 못했습니다.",
@@ -2319,13 +2587,15 @@ const ko: LocaleDictionary = {
   "move.checkpointDetail": "세부 정보",
   "move.assetsHeading": "이름이 변경되고 중복 제거된 파일",
   "move.assetRenamedAs": "{{from}} → {{to}}",
-  "move.assetDeduplicatedAgainst": "{{from}}이(가) {{to}}와(과) 중복되어 제거됨",
+  "move.assetDeduplicatedAgainst":
+    "{{from}}이(가) {{to}}와(과) 중복되어 제거됨",
   "move.assetUnknownCounterpart": "이름 없는 파일",
   "move.assetProvenance": "({{library}}에서)",
   "move.assetStateDone": "완료됨",
   "move.assetStatePlanned": "예정됨",
   "move.cancelAction": "작업 취소",
-  "move.cancelRequested": "취소를 요청했습니다. 다음 타이틀에서 작업이 멈춥니다.",
+  "move.cancelRequested":
+    "취소를 요청했습니다. 다음 타이틀에서 작업이 멈춥니다.",
   "move.cancelNotPossible": "이 작업은 이미 끝났습니다.",
   "move.cancelFailed": "취소를 요청하지 못했습니다.",
   "move.cancelDraining": "다음 타이틀에서 중지",
@@ -2382,42 +2652,58 @@ const ko: LocaleDictionary = {
   "move.toastWarningsChip": "일부 타이틀은 활동에서 확인이 필요합니다.",
   "move.toastFailedSubtitle": "이동 실패",
   "move.toastCanceledSubtitle": "이동 취소됨",
-  "move.startedHeading": "이동을 시작했습니다. 활동에서 진행 상황을 확인하세요.",
+  "move.startedHeading":
+    "이동을 시작했습니다. 활동에서 진행 상황을 확인하세요.",
   "move.viewInActivity": "활동에서 보기",
   "rootChange.rowAction": "루트 변경",
-  "rootChange.unavailableWhileUnsaved": "저장하지 않은 루트 변경 사항을 먼저 저장하거나 취소하세요.",
+  "rootChange.unavailableWhileUnsaved":
+    "저장하지 않은 루트 변경 사항을 먼저 저장하거나 취소하세요.",
   "rootChange.dialogTitle": "루트 변경",
-  "rootChange.dialogDescription": "{path}에 있는 모든 것이 이동합니다. 루트 전체 작업은 어떤 타이틀도 남겨 둘 수 없습니다.",
+  "rootChange.dialogDescription":
+    "{path}에 있는 모든 것이 이동합니다. 루트 전체 작업은 어떤 타이틀도 남겨 둘 수 없습니다.",
   "rootChange.destinationHeading": "이 루트가 갈 곳",
   "rootChange.destinationNewPath": "새 경로",
-  "rootChange.destinationNewPathHelp": "루트는 고유성과 타이틀 할당을 유지하며 경로만 바뀝니다.",
+  "rootChange.destinationNewPathHelp":
+    "루트는 고유성과 타이틀 할당을 유지하며 경로만 바뀝니다.",
   "rootChange.destinationExistingRoot": "이 라이브러리의 다른 루트",
-  "rootChange.destinationExistingRootHelp": "이 루트는 선택한 루트로 통합되고, 그 설정은 폐기됩니다.",
-  "rootChange.destinationNoOtherRoots": "이 라이브러리에는 통합할 다른 루트가 없습니다.",
+  "rootChange.destinationExistingRootHelp":
+    "이 루트는 선택한 루트로 통합되고, 그 설정은 폐기됩니다.",
+  "rootChange.destinationNoOtherRoots":
+    "이 라이브러리에는 통합할 다른 루트가 없습니다.",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.planChanged": "미리 보기 이후 계획이 바뀌었습니다. 확정하기 전에 다시 미리 보세요.",
+  "rootChange.planChanged":
+    "미리 보기 이후 계획이 바뀌었습니다. 확정하기 전에 다시 미리 보세요.",
   "rootChange.previewFailed": "이 루트 변경을 미리 볼 수 없습니다.",
   "rootChange.previewing": "루트 전체를 읽는 중입니다.",
   "rootChange.preview": "미리 보기",
   "rootChange.confirm": "시작",
   "rootChange.startFailed": "이 루트 변경을 시작할 수 없습니다.",
-  "rootChange.startedHeading": "루트 변경이 시작되었습니다. 활동에서 확인하세요.",
+  "rootChange.startedHeading":
+    "루트 변경이 시작되었습니다. 활동에서 확인하세요.",
   "rootChange.viewInActivity": "활동에서 보기",
-  "rootChange.identityKeepsRoot": "이 루트는 고유성과 {titles}개의 타이틀 할당을 모두 유지합니다.",
+  "rootChange.identityKeepsRoot":
+    "이 루트는 고유성과 {titles}개의 타이틀 할당을 모두 유지합니다.",
   "rootChange.identityKeepsDefault": "이 라이브러리의 기본 루트로 유지됩니다.",
-  "rootChange.identityLosesDefault": "더 이상 이 라이브러리의 기본 루트가 아닙니다.",
-  "rootChange.consolidationStatement": "이 루트의 타이틀 {titles}개가 모두 선택한 루트로 이동합니다.",
-  "rootChange.consolidationRetiresConfiguration": "원본 루트의 설정은 모든 항목이 도착하고 휴지통 처리가 끝난 뒤에 폐기됩니다.",
-  "rootChange.defaultTransfers": "대상 루트가 이 라이브러리의 기본이 되므로 새 콘텐츠는 그곳에 저장됩니다.",
+  "rootChange.identityLosesDefault":
+    "더 이상 이 라이브러리의 기본 루트가 아닙니다.",
+  "rootChange.consolidationStatement":
+    "이 루트의 타이틀 {titles}개가 모두 선택한 루트로 이동합니다.",
+  "rootChange.consolidationRetiresConfiguration":
+    "원본 루트의 설정은 모든 항목이 도착하고 휴지통 처리가 끝난 뒤에 폐기됩니다.",
+  "rootChange.defaultTransfers":
+    "대상 루트가 이 라이브러리의 기본이 되므로 새 콘텐츠는 그곳에 저장됩니다.",
   "rootChange.defaultStays": "이 라이브러리의 기본 루트는 바뀌지 않습니다.",
   "rootChange.accountingHeading": "이 루트의 모든 타이틀",
   "rootChange.accountingAssigned": "할당됨",
   "rootChange.accountingRelocating": "이동",
   "rootChange.accountingCatalogOnly": "카탈로그만",
   "rootChange.accountingBlocked": "차단됨",
-  "rootChange.accountingDoesNotClose": "세부 수치가 합계와 맞지 않습니다. 이 계획을 확정하지 마세요.",
-  "rootChange.blockedTitlesHeading": "{count}개의 타이틀이 이 작업에 포함될 수 없습니다.",
-  "rootChange.blockedTitlesNoExclude": "시작하기 전에 해결하세요. 루트 전체 작업은 어떤 타이틀도 남겨 둘 수 없습니다.",
+  "rootChange.accountingDoesNotClose":
+    "세부 수치가 합계와 맞지 않습니다. 이 계획을 확정하지 마세요.",
+  "rootChange.blockedTitlesHeading":
+    "{count}개의 타이틀이 이 작업에 포함될 수 없습니다.",
+  "rootChange.blockedTitlesNoExclude":
+    "시작하기 전에 해결하세요. 루트 전체 작업은 어떤 타이틀도 남겨 둘 수 없습니다.",
   "rootChange.groupsHeading": "이 통합이 하는 일",
   "rootChange.group.movingIntoUnusedFolders": "빈 폴더로",
   "rootChange.group.mergingWithDestinationTitles": "병합",
@@ -2433,48 +2719,85 @@ const ko: LocaleDictionary = {
   "rootChange.contentCompanions": "보조 파일",
   "rootChange.contentUnknown": "설명되지 않음",
   "rootChange.contentSampled": "여기에는 앞부분 항목만 표시됩니다.",
-  "rootChange.unknownContentHelp": "아무것도 추적하지 않는 콘텐츠가 {bytes} 있습니다. 옮기지도 삭제하지도 않으며, 그래서 이전 위치가 남습니다.",
+  "rootChange.unknownContentHelp":
+    "아무것도 추적하지 않는 콘텐츠가 {bytes} 있습니다. 옮기지도 삭제하지도 않으며, 그래서 이전 위치가 남습니다.",
   "rootChange.retirementHeading": "이후의 이전 위치",
-  "rootChange.retirementEmptyDirectoriesOnly": "빈 디렉터리만 제거됩니다: {count}개.",
-  "rootChange.retirementVerificationFirst": "대상 사본이 검증되기 전에는 원본에서 아무것도 제거되지 않습니다.",
+  "rootChange.retirementEmptyDirectoriesOnly":
+    "빈 디렉터리만 제거됩니다: {count}개.",
+  "rootChange.retirementVerificationFirst":
+    "대상 사본이 검증되기 전에는 원본에서 아무것도 제거되지 않습니다.",
   "rootChange.retirementRetainedHeading": "내용과 함께 남는 항목:",
-  "rootChange.retirementBlockedHeading": "다음이 해결될 때까지 이전 위치는 유지됩니다:",
-  "rootChange.retirementPermitted": "이전 위치를 폐기하는 데 걸림돌이 없습니다.",
-  "rootChange.verificationStatement": "원본을 휴지통으로 보내기 전에 파일 {files}개({bytes})를 대상에서 전부 검증합니다.",
-  "rootChange.insufficientSpace": "대상에 필요한 {required}의 여유 공간이 없습니다.",
+  "rootChange.retirementBlockedHeading":
+    "다음이 해결될 때까지 이전 위치는 유지됩니다:",
+  "rootChange.retirementPermitted":
+    "이전 위치를 폐기하는 데 걸림돌이 없습니다.",
+  "rootChange.verificationStatement":
+    "원본을 휴지통으로 보내기 전에 파일 {files}개({bytes})를 대상에서 전부 검증합니다.",
+  "rootChange.insufficientSpace":
+    "대상에 필요한 {required}의 여유 공간이 없습니다.",
   "rootChange.typedConfirmationPrompt": "확인하려면 문구를 입력하세요",
-  "rootChange.reason.root_identity_retained": "루트는 고유성을 유지하며 경로만 바뀝니다.",
-  "rootChange.reason.catalog_only_root_change": "추적 중인 파일이 없어 카탈로그 재할당만 이루어집니다.",
-  "rootChange.reason.title_blocked_for_root_change": "이 타이틀은 아직 루트 변경에 포함될 수 없습니다.",
-  "rootChange.reason.unknown_root_content": "어떤 타이틀도 설명하지 못하는 루트의 콘텐츠입니다.",
-  "rootChange.reason.source_retirement_blocked": "이전 위치는 아직 폐기할 수 없습니다.",
-  "rootChange.reason.file_outside_title_folder": "타이틀 폴더 밖에 있는 추적 파일입니다.",
-  "rootChange.reason.hardlinked_source": "원본 파일에 다른 하드 링크가 있으며, 이동을 따라가지 않습니다.",
-  "rootChange.reason.roots_consolidated": "이 루트의 모든 타이틀이 대상 루트로 이동합니다.",
-  "rootChange.reason.default_root_transferred": "대상 루트가 이 라이브러리의 기본이 됩니다.",
-  "rootChange.reason.moves_into_unused_folder": "아무도 쓰지 않는 폴더로 이동합니다.",
-  "rootChange.reason.merges_with_destination_title": "고유성을 공유하는 대상 타이틀과 병합됩니다.",
-  "rootChange.reason.folder_name_uniqued": "대상에서 폴더 이름이 사용 중이라 이 폴더의 이름을 바꿉니다.",
-  "rootChange.reason.catalog_only_consolidation": "추적 중인 파일이 없어 카탈로그 재할당만 이루어집니다.",
+  "rootChange.reason.root_identity_retained":
+    "루트는 고유성을 유지하며 경로만 바뀝니다.",
+  "rootChange.reason.catalog_only_root_change":
+    "추적 중인 파일이 없어 카탈로그 재할당만 이루어집니다.",
+  "rootChange.reason.title_blocked_for_root_change":
+    "이 타이틀은 아직 루트 변경에 포함될 수 없습니다.",
+  "rootChange.reason.unknown_root_content":
+    "어떤 타이틀도 설명하지 못하는 루트의 콘텐츠입니다.",
+  "rootChange.reason.source_retirement_blocked":
+    "이전 위치는 아직 폐기할 수 없습니다.",
+  "rootChange.reason.file_outside_title_folder":
+    "타이틀 폴더 밖에 있는 추적 파일입니다.",
+  "rootChange.reason.hardlinked_source":
+    "원본 파일에 다른 하드 링크가 있으며, 이동을 따라가지 않습니다.",
+  "rootChange.reason.roots_consolidated":
+    "이 루트의 모든 타이틀이 대상 루트로 이동합니다.",
+  "rootChange.reason.default_root_transferred":
+    "대상 루트가 이 라이브러리의 기본이 됩니다.",
+  "rootChange.reason.moves_into_unused_folder":
+    "아무도 쓰지 않는 폴더로 이동합니다.",
+  "rootChange.reason.merges_with_destination_title":
+    "고유성을 공유하는 대상 타이틀과 병합됩니다.",
+  "rootChange.reason.folder_name_uniqued":
+    "대상에서 폴더 이름이 사용 중이라 이 폴더의 이름을 바꿉니다.",
+  "rootChange.reason.catalog_only_consolidation":
+    "추적 중인 파일이 없어 카탈로그 재할당만 이루어집니다.",
   "rootChange.reason.destination_folder_exists": "대상 폴더가 이미 존재합니다.",
-  "rootChange.retirementBlocker.blocked_titles": "일부 타이틀이 이 작업에 포함될 수 없습니다.",
-  "rootChange.retirementBlocker.unexplained_source_content": "아무것도 설명하지 못하는 원본의 콘텐츠입니다.",
+  "rootChange.retirementBlocker.blocked_titles":
+    "일부 타이틀이 이 작업에 포함될 수 없습니다.",
+  "rootChange.retirementBlocker.unexplained_source_content":
+    "아무것도 설명하지 못하는 원본의 콘텐츠입니다.",
   "rootChange.refusal.root_change_path_not_absolute": "절대 경로를 입력하세요.",
-  "rootChange.refusal.root_change_paths_overlap": "새 경로가 이전 경로 안에 있거나 그 반대입니다.",
-  "rootChange.refusal.root_change_source_root_is_symlink": "이 루트는 심볼릭 링크입니다. 먼저 실제 디렉터리를 가리키게 하세요.",
-  "rootChange.refusal.root_change_source_root_unavailable": "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
-  "rootChange.refusal.root_change_destination_not_empty": "새 경로에 이미 콘텐츠가 있습니다. 비어 있거나 새로운 디렉터리를 선택하세요.",
-  "rootChange.refusal.root_change_destination_parent_missing": "새 경로의 상위 디렉터리가 없습니다.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "그 경로는 이미 다른 라이브러리의 루트로 설정되어 있습니다.",
-  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin": "그 경로는 사용자 지정 휴지통과 겹칩니다. 휴지통을 포함하거나 휴지통 안에 있는 경로는 사용할 수 없습니다.",
-  "rootChange.refusal.root_change_mode_not_supported": "루트 변경은 항상 파일을 옮깁니다. '파일이 이미 있음'은 여기서 제공되지 않습니다.",
-  "rootChange.refusal.root_consolidation_path_not_absolute": "절대 경로를 입력하세요.",
-  "rootChange.refusal.root_consolidation_same_root": "루트를 자기 자신으로 통합할 수 없습니다.",
-  "rootChange.refusal.root_consolidation_paths_overlap": "이 루트 중 하나가 다른 하나의 안에 있습니다.",
-  "rootChange.refusal.root_consolidation_source_root_is_symlink": "이 루트는 심볼릭 링크입니다. 먼저 실제 디렉터리를 가리키게 하세요.",
-  "rootChange.refusal.root_consolidation_source_root_unavailable": "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
-  "rootChange.refusal.root_consolidation_destination_root_unavailable": "지금 대상 루트를 읽을 수 없어 이미 들어 있는 내용을 기준으로 계획할 수 없습니다.",
-  "rootChange.refusal.root_consolidation_mode_not_supported": "통합은 항상 파일을 옮깁니다. '파일이 이미 있음'은 여기서 제공되지 않습니다.",
+  "rootChange.refusal.root_change_paths_overlap":
+    "새 경로가 이전 경로 안에 있거나 그 반대입니다.",
+  "rootChange.refusal.root_change_source_root_is_symlink":
+    "이 루트는 심볼릭 링크입니다. 먼저 실제 디렉터리를 가리키게 하세요.",
+  "rootChange.refusal.root_change_source_root_unavailable":
+    "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
+  "rootChange.refusal.root_change_destination_not_empty":
+    "새 경로에 이미 콘텐츠가 있습니다. 비어 있거나 새로운 디렉터리를 선택하세요.",
+  "rootChange.refusal.root_change_destination_parent_missing":
+    "새 경로의 상위 디렉터리가 없습니다.",
+  "rootChange.refusal.root_change_destination_is_configured_root":
+    "그 경로는 이미 다른 라이브러리의 루트로 설정되어 있습니다.",
+  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin":
+    "그 경로는 사용자 지정 휴지통과 겹칩니다. 휴지통을 포함하거나 휴지통 안에 있는 경로는 사용할 수 없습니다.",
+  "rootChange.refusal.root_change_mode_not_supported":
+    "루트 변경은 항상 파일을 옮깁니다. '파일이 이미 있음'은 여기서 제공되지 않습니다.",
+  "rootChange.refusal.root_consolidation_path_not_absolute":
+    "절대 경로를 입력하세요.",
+  "rootChange.refusal.root_consolidation_same_root":
+    "루트를 자기 자신으로 통합할 수 없습니다.",
+  "rootChange.refusal.root_consolidation_paths_overlap":
+    "이 루트 중 하나가 다른 하나의 안에 있습니다.",
+  "rootChange.refusal.root_consolidation_source_root_is_symlink":
+    "이 루트는 심볼릭 링크입니다. 먼저 실제 디렉터리를 가리키게 하세요.",
+  "rootChange.refusal.root_consolidation_source_root_unavailable":
+    "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
+  "rootChange.refusal.root_consolidation_destination_root_unavailable":
+    "지금 대상 루트를 읽을 수 없어 이미 들어 있는 내용을 기준으로 계획할 수 없습니다.",
+  "rootChange.refusal.root_consolidation_mode_not_supported":
+    "통합은 항상 파일을 옮깁니다. '파일이 이미 있음'은 여기서 제공되지 않습니다.",
   "indexerSearch.searchWithThisIndexer": "이 인덱서로 검색",
   "indexerSearch.queryPlaceholder": "모든 인덱서에서 릴리스 검색…",
   "indexerSearch.kindLabel": "종류",
@@ -2511,7 +2834,8 @@ const ko: LocaleDictionary = {
   "indexerSearch.health.skipped": "건너뜀",
   "indexerSearch.skipReason.indexerDisabled": "인덱서가 비활성화됨",
   "indexerSearch.skipReason.temporarilyDisabled": "일시적으로 비활성화됨",
-  "indexerSearch.skipReason.temporarilyDisabledUntil": "{{time}}까지 일시적으로 비활성화됨",
+  "indexerSearch.skipReason.temporarilyDisabledUntil":
+    "{{time}}까지 일시적으로 비활성화됨",
   "indexerSearch.skipReason.backedOff": "최근 오류로 대기 중",
   "indexerSearch.skipReason.backedOffUntil": "{{time}}까지 대기 중",
   "indexerSearch.skipReason.noTextSearch": "텍스트 검색을 지원하지 않음",
@@ -2543,7 +2867,8 @@ const ko: LocaleDictionary = {
   "indexerSearch.row.select": "릴리스 선택",
   "indexerSearch.row.grab": "가져오기",
   "indexerSearch.row.download": "파일 다운로드",
-  "indexerSearch.download.unavailable": "이 릴리스는 마그넷 링크여서 내려받을 파일이 없습니다",
+  "indexerSearch.download.unavailable":
+    "이 릴리스는 마그넷 링크여서 내려받을 파일이 없습니다",
   "indexerSearch.row.expand": "세부 정보 표시",
   "indexerSearch.row.collapse": "세부 정보 숨기기",
   "indexerSearch.row.grabs": "{{count}}회 가져옴",
@@ -2560,7 +2885,8 @@ const ko: LocaleDictionary = {
   "indexerSearch.age.months": "{{count}}개월",
   "indexerSearch.age.years": "{{count}}년",
   "indexerSearch.footer.selected": "{{count}}개 선택됨",
-  "indexerSearch.footer.nothingQueued": "가져오기 전까지는 대기열에 추가되지 않습니다.",
+  "indexerSearch.footer.nothingQueued":
+    "가져오기 전까지는 대기열에 추가되지 않습니다.",
   "indexerSearch.footer.grabSelected": "선택 항목 가져오기",
   "indexerSearch.footer.downloadSelected": "{{count}}개 다운로드",
   "indexerSearch.empty.prompt": "검색어를 입력해 인덱서를 검색하세요.",
@@ -2618,27 +2944,36 @@ const ko: LocaleDictionary = {
   "settings.noRequestRulesFound": "아직 요청 규칙이 없습니다.",
   "settings.requestRuleLibraries": "라이브러리",
   "settings.requestRuleLibrariesAll": "모든 라이브러리",
-  "settings.requestRuleLibrariesHelp": "모든 항목을 선택하지 않으면 이 규칙이 모든 라이브러리의 요청에 적용됩니다.",
+  "settings.requestRuleLibrariesHelp":
+    "모든 항목을 선택하지 않으면 이 규칙이 모든 라이브러리의 요청에 적용됩니다.",
   "settings.requestRuleRevision": "리비전",
   "settings.requestRuleDecisionCount": "결정 수",
   "settings.requestRuleCopy": "규칙 복사",
   "settings.requestRuleCreate": "규칙 만들기",
   "settings.requestRuleUpdate": "규칙 업데이트",
   "settings.requestRuleCreateNew": "새 요청 규칙",
-  "settings.requestRuleCreated": "요청 규칙을 만들었습니다. 활성화하기 전까지는 비활성 상태입니다.",
+  "settings.requestRuleCreated":
+    "요청 규칙을 만들었습니다. 활성화하기 전까지는 비활성 상태입니다.",
   "settings.requestRuleUpdated": "요청 규칙을 업데이트했습니다.",
   "settings.requestRuleDeleted": "요청 규칙 {{name}}을(를) 삭제했습니다.",
-  "settings.requestRuleDeleting": "요청 규칙 {{name}}을(를) 삭제할까요? 기록된 결정은 유지됩니다.",
-  "settings.requestRuleValidationRequired": "요청 규칙에는 이름과 매처가 필요합니다.",
+  "settings.requestRuleDeleting":
+    "요청 규칙 {{name}}을(를) 삭제할까요? 기록된 결정은 유지됩니다.",
+  "settings.requestRuleValidationRequired":
+    "요청 규칙에는 이름과 매처가 필요합니다.",
   "settings.requestRuleConfirmDiscardTitle": "저장하지 않은 변경을 버릴까요?",
-  "settings.requestRuleConfirmDiscardDescription": "편집기의 매처가 저장되지 않았습니다. 계속하면 대체됩니다.",
+  "settings.requestRuleConfirmDiscardDescription":
+    "편집기의 매처가 저장되지 않았습니다. 계속하면 대체됩니다.",
   "settings.requestRuleRequesters": "이 규칙에서 사람 지정",
-  "settings.requestRuleRequestersHelp": "이 규칙이 대상으로 하는 계정을 선택하고 적용하세요. 편집기의 매처가 다시 작성되므로 저장 전에 읽어볼 수 있습니다.",
+  "settings.requestRuleRequestersHelp":
+    "이 규칙이 대상으로 하는 계정을 선택하고 적용하세요. 편집기의 매처가 다시 작성되므로 저장 전에 읽어볼 수 있습니다.",
   "settings.requestRuleRequestersApply": "이 이름들을 매처에 쓰기",
-  "settings.requestRuleRequestersUnavailable": "계정 목록을 보려면 이 페이지에 없는 권한이 필요합니다. 이름은 매처에 직접 입력해야 합니다.",
-  "settings.requestRuleRequestersNoTarget": "이 매처는 아무도 지정하지 않아서 선택한 계정을 쓸 곳이 없습니다. 먼저 requesters 집합이나 사용자 이름 비교를 추가하세요.",
+  "settings.requestRuleRequestersUnavailable":
+    "계정 목록을 보려면 이 페이지에 없는 권한이 필요합니다. 이름은 매처에 직접 입력해야 합니다.",
+  "settings.requestRuleRequestersNoTarget":
+    "이 매처는 아무도 지정하지 않아서 선택한 계정을 쓸 곳이 없습니다. 먼저 requesters 집합이나 사용자 이름 비교를 추가하세요.",
   "settings.requestPreviewTitle": "이 규칙을 요청으로 시험하기",
-  "settings.requestPreviewSubtitle": "직접 설명한 요청에 매처 하나를 실행합니다. 제출되지도 기록되지도 않습니다.",
+  "settings.requestPreviewSubtitle":
+    "직접 설명한 요청에 매처 하나를 실행합니다. 제출되지도 기록되지도 않습니다.",
   "settings.requestPreviewSource": "매처",
   "settings.requestPreviewSourceStored": "저장된 규칙",
   "settings.requestPreviewSourceDraft": "편집기 초안",
@@ -2658,11 +2993,13 @@ const ko: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}}을(를) 사용합니다.",
   "settings.requestPreviewRun": "미리보기 실행",
   "settings.requestPreviewRunning": "실행 중…",
-  "settings.requestPreviewEmpty": "요청을 설명하고 미리보기를 실행하면 이 규칙이 어떻게 판단하는지 알 수 있습니다.",
+  "settings.requestPreviewEmpty":
+    "요청을 설명하고 미리보기를 실행하면 이 규칙이 어떻게 판단하는지 알 수 있습니다.",
   "settings.requestPreviewMetadataPartial": "메타데이터 불완전",
   "settings.requestPreviewShowInput": "매처가 본 입력 보기",
   "settings.requestPreviewHideInput": "입력 숨기기",
-  "settings.requestPreviewInputUnavailable": "입력 문서를 다시 읽을 수 없었습니다.",
+  "settings.requestPreviewInputUnavailable":
+    "입력 문서를 다시 읽을 수 없었습니다.",
   "settings.requestDecisionsTitle": "최근 결정",
   "settings.requestDecisionsOutcomeFilter": "결과",
   "settings.requestDecisionsOutcomeAll": "모든 결과",
@@ -2679,17 +3016,20 @@ const ko: LocaleDictionary = {
   "search.keepForDays": "{{count}}일",
   "search.keepForCustom": "일수 지정…",
   "search.keepForCustomLabel": "보관할 일수",
-  "search.keepForHelp": "Scryer가 이 미디어를 보관하는 기간입니다. 기간이 지나면 유지관리 규칙이 삭제할 수 있습니다. 영구 보관은 만료되지 않습니다.",
+  "search.keepForHelp":
+    "Scryer가 이 미디어를 보관하는 기간입니다. 기간이 지나면 유지관리 규칙이 삭제할 수 있습니다. 영구 보관은 만료되지 않습니다.",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "태그",
   "settings.titleTagsExisting": "정의된 태그",
-  "settings.titleTagsHelp": "여기에서 정의한 태그만 타이틀에 적용할 수 있습니다. 태그 이름을 바꾸면 그 태그를 가진 모든 타이틀과 지연 프로필이 함께 바뀌고, 삭제하면 모든 타이틀에서 제거됩니다.",
+  "settings.titleTagsHelp":
+    "여기에서 정의한 태그만 타이틀에 적용할 수 있습니다. 태그 이름을 바꾸면 그 태그를 가진 모든 타이틀과 지연 프로필이 함께 바뀌고, 삭제하면 모든 타이틀에서 제거됩니다.",
   "settings.titleTagsNone": "아직 정의된 태그가 없습니다.",
   "settings.titleTagsLoadError": "태그를 불러오지 못했습니다.",
   "settings.titleTagLabelLabel": "라벨",
   "settings.titleTagLabelPlaceholder": "keep",
-  "settings.titleTagLabelHelp": "소문자로 저장되며 여분의 공백은 제거됩니다. 최대 64자입니다.",
+  "settings.titleTagLabelHelp":
+    "소문자로 저장되며 여분의 공백은 제거됩니다. 최대 64자입니다.",
   "settings.titleTagDescriptionLabel": "설명",
   "settings.titleTagDescriptionPlaceholder": "이 태그의 용도(선택 사항)",
   "settings.titleTagTitleCount": "타이틀",
@@ -2699,16 +3039,22 @@ const ko: LocaleDictionary = {
   "settings.titleTagSaved": "태그를 저장했습니다.",
   "settings.titleTagSaveError": "태그를 저장하지 못했습니다.",
   "settings.titleTagDeleteError": "태그를 삭제하지 못했습니다.",
-  "settings.titleTagDeleted": "{{count}}개 타이틀에서 {{label}}을(를) 삭제했습니다.",
+  "settings.titleTagDeleted":
+    "{{count}}개 타이틀에서 {{label}}을(를) 삭제했습니다.",
   "settings.titleTagDeleteConfirmTitle": "태그 삭제",
-  "settings.titleTagDeleteConfirm": "{{label}}은(는) {{count}}개 타이틀에 있습니다. 삭제하면 해당 타이틀 전부와 이 태그로 필터링하는 지연 프로필에서 제거됩니다. 이 태그를 지정한 규칙은 더 이상 일치하지 않습니다.",
+  "settings.titleTagDeleteConfirm":
+    "{{label}}은(는) {{count}}개 타이틀에 있습니다. 삭제하면 해당 타이틀 전부와 이 태그로 필터링하는 지연 프로필에서 제거됩니다. 이 태그를 지정한 규칙은 더 이상 일치하지 않습니다.",
   "settings.titleTagLabelRequired": "태그 라벨을 입력하세요.",
-  "settings.titleTagLabelReserved": "라벨은 scryer:로 시작할 수 없습니다. 이 접두사는 Scryer가 직접 기록하는 설정용으로 예약되어 있습니다.",
+  "settings.titleTagLabelReserved":
+    "라벨은 scryer:로 시작할 수 없습니다. 이 접두사는 Scryer가 직접 기록하는 설정용으로 예약되어 있습니다.",
   "settings.titleTagLabelTooLong": "라벨은 최대 64자입니다.",
   "settings.titleTagLabelInvalid": "라벨에는 제어 문자를 포함할 수 없습니다.",
-  "settings.titleTagRenameSummary": "{{label}}(으)로 이름을 바꿨습니다. 타이틀 {{titles}}개, 시리즈 영화 {{seriesMovies}}개, 지연 프로필 {{delayProfiles}}개를 갱신했습니다.",
-  "settings.titleTagRenameWarning": "규칙 소스는 다시 작성되지 않으므로 규칙 참조 {{count}}개가 여전히 이전 라벨 {{label}}을(를) 가리키며 더 이상 일치하지 않습니다: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets": "유지 관리 규칙 세트 {{count}}개",
+  "settings.titleTagRenameSummary":
+    "{{label}}(으)로 이름을 바꿨습니다. 타이틀 {{titles}}개, 시리즈 영화 {{seriesMovies}}개, 지연 프로필 {{delayProfiles}}개를 갱신했습니다.",
+  "settings.titleTagRenameWarning":
+    "규칙 소스는 다시 작성되지 않으므로 규칙 참조 {{count}}개가 여전히 이전 라벨 {{label}}을(를) 가리키며 더 이상 일치하지 않습니다: {{references}}.",
+  "settings.titleTagReferenceMaintenanceRuleSets":
+    "유지 관리 규칙 세트 {{count}}개",
   "settings.titleTagReferenceReleaseRuleSets": "릴리스 규칙 세트 {{count}}개",
   "settings.titleTagReferenceManagedTagFilters": "관리형 태그 필터 {{count}}개",
   "settings.titleTagReferenceRequestRuleSets": "요청 규칙 세트 {{count}}개",
@@ -2717,7 +3063,8 @@ const ko: LocaleDictionary = {
   "title.tagsAdd": "태그 추가…",
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "{{label}} 제거",
-  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsEmptyRegistry":
+    "No tags are defined yet. An administrator defines them in Settings > Tags.",
   "title.bulkAddTags": "태그 추가",
   "title.bulkRemoveTags": "태그 제거",
   "title.catalogFilters.themes": "테마",
@@ -2733,13 +3080,16 @@ const ko: LocaleDictionary = {
   "settings.maintenanceActionRemoveTags": "태그 제거",
   "settings.maintenanceRuleTags": "태그",
   "settings.maintenanceRuleTagsNone": "선택된 태그가 없습니다",
-  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceRuleTagsHelp":
+    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} 추가",
   "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} 제거",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "삭제 대상 태그",
-  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateTaggedForRemovalDescription":
+    'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.maintenanceTemplateFlagForReviewTitle": "검토 표시",
-  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+  "settings.maintenanceTemplateFlagForReviewDescription":
+    "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
@@ -2808,7 +3158,8 @@ const ko: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "트랙에 언어 필드가 없어 트랙 이름에서 추정했습니다.",
+  "mediaInfo.inferredLanguageFootnote":
+    "트랙에 언어 필드가 없어 트랙 이름에서 추정했습니다.",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -2820,10 +3171,12 @@ const ko: LocaleDictionary = {
   "mediaInfo.roleForced": "Forced",
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "목록",
-  "lists.commandDescription": "공개 목록과 차트를 팔로우하고 작품을 자동으로 추가합니다.",
+  "lists.commandDescription":
+    "공개 목록과 차트를 팔로우하고 작품을 자동으로 추가합니다.",
   "lists.tab.public": "공개 목록",
   "lists.tab.exclusions": "제외",
-  "lists.exclusions.commandDescription": "어떤 목록도 추가할 수 없는 작품입니다.",
+  "lists.exclusions.commandDescription":
+    "어떤 목록도 추가할 수 없는 작품입니다.",
   "lists.action.enabled": "{{name}} 팔로우",
   "lists.action.retry": "다시 시도",
   "lists.action.syncAll": "모두 동기화",
@@ -2834,10 +3187,12 @@ const ko: LocaleDictionary = {
   "lists.url.submit": "목록 확인",
   "lists.url.help": "지원되는 제공자의 목록 주소를 붙여넣으세요.",
   "lists.url.recognized": "{{provider}} · {{list}}",
-  "lists.url.unrecognized": "Scryer가 팔로우할 수 없는 주소입니다. 지원되는 목록은 아래 제공자 카탈로그에서 확인하세요.",
+  "lists.url.unrecognized":
+    "Scryer가 팔로우할 수 없는 주소입니다. 지원되는 목록은 아래 제공자 카탈로그에서 확인하세요.",
   "lists.followed.heading": "팔로우 중인 목록",
   "lists.followed.empty": "아직 팔로우 중인 공개 목록이 없습니다.",
-  "lists.followed.emptyManager": "아직 공개 목록이 없습니다. 위에 URL을 붙여넣거나 아래 카탈로그에서 고르세요.",
+  "lists.followed.emptyManager":
+    "아직 공개 목록이 없습니다. 위에 URL을 붙여넣거나 아래 카탈로그에서 고르세요.",
   "lists.table.list": "목록",
   "lists.table.coverage": "보유율",
   "lists.table.mode": "모드",
@@ -2860,11 +3215,14 @@ const ko: LocaleDictionary = {
   "lists.mode.hold": "승인 대기로 보류",
   "lists.mode.request": "요청",
   "lists.mode.discover": "디스커버에만 표시",
-  "lists.modeHelp.add": "새 작품을 종류별로 선택한 모니터링 설정으로 추가합니다. 모니터링 중인 작품은 검색하고, 모니터링하지 않는 작품은 검색하지 않습니다.",
-  "lists.modeHelp.hold": "새 작품마다 대기 중인 요청을 만들어 누군가 승인하도록 합니다.",
+  "lists.modeHelp.add":
+    "새 작품을 종류별로 선택한 모니터링 설정으로 추가합니다. 모니터링 중인 작품은 검색하고, 모니터링하지 않는 작품은 검색하지 않습니다.",
+  "lists.modeHelp.hold":
+    "새 작품마다 대기 중인 요청을 만들어 누군가 승인하도록 합니다.",
   "lists.modeHelp.request": "멤버 대신 새 작품을 요청합니다.",
   "lists.modeHelp.discover": "아무것도 추가하지 않고 목록의 작품만 기록합니다.",
-  "lists.mode.discoverUnavailable": "목록이 디스커버에 표시되면 사용할 수 있습니다.",
+  "lists.mode.discoverUnavailable":
+    "목록이 디스커버에 표시되면 사용할 수 있습니다.",
   "lists.onLeave.keep": "작품 유지",
   "lists.onLeave.log": "기록만",
   "lists.onLeave.unmonitor": "모니터링 해제",
@@ -2909,14 +3267,17 @@ const ko: LocaleDictionary = {
   "lists.follow.kinds": "포함",
   "lists.follow.modeHeading": "새 작품이 올라오면",
   "lists.follow.routesHeading": "작품을 추가할 위치",
-  "lists.follow.routesHelp": "작품 종류마다 라이브러리가 필요합니다. 라이브러리가 없는 종류는 추가되지 않습니다.",
+  "lists.follow.routesHelp":
+    "작품 종류마다 라이브러리가 필요합니다. 라이브러리가 없는 종류는 추가되지 않습니다.",
   "lists.follow.filtersHeading": "필터",
   "lists.follow.syncHeading": "동기화",
   "lists.follow.maxPerSync": "동기화당 최대 작품 수",
   "lists.follow.maxPerSyncPlaceholder": "제한 없음",
-  "lists.follow.maxPerSyncHelp": "제한을 넘는 작품은 다음 동기화까지 기다립니다.",
+  "lists.follow.maxPerSyncHelp":
+    "제한을 넘는 작품은 다음 동기화까지 기다립니다.",
   "lists.follow.onLeave": "작품이 목록에서 빠지면",
-  "lists.follow.onLeaveHelp": "이 목록이 추가했고 다른 어떤 목록에도 없는 작품에만 적용됩니다. 목록은 작품을 삭제하지 않습니다.",
+  "lists.follow.onLeaveHelp":
+    "이 목록이 추가했고 다른 어떤 목록에도 없는 작품에만 적용됩니다. 목록은 작품을 삭제하지 않습니다.",
   "lists.follow.interval": "일정은 제공자가 정합니다: {{interval}}마다.",
   "lists.follow.problem.name": "목록 이름을 입력하세요.",
   "lists.follow.problem.kinds": "작품 종류를 하나 이상 포함하세요.",
@@ -2939,7 +3300,8 @@ const ko: LocaleDictionary = {
   "lists.filter.languages": "원어",
   "lists.filter.languagesPlaceholder": "en, ja",
   "lists.filter.releasedOnly": "공개된 작품만",
-  "lists.filter.releasedOnlyHelp": "아직 공개되지 않은 작품은 건너뜁니다. 동기화할 때마다 다시 확인합니다.",
+  "lists.filter.releasedOnlyHelp":
+    "아직 공개되지 않은 작품은 건너뜁니다. 동기화할 때마다 다시 확인합니다.",
   "lists.preview.heading": "미리 보기",
   "lists.preview.nextSyncHeading": "다음 동기화에서 추가될 항목",
   "lists.preview.run": "미리 보기",
@@ -2951,7 +3313,8 @@ const ko: LocaleDictionary = {
   "lists.preview.filtered": "필터됨",
   "lists.preview.excluded": "제외됨",
   "lists.preview.unresolved": "일치 없음",
-  "lists.preview.unresolvedHelp": "{{count}}개 작품은 아직 일치 항목을 찾지 못했습니다. 동기화할 때마다 다시 시도합니다.",
+  "lists.preview.unresolvedHelp":
+    "{{count}}개 작품은 아직 일치 항목을 찾지 못했습니다. 동기화할 때마다 다시 시도합니다.",
   "lists.preview.wouldAddHeading": "다음 동기화에서 추가될 작품",
   "lists.preview.nothingToAdd": "지금은 새로 추가할 항목이 없습니다.",
   "lists.detail.coverage": "보유율",
@@ -2960,7 +3323,8 @@ const ko: LocaleDictionary = {
   "lists.detail.nextSync": "다음 동기화",
   "lists.detail.noCap": "제한 없음",
   "lists.detail.openAtProvider": "제공자에서 열기",
-  "lists.detail.pausedUntil": "제공자가 Scryer에 요청 속도를 줄이도록 요청했습니다. {{time}} 이후 동기화를 재개합니다.",
+  "lists.detail.pausedUntil":
+    "제공자가 Scryer에 요청 속도를 줄이도록 요청했습니다. {{time}} 이후 동기화를 재개합니다.",
   "lists.detail.titles": "작품 ({{count}})",
   "lists.detail.title": "작품",
   "lists.detail.state": "상태",
@@ -2973,7 +3337,8 @@ const ko: LocaleDictionary = {
   "lists.detail.noRuns": "아직 동기화 기록이 없습니다.",
   "lists.detail.runCounts": "목록 {{total}} · 추가 {{added}} · 보류 {{held}}",
   "lists.unfollow.title": "{{name}} 팔로우를 해제할까요?",
-  "lists.unfollow.description": "Scryer가 이 목록의 동기화를 중지합니다. 작품은 라이브러리에 남고, 대기 중인 요청은 요청 화면에 남습니다.",
+  "lists.unfollow.description":
+    "Scryer가 이 목록의 동기화를 중지합니다. 작품은 라이브러리에 남고, 대기 중인 요청은 요청 화면에 남습니다.",
   "lists.status.followed": "{{name}}을(를) 팔로우합니다.",
   "lists.status.updated": "{{name}}을(를) 저장했습니다.",
   "lists.status.unfollowed": "{{name}} 팔로우를 해제했습니다.",
@@ -2990,15 +3355,19 @@ const ko: LocaleDictionary = {
   "lists.exclusions.scopeList": "{{name}}만",
   "lists.exclusions.add": "제외",
   "lists.exclusions.added": "{{name}}을(를) 목록에서 제외했습니다.",
-  "lists.exclusions.removed": "이제 목록에서 {{name}}을(를) 다시 추가할 수 있습니다.",
+  "lists.exclusions.removed":
+    "이제 목록에서 {{name}}을(를) 다시 추가할 수 있습니다.",
   "lists.exclusions.empty": "제외된 작품이 없습니다.",
   "lists.exclusions.created": "추가일",
   "lists.exclusions.remove": "{{name}} 제외 해제",
   "lists.exclusions.removeTitle": "{{name}} 제외를 해제할까요?",
-  "lists.exclusions.removeDescription": "다음 동기화 때 목록이 이 작품을 다시 추가할 수 있습니다.",
+  "lists.exclusions.removeDescription":
+    "다음 동기화 때 목록이 이 작품을 다시 추가할 수 있습니다.",
   "lists.exclusions.deleteCheckbox": "목록에서도 제외",
-  "lists.exclusions.deleteNoIds": "{{name}}을(를) 삭제했지만 목록에서 제외할 외부 ID가 없습니다.",
-  "lists.exclusions.deleteFailed": "{{name}}을(를) 삭제했지만 목록에서 제외하지 못했습니다. 목록 페이지에서 제외를 추가하세요.",
+  "lists.exclusions.deleteNoIds":
+    "{{name}}을(를) 삭제했지만 목록에서 제외할 외부 ID가 없습니다.",
+  "lists.exclusions.deleteFailed":
+    "{{name}}을(를) 삭제했지만 목록에서 제외하지 못했습니다. 목록 페이지에서 제외를 추가하세요.",
   "lists.policy.heading": "멤버 목록 정책",
   "lists.policy.help": "멤버의 개인 목록이 요청으로 바뀌는 방식을 정합니다.",
   "lists.policy.empty": "표시할 멤버가 없습니다.",
@@ -3009,24 +3378,37 @@ const ko: LocaleDictionary = {
   "lists.policy.value.auto": "자동 승인",
   "lists.policy.value.approval": "승인 필요",
   "lists.policy.value.none": "목록 사용 안 함",
-  "settings.refMaintFactsListsAddedByList": "사람이 아닌 목록이 대상을 라이브러리에 추가했는지 여부",
-  "settings.refMaintFactsListsOnEnabledList": "활성화된 목록(공개 또는 개인)이 아직 대상을 포함하는지 여부",
-  "settings.refMaintFactsListsNames": "아직 대상을 포함하는 활성화된 공개 목록의 이름",
-  "settings.refMaintFactsListsLeftAll": "대상을 포함했던 모든 목록이 대상을 제외했는지 여부",
+  "settings.refMaintFactsListsAddedByList":
+    "사람이 아닌 목록이 대상을 라이브러리에 추가했는지 여부",
+  "settings.refMaintFactsListsOnEnabledList":
+    "활성화된 목록(공개 또는 개인)이 아직 대상을 포함하는지 여부",
+  "settings.refMaintFactsListsNames":
+    "아직 대상을 포함하는 활성화된 공개 목록의 이름",
+  "settings.refMaintFactsListsLeftAll":
+    "대상을 포함했던 모든 목록이 대상을 제외했는지 여부",
   "settings.refMaintFactsListsLeftAt": "마지막 목록이 대상을 제외한 시각",
-  "settings.refMaintFactsListsLastListName": "대상이 가장 최근에 빠진 공개 목록",
-  "settings.refMaintFactsListsAddedByListValue": "목록 동기화가 타이틀을 만든 경우 true. 목록 저장소를 읽을 수 없으면 사유 list_store_unreadable로 알 수 없음",
-  "settings.refMaintFactsListsOnEnabledListValue": "활성화된 목록이 하나 이상 대상을 포함하는 동안 true",
-  "settings.refMaintFactsListsNamesValue": "공개 목록 이름만 정렬하여 표시하며, 멤버의 개인 목록 이름은 표시하지 않음",
-  "settings.refMaintFactsListsLeftAllValue": "대상을 포함했던 모든 목록이 제외하면 true. 아직 포함하는 목록이 있거나 목록에 오른 적이 없으면 false",
-  "settings.refMaintFactsListsLeftAtValue": "RFC3339 타임스탬프. 대상을 포함하는 목록이 남아 있으면 사유 not_left_every_list로 값 없음",
-  "settings.refMaintFactsListsLastListNameValue": "해당 공개 목록의 이름. 대상이 공개 목록에서 빠진 적이 없으면 사유 no_public_list_left로 값 없음",
+  "settings.refMaintFactsListsLastListName":
+    "대상이 가장 최근에 빠진 공개 목록",
+  "settings.refMaintFactsListsAddedByListValue":
+    "목록 동기화가 타이틀을 만든 경우 true. 목록 저장소를 읽을 수 없으면 사유 list_store_unreadable로 알 수 없음",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "활성화된 목록이 하나 이상 대상을 포함하는 동안 true",
+  "settings.refMaintFactsListsNamesValue":
+    "공개 목록 이름만 정렬하여 표시하며, 멤버의 개인 목록 이름은 표시하지 않음",
+  "settings.refMaintFactsListsLeftAllValue":
+    "대상을 포함했던 모든 목록이 제외하면 true. 아직 포함하는 목록이 있거나 목록에 오른 적이 없으면 false",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339 타임스탬프. 대상을 포함하는 목록이 남아 있으면 사유 not_left_every_list로 값 없음",
+  "settings.refMaintFactsListsLastListNameValue":
+    "해당 공개 목록의 이름. 대상이 공개 목록에서 빠진 적이 없으면 사유 no_public_list_left로 값 없음",
   "lists.providerSettings.heading": "제공자 설정",
-  "lists.providerSettings.copy": "이 서버에서 이 제공자의 모든 목록이 공유합니다.",
+  "lists.providerSettings.copy":
+    "이 서버에서 이 제공자의 모든 목록이 공유합니다.",
   "lists.providerSettings.required": "필수",
   "lists.providerSettings.secretStored": "저장됨",
   "lists.providerSettings.secretEmpty": "설정 안 됨",
-  "lists.providerSettings.secretPlaceholder": "저장된 값을 유지하려면 비워 두세요",
+  "lists.providerSettings.secretPlaceholder":
+    "저장된 값을 유지하려면 비워 두세요",
   "lists.providerSettings.clearSecret": "지우기",
   "lists.providerSettings.keepSecret": "유지",
   "lists.providerSettings.save": "설정 저장",
@@ -3035,19 +3417,26 @@ const ko: LocaleDictionary = {
   "title.listProvenance.left": "목록 {{name}}에서 빠짐",
   "lists.tab.personal": "개인",
   "lists.accounts.heading": "내 계정",
-  "lists.accounts.copy": "계정을 연결하여 개인 목록과 관심 목록을 구독하세요. 계정과 개인 목록은 본인만 볼 수 있습니다.",
+  "lists.accounts.copy":
+    "계정을 연결하여 개인 목록과 관심 목록을 구독하세요. 계정과 개인 목록은 본인만 볼 수 있습니다.",
   "lists.accounts.connect": "연결",
   "lists.accounts.connected": "연결됨",
   "lists.accounts.reconnect": "다시 연결",
   "lists.accounts.manage": "관리",
   "lists.accounts.manageTitle": "{{provider}} 계정 관리",
   "lists.accounts.private": "이 목록과 계정 정보는 본인만 볼 수 있습니다.",
-  "lists.accounts.waiting": "제공자 창에서 인증을 완료하세요. 승인은 자동으로 확인됩니다.",
-  "lists.accounts.linkFailed": "계정을 연결하지 못했습니다. 다시 연결을 시작하세요.",
-  "lists.accounts.pollRetrying": "지금은 승인 여부를 확인하지 못했습니다. 세션이 만료될 때까지 계속 시도합니다.",
-  "lists.accounts.originNotAllowed": "이 주소에서는 계정을 연결할 수 없습니다. 게시된 컨테이너 포트, 리버스 프록시 또는 호스트 이름을 통해 Scryer에 접속한다면 관리자에게 Scryer의 공개 URL을 설정해 달라고 요청하세요. 그렇지 않다면 localhost 또는 Scryer가 수신 대기하는 주소로 여세요.",
-  "lists.accounts.linkExpired": "계정 연결 세션이 만료되었습니다. 목록에서 새 연결을 시작하세요.",
-  "lists.accounts.popupBlocked": "팝업을 허용하여 계정을 승인한 후 다시 연결하세요.",
+  "lists.accounts.waiting":
+    "제공자 창에서 인증을 완료하세요. 승인은 자동으로 확인됩니다.",
+  "lists.accounts.linkFailed":
+    "계정을 연결하지 못했습니다. 다시 연결을 시작하세요.",
+  "lists.accounts.pollRetrying":
+    "지금은 승인 여부를 확인하지 못했습니다. 세션이 만료될 때까지 계속 시도합니다.",
+  "lists.accounts.originNotAllowed":
+    "이 주소에서는 계정을 연결할 수 없습니다. 게시된 컨테이너 포트, 리버스 프록시 또는 호스트 이름을 통해 Scryer에 접속한다면 관리자에게 Scryer의 공개 URL을 설정해 달라고 요청하세요. 그렇지 않다면 localhost 또는 Scryer가 수신 대기하는 주소로 여세요.",
+  "lists.accounts.linkExpired":
+    "계정 연결 세션이 만료되었습니다. 목록에서 새 연결을 시작하세요.",
+  "lists.accounts.popupBlocked":
+    "팝업을 허용하여 계정을 승인한 후 다시 연결하세요.",
   "lists.accounts.finishing": "계정 연결을 완료하는 중…",
   "lists.accounts.linked": "계정이 연결되었습니다.",
   "lists.accounts.returnToLists": "개인 목록으로 돌아가기",
@@ -3056,23 +3445,30 @@ const ko: LocaleDictionary = {
   "lists.accounts.statuses": "사용 가능한 상태: {{statuses}}",
   "lists.accounts.unlink": "계정 연결 해제",
   "lists.accounts.confirmUnlink": "연결 해제 확인",
-  "lists.accounts.unlinkHelp": "연결을 해제하면 이 계정을 사용하는 구독이 제거됩니다. 라이브러리 파일은 보존됩니다.",
+  "lists.accounts.unlinkHelp":
+    "연결을 해제하면 이 계정을 사용하는 구독이 제거됩니다. 라이브러리 파일은 보존됩니다.",
   "lists.accounts.unlinked": "계정 연결이 해제되었습니다.",
-  "lists.accounts.personalRouting": "개인 목록은 본인 소유입니다. 추가 및 검색 모드는 선택한 모든 라이브러리의 제목 관리 권한이 필요합니다. 요청은 목록 정책과 요청 규칙을 따릅니다.",
+  "lists.accounts.personalRouting":
+    "개인 목록은 본인 소유입니다. 추가 및 검색 모드는 선택한 모든 라이브러리의 제목 관리 권한이 필요합니다. 요청은 목록 정책과 요청 규칙을 따릅니다.",
   "lists.providerApps.heading": "사용자 지정 OAuth",
   "lists.providerApps.settingsLabel": "목록 · 사용자 지정 OAuth",
-  "lists.providerApps.copy": "기본 프로젝트 앱은 등록 없이 작동합니다. 이 인스턴스를 직접 연결하려면 자체 Trakt, AniList 또는 MyAnimeList 앱을 등록할 수 있습니다.",
+  "lists.providerApps.copy":
+    "기본 프로젝트 앱은 등록 없이 작동합니다. 이 인스턴스를 직접 연결하려면 자체 Trakt, AniList 또는 MyAnimeList 앱을 등록할 수 있습니다.",
   "lists.providerApps.simklDefault": "Simkl은 기본 프로젝트 앱을 사용합니다.",
   "lists.providerApps.useOwn": "자체 제공자 앱 사용",
   "lists.providerApps.clientId": "클라이언트 ID",
   "lists.providerApps.clientSecret": "클라이언트 비밀",
-  "lists.providerApps.traktSecretHint": "Trakt에서는 선택 사항입니다. Trakt는 PKCE로 회원을 로그인시키며, 비밀은 기존 Trakt 앱에만 필요합니다.",
+  "lists.providerApps.traktSecretHint":
+    "Trakt에서는 선택 사항입니다. Trakt는 PKCE로 회원을 로그인시키며, 비밀은 기존 Trakt 앱에만 필요합니다.",
   "lists.providerApps.redirectUri": "리디렉션 URI",
-  "lists.providerApps.redirectHelp": "이 인스턴스의 /lists/oauth/callback URL을 제공자에 등록하세요. 비밀을 비워 두면 저장된 값이 유지됩니다.",
+  "lists.providerApps.redirectHelp":
+    "이 인스턴스의 /lists/oauth/callback URL을 제공자에 등록하세요. 비밀을 비워 두면 저장된 값이 유지됩니다.",
   "episodeAssign.action": "에피소드에 할당",
   "episodeAssign.dialogTitle": "에피소드에 할당",
-  "episodeAssign.dialogDescription": "{{name}}이(가) 속한 에피소드를 선택하세요. Scryer가 해당 에피소드에 맞게 파일 이름을 바꾸어 제자리로 옮깁니다.",
-  "episodeAssign.pendingDescription": "Scryer가 {{name}}이(가) 어떤 에피소드인지 판단하지 못했습니다. 에피소드를 선택하면 Scryer가 그곳으로 가져옵니다.",
+  "episodeAssign.dialogDescription":
+    "{{name}}이(가) 속한 에피소드를 선택하세요. Scryer가 해당 에피소드에 맞게 파일 이름을 바꾸어 제자리로 옮깁니다.",
+  "episodeAssign.pendingDescription":
+    "Scryer가 {{name}}이(가) 어떤 에피소드인지 판단하지 못했습니다. 에피소드를 선택하면 Scryer가 그곳으로 가져옵니다.",
   "episodeAssign.unnamed": "이 파일",
   "episodeAssign.targetLabel": "에피소드",
   "episodeAssign.loadingEpisodes": "에피소드 불러오는 중…",
@@ -3081,7 +3477,8 @@ const ko: LocaleDictionary = {
   "episodeAssign.apply": "할당",
   "episodeAssign.applying": "할당 중…",
   "episodeAssign.replaceTitle": "이 에피소드에는 이미 파일이 있습니다",
-  "episodeAssign.replaceDescription": "이 파일을 할당하면 에피소드의 기본 파일이 됩니다. 현재 파일은 추가 파일로 디스크에 남습니다.",
+  "episodeAssign.replaceDescription":
+    "이 파일을 할당하면 에피소드의 기본 파일이 됩니다. 현재 파일은 추가 파일로 디스크에 남습니다.",
   "episodeAssign.replaceApply": "교체하고 할당",
   "episodeAssign.success": "파일을 할당하고 이름을 변경했습니다.",
   "episodeAssign.failed": "파일을 할당하지 못했습니다.",
@@ -3092,14 +3489,22 @@ const ko: LocaleDictionary = {
   "episodeAssign.noMatches": "일치하는 에피소드가 없습니다.",
   "episodeAssign.selectPlaceholder": "에피소드 선택…",
   "episodeAssign.refusal.noEpisodes": "에피소드를 하나 이상 선택하세요.",
-  "episodeAssign.refusal.outsideTitle": "해당 에피소드는 다른 타이틀에 속합니다.",
-  "episodeAssign.refusal.primaryConflict": "이 에피소드에는 이미 기본 파일이 있습니다.",
-  "episodeAssign.refusal.notEpisodic": "시리즈와 애니메이션 파일만 에피소드에 할당할 수 있습니다.",
-  "episodeAssign.refusal.unsupportedFile": "이 파일은 에피소드 간에 옮길 수 없습니다. 시리즈 영화 파일과 디스크 이미지는 제자리에 유지됩니다.",
-  "episodeAssign.refusal.destinationOccupied": "이 에피소드가 만드는 이름을 이미 다른 파일이 사용하고 있습니다. 해당 파일을 옮기거나 제거한 뒤 다시 시도하세요.",
-  "episodeAssign.refusal.renameRefused": "Scryer가 이 에피소드의 파일 이름을 정하지 못했습니다. 타이틀의 라이브러리 폴더와 이름 지정 템플릿을 확인하세요.",
-  "episodeAssign.refusal.renameFailed": "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
-  "pendingImports.reason.anime_numbering_ambiguous": "에피소드 번호가 모호합니다",
+  "episodeAssign.refusal.outsideTitle":
+    "해당 에피소드는 다른 타이틀에 속합니다.",
+  "episodeAssign.refusal.primaryConflict":
+    "이 에피소드에는 이미 기본 파일이 있습니다.",
+  "episodeAssign.refusal.notEpisodic":
+    "시리즈와 애니메이션 파일만 에피소드에 할당할 수 있습니다.",
+  "episodeAssign.refusal.unsupportedFile":
+    "이 파일은 에피소드 간에 옮길 수 없습니다. 시리즈 영화 파일과 디스크 이미지는 제자리에 유지됩니다.",
+  "episodeAssign.refusal.destinationOccupied":
+    "이 에피소드가 만드는 이름을 이미 다른 파일이 사용하고 있습니다. 해당 파일을 옮기거나 제거한 뒤 다시 시도하세요.",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer가 이 에피소드의 파일 이름을 정하지 못했습니다. 타이틀의 라이브러리 폴더와 이름 지정 템플릿을 확인하세요.",
+  "episodeAssign.refusal.renameFailed":
+    "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
+  "pendingImports.reason.anime_numbering_ambiguous":
+    "에피소드 번호가 모호합니다",
 };
 
 export default ko;

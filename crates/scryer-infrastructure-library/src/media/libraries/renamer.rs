@@ -34,8 +34,9 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
         for item in &plan.items {
             if matches!(item.write_action, RenameWriteAction::Move) && item.proposed_path.is_none()
             {
-                return Err(AppError::Validation(
-                    "rename target path is required for move actions".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::MEDIA_RENAME_TARGET_PATH_REQUIRED,
+                    "rename target path is required for move actions",
                 ));
             }
         }

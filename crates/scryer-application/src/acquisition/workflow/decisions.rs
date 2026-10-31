@@ -193,7 +193,7 @@ impl AppUseCase {
                 .acquisition_scope_states
                 .get_acquisition_scope_state_by_id(wid)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("wanted item {wid}")))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND, format!("wanted item {wid}")))?;
             let library_id = if let Some(library_id) = wanted.library_id.as_deref() {
                 library_id.to_string()
             } else {
@@ -202,7 +202,7 @@ impl AppUseCase {
                     .titles
                     .get_by_id(&wanted.title_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("title {}", wanted.title_id)))?
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", wanted.title_id)))?
                     .library_id
             };
             self.require_library_permission(
@@ -232,7 +232,7 @@ impl AppUseCase {
                 .titles
                 .get_by_id(tid)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {tid}")))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {tid}")))?;
             self.require_library_permission(
                 actor,
                 &title.library_id,

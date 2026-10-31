@@ -49,7 +49,7 @@ pub fn parse_download_client_remote_path_mappings(
         }
 
         let Some((remote_raw, local_raw)) = raw_line.split_once("=>") else {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_INVALID, format!(
                 "remote path mappings line {} must use REMOTE => LOCAL format",
                 line_index + 1
             )));
@@ -59,14 +59,14 @@ pub fn parse_download_client_remote_path_mappings(
 
         let local_root = local_raw.trim();
         if local_root.is_empty() {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH, format!(
                 "remote path mappings line {} requires a local path",
                 line_index + 1
             )));
         }
 
         if !Path::new(local_root).is_absolute() {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID, format!(
                 "remote path mappings line {} local path must be absolute: {local_root}",
                 line_index + 1
             )));
@@ -83,7 +83,7 @@ pub fn parse_download_client_remote_path_mappings(
         };
 
         if !seen.insert(mapping.duplicate_key()) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT, format!(
                 "remote path mappings line {} duplicates an existing remote path root",
                 line_index + 1
             )));
@@ -180,7 +180,7 @@ fn parse_download_client_config_json(config_json: &str) -> AppResult<serde_json:
     }
 
     serde_json::from_str(trimmed).map_err(|error| {
-        AppError::Validation(format!("invalid download client config JSON: {error}"))
+        AppError::validation_refused(crate::error_reasons::download_client_path_mappings::DOWNLOAD_CLIENT_CONFIG_JSON_INVALID, format!("invalid download client config JSON: {error}"))
     })
 }
 
@@ -196,31 +196,33 @@ fn read_remote_path_mappings_value(config: &serde_json::Value) -> AppResult<Opti
         return Ok(None);
     }
 
-    value
-        .as_str()
-        .map(Some)
-        .ok_or_else(|| AppError::Validation("remote_path_mappings must be a string".to_string()))
+    value.as_str().map(Some).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_INVALID,
+            "remote_path_mappings must be a string".to_string(),
+        )
+    })
 }
 
 fn parse_remote_root(remote_raw: &str, line_number: usize) -> AppResult<&str> {
     let remote_root = remote_raw.strip_suffix(' ').unwrap_or(remote_raw);
 
     if remote_root.trim().is_empty() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH, format!(
             "remote path mappings line {} requires a remote path",
             line_number
         )));
     }
 
     if remote_root.chars().next().is_some_and(char::is_whitespace) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE, format!(
             "remote path mappings line {} remote path cannot start with whitespace",
             line_number
         )));
     }
 
     if remote_root.chars().last().is_some_and(char::is_whitespace) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::download_client_path_mappings::REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE, format!(
             "remote path mappings line {} remote path cannot end with whitespace",
             line_number
         )));

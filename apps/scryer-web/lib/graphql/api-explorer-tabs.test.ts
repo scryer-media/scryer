@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renameExplorerTab, restoreExplorerTabNames } from "./api-explorer-tabs.ts";
+import {
+  renameExplorerTab,
+  restoreExplorerTabNames,
+} from "./api-explorer-tabs.ts";
 
 test("tab labels are independent of queries and preserve GraphiQL's active-tab identity", () => {
   const tabs = [
-    { title: "Lookup", query: "query Lookup { scryerVersion }", operationName: "Lookup" },
+    {
+      title: "Lookup",
+      query: "query Lookup { scryerVersion }",
+      operationName: "Lookup",
+    },
     { title: "Other", query: "{ scryerVersion }", operationName: null },
   ];
   const updated = renameExplorerTab(tabs, 0, "  My integration draft  ")!;

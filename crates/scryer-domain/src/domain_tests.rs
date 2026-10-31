@@ -1426,3 +1426,74 @@ fn executable_extensions_match_case_insensitively() {
     assert!(!is_executable_file(Path::new("file.mkv")));
     assert!(!is_executable_file(Path::new("exe")));
 }
+
+#[test]
+fn archive_password_reason_is_independent_of_the_sentence() {
+    use crate::DownloadPasswordFailure as Failure;
+    assert_eq!(
+        Failure::from_stored_reason(Some("ARCHIVE_PASSWORD_REQUIRED"), Some("translated text")),
+        Some(Failure::Required)
+    );
+    assert_eq!(
+        Failure::from_stored_reason(Some("ARCHIVE_PASSWORD_OR_CORRUPTION"), None),
+        Some(Failure::PasswordOrCorruption)
+    );
+    assert_eq!(
+        Failure::from_stored_reason(
+            Some("NEW_UNKNOWN_REASON"),
+            Some("ARCHIVE_PASSWORD_REQUIRED: old prose")
+        ),
+        None
+    );
+}
+
+#[test]
+fn legacy_archive_password_rows_remain_readable_without_a_separate_code() {
+    use crate::DownloadPasswordFailure as Failure;
+    for text in [
+        "archive_password_required",
+        "ARCHIVE_PASSWORD_REQUIRED: old explanation",
+    ] {
+        assert_eq!(
+            Failure::from_stored_reason(None, Some(text)),
+            Some(Failure::Required)
+        );
+    }
+    for text in [
+        "archive_password_or_corruption",
+        "ARCHIVE_PASSWORD_OR_CORRUPTION: old explanation",
+    ] {
+        assert_eq!(
+            Failure::from_stored_reason(None, Some(text)),
+            Some(Failure::PasswordOrCorruption)
+        );
+    }
+    assert_eq!(
+        Failure::from_stored_reason(None, Some("an unrelated provider failure")),
+        None
+    );
+}
+
+#[test]
+fn legacy_download_failure_event_defaults_the_separate_reason_code() {
+    let event: crate::DownloadFailedEventData =
+        serde_json::from_str(r#"{"reason":"ARCHIVE_PASSWORD_REQUIRED: old text"}"#).unwrap();
+    assert!(event.reason_code.is_none());
+    let legacy_json = serde_json::to_value(&event).unwrap();
+    assert!(legacy_json.get("reason_code").is_none());
+    assert_eq!(
+        serde_json::from_value::<crate::DownloadFailedEventData>(legacy_json).unwrap(),
+        event
+    );
+    let event: crate::DownloadFailedEventData = serde_json::from_str(
+        r#"{"reason_code":"ARCHIVE_PASSWORD_REQUIRED","reason":"translated text"}"#,
+    )
+    .unwrap();
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["reason_code"], "ARCHIVE_PASSWORD_REQUIRED");
+    assert_eq!(json["reason"], "translated text");
+    assert_eq!(
+        serde_json::from_value::<crate::DownloadFailedEventData>(json).unwrap(),
+        event
+    );
+}

@@ -105,8 +105,12 @@ fn from_metadata_search_item(
 }
 
 fn parse_metadata_date(value: String, field: &str) -> GqlResult<Date> {
-    parse_iso_date(Some(value))
-        .ok_or_else(|| to_gql_error(AppError::Validation(format!("invalid {field} date"))))
+    parse_iso_date(Some(value)).ok_or_else(|| {
+        to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_METADATA_DATE_INVALID,
+            format!("invalid {field} date"),
+        ))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -212,7 +216,10 @@ impl MetadataQueries {
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| {
                     value.parse().map_err(|_| {
-                        to_gql_error(AppError::Validation(format!("invalid {field} id")))
+                        to_gql_error(AppError::validation_refused(
+                            scryer_interface_core::refusal::INTERFACE_METADATA_ID_INVALID,
+                            format!("invalid {field} id"),
+                        ))
                     })
                 })
                 .transpose()
@@ -287,10 +294,12 @@ impl MetadataQueries {
             .tvdb_id
             .filter(|value| !value.trim().is_empty())
             .map(|value| {
-                value
-                    .trim()
-                    .parse::<i64>()
-                    .map_err(|_| to_gql_error(AppError::Validation("invalid tvdb id".to_string())))
+                value.trim().parse::<i64>().map_err(|_| {
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_METADATA_ID_INVALID,
+                        "invalid tvdb id",
+                    ))
+                })
             })
             .transpose()?;
         // A numeric id that is not positive names nothing; reject it rather
@@ -301,9 +310,10 @@ impl MetadataQueries {
             ("tmdb id", input.tmdb_id),
         ] {
             if id.is_some_and(|id| id <= 0) {
-                return Err(to_gql_error(AppError::Validation(format!(
-                    "{name} must be positive"
-                ))));
+                return Err(to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_METADATA_ID_INVALID,
+                    format!("{name} must be positive"),
+                )));
             }
         }
         let series_ref = SeriesTitleRef {

@@ -19,8 +19,14 @@ test("API navigation and direct access require both the opt-in and system permis
   }
   assert.equal(canAccessApiExplorer(false, true), false);
   assert.equal(canAccessApiExplorer(true, true), true);
-  assert.equal(canAccessSettingsSection("general", true, true, false, true), false);
-  assert.equal(canAccessSettingsSection("general", false, false, true, false), true);
+  assert.equal(
+    canAccessSettingsSection("general", true, true, false, true),
+    false,
+  );
+  assert.equal(
+    canAccessSettingsSection("general", false, false, true, false),
+    true,
+  );
 });
 
 /**

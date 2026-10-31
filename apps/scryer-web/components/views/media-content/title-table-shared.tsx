@@ -158,32 +158,32 @@ export const SERIES_TITLE_TABLE_ONLY_COLUMNS = new Set<TitleTableColumnKey>([
   "status",
 ]);
 
-export const ANIME_TITLE_TABLE_RATING_COLUMNS: readonly TitleTableColumnKey[] = [
-  "ratingImdb",
-  "ratingTmdb",
-  "ratingTrakt",
-  "ratingMyanimelist",
-  "ratingAnilist",
-  "ratingAnidb",
-  "ratingMdblist",
-];
+export const ANIME_TITLE_TABLE_RATING_COLUMNS: readonly TitleTableColumnKey[] =
+  [
+    "ratingImdb",
+    "ratingTmdb",
+    "ratingTrakt",
+    "ratingMyanimelist",
+    "ratingAnilist",
+    "ratingAnidb",
+    "ratingMdblist",
+  ];
 
-export const MOVIE_TITLE_TABLE_RATING_COLUMNS: readonly TitleTableColumnKey[] = [
-  "ratingImdb",
-  "ratingRottenTomatoes",
-  "ratingPopcornmeter",
-  "ratingMetacritic",
-  "ratingMetacriticUser",
-  "ratingLetterboxd",
-  "ratingTmdb",
-  "ratingTrakt",
-  "ratingMdblist",
-];
+export const MOVIE_TITLE_TABLE_RATING_COLUMNS: readonly TitleTableColumnKey[] =
+  [
+    "ratingImdb",
+    "ratingRottenTomatoes",
+    "ratingPopcornmeter",
+    "ratingMetacritic",
+    "ratingMetacriticUser",
+    "ratingLetterboxd",
+    "ratingTmdb",
+    "ratingTrakt",
+    "ratingMdblist",
+  ];
 
 export const SHARED_TITLE_TABLE_RATING_COLUMNS: readonly TitleTableColumnKey[] =
-  MOVIE_TITLE_TABLE_RATING_COLUMNS.filter(
-    (key) => key !== "ratingLetterboxd",
-  );
+  MOVIE_TITLE_TABLE_RATING_COLUMNS.filter((key) => key !== "ratingLetterboxd");
 
 export function titleTableSupportedRatingColumnsForView(
   view: ViewId,
@@ -459,12 +459,7 @@ export const VirtualizedTitleTableBody = React.forwardRef<
       titleVirtualizer.scrollToIndex(selectedIndex, { align: "center" });
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [
-    selectedTitleId,
-    selectedTitleScrollKey,
-    titleVirtualizer,
-    titles,
-  ]);
+  }, [selectedTitleId, selectedTitleScrollKey, titleVirtualizer, titles]);
 
   React.useEffect(() => {
     const element = scrollRef.current;
@@ -757,9 +752,7 @@ export function titleTableRatingColumnWidthRem(
   }
 }
 
-export function titleTableRatingColumnLabel(
-  key: TitleTableColumnKey,
-): string {
+export function titleTableRatingColumnLabel(key: TitleTableColumnKey): string {
   if (key === "ratingScryer") {
     return "Scryer Rating";
   }
@@ -784,8 +777,10 @@ export function titleTableRatingColumnValue(
     return "—";
   }
   return (
-    externalRatingLabelForAliases(ratings.externalRatings, definition.aliases) ??
-    "—"
+    externalRatingLabelForAliases(
+      ratings.externalRatings,
+      definition.aliases,
+    ) ?? "—"
   );
 }
 
@@ -992,7 +987,9 @@ export function EpisodeProgressBar({
           "pointer-events-none absolute inset-0 flex items-center justify-center tabular-nums font-semibold text-foreground dark:text-white dark:[text-shadow:0_1px_1px_rgba(0,0,0,0.55)]",
           compact ? "text-[11px]" : "text-sm",
         )}
-        style={{ clipPath: `inset(0 0 0 ${Math.min(100, Math.max(0, progress.percent))}%)` }}
+        style={{
+          clipPath: `inset(0 0 0 ${Math.min(100, Math.max(0, progress.percent))}%)`,
+        }}
       >
         {progress.text}
       </span>
@@ -1002,7 +999,9 @@ export function EpisodeProgressBar({
           "pointer-events-none absolute inset-0 flex items-center justify-center tabular-nums font-semibold text-white dark:[text-shadow:0_1px_1px_rgba(0,0,0,0.55)]",
           compact ? "text-[11px]" : "text-sm",
         )}
-        style={{ clipPath: `inset(0 ${100 - Math.min(100, Math.max(0, progress.percent))}% 0 0)` }}
+        style={{
+          clipPath: `inset(0 ${100 - Math.min(100, Math.max(0, progress.percent))}% 0 0)`,
+        }}
       >
         {progress.text}
       </span>
@@ -1143,9 +1142,12 @@ export function TitleTableActionButton({
 }: TitleTableActionButtonProps) {
   const surfaceClass: Partial<Record<BoxedActionButtonTone, string>> = {
     auto: "bg-[linear-gradient(var(--scry-success-bg),var(--scry-success-bg))] hover:bg-[linear-gradient(var(--scry-success-bg-strong),var(--scry-success-bg-strong))]",
-    search: "bg-[linear-gradient(var(--scry-info-bg),var(--scry-info-bg))] hover:bg-[linear-gradient(var(--scry-info-bg-strong),var(--scry-info-bg-strong))]",
-    accent: "bg-[linear-gradient(rgba(var(--scry-accent-rgb),0.1),rgba(var(--scry-accent-rgb),0.1))] hover:bg-[linear-gradient(rgba(var(--scry-accent-rgb),0.2),rgba(var(--scry-accent-rgb),0.2))]",
-    delete: "bg-[linear-gradient(var(--scry-danger-bg),var(--scry-danger-bg))] hover:bg-[linear-gradient(var(--scry-danger-bg-strong),var(--scry-danger-bg-strong))]",
+    search:
+      "bg-[linear-gradient(var(--scry-info-bg),var(--scry-info-bg))] hover:bg-[linear-gradient(var(--scry-info-bg-strong),var(--scry-info-bg-strong))]",
+    accent:
+      "bg-[linear-gradient(rgba(var(--scry-accent-rgb),0.1),rgba(var(--scry-accent-rgb),0.1))] hover:bg-[linear-gradient(rgba(var(--scry-accent-rgb),0.2),rgba(var(--scry-accent-rgb),0.2))]",
+    delete:
+      "bg-[linear-gradient(var(--scry-danger-bg),var(--scry-danger-bg))] hover:bg-[linear-gradient(var(--scry-danger-bg-strong),var(--scry-danger-bg-strong))]",
   };
 
   return (
@@ -1291,9 +1293,7 @@ export function TitleCollectionEmptyState({
             }}
             disabled={scanDisabled || scanLoading}
           >
-            {scanLoading ? (
-              <LoadingMark className="mr-1.5 h-4 w-4" />
-            ) : null}
+            {scanLoading ? <LoadingMark className="mr-1.5 h-4 w-4" /> : null}
             {t("settings.libraryScanButton")}
           </Button>
           {scanNotice ? (
@@ -1324,7 +1324,12 @@ export function TitleCollectionErrorState({
       {error ? (
         <p className="mt-1 text-sm text-muted-foreground">{error}</p>
       ) : null}
-      <Button type="button" variant="primary" className="mt-4" onClick={onRetry}>
+      <Button
+        type="button"
+        variant="primary"
+        className="mt-4"
+        onClick={onRetry}
+      >
         {t("label.retry")}
       </Button>
     </div>

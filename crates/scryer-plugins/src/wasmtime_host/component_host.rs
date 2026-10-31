@@ -1004,9 +1004,12 @@ impl ComponentHost {
     pub(crate) fn captured_host_policy_error(&self) -> Option<scryer_application::AppError> {
         let capture = self.inner.indexer_error_capture.lock().ok()?;
         let host = capture.as_ref()?.denied_host.as_deref()?;
-        Some(scryer_application::AppError::Validation(format!(
-            "indexer_host_not_allowed: Host {host} is missing permission for this indexer instance"
-        )))
+        Some(scryer_application::AppError::validation_refused(
+            crate::error_reasons::PLUGIN_INDEXER_HOST_FORBIDDEN,
+            format!(
+                "indexer_host_not_allowed: Host {host} is missing permission for this indexer instance"
+            ),
+        ))
     }
 
     /// Prefer the immutable accounting identity over error-response capture.

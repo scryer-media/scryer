@@ -1104,7 +1104,7 @@ mod plugin_http_client_tests {
         .expect_err("private plugin artifact URL should be rejected");
 
         assert!(
-            matches!(error, AppError::Validation(_)),
+            matches!(error, AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::ValidationRefusedWithCount { .. }),
             "expected validation error, got {error:?}"
         );
         assert!(error.to_string().contains("private or local address"));

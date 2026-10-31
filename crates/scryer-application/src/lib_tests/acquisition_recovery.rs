@@ -799,6 +799,101 @@ async fn walk_saved_movie_result(
     .await
 }
 
+#[tokio::test]
+async fn missing_grab_keeps_saved_candidates_until_expiry_or_explicit_search() {
+    use crate::acquisition::pending::{PendingGrabOutcome, PendingGrabTrigger};
+    use crate::acquisition_workflow::StandbyRecoveryOutcome;
+    for explicit_search in [false, true] {
+        let release = "Saved.Missing.Fixture.2024.1080p.WEB-DL-GRP";
+        let (app, _title, wanted, standby, client, pending) =
+            saved_movie_result_fixture("Saved Missing Fixture", release).await;
+        let now = Utc::now();
+        let history = |grabbed_at: chrono::DateTime<Utc>| {
+            serde_json::json!({
+                "title": release, "score": 100, "grabbed_at": grabbed_at,
+                "missing_download_id": scryer_domain::download_identity::DownloadId::new(),
+            })
+            .to_string()
+        };
+        app.services
+            .workflow
+            .acquisition_scope_states
+            .update_acquisition_scope_status(
+                &wanted.id,
+                "wanted",
+                wanted.last_search_at.as_deref(),
+                Some(&history(now - chrono::Duration::hours(1))),
+            )
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                walk_saved_movie_result(&app, &wanted).await,
+                StandbyRecoveryOutcome::Deferred { .. }
+            ));
+        }
+        assert!(client.submitted_release_titles.lock().await.is_empty());
+        assert_eq!(
+            pending
+                .get_pending_release(&standby.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PendingReleaseStatus::Standby
+        );
+        // Delay-expiry promotion goes through the same history admission.
+        assert_eq!(
+            app.try_grab_pending_release(
+                &wanted,
+                &standby,
+                &now,
+                PendingGrabTrigger::Automatic,
+                &crate::domain_events::DomainEventActor::system()
+            )
+            .await
+            .unwrap(),
+            PendingGrabOutcome::Deferred
+        );
+        let outcome = if explicit_search {
+            let snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+            crate::acquisition_workflow::try_saved_candidates_with_trigger(
+                &app,
+                &wanted,
+                crate::acquisition_workflow::SavedCandidateExclusions {
+                    failed_release_title: None,
+                    excluded_episode_ids: None,
+                },
+                &snapshot,
+                &now,
+                &crate::domain_events::DomainEventActor::system(),
+                PendingGrabTrigger::InteractiveSearch,
+            )
+            .await
+        } else {
+            // Inject expired durable history, then run one ordinary scheduler
+            // step. No failure event or coverage invalidation wakes this grab.
+            app.services
+                .workflow
+                .acquisition_scope_states
+                .update_acquisition_scope_status(
+                    &wanted.id,
+                    "wanted",
+                    wanted.last_search_at.as_deref(),
+                    Some(&history(now - chrono::Duration::hours(13))),
+                )
+                .await
+                .unwrap();
+            walk_saved_movie_result(&app, &wanted).await
+        };
+        assert!(
+            matches!(outcome, StandbyRecoveryOutcome::Recovered { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(client.submitted_release_titles.lock().await.len(), 1);
+    }
+}
+
 /// A blocklisted saved result is skipped from reads alone, so repeating the
 /// walk while the block stands writes nothing. Lifting the block is a changed
 /// answer, and the row is claimed and grabbed.
@@ -1326,7 +1421,7 @@ async fn import_gate_rejection_blocklists_under_its_own_reason_and_reopens_the_s
         completed_source: None,
         state: scryer_domain::TrackedDownloadState::FailedPending,
         status: scryer_domain::TrackedDownloadStatus::Error,
-        status_messages: vec![verdict.to_string()],
+        status_messages: vec![verdict.to_string().into()],
         title_id: Some(title.id.clone()),
         facet: Some("movie".to_string()),
         source_title: Some("Fixture.Release.2020.1080p-GROUP".to_string()),
@@ -2503,6 +2598,11 @@ async fn password_failed_download_emits_retryable_history_without_blocklisting()
         .unwrap();
     let mut item = failed_history_item("synthetic-job", "Synthetic.Release{{synthetic-secret}}");
     item.client_type = "weaver".into();
+    item.attention_reason_code = Some(
+        scryer_domain::DownloadPasswordFailure::Required
+            .reason_code()
+            .into(),
+    );
     item.attention_reason = Some(
         scryer_domain::DownloadPasswordFailure::Required
             .message()
@@ -2546,6 +2646,10 @@ async fn password_failed_download_emits_retryable_history_without_blocklisting()
         })
         .collect::<Vec<_>>();
     assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].reason_code.as_deref(),
+        Some("ARCHIVE_PASSWORD_REQUIRED")
+    );
     assert_eq!(
         failures[0].canonical_download_id.as_deref(),
         Some(download_id.to_string().as_str())
@@ -2679,7 +2783,7 @@ async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() 
         tracked_download
             .status_messages
             .iter()
-            .any(|message| message.contains("wasn't grabbed by Scryer"))
+            .any(|message| message.text.contains("wasn't grabbed by Scryer"))
     );
 
     let updated = wanted_items
@@ -3771,6 +3875,7 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "episode-one-active".to_string(),
         download_id: None,
@@ -4008,6 +4113,7 @@ async fn acquisition_cycle_collection_submission_blocks_same_season_only() {
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "season-one-pack".to_string(),
         download_id: None,
@@ -4399,6 +4505,24 @@ async fn seed_series_pack_scope_fixture_with_download_client(
     Arc<TrackingIndexerClient>,
     Vec<(u32, String)>,
 ) {
+    seed_series_scope_fixture(indexer_client, persisted_seasons, download_client, 5, 1).await
+}
+
+/// A monitored series of `season_count` seasons of `episodes_per_season`
+/// aired episodes each, with a wanted row for every episode of each season in
+/// `persisted_seasons`. Returns each episode as `(season, episode id)`.
+async fn seed_series_scope_fixture(
+    indexer_client: Arc<TrackingIndexerClient>,
+    persisted_seasons: &[u32],
+    download_client: Arc<StubDownloadClient>,
+    season_count: u32,
+    episodes_per_season: u32,
+) -> (
+    AppUseCase,
+    Title,
+    Arc<TrackingIndexerClient>,
+    Vec<(u32, String)>,
+) {
     let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
         download_client,
@@ -4424,7 +4548,7 @@ async fn seed_series_pack_scope_fixture_with_download_client(
         .expect("create series-pack title");
 
     let mut episode_ids = Vec::new();
-    for season_number in 1..=5 {
+    for season_number in 1..=season_count {
         let season = app
             .services
             .catalog
@@ -4438,75 +4562,186 @@ async fn seed_series_pack_scope_fixture_with_download_client(
                 ordered_path: None,
                 narrative_order: Some(season_number.to_string()),
                 first_episode_number: Some("1".to_string()),
-                last_episode_number: Some("1".to_string()),
+                last_episode_number: Some(episodes_per_season.to_string()),
                 monitored: true,
                 created_at: Utc::now(),
             })
             .await
             .expect("create series-pack season");
-        let episode = app
-            .services
-            .catalog
-            .shows
-            .create_episode(Episode {
-                id: Id::new().0,
-                title_id: title.id.clone(),
-                collection_id: Some(season.id.clone()),
-                episode_type: scryer_domain::EpisodeType::Standard,
-                episode_number: Some("1".to_string()),
-                season_number: Some(season_number.to_string()),
-                episode_label: Some(format!("S{season_number:02}E01")),
-                title: Some(format!("S{season_number:02}E01")),
-                air_date: Some("2024-01-01".to_string()),
-                duration_seconds: Some(1_440),
-                has_multi_audio: false,
-                has_subtitle: false,
-                is_filler: false,
-                is_recap: false,
-                absolute_number: None,
-                contiguous_absolute_number: None,
-                overview: None,
-                tvdb_id: None,
-                tmdb_id: None,
-                image_url: None,
-                monitored: true,
-                created_at: Utc::now(),
-            })
-            .await
-            .expect("create series-pack episode");
-        if persisted_seasons.contains(&season_number) {
-            wanted_items
-                .upsert_acquisition_scope_state(&AcquisitionScopeState {
+        for episode_number in 1..=episodes_per_season {
+            let episode = app
+                .services
+                .catalog
+                .shows
+                .create_episode(Episode {
                     id: Id::new().0,
                     title_id: title.id.clone(),
-                    title_name: Some(title.name.clone()),
-                    title_slug: None,
-                    title_facet: None,
-                    library_id: None,
-                    library_name: None,
-                    library_slug: None,
-                    episode_id: Some(episode.id.clone()),
-                    collection_id: Some(season.id),
-                    series_movie_link_id: None,
+                    collection_id: Some(season.id.clone()),
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: Some(episode_number.to_string()),
                     season_number: Some(season_number.to_string()),
-                    episode_number: Some("1".to_string()),
-                    media_type: "episode".to_string(),
-                    last_search_at: None,
-                    status: AcquisitionScopeStatus::Wanted,
-                    grabbed_release: None,
-                    landed_bar: None,
-                    latest_release_decision: None,
-                    mismatch_recovery_eligible: false,
-                    created_at: Utc::now().to_rfc3339(),
-                    updated_at: Utc::now().to_rfc3339(),
+                    episode_label: Some(format!("S{season_number:02}E{episode_number:02}")),
+                    title: Some(format!("S{season_number:02}E{episode_number:02}")),
+                    air_date: Some("2024-01-01".to_string()),
+                    duration_seconds: Some(1_440),
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: true,
+                    created_at: Utc::now(),
                 })
                 .await
-                .expect("seed series-pack wanted episode");
+                .expect("create series-pack episode");
+            if persisted_seasons.contains(&season_number) {
+                wanted_items
+                    .upsert_acquisition_scope_state(&AcquisitionScopeState {
+                        id: Id::new().0,
+                        title_id: title.id.clone(),
+                        title_name: Some(title.name.clone()),
+                        title_slug: None,
+                        title_facet: None,
+                        library_id: None,
+                        library_name: None,
+                        library_slug: None,
+                        episode_id: Some(episode.id.clone()),
+                        collection_id: Some(season.id.clone()),
+                        series_movie_link_id: None,
+                        season_number: Some(season_number.to_string()),
+                        episode_number: Some(episode_number.to_string()),
+                        media_type: "episode".to_string(),
+                        last_search_at: None,
+                        status: AcquisitionScopeStatus::Wanted,
+                        grabbed_release: None,
+                        landed_bar: None,
+                        latest_release_decision: None,
+                        mismatch_recovery_eligible: false,
+                        created_at: Utc::now().to_rfc3339(),
+                        updated_at: Utc::now().to_rfc3339(),
+                    })
+                    .await
+                    .expect("seed series-pack wanted episode");
+            }
+            episode_ids.push((season_number, episode.id));
         }
-        episode_ids.push((season_number, episode.id));
     }
 
     (app, title, indexer_client, episode_ids)
+}
+
+/// The episode searches issued so far, in order, as `(season, episode)`.
+async fn episode_searches(indexer_client: &TrackingIndexerClient) -> Vec<(u32, u32)> {
+    indexer_client
+        .searches
+        .lock()
+        .await
+        .iter()
+        .filter_map(|search| Some((search.season?, search.episode?)))
+        .collect()
+}
+
+/// A walk whose time is up stops inside the title it is walking, not only
+/// between titles, and the next walk picks the title up at its first unwalked
+/// scope instead of starting it over. A spent budget still gets one scope of
+/// the title in per walk, so the backlog keeps moving.
+#[tokio::test]
+async fn a_walk_out_of_time_stops_inside_a_title_and_the_next_walk_resumes_at_its_next_scope() {
+    use crate::acquisition_workflow::WalkStopReason;
+    let indexer_client = Arc::new(TrackingIndexerClient::default().returning_no_results());
+    let (app, _, indexer_client, _) = seed_series_pack_scope_fixture(indexer_client).await;
+
+    for season in 1..=4u32 {
+        let before = episode_searches(&indexer_client).await.len();
+        let outcome = app
+            .run_background_acquisition_cycle_with_budget_once(std::time::Duration::ZERO)
+            .await;
+        assert_eq!(outcome.titles_walked, 1, "walk {season}");
+        assert_eq!(
+            outcome.titles_stopped_midway, 1,
+            "walk {season} stops the title before its last scope"
+        );
+        assert_eq!(
+            outcome.stop,
+            Some(WalkStopReason::Deadline),
+            "walk {season}"
+        );
+        assert_eq!(
+            episode_searches(&indexer_client).await[before..].to_vec(),
+            vec![(season, 1)],
+            "walk {season} searches only the first scope the earlier walks did not reach"
+        );
+    }
+
+    // The fifth walk reaches the title's last scope, so nothing is left over.
+    let before = episode_searches(&indexer_client).await.len();
+    let last = app
+        .run_background_acquisition_cycle_with_budget_once(std::time::Duration::ZERO)
+        .await;
+    assert_eq!(last.titles_stopped_midway, 0);
+    assert_eq!(last.stop, None);
+    assert_eq!(
+        episode_searches(&indexer_client).await[before..].to_vec(),
+        vec![(5, 1)]
+    );
+    assert_eq!(
+        episode_searches(&indexer_client).await,
+        (1..=5).map(|season| (season, 1)).collect::<Vec<_>>(),
+        "every scope is searched exactly once across the walks"
+    );
+}
+
+/// A title with more scopes than one walk's search budget stops once it has
+/// spent the budget, even with time to spare, and the next walk searches the
+/// rest of it and nothing it already searched.
+#[tokio::test]
+async fn a_title_stops_at_its_search_budget_and_the_next_walk_searches_the_rest() {
+    use crate::acquisition_workflow::{BACKGROUND_TITLE_WALK_QUERY_BUDGET, WalkStopReason};
+    let episode_count = BACKGROUND_TITLE_WALK_QUERY_BUDGET as u32 + 5;
+    let indexer_client = Arc::new(TrackingIndexerClient::default().returning_no_results());
+    let (app, _, indexer_client, _) = seed_series_scope_fixture(
+        indexer_client,
+        &[1],
+        Arc::new(StubDownloadClient::default().with_unique_job_ids()),
+        1,
+        episode_count,
+    )
+    .await;
+
+    let first = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(first.titles_walked, 1);
+    assert_eq!(first.titles_stopped_midway, 1);
+    assert_eq!(first.stop, Some(WalkStopReason::QueryBudget));
+    assert_eq!(first.indexer_queries, BACKGROUND_TITLE_WALK_QUERY_BUDGET);
+    let first_episodes = episode_searches(&indexer_client).await;
+    let reached = first_episodes.len() as u32;
+    assert!(
+        (1..episode_count).contains(&reached),
+        "the budget stops the title part-way: {first_episodes:?}"
+    );
+    assert_eq!(
+        first_episodes,
+        (1..=reached)
+            .map(|episode| (1, episode))
+            .collect::<Vec<_>>(),
+        "the title is walked in episode order up to where it stopped"
+    );
+
+    let second = app.run_background_acquisition_cycle_once().await;
+    assert_eq!(second.titles_stopped_midway, 0);
+    assert_eq!(second.stop, None);
+    assert_eq!(
+        episode_searches(&indexer_client).await[first_episodes.len()..].to_vec(),
+        (reached + 1..=episode_count)
+            .map(|episode| (1, episode))
+            .collect::<Vec<_>>(),
+        "the next walk searches exactly the scopes the first did not reach"
+    );
 }
 
 fn series_pack_anchor_standby(
@@ -5374,6 +5609,551 @@ async fn seed_recent_failed_season_pack_fixture_with_indexer_and_scope_states(
     }
 
     (app, title, indexer_client, download_client)
+}
+
+#[tokio::test]
+async fn rss_priority_drains_the_current_query_then_resumes_unwalked_scopes() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let indexer = Arc::new(TrackingIndexerClient {
+        search_gate: Some(gate.clone()),
+        ..TrackingIndexerClient::default()
+            .returning_no_results()
+            .reporting_routed_indexers_fired()
+    });
+    let (app, _, _, _) = seed_recent_failed_season_pack_fixture_with_indexer(indexer.clone()).await;
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::default());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let walk = tokio::spawn({
+        let app = app.clone();
+        async move { app.run_background_acquisition_cycle_once().await }
+    });
+    within_deadline(
+        "the title query to start",
+        indexer.search_started.notified(),
+    )
+    .await;
+    assert_eq!(indexer.searches.lock().await.len(), 1);
+
+    // An actual RSS visit completes while the old HTTP query is still held.
+    within_deadline(
+        "RSS to start and finish beside the blocked query",
+        app.run_scheduled_rss_sync(),
+    )
+    .await
+    .expect("RSS visit");
+    assert!(
+        !walk.is_finished(),
+        "RSS does not wait for the background walk"
+    );
+    assert!(!indexer.search_cancellations.lock().await[0].is_cancelled());
+    gate.add_permits(1);
+    let outcome = within_deadline("the yielded walk to drain its query", walk)
+        .await
+        .expect("walk task");
+    assert_eq!(
+        outcome.stop,
+        Some(crate::acquisition::workflow::WalkStopReason::RssPriority)
+    );
+    assert_eq!(
+        indexer.searches.lock().await.len(),
+        1,
+        "no season or episode query after yielding"
+    );
+    assert!(
+        !coverage.recorded().await.is_empty(),
+        "the completed query keeps its coverage"
+    );
+
+    gate.add_permits(100);
+    let resumed = within_deadline(
+        "the next cycle to resume",
+        app.run_background_acquisition_cycle_once(),
+    )
+    .await;
+    assert!(
+        resumed.indexer_queries > 0,
+        "RSS cancellation belongs only to the previous generation"
+    );
+    assert!(
+        indexer
+            .searches
+            .lock()
+            .await
+            .iter()
+            .any(|search| search.season.is_some())
+    );
+}
+
+#[tokio::test]
+async fn rss_priority_blocks_background_admission_until_the_visit_drops() {
+    let (app, _, indexer) = seed_recent_failed_season_pack_fixture().await;
+    let rss = app.runtime.acquisition.walk_priority.begin_rss();
+    let outcome = within_deadline(
+        "held background pass",
+        app.run_background_acquisition_cycle_once(),
+    )
+    .await;
+    assert_eq!(outcome.indexer_queries, 0);
+    assert!(indexer.searches.lock().await.is_empty());
+    drop(rss);
+    let resumed = within_deadline(
+        "background admission after RSS",
+        app.run_background_acquisition_cycle_once(),
+    )
+    .await;
+    assert!(resumed.indexer_queries > 0);
+}
+
+#[tokio::test]
+async fn rss_priority_keeps_a_fifth_title_queued_while_four_queries_drain() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let indexer = Arc::new(TrackingIndexerClient {
+        search_gate: Some(gate.clone()),
+        ..TrackingIndexerClient::default().returning_no_results()
+    });
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted.clone(),
+        indexer.clone(),
+    );
+    for number in 1..=5 {
+        seed_movie_wanted_for_acquisition(
+            &app,
+            &user,
+            &wanted,
+            &format!("Queued Movie {number}"),
+            2024,
+        )
+        .await;
+    }
+    let walk = tokio::spawn({
+        let app = app.clone();
+        async move { app.run_background_acquisition_cycle_once().await }
+    });
+    within_deadline("four admitted title queries", async {
+        while indexer.searches.lock().await.len() < 4 {
+            indexer.search_started.notified().await;
+        }
+    })
+    .await;
+    let rss = app.runtime.acquisition.walk_priority.begin_rss();
+    drop(rss);
+    gate.add_permits(4);
+    let outcome = within_deadline("four draining queries", walk)
+        .await
+        .unwrap();
+    assert_eq!(outcome.titles_walked, 4);
+    assert_eq!(
+        indexer.searches.lock().await.len(),
+        4,
+        "the fifth title is left on the cursor even after RSS finishes"
+    );
+    assert!(
+        indexer
+            .search_cancellations
+            .lock()
+            .await
+            .iter()
+            .all(|token| !token.is_cancelled())
+    );
+    gate.add_permits(100);
+    within_deadline(
+        "queued title resumes",
+        app.run_background_acquisition_cycle_once(),
+    )
+    .await;
+    assert_eq!(
+        indexer
+            .searches
+            .lock()
+            .await
+            .iter()
+            .map(|search| search.query.clone())
+            .collect::<HashSet<_>>()
+            .len(),
+        5
+    );
+}
+
+#[tokio::test]
+async fn rss_priority_skips_alias_queries_without_discarding_obtained_candidates() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let indexer = Arc::new(TrackingIndexerClient {
+        search_gate: Some(gate.clone()),
+        ..TrackingIndexerClient::default().reporting_routed_indexers_fired()
+    });
+    let (app, mut title, _, _) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer.clone()).await;
+    title.tags.push(format!(
+        "{}Alternate Series",
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+    ));
+    let mut subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    subject.queries = vec![title.name.clone()];
+    let token = app
+        .runtime
+        .acquisition
+        .walk_priority
+        .begin_background()
+        .unwrap();
+    let search = async {
+        let mut context = crate::catalog::release_search::WalkSearchContext::default();
+        context.rss_yield = Some(token);
+        let outcome = app
+            .search_and_score_subject_with_context(
+                &title,
+                &subject,
+                "alias_yield_test",
+                SearchMode::Interactive,
+                tokio_util::sync::CancellationToken::new(),
+                Some(HashSet::from(["acquisition-indexer".into()])),
+                None,
+                Utc::now(),
+                &mut context,
+            )
+            .await
+            .unwrap();
+        assert!(context.interrupted);
+        outcome
+    };
+    let interrupt = async {
+        within_deadline("primary query entered", indexer.search_started.notified()).await;
+        let rss = app.runtime.acquisition.walk_priority.begin_rss();
+        drop(rss);
+        gate.add_permits(1);
+    };
+    let (outcome, ()) = within_deadline("alias query yield", async {
+        tokio::join!(search, interrupt)
+    })
+    .await;
+    assert!(!outcome.results.is_empty());
+    assert!(outcome.complete_indexer_ids.is_empty());
+    assert!(outcome.unsupported_indexer_ids.is_empty());
+    assert_eq!(indexer.searches.lock().await.len(), 1);
+    gate.add_permits(100);
+    let resumed = within_deadline(
+        "alias scope resumes",
+        app.search_and_score_subject_restricted_with_fired_indexers(
+            &title,
+            &subject,
+            "alias_yield_test",
+            SearchMode::Interactive,
+            tokio_util::sync::CancellationToken::new(),
+            Some(HashSet::from(["acquisition-indexer".into()])),
+            None,
+            Utc::now(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(!resumed.complete_indexer_ids.is_empty());
+    assert!(
+        indexer
+            .searches
+            .lock()
+            .await
+            .iter()
+            .any(|search| search.query.starts_with("Alternate Series"))
+    );
+}
+
+#[tokio::test]
+async fn title_walk_shared_scoring_matches_isolated_scopes_and_linked_movie_inputs() {
+    let (app, mut title, indexer) = seed_recent_failed_season_pack_fixture().await;
+    title.tags.push(format!(
+        "{}Alternate Series",
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+    ));
+    let reads = Arc::new(crate::acquisition::title_reads::TitleCatalogReads::new(
+        &title.id,
+    ));
+    let mut shared = crate::catalog::release_search::WalkSearchContext::default();
+    shared.reads = Some(reads.clone());
+    let now = Utc::now();
+    let mut subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    // Interactive mode deliberately visits the alias too; each scope keeps its
+    // own parse and coverage coordinates while sharing expensive preparation.
+    for (season, episode, kind) in [
+        (None, None, ReleaseSearchSubjectKind::Title),
+        (Some(7), None, ReleaseSearchSubjectKind::Season),
+        (Some(7), Some(23), ReleaseSearchSubjectKind::Episode),
+        (Some(7), Some(24), ReleaseSearchSubjectKind::Episode),
+    ] {
+        subject.season = season;
+        subject.episode = episode;
+        subject.subject_kind = kind;
+        let actual = within_deadline(
+            "scoring scope",
+            app.search_and_score_subject_with_context(
+                &title,
+                &subject,
+                "shared_scoring_test",
+                SearchMode::Interactive,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                now,
+                &mut shared,
+            ),
+        )
+        .await
+        .unwrap();
+        let expected = within_deadline(
+            "scoring scope",
+            app.search_and_score_subject_restricted_with_fired_indexers(
+                &title,
+                &subject,
+                "shared_scoring_test",
+                SearchMode::Interactive,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                now,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(!actual.results.is_empty());
+        assert_eq!(actual.results, expected.results);
+    }
+    assert_eq!(
+        reads.scoring_preparations.load(Ordering::SeqCst),
+        1,
+        "all pack, episode and alias scopes share preparation"
+    );
+    assert!(
+        indexer
+            .searches
+            .lock()
+            .await
+            .iter()
+            .any(|search| search.query.starts_with("Alternate Series"))
+    );
+
+    // Linked movies retain their parent's ID, but use movie profile/category,
+    // runtime and parsing inputs. They must agree with an isolated movie call.
+    let mut movie = title.clone();
+    movie.name = "Linked Movie".into();
+    movie.facet = MediaFacet::Movie;
+    movie.runtime_minutes = Some(97);
+    movie.year = Some(2024);
+    movie.tags.clear();
+    let movie_subject = app
+        .resolve_release_search_subject_for_title(&movie)
+        .await
+        .unwrap();
+    let actual = within_deadline(
+        "scoring scope",
+        app.search_and_score_subject_with_context(
+            &movie,
+            &movie_subject,
+            "shared_scoring_test",
+            SearchMode::Interactive,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            now,
+            &mut shared,
+        ),
+    )
+    .await
+    .unwrap();
+    let expected = within_deadline(
+        "scoring scope",
+        app.search_and_score_subject_restricted_with_fired_indexers(
+            &movie,
+            &movie_subject,
+            "shared_scoring_test",
+            SearchMode::Interactive,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            now,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !actual.results.is_empty(),
+        "the linked movie parity check must score a release"
+    );
+    assert_eq!(actual.results, expected.results);
+    assert_eq!(
+        reads.scoring_preparations.load(Ordering::SeqCst),
+        2,
+        "the derived movie replaces the series preparation"
+    );
+}
+
+#[tokio::test]
+async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    let app = app.with_test_overrides(|builder| builder.with_blocklist_repo(blocklist.clone()));
+    let mut profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+    let release = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let now = Utc::now();
+    let mut prepared = None;
+    let mut routing = IndexerRoutingPlan {
+        entries: HashMap::from([(
+            "indexer-test".into(),
+            IndexerRoutingEntry {
+                enabled: true,
+                categories: vec![],
+                priority: 1,
+            },
+        )]),
+    };
+    macro_rules! score {
+        ($prepared:expr, $reads:expr) => {
+            within_deadline(
+                "prepared scope scoring",
+                app.score_release_results_with_prepared(
+                    vec![release.clone()],
+                    &profile,
+                    &title.id,
+                    Some(&routing),
+                    Some(24),
+                    &subject.title_evidence.parse_context,
+                    Some(7),
+                    Some(23),
+                    None,
+                    $prepared,
+                    $reads,
+                    true,
+                    None,
+                    now,
+                ),
+            )
+            .await
+            .unwrap()
+        };
+    }
+    let first = score!(&mut prepared, Some(&reads));
+    assert!(!first.is_empty());
+    assert_eq!(first, score!(&mut prepared, Some(&reads)));
+    assert_eq!(reads.scoring_preparations.load(Ordering::SeqCst), 1);
+    profile.criteria.cutoff_score = Some(profile.criteria.cutoff_score.unwrap_or_default() + 1);
+    let changed_profile = score!(&mut prepared, Some(&reads));
+    assert_eq!(reads.scoring_preparations.load(Ordering::SeqCst), 2);
+    assert_eq!(changed_profile, score!(&mut None, None));
+    routing.entries.get_mut("indexer-test").unwrap().priority = 2;
+    let changed_routing = score!(&mut prepared, Some(&reads));
+    assert_eq!(reads.scoring_preparations.load(Ordering::SeqCst), 3);
+    assert_eq!(changed_routing, score!(&mut None, None));
+    blocklist
+        .block(&NewBlocklistEntry {
+            title_id: title.id.clone(),
+            release_name: release.title.clone(),
+            indexer_id: String::new(),
+            info_hash: None,
+            reason: Some("blocked during walk".into()),
+        })
+        .await
+        .unwrap();
+    assert!(
+        score!(&mut prepared, Some(&reads)).is_empty(),
+        "a later scope must observe the new exclusion"
+    );
+    assert_eq!(
+        reads.scoring_preparations.load(Ordering::SeqCst),
+        3,
+        "mutable exclusions refresh without rebuilding title policy"
+    );
+}
+
+#[tokio::test]
+async fn title_walk_compact_reads_cover_pack_ownership_and_scope_cutoffs() {
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let pending = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, title, _, _) = seed_recent_failed_season_pack_fixture_with_indexer_and_scope_states(
+        Arc::new(TrackingIndexerClient::default()),
+        wanted.clone(),
+        pending.clone(),
+    )
+    .await;
+    let files = Arc::new(MockMediaFileRepo {
+        missing_scope_source: Some(wanted),
+        ..Default::default()
+    });
+    let app = app.with_test_overrides(|builder| builder.with_media_files(files.clone()));
+    within_deadline(
+        "background title walk with compact reads",
+        app.run_background_acquisition_cycle_once(),
+    )
+    .await;
+    assert_eq!(files.title_file_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(files.primary_cutoff_reads.load(Ordering::SeqCst), 1);
+    // Review parking has its own title-level idempotency read. Check the
+    // evaluator independently so that separate workflow cannot mask a history
+    // read added to its active-pending query.
+    pending.title_history_reads.store(0, Ordering::SeqCst);
+    pending.active_title_reads.lock().await.clear();
+    let episode = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|episode| episode.episode_number.as_deref() == Some("23"))
+        .unwrap();
+    let mut subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    subject.submission_scope = SubmissionScope::Episode {
+        episode_id: episode.id,
+    };
+    subject.season = Some(7);
+    subject.episode = Some(23);
+    subject.subject_kind = ReleaseSearchSubjectKind::Episode;
+    let candidate = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+    let evaluated = within_deadline(
+        "compact evaluator pending read",
+        app.evaluate_search_results_for_subject_with_reads(
+            &title,
+            &subject,
+            vec![candidate],
+            false,
+            &reads,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(!evaluated.is_empty());
+    assert_eq!(pending.title_history_reads.load(Ordering::SeqCst), 0);
+    assert!(!pending.active_title_reads.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -6522,6 +7302,27 @@ async fn missing_adopted_submission_defers_without_failed_signature_or_blocklist
 
     app.run_background_acquisition_cycle_once().await;
 
+    // Retry directly so scheduler backoff cannot hide a missing submission
+    // fence. Both repeated grabs must stop before calling the client again.
+    for _ in 0..2 {
+        let error = app
+            .queue_existing_title_download(
+                &user,
+                &title.id,
+                QueuedReleaseSelection {
+                    source_hint: Some("https://example.invalid/recovered.nzb".to_string()),
+                    source_kind: Some(DownloadSourceKind::NzbUrl),
+                    source_title: Some(release_title.to_string()),
+                    ..Default::default()
+                },
+                SubmissionScope::Title,
+                SubmissionConflictPolicy::Abort,
+            )
+            .await
+            .expect_err("unresolved adoption must block another submission");
+        assert!(error.is_download_submit_ambiguous());
+    }
+
     assert_eq!(
         download_client
             .submitted_release_titles
@@ -6654,7 +7455,7 @@ async fn acquisition_cycle_category_mismatch_veto_burns_the_release_without_subm
         vetoed
             .error_message
             .as_deref()
-            .is_some_and(|message| message.contains("category_mismatch")),
+            .is_some_and(|message| message.contains("contradicts the release's movie subject")),
         "the recorded failure must tell operators why: {:?}",
         vetoed.error_message
     );
@@ -6681,10 +7482,10 @@ async fn acquisition_cycle_category_mismatch_veto_burns_the_release_without_subm
         "counterfeit.feature.2024.1080p.web-dl-grp"
     );
     assert!(
-        blocklist[0]
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("category_mismatch")),
+        blocklist[0].reason.as_deref().is_some_and(|reason| {
+            reason.contains("indexer category 'TV > HD' contradicts the release's movie subject")
+                && reason.contains("the NZB was not handed to the download client")
+        }),
         "the entry must tell operators why: {:?}",
         blocklist[0].reason
     );
@@ -9675,6 +10476,7 @@ async fn acquisition_cycle_title_submission_still_blocks_movie_search() {
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "movie-active".to_string(),
         download_id: None,
@@ -11790,6 +12592,304 @@ async fn rss_does_not_grab_paused_scope() {
     assert!(download_submissions.store.lock().await.is_empty());
 }
 
+#[tokio::test]
+async fn rss_title_visit_reuses_catalog_reads_across_episodes_and_packs() {
+    assert_rss_title_visit_read_budget(MediaFacet::Series, false).await;
+}
+
+#[tokio::test]
+async fn rss_pending_replay_hits_the_narrow_query_with_its_frozen_row_id() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        pending.clone(),
+        wanted.clone(),
+        Arc::new(FixedFeedRssIndexerClient { results: vec![] }),
+    );
+    let (title, wanted_id) =
+        seed_movie_wanted_for_acquisition(&app, &user, &wanted, "RSS Replay Guard", 2024).await;
+    let mut release = pending_movie_release(
+        &wanted_id,
+        &title,
+        "RSS.Replay.Guard.2024.1080p.WEB-DL-GRP",
+        PendingReleaseStatus::Waiting,
+    );
+    release.indexer_source = Some("nzbgeek".into());
+    release.release_listing_json = Some(STANDBY_LISTING_SNAPSHOT.into());
+    let pending_id = pending.insert_pending_release(&release).await.unwrap();
+    pending.active_title_reads.lock().await.clear();
+    pending.title_history_reads.store(0, Ordering::SeqCst);
+
+    let report =
+        crate::test_wait::within_deadline("RSS pending replay", app.run_scheduled_rss_sync())
+            .await
+            .expect("RSS replay cycle");
+    assert_eq!(report.releases_grabbed, 1, "{report:?}");
+    assert_eq!(
+        *pending.active_title_reads.lock().await,
+        vec![(title.id, vec![pending_id])],
+        "replay must pass the exact durable row ID through the narrow query"
+    );
+    assert_eq!(
+        pending.title_history_reads.load(Ordering::SeqCst),
+        0,
+        "replay must not fall back to loading the title's entire pending history"
+    );
+    let submitted = submissions.store.lock().await;
+    assert_eq!(submitted.len(), 1);
+    let snapshot: serde_json::Value = serde_json::from_str(
+        submitted[0]
+            .release_listing_json
+            .as_deref()
+            .expect("frozen listing"),
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot["extra"]["synthetic_listing_attribute"], "standby",
+        "the narrow lookup must preserve the replay's frozen facts"
+    );
+}
+
+#[tokio::test]
+async fn rss_anime_title_visit_reuses_catalog_reads_through_subject_resolution() {
+    assert_rss_title_visit_read_budget(MediaFacet::Anime, false).await;
+}
+
+#[tokio::test]
+async fn rss_title_visit_refreshes_blocklist_after_the_first_submission() {
+    assert_rss_title_visit_read_budget(MediaFacet::Anime, true).await;
+}
+
+async fn assert_rss_title_visit_read_budget(facet: MediaFacet, block_later_scopes: bool) {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let pending = Arc::new(TrackingPendingReleaseRepo::default());
+    let blocklist = Arc::new(MockBlocklistRepo::default());
+    let client = Arc::new(StubDownloadClient::default().with_unique_job_ids());
+    let release_names = [
+        "Cascade.Falls.S01E01.1080p.WEB-DL-GRP",
+        "Cascade.Falls.S01E02.1080p.WEB-DL-GRP",
+        "Cascade.Falls.S01.COMPLETE.1080p.WEB-DL-GRP",
+    ];
+    // Ordinary series exercise two episodes plus a season pack. The anime
+    // bridge fixture exercises two unambiguous episode scopes.
+    let evaluated_scopes = if facet == MediaFacet::Anime { 2 } else { 3 };
+    let results = release_names
+        .iter()
+        .copied()
+        .take(evaluated_scopes)
+        .map(|name| {
+            let mut result = FixedReleaseIndexerClient::new(name)
+                .with_listing_facts()
+                .release();
+            result.guid = Some(name.to_string());
+            result.download_url = Some(format!("https://example.invalid/{name}.nzb"));
+            result
+        })
+        .collect();
+    let (mut app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        client.clone(),
+        submissions.clone(),
+        pending.clone(),
+        wanted.clone(),
+        Arc::new(FixedFeedRssIndexerClient { results }),
+    );
+    let shows = Arc::new(MockShowRepo::default());
+    let files = Arc::new(MockMediaFileRepo::default());
+    app.services.catalog.shows = shows.clone();
+    app = app.with_test_overrides(|services| {
+        services
+            .with_media_files(files.clone())
+            .with_blocklist_repo(blocklist.clone())
+    });
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Cascade Falls".into(),
+                facet: facet.clone(),
+                monitored: true,
+                content_status: Some("Continuing".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("series");
+    wanted.remember_title_facet(&title.id, facet.clone()).await;
+    if facet == MediaFacet::Anime {
+        shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&scryer_domain::AnimeNumberingBridge {
+                    source: Default::default(),
+                    generated_on: "2026-01-01".into(),
+                    corroborating_order: None,
+                    seasons: vec![scryer_domain::AnimeCommunitySeason {
+                        index: 1,
+                        absolute_start: Some(1),
+                        ..Default::default()
+                    }],
+                }),
+            )
+            .await
+            .expect("numbering bridge");
+    }
+    let season = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            Some("Season 1".into()),
+            None,
+            Some("1".into()),
+            Some("2".into()),
+        )
+        .await
+        .expect("season");
+    let mut ids = Vec::new();
+    for number in 1..=2 {
+        let episode = app
+            .create_episode(
+                &user,
+                title.id.clone(),
+                Some(season.id.clone()),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                Some(format!("S01E{number:02}")),
+                Some(format!("Episode {number}")),
+                Some("2024-01-01".into()),
+                Some(1_440),
+                false,
+                false,
+            )
+            .await
+            .expect("episode");
+        ids.push(episode.id);
+    }
+    let before = [
+        shows.title_episode_reads.load(Ordering::SeqCst),
+        shows.title_collection_reads.load(Ordering::SeqCst),
+        files.title_file_reads.load(Ordering::SeqCst),
+    ];
+    let bridge_reads_before = shows.anime_bridge_reads.load(Ordering::SeqCst);
+    let cutoff_reads_before = files.primary_cutoff_reads.load(Ordering::SeqCst);
+    let blocklist_reads_before = blocklist.title_reads.load(Ordering::SeqCst);
+    submissions.list_for_title_calls.lock().await.clear();
+    submissions.active_unbound_title_calls.lock().await.clear();
+    pending.active_title_reads.lock().await.clear();
+    pending.title_history_reads.store(0, Ordering::SeqCst);
+    let report = if block_later_scopes {
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        *client.submit_gate.lock().await = Some(release_first.clone());
+        let block_after_first_enters = async {
+            crate::test_wait::within_deadline(
+                "first RSS submission",
+                client.submit_started.notified(),
+            )
+            .await;
+            // The first scope passed its guards. Change the exclusion while it
+            // is in the client, before any later scope can be evaluated.
+            for name in release_names {
+                blocklist
+                    .block(&NewBlocklistEntry {
+                        title_id: title.id.clone(),
+                        release_name: name.into(),
+                        indexer_id: String::new(),
+                        info_hash: None,
+                        reason: Some("blocked during RSS visit".into()),
+                    })
+                    .await
+                    .unwrap();
+            }
+            *client.submit_gate.lock().await = None;
+            release_first.notify_one();
+        };
+        let (report, ()) = tokio::join!(
+            crate::test_wait::within_deadline(
+                "RSS guard refresh cycle",
+                app.run_scheduled_rss_sync()
+            ),
+            block_after_first_enters,
+        );
+        report.expect("RSS cycle")
+    } else {
+        crate::test_wait::within_deadline("RSS read budget cycle", app.run_scheduled_rss_sync())
+            .await
+            .expect("RSS cycle")
+    };
+    let expected_grabs = if block_later_scopes { 1 } else { 2 };
+    assert_eq!(
+        report.releases_grabbed,
+        expected_grabs,
+        "report: {report:?}; submissions: {:?}",
+        submissions.store.lock().await
+    );
+    let submitted = submissions.store.lock().await;
+    assert_eq!(submitted.len(), expected_grabs);
+    for id in ids.iter().filter(|_| !block_later_scopes) {
+        assert!(submitted.iter().any(|item| item.scope
+            == SubmissionScope::Episode {
+                episode_id: id.clone()
+            }));
+    }
+    let after = [
+        shows.title_episode_reads.load(Ordering::SeqCst),
+        shows.title_collection_reads.load(Ordering::SeqCst),
+        files.title_file_reads.load(Ordering::SeqCst),
+    ];
+    assert_eq!(
+        std::array::from_fn::<usize, 3, _>(|i| after[i] - before[i]),
+        [2, 1, 0],
+        "one shared evaluation read, plus the canonical submission guard's independent episode read"
+    );
+    assert_eq!(
+        shows.anime_bridge_reads.load(Ordering::SeqCst) - bridge_reads_before,
+        1,
+        "routing, scoring and subject resolution share the numbering bridge"
+    );
+    assert_eq!(
+        files.primary_cutoff_reads.load(Ordering::SeqCst) - cutoff_reads_before,
+        1,
+        "RSS uses one compact projection and never falls back to full title-file rows"
+    );
+    assert_eq!(
+        pending.title_history_reads.load(Ordering::SeqCst),
+        0,
+        "RSS must not rehydrate terminal pending history"
+    );
+    let active_reads = pending.active_title_reads.lock().await;
+    assert_eq!(
+        active_reads.len(),
+        evaluated_scopes,
+        "pending state is refreshed for every evaluated scope, even when scoring excludes its release"
+    );
+    assert!(
+        active_reads
+            .iter()
+            .all(|(id, replay_ids)| id == &title.id && replay_ids.is_empty())
+    );
+    assert_eq!(
+        blocklist.title_reads.load(Ordering::SeqCst) - blocklist_reads_before,
+        evaluated_scopes * 2,
+        "every scoring batch refreshes exclusions; every grab attempt checks them independently"
+    );
+    assert_eq!(
+        *submissions.active_unbound_title_calls.lock().await,
+        vec![title.id.clone()],
+        "the guarded canonical submission still checks uncertain acceptance"
+    );
+    assert_eq!(
+        *submissions.list_for_title_calls.lock().await,
+        vec![title.id.clone(), title.id.clone()],
+        "one queue snapshot plus an independent read under the canonical submission guard"
+    );
+}
+
 /// A season pack matching two monitored, missing episodes is grabbed once at
 /// pack granularity (§D5 #3): a single submission carrying the pack submission
 /// scope, not one grab per member episode.
@@ -13722,6 +14822,86 @@ async fn a_season_scoped_interactive_walk_never_spends_a_bare_title_query() {
     );
 }
 
+/// Releasing the title walk lock at the end of an operator's season search
+/// must not wake the convergence poller. A woken cycle runs a full,
+/// gap-exempt walk with no season filter, and it would land on this title
+/// right after the operator asked for one season of it.
+#[tokio::test]
+async fn a_season_scoped_interactive_walk_leaves_no_poller_wake_behind() {
+    use futures_util::FutureExt;
+
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    let wake = app.runtime.acquisition.acquisition_wake.clone();
+    let _ = wake.notified().now_or_never();
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        Some(7),
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("season-scoped interactive walk");
+
+    assert!(
+        !indexer_client.searches.lock().await.is_empty(),
+        "the season-scoped walk still queries its season"
+    );
+    assert!(
+        wake.notified().now_or_never().is_none(),
+        "a season-scoped walk must not wake the convergence poller"
+    );
+}
+
+/// An operator's search for one episode goes through the best-release queue,
+/// not the title walk, and it must leave the convergence poller asleep too.
+#[tokio::test]
+async fn an_episode_scoped_automatic_search_leaves_no_poller_wake_behind() {
+    use futures_util::FutureExt;
+
+    let (app, title, _indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    let season = app
+        .services
+        .catalog
+        .shows
+        .list_collections_for_title(&title.id)
+        .await
+        .expect("list seasons")
+        .into_iter()
+        .next()
+        .expect("the fixture season");
+    let episode = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_collection(&season.id)
+        .await
+        .expect("list episodes")
+        .into_iter()
+        .next()
+        .expect("a fixture episode");
+    let wake = app.runtime.acquisition.acquisition_wake.clone();
+    let _ = wake.notified().now_or_never();
+
+    app.queue_best_release(
+        &test_admin_user(),
+        &title.id,
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+        SubmissionConflictPolicy::Abort,
+    )
+    .await
+    .expect("episode-scoped best-release search");
+
+    assert!(
+        wake.notified().now_or_never().is_none(),
+        "an episode-scoped search must not wake the convergence poller"
+    );
+}
+
 /// The search client picks the pacing lane from the learning context: only a
 /// context that consents to corpus reuse is a background pass. An operator's
 /// walk must never carry that consent, so its indexer requests are paced as
@@ -13891,6 +15071,62 @@ async fn a_contained_indexer_is_held_until_due_without_coverage_or_deferral() {
     assert!(
         coverage.recorded().await.is_empty(),
         "a re-asked contained indexer is still not coverage"
+    );
+}
+
+/// An indexer that background searches learned to carry nothing for the
+/// subject's facet is held by the walk the same way a contained one is: the
+/// cycle neither asks it nor defers the scope, an operator's walk still asks
+/// it, and once the hold runs out the cycle asks again.
+#[tokio::test]
+async fn a_facet_suppressed_indexer_is_held_by_the_walk_until_it_expires() {
+    let indexer_client = Arc::new(TrackingIndexerClient::default().returning_no_results());
+    indexer_client.containment.lock().await.facet_hold_until =
+        Some(chrono::Utc::now() + chrono::Duration::hours(24));
+    let (app, title, indexer_client, _) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer_client).await;
+
+    let held = app.run_background_acquisition_cycle_once().await;
+    assert!(
+        indexer_client.searches.lock().await.is_empty(),
+        "a facet-suppressed indexer is not asked by the background cycle"
+    );
+    assert_eq!(held.deferred_scopes, 0, "a facet hold is not a deferral");
+    {
+        let containment = indexer_client.containment.lock().await;
+        assert!(
+            !containment.facet_hold_reads.is_empty()
+                && containment
+                    .facet_hold_reads
+                    .iter()
+                    .all(|facet| facet == "anime"),
+            "the walk asks about the subject's search facet: {:?}",
+            containment.facet_hold_reads
+        );
+    }
+
+    crate::acquisition::workflow::run_interactive_title_acquisition_walk(
+        &app,
+        &title.id,
+        None,
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .expect("interactive title walk");
+    let after_operator = indexer_client.searches.lock().await.len();
+    assert!(
+        after_operator > 0,
+        "an operator's walk still asks the indexer"
+    );
+
+    indexer_client.containment.lock().await.facet_hold_until =
+        Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    app.run_background_acquisition_cycle_once().await;
+    assert!(
+        indexer_client.searches.lock().await.len() > after_operator,
+        "once the facet hold expires, the cycle asks the indexer again"
     );
 }
 
@@ -14333,7 +15569,9 @@ async fn automatic_search_preserves_pauses_and_single_job_admission() {
     let result = app
         .resolve_acquisition_search_scopes(&actor, &request)
         .await;
-    assert!(matches!(result, Err(AppError::Validation(message)) if message.contains("paused")));
+    assert!(
+        matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("paused"))
+    );
     assert!(
         app.start_acquisition_search_job(
             &actor,
@@ -14397,7 +15635,9 @@ async fn automatic_search_rechecks_pauses_after_waiting_for_the_title() {
     }
     drop(held);
     let result = walk.await.unwrap();
-    assert!(matches!(result, Err(AppError::Validation(message)) if message.contains("paused")));
+    assert!(
+        matches!(result, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("paused"))
+    );
     assert!(
         indexer.searches.lock().await.is_empty(),
         "a paused wait must not dispatch searches"
@@ -17451,4 +18691,276 @@ async fn an_rss_cycle_past_its_budget_leaves_the_remaining_titles_to_the_next_cy
         .map(|submission| submission.title_id.clone())
         .collect::<HashSet<_>>();
     assert_eq!(grabbed_titles, HashSet::from([alpha.id, beta.id]));
+}
+
+/// Answers each RSS poll with the next feed in line, and with an empty feed
+/// once the line runs out.
+struct SequencedFeedRssIndexerClient {
+    feeds: std::sync::Mutex<std::collections::VecDeque<Vec<IndexerSearchResult>>>,
+}
+
+impl SequencedFeedRssIndexerClient {
+    fn new(feeds: Vec<Vec<IndexerSearchResult>>) -> Self {
+        Self {
+            feeds: std::sync::Mutex::new(feeds.into()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl IndexerClient for SequencedFeedRssIndexerClient {
+    async fn search(
+        &self,
+        _query: String,
+        _ids: std::collections::HashMap<String, String>,
+        _category: Option<String>,
+        _facet: Option<String>,
+        _id_search_facet: Option<String>,
+        _newznab_categories: Option<Vec<String>>,
+        _indexer_routing: Option<IndexerRoutingPlan>,
+        _mode: SearchMode,
+        _operation: IndexerErrorOperation,
+        _season: Option<u32>,
+        _episode: Option<u32>,
+        _absolute_episode: Option<u32>,
+        _year: Option<i32>,
+        _tagged_aliases: Vec<TaggedAlias>,
+        _learning_context: Option<crate::IndexerSearchLearningContext>,
+        _cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        let results = self
+            .feeds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or_default();
+        Ok(IndexerSearchResponse {
+            next_cursor: None,
+            completion: crate::IndexerSearchCompletion::Complete,
+            indexer_outcomes: Vec::new(),
+            results,
+            api_current: None,
+            api_max: None,
+            grab_current: None,
+            grab_max: None,
+        })
+    }
+}
+
+/// A synthetic movie for the carry-over tests, with the feed item that
+/// matches it.
+struct CarryOverFixtureTitle {
+    id: String,
+    release: IndexerSearchResult,
+}
+
+/// Seed one wanted movie per name and return them in title-id order, which
+/// is the order a cycle takes fresh titles up in.
+async fn seed_carry_over_titles(
+    app: &AppUseCase,
+    user: &User,
+    wanted_items: &Arc<TrackingAcquisitionScopeStateRepo>,
+    names: &[&str],
+) -> Vec<CarryOverFixtureTitle> {
+    let mut titles = Vec::with_capacity(names.len());
+    for name in names {
+        let (title, _) =
+            seed_movie_wanted_for_acquisition(app, user, wanted_items, name, 2024).await;
+        let release_name = format!("{}.2024.1080p.WEB-DL-GRP", name.replace(' ', "."));
+        let guid = format!("carry-guid-{}", name.replace(' ', "-").to_lowercase());
+        titles.push(CarryOverFixtureTitle {
+            id: title.id,
+            release: streamed_rss_result("indexer-a", &guid, &release_name),
+        });
+    }
+    titles.sort_by(|left, right| left.id.cmp(&right.id));
+    titles
+}
+
+/// The title ids the durable carry-over record holds.
+async fn persisted_rss_carry_over(app: &AppUseCase) -> Vec<String> {
+    app.services
+        .config
+        .settings
+        .get_setting_json_explicit(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::acquisition::rss::RSS_CARRY_OVER_TITLE_IDS_KEY,
+            None,
+        )
+        .await
+        .expect("read the carry-over record")
+        .and_then(|value| serde_json::from_str::<Option<Vec<String>>>(&value).ok())
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// The title of the one download a cycle submitted.
+async fn the_title_one_cycle_grabbed(
+    submissions: &TrackingDownloadSubmissionRepo,
+    before: usize,
+) -> String {
+    let store = submissions.store.lock().await;
+    assert_eq!(store.len(), before + 1, "the cycle grabs exactly one title");
+    store[before].title_id.clone()
+}
+
+/// A cycle that runs out of budget keeps its carry-over durably, and a new
+/// process takes the carried title up before a fresh one that sorts ahead of
+/// it, even though the restart emptied the seen set and the releases with it.
+#[tokio::test(start_paused = true)]
+async fn an_rss_carry_over_survives_a_restart_and_keeps_its_turn() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let feeds = Arc::new(SequencedFeedRssIndexerClient::new(Vec::new()));
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        feeds.clone(),
+    );
+    let titles = seed_carry_over_titles(
+        &app,
+        &user,
+        &wanted_items,
+        &[
+            "Synthetic Amber Quay",
+            "Synthetic Birch Quay",
+            "Synthetic Cedar Quay",
+        ],
+    )
+    .await;
+    let (first, middle, last) = (&titles[0], &titles[1], &titles[2]);
+    feeds.feeds.lock().unwrap().extend([
+        vec![first.release.clone(), last.release.clone()],
+        // The first poll after a restart sees the carried title's item again,
+        // next to a fresh title that would otherwise sort ahead of it.
+        vec![middle.release.clone(), last.release.clone()],
+    ]);
+
+    app.run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+        .await
+        .expect("first RSS cycle");
+    assert_eq!(
+        the_title_one_cycle_grabbed(&download_submissions, 0).await,
+        first.id
+    );
+    assert_eq!(persisted_rss_carry_over(&app).await, vec![last.id.clone()]);
+
+    // A new process: fresh coordination over the same durable stores.
+    let restarted = AppUseCase {
+        runtime: crate::services::AppRuntimeState::default(),
+        ..app.clone()
+    };
+    restarted
+        .run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+        .await
+        .expect("first RSS cycle after the restart");
+    assert_eq!(
+        the_title_one_cycle_grabbed(&download_submissions, 1).await,
+        last.id,
+        "the restored title takes its turn ahead of the fresh one"
+    );
+    assert_eq!(
+        persisted_rss_carry_over(&restarted).await,
+        vec![middle.id.clone()]
+    );
+
+    // The feed is quiet now; the title the restarted cycle left is still
+    // taken up, and a cycle that reaches every title clears the record.
+    restarted
+        .run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+        .await
+        .expect("second RSS cycle after the restart");
+    assert_eq!(
+        the_title_one_cycle_grabbed(&download_submissions, 2).await,
+        middle.id
+    );
+    assert!(persisted_rss_carry_over(&restarted).await.is_empty());
+    assert!(
+        restarted
+            .runtime
+            .acquisition
+            .rss_unprocessed_titles
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Carried titles that alone would fill every cycle do not hold a fresh title
+/// back: the cycle after a budget overrun gives the fresh lane the first
+/// turn, and the carried titles follow in the order they were left.
+#[tokio::test(start_paused = true)]
+async fn a_fresh_rss_title_gets_a_turn_while_carried_titles_fill_the_budget() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let feeds = Arc::new(SequencedFeedRssIndexerClient::new(Vec::new()));
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        download_submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        feeds.clone(),
+    );
+    let carried = seed_carry_over_titles(
+        &app,
+        &user,
+        &wanted_items,
+        &[
+            "Synthetic Alder Reach",
+            "Synthetic Basalt Reach",
+            "Synthetic Cobalt Reach",
+        ],
+    )
+    .await;
+    let fresh = seed_carry_over_titles(&app, &user, &wanted_items, &["Synthetic Dune Reach"])
+        .await
+        .remove(0);
+    feeds.feeds.lock().unwrap().extend([
+        carried
+            .iter()
+            .map(|title| title.release.clone())
+            .collect::<Vec<_>>(),
+        vec![fresh.release.clone()],
+    ]);
+
+    // A spent budget processes one title per cycle, so the two carried
+    // titles alone would fill the next two cycles.
+    app.run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+        .await
+        .expect("first RSS cycle");
+    assert_eq!(
+        the_title_one_cycle_grabbed(&download_submissions, 0).await,
+        carried[0].id
+    );
+    assert_eq!(
+        persisted_rss_carry_over(&app).await,
+        vec![carried[1].id.clone(), carried[2].id.clone()]
+    );
+
+    app.run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+        .await
+        .expect("second RSS cycle");
+    assert_eq!(
+        the_title_one_cycle_grabbed(&download_submissions, 1).await,
+        fresh.id,
+        "the fresh title is not queued behind every carried one"
+    );
+    assert_eq!(
+        persisted_rss_carry_over(&app).await,
+        vec![carried[1].id.clone(), carried[2].id.clone()],
+        "the carried titles keep their order"
+    );
+
+    for (cycle, expected) in [(2, &carried[1].id), (3, &carried[2].id)] {
+        app.run_scheduled_rss_sync_within(std::time::Duration::ZERO)
+            .await
+            .expect("carried RSS cycle");
+        assert_eq!(
+            &the_title_one_cycle_grabbed(&download_submissions, cycle).await,
+            expected
+        );
+    }
+    assert!(persisted_rss_carry_over(&app).await.is_empty());
 }

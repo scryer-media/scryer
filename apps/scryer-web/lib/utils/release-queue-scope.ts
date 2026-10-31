@@ -7,16 +7,22 @@ export type QueueDownloadScopeInput =
   | { seriesMovie: string }
   | { title: boolean };
 
-function queueScopeToInput(scope: ReleaseQueueScope): QueueDownloadScopeInput | null {
+function queueScopeToInput(
+  scope: ReleaseQueueScope,
+): QueueDownloadScopeInput | null {
   switch (scope.__typename) {
     case "EpisodeScopePayload":
       return scope.episodeId ? { episode: scope.episodeId } : null;
     case "EpisodeSetScopePayload":
-      return scope.episodeIds.length > 0 ? { episodeSet: scope.episodeIds } : null;
+      return scope.episodeIds.length > 0
+        ? { episodeSet: scope.episodeIds }
+        : null;
     case "CollectionScopePayload":
       return scope.collectionId ? { collection: scope.collectionId } : null;
     case "SeriesMovieScopePayload":
-      return scope.seriesMovieLinkId ? { seriesMovie: scope.seriesMovieLinkId } : null;
+      return scope.seriesMovieLinkId
+        ? { seriesMovie: scope.seriesMovieLinkId }
+        : null;
     case "TitleScopePayload":
       return { title: true };
     case "OrphanScopePayload":
@@ -32,7 +38,9 @@ export function releaseQueueScopeInput(
   release: Pick<Release, "queueScope">,
   fallback: QueueDownloadScopeInput,
 ): QueueDownloadScopeInput {
-  const candidateScope = release.queueScope ? queueScopeToInput(release.queueScope) : null;
+  const candidateScope = release.queueScope
+    ? queueScopeToInput(release.queueScope)
+    : null;
   return candidateScope ?? fallback;
 }
 
@@ -61,7 +69,9 @@ export function releaseSupportsAdditionalFileQueue(
   release: Pick<Release, "queueScope">,
   titleFacet: string | null | undefined,
 ): boolean {
-  const scope = release.queueScope ? queueScopeToInput(release.queueScope) : null;
+  const scope = release.queueScope
+    ? queueScopeToInput(release.queueScope)
+    : null;
   return scope !== null && queueScopeAcceptsAdditionalFile(scope, titleFacet);
 }
 
@@ -105,7 +115,9 @@ type PrimaryFileRoles = readonly { role?: string | null }[] | null | undefined;
 /// `hasPrimaryMediaFile` directly.
 export function queueScopeReplacesPrimary(
   scope: QueueDownloadScopeInput,
-  episodesByCollection: Readonly<Record<string, readonly { id: string }[] | undefined>>,
+  episodesByCollection: Readonly<
+    Record<string, readonly { id: string }[] | undefined>
+  >,
   mediaFilesByEpisode: Readonly<Record<string, PrimaryFileRoles>>,
 ): boolean {
   const episodeHasPrimary = (episodeId: string) =>
@@ -134,7 +146,9 @@ export function queueScopeReplacesPrimary(
 /// covers every episode, so any primary file linked to an episode counts.
 export function queueScopeReplacesPrimaryFromTitleFiles(
   scope: QueueDownloadScopeInput,
-  episodesByCollection: Readonly<Record<string, readonly { id: string }[] | undefined>>,
+  episodesByCollection: Readonly<
+    Record<string, readonly { id: string }[] | undefined>
+  >,
   titleFiles: readonly { episodeId: string | null; role?: string | null }[],
 ): boolean {
   const filesByEpisode: Record<string, { role?: string | null }[]> = {};

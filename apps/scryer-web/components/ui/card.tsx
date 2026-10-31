@@ -14,16 +14,39 @@ function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   );
 }
 
-function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="card-header" className={cn("mb-3", className)} {...props} />;
+function CardHeader({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div data-slot="card-header" className={cn("mb-3", className)} {...props} />
+  );
 }
 
-function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 data-slot="card-title" className={cn("text-lg font-semibold leading-none", className)} {...props} />;
+function CardTitle({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLHeadingElement>) {
+  return (
+    <h2
+      data-slot="card-title"
+      className={cn("text-lg font-semibold leading-none", className)}
+      {...props}
+    />
+  );
 }
 
-function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div data-slot="card-content" className={cn("space-y-3", className)} {...props} />;
+function CardContent({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      data-slot="card-content"
+      className={cn("space-y-3", className)}
+      {...props}
+    />
+  );
 }
 
 export { Card, CardHeader, CardTitle, CardContent };

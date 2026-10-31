@@ -73,9 +73,7 @@ export type ReactiveRefreshContextValue = {
   queueCatalogTitlesRefresh: (
     options: QueueCatalogTitlesRefreshOptions,
   ) => void;
-  queueCatalogTitleRefresh: (
-    options: QueueCatalogTitleRefreshOptions,
-  ) => void;
+  queueCatalogTitleRefresh: (options: QueueCatalogTitleRefreshOptions) => void;
   queueTitleSidePanelOverviewRefresh: <
     TTitle = unknown,
     TDiagnostics = unknown,

@@ -29,8 +29,9 @@ impl AppUseCase {
         let auth_session_version =
             if let Some(expected_auth_session_version) = expected_auth_session_version {
                 if current_auth_session_version != *expected_auth_session_version {
-                    return Err(AppError::Unauthorized(
-                        "authentication session was invalidated".into(),
+                    return Err(AppError::unauthorized_reason(
+                        crate::error_reasons::security::AUTHENTICATION_SESSION_INVALIDATED,
+                        "authentication session was invalidated",
                     ));
                 }
                 expected_auth_session_version.clone()
@@ -101,7 +102,10 @@ impl AppUseCase {
             .get_login_verification_challenge(challenge_id)
             .await?
             .ok_or_else(|| {
-                AppError::Unauthorized("login verification challenge is unavailable".into())
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_UNAVAILABLE,
+                    "login verification challenge is unavailable",
+                )
             })?;
         if self.login_verification_challenge_expired(&challenge)? {
             let _ = self
@@ -110,15 +114,17 @@ impl AppUseCase {
                 .webauthn
                 .take_login_verification_challenge(challenge_id)
                 .await?;
-            return Err(AppError::Validation(
-                "login verification challenge has expired".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_EXPIRED,
+                "login verification challenge has expired",
             ));
         }
         if (require_passkey && !challenge.allow_passkey)
             || (!require_passkey && !challenge.allow_totp)
         {
-            return Err(AppError::Unauthorized(
-                "requested login verification factor is unavailable".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE,
+                "requested login verification factor is unavailable",
             ));
         }
         let user = self
@@ -128,11 +134,15 @@ impl AppUseCase {
             .get_by_id(&challenge.user_id)
             .await?
             .ok_or_else(|| {
-                AppError::Unauthorized("login verification user is unavailable".into())
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::LOGIN_VERIFICATION_USER_UNAVAILABLE,
+                    "login verification user is unavailable",
+                )
             })?;
         if !user.login_status().is_enabled() {
-            return Err(AppError::Unauthorized(
-                "login verification user is unavailable".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::LOGIN_VERIFICATION_USER_UNAVAILABLE,
+                "login verification user is unavailable",
             ));
         }
         let current_auth_session_version = self
@@ -142,8 +152,9 @@ impl AppUseCase {
             .auth_session_version(&user.id)
             .await?;
         if current_auth_session_version != challenge.auth_session_version {
-            return Err(AppError::Unauthorized(
-                "login verification challenge was invalidated".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_INVALIDATED,
+                "login verification challenge was invalidated",
             ));
         }
         Ok((challenge, user))
@@ -171,11 +182,15 @@ impl AppUseCase {
             .take_login_verification_challenge(challenge_id)
             .await?
             .ok_or_else(|| {
-                AppError::Unauthorized("login verification challenge was already used".into())
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_ALREADY_USED,
+                    "login verification challenge was already used",
+                )
             })?;
         if consumed.user_id != user.id || consumed.id != challenge.id {
-            return Err(AppError::Unauthorized(
-                "login verification challenge was invalidated".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_INVALIDATED,
+                "login verification challenge was invalidated",
             ));
         }
         let password_change_required = consumed.login_method
@@ -202,13 +217,17 @@ impl AppUseCase {
             .take_login_verification_challenge(challenge_id)
             .await?
             .ok_or_else(|| {
-                AppError::Unauthorized("login verification challenge was already used".into())
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_ALREADY_USED,
+                    "login verification challenge was already used",
+                )
             })?;
         if challenge.user_id != expected_user_id
             || self.login_verification_challenge_expired(&challenge)?
         {
-            return Err(AppError::Unauthorized(
-                "login verification challenge was invalidated".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::LOGIN_VERIFICATION_CHALLENGE_INVALIDATED,
+                "login verification challenge was invalidated",
             ));
         }
         Ok(challenge)

@@ -216,6 +216,8 @@ fn seeded_job(download_dir: &Path, url: &str, bytes_done: u64) -> HttpJob {
             role: HttpFileRole::Media,
             resource: muxed(url, 720),
             final_path: output_dir.join("Synthetic.Show.S01E01.mp4"),
+            partial_path: None,
+            publication: None,
             attempt: 1,
             bytes_done,
             total_bytes: Some(BODY.len() as u64),
@@ -227,11 +229,13 @@ fn seeded_job(download_dir: &Path, url: &str, bytes_done: u64) -> HttpJob {
             language: None,
             forbidden_answers: 0,
             skipped_error: None,
+            skipped_reason: None,
         }],
         output_dir,
         // As a crash mid-transfer leaves it.
         state: HttpJobState::Downloading,
         error: None,
+        error_reason: None,
         expected_size_bytes: None,
         expected_duration_seconds: None,
         verify: Default::default(),
@@ -361,6 +365,36 @@ fn part_paths_name_each_attempt_separately() {
         part_path_for(final_path, 2),
         Path::new("/srv/dl/Show/Show.mp4.2.part")
     );
+}
+
+#[test]
+fn http_queue_errors_keep_codes_and_explanations_separate() {
+    for code in [
+        None,
+        Some("HTTP_FUTURE_CONDITION"),
+        Some(http_release_refusal::UNKNOWN_CONTAINER),
+    ] {
+        let mut job = seeded_job(Path::new("/synthetic"), "https://media.invalid/a.mp4", 0);
+        job.state = HttpJobState::Failed;
+        job.error = Some("Readable failure explanation".into());
+        job.error_reason = code.map(str::to_string);
+        let item = job_to_queue_item(&job, None);
+        assert_eq!(
+            item.attention_reason.as_deref(),
+            Some("Readable failure explanation")
+        );
+        assert_eq!(item.attention_reason_code.as_deref(), code);
+        assert_eq!(
+            item.tracked_status_messages,
+            code.map(|_| "Readable failure explanation")
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        job.state = HttpJobState::Completed;
+        let item = job_to_queue_item(&job, None);
+        assert!(item.attention_reason.is_none());
+        assert!(item.attention_reason_code.is_none());
+    }
 }
 
 #[test]
@@ -1653,7 +1687,7 @@ async fn chunked_server(chunks: Vec<Vec<u8>>) -> (String, Arc<std::sync::Mutex<V
 }
 
 #[tokio::test]
-async fn checkpoints_write_progress_files_and_never_the_queue_document() {
+async fn byte_checkpoints_write_progress_and_structural_checkpoints_write_document() {
     let chunks: Vec<Vec<u8>> = BODY.chunks(2).map(<[u8]>::to_vec).collect();
     let chunk_count = chunks.len() as u64;
     let (base, _) = chunked_server(chunks).await;
@@ -1682,10 +1716,10 @@ async fn checkpoints_write_progress_files_and_never_the_queue_document() {
         "{} progress writes for {chunk_count} pieces",
         engine.progress_writes()
     );
-    // Added, started, file finished, job completed: the document follows the
-    // job's transitions, not its bytes.
+    // Added, started, partial name, publication identity, file finished, job
+    // completed: bounded structural writes, independent of body chunk count.
     assert!(
-        engine.document_writes() <= 4,
+        engine.document_writes() <= 6,
         "{} document writes",
         engine.document_writes()
     );
@@ -1806,6 +1840,80 @@ async fn gated_server(split: usize, gate: Arc<tokio::sync::Notify>) -> String {
         let _ = stream.shutdown().await;
     });
     format!("http://{address}")
+}
+
+#[tokio::test]
+async fn http_host_admission_skips_blocked_jobs_and_releases_cancelled_reservations() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let mut gates = Vec::new();
+        let mut urls = Vec::new();
+        for index in 0..4 {
+            let gate = Arc::new(tokio::sync::Notify::new());
+            let base = gated_server(17, gate.clone()).await;
+            urls.push(if index == 3 {
+                base.replace("127.0.0.1", "localhost")
+            } else {
+                base
+            });
+            gates.push(gate);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(
+            dir.path(),
+            serde_json::json!({
+                "max_concurrent_downloads": 3, "max_connections_per_host": 1
+            }),
+        );
+        let client = client(&config);
+        client.engine().set_enabled(false);
+        let mut ids = Vec::new();
+        for (index, url) in urls.iter().enumerate() {
+            let mut input = request(source(vec![muxed(&format!("{url}/media.mp4"), 720)]));
+            input.source_title = Some(format!("Synthetic.Show.S01E{:02}.WEB", index + 1));
+            input.release_title = input.source_title.clone();
+            input.http.as_mut().unwrap().policy.output_basename =
+                format!("Synthetic.Show.S01E{:02}", index + 1);
+            ids.push(client.submit_download(&input).await.unwrap().job_id);
+        }
+        client.engine().set_enabled(true);
+        wait_for_live_bytes(&client, &ids[0], 17).await;
+        wait_for_live_bytes(&client, &ids[3], 17).await;
+        for id in &ids[1..3] {
+            assert_eq!(
+                client.engine().job(id).await.unwrap().unwrap().state,
+                HttpJobState::Queued
+            );
+        }
+        // Cancellation releases admission, so the next A can start while B
+        // remains admitted. Neither consumes another actual-request permit.
+        client.engine().pause(&ids[0]).await.unwrap();
+        gates[0].notify_one();
+        wait_for_live_bytes(&client, &ids[1], 17).await;
+        assert_eq!(
+            client.engine().job(&ids[2]).await.unwrap().unwrap().state,
+            HttpJobState::Queued
+        );
+        client.engine().set_limits(engine::HttpEngineLimits {
+            max_concurrent_downloads: 3,
+            max_connections_per_host: 2,
+            bandwidth_limit_kbps: None,
+        });
+        // A config update alone does not trigger scheduling; resuming a job
+        // invokes the existing scheduler with the new limit.
+        client.engine().pause(&ids[2]).await.unwrap();
+        client.engine().resume(&ids[2]).await.unwrap();
+        wait_for_live_bytes(&client, &ids[2], 17).await;
+        for gate in &gates {
+            gate.notify_one();
+        }
+        for id in &ids[1..] {
+            wait_for_job(&client, id, |job| job.state.is_terminal()).await;
+        }
+        client.engine().begin_shutdown();
+        client.engine().workers().wait().await;
+    })
+    .await
+    .expect("host admission regression timed out");
 }
 
 #[tokio::test]
@@ -2118,11 +2226,20 @@ async fn a_file_already_in_place_completes_without_a_request() {
     let dir = tempfile::tempdir().unwrap();
     let config = config(dir.path(), serde_json::json!({}));
     // Renamed into place, then interrupted before the move was recorded.
-    let job = seeded_job(
+    let mut job = seeded_job(
         dir.path(),
         &format!("{}/media/clip.mp4", server.uri()),
         BODY.len() as u64,
     );
+    job.files[0].publication = Some(super::state::PublicationCheckpoint {
+        attempt: 1,
+        partial_path: job.files[0].part_path(),
+        final_path: job.files[0].final_path.clone(),
+        size: BODY.len() as u64,
+        sha256: aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, BODY)
+            .as_ref()
+            .to_vec(),
+    });
     tokio::fs::create_dir_all(&job.output_dir).await.unwrap();
     tokio::fs::write(&job.files[0].final_path, BODY)
         .await
@@ -2398,6 +2515,7 @@ struct RecordingCheckpoint {
     recorded: std::sync::Mutex<Vec<HttpJobFile>>,
     changed: tokio::sync::Notify,
     crash_on_complete: bool,
+    crash_on_publication: bool,
 }
 
 #[async_trait::async_trait]
@@ -2410,6 +2528,11 @@ impl super::transfer::Checkpoint for RecordingCheckpoint {
         }
         self.recorded.lock().unwrap().push(file.clone());
         self.changed.notify_one();
+        if self.crash_on_publication && file.publication.is_some() && !file.complete {
+            return Err(scryer_application::AppError::Repository(
+                "synthetic pre-publication interruption".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -2438,6 +2561,7 @@ async fn transfer_once(
         cancel,
         live_bytes: &live_bytes,
         limiter,
+        host_limiter: None,
         backoff_unit: Duration::from_millis(1),
         cadence: super::transfer::CheckpointCadence {
             bytes: u64::MAX,
@@ -2480,13 +2604,19 @@ async fn publishing_never_replaces_a_file_already_under_the_final_name() {
 
     let refused = super::transfer::publish_part(&part, &final_path).await;
     assert!(
-        matches!(refused, Err(TransferError::Permanent(_))),
+        matches!(
+            refused,
+            Err(TransferError::Refused(
+                http_release_refusal::DESTINATION_EXISTS,
+                _
+            ))
+        ),
         "{refused:?}"
     );
     assert_eq!(std::fs::read(&final_path).unwrap(), b"someone else's file");
     assert_eq!(std::fs::read(&part).unwrap(), BODY);
 
-    // Through a whole transfer, too: the fetched bytes stay in the partial.
+    // An unverified final-only file is preserved without fetching again.
     let server = whole_file_server().await;
     let checkpoint = RecordingCheckpoint::default();
     let mut file = fresh_file(dir.path(), &format!("{}/media/clip.mp4", server.uri()));
@@ -2495,7 +2625,13 @@ async fn publishing_never_replaces_a_file_already_under_the_final_name() {
     let cancel = tokio_util::sync::CancellationToken::new();
     let result = transfer_once(&checkpoint, &mut file, None, &cancel).await;
     assert!(
-        matches!(result, Err(TransferError::Permanent(_))),
+        matches!(
+            result,
+            Err(TransferError::Refused(
+                http_release_refusal::RECOVERY_UNVERIFIED,
+                _
+            ))
+        ),
         "{result:?}"
     );
     assert!(!file.complete);
@@ -2503,7 +2639,8 @@ async fn publishing_never_replaces_a_file_already_under_the_final_name() {
         std::fs::read(&file.final_path).unwrap(),
         b"someone else's file"
     );
-    assert_eq!(std::fs::read(file.part_path()).unwrap(), BODY);
+    assert!(!file.part_path().exists());
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -2741,4 +2878,483 @@ async fn an_unnamed_media_download_is_published_under_its_probed_container() {
         .map(|entry| entry.unwrap().file_name())
         .collect();
     assert_eq!(entries.len(), 1, "{entries:?}");
+}
+
+// Sonarr 465b5192, Parser/IsoLanguages.cs: ISO aliases share an identity,
+// while Portuguese and PortugueseBrazil are distinct.
+#[test]
+fn http_subtitles_match_aliases_without_erasing_regions() {
+    let mut input = source(vec![
+        muxed("https://cdn.invalid/media.mp4", 720),
+        subtitle("https://cdn.invalid/en.vtt", "eng"),
+        subtitle("https://cdn.invalid/pt.vtt", "pt-PT"),
+        subtitle("https://cdn.invalid/br.vtt", "pt-BR"),
+    ]);
+    input.selected.subtitle_mode = HttpSubtitleMode::SidecarRequired;
+    input.selected.subtitle_languages = vec!["en".into(), "pob".into()];
+    let planned = plan_download(&input, Path::new("/synthetic")).unwrap();
+    assert_eq!(planned.files.len(), 3);
+    assert_eq!(planned.files[1].resource.url, "https://cdn.invalid/en.vtt");
+    assert_eq!(planned.files[2].resource.url, "https://cdn.invalid/br.vtt");
+}
+
+// Radarr 4d9bd475, DecisionEngine/Specifications/LanguageSpecification.cs:
+// a known unwanted language cannot satisfy the profile.
+#[test]
+fn http_audio_mismatch_is_neither_primary_nor_fallback() {
+    let labelled = |url: &str, height, language: &str| {
+        let mut resource = muxed(url, height);
+        resource.audio = Some(scryer_plugin_sdk::PluginHttpAudioTrack {
+            language: Some(language.into()),
+            ..Default::default()
+        });
+        resource
+    };
+    let mut input = source(vec![
+        labelled("https://cdn.invalid/de.mp4", 2160, "de"),
+        labelled("https://cdn.invalid/en.mp4", 1080, "en"),
+        labelled("https://cdn.invalid/eng.mp4", 720, "eng"),
+    ]);
+    input.selected.audio_languages = vec!["eng".into()];
+    let planned = plan_download(&input, Path::new("/synthetic")).unwrap();
+    assert_eq!(planned.files[0].resource.url, "https://cdn.invalid/en.mp4");
+    assert_eq!(planned.media_fallbacks.len(), 1);
+    assert_eq!(
+        planned.media_fallbacks[0].url,
+        "https://cdn.invalid/eng.mp4"
+    );
+    input.selected.audio_languages.push("jpn".into());
+    assert_eq!(
+        plan_download(&input, Path::new("/synthetic"))
+            .unwrap_err()
+            .validation_reason(),
+        Some(http_release_refusal::NO_AUDIO_RESOURCE)
+    );
+}
+
+#[tokio::test]
+async fn http_recovery_refuses_same_size_replacement_and_legacy_final_only() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let server = whole_file_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let crashing = RecordingCheckpoint {
+            crash_on_complete: true,
+            ..Default::default()
+        };
+        let mut file = fresh_file(dir.path(), &format!("{}/media/clip.mp4", server.uri()));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        assert!(
+            transfer_once(&crashing, &mut file, None, &cancel)
+                .await
+                .is_err()
+        );
+        let mut recorded = crashing.last();
+        let replacement = vec![b'x'; BODY.len()];
+        std::fs::write(&recorded.final_path, &replacement).unwrap();
+        let checkpoint = RecordingCheckpoint::default();
+        let error = transfer_once(&checkpoint, &mut recorded, None, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(http_release_refusal::RECOVERY_UNVERIFIED)
+        );
+        assert_eq!(std::fs::read(&recorded.final_path).unwrap(), replacement);
+        recorded.publication = None;
+        std::fs::write(&recorded.final_path, BODY).unwrap();
+        let error = transfer_once(&checkpoint, &mut recorded, None, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(http_release_refusal::RECOVERY_UNVERIFIED)
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+#[test]
+fn http_partial_path_survives_extension_change_and_old_documents() {
+    let mut file = fresh_file(Path::new("/synthetic"), "https://cdn.invalid/media");
+    let old = file.part_path();
+    file.partial_path = Some(old.clone());
+    file.final_path.set_extension("mkv");
+    let restored: HttpJobFile =
+        serde_json::from_value(serde_json::to_value(&file).unwrap()).unwrap();
+    assert_eq!(restored.part_path(), old);
+    let mut legacy = serde_json::to_value(&file).unwrap();
+    legacy.as_object_mut().unwrap().remove("partial_path");
+    legacy.as_object_mut().unwrap().remove("publication");
+    let restored: HttpJobFile = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        restored.part_path(),
+        part_path_for(&restored.final_path, restored.attempt)
+    );
+    file.publication = Some(super::state::PublicationCheckpoint {
+        attempt: file.attempt,
+        partial_path: file.part_path(),
+        final_path: file.final_path.clone(),
+        size: BODY.len() as u64,
+        sha256: aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, BODY)
+            .as_ref()
+            .to_vec(),
+    });
+    start_new_attempt(&mut file);
+    assert!(file.publication.is_none());
+    assert_eq!(file.part_path(), part_path_for(&file.final_path, 2));
+}
+
+#[tokio::test]
+async fn http_host_permits_follow_actual_hosts_limits_and_cancellation() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        use super::transfer::HostLimiter;
+        let limiter = HostLimiter::new(1);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let url = reqwest::Url::parse("https://CDN.invalid/one").unwrap();
+        let alias = reqwest::Url::parse("https://cdn.invalid.:8443/two").unwrap();
+        let other = reqwest::Url::parse("https://other.invalid/three").unwrap();
+        let first = limiter.acquire(&url, &cancel).await.unwrap();
+        let _other = limiter.acquire(&other, &cancel).await.unwrap();
+        let waiting = limiter.acquire(&alias, &cancel);
+        tokio::pin!(waiting);
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(
+                std::future::Future::poll(waiting.as_mut(), cx).is_pending()
+            ))
+            .await
+        );
+        limiter.set_limit(2);
+        let second = tokio::time::timeout(WAIT_BOUND, &mut waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        limiter.set_limit(1);
+        drop(first);
+        let waiting = limiter.acquire(&url, &cancel);
+        tokio::pin!(waiting);
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(
+                std::future::Future::poll(waiting.as_mut(), cx).is_pending()
+            ))
+            .await
+        );
+        cancel.cancel();
+        assert!(matches!(
+            tokio::time::timeout(WAIT_BOUND, &mut waiting)
+                .await
+                .unwrap(),
+            Err(TransferError::Cancelled)
+        ));
+        drop(second);
+        let fresh_cancel = tokio_util::sync::CancellationToken::new();
+        let _permit = tokio::time::timeout(WAIT_BOUND, limiter.acquire(&url, &fresh_cancel))
+            .await
+            .unwrap()
+            .unwrap();
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+// Radarr 4d9bd475, MediaFiles/DiskScanService.cs only discovers supported
+// extensions. An unknown container must not be made eligible by hiding .bin.
+#[tokio::test]
+async fn http_unknown_container_preserves_payload_and_reports_reason() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let server = whole_file_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path(), serde_json::json!({}));
+        let client = client(&config);
+        client.engine().set_media_probe(FixedProbe::new(
+            super::transfer::MediaProbeOutcome::Probed {
+                duration_seconds: None,
+                has_video: Some(true),
+                container: None,
+            },
+        ));
+        let mut opaque = resource(
+            &format!("{}/media/clip.mp4", server.uri()),
+            HttpResourceRole::Muxed,
+        );
+        opaque.container = Some("bin".into());
+        let grab = client
+            .submit_download(&request(source(vec![opaque])))
+            .await
+            .unwrap();
+        let done = wait_for_job(&client, &grab.job_id, |job| job.state.is_terminal()).await;
+        assert_eq!(done.state, HttpJobState::Failed);
+        assert_eq!(
+            done.error_reason.as_deref(),
+            Some(http_release_refusal::UNKNOWN_CONTAINER)
+        );
+        assert!(!done.files[0].final_path.exists());
+        assert_eq!(std::fs::read(done.files[0].part_path()).unwrap(), BODY);
+        let item = job_to_queue_item(&done, None);
+        assert_eq!(
+            item.attention_reason_code.as_deref(),
+            Some(http_release_refusal::UNKNOWN_CONTAINER)
+        );
+        assert_eq!(item.attention_reason, done.error);
+        assert_eq!(item.tracked_status_messages, vec![done.error.unwrap()]);
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+#[tokio::test]
+async fn http_legacy_renamed_partial_is_recovered_without_refetch() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = seeded_job(
+            dir.path(),
+            "https://unreachable.invalid/download",
+            BODY.len() as u64,
+        )
+        .files
+        .remove(0);
+        file.resource.container = None;
+        file.final_path.set_extension("mkv");
+        std::fs::create_dir_all(file.final_path.parent().unwrap()).unwrap();
+        let original = part_path_for(&file.final_path.with_extension("bin"), file.attempt);
+        std::fs::write(&original, BODY).unwrap();
+        let checkpoint = RecordingCheckpoint::default();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ambiguous = file.part_path();
+        std::fs::write(&ambiguous, b"unrelated partial").unwrap();
+        let error = transfer_once(&checkpoint, &mut file, None, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(http_release_refusal::RECOVERY_UNVERIFIED)
+        );
+        assert_eq!(std::fs::read(&ambiguous).unwrap(), b"unrelated partial");
+        assert_eq!(std::fs::read(&original).unwrap(), BODY);
+        assert!(!file.final_path.exists());
+        std::fs::remove_file(&ambiguous).unwrap();
+        tokio::time::timeout(
+            WAIT_BOUND,
+            transfer_once(&checkpoint, &mut file, None, &cancel),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(file.complete);
+        assert_eq!(file.partial_path, Some(original.clone()));
+        assert_eq!(std::fs::read(&file.final_path).unwrap(), BODY);
+        assert!(!original.exists());
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+#[tokio::test]
+async fn http_publication_failure_preserves_partial() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let dir = tempfile::tempdir().unwrap();
+        let partial = dir.path().join("owned.part");
+        std::fs::write(&partial, BODY).unwrap();
+        let missing_parent = dir.path().join("absent/media.mp4");
+        let error = super::transfer::publish_part(&partial, &missing_parent)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(http_release_refusal::PUBLICATION_FAILED)
+        );
+        assert_eq!(std::fs::read(&partial).unwrap(), BODY);
+        assert!(!missing_parent.exists());
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+#[tokio::test]
+async fn http_redirect_waits_for_destination_host_and_releases_source_host() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let destination = whole_file_server().await;
+        let origin = MockServer::start().await;
+        let target = format!("{}/media/clip.mp4", destination.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", target.as_str()))
+            .mount(&origin)
+            .await;
+        let origin_url = origin.uri().replace("127.0.0.1", "localhost");
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = fresh_file(dir.path(), &format!("{origin_url}/redirect"));
+        std::fs::create_dir_all(file.final_path.parent().unwrap()).unwrap();
+        let checkpoint = RecordingCheckpoint::default();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let limiter = super::transfer::HostLimiter::new(1);
+        let held = limiter
+            .acquire(&reqwest::Url::parse(&target).unwrap(), &cancel)
+            .await
+            .unwrap();
+        let bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let context = super::transfer::TransferContext {
+            egress: super::transfer::Egress::Direct,
+            checkpoint: &checkpoint,
+            cancel: &cancel,
+            live_bytes: &bytes,
+            limiter: None,
+            host_limiter: Some(&limiter),
+            backoff_unit: Duration::from_millis(1),
+            cadence: super::transfer::CheckpointCadence {
+                bytes: u64::MAX,
+                interval: WAIT_BOUND,
+            },
+            clock: super::transfer::system_clock(),
+            media_check: None,
+        };
+        let transfer = super::transfer::transfer_file(&context, &mut file);
+        tokio::pin!(transfer);
+        tokio::select! {
+            result = &mut transfer => panic!("destination permit should block: {result:?}"),
+            () = limiter.blocked.notified() => {}
+        }
+        assert_eq!(origin.received_requests().await.unwrap().len(), 1);
+        assert!(destination.received_requests().await.unwrap().is_empty());
+        let source_permit = limiter
+            .acquire(&reqwest::Url::parse(&origin_url).unwrap(), &cancel)
+            .await
+            .unwrap();
+        drop(source_permit);
+        drop(held);
+        transfer.await.unwrap();
+        assert_eq!(destination.received_requests().await.unwrap().len(), 1);
+    })
+    .await
+    .expect("redirect finishes when the destination permit is released");
+}
+
+#[tokio::test]
+async fn http_auth_refusal_is_coded_before_queueing() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path(), serde_json::json!({}));
+        let client = client(&config);
+        let mut media = muxed("https://cdn.invalid/secure.mp4", 720);
+        media.auth_ref = Some("provider-login".into());
+        let error = client
+            .submit_download(&request(source(vec![media])))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(http_release_refusal::UNSUPPORTED_AUTH)
+        );
+        assert!(
+            client
+                .engine()
+                .jobs_where(|_| true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    })
+    .await
+    .expect("HTTP regression timed out");
+}
+
+#[tokio::test]
+async fn http_interrupted_extension_checkpoint_keeps_actual_partial_path() {
+    tokio::time::timeout(WAIT_BOUND, async {
+        let server = whole_file_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = fresh_file(dir.path(), &format!("{}/media/clip.mp4", server.uri()));
+        file.resource.container = Some("bin".into());
+        file.final_path.set_extension("bin");
+        std::fs::create_dir_all(file.final_path.parent().unwrap()).unwrap();
+        let old_part = file.part_path();
+        let crashing = RecordingCheckpoint {
+            crash_on_publication: true,
+            ..Default::default()
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let probe = FixedProbe::new(super::transfer::MediaProbeOutcome::Probed {
+            duration_seconds: None,
+            has_video: Some(true),
+            container: Some("matroska".into()),
+        });
+        let context = super::transfer::TransferContext {
+            egress: super::transfer::Egress::Direct,
+            checkpoint: &crashing,
+            cancel: &cancel,
+            live_bytes: &bytes,
+            limiter: None,
+            host_limiter: None,
+            backoff_unit: Duration::from_millis(1),
+            cadence: super::transfer::CheckpointCadence {
+                bytes: u64::MAX,
+                interval: WAIT_BOUND,
+            },
+            clock: super::transfer::system_clock(),
+            media_check: Some(super::transfer::MediaCheck {
+                probe: probe.as_ref(),
+                expected_duration_seconds: None,
+                verify: Default::default(),
+            }),
+        };
+        assert!(
+            super::transfer::transfer_file(&context, &mut file)
+                .await
+                .is_err()
+        );
+        let mut recovered = crashing.last();
+        assert_eq!(recovered.part_path(), old_part);
+        assert_eq!(recovered.final_path.extension().unwrap(), "mkv");
+        assert!(!recovered.final_path.exists());
+        assert_eq!(std::fs::read(&old_part).unwrap(), BODY);
+        let checkpoint = RecordingCheckpoint::default();
+        let context = super::transfer::TransferContext {
+            checkpoint: &checkpoint,
+            ..context
+        };
+        let replacement = vec![b'x'; BODY.len()];
+        std::fs::write(&old_part, &replacement).unwrap();
+        let error = super::transfer::transfer_file(&context, &mut recovered)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(http_release_refusal::RECOVERY_UNVERIFIED)
+        );
+        assert_eq!(std::fs::read(&old_part).unwrap(), replacement);
+        assert!(!recovered.final_path.exists());
+        std::fs::write(&old_part, BODY).unwrap();
+        super::transfer::transfer_file(&context, &mut recovered)
+            .await
+            .unwrap();
+        assert!(recovered.complete);
+        assert_eq!(std::fs::read(&recovered.final_path).unwrap(), BODY);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    })
+    .await
+    .expect("checkpoint recovery finishes");
+}
+
+#[tokio::test]
+async fn native_http_auth_ref_refusal_has_a_stable_reason_and_redacts_credentials() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path(), serde_json::json!({}));
+    let client = client(&config);
+    let mut media = muxed("https://synthetic.invalid/media.mp4", 1080);
+    media.auth_ref = Some("private-provider-credential-reference".to_string());
+    let error = client
+        .submit_download(&request(source(vec![media])))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(scryer_application::http_release_refusal::UNSUPPORTED_AUTH)
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains("private-provider-credential-reference")
+    );
+    assert!(client.list_queue().await.unwrap().is_empty());
 }

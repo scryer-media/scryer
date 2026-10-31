@@ -434,9 +434,12 @@ async fn postgres_upgrade_applies_and_migrates_legacy_identity_rows() {
         .expect("scoped postgres pool should connect");
 
     let outcome = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(PRE_UPGRADE_VERSION))
-            .await
-            .expect("pre-0192 postgres fixture should apply");
+        crate::postgres_history_test_support::replay_historical_postgres(
+            &pool,
+            PRE_UPGRADE_VERSION,
+        )
+        .await
+        .expect("pre-0192 postgres fixture should apply");
 
         let legacy_v1 = format!("v1$abcdef0123456789abcdef0123456789${LEGACY_SHA256}");
         sqlx::query(

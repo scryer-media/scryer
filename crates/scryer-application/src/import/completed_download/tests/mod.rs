@@ -2008,6 +2008,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "dl-1".to_string(),
             download_id: None,

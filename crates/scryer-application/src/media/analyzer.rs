@@ -171,8 +171,9 @@ pub(crate) async fn probe_native_catalog(
     let outcome = flight.outcome().await?;
     let source_after = super::discs::MediaSourceVersion::read(&source_path).await?;
     if key.source.as_ref() != Some(&source_after) {
-        return Err(AppError::Validation(
-            "media source changed during inspection".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media::SOURCE_CHANGED_DURING_INSPECTION,
+            "media source changed during inspection",
         ));
     }
     Ok(outcome)
@@ -230,8 +231,9 @@ impl MediaAnalyzer for NativeMediaAnalyzer {
         #[cfg(not(feature = "runtime-media-analysis"))]
         {
             let _ = (path, selection);
-            Err(AppError::Validation(
-                "native diagnostics are not compiled into this target".into(),
+            Err(AppError::validation_refused(
+                crate::error_reasons::media::NATIVE_DIAGNOSTICS_NOT_COMPILED_INTO_TARGET,
+                "native diagnostics are not compiled into this target",
             ))
         }
     }

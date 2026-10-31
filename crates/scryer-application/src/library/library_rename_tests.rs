@@ -531,6 +531,29 @@ fn configured_title_folder_path_prefers_title_year_over_parsed_release_year() {
 }
 
 #[test]
+fn title_folder_tmdb_token_uses_the_titles_entity_kind() {
+    for (facet, expected) in [
+        (MediaFacet::Series, "136315"),
+        (MediaFacet::Anime, "136315"),
+        (MediaFacet::Movie, "9001"),
+    ] {
+        let mut title = test_movie_title("Fixture Show");
+        title.facet = facet;
+        title.year = Some(2022);
+        title.external_ids = vec![
+            ExternalId::with_kind("tvdb", "series", "4242"),
+            ExternalId::with_kind("tmdb", "movie", "9001"),
+            ExternalId::with_kind("tmdb", "series", "136315"),
+        ];
+        let tokens = build_title_folder_tokens(&title, None);
+        assert_eq!(
+            render_title_folder_template("{title} ({year}) [tmdbid-{tmdb_id}]", &tokens),
+            format!("Fixture Show (2022) [tmdbid-{expected}]")
+        );
+    }
+}
+
+#[test]
 fn title_folder_tokens_include_external_ids_and_prefer_normalized_imdb() {
     let mut title = test_movie_title("Movie");
     title.imdb_id = Some("https://www.imdb.com/title/tt0468569/".to_string());
@@ -996,6 +1019,29 @@ async fn existing_title_folder_spelling_wins_for_case_only_path_changes() {
 }
 
 #[test]
+fn title_folder_spelling_lookup_runs_only_for_case_only_changes() {
+    assert!(AppUseCase::rename_folder_differs_only_by_case(
+        Some("/library/movies/Example Title"),
+        "/library/movies/example title",
+    ));
+    assert!(
+        !AppUseCase::rename_folder_differs_only_by_case(
+            Some("/library/movies/Example Title"),
+            "/library/movies/Other Title",
+        ),
+        "a real rename must not scan the library root"
+    );
+    assert!(!AppUseCase::rename_folder_differs_only_by_case(
+        Some("/library/movies/Example Title"),
+        "/library/movies/Example Title",
+    ));
+    assert!(!AppUseCase::rename_folder_differs_only_by_case(
+        None,
+        "/library/movies/Example Title",
+    ));
+}
+
+#[test]
 fn episode_rename_parent_uses_configured_season_folder_template() {
     let mut title = test_movie_title("Test Show");
     title.facet = MediaFacet::Series;
@@ -1340,6 +1386,43 @@ fn test_media_file(path: &str) -> TitleMediaFile {
 }
 
 #[test]
+fn rename_tokens_expose_dynamic_range_revision_and_stereoscopy() {
+    let title = test_movie_title("Movie");
+    let cases = [
+        (
+            "Movie.2024.2160p.WEB-DL.HDR10+.PROPER.3D-GROUP",
+            "HDR10+",
+            "Proper",
+            "3D",
+        ),
+        ("Movie.2024.2160p.WEB-DL.DV.HDR10-GROUP", "DV HDR10", "", ""),
+        ("Movie.2024.2160p.WEB-DL.REPACK-GROUP", "", "REPACK", ""),
+        ("Movie.2024.1080p.WEB-DL-GROUP", "", "", ""),
+    ];
+
+    for (release, dynamic_range, revision, is_3d) in cases {
+        let parsed = parse_release_metadata(release);
+        let tokens = title_rename_tokens(&title, None, &parsed, "mkv").0;
+
+        assert_eq!(
+            tokens.get("dynamic_range").map(String::as_str),
+            Some(dynamic_range),
+            "{release}"
+        );
+        assert_eq!(
+            tokens.get("revision").map(String::as_str),
+            Some(revision),
+            "{release}"
+        );
+        assert_eq!(
+            tokens.get("is_3d").map(String::as_str),
+            Some(is_3d),
+            "{release}"
+        );
+    }
+}
+
+#[test]
 fn resolve_rename_common_metadata_prefers_analysis_over_parsed_metadata() {
     let media_file = test_media_file("/library/Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed.mkv");
     let parsed = parse_release_metadata("Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed");
@@ -1447,6 +1530,8 @@ fn media_file_recorded_from_analysis(
     media_file.video_codec = analysis.video_codec;
     media_file.video_width = analysis.video_width;
     media_file.video_height = analysis.video_height;
+    media_file.video_hdr_format = analysis.video_hdr_format.clone();
+    media_file.dovi_profile = analysis.dovi_profile;
     media_file.audio_codec = analysis.audio_codec.clone();
     media_file.audio_profile = analysis.audio_profile.clone();
     media_file.audio_channels = analysis.audio_channels;
@@ -1509,11 +1594,12 @@ fn import_and_library_rename_render_identical_series_tokens() {
     let mut title = test_movie_title("Lantern Harbor");
     title.facet = MediaFacet::Anime;
     let episode = test_series_episode();
-    let release = "Lantern.Harbor.S01E01.1080p.WEB-DL.AAC2.0.H.264-Glimmerwick";
+    let release = "Lantern.Harbor.S01E01.1080p.WEB-DL.AAC2.0.H.264.HDR10+.PROPER.3D-Glimmerwick";
     let parsed = parse_release_metadata(release);
 
     for (channels, layout, expected_channels) in [(2, "stereo", "2.0"), (6, "5.1(side)", "5.1")] {
-        let analysis = probed_series_analysis(channels, layout);
+        let mut analysis = probed_series_analysis(channels, layout);
+        analysis.video_hdr_format = Some("HDR10+".to_string());
         let media_file = media_file_recorded_from_analysis(
             &format!("/library/Lantern Harbor/{release}.mkv"),
             &episode.id,
@@ -1546,6 +1632,15 @@ fn import_and_library_rename_render_identical_series_tokens() {
             import_tokens.get("absolute_episode").map(String::as_str),
             Some("001")
         );
+        assert_eq!(
+            import_tokens.get("dynamic_range").map(String::as_str),
+            Some("HDR10+")
+        );
+        assert_eq!(
+            import_tokens.get("revision").map(String::as_str),
+            Some("Proper")
+        );
+        assert_eq!(import_tokens.get("is_3d").map(String::as_str), Some("3D"));
     }
 }
 

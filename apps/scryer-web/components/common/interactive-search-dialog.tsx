@@ -43,7 +43,9 @@ export function InteractiveSearchDialog({
         <DialogHeader className="pr-8 text-left">
           <DialogTitle className="truncate">{title}</DialogTitle>
           {description ? (
-            <DialogDescription className="truncate">{description}</DialogDescription>
+            <DialogDescription className="truncate">
+              {description}
+            </DialogDescription>
           ) : null}
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>

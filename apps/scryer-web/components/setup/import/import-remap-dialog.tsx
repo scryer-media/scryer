@@ -2,11 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ArrowDown, ArrowLeftRight, FolderOpen, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SetupPrimaryButton } from "@/components/setup/setup-chrome";
 import { FolderBrowserDialog } from "../folder-browser-dialog";
 import {

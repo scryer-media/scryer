@@ -33,8 +33,7 @@ import { LoadingMark } from "@/components/common/loading-mark";
 type SearchSurface = "desktop" | "mobile";
 
 type SearchResultDataAttribute =
-  | "data-global-search-result"
-  | "data-mobile-global-search-result";
+  "data-global-search-result" | "data-mobile-global-search-result";
 
 type MetadataActionKind = "add" | "inCatalog" | "request" | "unavailable";
 type SearchResultKind = "catalog" | "metadata";
@@ -107,9 +106,7 @@ function searchResultIdentityAttributes({
     // and data attributes stay lowercase (same convention as selectorId).
     "data-global-search-result-facet": facet.toLowerCase(),
     "data-global-search-result-title": titleName,
-    ...(actionKind
-      ? { "data-global-search-result-action": actionKind }
-      : {}),
+    ...(actionKind ? { "data-global-search-result-action": actionKind } : {}),
     ...(dataAttributeValue(titleId)
       ? { "data-global-search-result-title-id": dataAttributeValue(titleId)! }
       : {}),
@@ -321,7 +318,9 @@ export function SearchCatalogResultCard({
     viewSingle();
   };
   const handlePick = (pickedTitleId: string) => {
-    const picked = libraries.find((library) => library.titleId === pickedTitleId);
+    const picked = libraries.find(
+      (library) => library.titleId === pickedTitleId,
+    );
     if (picked) {
       onView(picked);
     }
@@ -431,7 +430,11 @@ export function SearchCatalogResultCard({
               <ArrowUpRight className="h-3.5 w-3.5" />
               <span>{viewLabel}</span>
             </SelectTrigger>
-            <SelectContent position="popper" align="end" className="min-w-[12rem]">
+            <SelectContent
+              position="popper"
+              align="end"
+              className="min-w-[12rem]"
+            >
               {libraries.map((library) => (
                 <SelectItem key={library.titleId} value={library.titleId}>
                   {library.libraryName}

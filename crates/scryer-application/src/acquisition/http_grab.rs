@@ -48,16 +48,22 @@ pub(crate) fn verify_resolved_http_release(
     resolved: &PluginHttpRelease,
 ) -> AppResult<()> {
     if resolved.item_id != listed.item_id {
-        return Err(AppError::Validation(format!(
-            "the indexer resolved a different item ({} instead of {}); refusing to submit",
-            resolved.item_id, listed.item_id
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::INDEXER_RESOLVED_DIFFERENT_ITEM,
+            format!(
+                "the indexer resolved a different item ({} instead of {}); refusing to submit",
+                resolved.item_id, listed.item_id
+            ),
+        ));
     }
     if resolved.page_url != listed.page_url {
-        return Err(AppError::Validation(format!(
-            "the indexer resolved a different page ({} instead of {}); refusing to submit",
-            resolved.page_url, listed.page_url
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::INDEXER_RESOLVED_DIFFERENT_PAGE,
+            format!(
+                "the indexer resolved a different page ({} instead of {}); refusing to submit",
+                resolved.page_url, listed.page_url
+            ),
+        ));
     }
     Ok(())
 }
@@ -265,6 +271,63 @@ fn dedup_languages<'a>(languages: impl Iterator<Item = &'a str>) -> Vec<String> 
     out
 }
 
+/// Resolve evidence before crossing the client boundary. Explicit resource
+/// language outranks inferred release/title language, as in Radarr's language
+/// aggregation; mandatory conditions retain Sonarr's required-group semantics.
+fn apply_http_audio_requirements(
+    release: &PluginHttpRelease,
+    selected: &mut PluginHttpSelection,
+    context: &crate::audio_requirements::TitleAudioLanguageContext,
+    release_title: &str,
+) -> AppResult<()> {
+    selected.audio_languages =
+        crate::resolve_required_audio_requirements(&selected.audio_languages, context);
+    if selected.audio_languages.is_empty() {
+        return Ok(());
+    }
+    let parsed = crate::parse_release_metadata(release_title);
+    let inferred =
+        crate::release_audio_language_hints_for_title(&parsed, None, Some(context), true);
+    let mut offered_media = false;
+    let mut accepted_media = false;
+    selected.resources.retain(|index| {
+        let Some(resource) = release.resources.get(*index as usize) else {
+            return false;
+        };
+        // Other clients own segmented streams and separate-track selection.
+        // This gate only establishes evidence for complete native HTTP files.
+        if resource.transport != HttpTransport::DirectFile || resource.separate_tracks {
+            accepted_media = true;
+            return true;
+        }
+        if !matches!(
+            resource.role,
+            HttpResourceRole::Muxed | HttpResourceRole::Video
+        ) {
+            return true;
+        }
+        offered_media = true;
+        let explicit = resource
+            .audio
+            .as_ref()
+            .and_then(|track| track.language.as_deref())
+            .filter(|value| !value.trim().is_empty() && !value.eq_ignore_ascii_case("und"));
+        let evidence = explicit
+            .map(|language| vec![language.to_owned()])
+            .unwrap_or_else(|| inferred.clone());
+        let accepted = crate::required_audio_languages_match(&selected.audio_languages, &evidence);
+        accepted_media |= accepted;
+        accepted
+    });
+    if offered_media && !accepted_media {
+        return Err(AppError::validation_refused(
+            crate::http_release_refusal::NO_AUDIO_RESOURCE,
+            "no media resource satisfies the required audio languages",
+        ));
+    }
+    Ok(())
+}
+
 impl AppUseCase {
     /// The complete `http` block for an `HttpResource` grab, or `None` when
     /// the intent carries no HTTP release.
@@ -293,12 +356,19 @@ impl AppUseCase {
                 .map(|language| language.code.clone())
                 .collect(),
         };
-        let selected = build_http_selection(&release, &profile, &subtitles);
+        let mut selected = build_http_selection(&release, &profile, &subtitles);
         let release_title = request
             .release_title
             .as_deref()
             .or(request.source_title.as_deref())
             .unwrap_or(&request.title.name);
+        let audio_context = crate::title_audio_language_context(
+            request.title.language.as_deref(),
+            request.title.country.as_deref(),
+            Some(request.title.facet.as_str()),
+            &request.title.tags,
+        );
+        apply_http_audio_requirements(&release, &mut selected, &audio_context, release_title)?;
         let policy = build_http_policy(&release, release_title, download_id, release_size_bytes);
         Ok(PluginHttpDownloadSource {
             release,
@@ -441,14 +511,30 @@ mod tests {
             ..listed.clone()
         };
         let error = verify_resolved_http_release(&listed, &other_item).unwrap_err();
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
 
         let other_page = PluginHttpRelease {
             page_url: "https://provider.invalid/watch/item-1?alt=1".into(),
             ..listed.clone()
         };
         let error = verify_resolved_http_release(&listed, &other_page).unwrap_err();
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -592,5 +678,84 @@ mod tests {
         let long_title = "x".repeat(400);
         let long = http_output_basename(&long_title, &download_id);
         assert!(long.len() <= OUTPUT_BASENAME_TITLE_LIMIT + 1 + download_id.to_string().len());
+    }
+
+    // Radarr 4d9bd475: LanguageSpecification resolves Original; AggregateLanguage
+    // uses title language only when stronger evidence is absent. Sonarr 465b5192:
+    // SpecificationMatchesGroup requires every required condition.
+    #[test]
+    fn http_audio_selection_resolves_original_and_preserves_evidence_precedence() {
+        let context = crate::title_audio_language_context(Some("ja"), None, Some("anime"), &[]);
+        let unlabelled = resource(HttpTransport::DirectFile, HttpResourceRole::Muxed);
+        let mut german = unlabelled.clone();
+        german.audio = Some(scryer_plugin_sdk::PluginHttpAudioTrack {
+            language: Some("de".into()),
+            ..Default::default()
+        });
+        let release = PluginHttpRelease {
+            resources: vec![german, unlabelled],
+            ..release()
+        };
+        let mut selected = build_http_selection(
+            &release,
+            &profile(&[], vec![], &["original"]),
+            &Default::default(),
+        );
+        apply_http_audio_requirements(&release, &mut selected, &context, "Synthetic.Show.S01E01")
+            .unwrap();
+        assert_eq!(selected.audio_languages, vec!["jpn"]);
+        assert_eq!(selected.resources, vec![1]);
+
+        let mut selected = build_http_selection(
+            &release,
+            &profile(&[], vec![], &["eng", "jpn"]),
+            &Default::default(),
+        );
+        apply_http_audio_requirements(
+            &release,
+            &mut selected,
+            &context,
+            "Synthetic.Show.S01E01.DUAL",
+        )
+        .unwrap();
+        assert_eq!(selected.resources, vec![1]);
+        let mut selected = build_http_selection(
+            &release,
+            &profile(&[], vec![], &["eng", "jpn"]),
+            &Default::default(),
+        );
+        let error = apply_http_audio_requirements(
+            &release,
+            &mut selected,
+            &context,
+            "Synthetic.Show.S01E01.Japanese",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::http_release_refusal::NO_AUDIO_RESOURCE)
+        );
+
+        let segmented = PluginHttpRelease {
+            resources: vec![resource(HttpTransport::Hls, HttpResourceRole::Muxed)],
+            ..release
+        };
+        let mut selected = build_http_selection(
+            &segmented,
+            &profile(&[], vec![], &["eng"]),
+            &Default::default(),
+        );
+        apply_http_audio_requirements(
+            &segmented,
+            &mut selected,
+            &context,
+            "Synthetic.Show.S01E01.Japanese",
+        )
+        .unwrap();
+        assert_eq!(
+            selected.resources,
+            vec![0],
+            "segmented resource policy stays with its client"
+        );
     }
 }

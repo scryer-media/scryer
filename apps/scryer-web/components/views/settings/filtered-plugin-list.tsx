@@ -106,7 +106,12 @@ export function FilteredPluginList({
     uninstallPlugin,
     togglePlugin,
     upgradePlugin,
-  } = usePluginManagement({ client, t, refreshProviderOptions, catalogVersion });
+  } = usePluginManagement({
+    client,
+    t,
+    refreshProviderOptions,
+    catalogVersion,
+  });
 
   const allowedTypes = React.useMemo(
     () => new Set([...FAMILY_PLUGIN_TYPES[family], ...extraPluginTypes]),
@@ -165,7 +170,9 @@ export function FilteredPluginList({
     <>
       <section
         className={cn(
-          gutterPanel ? FILTERED_PLUGIN_PANEL_FLUSH_CLASS : FILTERED_PLUGIN_PANEL_CLASS,
+          gutterPanel
+            ? FILTERED_PLUGIN_PANEL_FLUSH_CLASS
+            : FILTERED_PLUGIN_PANEL_CLASS,
           className,
         )}
       >
@@ -189,7 +196,9 @@ export function FilteredPluginList({
                 label={updateAllLabel}
                 tooltip={updateAllTooltip}
                 tone="upgrade"
-                className={cn(gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS)}
+                className={cn(
+                  gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS,
+                )}
                 onClick={() => void updateVisiblePlugins()}
                 disabled={upgradingVisiblePlugins}
               >
@@ -204,7 +213,9 @@ export function FilteredPluginList({
               label={t("settings.pluginsRefresh")}
               tone="neutral"
               appearance={gutterPanel ? "ghost" : "boxed"}
-              className={cn(gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS)}
+              className={cn(
+                gutterPanel && FILTERED_PLUGIN_HEADER_BUTTON_FLUSH_CLASS,
+              )}
               onClick={() => void refreshPluginsRegistry()}
               disabled={pluginsRefreshing}
             >
@@ -228,7 +239,9 @@ export function FilteredPluginList({
         </div>
         <div
           className={
-            gutterPanel ? FILTERED_PLUGIN_BODY_FLUSH_CLASS : FILTERED_PLUGIN_BODY_CLASS
+            gutterPanel
+              ? FILTERED_PLUGIN_BODY_FLUSH_CLASS
+              : FILTERED_PLUGIN_BODY_CLASS
           }
         >
           {pluginsError ? (
@@ -237,12 +250,16 @@ export function FilteredPluginList({
             </p>
           ) : null}
           {pluginsLoading ? (
-            <div className={`col-span-full flex items-center gap-2 py-6 text-sm ${FILTERED_PLUGIN_MUTED_CLASS}`}>
+            <div
+              className={`col-span-full flex items-center gap-2 py-6 text-sm ${FILTERED_PLUGIN_MUTED_CLASS}`}
+            >
               <LoadingMark className="h-4 w-4" />
               {t("label.loading")}
             </div>
           ) : familyPlugins.length === 0 ? (
-            <p className={`col-span-full py-6 text-sm ${FILTERED_PLUGIN_MUTED_CLASS}`}>
+            <p
+              className={`col-span-full py-6 text-sm ${FILTERED_PLUGIN_MUTED_CLASS}`}
+            >
               {t("settings.pluginsNoAvailable")}
             </p>
           ) : (
@@ -298,10 +315,14 @@ export function FilteredPluginList({
                         {hasStatusBadges ? (
                           <div className="mt-1.5 flex flex-wrap items-center gap-1">
                             {plugin.builtin ? (
-                              <Badge tone="info">{t("settings.pluginBuiltin")}</Badge>
+                              <Badge tone="info">
+                                {t("settings.pluginBuiltin")}
+                              </Badge>
                             ) : null}
                             {plugin.official ? (
-                              <Badge tone="info">{t("settings.pluginOfficial")}</Badge>
+                              <Badge tone="info">
+                                {t("settings.pluginOfficial")}
+                              </Badge>
                             ) : null}
                             {plugin.supportTier === "verified_community" ? (
                               <Badge tone="positive">
@@ -314,14 +335,17 @@ export function FilteredPluginList({
                               </Badge>
                             ) : null}
                             {plugin.status === "beta" ? (
-                              <Badge tone="warning">{t("settings.pluginBeta")}</Badge>
+                              <Badge tone="warning">
+                                {t("settings.pluginBeta")}
+                              </Badge>
                             ) : null}
                             {plugin.status === "deprecated" ? (
                               <Badge tone="negative">
                                 {t("settings.pluginDeprecated")}
                               </Badge>
                             ) : null}
-                            {plugin.builtin && plugin.sourceKind === "downloaded" ? (
+                            {plugin.builtin &&
+                            plugin.sourceKind === "downloaded" ? (
                               <Badge tone="warning">
                                 {t("settings.pluginOverride")}
                               </Badge>
@@ -350,56 +374,59 @@ export function FilteredPluginList({
                                 <Power className="h-3.5 w-3.5" />
                               )}
                             </IconButton>
-                          {plugin.updateAvailable ? (
-                            <IconButton
-                              label={t("settings.pluginUpgrade", {
-                                version: plugin.latestVersion ?? plugin.version,
-                              })}
-                              tone="upgrade"
-                              onClick={() => void upgradePlugin(plugin)}
-                              disabled={mutating}
-                            >
-                              <ArrowUpCircle className="h-3.5 w-3.5" />
-                            </IconButton>
-                          ) : null}
-                          {canUninstall ? (
-                            <IconButton
-                              label={t("settings.pluginUninstall")}
-                              tone="delete"
-                              onClick={() => setPendingUninstall(plugin)}
-                              disabled={mutating}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </IconButton>
-                          ) : null}
-                        </>
+                            {plugin.updateAvailable ? (
+                              <IconButton
+                                label={t("settings.pluginUpgrade", {
+                                  version:
+                                    plugin.latestVersion ?? plugin.version,
+                                })}
+                                tone="upgrade"
+                                onClick={() => void upgradePlugin(plugin)}
+                                disabled={mutating}
+                              >
+                                <ArrowUpCircle className="h-3.5 w-3.5" />
+                              </IconButton>
+                            ) : null}
+                            {canUninstall ? (
+                              <IconButton
+                                label={t("settings.pluginUninstall")}
+                                tone="delete"
+                                onClick={() => setPendingUninstall(plugin)}
+                                disabled={mutating}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </IconButton>
+                            ) : null}
+                          </>
                         ) : (
                           <IconButton
                             type="button"
-                          label={t("settings.pluginInstall")}
-                          tone="install"
-                          onClick={() => void installPlugin(plugin)}
-                          disabled={mutating}
-                        >
-                          {mutating ? (
-                            <LoadingMark className="h-3.5 w-3.5" />
-                          ) : (
-                            <Download className="h-3.5 w-3.5" />
-                          )}
-                        </IconButton>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {running && progress ? (
-                  <div className="mt-2">
-                    <PluginInstallProgressBar progress={progress} />
+                            label={t("settings.pluginInstall")}
+                            tone="install"
+                            onClick={() => void installPlugin(plugin)}
+                            disabled={mutating}
+                          >
+                            {mutating ? (
+                              <LoadingMark className="h-3.5 w-3.5" />
+                            ) : (
+                              <Download className="h-3.5 w-3.5" />
+                            )}
+                          </IconButton>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ) : null}
-                {error ? (
-                  <p className="mt-1.5 text-[11px] text-[var(--scry-danger-text-soft)]">{error}</p>
-                ) : null}
-              </div>
+                  {running && progress ? (
+                    <div className="mt-2">
+                      <PluginInstallProgressBar progress={progress} />
+                    </div>
+                  ) : null}
+                  {error ? (
+                    <p className="mt-1.5 text-[11px] text-[var(--scry-danger-text-soft)]">
+                      {error}
+                    </p>
+                  ) : null}
+                </div>
               );
             })
           )}
@@ -411,7 +438,11 @@ export function FilteredPluginList({
         description={t("settings.pluginUninstallWarning")}
         confirmLabel={t("settings.pluginUninstall")}
         cancelLabel={t("label.cancel")}
-        isBusy={pendingUninstall ? mutatingPluginIds.includes(pendingUninstall.id) : false}
+        isBusy={
+          pendingUninstall
+            ? mutatingPluginIds.includes(pendingUninstall.id)
+            : false
+        }
         onConfirm={confirmUninstall}
         onCancel={() => setPendingUninstall(null)}
       />

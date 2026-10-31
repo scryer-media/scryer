@@ -15,6 +15,7 @@ use scryer_domain::{
 use tracing::warn;
 
 const SOURCE_CHANGED_AFTER_PROBE_CODE: &str = "source_changed_after_probe";
+const IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE: &str = "import_source_changed_after_probe";
 const SOURCE_SNAPSHOT_UNAVAILABLE_CODE: &str = "import_source_snapshot_unavailable";
 
 pub(crate) enum ImportedFileGateDecision {
@@ -96,8 +97,8 @@ impl ImportedFileRejection {
     ///
     /// A rule-error hold keeps `PostDownloadRuleBlocked` so the result is routed
     /// by its code: its message quotes operator-authored rule text and must never
-    /// be read as a transient failure. Every other review hold keeps reporting
-    /// `PolicyMismatch`, which a source-changed hold relies on to be retried.
+    /// be read as a transient failure. Source races retain their retryable
+    /// reasons; other review holds report `PolicyMismatch`.
     pub(crate) fn review_hold_skip_reason(&self) -> ImportSkipReason {
         review_hold_skip_reason_for_code(self.recycle_reason)
     }
@@ -108,6 +109,13 @@ impl ImportedFileRejection {
 pub(crate) fn review_hold_skip_reason_for_code(code: &str) -> ImportSkipReason {
     if code == POST_DOWNLOAD_RULE_ERROR_CODE {
         ImportSkipReason::PostDownloadRuleBlocked
+    } else if matches!(
+        code,
+        SOURCE_CHANGED_AFTER_PROBE_CODE | IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE
+    ) {
+        ImportSkipReason::SourceChanged
+    } else if code == SOURCE_SNAPSHOT_UNAVAILABLE_CODE {
+        ImportSkipReason::SourceUnavailable
     } else {
         ImportSkipReason::PolicyMismatch
     }
@@ -131,8 +139,8 @@ fn import_source_changed_rejection(
             "import source changed after validation probe: {} ({detail})",
             path.display()
         ),
-        recycle_reason: "import_source_changed_after_probe",
-        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        recycle_reason: IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE,
+        skip_reason: Some(ImportSkipReason::SourceChanged),
         blocking_rule_codes: vec![SOURCE_CHANGED_AFTER_PROBE_CODE.to_string()],
     }
 }
@@ -147,7 +155,7 @@ fn import_source_snapshot_unavailable_rejection(
             path.display()
         ),
         recycle_reason: SOURCE_SNAPSHOT_UNAVAILABLE_CODE,
-        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        skip_reason: Some(ImportSkipReason::SourceUnavailable),
         blocking_rule_codes: vec![SOURCE_SNAPSHOT_UNAVAILABLE_CODE.to_string()],
     }
 }
@@ -580,8 +588,7 @@ pub(crate) fn replace_runtime_band_block(
 
     let band_min_seconds = incumbent_seconds.saturating_mul(RUNTIME_BAND_MIN_PERCENT) / 100;
     let band_max_seconds = incumbent_seconds.saturating_mul(RUNTIME_BAND_MAX_PERCENT) / 100;
-    // Wording deliberately avoids the "blocked"/"locked" vocabulary that
-    // `completed_import_error_message_is_retryable` treats as transient.
+    // A runtime mismatch is a policy hold, independent of its wording.
     if actual_seconds < band_min_seconds {
         return Some(format!(
             "imported file runtime is too short to replace the existing file: existing file is about {} minutes, probed file is {}; held for manual resolution",
@@ -926,7 +933,11 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
     .await
     {
         Ok(probe) => probe,
-        Err(error @ crate::AppError::Validation(_)) => {
+        Err(
+            error @ (crate::AppError::Validation(_)
+            | crate::AppError::ValidationRefused { .. }
+            | crate::AppError::ValidationRefusedWithCount { .. }),
+        ) => {
             return ImportedFileGateDecision::Rejected(import_source_changed_rejection(
                 path, error,
             ));
@@ -2134,24 +2145,20 @@ pub(crate) async fn persist_media_analysis_result(
                 let current = media_files
                     .get_media_file_by_id(file_id)
                     .await?
-                    .ok_or_else(|| crate::AppError::NotFound(format!("media file {file_id}")))?;
+                    .ok_or_else(|| crate::AppError::not_found_reason(crate::error_reasons::import::MEDIA_FILE_NOT_FOUND, format!("media file {file_id}")))?;
                 if current.analysis_details.revision > 0
                     && current.analysis_details.disc.as_ref().is_some_and(|disc| {
                         Some(&disc.selection)
                             != analysis.details.disc.as_ref().map(|next| &next.selection)
                     })
                 {
-                    return Err(crate::AppError::Validation(
-                        "saved disc selection changed before import metadata was published".into(),
-                    ));
+                    return Err(crate::AppError::validation_refused(crate::error_reasons::import::SAVED_DISC_SELECTION_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED, "saved disc selection changed before import metadata was published"));
                 }
                 if !media_files
                     .update_media_file_analysis_if_unchanged(&current, analysis.clone())
                     .await?
                 {
-                    return Err(crate::AppError::Validation(
-                        "media file changed before import metadata was published".into(),
-                    ));
+                    return Err(crate::AppError::validation_refused(crate::error_reasons::import::MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED, "media file changed before import metadata was published"));
                 }
                 Ok(())
             }
@@ -2685,6 +2692,7 @@ mod tests {
             &resolved,
             &decision,
             crate::user_rule_input::ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -2793,6 +2801,7 @@ mod tests {
         }])
         .expect("rule builds");
         let snapshot = crate::quality::release_listing::ReleaseListingSnapshot {
+            protocol: None,
             grab_scoring: None,
             published_at: Some("2024-01-02T03:04:05Z".to_string()),
             thumbs_up: None,
@@ -2903,6 +2912,7 @@ mod tests {
             &profile,
             &decision,
             crate::user_rule_input::ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -3853,6 +3863,38 @@ mod tests {
         assert_eq!(
             quality_contradiction(&codes(&["quality_contradicted:garbage"])),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_review_reason_tests {
+    use super::*;
+
+    #[test]
+    fn source_change_review_retains_both_existing_codes_without_reading_the_sentence() {
+        for code in [
+            SOURCE_CHANGED_AFTER_PROBE_CODE,
+            IMPORT_SOURCE_CHANGED_AFTER_PROBE_CODE,
+        ] {
+            let rejection = ImportedFileRejection {
+                message: "rewritten explanation".into(),
+                recycle_reason: code,
+                skip_reason: Some(ImportSkipReason::SourceChanged),
+                blocking_rule_codes: Vec::new(),
+            };
+            assert_eq!(
+                rejection.review_hold_skip_reason(),
+                ImportSkipReason::SourceChanged
+            );
+        }
+        assert_eq!(
+            review_hold_skip_reason_for_code(SOURCE_SNAPSHOT_UNAVAILABLE_CODE),
+            ImportSkipReason::SourceUnavailable
+        );
+        assert_eq!(
+            review_hold_skip_reason_for_code(DISC_REVIEW_REQUIRED_CODE),
+            ImportSkipReason::PolicyMismatch
         );
     }
 }

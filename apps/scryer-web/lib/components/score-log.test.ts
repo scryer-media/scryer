@@ -31,7 +31,8 @@ test("score log renders decoded entries with rule badges, rejections and the tot
       entries: ReleaseDecisionExplanationEntry[];
       total?: number | null;
     }>;
-    const TranslateContext = contextModule.TranslateContext as Context<Translate | null>;
+    const TranslateContext =
+      contextModule.TranslateContext as Context<Translate | null>;
     const html = renderToStaticMarkup(
       createElement(
         TranslateContext.Provider,
@@ -41,8 +42,18 @@ test("score log renders decoded entries with rule badges, rejections and the tot
             quality_profile_decision: {
               scoring_log: [
                 { code: "quality_tier", delta: 1000 },
-                { code: "release_group", delta: -25, source: "user:rule-1", ruleSetName: "Synthetic groups" },
-                { code: "codec_required", delta: 0, kind: "mandatory_rejection", source: { kind: "system_rule", name: "Synthetic codecs" } },
+                {
+                  code: "release_group",
+                  delta: -25,
+                  source: "user:rule-1",
+                  ruleSetName: "Synthetic groups",
+                },
+                {
+                  code: "codec_required",
+                  delta: 0,
+                  kind: "mandatory_rejection",
+                  source: { kind: "system_rule", name: "Synthetic codecs" },
+                },
               ],
             },
           }),

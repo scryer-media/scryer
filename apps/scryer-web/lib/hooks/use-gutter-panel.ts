@@ -21,7 +21,10 @@ export type GutterPanelFrame = {
  * page body so a remounted body shows the panel where it was instead of
  * sliding it in again.
  */
-export type GutterPanelMemory = React.RefObject<{ frame: GutterPanelFrame; open: boolean } | null>;
+export type GutterPanelMemory = React.RefObject<{
+  frame: GutterPanelFrame;
+  open: boolean;
+} | null>;
 
 const UNDOCKED_FRAME: GutterPanelFrame = {
   docked: false,
@@ -60,7 +63,9 @@ export function useGutterPanel(
   resetKey?: unknown,
   memory?: GutterPanelMemory,
 ) {
-  const [frame, setFrame] = React.useState<GutterPanelFrame>(() => memory?.current?.frame ?? UNDOCKED_FRAME);
+  const [frame, setFrame] = React.useState<GutterPanelFrame>(
+    () => memory?.current?.frame ?? UNDOCKED_FRAME,
+  );
   const [open, setOpen] = React.useState(() => memory?.current?.open ?? false);
   const width = size?.width;
   const gap = size?.gap;
@@ -75,13 +80,17 @@ export function useGutterPanel(
 
     const measure = () => {
       const rect = container.getBoundingClientRect();
-      const clientRight = rect.left + container.clientLeft + container.clientWidth;
+      const clientRight =
+        rect.left + container.clientLeft + container.clientWidth;
       const gutter = clientRight - content.getBoundingClientRect().right;
       const next: GutterPanelFrame = {
         docked: gutter - gap >= width,
         width: Math.min(width, container.clientWidth),
         top: Math.max(0, Math.round(rect.top)),
-        right: Math.max(0, Math.round(document.documentElement.clientWidth - clientRight)),
+        right: Math.max(
+          0,
+          Math.round(document.documentElement.clientWidth - clientRight),
+        ),
       };
       setFrame((current) => (sameFrame(current, next) ? current : next));
     };
@@ -91,7 +100,10 @@ export function useGutterPanel(
     // moves the container's top edge.
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
     observer?.observe(container);
     observer?.observe(content);
     return () => {
@@ -104,8 +116,14 @@ export function useGutterPanel(
   // Follow the docking in the same render that changes it: an effect would
   // commit one frame with the panel still open but no longer docked, which
   // flashes it into its modal overlay before it slides away.
-  const [defaultFor, setDefaultFor] = React.useState({ docked: frame.docked, resetKey });
-  if (defaultFor.docked !== frame.docked || !Object.is(defaultFor.resetKey, resetKey)) {
+  const [defaultFor, setDefaultFor] = React.useState({
+    docked: frame.docked,
+    resetKey,
+  });
+  if (
+    defaultFor.docked !== frame.docked ||
+    !Object.is(defaultFor.resetKey, resetKey)
+  ) {
     setDefaultFor({ docked: frame.docked, resetKey });
     setOpen(frame.docked);
   }

@@ -49,14 +49,16 @@ impl AppUseCase {
 
         let name = name.trim().to_string();
         if name.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_NAME_REQUIRED,
                 "subtitle provider config name must not be empty".to_string(),
             ));
         }
 
         let provider_type = provider_type.trim().to_ascii_lowercase();
         if provider_type.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_PROVIDER_TYPE_REQUIRED,
                 "subtitle provider type must not be empty".to_string(),
             ));
         }
@@ -92,7 +94,8 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         if !update.has_changes() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_FIELD_REQUIRED,
                 "at least one subtitle provider config field must be provided".to_string(),
             ));
         }
@@ -102,7 +105,10 @@ impl AppUseCase {
                 .get_by_id(&update.id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("subtitle provider config {}", update.id))
+                    AppError::not_found_reason(
+                        crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_NOT_FOUND,
+                        format!("subtitle provider config {}", update.id),
+                    )
                 })?;
             let provider_type = update
                 .provider_type
@@ -197,7 +203,12 @@ impl AppUseCase {
                 .subtitle_provider_configs_repo()?
                 .get_by_id(id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("subtitle provider config {id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_NOT_FOUND,
+                        format!("subtitle provider config {id}"),
+                    )
+                })?;
             if !normalized_provider_type.is_empty() {
                 config.provider_type = normalized_provider_type.clone();
             }
@@ -277,10 +288,13 @@ impl AppUseCase {
             .available()
             .and_then(|provider| provider.client_for_config(config, &bindings))
             .ok_or_else(|| {
-                AppError::NotFound(format!(
-                    "no subtitle plugin for provider type '{}'",
-                    config.provider_type
-                ))
+                AppError::not_found_reason(
+                    crate::error_reasons::subtitles::SUBTITLE_PLUGIN_PROVIDER_TYPE_NOT_FOUND,
+                    format!(
+                        "no subtitle plugin for provider type '{}'",
+                        config.provider_type
+                    ),
+                )
             })
     }
 
@@ -300,7 +314,10 @@ impl AppUseCase {
         let mut incoming = parse_config_object(config_json)?;
         let Some(existing_config_json) = existing_config_json else {
             return serde_json::to_string(&incoming).map_err(|error| {
-                AppError::Validation(format!("invalid subtitle provider config_json: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_JSON_INVALID,
+                    format!("invalid subtitle provider config_json: {error}"),
+                )
             });
         };
         let existing = parse_config_object(existing_config_json)?;
@@ -328,7 +345,10 @@ impl AppUseCase {
         }
 
         serde_json::to_string(&incoming).map_err(|error| {
-            AppError::Validation(format!("invalid subtitle provider config_json: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_JSON_INVALID,
+                format!("invalid subtitle provider config_json: {error}"),
+            )
         })
     }
 
@@ -466,12 +486,14 @@ fn parse_config_object(config_json: &str) -> AppResult<Map<String, Value>> {
 
     match serde_json::from_str::<Value>(trimmed) {
         Ok(Value::Object(map)) => Ok(map),
-        Ok(_) => Err(AppError::Validation(
+        Ok(_) => Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_JSON_INVALID,
             "subtitle provider config_json must be a JSON object".to_string(),
         )),
-        Err(error) => Err(AppError::Validation(format!(
-            "invalid subtitle provider config_json: {error}"
-        ))),
+        Err(error) => Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_PROVIDER_CONFIG_JSON_INVALID,
+            format!("invalid subtitle provider config_json: {error}"),
+        )),
     }
 }
 

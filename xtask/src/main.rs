@@ -216,14 +216,8 @@ struct CiArgs {
 
 #[derive(Subcommand)]
 enum CiCommand {
-    Clippy(ClippyArgs),
+    Clippy,
     Winget(WingetArgs),
-}
-
-#[derive(Args)]
-struct ClippyArgs {
-    #[arg(long)]
-    linux_only: bool,
 }
 
 #[derive(Args)]
@@ -391,12 +385,7 @@ fn delegate_sdk(ctx: &TaskContext, args: &SdkArgs) -> Result<()> {
 fn delegate_ci(ctx: &TaskContext, args: &CiArgs) -> Result<()> {
     let mut forwarded = vec!["ci".to_string()];
     match &args.command {
-        CiCommand::Clippy(clippy) => {
-            forwarded.push("clippy".to_string());
-            if clippy.linux_only {
-                forwarded.push("--linux-only".to_string());
-            }
-        }
+        CiCommand::Clippy => forwarded.push("clippy".to_string()),
         CiCommand::Winget(winget) => {
             forwarded.push("winget".to_string());
             forwarded.push("--version".to_string());
@@ -428,13 +417,13 @@ fn build_test_plugin_fixture(ctx: &TaskContext) -> Result<()> {
 
     step("Building test indexer WebAssembly fixture from source");
     let mut locate_rustc = ctx.command_in("rustup", &ctx.repo_root);
-    locate_rustc.args(["which", "rustc", "--toolchain", "1.97.1"]);
+    locate_rustc.args(["which", "rustc", "--toolchain", "1.99.1"]);
     let rustc = PathBuf::from(run_capture(&mut locate_rustc)?.trim());
     let mut build = ctx.command_in("rustup", &ctx.repo_root);
     build
         .args([
             "run",
-            "1.97.1",
+            "1.99.1",
             "cargo",
             "build",
             "--locked",
@@ -579,6 +568,13 @@ fn tail_file(path: &Path, lines: usize) -> Result<String> {
     let content = fs::read_to_string(path).unwrap_or_default();
     let collected = content.lines().rev().take(lines).collect::<Vec<_>>();
     Ok(collected.into_iter().rev().collect::<Vec<_>>().join("\n"))
+}
+
+fn setup_code_record(backend_output: &str) -> Option<&str> {
+    // This is an operator-output record, never an API response or error classifier.
+    backend_output
+        .lines()
+        .find(|line| line.starts_with("Scryer one-time setup code: "))
 }
 
 enum BackendStartupOutcome {
@@ -1195,7 +1191,25 @@ fn nonempty_file(path: &Path) -> bool {
     path.is_file() && fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0)
 }
 
+fn serve_checkout_root(start: &Path) -> Result<PathBuf> {
+    start
+        .ancestors()
+        .find(|directory| {
+            directory.join("Cargo.toml").is_file()
+                && directory.join("xtask/src/main.rs").is_file()
+                && directory.join("apps/scryer-web/package.json").is_file()
+        })
+        .map(Path::to_path_buf)
+        .context("run xtask serve from within the Scryer checkout to serve")
+}
+
 fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Result<()> {
+    // A shared build cache can retain another worktree's compile-time root.
+    // Serving must use the checkout selected by the invocation, not that cache.
+    let mut serve_context = ctx.clone();
+    serve_context.repo_root = serve_checkout_root(&std::env::current_dir()?)?;
+    let ctx = &serve_context;
+    println!("    Serving checkout: {}", ctx.repo_root.display());
     ensure_serve_builtin_plugins(ctx)?;
     require_command("npm")?;
 
@@ -1339,6 +1353,23 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
     println!("    Frontend: {frontend_url}");
     println!("    Datastore: {}", datastore.location);
     println!("    Log:      tail -f {}", backend_log.display());
+    // The backend flushes its setup code before opening the listener. Relay only
+    // that operator-only record from this launch's freshly truncated log.
+    match fs::read_to_string(&backend_log) {
+        Ok(output) => {
+            if let Some(record) = setup_code_record(&output) {
+                println!("\n============================================================");
+                println!("SCRYER FIRST-RUN SETUP — ACTION REQUIRED\n");
+                println!("{record}\n");
+                println!("Enter this code in the setup screen. Keep it private.");
+                println!("============================================================\n");
+            }
+        }
+        Err(error) => warn(format!(
+            "Could not read the setup code from {}: {error}",
+            backend_log.display()
+        )),
+    }
     println!();
     println!("==> Starting Vite dev server with live updates...");
 
@@ -1354,6 +1385,8 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
             "--host",
             "0.0.0.0",
             "--strictPort",
+            "--clearScreen",
+            "false",
             "--port",
             &frontend_port.to_string(),
         ]);
@@ -1510,6 +1543,43 @@ pub(crate) fn run_capture(command: &mut Command) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_checkout_root_uses_the_invoked_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let primary = temp.path().join("primary");
+        let worktree = primary.join(".worktrees/feature");
+        for root in [&primary, &worktree] {
+            fs::create_dir_all(root.join("xtask/src")).unwrap();
+            fs::create_dir_all(root.join("apps/scryer-web")).unwrap();
+            for file in [
+                "Cargo.toml",
+                "xtask/src/main.rs",
+                "apps/scryer-web/package.json",
+            ] {
+                fs::write(root.join(file), "").unwrap();
+            }
+        }
+        assert_eq!(serve_checkout_root(&primary).unwrap(), primary);
+        assert_eq!(
+            serve_checkout_root(&worktree.join("apps/scryer-web")).unwrap(),
+            worktree
+        );
+        assert!(serve_checkout_root(temp.path()).is_err());
+    }
+
+    #[test]
+    fn setup_code_record_relays_only_the_operator_record() {
+        assert_eq!(
+            setup_code_record("starting\r\nScryer one-time setup code: ABC-234\r\nlistening\r\n"),
+            Some("Scryer one-time setup code: ABC-234")
+        );
+        assert_eq!(setup_code_record("existing instance: ready\n"), None);
+        assert_eq!(
+            setup_code_record("INFO unrelated: Scryer one-time setup code: ABC-234\n"),
+            None
+        );
+    }
 
     #[test]
     fn serve_public_url_uses_resolved_frontend_port_when_unconfigured() {

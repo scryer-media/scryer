@@ -1018,7 +1018,13 @@ impl AppUseCase {
                     // each retry under the same stable step key.
                     let terminal_error = matches!(
                         error,
-                        AppError::Validation(_) | AppError::Unauthorized(_) | AppError::NotFound(_)
+                        AppError::Validation(_)
+                            | AppError::ValidationRefused { .. }
+                            | AppError::ValidationRefusedWithCount { .. }
+                            | AppError::Unauthorized(_)
+                            | AppError::UnauthorizedReason { .. }
+                            | AppError::NotFound(_)
+                            | AppError::NotFoundReason { .. }
                     );
                     if terminal_error
                         || run.attempt >= super::action_execution::MAINTENANCE_MAX_ACTION_ATTEMPTS
@@ -1175,9 +1181,10 @@ impl AppUseCase {
                 if !profiles.profiles.iter().any(|profile| {
                     crate::settings::runtime::quality_profile_ids_equal(&profile.id, target)
                 }) {
-                    return Err(AppError::Validation(format!(
-                        "target quality profile '{target}' does not exist"
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::maintenance::TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
+                        format!("target quality profile '{target}' does not exist"),
+                    ));
                 }
                 let current = title.tags.iter().find_map(|tag| {
                     tag.strip_prefix(super::facts::QUALITY_PROFILE_TAG_PREFIX)
@@ -1325,8 +1332,9 @@ impl AppUseCase {
                 )
                 .await
             }
-            _ => Err(AppError::Validation(
-                "maintenance sequence step parameters are invalid".into(),
+            _ => Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::SEQUENCE_STEP_PARAMETERS_INVALID,
+                "maintenance sequence step parameters are invalid",
             )),
         }
     }
@@ -1627,8 +1635,9 @@ impl AppUseCase {
             .await
         {
             Ok(receipt) => receipt,
-            Err(AppError::Validation(message))
-                if message.contains("acquisition search job is already running") =>
+            Err(error)
+                if error.validation_reason()
+                    == Some(crate::error_reasons::acquisition::SEARCH_RUNNING) =>
             {
                 return Ok(SequenceStepResult::Held(
                     execution_reason::ACTIVE_ACQUISITION,
@@ -1962,7 +1971,8 @@ impl AppUseCase {
             .iter()
             .find(|previous| previous.kind == MaintenanceActionStepKind::Unmonitor)
         else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP,
                 "DeleteFiles requires an earlier Unmonitor step".to_string(),
             ));
         };
@@ -1970,7 +1980,8 @@ impl AppUseCase {
             include_descendants,
         } = &unmonitor.parameters
         else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
                 "DeleteFiles has an incompatible Unmonitor prerequisite".to_string(),
             ));
         };

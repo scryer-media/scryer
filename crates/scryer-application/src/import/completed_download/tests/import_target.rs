@@ -198,7 +198,10 @@ async fn download_of_only_an_executable_ends_as_unwanted_executables() {
         "{result:?}"
     );
     assert_eq!(result.error_message.as_deref(), Some(expected.as_str()));
-    assert_eq!(td.status_messages, vec![expected]);
+    assert_eq!(
+        crate::tracked_downloads::status_texts(&td.status_messages),
+        vec![expected]
+    );
     assert_eq!(
         td.no_video_import_retry, None,
         "no no-video retry is scheduled"
@@ -235,7 +238,10 @@ async fn scryer_grab_of_only_an_executable_is_routed_to_failure_handling() {
         td.client_item.attention_reason.as_deref(),
         Some(expected.as_str())
     );
-    assert_eq!(td.status_messages, vec![expected]);
+    assert_eq!(
+        crate::tracked_downloads::status_texts(&td.status_messages),
+        vec![expected]
+    );
     assert!(
         td.burned_by_import_gate,
         "the failure is the import gate's, so terminal cleanup removes the files too"
@@ -352,7 +358,9 @@ async fn migrated_unverified_import_record_does_not_suppress_blocked_import_retr
     td.client_item.is_scryer_origin = true;
     td.state = TrackedDownloadState::ImportBlocked;
     td.status = TrackedDownloadStatus::Warning;
-    td.status_messages = vec!["Awaiting import verification.".to_string()];
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+        "Awaiting import verification.".to_string(),
+    )];
     submissions
         .canonical_identity_tracked_state_reasons
         .lock()
@@ -374,7 +382,7 @@ async fn migrated_unverified_import_record_does_not_suppress_blocked_import_retr
     assert!(
         td.status_messages
             .iter()
-            .all(|message| message != "Awaiting import verification.")
+            .all(|message| message.text != "Awaiting import verification.")
     );
 }
 
@@ -390,7 +398,9 @@ async fn attempted_import_does_not_reopen_when_durable_reason_is_stale() {
     td.state = TrackedDownloadState::ImportBlocked;
     td.import_attempted = true;
     td.status = TrackedDownloadStatus::Error;
-    td.status_messages = vec!["Import failed after admission.".to_string()];
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+        "Import failed after admission.".to_string(),
+    )];
     submissions
         .canonical_identity_tracked_state_reasons
         .lock()
@@ -421,6 +431,7 @@ async fn explicit_retry_resolves_previously_unmatched_swedish_release() {
     title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Över Atlanten".into(),
         language: "swe".into(),
+        country: None,
     }];
     let mut record = test_import_record(
         "swedish-retry",
@@ -517,7 +528,12 @@ async fn password_retry_requires_and_persists_replacement_before_execution() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(error, AppError::Repository(_)));
+    assert!(matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+    ));
     assert!(imports.retry_claims.lock().await.is_empty());
     assert!(imports.status_updates.lock().await.is_empty());
     submissions
@@ -556,7 +572,9 @@ async fn retry_reconciliation_replaces_durable_burned_failure_and_survives_resta
     let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
     td.state = TrackedDownloadState::Failed;
     td.burned_by_import_gate = true;
-    td.status_messages = vec!["old quality mismatch".into()];
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+        "old quality mismatch",
+    )];
     assert!(
         crate::tracked_downloads::persist_tracked_download_state_marker(
             &app,
@@ -603,7 +621,7 @@ async fn retry_reconciliation_replaces_durable_burned_failure_and_survives_resta
         restored
             .status_messages
             .iter()
-            .any(|message| message.contains("1440P"))
+            .any(|message| message.text.contains("1440P"))
     );
 }
 
@@ -865,7 +883,13 @@ async fn titleless_retry_is_refused_when_the_resolved_title_is_in_another_librar
         .await
         .expect_err("the resolved movie title is outside the actor's library");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     let recorded = import_repo
         .last_import_result()
         .await
@@ -1182,9 +1206,13 @@ async fn pipeline_error_before_result_schedules_automatic_retry_instead_of_block
     assert!(retry.next_retry_at >= before + chrono::Duration::seconds(30));
     assert!(td.import_retry_deferred(Utc::now()));
     assert!(
-        td.status_messages[0].starts_with("Import failed: ")
-            && td.status_messages[0].contains("simulated import queue failure")
-            && td.status_messages[0].contains("Retrying automatically (attempt 1)"),
+        td.status_messages[0].text.starts_with("Import failed: ")
+            && td.status_messages[0]
+                .text
+                .contains("simulated import queue failure")
+            && td.status_messages[0]
+                .text
+                .contains("Retrying automatically (attempt 1)"),
         "{:?}",
         td.status_messages
     );

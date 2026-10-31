@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -78,9 +79,12 @@ export function useTitleRename<
     setPreviewingKey(requestedKey);
     try {
       const { data, error } = await client
-        .query<{ mediaRenamePreview: MediaRenamePlan }>(mediaRenamePreviewQuery, {
-          input: { facet: title.facet, titleId: title.id, dryRun: true },
-        })
+        .query<{ mediaRenamePreview: MediaRenamePlan }>(
+          mediaRenamePreviewQuery,
+          {
+            input: { facet: title.facet, titleId: title.id, dryRun: true },
+          },
+        )
         .toPromise();
       if (error) {
         throw error;
@@ -101,9 +105,14 @@ export function useTitleRename<
       setPlanState((current) =>
         current?.titleKey === requestedKey ? null : current,
       );
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
     } finally {
-      setPreviewingKey((current) => (current === requestedKey ? null : current));
+      setPreviewingKey((current) =>
+        current === requestedKey ? null : current,
+      );
     }
   }, [available, client, setGlobalStatus, t, title, titleKey]);
 
@@ -137,7 +146,10 @@ export function useTitleRename<
         void Promise.resolve()
           .then(() => onAppliedRef.current?.(renamedTitle))
           .catch((refreshError: unknown) => {
-            console.error("[title-rename] refresh after rename failed:", refreshError);
+            console.error(
+              "[title-rename] refresh after rename failed:",
+              refreshError,
+            );
           });
       };
       const run = normalizeJobRun(data?.renameTitles?.jobRun);
@@ -151,7 +163,10 @@ export function useTitleRename<
         current?.titleKey === requestedKey ? null : current,
       );
     } catch (error: unknown) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setApplyingKey((current) => (current === requestedKey ? null : current));
     }

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { useCallback, useState } from "react";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -49,14 +50,18 @@ export function useMaintenanceRuleState({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
-  const [pendingArming, setPendingArming] = useState<PendingArming | null>(null);
+  const [pendingArming, setPendingArming] = useState<PendingArming | null>(
+    null,
+  );
 
   const applyRuleState = useCallback(
     async (
       record: MaintenanceRuleSetRecord,
       state: MaintenanceRuleState,
       candidateCount?: number,
-    ): Promise<{ ok: true } | { ok: false; message: string }> => {
+    ): Promise<
+      { ok: true } | { ok: false; message: string; error: unknown }
+    > => {
       const { error } = await client
         .mutation(
           setMaintenanceRuleStateMutation,
@@ -64,12 +69,20 @@ export function useMaintenanceRuleState({
         )
         .toPromise();
       if (error) {
-        return { ok: false, message: error.message };
+        return {
+          ok: false,
+          message: userFacingGraphQlErrorMessage(
+            error,
+            t("status.failedToUpdate"),
+            t,
+          ),
+          error,
+        };
       }
       await onChanged();
       return { ok: true };
     },
-    [client, onChanged],
+    [client, onChanged, t],
   );
 
   /// List what the rule could act on once enabled. The dialog shows every
@@ -113,7 +126,7 @@ export function useMaintenanceRuleState({
       } catch (error) {
         setPendingArming(null);
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToLoad"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
           { level: "ERROR" },
         );
       }
@@ -140,7 +153,13 @@ export function useMaintenanceRuleState({
         );
       })();
     },
-    [applyRuleState, openDestructiveArming, setBusyRuleSetId, setGlobalStatus, t],
+    [
+      applyRuleState,
+      openDestructiveArming,
+      setBusyRuleSetId,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   /// The server rejects a stale acknowledgement and reports the count it holds.
@@ -160,10 +179,13 @@ export function useMaintenanceRuleState({
       );
       return;
     }
-    const serverCount = parseAcknowledgedCandidateCountMismatch(result.message);
+    const serverCount = parseAcknowledgedCandidateCountMismatch(result.error);
     if (serverCount === null) {
       setPendingArming(null);
-      setGlobalStatus(result.message, { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(result, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
       await onChanged();
       return;
     }
@@ -217,7 +239,10 @@ export function useMaintenanceRuleState({
                   })}
                 </p>
               ) : null}
-              <p id="settings-maintenance-arming-count" className="font-semibold">
+              <p
+                id="settings-maintenance-arming-count"
+                className="font-semibold"
+              >
                 {pendingArming.candidateCount === 0
                   ? t("settings.maintenanceArmDestructiveNoCandidates")
                   : t("settings.maintenanceArmDestructiveCount", {

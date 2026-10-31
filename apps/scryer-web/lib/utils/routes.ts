@@ -6,7 +6,9 @@ import type {
 } from "@/components/root/types";
 import { isMediaView } from "../facets/registry.ts";
 
-export function isMediaSettingsSection(section: ContentSettingsSection): boolean {
+export function isMediaSettingsSection(
+  section: ContentSettingsSection,
+): boolean {
   return (
     section === "library" ||
     section === "general" ||
@@ -28,7 +30,9 @@ export function isProtectedSettingsRoute(
   return isMediaView(view) && isMediaSettingsSection(contentSettingsSection);
 }
 
-export function isManageConfigMediaSection(section: ContentSettingsSection): boolean {
+export function isManageConfigMediaSection(
+  section: ContentSettingsSection,
+): boolean {
   return isMediaSettingsSection(section);
 }
 
@@ -140,9 +144,7 @@ export function shouldLeaveListsPage(canAccessLists: boolean): boolean {
 }
 
 /** The instance-wide exclusions pane is a list-management surface only. */
-export function canAccessListExclusions(
-  canManageLists: boolean,
-): boolean {
+export function canAccessListExclusions(canManageLists: boolean): boolean {
   return canManageLists;
 }
 

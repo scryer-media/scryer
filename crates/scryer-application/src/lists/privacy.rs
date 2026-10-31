@@ -18,7 +18,10 @@ use super::fetch::{ListFailure, ListFailureClass};
 use crate::{AppError, AppResult};
 
 fn not_found() -> AppError {
-    AppError::NotFound("list subscription not found".into())
+    AppError::not_found_reason(
+        crate::error_reasons::lists::SUBSCRIPTION_NOT_FOUND,
+        "list subscription not found",
+    )
 }
 
 /// Whether `actor` may see `subscription` at all. Public subscriptions are
@@ -55,7 +58,10 @@ pub fn ensure_account_owner(actor: &User, account: &UserListAccount) -> AppResul
     if actor.id == account.user_id {
         Ok(())
     } else {
-        Err(AppError::NotFound("list account not found".into()))
+        Err(AppError::not_found_reason(
+            crate::error_reasons::lists::ACCOUNT_NOT_FOUND,
+            "list account not found",
+        ))
     }
 }
 

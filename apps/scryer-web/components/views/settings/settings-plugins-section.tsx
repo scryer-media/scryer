@@ -1,6 +1,15 @@
 import { useState, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpCircle, Download, ExternalLink, Power, PowerOff, RefreshCw, Trash2, Upload } from "lucide-react";
+import {
+  ArrowUpCircle,
+  Download,
+  ExternalLink,
+  Power,
+  PowerOff,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { PluginLogo } from "@/components/common/plugin-visual";
 import { PluginSettingsPanel } from "./plugin-settings-panel";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
@@ -86,7 +95,7 @@ export type PluginInstallProgressRecord = {
 };
 
 export type PluginCatalogStatusRecord = {
-  refreshState: 'READY' | 'DEGRADED';
+  refreshState: "READY" | "DEGRADED";
   githubAvailable: boolean;
   lastCheckedAt?: string | null;
   outageMessage?: string | null;
@@ -127,7 +136,9 @@ type SettingsPluginsSectionProps = {
   onAutoUpdateEnabledChange: (enabled: boolean) => void;
   onManualRepoUrlChange: (value: string) => void;
   onToggleManualInstall: () => void;
-  onManualPluginFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onManualPluginFileChange: (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => void;
   onInspectManualPluginRepo: () => void;
   onRequestInstallUploadedPlugin: () => void;
   onInstallManualPlugin: () => void;
@@ -144,7 +155,10 @@ type FilterState = {
   officialOnly: boolean;
 };
 
-type Translate = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
+type Translate = (
+  key: string,
+  values?: Record<string, string | number | boolean | null | undefined>,
+) => string;
 
 function isDownloadedBuiltinOverride(plugin: RegistryPluginRecord): boolean {
   return plugin.builtin && plugin.sourceKind === "downloaded";
@@ -176,12 +190,17 @@ export function formatPluginBytes(bytes?: number | null): string | null {
 export function isRunningPluginProgress(
   progress?: PluginInstallProgressRecord,
 ): progress is PluginInstallProgressRecord {
-  return progress !== undefined
-    && progress.state !== "SUCCEEDED"
-    && progress.state !== "FAILED";
+  return (
+    progress !== undefined &&
+    progress.state !== "SUCCEEDED" &&
+    progress.state !== "FAILED"
+  );
 }
 
-function pluginProgressLabel(progress: PluginInstallProgressRecord, t: Translate): string {
+function pluginProgressLabel(
+  progress: PluginInstallProgressRecord,
+  t: Translate,
+): string {
   switch (progress.state) {
     case "DOWNLOADING":
       return t("settings.pluginInstallDownloading");
@@ -241,15 +260,13 @@ function PluginActionButton({
   ...props
 }: Omit<React.ComponentProps<typeof IconButton>, "tone"> & {
   label: string;
-  tone: Extract<BoxedActionButtonTone, "install" | "upgrade" | "enabled" | "disabled" | "delete">;
+  tone: Extract<
+    BoxedActionButtonTone,
+    "install" | "upgrade" | "enabled" | "disabled" | "delete"
+  >;
 }) {
   return (
-    <IconButton
-      label={label}
-      tone={tone}
-      className={className}
-      {...props}
-    >
+    <IconButton label={label} tone={tone} className={className} {...props}>
       {children}
     </IconButton>
   );
@@ -257,14 +274,22 @@ function PluginActionButton({
 
 function categoryLabel(pluginType: string, t: Translate): string {
   switch (pluginType) {
-    case "indexer": return t("settings.pluginCategoryIndexer");
-    case "usenet_indexer": return t("settings.pluginCategoryUsenetIndexer");
-    case "torrent_indexer": return t("settings.pluginCategoryTorrentIndexer");
-    case "download_client": return t("settings.pluginCategoryDownloadClient");
-    case "archive_extractor": return t("settings.pluginCategoryArchiveExtractor");
-    case "notification": return t("settings.pluginCategoryNotification");
-    case "subtitle_provider": return t("settings.pluginCategorySubtitleProvider");
-    default: return pluginType;
+    case "indexer":
+      return t("settings.pluginCategoryIndexer");
+    case "usenet_indexer":
+      return t("settings.pluginCategoryUsenetIndexer");
+    case "torrent_indexer":
+      return t("settings.pluginCategoryTorrentIndexer");
+    case "download_client":
+      return t("settings.pluginCategoryDownloadClient");
+    case "archive_extractor":
+      return t("settings.pluginCategoryArchiveExtractor");
+    case "notification":
+      return t("settings.pluginCategoryNotification");
+    case "subtitle_provider":
+      return t("settings.pluginCategorySubtitleProvider");
+    default:
+      return pluginType;
   }
 }
 
@@ -273,7 +298,9 @@ function applyFilters(
   filters: FilterState,
 ): RegistryPluginRecord[] {
   return plugins
-    .filter((p) => filters.category === "all" || p.pluginType === filters.category)
+    .filter(
+      (p) => filters.category === "all" || p.pluginType === filters.category,
+    )
     .filter((p) => !filters.officialOnly || p.official)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -355,25 +382,41 @@ function PluginTable({
 }) {
   const t = useTranslate();
   const nameColumnClass =
-    showActions === "installed" ? "min-w-[360px] w-[34%]" : "min-w-[420px] w-[42%]";
+    showActions === "installed"
+      ? "min-w-[360px] w-[34%]"
+      : "min-w-[420px] w-[42%]";
   const typeColumnClass = "min-w-[150px] text-center";
   const versionColumnClass = "min-w-[150px] text-center";
   const sizeColumnClass = "w-28 min-w-[112px] text-center";
   const statusColumnClass =
-    showActions === "installed" ? "min-w-[180px] text-center" : "min-w-[200px] text-center";
+    showActions === "installed"
+      ? "min-w-[180px] text-center"
+      : "min-w-[200px] text-center";
   const enabledColumnClass = "w-24 min-w-[96px] text-center";
   const actionsColumnClass =
-    showActions === "installed" ? "w-40 min-w-[160px] text-center" : "w-28 min-w-[112px] text-center";
+    showActions === "installed"
+      ? "w-40 min-w-[160px] text-center"
+      : "w-28 min-w-[112px] text-center";
   const tableMinWidthClass =
     showActions === "installed" ? "min-w-[1220px]" : "min-w-[1140px]";
 
   if (plugins.length === 0) {
-    return <p className={`${PLUGIN_PANEL_BODY_CLASS} text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>{emptyMessage}</p>;
+    return (
+      <p
+        className={`${PLUGIN_PANEL_BODY_CLASS} text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}
+      >
+        {emptyMessage}
+      </p>
+    );
   }
 
   return (
     <Table
-      id={showActions === "installed" ? "settings-plugins-installed-table" : "settings-plugins-available-table"}
+      id={
+        showActions === "installed"
+          ? "settings-plugins-installed-table"
+          : "settings-plugins-available-table"
+      }
       data-plugin-table={showActions}
       overflow="auto"
       layout="auto"
@@ -382,39 +425,71 @@ function PluginTable({
     >
       <TableHeader>
         <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-          <TableHead className={cn(nameColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.name")}</TableHead>
-          <TableHead className={cn(typeColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.type")}</TableHead>
-          <TableHead className={cn(versionColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.version")}</TableHead>
-          <TableHead className={cn(sizeColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("queue.size")}</TableHead>
-          <TableHead className={cn(statusColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.status")}</TableHead>
+          <TableHead
+            className={cn(nameColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("label.name")}
+          </TableHead>
+          <TableHead
+            className={cn(typeColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("label.type")}
+          </TableHead>
+          <TableHead
+            className={cn(versionColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("label.version")}
+          </TableHead>
+          <TableHead
+            className={cn(sizeColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("queue.size")}
+          </TableHead>
+          <TableHead
+            className={cn(statusColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("label.status")}
+          </TableHead>
           {showActions === "installed" && (
-            <TableHead className={cn(enabledColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.enabled")}</TableHead>
+            <TableHead
+              className={cn(enabledColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+            >
+              {t("label.enabled")}
+            </TableHead>
           )}
-          <TableActionsHead className={cn(actionsColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}>{t("label.actions")}</TableActionsHead>
+          <TableActionsHead
+            className={cn(actionsColumnClass, PLUGIN_TABLE_HEADER_CELL_CLASS)}
+          >
+            {t("label.actions")}
+          </TableActionsHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {plugins.map((plugin) => {
           const progress = pluginProgress[plugin.id];
-          const runningProgress = isRunningPluginProgress(progress) ? progress : undefined;
-          const isBusy = mutatingPluginIds.includes(plugin.id) || plugin.installInProgress;
+          const runningProgress = isRunningPluginProgress(progress)
+            ? progress
+            : undefined;
+          const isBusy =
+            mutatingPluginIds.includes(plugin.id) || plugin.installInProgress;
           const isUpgrading =
-            (runningProgress?.operationKind === "UPGRADE")
-            || (plugin.installInProgress && showActions === "installed");
+            runningProgress?.operationKind === "UPGRADE" ||
+            (plugin.installInProgress && showActions === "installed");
           const sourceLink = plugin.sourceRepo;
           const normalizedSourceLink = normalizePluginLink(sourceLink);
           const normalizedDocsLink = normalizePluginLink(plugin.docsUrl);
           const showDocsLink =
-            normalizedDocsLink !== null && normalizedDocsLink !== normalizedSourceLink;
+            normalizedDocsLink !== null &&
+            normalizedDocsLink !== normalizedSourceLink;
           const actionError = pluginErrors[plugin.id];
           const displayVersion =
             showActions === "installed" && plugin.installedVersion
               ? plugin.installedVersion
               : plugin.version;
           const sameVersionOptimizedUpgrade =
-            plugin.updateAvailable
-            && plugin.isInstalled
-            && plugin.installedVersion === plugin.version;
+            plugin.updateAvailable &&
+            plugin.isInstalled &&
+            plugin.installedVersion === plugin.version;
           const bytesLabel = formatPluginBytes(plugin.bytes);
           return (
             <TableRow
@@ -423,12 +498,16 @@ function PluginTable({
               data-plugin-table={showActions}
               data-plugin-installed={plugin.isInstalled ? "true" : "false"}
               data-plugin-enabled={plugin.isEnabled ? "true" : "false"}
-              data-plugin-update-available={plugin.updateAvailable ? "true" : "false"}
+              data-plugin-update-available={
+                plugin.updateAvailable ? "true" : "false"
+              }
               data-plugin-blocked={plugin.blockedReason ? "true" : "false"}
               data-ui="settings-plugin-table-row"
               className={PLUGIN_TABLE_ROW_CLASS}
             >
-              <TableCell className={cn(nameColumnClass, PLUGIN_TABLE_CELL_CLASS)}>
+              <TableCell
+                className={cn(nameColumnClass, PLUGIN_TABLE_CELL_CLASS)}
+              >
                 <div className="flex min-w-0 items-center gap-3">
                   <PluginLogo
                     id={plugin.id}
@@ -439,11 +518,20 @@ function PluginTable({
                     className="h-10 w-10"
                   />
                   <div className="min-w-0">
-                    <div className="font-medium text-[var(--scry-ink2)]">{plugin.name}</div>
-                    <div className={`whitespace-normal break-words text-xs ${PLUGIN_MUTED_TEXT_CLASS}`}>
+                    <div className="font-medium text-[var(--scry-ink2)]">
+                      {plugin.name}
+                    </div>
+                    <div
+                      className={`whitespace-normal break-words text-xs ${PLUGIN_MUTED_TEXT_CLASS}`}
+                    >
                       {plugin.description}
                     </div>
-                    {plugin.isInstalled && <PluginSettingsPanel key={plugin.installedVersion} pluginId={plugin.id} />}
+                    {plugin.isInstalled && (
+                      <PluginSettingsPanel
+                        key={plugin.installedVersion}
+                        pluginId={plugin.id}
+                      />
+                    )}
                     {plugin.blockedReason && (
                       <div
                         data-ui="settings-plugin-blocked-reason"
@@ -481,20 +569,34 @@ function PluginTable({
                   </div>
                 </div>
               </TableCell>
-              <TableCell className={cn(typeColumnClass, PLUGIN_TABLE_CELL_CLASS, "text-sm text-[var(--scry-ink2)]")}>{categoryLabel(plugin.pluginType, t)}</TableCell>
-              <TableCell className={cn(versionColumnClass, PLUGIN_TABLE_CELL_CLASS, "text-sm")}>
+              <TableCell
+                className={cn(
+                  typeColumnClass,
+                  PLUGIN_TABLE_CELL_CLASS,
+                  "text-sm text-[var(--scry-ink2)]",
+                )}
+              >
+                {categoryLabel(plugin.pluginType, t)}
+              </TableCell>
+              <TableCell
+                className={cn(
+                  versionColumnClass,
+                  PLUGIN_TABLE_CELL_CLASS,
+                  "text-sm",
+                )}
+              >
                 {t("settings.pluginVersion", { version: displayVersion })}
                 {plugin.updateAvailable && (
                   <div className="text-xs text-[var(--scry-warning-text)]">
                     {sameVersionOptimizedUpgrade
                       ? t("settings.pluginOptimizedBuildAvailable")
-                      : t("settings.pluginUpdateAvailable", { version: plugin.version })}
+                      : t("settings.pluginUpdateAvailable", {
+                          version: plugin.version,
+                        })}
                   </div>
                 )}
                 {actionError && (
-                  <div className="text-xs text-destructive">
-                    {actionError}
-                  </div>
+                  <div className="text-xs text-destructive">{actionError}</div>
                 )}
               </TableCell>
               <TableCodeCell
@@ -504,11 +606,15 @@ function PluginTable({
                   "text-sm",
                   PLUGIN_MUTED_TEXT_CLASS,
                 )}
-                title={plugin.bytes != null ? `${plugin.bytes} bytes` : undefined}
+                title={
+                  plugin.bytes != null ? `${plugin.bytes} bytes` : undefined
+                }
               >
                 {bytesLabel ?? "—"}
               </TableCodeCell>
-              <TableCell className={cn(statusColumnClass, PLUGIN_TABLE_CELL_CLASS)}>
+              <TableCell
+                className={cn(statusColumnClass, PLUGIN_TABLE_CELL_CLASS)}
+              >
                 <div className="flex flex-wrap items-center justify-center gap-2">
                   {plugin.builtin && (
                     <Badge tone="info">{t("settings.pluginBuiltin")}</Badge>
@@ -522,13 +628,17 @@ function PluginTable({
                     </Badge>
                   )}
                   {plugin.supportTier === "unverified" && (
-                    <Badge tone="warning">{t("settings.pluginUnverified")}</Badge>
+                    <Badge tone="warning">
+                      {t("settings.pluginUnverified")}
+                    </Badge>
                   )}
                   {plugin.status === "beta" && (
                     <Badge tone="warning">{t("settings.pluginBeta")}</Badge>
                   )}
                   {plugin.status === "deprecated" && (
-                    <Badge tone="negative">{t("settings.pluginDeprecated")}</Badge>
+                    <Badge tone="negative">
+                      {t("settings.pluginDeprecated")}
+                    </Badge>
                   )}
                   {isDownloadedBuiltinOverride(plugin) && (
                     <Badge tone="warning">{t("settings.pluginOverride")}</Badge>
@@ -539,7 +649,9 @@ function PluginTable({
                 </div>
               </TableCell>
               {showActions === "installed" && (
-                <TableCell className={cn(enabledColumnClass, PLUGIN_TABLE_CELL_CLASS)}>
+                <TableCell
+                  className={cn(enabledColumnClass, PLUGIN_TABLE_CELL_CLASS)}
+                >
                   {plugin.blockedReason ? (
                     // The plugin is still switched on and its configuration is
                     // retained, but it is not running. A checkmark here read as
@@ -560,7 +672,9 @@ function PluginTable({
                   )}
                 </TableCell>
               )}
-              <TableActionsCell className={cn(actionsColumnClass, PLUGIN_TABLE_CELL_CLASS)}>
+              <TableActionsCell
+                className={cn(actionsColumnClass, PLUGIN_TABLE_CELL_CLASS)}
+              >
                 {showActions === "installed" ? (
                   <div className="mx-auto flex w-full min-w-0 flex-col items-center gap-2">
                     <div className="flex w-full flex-wrap items-center justify-center gap-1">
@@ -569,7 +683,11 @@ function PluginTable({
                         tone={plugin.isEnabled ? "disabled" : "enabled"}
                         disabled={isBusy}
                         onClick={() => onTogglePlugin(plugin)}
-                        label={plugin.isEnabled ? t("label.disable") : t("label.enable")}
+                        label={
+                          plugin.isEnabled
+                            ? t("label.disable")
+                            : t("label.enable")
+                        }
                       >
                         {plugin.isEnabled ? (
                           <PowerOff className="h-4 w-4" />
@@ -579,14 +697,19 @@ function PluginTable({
                       </PluginActionButton>
                       {plugin.updateAvailable && (
                         <PluginActionButton
-                          id={selectorId("settings-plugin-upgrade", plugin.name)}
+                          id={selectorId(
+                            "settings-plugin-upgrade",
+                            plugin.name,
+                          )}
                           tone="upgrade"
                           disabled={isBusy || upgradeBlocked}
                           onClick={() => onUpgradePlugin(plugin)}
                           label={
                             sameVersionOptimizedUpgrade
                               ? t("settings.pluginInstallOptimizedBuild")
-                              : t("settings.pluginUpgrade", { version: plugin.version })
+                              : t("settings.pluginUpgrade", {
+                                  version: plugin.version,
+                                })
                           }
                         >
                           {isUpgrading ? (
@@ -598,7 +721,10 @@ function PluginTable({
                       )}
                       {canUninstallPlugin(plugin) && (
                         <PluginActionButton
-                          id={selectorId("settings-plugin-uninstall", plugin.name)}
+                          id={selectorId(
+                            "settings-plugin-uninstall",
+                            plugin.name,
+                          )}
                           tone="delete"
                           disabled={isBusy}
                           onClick={() => onUninstallPlugin(plugin)}
@@ -693,14 +819,24 @@ export function SettingsPluginsSection({
     officialOnly: false,
   });
 
-  const installed = useMemo(() => plugins.filter((p) => p.isInstalled), [plugins]);
-  const available = useMemo(() => plugins.filter((p) => !p.isInstalled), [plugins]);
+  const installed = useMemo(
+    () => plugins.filter((p) => p.isInstalled),
+    [plugins],
+  );
+  const available = useMemo(
+    () => plugins.filter((p) => !p.isInstalled),
+    [plugins],
+  );
   const enabledInstalled = useMemo(
     () => installed.filter((p) => p.isEnabled),
     [installed],
   );
   const runtimeMemoryBytes = useMemo(
-    () => enabledInstalled.reduce((total, plugin) => total + (plugin.bytes ?? 0), 0),
+    () =>
+      enabledInstalled.reduce(
+        (total, plugin) => total + (plugin.bytes ?? 0),
+        0,
+      ),
     [enabledInstalled],
   );
   const runtimeMemoryLabel = formatPluginBytes(runtimeMemoryBytes) ?? "—";
@@ -724,56 +860,66 @@ export function SettingsPluginsSection({
       {/* Equal columns: every action takes the width of the widest, so the
           update count badge does not make Update All the odd one out. */}
       <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none">
-      {upgradeCount > 0 || upgradingAll ? (
-      <TextActionButton
-        id="settings-plugins-upgrade-all"
-        tone="upgrade"
-        size="sm"
-        className="w-full"
-        disabled={upgradingAll || remoteActionsBlocked.upgrade}
-        onClick={onUpgradeAllPlugins}
-        leadingIcon={upgradingAll ? <LoadingMark className="h-4 w-4" /> : <ArrowUpCircle className="h-4 w-4" />}
-      >
-        {upgradingAll ? t("settings.pluginsUpdatingAll") : t("settings.pluginsUpdateAll")}
-        {upgradeCount > 0 ? (
-          <Badge
-            tone="info"
-            className="ml-2 h-5 min-w-5 rounded-full px-1.5 text-[11px]"
+        {upgradeCount > 0 || upgradingAll ? (
+          <TextActionButton
+            id="settings-plugins-upgrade-all"
+            tone="upgrade"
+            size="sm"
+            className="w-full"
+            disabled={upgradingAll || remoteActionsBlocked.upgrade}
+            onClick={onUpgradeAllPlugins}
+            leadingIcon={
+              upgradingAll ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <ArrowUpCircle className="h-4 w-4" />
+              )
+            }
           >
-            {upgradeCount}
-          </Badge>
+            {upgradingAll
+              ? t("settings.pluginsUpdatingAll")
+              : t("settings.pluginsUpdateAll")}
+            {upgradeCount > 0 ? (
+              <Badge
+                tone="info"
+                className="ml-2 h-5 min-w-5 rounded-full px-1.5 text-[11px]"
+              >
+                {upgradeCount}
+              </Badge>
+            ) : null}
+          </TextActionButton>
         ) : null}
-      </TextActionButton>
-      ) : null}
-      <Button
-        id="settings-plugins-manual-toggle"
-        variant="outline"
-        size="sm"
-        className="h-9 w-full"
-        onClick={onToggleManualInstall}
-      >
-        {t("settings.pluginInstallManually")}
-      </Button>
-      <Button
-        id="settings-plugins-refresh"
-        variant="outline"
-        size="sm"
-        className="h-9 w-full"
-        disabled={refreshing}
-        onClick={onRefreshRegistry}
-      >
-        {refreshing ? <LoadingMark className="mr-2 h-4 w-4" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-        {refreshing ? t("label.refreshing") : t("settings.pluginsRefresh")}
-      </Button>
+        <Button
+          id="settings-plugins-manual-toggle"
+          variant="outline"
+          size="sm"
+          className="h-9 w-full"
+          onClick={onToggleManualInstall}
+        >
+          {t("settings.pluginInstallManually")}
+        </Button>
+        <Button
+          id="settings-plugins-refresh"
+          variant="outline"
+          size="sm"
+          className="h-9 w-full"
+          disabled={refreshing}
+          onClick={onRefreshRegistry}
+        >
+          {refreshing ? (
+            <LoadingMark className="mr-2 h-4 w-4" />
+          ) : (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          )}
+          {refreshing ? t("label.refreshing") : t("settings.pluginsRefresh")}
+        </Button>
       </div>
     </div>
   );
 
   return (
     <div className="space-y-4 text-sm">
-      {headerActionsTarget ? (
-        createPortal(toolbar, headerActionsTarget)
-      ) : null}
+      {headerActionsTarget ? createPortal(toolbar, headerActionsTarget) : null}
 
       {catalogStatus?.outageMessage && (
         <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-sm text-[var(--scry-warning-text)]">
@@ -793,7 +939,9 @@ export function SettingsPluginsSection({
       )}
 
       <section className={PLUGIN_PANEL_CLASS} id="settings-plugins-auto-update">
-        <div className={`${PLUGIN_PANEL_BODY_CLASS} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
+        <div
+          className={`${PLUGIN_PANEL_BODY_CLASS} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}
+        >
           <div className="space-y-1">
             <Label htmlFor="settings-plugins-auto-update-toggle">
               {t("settings.pluginAutoUpdateEnabled")}
@@ -803,9 +951,7 @@ export function SettingsPluginsSection({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {autoUpdateSaving ? (
-              <LoadingMark className="h-4 w-4" />
-            ) : null}
+            {autoUpdateSaving ? <LoadingMark className="h-4 w-4" /> : null}
             <SettingsToggleSwitch
               id="settings-plugins-auto-update-toggle"
               checked={autoUpdateEnabled}
@@ -818,8 +964,12 @@ export function SettingsPluginsSection({
       </section>
 
       {initialLoading ? (
-        <div className={`${PLUGIN_PANEL_CLASS} flex min-h-48 items-center justify-center`}>
-          <div className={`flex items-center gap-3 text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
+        <div
+          className={`${PLUGIN_PANEL_CLASS} flex min-h-48 items-center justify-center`}
+        >
+          <div
+            className={`flex items-center gap-3 text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}
+          >
             <LoadingMark className="h-5 w-5" />
             <span>{t("label.loading")}</span>
           </div>
@@ -836,7 +986,9 @@ export function SettingsPluginsSection({
           <div className={`${PLUGIN_PANEL_BODY_CLASS} space-y-4`}>
             <div className={`${PLUGIN_INSET_CLASS} p-4`}>
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold text-[var(--scry-ink2)]">{t("settings.pluginManualUploadTitle")}</h3>
+                <h3 className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  {t("settings.pluginManualUploadTitle")}
+                </h3>
                 <p className={`text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
                   {t("settings.pluginManualUploadHelp")}
                 </p>
@@ -866,54 +1018,78 @@ export function SettingsPluginsSection({
                   disabled={manualBusy || !manualFileName}
                   onClick={onRequestInstallUploadedPlugin}
                 >
-                  {manualBusy ? t("label.loading") : t("settings.pluginManualUploadInstall")}
+                  {manualBusy
+                    ? t("label.loading")
+                    : t("settings.pluginManualUploadInstall")}
                 </Button>
               </div>
-              <div className={`mt-3 space-y-1 text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
+              <div
+                className={`mt-3 space-y-1 text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}
+              >
                 <p id="settings-plugins-manual-file-name">
                   {manualFileName ?? t("settings.pluginManualUploadNoFile")}
                 </p>
                 <p>{t("settings.pluginManualUploadFormats")}</p>
               </div>
               {pluginErrors.__manualUpload && (
-                <p className="text-sm text-destructive">{pluginErrors.__manualUpload}</p>
+                <p className="text-sm text-destructive">
+                  {pluginErrors.__manualUpload}
+                </p>
               )}
             </div>
 
             <div className={`${PLUGIN_INSET_CLASS} p-4`}>
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold text-[var(--scry-ink2)]">{t("settings.pluginManualRepoTitle")}</h3>
+                <h3 className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  {t("settings.pluginManualRepoTitle")}
+                </h3>
                 <p className={`text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
                   {t("settings.pluginManualRepoHelp")}
                 </p>
               </div>
               <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end">
                 <label className="flex-1 space-y-1 text-sm">
-                  <span className="font-medium text-[var(--scry-ink2)]">{t("settings.pluginManualRepoUrl")}</span>
+                  <span className="font-medium text-[var(--scry-ink2)]">
+                    {t("settings.pluginManualRepoUrl")}
+                  </span>
                   <Input
                     id="settings-plugins-manual-repo-url"
                     value={manualRepoUrl}
-                    onChange={(event) => onManualRepoUrlChange(event.target.value)}
+                    onChange={(event) =>
+                      onManualRepoUrlChange(event.target.value)
+                    }
                     placeholder="https://github.com/example/scryer-plugin-example"
                   />
                 </label>
                 <Button
                   id="settings-plugins-manual-repo-inspect"
                   type="button"
-                  disabled={manualBusy || remoteActionsBlocked.inspectManual || !manualRepoUrl.trim()}
+                  disabled={
+                    manualBusy ||
+                    remoteActionsBlocked.inspectManual ||
+                    !manualRepoUrl.trim()
+                  }
                   onClick={onInspectManualPluginRepo}
                 >
-                  {manualBusy ? t("label.loading") : t("settings.pluginInspectManual")}
+                  {manualBusy
+                    ? t("label.loading")
+                    : t("settings.pluginInspectManual")}
                 </Button>
               </div>
             </div>
             {pluginErrors.__manual ? (
-              <p className="text-sm text-destructive">{pluginErrors.__manual}</p>
+              <p className="text-sm text-destructive">
+                {pluginErrors.__manual}
+              </p>
             ) : null}
             {manualPreview ? (
-              <div className={`${PLUGIN_INSET_CLASS} flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between`}>
+              <div
+                className={`${PLUGIN_INSET_CLASS} flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between`}
+              >
                 <div>
-                  <div className="font-medium text-[var(--scry-ink2)]">{manualPreview.plugin.name}</div>
+                  <div className="font-medium text-[var(--scry-ink2)]">
+                    {manualPreview.plugin.name}
+                  </div>
                   <div className={`text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
                     {manualPreview.plugin.description}
                   </div>
@@ -937,23 +1113,31 @@ export function SettingsPluginsSection({
 
       {!initialLoading && plugins.length === 0 ? (
         <div className={PLUGIN_PANEL_CLASS}>
-          <p className={`${PLUGIN_PANEL_BODY_CLASS} text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
+          <p
+            className={`${PLUGIN_PANEL_BODY_CLASS} text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}
+          >
             {t("settings.pluginsNoPlugins")}
           </p>
         </div>
       ) : !initialLoading ? (
         <>
           <section className={PLUGIN_PANEL_CLASS}>
-            <div className={`${PLUGIN_PANEL_HEADER_CLASS} flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between`}>
+            <div
+              className={`${PLUGIN_PANEL_HEADER_CLASS} flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between`}
+            >
               <div className="flex flex-wrap items-baseline gap-2">
-                <h2 className={PLUGIN_PANEL_TITLE_CLASS}>{t("settings.pluginsInstalled")}</h2>
+                <h2 className={PLUGIN_PANEL_TITLE_CLASS}>
+                  {t("settings.pluginsInstalled")}
+                </h2>
                 <span
                   id="settings-plugins-runtime-memory-estimate"
                   className={`rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-0.5 text-[11px] font-medium ${PLUGIN_MUTED_TEXT_CLASS}`}
                   title={`${runtimeMemoryBytes} bytes`}
                 >
                   {t("settings.pluginRuntimeMemoryEstimate")}:{" "}
-                  <span className="text-[var(--scry-ink2)]">{runtimeMemoryLabel}</span>
+                  <span className="text-[var(--scry-ink2)]">
+                    {runtimeMemoryLabel}
+                  </span>
                 </span>
               </div>
               <PluginFilters
@@ -979,8 +1163,12 @@ export function SettingsPluginsSection({
           </section>
 
           <section className={PLUGIN_PANEL_CLASS}>
-            <div className={`${PLUGIN_PANEL_HEADER_CLASS} flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between`}>
-              <h2 className={PLUGIN_PANEL_TITLE_CLASS}>{t("settings.pluginsAvailable")}</h2>
+            <div
+              className={`${PLUGIN_PANEL_HEADER_CLASS} flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between`}
+            >
+              <h2 className={PLUGIN_PANEL_TITLE_CLASS}>
+                {t("settings.pluginsAvailable")}
+              </h2>
               <PluginFilters
                 filters={availableFilters}
                 categories={allCategories}

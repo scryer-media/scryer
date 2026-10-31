@@ -13,18 +13,40 @@ const UNKEYWORDED_FAILURES = [
 
 test("a status toasts at the level its caller stated", () => {
   for (const message of UNKEYWORDED_FAILURES) {
-    assert.equal(resolveStatusToastLevel(message, { level: "ERROR" }), "ERROR", message);
+    assert.equal(
+      resolveStatusToastLevel(message, { level: "ERROR" }),
+      "ERROR",
+      message,
+    );
   }
-  assert.equal(resolveStatusToastLevel("Queued Lantern Harbor", { level: "SUCCESS" }), "SUCCESS");
-  assert.equal(resolveStatusToastLevel("3 imported, 1 skipped", { level: "WARNING" }), "WARNING");
+  assert.equal(
+    resolveStatusToastLevel("Queued Lantern Harbor", { level: "SUCCESS" }),
+    "SUCCESS",
+  );
+  assert.equal(
+    resolveStatusToastLevel("3 imported, 1 skipped", { level: "WARNING" }),
+    "WARNING",
+  );
 });
 
 test("the wording never changes the stated level", () => {
   // Each sentence reads like a different level than the one its caller gave.
-  assert.equal(resolveStatusToastLevel("Download marked failed.", { level: "SUCCESS" }), "SUCCESS");
-  assert.equal(resolveStatusToastLevel("The tag could not be saved.", { level: "ERROR" }), "ERROR");
-  assert.equal(resolveStatusToastLevel("Queued Lantern Harbor", { level: "ERROR" }), "ERROR");
-  assert.equal(resolveStatusToastLevel("Title is required.", { level: "WARNING" }), "WARNING");
+  assert.equal(
+    resolveStatusToastLevel("Download marked failed.", { level: "SUCCESS" }),
+    "SUCCESS",
+  );
+  assert.equal(
+    resolveStatusToastLevel("The tag could not be saved.", { level: "ERROR" }),
+    "ERROR",
+  );
+  assert.equal(
+    resolveStatusToastLevel("Queued Lantern Harbor", { level: "ERROR" }),
+    "ERROR",
+  );
+  assert.equal(
+    resolveStatusToastLevel("Title is required.", { level: "WARNING" }),
+    "WARNING",
+  );
 });
 
 test("a status raised without a level does not toast, whatever it says", () => {

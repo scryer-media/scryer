@@ -32,7 +32,11 @@ export function discoveryItemDisplayTitle(item: DiscoveryDisplayItem) {
   const displayTitle = usefulDiscoveryTitle(item.displayTitle);
   const sortTitle = usefulDiscoveryTitle(item.sortTitle);
   const alternateTitle = usefulDiscoveryTitle(item.originalTitle);
-  if (alternateTitle && displayTitle && hasNonLatinTitleCharacters(displayTitle)) {
+  if (
+    alternateTitle &&
+    displayTitle &&
+    hasNonLatinTitleCharacters(displayTitle)
+  ) {
     return alternateTitle;
   }
   return displayTitle || sortTitle || alternateTitle || item.targetKey;

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 
@@ -8,7 +9,10 @@ import { updateScriptInterpreterSettingsMutation } from "@/lib/graphql/mutations
 import { scriptInterpreterSettingsQuery } from "@/lib/graphql/queries";
 import type { ScriptInterpreterSettings } from "@/lib/types/scripts";
 
-export type ScriptInterpreterDraft = Record<keyof ScriptInterpreterSettings, string>;
+export type ScriptInterpreterDraft = Record<
+  keyof ScriptInterpreterSettings,
+  string
+>;
 
 const EMPTY_INTERPRETERS: ScriptInterpreterDraft = {
   python: "",
@@ -18,7 +22,10 @@ const EMPTY_INTERPRETERS: ScriptInterpreterDraft = {
 };
 
 function interpreterDraftFrom(value: unknown): ScriptInterpreterDraft {
-  const record = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const record =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
   const read = (key: keyof ScriptInterpreterSettings) =>
     typeof record[key] === "string" ? (record[key] as string) : "";
   return {
@@ -29,7 +36,10 @@ function interpreterDraftFrom(value: unknown): ScriptInterpreterDraft {
   };
 }
 
-function sameInterpreters(left: ScriptInterpreterDraft, right: ScriptInterpreterDraft): boolean {
+function sameInterpreters(
+  left: ScriptInterpreterDraft,
+  right: ScriptInterpreterDraft,
+): boolean {
   return (
     left.python === right.python &&
     left.powershell === right.powershell &&
@@ -39,7 +49,9 @@ function sameInterpreters(left: ScriptInterpreterDraft, right: ScriptInterpreter
 }
 
 /** Interpreter paths saved as entered; an empty field clears the path. */
-function interpreterInput(draft: ScriptInterpreterDraft): ScriptInterpreterSettings {
+function interpreterInput(
+  draft: ScriptInterpreterDraft,
+): ScriptInterpreterSettings {
   const value = (path: string) => (path.trim() ? path.trim() : null);
   return {
     python: value(draft.python),
@@ -53,19 +65,28 @@ function useScriptInterpreterSettings() {
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
-  const [draft, setDraft] = useState<ScriptInterpreterDraft>(EMPTY_INTERPRETERS);
-  const [baseline, setBaseline] = useState<ScriptInterpreterDraft>(EMPTY_INTERPRETERS);
+  const [draft, setDraft] =
+    useState<ScriptInterpreterDraft>(EMPTY_INTERPRETERS);
+  const [baseline, setBaseline] =
+    useState<ScriptInterpreterDraft>(EMPTY_INTERPRETERS);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void client
-      .query(scriptInterpreterSettingsQuery, {}, { requestPolicy: "network-only" })
+      .query(
+        scriptInterpreterSettingsQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
       .toPromise()
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          setGlobalStatus(error.message, { level: "ERROR" });
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+            { level: "ERROR" },
+          );
           return;
         }
         const loaded = interpreterDraftFrom(data?.scriptInterpreterSettings);
@@ -82,13 +103,15 @@ function useScriptInterpreterSettings() {
     return () => {
       cancelled = true;
     };
-  }, [client, setGlobalStatus]);
+  }, [client, setGlobalStatus, t]);
 
   const save = useCallback(async () => {
     setIsSaving(true);
     try {
       const { data, error } = await client
-        .mutation(updateScriptInterpreterSettingsMutation, { input: interpreterInput(draft) })
+        .mutation(updateScriptInterpreterSettingsMutation, {
+          input: interpreterInput(draft),
+        })
         .toPromise();
       if (error) throw error;
       const returned = data?.updateScriptInterpreterSettings;
@@ -99,9 +122,14 @@ function useScriptInterpreterSettings() {
           : interpreterDraftFrom(interpreterInput(draft));
       setDraft(saved);
       setBaseline(saved);
-      setGlobalStatus(t("settings.scriptInterpreters.saved"), { level: "SUCCESS" });
+      setGlobalStatus(t("settings.scriptInterpreters.saved"), {
+        level: "SUCCESS",
+      });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setIsSaving(false);
     }

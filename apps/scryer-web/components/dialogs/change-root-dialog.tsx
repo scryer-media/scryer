@@ -1,6 +1,11 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { ArrowRight, HardDrive, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  ArrowRight,
+  HardDrive,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
 
 import {
   Dialog,
@@ -210,8 +215,7 @@ export function ChangeRootDialog({
         throw error;
       }
       const next = data?.locationRootScopePreview as
-        | LocationRootScopePreview
-        | undefined;
+        LocationRootScopePreview | undefined;
       if (!next) {
         throw new Error(t("rootChange.previewFailed"));
       }
@@ -222,7 +226,11 @@ export function ChangeRootDialog({
       setPreviewError(
         code
           ? t(rootRefusalMessageKey(code))
-          : userFacingGraphQlErrorMessage(error, t("rootChange.previewFailed")),
+          : userFacingGraphQlErrorMessage(
+              error,
+              t("rootChange.previewFailed"),
+              t,
+            ),
       );
     } finally {
       setPreviewing(false);
@@ -371,7 +379,6 @@ export function ChangeRootDialog({
                   </SelectContent>
                 </Select>
               )}
-
             </div>
 
             {planChanged ? (
@@ -479,9 +486,7 @@ export function ChangeRootDialog({
               </div>
             ) : null}
 
-            {accounting ? (
-              <TitleLedger accounting={accounting} t={t} />
-            ) : null}
+            {accounting ? <TitleLedger accounting={accounting} t={t} /> : null}
 
             {/* FR-024's seven groups are the consolidation preview (US5.1). */}
             {consolidationPreview ? (
@@ -527,9 +532,7 @@ export function ChangeRootDialog({
                       <span className="font-[var(--font-code)] break-all text-foreground">
                         {line.from}
                       </span>
-                      <span className="mx-1 text-muted-foreground">
-                        {"→"}
-                      </span>
+                      <span className="mx-1 text-muted-foreground">{"→"}</span>
                       <span className="font-[var(--font-code)] break-all text-foreground">
                         {line.to}
                       </span>
@@ -541,7 +544,9 @@ export function ChangeRootDialog({
                     </li>
                   ))}
                 </ul>
-                {changedFolderNamesComplete(consolidationPreview.plan) ? null : (
+                {changedFolderNamesComplete(
+                  consolidationPreview.plan,
+                ) ? null : (
                   <p
                     id="root-consolidation-renamed-folders-sampled"
                     className="text-xs text-muted-foreground"
@@ -714,7 +719,8 @@ function TitleLedger({
           <dd
             className={cn(
               "text-foreground",
-              toCount(accounting.blocked) > 0 && "text-[var(--scry-danger-text)]",
+              toCount(accounting.blocked) > 0 &&
+                "text-[var(--scry-danger-text)]",
             )}
           >
             {toCount(accounting.blocked)}
@@ -817,7 +823,10 @@ function ContentBuckets({
           </p>
           <ul className="ml-4 list-disc space-y-0.5">
             {content.unknown.entries.map((entry) => (
-              <li key={entry.path} className="font-[var(--font-code)] break-all">
+              <li
+                key={entry.path}
+                className="font-[var(--font-code)] break-all"
+              >
                 {entry.path}
               </li>
             ))}
@@ -962,4 +971,3 @@ function SampledPathList({
     </div>
   );
 }
-

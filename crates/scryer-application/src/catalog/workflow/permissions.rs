@@ -11,7 +11,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(actor, &title.library_id, permission)
             .await?;
         Ok(title)
@@ -67,7 +67,7 @@ impl AppUseCase {
             .shows
             .get_collection_by_id(collection_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("collection {collection_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::COLLECTION_NOT_FOUND, format!("collection {collection_id}")))?;
         self.require_title_permission(actor, &collection.title_id, permission)
             .await?;
         Ok(collection)
@@ -86,7 +86,7 @@ impl AppUseCase {
             .shows
             .get_episode_by_id(episode_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::EPISODE_NOT_FOUND, format!("episode {episode_id}")))?;
         self.require_title_permission(actor, &episode.title_id, permission)
             .await?;
         Ok(episode)

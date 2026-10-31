@@ -458,6 +458,10 @@ define_class!(
             &self,
             _sender: &NSApplication,
         ) -> NSApplicationTerminateReply {
+            if let Err(error) = self.ivars().supervisor.borrow().ensure_restore_idle() {
+                self.report(Err(error));
+                return NSApplicationTerminateReply::TerminateCancel;
+            }
             if self.ivars().quit_confirmed.get() {
                 return NSApplicationTerminateReply::TerminateNow;
             }

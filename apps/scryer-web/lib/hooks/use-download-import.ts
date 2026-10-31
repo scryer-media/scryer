@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useClient } from "urql";
 
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -37,9 +44,7 @@ function mergeImportItems(
   previousItems: DownloadQueueItem[],
   nextItems: DownloadQueueItem[],
 ): DownloadQueueItem[] {
-  const seen = new Set(
-    previousItems.map(downloadQueueItemIdentityKey),
-  );
+  const seen = new Set(previousItems.map(downloadQueueItemIdentityKey));
   const merged = [...previousItems];
   for (const item of nextItems) {
     const key = downloadQueueItemIdentityKey(item);
@@ -72,69 +77,98 @@ export function useDownloadImport({
   const activeRequestRef = useRef<AbortController | null>(null);
   const pendingRefreshRef = useRef(false);
   const epochRef = useRef(0);
-  const [loadedScope, setLoadedScope] = useState<{ filter: DownloadImportFilter; auth: string | null } | null>(null);
-  const sameScope = loadedScope?.filter === filter && loadedScope.auth === authScope;
+  const [loadedScope, setLoadedScope] = useState<{
+    filter: DownloadImportFilter;
+    auth: string | null;
+  } | null>(null);
+  const sameScope =
+    loadedScope?.filter === filter && loadedScope.auth === authScope;
 
-  const runRequest = useCallback(async (loadMore: boolean) => {
-    if (!enabled) return;
-    if (activeRequestRef.current) {
-      if (!loadMore) pendingRefreshRef.current = true;
-      return;
-    }
-    if (loadMore && !hasMoreRef.current) return;
-    const epoch = epochRef.current;
-    const current = () => epoch === epochRef.current && authScope === getAuthToken();
-    // One queued refresh is consumed after a successful request. A failure waits
-    // for the regular poll or an explicit retry, avoiding immediate retry loops.
-    let more = loadMore;
-    do {
-      pendingRefreshRef.current = false;
-      const controller = new AbortController();
-      activeRequestRef.current = controller;
-      if (more) setImportLoadingMore(true);
-      else setImportLoading(true);
-      let succeeded = false;
-      try {
-        const offset = more ? nextOffsetRef.current : 0;
-        const limit = more ? IMPORT_PAGE_SIZE : Math.max(nextOffsetRef.current, IMPORT_PAGE_SIZE);
-        const { data, error } = await boundedQuery(
-          client.query<{ downloadImport: DownloadImportPage }>(downloadImportQuery, { limit, offset, filter }),
-          controller.signal,
-        );
-        if (!current()) return;
-        if (error) throw error;
-        const page = data?.downloadImport;
-        if (!page || !Array.isArray(page.items) || typeof page.hasMore !== "boolean" ||
-            !Number.isSafeInteger(page.totalCount) || page.totalCount < 0) {
-          throw new Error("Invalid import activity response.");
-        }
-        const append = more;
-        setImportItems((items) => mergeImportItems(append ? items : [], page.items));
-        nextOffsetRef.current = offset + page.items.length;
-        hasMoreRef.current = page.hasMore;
-        setImportHasMore(page.hasMore);
-        setImportTotalCount(page.totalCount);
-        setLoadedScope({ filter, auth: authScope });
-        setImportError(null);
-        setLastRefreshedAt(new Date());
-        succeeded = true;
-      } catch (error) {
-        if (!current()) return;
-        const message = error instanceof QueryTimeoutError ? t("activity.refreshTimedOut") :
-          error instanceof Error ? error.message : "Failed to load import activity.";
-        setImportError(message);
-        setGlobalStatus(message, error instanceof QueryTimeoutError ? undefined : { level: "ERROR" });
-      } finally {
-        if (current()) {
-          activeRequestRef.current = null;
-          setImportLoading(false);
-          setImportLoadingMore(false);
-        }
+  const runRequest = useCallback(
+    async (loadMore: boolean) => {
+      if (!enabled) return;
+      if (activeRequestRef.current) {
+        if (!loadMore) pendingRefreshRef.current = true;
+        return;
       }
-      if (!succeeded || !current()) break;
-      more = false;
-    } while (pendingRefreshRef.current);
-  }, [authScope, client, enabled, filter, setGlobalStatus, t]);
+      if (loadMore && !hasMoreRef.current) return;
+      const epoch = epochRef.current;
+      const current = () =>
+        epoch === epochRef.current && authScope === getAuthToken();
+      // One queued refresh is consumed after a successful request. A failure waits
+      // for the regular poll or an explicit retry, avoiding immediate retry loops.
+      let more = loadMore;
+      do {
+        pendingRefreshRef.current = false;
+        const controller = new AbortController();
+        activeRequestRef.current = controller;
+        if (more) setImportLoadingMore(true);
+        else setImportLoading(true);
+        let succeeded = false;
+        try {
+          const offset = more ? nextOffsetRef.current : 0;
+          const limit = more
+            ? IMPORT_PAGE_SIZE
+            : Math.max(nextOffsetRef.current, IMPORT_PAGE_SIZE);
+          const { data, error } = await boundedQuery(
+            client.query<{ downloadImport: DownloadImportPage }>(
+              downloadImportQuery,
+              { limit, offset, filter },
+            ),
+            controller.signal,
+          );
+          if (!current()) return;
+          if (error) throw error;
+          const page = data?.downloadImport;
+          if (
+            !page ||
+            !Array.isArray(page.items) ||
+            typeof page.hasMore !== "boolean" ||
+            !Number.isSafeInteger(page.totalCount) ||
+            page.totalCount < 0
+          ) {
+            throw new Error("Invalid import activity response.");
+          }
+          const append = more;
+          setImportItems((items) =>
+            mergeImportItems(append ? items : [], page.items),
+          );
+          nextOffsetRef.current = offset + page.items.length;
+          hasMoreRef.current = page.hasMore;
+          setImportHasMore(page.hasMore);
+          setImportTotalCount(page.totalCount);
+          setLoadedScope({ filter, auth: authScope });
+          setImportError(null);
+          setLastRefreshedAt(new Date());
+          succeeded = true;
+        } catch (error) {
+          if (!current()) return;
+          const message =
+            error instanceof QueryTimeoutError
+              ? t("activity.refreshTimedOut")
+              : userFacingGraphQlErrorMessage(
+                  error,
+                  t("error.fallback.failedToLoadImportActivity"),
+                  t,
+                );
+          setImportError(message);
+          setGlobalStatus(
+            message,
+            error instanceof QueryTimeoutError ? undefined : { level: "ERROR" },
+          );
+        } finally {
+          if (current()) {
+            activeRequestRef.current = null;
+            setImportLoading(false);
+            setImportLoadingMore(false);
+          }
+        }
+        if (!succeeded || !current()) break;
+        more = false;
+      } while (pendingRefreshRef.current);
+    },
+    [authScope, client, enabled, filter, setGlobalStatus, t],
+  );
 
   const refreshImport = useCallback(() => runRequest(false), [runRequest]);
   const loadMoreImport = useCallback(() => runRequest(true), [runRequest]);

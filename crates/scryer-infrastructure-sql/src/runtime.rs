@@ -855,30 +855,7 @@ fn opt_bool_from_pg_row(row: &PgRow, column: &str) -> AppResult<Option<bool>> {
 const TRANSIENT_SQLITE_ERROR_CODES: [u64; 6] = [5, 261, 517, 773, 6, 262];
 
 pub fn is_transient_sqlite_busy(error: &AppError) -> bool {
-    let AppError::Repository(message) = error else {
-        return false;
-    };
-
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("database is locked")
-        || normalized.contains("database table is locked")
-        || normalized.contains("database schema is locked")
-        || normalized.contains("sqlite_busy")
-        || normalized.contains("busy_snapshot")
-        || sqlite_error_codes(&normalized).any(|code| TRANSIENT_SQLITE_ERROR_CODES.contains(&code))
-}
-
-// sqlx renders sqlite errors as "(code: N) message"; match N exactly so codes
-// that merely start with a transient digit (516, 522, 526, ...) never retry.
-fn sqlite_error_codes(message: &str) -> impl Iterator<Item = u64> + '_ {
-    const CODE_PREFIX: &str = "code: ";
-    message.match_indices(CODE_PREFIX).filter_map(|(index, _)| {
-        let digits: String = message[index + CODE_PREFIX.len()..]
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        digits.parse().ok()
-    })
+    error.repository_kind() == Some(scryer_application::RepositoryErrorKind::Busy)
 }
 
 pub async fn run_with_sqlite_busy_retries<T, Op, Fut>(
@@ -948,66 +925,194 @@ where
     }
 }
 
-pub fn repo_err(error: impl std::fmt::Display) -> AppError {
-    AppError::Repository(error.to_string())
+/// Preserve SQL driver facts before rendering the diagnostic for operators.
+pub fn repo_err(error: impl std::fmt::Display + std::any::Any) -> AppError {
+    let kind = (&error as &dyn std::any::Any)
+        .downcast_ref::<sqlx::Error>()
+        .map(repository_error_kind)
+        .unwrap_or(scryer_application::RepositoryErrorKind::Other);
+    AppError::repository_failure(kind, error.to_string())
+}
+
+fn repository_error_kind(error: &sqlx::Error) -> scryer_application::RepositoryErrorKind {
+    use scryer_application::RepositoryErrorKind;
+    let Some(database) = error.as_database_error() else {
+        return RepositoryErrorKind::Other;
+    };
+    match database.kind() {
+        sqlx::error::ErrorKind::UniqueViolation => {
+            if database.table() == Some("title_external_ids")
+                || database.message().contains("title_external_ids.")
+            {
+                return RepositoryErrorKind::TitleExternalIdConflict;
+            }
+            return RepositoryErrorKind::UniqueViolation;
+        }
+        sqlx::error::ErrorKind::ForeignKeyViolation => {
+            return RepositoryErrorKind::ForeignKeyViolation;
+        }
+        sqlx::error::ErrorKind::NotNullViolation => return RepositoryErrorKind::NotNullViolation,
+        sqlx::error::ErrorKind::CheckViolation => return RepositoryErrorKind::CheckViolation,
+        _ => {}
+    }
+    if let Some(code) = database.code() {
+        if code
+            .parse::<u64>()
+            .ok()
+            .is_some_and(|code| TRANSIENT_SQLITE_ERROR_CODES.contains(&code))
+        {
+            return RepositoryErrorKind::Busy;
+        }
+        // SQLite has no typed missing-table surface. Classify its diagnostic
+        // once here; PostgreSQL provides a stable SQLSTATE for the same fact.
+        if code == "42P01" || (code == "1" && database.message().starts_with("no such table:")) {
+            return RepositoryErrorKind::MissingTable;
+        }
+    }
+    RepositoryErrorKind::Other
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn repo_error(message: &str) -> AppError {
-        AppError::Repository(message.to_string())
+    #[derive(Debug)]
+    struct DriverFailure {
+        code: &'static str,
+        unique: bool,
+    }
+
+    impl std::fmt::Display for DriverFailure {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("opaque driver diagnostic")
+        }
+    }
+
+    impl std::error::Error for DriverFailure {}
+
+    impl sqlx::error::DatabaseError for DriverFailure {
+        fn message(&self) -> &str {
+            "opaque driver diagnostic"
+        }
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(std::borrow::Cow::Borrowed(self.code))
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            if self.unique {
+                sqlx::error::ErrorKind::UniqueViolation
+            } else {
+                sqlx::error::ErrorKind::Other
+            }
+        }
     }
 
     #[test]
-    fn busy_matcher_accepts_busy_and_locked_codes() {
-        for message in [
-            "error returned from database: (code: 5) database is locked",
-            "error returned from database: (code: 261) recovery in progress",
-            "error returned from database: (code: 517) busy snapshot",
-            "error returned from database: (code: 773) busy timeout",
-            "error returned from database: (code: 6) database table is locked",
-            "error returned from database: (code: 262) shared cache locked",
-        ] {
-            assert!(
-                is_transient_sqlite_busy(&repo_error(message)),
-                "expected transient: {message}"
+    fn driver_busy_codes_are_exact_and_independent_of_diagnostic() {
+        use scryer_application::RepositoryErrorKind;
+        for code in ["5", "261", "517", "773", "6", "262"] {
+            let error = sqlx::Error::Database(Box::new(DriverFailure {
+                code,
+                unique: false,
+            }));
+            assert_eq!(
+                repo_err(error).repository_kind(),
+                Some(RepositoryErrorKind::Busy),
+                "{code}"
+            );
+        }
+        for code in ["516", "522", "526", "531", "1555", "1"] {
+            let error = sqlx::Error::Database(Box::new(DriverFailure {
+                code,
+                unique: false,
+            }));
+            assert_eq!(
+                repo_err(error).repository_kind(),
+                Some(RepositoryErrorKind::Other),
+                "{code}"
             );
         }
     }
 
     #[test]
-    fn busy_matcher_accepts_stable_message_fallbacks() {
-        assert!(is_transient_sqlite_busy(&repo_error(
-            "SQLITE_BUSY: unable to acquire lock"
-        )));
-        assert!(is_transient_sqlite_busy(&repo_error(
-            "transaction failed: BUSY_SNAPSHOT"
-        )));
-    }
-
-    #[test]
-    fn busy_matcher_rejects_non_transient_codes() {
-        for message in [
-            "error returned from database: (code: 516) abort due to rollback",
-            "error returned from database: (code: 522) disk I/O error (short read)",
-            "error returned from database: (code: 526) unable to open database file",
-            "error returned from database: (code: 531) constraint failed in commit hook",
-            "error returned from database: (code: 1555) UNIQUE constraint failed: titles.id",
-            "error returned from database: (code: 1) SQL logic error",
-        ] {
-            assert!(
-                !is_transient_sqlite_busy(&repo_error(message)),
-                "expected non-transient: {message}"
+    fn driver_constraint_kind_survives_for_both_dialects() {
+        use scryer_application::RepositoryErrorKind;
+        for code in ["1555", "2067", "23505"] {
+            let error = sqlx::Error::Database(Box::new(DriverFailure { code, unique: true }));
+            assert_eq!(
+                repo_err(error).repository_kind(),
+                Some(RepositoryErrorKind::UniqueViolation)
             );
         }
     }
 
+    #[tokio::test]
+    async fn driver_failure_keeps_constraint_and_missing_table_kinds() {
+        use scryer_application::RepositoryErrorKind;
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE facts (id INTEGER NOT NULL PRIMARY KEY, value TEXT NOT NULL UNIQUE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO facts VALUES (1, 'one')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let unique = sqlx::query("INSERT INTO facts VALUES (2, 'one')")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            repo_err(unique).repository_kind(),
+            Some(RepositoryErrorKind::UniqueViolation)
+        );
+        sqlx::query("CREATE TABLE title_external_ids (source TEXT NOT NULL, external_id TEXT NOT NULL, PRIMARY KEY (source, external_id))")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO title_external_ids VALUES ('synthetic', '1')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let external = sqlx::query("INSERT INTO title_external_ids VALUES ('synthetic', '1')")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            repo_err(external).repository_kind(),
+            Some(RepositoryErrorKind::TitleExternalIdConflict)
+        );
+        let missing = sqlx::query("SELECT * FROM absent_table")
+            .fetch_all(&pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            repo_err(missing).repository_kind(),
+            Some(RepositoryErrorKind::MissingTable)
+        );
+    }
+
     #[test]
-    fn busy_matcher_ignores_non_repository_errors() {
-        assert!(!is_transient_sqlite_busy(&AppError::Validation(
-            "(code: 5) database is locked".to_string()
+    fn busy_retry_uses_driver_kind_independently_of_diagnostic() {
+        use scryer_application::RepositoryErrorKind;
+        assert!(is_transient_sqlite_busy(&AppError::repository_failure(
+            RepositoryErrorKind::Busy,
+            "wording may change"
+        )));
+        assert!(!is_transient_sqlite_busy(&AppError::Repository(
+            "database is locked".into()
+        )));
+        assert!(!is_transient_sqlite_busy(&AppError::repository_failure(
+            RepositoryErrorKind::Other,
+            "SQLITE_BUSY"
         )));
     }
 

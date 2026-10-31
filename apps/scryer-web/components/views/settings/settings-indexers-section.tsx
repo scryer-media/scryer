@@ -175,7 +175,8 @@ const FALLBACK_PROVIDER_OPTIONS = [
   { value: "newznab", label: "Newznab Indexer" },
 ];
 
-const INDEXER_NARROW_CELL_CLASS =
+/** Below 1279px a settings table row becomes a card; each cell shows its data-label beside the value. */
+export const INDEXER_NARROW_CELL_CLASS =
   "max-[1279px]:flex max-[1279px]:items-center max-[1279px]:justify-between max-[1279px]:gap-4 max-[1279px]:border-b max-[1279px]:border-border/60 max-[1279px]:px-3 max-[1279px]:py-2 max-[1279px]:text-right max-[1279px]:before:shrink-0 max-[1279px]:before:text-left max-[1279px]:before:text-xs max-[1279px]:before:font-medium max-[1279px]:before:text-muted-foreground max-[1279px]:before:content-[attr(data-label)]";
 
 function selectedIndexerPresetName(
@@ -304,7 +305,9 @@ function ManagedIndexerRateLimitsPopover({
             );
           }}
         >
-          <p className="text-sm font-medium">{t("settings.indexerRateLimits")}</p>
+          <p className="text-sm font-medium">
+            {t("settings.indexerRateLimits")}
+          </p>
           <label className="block">
             <Label className="mb-2 block" htmlFor={intervalId}>
               {t("form.indexerRateLimitSeconds")}
@@ -1367,9 +1370,22 @@ export function SettingsIndexersSection({
           nextConfigValues[field.key] =
             field.defaultValue ?? (field.fieldType === "BOOL" ? "false" : "");
         }
+        const presetName = (nextProvider?.configFields ?? [])
+          .map((field) =>
+            selectedIndexerPresetName(
+              nextProvider?.configFields ?? [],
+              field.key,
+              nextConfigValues[field.key] ?? "",
+            ),
+          )
+          .find((name): name is string => name !== null);
         return {
           ...prev,
           providerType: nextProviderType,
+          name:
+            hasCustomizedName || !nextProvider
+              ? prev.name
+              : (presetName ?? nextProvider.name),
           downloadClientId:
             nextMappingCompatibility?.supportsMapping === false
               ? null
@@ -1385,6 +1401,7 @@ export function SettingsIndexersSection({
       });
     },
     [
+      hasCustomizedName,
       indexerDownloadClientMappingCatalogResource.catalog,
       providerTypes,
       setIndexerDraft,
@@ -1843,7 +1860,9 @@ export function SettingsIndexersSection({
                                     indexer={indexer}
                                     routingByScope={indexerRoutingByScope}
                                     isLoading={indexerRoutingLoading}
-                                    mutatingScopes={mutatingIndexerRoutingScopes}
+                                    mutatingScopes={
+                                      mutatingIndexerRoutingScopes
+                                    }
                                     onChange={updateIndexerRoutingForScope}
                                   />
                                 </div>
@@ -2170,7 +2189,9 @@ export function SettingsIndexersSection({
                                   draft={indexerDraft}
                                   onChange={handleConfigValueChange}
                                   loginChallenge={loginChallenge}
-                                  onRefreshLoginChallenge={refreshLoginChallenge}
+                                  onRefreshLoginChallenge={
+                                    refreshLoginChallenge
+                                  }
                                 />
                               </CollapsibleContent>
                             </Collapsible>

@@ -51,7 +51,7 @@ impl AppUseCase {
             updated_at: now,
         }
         .normalized();
-        profile.validate().map_err(AppError::Validation)?;
+        profile.validate().map_err(|message| AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_INVALID, message))?;
 
         let created = self
             .services
@@ -78,20 +78,16 @@ impl AppUseCase {
             .await?;
         let id = update.id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "seeding profile id is required".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_ID_REQUIRED, "seeding profile id is required"));
         }
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one seeding profile field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_FIELD_REQUIRED, "at least one seeding profile field must be provided"));
         }
 
         let mut profile = self
             .seeding_profile(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("seeding profile '{id}' not found")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::integration::SEEDING_PROFILE_NOT_FOUND, format!("seeding profile '{id}' not found")))?;
         if let Some(name) = update.name {
             profile.name = name;
         }
@@ -127,7 +123,7 @@ impl AppUseCase {
         }
         profile.updated_at = Utc::now();
         let profile = profile.normalized();
-        profile.validate().map_err(AppError::Validation)?;
+        profile.validate().map_err(|message| AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_INVALID, message))?;
 
         let updated = self
             .services
@@ -152,19 +148,17 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "seeding profile id is required".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_ID_REQUIRED, "seeding profile id is required"));
         }
         if self.seeding_profile(id).await?.is_none() {
-            return Err(AppError::NotFound(format!(
+            return Err(AppError::not_found_reason(crate::error_reasons::integration::SEEDING_PROFILE_NOT_FOUND, format!(
                 "seeding profile '{id}' not found"
             )));
         }
 
         let referrers = self.seeding_profile_referrers(id).await?;
         if !referrers.is_empty() {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::integration::SEEDING_PROFILE_STILL_ASSIGNED, format!(
                 "seeding profile is still assigned to {}",
                 referrers.join(", ")
             )));
@@ -198,7 +192,7 @@ impl AppUseCase {
             .await?;
         let indexer_id = indexer_id.trim();
         if indexer_id.is_empty() {
-            return Err(AppError::Validation("indexer id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_ID_REQUIRED, "indexer id is required"));
         }
         let normalized_profile_id = seeding_profile_id
             .map(str::trim)
@@ -211,11 +205,11 @@ impl AppUseCase {
             .get_by_id(indexer_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("indexer config '{indexer_id}' not found"))
+                AppError::not_found_reason(crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND, format!("indexer config '{indexer_id}' not found"))
             })?;
         if let Some(profile_id) = normalized_profile_id.as_deref() {
             let profile = self.seeding_profile(profile_id).await?.ok_or_else(|| {
-                AppError::NotFound(format!("seeding profile '{profile_id}' not found"))
+                AppError::not_found_reason(crate::error_reasons::integration::SEEDING_PROFILE_NOT_FOUND, format!("seeding profile '{profile_id}' not found"))
             })?;
             self.validate_indexer_seeding_profile_assignment(&existing, &profile)?;
         }
@@ -248,20 +242,18 @@ impl AppUseCase {
         if indexer.provider_type.eq_ignore_ascii_case("prowlarr")
             && indexer.managed_parent_config_id.is_none()
         {
-            return Err(AppError::Validation(
-                "Prowlarr management parents cannot be assigned a seeding profile".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROWLARR_MANAGEMENT_PARENTS_CANNOT_ASSIGNED_SEEDING_PROFILE, "Prowlarr management parents cannot be assigned a seeding profile"));
         }
         let families = self
             .indexer_download_mapping_families(&indexer.provider_type)
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::integration::INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY, format!(
                     "indexer provider '{}' does not declare a supported protocol family",
                     indexer.provider_type
                 ))
             })?;
         if !families.contains(&"torrent") {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::integration::INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED, format!(
                 "indexer '{}' does not support torrents, so seeding profile '{}' cannot be assigned",
                 indexer.name, profile.name
             )));
@@ -289,7 +281,7 @@ impl AppUseCase {
         if let Some(profile_id) = normalized.as_deref()
             && self.seeding_profile(profile_id).await?.is_none()
         {
-            return Err(AppError::NotFound(format!(
+            return Err(AppError::not_found_reason(crate::error_reasons::integration::SEEDING_PROFILE_NOT_FOUND, format!(
                 "seeding profile '{profile_id}' not found"
             )));
         }
@@ -339,9 +331,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         if floor < 0 {
-            return Err(AppError::Validation(
-                "minimum seeders floor cannot be negative".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE, "minimum seeders floor cannot be negative"));
         }
         self.services
             .config

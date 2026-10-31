@@ -96,7 +96,9 @@ function MaintenanceSequenceProgress({
     );
   }
 
-  const progressByStepId = new Map(progress.map((entry) => [entry.step.id, entry]));
+  const progressByStepId = new Map(
+    progress.map((entry) => [entry.step.id, entry]),
+  );
   return (
     <ol className="mt-1 space-y-1 text-xs text-muted-foreground">
       {sequence.steps.map((step, index) => {
@@ -107,16 +109,23 @@ function MaintenanceSequenceProgress({
         const searchState = maintenanceSearchHistoryState(entry);
         const stepLabelKey = actionStepKindLabelKey(step.kind);
         return (
-          <li key={step.id} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <li
+            key={step.id}
+            className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
+          >
             <span className="font-medium text-foreground">
               {index + 1}. {stepLabelKey ? t(stepLabelKey) : step.kind}
             </span>
             {step.kind === "SEARCH" ? (
               acceptedReceipt ? (
                 <>
-                  <span>{t("settings.maintenanceSequenceHistorySearchRequested")}</span>
+                  <span>
+                    {t("settings.maintenanceSequenceHistorySearchRequested")}
+                  </span>
                   <span>·</span>
-                  <span>{t("settings.maintenanceSequenceHistorySearchAccepted")}</span>
+                  <span>
+                    {t("settings.maintenanceSequenceHistorySearchAccepted")}
+                  </span>
                   {acceptedReceipt.jobRunId ? (
                     <a
                       className="text-primary underline-offset-2 hover:underline"
@@ -145,10 +154,14 @@ function MaintenanceSequenceProgress({
               <span>· {t("settings.maintenanceSequenceHistoryWaiting")}</span>
             )}
             {entry?.run?.holdReason ? (
-              <span className="text-[var(--scry-warning-text)]">{entry.run.holdReason}</span>
+              <span className="text-[var(--scry-warning-text)]">
+                {entry.run.holdReason}
+              </span>
             ) : null}
             {entry?.run?.error ? (
-              <span className="text-[var(--scry-danger-text)]">{entry.run.error}</span>
+              <span className="text-[var(--scry-danger-text)]">
+                {entry.run.error}
+              </span>
             ) : null}
           </li>
         );
@@ -185,7 +198,11 @@ function TagPatchSummary({
 function RunStatusBadge({ status }: { status: string }) {
   const t = useTranslate();
   const labelKey = runStatusLabelKey(status);
-  return <Badge tone={runStatusBadgeTone(status)}>{labelKey ? t(labelKey) : status}</Badge>;
+  return (
+    <Badge tone={runStatusBadgeTone(status)}>
+      {labelKey ? t(labelKey) : status}
+    </Badge>
+  );
 }
 
 function ReasonCodes({ codes }: { codes: string[] }) {
@@ -193,7 +210,11 @@ function ReasonCodes({ codes }: { codes: string[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {codes.map((code) => (
-        <code key={code} data-code-font className="rounded bg-muted px-1 py-0.5 text-xs">
+        <code
+          key={code}
+          data-code-font
+          className="rounded bg-muted px-1 py-0.5 text-xs"
+        >
           {code}
         </code>
       ))}
@@ -204,7 +225,11 @@ function ReasonCodes({ codes }: { codes: string[] }) {
 // ── Instance switches ─────────────────────────────────────────────────
 
 /// The two switches every maintenance pane shows above its content, in order.
-const INSTANCE_SWITCHES: { key: MaintenanceGateKey; label: string; help: string }[] = [
+const INSTANCE_SWITCHES: {
+  key: MaintenanceGateKey;
+  label: string;
+  help: string;
+}[] = [
   {
     key: "enabled",
     label: "settings.maintenanceSwitchEnabled",
@@ -245,14 +270,19 @@ export function MaintenanceInstanceSwitches({
     );
   }
   return (
-    <div id="settings-maintenance-switches" className="grid gap-3 md:grid-cols-2">
+    <div
+      id="settings-maintenance-switches"
+      className="grid gap-3 md:grid-cols-2"
+    >
       {INSTANCE_SWITCHES.map(({ key, label, help }) => (
         <div
           key={key}
           className="flex items-center justify-between gap-3 rounded border border-border bg-muted/30 px-3 py-2.5"
         >
           <div className="space-y-1">
-            <Label htmlFor={selectorId("settings-maintenance-switch", key)}>{t(label)}</Label>
+            <Label htmlFor={selectorId("settings-maintenance-switch", key)}>
+              {t(label)}
+            </Label>
             <p className="text-xs text-muted-foreground">{t(help)}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -284,7 +314,9 @@ function CandidateDueCell({ dueAt }: { dueAt: string }) {
   return (
     <span
       className={
-        countdown.overdue ? "text-[var(--scry-warning-text)]" : "text-muted-foreground"
+        countdown.overdue
+          ? "text-[var(--scry-warning-text)]"
+          : "text-muted-foreground"
       }
     >
       {t(countdown.labelKey, countdown.values)}
@@ -447,18 +479,24 @@ export function MaintenanceCandidatesPanel({
             <TableHeader>
               <TableRow>
                 <TableHead>{t("label.title")}</TableHead>
-                <TableHead>{t("settings.maintenanceCandidatesColRule")}</TableHead>
+                <TableHead>
+                  {t("settings.maintenanceCandidatesColRule")}
+                </TableHead>
                 <TableHead className="w-[150px]">
                   {t("settings.maintenanceCandidatesColState")}
                 </TableHead>
-                <TableHead>{t("settings.maintenancePreviewColReasons")}</TableHead>
+                <TableHead>
+                  {t("settings.maintenancePreviewColReasons")}
+                </TableHead>
                 <TableHead className="whitespace-nowrap">
                   {t("settings.maintenanceCandidatesColFirstMatched")}
                 </TableHead>
                 <TableHead className="whitespace-nowrap">
                   {t("settings.maintenanceCandidatesColDue")}
                 </TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -468,19 +506,35 @@ export function MaintenanceCandidatesPanel({
                   <TableRow
                     key={candidate.id}
                     data-ui="settings-table-row"
-                    id={selectorId("settings-maintenance-candidate-row", candidate.id)}
+                    id={selectorId(
+                      "settings-maintenance-candidate-row",
+                      candidate.id,
+                    )}
                   >
                     <TableCell className="font-medium">
                       <div className="flex flex-col gap-1">
                         <span>{candidate.titleName}</span>
-                        {candidate.subjectKind !== "title" && <span className="text-sm text-muted-foreground">{candidate.subjectLabel}</span>}
-                        {candidate.fileCount != null && <span className="text-xs text-muted-foreground">{t("settings.maintenanceFileSummary", { count: candidate.fileCount, size: formatBytes(candidate.totalSizeBytes) })}</span>}
+                        {candidate.subjectKind !== "title" && (
+                          <span className="text-sm text-muted-foreground">
+                            {candidate.subjectLabel}
+                          </span>
+                        )}
+                        {candidate.fileCount != null && (
+                          <span className="text-xs text-muted-foreground">
+                            {t("settings.maintenanceFileSummary", {
+                              count: candidate.fileCount,
+                              size: formatBytes(candidate.totalSizeBytes),
+                            })}
+                          </span>
+                        )}
                         {candidate.storageRootFileCount !== null &&
                         candidate.storageRootTotalSizeBytes !== null ? (
                           <span className="text-xs text-muted-foreground">
                             {t("settings.maintenanceStorageRootFileSummary", {
                               count: candidate.storageRootFileCount,
-                              size: formatBytes(candidate.storageRootTotalSizeBytes),
+                              size: formatBytes(
+                                candidate.storageRootTotalSizeBytes,
+                              ),
                             })}
                           </span>
                         ) : null}
@@ -515,7 +569,10 @@ export function MaintenanceCandidatesPanel({
                             title={candidate.stateReason || undefined}
                           >
                             {t("settings.maintenanceCandidatesHeldSince", {
-                              time: timestamp(candidate.heldSince, dateTimeFormat),
+                              time: timestamp(
+                                candidate.heldSince,
+                                dateTimeFormat,
+                              ),
                             })}
                           </span>
                         ) : null}
@@ -616,7 +673,9 @@ export function MaintenanceRunsPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{t("settings.maintenanceRunsTitle")}</CardTitle>
+        <CardTitle className="text-base">
+          {t("settings.maintenanceRunsTitle")}
+        </CardTitle>
         <p className="text-xs text-muted-foreground">
           {t("settings.maintenanceRunsSubtitle")}
         </p>
@@ -702,7 +761,9 @@ export function MaintenanceRunsPanel({
                   <TableHead className="whitespace-nowrap">
                     {t("settings.maintenanceRunColStarted")}
                   </TableHead>
-                  <TableHead>{t("settings.maintenanceCandidatesColRule")}</TableHead>
+                  <TableHead>
+                    {t("settings.maintenanceCandidatesColRule")}
+                  </TableHead>
                   <TableHead className="w-[130px]">
                     {t("settings.maintenanceRunColStatus")}
                   </TableHead>
@@ -722,7 +783,10 @@ export function MaintenanceRunsPanel({
                     <TableRow
                       key={run.id}
                       data-ui="settings-table-row"
-                      id={selectorId("settings-maintenance-evaluation-run-row", run.id)}
+                      id={selectorId(
+                        "settings-maintenance-evaluation-run-row",
+                        run.id,
+                      )}
                     >
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {timestamp(run.startedAt, dateTimeFormat)}
@@ -796,12 +860,22 @@ export function MaintenanceRunsPanel({
                   <TableRow
                     key={run.id}
                     data-ui="settings-table-row"
-                    id={selectorId("settings-maintenance-action-run-row", run.id)}
+                    id={selectorId(
+                      "settings-maintenance-action-run-row",
+                      run.id,
+                    )}
                   >
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {timestamp(run.startedAt, dateTimeFormat)}
                     </TableCell>
-                    <TableCell className="font-medium">{run.titleName}{run.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{run.subjectLabel}</div>}</TableCell>
+                    <TableCell className="font-medium">
+                      {run.titleName}
+                      {run.subjectKind !== "title" && (
+                        <div className="text-sm text-muted-foreground">
+                          {run.subjectLabel}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       <ActionKindLabel kind={run.actionKind} />
                       <MaintenanceSequenceProgress
@@ -881,26 +955,44 @@ export function MaintenanceExclusionsPanel({
             <TableHeader>
               <TableRow>
                 <TableHead>{t("label.title")}</TableHead>
-                <TableHead>{t("settings.maintenanceExclusionColScope")}</TableHead>
-                <TableHead>{t("settings.maintenanceExclusionColReason")}</TableHead>
+                <TableHead>
+                  {t("settings.maintenanceExclusionColScope")}
+                </TableHead>
+                <TableHead>
+                  {t("settings.maintenanceExclusionColReason")}
+                </TableHead>
                 <TableHead className="whitespace-nowrap">
                   {t("settings.maintenanceExclusionColCreated")}
                 </TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {exclusions.map((exclusion) => {
                 const rule = exclusion.ruleSetId
-                  ? ruleSetRecords.find((record) => record.id === exclusion.ruleSetId)
+                  ? ruleSetRecords.find(
+                      (record) => record.id === exclusion.ruleSetId,
+                    )
                   : null;
                 return (
                   <TableRow
                     key={exclusion.id}
                     data-ui="settings-table-row"
-                    id={selectorId("settings-maintenance-exclusion-row", exclusion.id)}
+                    id={selectorId(
+                      "settings-maintenance-exclusion-row",
+                      exclusion.id,
+                    )}
                   >
-                    <TableCell className="font-medium">{exclusion.titleName}{exclusion.subjectKind !== "title" && <div className="text-sm text-muted-foreground">{exclusion.subjectLabel}</div>}</TableCell>
+                    <TableCell className="font-medium">
+                      {exclusion.titleName}
+                      {exclusion.subjectKind !== "title" && (
+                        <div className="text-sm text-muted-foreground">
+                          {exclusion.subjectLabel}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {exclusion.ruleSetId
                         ? (rule?.name ?? exclusion.ruleSetId)
@@ -956,7 +1048,8 @@ function MaintenanceFileResults({ detail }: { detail: string }) {
       </summary>
       {results.storageRootId ? (
         <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceRuleStorageRoot")}: <code>{results.storageRootId}</code>
+          {t("settings.maintenanceRuleStorageRoot")}:{" "}
+          <code>{results.storageRootId}</code>
         </p>
       ) : null}
       {results.totalSizeBytes != null ? (

@@ -1,12 +1,24 @@
 import { titleDeleteErrorMessage } from "@/lib/utils/title-delete-error-message";
 import * as React from "react";
 import type { Client } from "urql";
-import { addListExclusionMutation, deleteTitlesMutation } from "@/lib/graphql/mutations";
-import { deleteTitlesPreviewQuery, listExclusionTitleQuery } from "@/lib/graphql/queries";
+import {
+  addListExclusionMutation,
+  deleteTitlesMutation,
+} from "@/lib/graphql/mutations";
+import {
+  deleteTitlesPreviewQuery,
+  listExclusionTitleQuery,
+} from "@/lib/graphql/queries";
 import type { JobRun, TitleRecord } from "@/lib/types";
-import type { DeletePreview, DeleteTitlesPreview } from "@/lib/types/delete-preview";
+import type {
+  DeletePreview,
+  DeleteTitlesPreview,
+} from "@/lib/types/delete-preview";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
-import { exclusionInputFromTitle, type AddListExclusionInput } from "@/lib/utils/lists";
+import {
+  exclusionInputFromTitle,
+  type AddListExclusionInput,
+} from "@/lib/utils/lists";
 import { selectedTitleIdsKey } from "@/lib/utils/title-selection";
 import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
@@ -151,7 +163,9 @@ export function useBulkDelete({
         if (payload.failedCount > 0) {
           setBulkDeletePreviewError(
             withFailureDetail(
-              t("status.bulkDeletePreviewFailed", { failed: payload.failedCount }),
+              t("status.bulkDeletePreviewFailed", {
+                failed: payload.failedCount,
+              }),
               failedTitles.slice(0, 5).join(", "),
             ),
           );
@@ -222,13 +236,20 @@ export function useBulkDelete({
     try {
       // Catalog rows may not carry external ids, so read them while the titles
       // still exist. The exclusions themselves are only sent after the delete.
-      const exclusionsByTitleId = new Map<string, AddListExclusionInput | null>();
+      const exclusionsByTitleId = new Map<
+        string,
+        AddListExclusionInput | null
+      >();
       if (excludeFromLists) {
         for (const title of targets) {
           let exclusion = exclusionInputFromTitle(title);
           if (!exclusion) {
             const lookup = await client
-              .query(listExclusionTitleQuery, { id: title.id }, { requestPolicy: "network-only" })
+              .query(
+                listExclusionTitleQuery,
+                { id: title.id },
+                { requestPolicy: "network-only" },
+              )
               .toPromise()
               .catch(() => null);
             const found = lookup?.data?.title as TitleRecord | null | undefined;
@@ -311,10 +332,16 @@ export function useBulkDelete({
           if (exclusionFailed) failed += 1;
         }
         if (withoutIds > 0) {
-          setGlobalStatus(t("lists.exclusions.bulkDeleteNoIds", { count: withoutIds }), { level: "WARNING" });
+          setGlobalStatus(
+            t("lists.exclusions.bulkDeleteNoIds", { count: withoutIds }),
+            { level: "WARNING" },
+          );
         }
         if (failed > 0) {
-          setGlobalStatus(t("lists.exclusions.bulkDeleteFailed", { count: failed }), { level: "ERROR" });
+          setGlobalStatus(
+            t("lists.exclusions.bulkDeleteFailed", { count: failed }),
+            { level: "ERROR" },
+          );
         }
       }
     } catch (error) {
@@ -361,7 +388,12 @@ export function useBulkDelete({
     setBulkDeletePreviewError(null);
     setBulkDeletePreviewsByTitleId({});
     setBulkDeleteDialogOpen(true);
-  }, [bulkActionBusy, selectedTitleLibraryIds.length, selectedTitles.length, setGlobalStatus]);
+  }, [
+    bulkActionBusy,
+    selectedTitleLibraryIds.length,
+    selectedTitles.length,
+    setGlobalStatus,
+  ]);
 
   return {
     bulkDeleteDialogOpen,

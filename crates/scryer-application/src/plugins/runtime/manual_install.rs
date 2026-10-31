@@ -8,7 +8,7 @@ fn single_manual_catalog_plugin(
     repo: &GitHubRepo,
 ) -> AppResult<CatalogV3PluginEntry> {
     if catalog.plugins.len() != 1 {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY, format!(
             "manual plugin repo '{}' must publish exactly one plugin entry",
             repo.slug()
         )));
@@ -16,7 +16,7 @@ fn single_manual_catalog_plugin(
     let plugin = catalog.plugins[0].clone();
     let source_repo = GitHubRepo::parse(&plugin.source_repo)?;
     if source_repo != *repo {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO, format!(
             "manual plugin repo '{}' published plugin '{}' from source repo '{}'",
             repo.slug(),
             plugin.id,
@@ -44,9 +44,7 @@ fn uploaded_plugin_file_is_zstd(file_name: &str) -> AppResult<bool> {
     if normalized.ends_with(".wasm") {
         return Ok(false);
     }
-    Err(AppError::Validation(
-        "manual plugin upload must be a .wasm or .wasm.zst file".to_string(),
-    ))
+    Err(AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_UPLOAD_INVALID, "manual plugin upload must be a .wasm or .wasm.zst file".to_string()))
 }
 
 async fn decode_uploaded_plugin_wasm_with_limit(
@@ -150,13 +148,13 @@ impl AppUseCase {
         let (release, artifact) =
             select_catalog_release_and_artifact(&plugin, &supported_plugin_features, cpu_class)
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE, format!(
                         "manual plugin repo '{}' has no SDK-compatible release",
                         repo.slug()
                     ))
                 })?;
         let catalog_json = String::from_utf8(catalog_raw).map_err(|e| {
-            AppError::Validation(format!("manual plugin catalog is not UTF-8: {e}"))
+            AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_CATALOG_NOT_UTF_8, format!("manual plugin catalog is not UTF-8: {e}"))
         })?;
         Ok((
             CatalogPluginResolution {
@@ -237,22 +235,18 @@ impl AppUseCase {
             .await?;
 
         if !acknowledge_risk {
-            return Err(AppError::Validation(
-                "manual plugin upload requires explicit risk acknowledgement".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_UPLOAD_REQUIRES_EXPLICIT_RISK_ACKNOWLEDGEMENT, "manual plugin upload requires explicit risk acknowledgement".to_string()));
         }
 
         let file_name = file_name.trim();
         if file_name.is_empty() {
-            return Err(AppError::Validation(
-                "manual plugin upload file name is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_UPLOAD_FILE_NAME_REQUIRED, "manual plugin upload file name is required".to_string()));
         }
         let uploaded_is_zstd = uploaded_plugin_file_is_zstd(file_name)?;
         let uploaded_bytes = base64::engine::general_purpose::STANDARD
             .decode(wasm_base64.trim())
             .map_err(|error| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_UPLOAD_PAYLOAD_INVALID, format!(
                     "manual plugin upload payload is not valid base64: {error}"
                 ))
             })?;
@@ -267,15 +261,15 @@ impl AppUseCase {
             AppError::Repository(format!("plugin descriptor loading task failed: {error}"))
         })??;
         validate_plugin_descriptor_sdk_contract(&descriptor, SDK_VERSION)
-            .map_err(AppError::Validation)?;
-        validate_plugin_descriptor_host_permissions(&descriptor).map_err(AppError::Validation)?;
+            .map_err(|message| AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_SDK_INCOMPATIBLE, message))?;
+        validate_plugin_descriptor_host_permissions(&descriptor).map_err(|message| AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_HOST_PERMISSIONS_INVALID, message))?;
         // Manually uploaded plugins are always Unverified, so the host-process
         // capability is never permitted on this path.
         ensure_host_process_capability_allowed(&descriptor, PluginSupportTier::Unverified)?;
 
         let plugin_id = descriptor.id.clone();
         if is_reserved_first_party_provider(descriptor.provider_type()) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE, format!(
                 "provider type '{}' is reserved for first-party code",
                 descriptor.provider_type()
             )));
@@ -297,7 +291,7 @@ impl AppUseCase {
             .as_ref()
             .is_some_and(|installation| installation.is_builtin)
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::BUNDLED_PLUGIN, format!(
                 "plugin '{}' is a bundled plugin; uninstall any downloaded override before uploading a local build",
                 plugin_id
             )));

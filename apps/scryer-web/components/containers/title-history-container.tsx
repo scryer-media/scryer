@@ -1,10 +1,16 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 import { librariesQuery, titleHistoryQuery } from "@/lib/graphql/queries";
 import { retryImportMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { LibraryRecord, TitleHistoryEvent, TitleHistoryPage, TitleRecord } from "@/lib/types";
+import type {
+  LibraryRecord,
+  TitleHistoryEvent,
+  TitleHistoryPage,
+  TitleRecord,
+} from "@/lib/types";
 import {
   domainEventTypesForHistoryEvents,
   WANTED_HISTORY_FILTERS,
@@ -32,13 +38,18 @@ export function TitleHistoryContainer({
   const [error, setError] = React.useState<string | null>(null);
   const [activeFilters, setActiveFilters] = React.useState<string[]>([]);
   const [page, setPage] = React.useState(0);
-  const [selectedTitle, setSelectedTitle] = React.useState<TitleRecord | null>(null);
+  const [selectedTitle, setSelectedTitle] = React.useState<TitleRecord | null>(
+    null,
+  );
   const [libraries, setLibraries] = React.useState<LibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = React.useState(false);
-  const [selectedLibraryIds, setSelectedLibraryIds] = React.useState<string[]>([]);
+  const [selectedLibraryIds, setSelectedLibraryIds] = React.useState<string[]>(
+    [],
+  );
 
   const selectedEventTypes = React.useMemo(
-    () => (activeFilters.length > 0 ? activeFilters : [...WANTED_HISTORY_FILTERS]),
+    () =>
+      activeFilters.length > 0 ? activeFilters : [...WANTED_HISTORY_FILTERS],
     [activeFilters],
   );
   const offset = page * PAGE_SIZE;
@@ -48,50 +59,59 @@ export function TitleHistoryContainer({
 
   // A background load (a live-event refetch) keeps the current rows on screen
   // instead of flashing the loading state; loads the user caused show it.
-  const fetchHistory = React.useCallback(async (options?: { background?: boolean }) => {
-    const requestId = requestSequenceRef.current + 1;
-    requestSequenceRef.current = requestId;
-    if (!options?.background) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const result = await client
-        .query<{ titleHistory: TitleHistoryPage }>(titleHistoryQuery, {
-          filter: {
-            // Chips use the lowercase display keys; TitleHistoryEventTypeValue
-            // members are their exact uppercase.
-            eventTypes: selectedEventTypes.map((value) => value.toUpperCase()),
-            titleIds: selectedTitle ? [selectedTitle.id] : null,
-            libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds),
-            groupByEvent: true,
-            limit: PAGE_SIZE,
-            offset,
-          },
-        })
-        .toPromise();
-
-      if (requestSequenceRef.current !== requestId) return;
-      if (result.error) {
-        throw result.error;
+  const fetchHistory = React.useCallback(
+    async (options?: { background?: boolean }) => {
+      const requestId = requestSequenceRef.current + 1;
+      requestSequenceRef.current = requestId;
+      if (!options?.background) {
+        setLoading(true);
+        setError(null);
       }
+      try {
+        const result = await client
+          .query<{ titleHistory: TitleHistoryPage }>(titleHistoryQuery, {
+            filter: {
+              // Chips use the lowercase display keys; TitleHistoryEventTypeValue
+              // members are their exact uppercase.
+              eventTypes: selectedEventTypes.map((value) =>
+                value.toUpperCase(),
+              ),
+              titleIds: selectedTitle ? [selectedTitle.id] : null,
+              libraryIds: selectedLibraryIdsToQueryValue(selectedLibraryIds),
+              groupByEvent: true,
+              limit: PAGE_SIZE,
+              offset,
+            },
+          })
+          .toPromise();
 
-      setEvents(result.data?.titleHistory.items ?? []);
-      setTotalCount(result.data?.titleHistory.totalCount ?? 0);
-      setError(null);
-    } catch (fetchError) {
-      if (requestSequenceRef.current !== requestId) return;
-      setError(
-        fetchError instanceof Error ? fetchError.message : t("status.failedToLoad"),
-      );
-      setEvents([]);
-      setTotalCount(0);
-    } finally {
-      if (requestSequenceRef.current === requestId) {
-        setLoading(false);
+        if (requestSequenceRef.current !== requestId) return;
+        if (result.error) {
+          throw result.error;
+        }
+
+        setEvents(result.data?.titleHistory.items ?? []);
+        setTotalCount(result.data?.titleHistory.totalCount ?? 0);
+        setError(null);
+      } catch (fetchError) {
+        if (requestSequenceRef.current !== requestId) return;
+        setError(
+          userFacingGraphQlErrorMessage(
+            fetchError,
+            t("status.failedToLoad"),
+            t,
+          ),
+        );
+        setEvents([]);
+        setTotalCount(0);
+      } finally {
+        if (requestSequenceRef.current === requestId) {
+          setLoading(false);
+        }
       }
-    }
-  }, [client, offset, selectedEventTypes, selectedLibraryIds, selectedTitle, t]);
+    },
+    [client, offset, selectedEventTypes, selectedLibraryIds, selectedTitle, t],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -119,7 +139,11 @@ export function TitleHistoryContainer({
       .catch((fetchError) => {
         if (!cancelled) {
           setGlobalStatus(
-            fetchError instanceof Error ? fetchError.message : t("status.failedToLoad"),
+            userFacingGraphQlErrorMessage(
+              fetchError,
+              t("status.failedToLoad"),
+              t,
+            ),
             { level: "ERROR" },
           );
         }
@@ -176,15 +200,21 @@ export function TitleHistoryContainer({
     setActiveFilters(eventTypes);
   }, []);
 
-  const handleSelectedTitleChange = React.useCallback((title: TitleRecord | null) => {
-    setPage(0);
-    setSelectedTitle(title);
-  }, []);
+  const handleSelectedTitleChange = React.useCallback(
+    (title: TitleRecord | null) => {
+      setPage(0);
+      setSelectedTitle(title);
+    },
+    [],
+  );
 
-  const handleSelectedLibraryIdsChange = React.useCallback((libraryIds: string[]) => {
-    setPage(0);
-    setSelectedLibraryIds(libraryIds);
-  }, []);
+  const handleSelectedLibraryIdsChange = React.useCallback(
+    (libraryIds: string[]) => {
+      setPage(0);
+      setSelectedLibraryIds(libraryIds);
+    },
+    [],
+  );
 
   const handlePreviousPage = React.useCallback(() => {
     setPage((current) => Math.max(0, current - 1));
@@ -211,7 +241,7 @@ export function TitleHistoryContainer({
         await fetchHistory();
       } catch (retryError) {
         setGlobalStatus(
-          retryError instanceof Error ? retryError.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(retryError, t("status.apiError"), t),
           { level: "ERROR" },
         );
       }

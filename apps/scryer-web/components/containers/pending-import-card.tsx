@@ -6,7 +6,11 @@ import { TitlePoster } from "@/components/title-poster";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
@@ -56,9 +60,11 @@ export type PendingImportCardProps = {
   searchResults: MetadataSearchResult[];
   searchError: string | null;
   searching: boolean;
-  formatBindingEpisodeDisplay: (
-    episode: PendingImportBindingEpisode,
-  ) => { key: string | null; label: string; showSeparateLabel: boolean };
+  formatBindingEpisodeDisplay: (episode: PendingImportBindingEpisode) => {
+    key: string | null;
+    label: string;
+    showSeparateLabel: boolean;
+  };
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
@@ -70,7 +76,9 @@ export type PendingImportCardProps = {
   ) => void;
   onToggleEpisodeSelection: (episodeId: string, checked: boolean) => void;
   onSetSelectedEpisodeIds: React.Dispatch<React.SetStateAction<string[]>>;
-  onSetExpandedBindingSeasonKeys: React.Dispatch<React.SetStateAction<string[]>>;
+  onSetExpandedBindingSeasonKeys: React.Dispatch<
+    React.SetStateAction<string[]>
+  >;
   onSearchQueryChange: (value: string) => void;
   onSearchYearChange: (value: number | null) => void;
   onClearActiveItem: () => void;
@@ -113,9 +121,12 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   // Both codes describe a folder-ownership problem rather than a metadata one,
   // so neither is repaired by searching or binding metadata.
   const isInvalidOwnership = item.reason === "invalid_title_folder_ownership";
-  const isFolderOwnershipChange = item.reason === "folder_ownership_changed_by_user";
+  const isFolderOwnershipChange =
+    item.reason === "folder_ownership_changed_by_user";
   const isOwnershipConflict =
-    item.reason === "title_already_owns_another_folder" || isFolderOwnershipChange || isInvalidOwnership;
+    item.reason === "title_already_owns_another_folder" ||
+    isFolderOwnershipChange ||
+    isInvalidOwnership;
   const canSearchOrBind =
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
   // The scan found the title but could not tell which episode the file's
@@ -141,7 +152,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             >
               {summary}
             </p>
-            <p className="text-xs text-muted-foreground">{t("pendingImports.library")} {libraryLabel}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("pendingImports.library")} {libraryLabel}
+            </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             {canAssignEpisode ? (
@@ -169,7 +182,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                 disabled={isBusy}
               >
                 {item.titleId ? null : <Search className="mr-2 h-4 w-4" />}
-                {item.titleId ? t("pendingImports.bindEpisodes") : t("pendingImports.searchAction")}
+                {item.titleId
+                  ? t("pendingImports.bindEpisodes")
+                  : t("pendingImports.searchAction")}
               </Button>
             ) : null}
             {item.status === "PENDING" ? (
@@ -189,12 +204,18 @@ export const PendingImportCard = React.memo(function PendingImportCard({
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <div>
-          <span className="font-medium text-foreground">{t("pendingImports.path")}:</span>{" "}
-          <span className="break-all font-[var(--font-code)] text-muted-foreground">{item.path}</span>
+          <span className="font-medium text-foreground">
+            {t("pendingImports.path")}:
+          </span>{" "}
+          <span className="break-all font-[var(--font-code)] text-muted-foreground">
+            {item.path}
+          </span>
         </div>
         {item.titleId ? (
           <div>
-            <span className="font-medium text-foreground">{t("pendingImports.knownTitle")}</span>{" "}
+            <span className="font-medium text-foreground">
+              {t("pendingImports.knownTitle")}
+            </span>{" "}
             {knownTitleHref ? (
               <Link
                 to={knownTitleHref}
@@ -203,7 +224,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                 {knownTitleLabel}
               </Link>
             ) : (
-              <span className="break-all text-muted-foreground">{knownTitleLabel}</span>
+              <span className="break-all text-muted-foreground">
+                {knownTitleLabel}
+              </span>
             )}
           </div>
         ) : null}
@@ -215,10 +238,10 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             {isInvalidOwnership
               ? t("pendingImports.invalidOwnershipHelp")
               : isFolderOwnershipChange
-              ? t("pendingImports.folderOwnershipChangedHelp")
-              : t("pendingImports.ownershipConflictHelp", {
-                  folder: item.titleFolderPath,
-                })}
+                ? t("pendingImports.folderOwnershipChangedHelp")
+                : t("pendingImports.ownershipConflictHelp", {
+                    folder: item.titleFolderPath,
+                  })}
           </p>
         ) : null}
         {isActive && canSearchOrBind ? (
@@ -252,12 +275,16 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                           : ""}
                         {bindingPreview.file.parsedEpisodes.length > 0
                           ? t("pendingImports.parsedHintEpisodes", {
-                              episodes: bindingPreview.file.parsedEpisodes.join(", "),
+                              episodes:
+                                bindingPreview.file.parsedEpisodes.join(", "),
                             })
                           : ""}
                         {bindingPreview.file.parsedAbsoluteNumbers.length > 0
                           ? t("pendingImports.parsedHintAbsolute", {
-                              absolute: bindingPreview.file.parsedAbsoluteNumbers.join(", "),
+                              absolute:
+                                bindingPreview.file.parsedAbsoluteNumbers.join(
+                                  ", ",
+                                ),
                             })
                           : ""}
                       </div>
@@ -270,7 +297,8 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                         variant="outline"
                         disabled={isBusy}
                         onClick={() => {
-                          const suggestedEpisodeIds = bindingPreview.file.suggestedEpisodeIds;
+                          const suggestedEpisodeIds =
+                            bindingPreview.file.suggestedEpisodeIds;
                           onSetSelectedEpisodeIds(suggestedEpisodeIds);
                           onSetExpandedBindingSeasonKeys(
                             bindingSeasonKeysForSelection(
@@ -298,7 +326,8 @@ export const PendingImportCard = React.memo(function PendingImportCard({
 
                     <div className="space-y-4">
                       {bindingGroups.map(([seasonKey, episodes]) => {
-                        const seasonOpen = expandedBindingSeasonKeys.includes(seasonKey);
+                        const seasonOpen =
+                          expandedBindingSeasonKeys.includes(seasonKey);
                         return (
                           <Collapsible
                             key={seasonKey}
@@ -328,7 +357,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                                   <span>
                                     {seasonKey === "specials"
                                       ? t("pendingImports.specials")
-                                      : t("pendingImports.seasonNumber", { number: seasonKey })}
+                                      : t("pendingImports.seasonNumber", {
+                                          number: seasonKey,
+                                        })}
                                   </span>
                                 </button>
                               </CollapsibleTrigger>
@@ -366,7 +397,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                                       className="flex items-start gap-3 text-sm text-foreground"
                                     >
                                       <Checkbox
-                                        checked={selectedEpisodeIds.includes(episode.id)}
+                                        checked={selectedEpisodeIds.includes(
+                                          episode.id,
+                                        )}
                                         onCheckedChange={(checked) =>
                                           onToggleEpisodeSelection(
                                             episode.id,
@@ -387,7 +420,8 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                                           </>
                                         ) : (
                                           <span>
-                                            {episodeDisplay.key ?? episodeDisplay.label}
+                                            {episodeDisplay.key ??
+                                              episodeDisplay.label}
                                           </span>
                                         )}
                                       </span>
@@ -408,7 +442,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                         disabled={isBusy || selectedEpisodeIds.length === 0}
                         onClick={() => void onBind()}
                       >
-                        {isResolving ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+                        {isResolving ? (
+                          <LoadingMark className="mr-2 h-4 w-4" />
+                        ) : null}
                         {t("pendingImports.bindSelectedEpisodes")}
                       </Button>
                     </div>
@@ -422,7 +458,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                     id={`pending-import-search-query-${item.id}`}
                     className="min-w-0 flex-1"
                     value={searchQuery}
-                    onChange={(event) => onSearchQueryChange(event.target.value)}
+                    onChange={(event) =>
+                      onSearchQueryChange(event.target.value)
+                    }
                     placeholder={t("pendingImports.searchPlaceholder")}
                     disabled={isBusy}
                   />
@@ -442,7 +480,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                           return;
                         }
                         const parsed = Number.parseInt(raw, 10);
-                        onSearchYearChange(Number.isNaN(parsed) ? null : parsed);
+                        onSearchYearChange(
+                          Number.isNaN(parsed) ? null : parsed,
+                        );
                       }}
                       placeholder={t("pendingImports.searchYearPlaceholder")}
                       aria-label={t("pendingImports.searchYearLabel")}
@@ -483,11 +523,16 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                     className="text-sm text-destructive"
                     data-ui="pending-import-search-error"
                   >
-                    {t("pendingImports.searchRequestFailed", { error: searchError })}
+                    {t("pendingImports.searchRequestFailed", {
+                      error: searchError,
+                    })}
                   </div>
                 ) : null}
 
-                {!searching && !searchError && searchQuery.trim() && searchResults.length === 0 ? (
+                {!searching &&
+                !searchError &&
+                searchQuery.trim() &&
+                searchResults.length === 0 ? (
                   <div
                     className="text-sm text-muted-foreground"
                     data-ui="pending-import-search-empty"
@@ -507,23 +552,34 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                         data-ui="pending-import-search-result"
                         data-pending-import-id={item.id}
                         data-tvdb-id={result.tvdbId ?? ""}
-                        data-smg-id={result.smgId == null ? "" : String(result.smgId)}
+                        data-smg-id={
+                          result.smgId == null ? "" : String(result.smgId)
+                        }
                         data-title-name={result.name}
                         data-existing-title-id={result.existingTitleId ?? ""}
                       >
                         <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
                           {result.posterUrl ? (
-                            <TitlePoster src={result.posterUrl} alt={result.name} />
+                            <TitlePoster
+                              src={result.posterUrl}
+                              alt={result.name}
+                            />
                           ) : null}
                         </div>
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-foreground">{result.name}</span>
+                            <span className="font-medium text-foreground">
+                              {result.name}
+                            </span>
                             {result.year ? (
-                              <span className="text-xs text-muted-foreground">{result.year}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {result.year}
+                              </span>
                             ) : null}
                             <span className="text-xs text-muted-foreground">
-                              {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
+                              {result.smgId != null
+                                ? `SMG ${result.smgId}`
+                                : `TVDB ${result.tvdbId}`}
                             </span>
                             {alreadyInLibrary ? (
                               <span
@@ -535,7 +591,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                             ) : null}
                           </div>
                           {result.status ? (
-                            <div className="text-xs text-muted-foreground">{result.status}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {result.status}
+                            </div>
                           ) : null}
                           {result.overview ? (
                             <p className="line-clamp-3 text-sm text-muted-foreground">
@@ -559,7 +617,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                             onClick={() =>
                               void onResolve(
                                 result,
-                                alreadyInLibrary ? { attachToExistingTitle: true } : undefined,
+                                alreadyInLibrary
+                                  ? { attachToExistingTitle: true }
+                                  : undefined,
                               )
                             }
                             disabled={isBusy}
@@ -593,7 +653,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   );
 });
 
-function bindingSeasonKeyForEpisode(episode: PendingImportBindingEpisode): string {
+function bindingSeasonKeyForEpisode(
+  episode: PendingImportBindingEpisode,
+): string {
   return episode.seasonNumber?.trim() || "specials";
 }
 

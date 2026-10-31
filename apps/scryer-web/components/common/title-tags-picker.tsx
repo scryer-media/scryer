@@ -1,10 +1,24 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
+import { hasGraphQlErrorReason } from "@/lib/graphql/error-message";
 import * as React from "react";
 import { useClient } from "urql";
 import { ChevronDown, Tag, X } from "lucide-react";
 
-import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
+import {
+  Command,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  selectContentClassName,
+  selectTriggerClassName,
+} from "@/components/ui/select";
 import { titleTagDefinitionsQuery } from "@/lib/graphql/queries";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -14,7 +28,10 @@ import {
   updateTitleTagsMutation,
 } from "@/lib/graphql/mutations";
 import { useSessionUser } from "@/lib/hooks/use-auth";
-import { useTitleTagDefinitions, refreshTitleTagConsumers } from "@/lib/hooks/use-title-tag-definitions";
+import {
+  useTitleTagDefinitions,
+  refreshTitleTagConsumers,
+} from "@/lib/hooks/use-title-tag-definitions";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
@@ -66,7 +83,9 @@ export function TitleTagsPicker({
   const [createError, setCreateError] = React.useState<string | null>(null);
   const busyRef = React.useRef(false);
   const current = React.useRef({ value, excludedLabels, onChange, disabled });
-  React.useEffect(() => { current.current = { value, excludedLabels, onChange, disabled }; }, [value, excludedLabels, onChange, disabled]);
+  React.useEffect(() => {
+    current.current = { value, excludedLabels, onChange, disabled };
+  }, [value, excludedLabels, onChange, disabled]);
   const sessionUser = useSessionUser();
   const canManageRegistry = hasAppPermission(
     sessionUser,
@@ -88,38 +107,72 @@ export function TitleTagsPicker({
 
   const addLabel = (label: string) => {
     const latest = current.current;
-    if (latest.disabled || userTitleTags(latest.excludedLabels).includes(label)) return;
+    if (latest.disabled || userTitleTags(latest.excludedLabels).includes(label))
+      return;
     latest.onChange(userTitleTags([...userTitleTags(latest.value), label]));
     setOpen(false);
     setSearch("");
   };
   const candidate = normalizeTitleTagLabel(search);
   const candidateError = titleTagLabelErrorKey(candidate);
-  const canCreate = canManageRegistry && candidate.length > 0 && !candidateError
-    && !definitions.some((definition) => normalizeTitleTagLabel(definition.label) === candidate)
-    && !excluded.has(candidate) && !applied.includes(candidate);
+  const canCreate =
+    canManageRegistry &&
+    candidate.length > 0 &&
+    !candidateError &&
+    !definitions.some(
+      (definition) => normalizeTitleTagLabel(definition.label) === candidate,
+    ) &&
+    !excluded.has(candidate) &&
+    !applied.includes(candidate);
   const createAndSelect = async () => {
     if (!canCreate || disabled || loading || busyRef.current) return;
     busyRef.current = true;
     setCreating(true);
     setCreateError(null);
     try {
-      const result = await client.mutation(createTitleTagDefinitionMutation, { input: { label: candidate, description: null } }).toPromise();
-      let label: string | undefined = result.data?.createTitleTagDefinition?.definition?.label;
+      const result = await client
+        .mutation(createTitleTagDefinitionMutation, {
+          input: { label: candidate, description: null },
+        })
+        .toPromise();
+      let label: string | undefined =
+        result.data?.createTitleTagDefinition?.definition?.label;
       let refreshedDefinitions: TitleTagDefinition[] | undefined;
       if (result.error) {
-        if (!result.error.message.toLowerCase().includes("already exists")) throw result.error;
-        const refreshed = await client.query(titleTagDefinitionsQuery, {}, { requestPolicy: "network-only" }).toPromise();
+        if (
+          !hasGraphQlErrorReason(
+            result.error,
+            "TAG_ALREADY_EXISTS",
+            "VALIDATION_ERROR",
+          )
+        )
+          throw result.error;
+        const refreshed = await client
+          .query(
+            titleTagDefinitionsQuery,
+            {},
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
         if (refreshed.error) throw refreshed.error;
         refreshedDefinitions = refreshed.data?.titleTagDefinitions;
-        label = refreshed.data?.titleTagDefinitions?.find((definition: TitleTagDefinition) => normalizeTitleTagLabel(definition.label) === candidate)?.label;
+        label = refreshed.data?.titleTagDefinitions?.find(
+          (definition: TitleTagDefinition) =>
+            normalizeTitleTagLabel(definition.label) === candidate,
+        )?.label;
         if (!label) throw result.error;
       }
       if (!label) throw new Error(t("settings.titleTagSaveError"));
       refreshTitleTagConsumers(client, refreshedDefinitions);
       addLabel(label);
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : t("settings.titleTagSaveError"));
+      setCreateError(
+        userFacingGraphQlErrorMessage(
+          error,
+          t("settings.titleTagSaveError"),
+          t,
+        ),
+      );
     } finally {
       busyRef.current = false;
       setCreating(false);
@@ -133,73 +186,162 @@ export function TitleTagsPicker({
     [applied, onChange],
   );
 
-  const appliedTags = applied.length > 0 ? (
-    <div className="flex flex-wrap gap-1.5">
-      {applied.map((label) => (
-        <span
-          key={label}
-          className="inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] py-1 pl-2 pr-1.5 text-xs font-semibold text-[var(--scry-accent-text)]"
-        >
-          <Tag className="size-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{label}</span>
-          <button
-            id={`${idPrefix}-tag-remove-${label.replace(/\s+/g, "-")}`}
-            type="button"
-            aria-label={t("title.tagsRemove", { label })}
-            title={t("title.tagsRemove", { label })}
-            onClick={() => removeLabel(label)}
-            disabled={disabled}
-            className="rounded-[5px] p-0.5 transition hover:bg-[rgba(var(--scry-accent-rgb),0.28)] disabled:opacity-50"
+  const appliedTags =
+    applied.length > 0 ? (
+      <div className="flex flex-wrap gap-1.5">
+        {applied.map((label) => (
+          <span
+            key={label}
+            className="inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] py-1 pl-2 pr-1.5 text-xs font-semibold text-[var(--scry-accent-text)]"
           >
-            <X className="h-3 w-3" aria-hidden="true" />
+            <Tag className="size-3 shrink-0" aria-hidden="true" />
+            <span className="truncate">{label}</span>
+            <button
+              id={`${idPrefix}-tag-remove-${label.replace(/\s+/g, "-")}`}
+              type="button"
+              aria-label={t("title.tagsRemove", { label })}
+              title={t("title.tagsRemove", { label })}
+              onClick={() => removeLabel(label)}
+              disabled={disabled}
+              className="rounded-[5px] p-0.5 transition hover:bg-[rgba(var(--scry-accent-rgb),0.28)] disabled:opacity-50"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </span>
+        ))}
+      </div>
+    ) : (
+      <p className="text-sm text-muted-foreground">
+        {emptyValueText ?? t("title.tagsNone")}
+      </p>
+    );
+
+  const selector =
+    registryIsEmpty &&
+    !canManageRegistry &&
+    !(layout === "compact" && applied.length) ? (
+      <p className="text-xs text-muted-foreground">
+        {t("title.tagsEmptyRegistry")}
+      </p>
+    ) : (
+      <Popover
+        open={open && !disabled}
+        onOpenChange={(next) => {
+          if (!creating) {
+            setOpen(next);
+            setCreateError(null);
+          }
+        }}
+        modal
+      >
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            id={`${idPrefix}-tags-add`}
+            disabled={disabled || loading || creating}
+            className={selectTriggerClassName({
+              className:
+                layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full",
+            })}
+          >
+            {layout === "compact" && applied.length ? (
+              <span className="flex min-w-0 gap-1 overflow-hidden">
+                {applied.map((label) => (
+                  <span
+                    key={label}
+                    className="min-w-0 truncate rounded border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] px-1.5 py-0.5 text-xs font-semibold text-[var(--scry-accent-text)]"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="min-w-0 truncate text-left">
+                {t("title.tagsAdd")}
+              </span>
+            )}
+            <ChevronDown className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
           </button>
-        </span>
-      ))}
-    </div>
-  ) : (
-    <p className="text-sm text-muted-foreground">
-      {emptyValueText ?? t("title.tagsNone")}
-    </p>
-  );
+        </PopoverTrigger>
+        <PopoverContent
+          className={selectContentClassName(
+            "z-[90] w-[var(--radix-popover-trigger-width)] min-w-64 p-0",
+          )}
+        >
+          <Command shouldFilter={false}>
+            <CommandInput
+              wrapperId={`${idPrefix}-tags-search`}
+              value={search}
+              onValueChange={(value) => {
+                setSearch(value);
+                setCreateError(null);
+              }}
+              placeholder={t("title.tagsSearch")}
+              disabled={creating}
+            />
+            <CommandList>
+              {layout === "compact"
+                ? applied
+                    .filter((label) =>
+                      label.includes(normalizeTitleTagLabel(search)),
+                    )
+                    .map((label) => (
+                      <CommandItem
+                        key={`remove-${label}`}
+                        value={label}
+                        onSelect={() => removeLabel(label)}
+                        disabled={creating}
+                      >
+                        <Tag className="size-3.5" aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate">{label}</span>
+                        <X
+                          className="size-3.5"
+                          aria-label={t("title.tagsRemove", { label })}
+                        />
+                      </CommandItem>
+                    ))
+                : null}
+              {options
+                .filter((label) =>
+                  label.includes(normalizeTitleTagLabel(search)),
+                )
+                .map((label) => (
+                  <CommandItem
+                    key={label}
+                    value={label}
+                    onSelect={() => addLabel(label)}
+                    disabled={creating}
+                  >
+                    {label}
+                  </CommandItem>
+                ))}
+              {canCreate ? (
+                <CommandItem
+                  data-action-id={`${idPrefix}-tags-create`}
+                  value={`create-${candidate}`}
+                  onSelect={() => void createAndSelect()}
+                  disabled={creating}
+                >
+                  {t("title.tagsCreateSelect", { label: candidate })}
+                </CommandItem>
+              ) : null}
+            </CommandList>
+          </Command>
+          {createError || (candidate && candidateError) ? (
+            <p role="alert" className="p-3 text-sm text-destructive">
+              {createError ?? t(candidateError!)}
+            </p>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+    );
 
-  const selector = registryIsEmpty && !canManageRegistry && !(layout === "compact" && applied.length) ? (
-    <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
-  ) : (
-    <Popover open={open && !disabled} onOpenChange={(next) => { if (!creating) { setOpen(next); setCreateError(null); } }} modal>
-      <PopoverTrigger asChild>
-        <button type="button" id={`${idPrefix}-tags-add`} disabled={disabled || loading || creating}
-          className={selectTriggerClassName({ className: layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full" })}>
-          {layout === "compact" && applied.length ? (
-            <span className="flex min-w-0 gap-1 overflow-hidden">
-              {applied.map((label) => <span key={label} className="min-w-0 truncate rounded border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] px-1.5 py-0.5 text-xs font-semibold text-[var(--scry-accent-text)]">{label}</span>)}
-            </span>
-          ) : <span className="min-w-0 truncate text-left">{t("title.tagsAdd")}</span>}
-          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className={selectContentClassName("z-[90] w-[var(--radix-popover-trigger-width)] min-w-64 p-0")}>
-        <Command shouldFilter={false}>
-          <CommandInput value={search} onValueChange={(value) => { setSearch(value); setCreateError(null); }} placeholder={t("title.tagsSearch")} disabled={creating} />
-          <CommandList>
-            {layout === "compact" ? applied.filter((label) => label.includes(normalizeTitleTagLabel(search))).map((label) => (
-              <CommandItem key={`remove-${label}`} value={label} onSelect={() => removeLabel(label)} disabled={creating}>
-                <Tag className="size-3.5" aria-hidden="true" /><span className="min-w-0 flex-1 truncate">{label}</span><X className="size-3.5" aria-label={t("title.tagsRemove", { label })} />
-              </CommandItem>
-            )) : null}
-            {options.filter((label) => label.includes(normalizeTitleTagLabel(search))).map((label) => (
-              <CommandItem key={label} value={label} onSelect={() => addLabel(label)} disabled={creating}>{label}</CommandItem>
-            ))}
-            {canCreate ? <CommandItem value={`create-${candidate}`} onSelect={() => void createAndSelect()} disabled={creating}>
-              {t("title.tagsCreateSelect", { label: candidate })}
-            </CommandItem> : null}
-          </CommandList>
-        </Command>
-        {createError || (candidate && candidateError) ? <p role="alert" className="p-3 text-sm text-destructive">{createError ?? t(candidateError!)}</p> : null}
-      </PopoverContent>
-    </Popover>
-  );
-
-  if (layout === "compact") return <div id={`${idPrefix}-tags`} className="min-w-0">{selector}</div>;
+  if (layout === "compact")
+    return (
+      <div id={`${idPrefix}-tags`} className="min-w-0">
+        {selector}
+      </div>
+    );
 
   if (layout === "table") {
     return (
@@ -282,7 +424,11 @@ export function TitleTagsEditor({
       try {
         const { error } = await client
           .mutation(updateTitleTagsMutation, {
-            input: { titleIds: [titleId], add: delta.add, remove: delta.remove },
+            input: {
+              titleIds: [titleId],
+              add: delta.add,
+              remove: delta.remove,
+            },
           })
           .toPromise();
         if (error) {
@@ -291,7 +437,7 @@ export function TitleTagsEditor({
         await onTitleChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -386,7 +532,7 @@ export function SeriesMovieTagsEditor({
         await onLinkChanged?.();
       } catch (error: unknown) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {

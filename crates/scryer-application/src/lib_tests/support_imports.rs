@@ -254,6 +254,7 @@ pub(crate) struct MockMediaFileRepo {
     pub(super) missing_scope_sweeps: Arc<std::sync::atomic::AtomicUsize>,
     /// Title-wide and episode-scoped file reads, for read-budget tests.
     pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) primary_cutoff_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     /// Each file's title-wide role, as `media_files.role` holds it. Episode
     /// elections change only the per-link role (`role` on the link rows in
@@ -724,6 +725,25 @@ impl MediaFileRepository for MockMediaFileRepo {
             .iter()
             .filter(|entry| entry.title_id == title_id)
             .cloned()
+            .collect())
+    }
+
+    async fn list_primary_file_cutoffs_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<crate::MediaFileCutoffSummary>> {
+        self.primary_cutoff_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(message) = self.list_media_files_for_title_error.lock().await.clone() {
+            return Err(AppError::Repository(message));
+        }
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .filter(|file| file.title_id == title_id && file.role.is_primary())
+            .map(crate::MediaFileCutoffSummary::from)
             .collect())
     }
 

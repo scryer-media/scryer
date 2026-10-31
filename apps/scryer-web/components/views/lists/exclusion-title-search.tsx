@@ -4,7 +4,11 @@ import { useClient } from "urql";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { TitlePoster } from "@/components/title-poster";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { useTranslate } from "@/lib/context/translate-context";
 import { searchMetadataQuery } from "@/lib/graphql/queries";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
@@ -31,7 +35,13 @@ type ExclusionTitleSearchProps = {
  * titles of the chosen kind; picking one hands it back so the form can take
  * its name, year and ids. A title typed without picking stays as typed.
  */
-export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: ExclusionTitleSearchProps) {
+export function ExclusionTitleSearch({
+  id,
+  value,
+  kind,
+  onChange,
+  onPick,
+}: ExclusionTitleSearchProps) {
   const client = useClient();
   const t = useTranslate();
   const listboxId = React.useId();
@@ -70,7 +80,10 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
         .toPromise()
         .then(({ data, error }) => {
           if (error) throw error;
-          if (active) setResults((data?.searchMetadata ?? []) as MetadataTvdbSearchItem[]);
+          if (active)
+            setResults(
+              (data?.searchMetadata ?? []) as MetadataTvdbSearchItem[],
+            );
         })
         .catch((error: unknown) => {
           if (active && !isAbortError(error)) setFailed(true);
@@ -89,7 +102,9 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
 
   React.useEffect(() => {
     if (!open || activeIndex < 0) return;
-    document.getElementById(`${listboxId}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+    document
+      .getElementById(`${listboxId}-option-${activeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, listboxId, open]);
 
   const pick = (result: MetadataTvdbSearchItem) => {
@@ -110,7 +125,9 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
           aria-autocomplete="list"
           aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
-          aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+          aria-activedescendant={
+            activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined
+          }
           onChange={(event) => {
             setTyped(true);
             onChange(event.target.value);
@@ -131,7 +148,11 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
               }
               return;
             }
-            if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || results.length === 0) return;
+            if (
+              (event.key !== "ArrowDown" && event.key !== "ArrowUp") ||
+              results.length === 0
+            )
+              return;
             event.preventDefault();
             setOpen(true);
             setActiveIndex((current) =>
@@ -150,16 +171,25 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
         className="w-[var(--radix-popover-trigger-width)] p-0"
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <div id={listboxId} role="listbox" className="max-h-80 overflow-y-auto p-2">
+        <div
+          id={listboxId}
+          role="listbox"
+          className="max-h-80 overflow-y-auto p-2"
+        >
           {loading ? (
             <div className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
               <LoadingMark className="h-4 w-4" />
               {t("title.fixMatchSearching")}
             </div>
           ) : failed ? (
-            <div className="px-2 py-3 text-sm text-[var(--scry-danger-text)]">{t("status.failedToLoad")}</div>
+            <div className="px-2 py-3 text-sm text-[var(--scry-danger-text)]">
+              {t("status.failedToLoad")}
+            </div>
           ) : results.length === 0 ? (
-            <div id="list-exclusion-title-no-results" className="px-2 py-3 text-sm text-muted-foreground">
+            <div
+              id="list-exclusion-title-no-results"
+              className="px-2 py-3 text-sm text-muted-foreground"
+            >
               {t("title.fixMatchNoResults")}
             </div>
           ) : (
@@ -181,12 +211,21 @@ export function ExclusionTitleSearch({ id, value, kind, onChange, onPick }: Excl
                   )}
                 >
                   <span className="h-12 w-8 flex-none overflow-hidden rounded-sm bg-muted">
-                    <TitlePoster src={result.posterUrl} alt="" className="h-full w-full object-cover" />
+                    <TitlePoster
+                      src={result.posterUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium text-foreground">
                       {result.name}
-                      {result.year ? <span className="text-muted-foreground"> ({result.year})</span> : null}
+                      {result.year ? (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          ({result.year})
+                        </span>
+                      ) : null}
                     </span>
                     <span className="block truncate font-[var(--font-code)] text-xs text-muted-foreground">
                       {fields.ids}

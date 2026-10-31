@@ -1,11 +1,8 @@
+import { isArchivePasswordFailure } from "@/lib/utils/archive-password-reason";
 import * as React from "react";
 import { Link } from "react-router";
 import { useQuery } from "urql";
-import {
-  ChevronDown,
-  ChevronUp,
-  RotateCcw,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   CalendarEventHoverCard,
@@ -26,7 +23,10 @@ import type { TitleHistoryEvent } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
-import { useDownloadPasswordRetry, type DownloadPasswordRetryTarget } from "@/lib/hooks/use-download-password-retry";
+import {
+  useDownloadPasswordRetry,
+  type DownloadPasswordRetryTarget,
+} from "@/lib/hooks/use-download-password-retry";
 import { formatUiDate, formatUiTime } from "@/lib/utils/date-format";
 import {
   compareHistoryEpisodes,
@@ -64,18 +64,20 @@ const HISTORY_EMPTY_VALUE = "\u2014";
 function primarySourceLabel(event: TitleHistoryEvent): string {
   return redactHistoryApiKeys(
     event.displayTitle ??
-    event.sourceTitle ??
-    event.sourcePath ??
-    event.destPath ??
-    HISTORY_EMPTY_VALUE,
+      event.sourceTitle ??
+      event.sourcePath ??
+      event.destPath ??
+      HISTORY_EMPTY_VALUE,
   );
 }
 
-function historySource(event: TitleHistoryEvent): { label: string; to: string } | null {
+function historySource(
+  event: TitleHistoryEvent,
+): { label: string; to: string } | null {
   const isGrab = event.eventType === "grabbed";
   const label = isGrab
-    ? event.sourceProvider ?? event.sourceHint ?? event.sourceSystem
-    : event.clientName ?? event.sourceSystem ?? event.sourceHint;
+    ? (event.sourceProvider ?? event.sourceHint ?? event.sourceSystem)
+    : (event.clientName ?? event.sourceSystem ?? event.sourceHint);
   if (!label?.trim()) {
     return null;
   }
@@ -87,13 +89,21 @@ function historySource(event: TitleHistoryEvent): { label: string; to: string } 
 }
 
 function actorLabel(event: TitleHistoryEvent): string {
-  return event.actorDisplayName ?? event.actorUserId ?? event.actorKind ?? "\u2014";
+  return (
+    event.actorDisplayName ?? event.actorUserId ?? event.actorKind ?? "\u2014"
+  );
 }
 
-function historyTypeLabel(event: TitleHistoryEvent, t: ReturnType<typeof useTranslate>): string {
+function historyTypeLabel(
+  event: TitleHistoryEvent,
+  t: ReturnType<typeof useTranslate>,
+): string {
   if (event.scoring?.decisionCode === "upgrade") return t("history.upgrade");
-  if (event.scoring?.decisionCode === "manual_override") return t("scoring.manualOverride");
-  return event.eventType === "file_upgraded" ? t("history.upgrade") : t("history.initial");
+  if (event.scoring?.decisionCode === "manual_override")
+    return t("scoring.manualOverride");
+  return event.eventType === "file_upgraded"
+    ? t("history.upgrade")
+    : t("history.initial");
 }
 
 // What the title column shows. An unlinked grab has no catalog title, so its
@@ -119,9 +129,14 @@ function titleHistoryHref(event: TitleHistoryEvent): string | null {
   return `${buildOverviewDetailPath(view, null, null)}?id=${encodeURIComponent(titleId)}`;
 }
 
-function historyEpisodeHref(event: TitleHistoryEvent, episodeId: string): string | null {
+function historyEpisodeHref(
+  event: TitleHistoryEvent,
+  episodeId: string,
+): string | null {
   const titleHref = titleHistoryHref(event);
-  return titleHref ? `${titleHref}&episodeId=${encodeURIComponent(episodeId)}` : null;
+  return titleHref
+    ? `${titleHref}&episodeId=${encodeURIComponent(episodeId)}`
+    : null;
 }
 
 type HistoryEpisode = HistoryEpisodeDisplay;
@@ -157,9 +172,13 @@ function historyHoverDetails(event: TitleHistoryEvent): {
   const rawFacet = historyHoverString(title, "facet") ?? event.facet;
   const facet = rawFacet?.trim().toUpperCase() ?? null;
   return {
-    facet: facet === "MOVIE" || facet === "SERIES" || facet === "ANIME" ? facet : null,
+    facet:
+      facet === "MOVIE" || facet === "SERIES" || facet === "ANIME"
+        ? facet
+        : null,
     posterUrl:
-      historyHoverString(title, "poster_url") ?? historyHoverString(title, "posterUrl"),
+      historyHoverString(title, "poster_url") ??
+      historyHoverString(title, "posterUrl"),
   };
 }
 
@@ -209,7 +228,8 @@ function HistoryTitleHoverLink({
     left: number;
   } | null>(null);
   const hoverTimerRef = React.useRef<number | null>(null);
-  const canPreview = event.eventType === "imported" || event.eventType === "file_upgraded";
+  const canPreview =
+    event.eventType === "imported" || event.eventType === "file_upgraded";
   const details = historyHoverDetails(event);
 
   const clearHoverTimer = React.useCallback(() => {
@@ -279,7 +299,11 @@ function HistoryTitleHoverLink({
         <CalendarEventHoverCard
           key={event.id}
           preview={{
-            episode: calendarEpisodeForHistoryEvent(event, details, episodeLabel),
+            episode: calendarEpisodeForHistoryEvent(
+              event,
+              details,
+              episodeLabel,
+            ),
             anchor: previewAnchor,
           }}
           onMouseEnter={clearHoverTimer}
@@ -297,7 +321,10 @@ function historyEpisodesQuery(episodeCount: number): string {
   ).join(", ");
   const selections = Array.from(
     { length: episodeCount },
-    (_, index) => `episode${index}: episode(titleId: $titleId, episodeId: $episode${index}) {
+    (
+      _,
+      index,
+    ) => `episode${index}: episode(titleId: $titleId, episodeId: $episode${index}) {
       id
       seasonNumber
       episodeNumber
@@ -371,29 +398,48 @@ function HistoryEpisodes({
   );
 }
 
-function passwordRetryTarget(event: TitleHistoryEvent): DownloadPasswordRetryTarget | null {
+function passwordRetryTarget(
+  event: TitleHistoryEvent,
+): DownloadPasswordRetryTarget | null {
   if (event.eventType !== "download_failed") return null;
   const payload = historyHoverData(event.dataJson);
   const data = historyHoverData(payload?.data) ?? payload;
   const reason = historyHoverString(data, "reason");
+  const reasonCode =
+    event.failureReasonCode ?? historyHoverString(data, "reason_code");
   const downloadId = historyHoverString(data, "canonical_download_id");
   const clientId = historyHoverString(data, "client_id");
   const clientType = historyHoverString(data, "client_type");
   const downloadClientItemId = historyHoverString(data, "download_id");
-  if (!downloadId || !clientId || !clientType || !downloadClientItemId ||
-      !["sabnzbd", "nzbget", "weaver"].includes(clientType) ||
-      !(reason?.startsWith("ARCHIVE_PASSWORD_REQUIRED:") || reason?.startsWith("ARCHIVE_PASSWORD_OR_CORRUPTION:"))) return null;
-  return { downloadId, clientId, clientType, downloadClientItemId, titleName: primarySourceLabel(event) };
+  if (
+    !downloadId ||
+    !clientId ||
+    !clientType ||
+    !downloadClientItemId ||
+    !["sabnzbd", "nzbget", "weaver"].includes(clientType) ||
+    !isArchivePasswordFailure(reasonCode, reason)
+  )
+    return null;
+  return {
+    downloadId,
+    clientId,
+    clientType,
+    downloadClientItemId,
+    titleName: primarySourceLabel(event),
+  };
 }
 
-function canRetryEvent(event: TitleHistoryEvent, onRetry?: (importId: string, password?: string) => Promise<void>): boolean {
+function canRetryEvent(
+  event: TitleHistoryEvent,
+  onRetry?: (importId: string, password?: string) => Promise<void>,
+): boolean {
   if (passwordRetryTarget(event)) return true;
   return Boolean(
     onRetry &&
-      event.importId &&
-      (event.eventType === "import_failed" ||
-        event.eventType === "import_skipped" ||
-        event.eventType === "import_rejected_by_rule"),
+    event.importId &&
+    (event.eventType === "import_failed" ||
+      event.eventType === "import_skipped" ||
+      event.eventType === "import_rejected_by_rule"),
   );
 }
 
@@ -414,11 +460,17 @@ export function HistoryEventTable({
 }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const [expandedRows, setExpandedRows] = React.useState<Record<string, boolean>>({});
-  const [passwordRetry, setPasswordRetry] = React.useState<TitleHistoryEvent | null>(null);
+  const [expandedRows, setExpandedRows] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [passwordRetry, setPasswordRetry] =
+    React.useState<TitleHistoryEvent | null>(null);
   const [retryingId, setRetryingId] = React.useState<string | null>(null);
-  const { request: requestDownloadPassword, dialog: downloadPasswordDialog } = useDownloadPasswordRetry();
-  const showActions = Boolean(onRetry) || events.some((event) => passwordRetryTarget(event) !== null);
+  const { request: requestDownloadPassword, dialog: downloadPasswordDialog } =
+    useDownloadPasswordRetry();
+  const showActions =
+    Boolean(onRetry) ||
+    events.some((event) => passwordRetryTarget(event) !== null);
   const columnCount =
     1 + // expander
     1 + // event
@@ -442,8 +494,11 @@ export function HistoryEventTable({
       const target = passwordRetryTarget(event);
       if (target) {
         setRetryingId(event.id);
-        try { await requestDownloadPassword(target); }
-        finally { setRetryingId(null); }
+        try {
+          await requestDownloadPassword(target);
+        } finally {
+          setRetryingId(null);
+        }
         return;
       }
       if (!onRetry || !event.importId) {
@@ -475,7 +530,12 @@ export function HistoryEventTable({
 
   return (
     <div className="@container/history min-w-0 overflow-hidden">
-      <Table overflow="auto" layout="fixed" density="dense" className="@max-[64rem]/history:block">
+      <Table
+        overflow="auto"
+        layout="fixed"
+        density="dense"
+        className="@max-[64rem]/history:block"
+      >
         <TableHeader className="@max-[64rem]/history:hidden">
           <TableRow>
             <TableHead className="w-10 text-center" />
@@ -486,12 +546,20 @@ export function HistoryEventTable({
             <TableHead>
               {t("queue.releaseTitle")} {t("label.name")}
             </TableHead>
-            <TableHead className="w-36 text-center">{t("queue.source")}</TableHead>
-            <TableHead className="w-24 text-center">{t("label.type")}</TableHead>
+            <TableHead className="w-36 text-center">
+              {t("queue.source")}
+            </TableHead>
+            <TableHead className="w-24 text-center">
+              {t("label.type")}
+            </TableHead>
             {showActor ? (
-              <TableHead className="w-32 text-center">{t("history.actor")}</TableHead>
+              <TableHead className="w-32 text-center">
+                {t("history.actor")}
+              </TableHead>
             ) : null}
-            <TableHead className="w-40 text-center">{t("history.date")}</TableHead>
+            <TableHead className="w-40 text-center">
+              {t("history.date")}
+            </TableHead>
             {showActions ? (
               <TableActionsHead className="w-40">
                 {t("history.actions")}
@@ -530,9 +598,14 @@ export function HistoryEventTable({
                       <button
                         type="button"
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card/80 text-muted-foreground transition hover:text-foreground"
+                        id={selectorId("history-event-expand", event.id)}
                         onClick={() => toggleExpanded(event.id)}
                         aria-expanded={isExpanded}
-                        aria-controls={isExpanded ? `history-event-details-${event.id}` : undefined}
+                        aria-controls={
+                          isExpanded
+                            ? `history-event-details-${event.id}`
+                            : undefined
+                        }
                         aria-label={
                           isExpanded
                             ? t("history.collapseDetails")
@@ -552,7 +625,9 @@ export function HistoryEventTable({
                       className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${meta.badgeClassName}`}
                     >
                       <HistoryEventIcon eventType={event.eventType} size={14} />
-                      <span>{getTitleHistoryEventLabel(event.eventType, t)}</span>
+                      <span>
+                        {getTitleHistoryEventLabel(event.eventType, t)}
+                      </span>
                     </span>
                   </TableCell>
                   {showTitle ? (
@@ -599,7 +674,9 @@ export function HistoryEventTable({
                     </ActionTooltip>
                   </TableCell>
                   <TableCell className="align-middle text-center text-sm">
-                    <span className="mb-1 hidden text-xs text-muted-foreground @max-[64rem]/history:block">{t("queue.source")}</span>
+                    <span className="mb-1 hidden text-xs text-muted-foreground @max-[64rem]/history:block">
+                      {t("queue.source")}
+                    </span>
                     {source ? (
                       <Link
                         to={source.to}
@@ -613,25 +690,41 @@ export function HistoryEventTable({
                     )}
                   </TableCell>
                   <TableCell className="align-middle text-center text-sm text-muted-foreground">
-                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("label.type")}</span>
+                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">
+                      {t("label.type")}
+                    </span>
                     {historyTypeLabel(event, t)}
                   </TableCell>
                   {showActor ? (
                     <TableCell
-                      id={selectorId("history-event-actor", event.eventType, event.id)}
+                      id={selectorId(
+                        "history-event-actor",
+                        event.eventType,
+                        event.id,
+                      )}
                       className="align-middle text-center text-sm text-muted-foreground"
                     >
-                      <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("history.actor")}</span>
+                      <span className="mb-1 hidden text-xs @max-[64rem]/history:block">
+                        {t("history.actor")}
+                      </span>
                       {actorLabel(event)}
                     </TableCell>
                   ) : null}
                   <TableCell className="align-middle text-center text-sm text-muted-foreground">
-                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">{t("history.date")}</span>
+                    <span className="mb-1 hidden text-xs @max-[64rem]/history:block">
+                      {t("history.date")}
+                    </span>
                     <div className="font-medium text-foreground">
-                      {formatUiDate(event.occurredAt ?? event.createdAt, dateTimeFormat)}
+                      {formatUiDate(
+                        event.occurredAt ?? event.createdAt,
+                        dateTimeFormat,
+                      )}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {formatUiTime(event.occurredAt ?? event.createdAt, dateTimeFormat)}
+                      {formatUiTime(
+                        event.occurredAt ?? event.createdAt,
+                        dateTimeFormat,
+                      )}
                     </div>
                   </TableCell>
                   {showActions ? (
@@ -660,13 +753,20 @@ export function HistoryEventTable({
                   ) : null}
                 </TableRow>
                 {isExpanded ? (
-                  <TableRow id={`history-event-details-${event.id}`} className="@max-[64rem]/history:block">
-                    <TableCell colSpan={columnCount} className="bg-card/30 @max-[64rem]/history:block @max-[64rem]/history:p-3">
+                  <TableRow
+                    id={`history-event-details-${event.id}`}
+                    className="@max-[64rem]/history:block"
+                  >
+                    <TableCell
+                      colSpan={columnCount}
+                      className="bg-card/30 @max-[64rem]/history:block @max-[64rem]/history:p-3"
+                    >
                       <div className="min-w-0 space-y-4 rounded-lg border border-border/60 bg-background/40 p-3 sm:p-4">
                         {detail.hasDetail ? (
                           <HistoryEventDetailContent event={event} />
                         ) : null}
-                        {(event.eventType === "imported" || event.eventType === "grabbed") &&
+                        {(event.eventType === "imported" ||
+                          event.eventType === "grabbed") &&
                         event.episodeIds.length > 0 ? (
                           <HistoryEpisodes
                             event={event}
@@ -690,7 +790,9 @@ export function HistoryEventTable({
                         ) : null}
                         {retryable ? (
                           <div className="space-y-2 border-t border-border/60 pt-4">
-                            <p className="text-xs text-muted-foreground">{t("importHistory.retryHelp")}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {t("importHistory.retryHelp")}
+                            </p>
                             {event.retryRequiresPassword ? (
                               <div className="space-y-2">
                                 <p className="text-xs text-muted-foreground">

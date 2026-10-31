@@ -28,7 +28,9 @@ export function groupRecycleBinItems<TItem extends RecycleBinFilterItem>(
   const byTitle = new Map<string, RecycleBinGroup<TItem>>();
   for (const item of items) {
     const titleName = item.titleName?.trim() || unassociatedTitleName;
-    const groupId = item.titleId ? `title:${item.titleId}` : `unassociated:${item.libraryId}`;
+    const groupId = item.titleId
+      ? `title:${item.titleId}`
+      : `unassociated:${item.libraryId}`;
     const group = byTitle.get(groupId) ?? {
       id: groupId,
       titleName,
@@ -42,13 +44,18 @@ export function groupRecycleBinItems<TItem extends RecycleBinFilterItem>(
   return Array.from(byTitle.values())
     .map((group) => {
       const titleMatches =
-        normalizedFilter.length === 0 || group.titleName.toLocaleLowerCase().includes(normalizedFilter);
+        normalizedFilter.length === 0 ||
+        group.titleName.toLocaleLowerCase().includes(normalizedFilter);
       const visibleItems = titleMatches
         ? group.items
-        : group.items.filter((item) => item.fileName.toLocaleLowerCase().includes(normalizedFilter));
+        : group.items.filter((item) =>
+            item.fileName.toLocaleLowerCase().includes(normalizedFilter),
+          );
       return {
         ...group,
-        items: [...visibleItems].sort((a, b) => b.recycledAt.localeCompare(a.recycledAt)),
+        items: [...visibleItems].sort((a, b) =>
+          b.recycledAt.localeCompare(a.recycledAt),
+        ),
       };
     })
     .filter((group) => group.items.length > 0)
@@ -86,7 +93,8 @@ export function parseRecycleBinRetentionDays(value: string): number | null {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   const days = Number(trimmed);
-  return days >= RECYCLE_BIN_MIN_RETENTION_DAYS && days <= RECYCLE_BIN_MAX_RETENTION_DAYS
+  return days >= RECYCLE_BIN_MIN_RETENTION_DAYS &&
+    days <= RECYCLE_BIN_MAX_RETENTION_DAYS
     ? days
     : null;
 }
@@ -102,8 +110,10 @@ export function recycleBinLocationChanges(
 ): RecycleBinSettingsChanges {
   const changes: RecycleBinSettingsChanges = {};
   const draftPath = draft.path.trim();
-  if (draftPath !== (stored.path ?? "")) changes.path = draftPath === "" ? null : draftPath;
-  if (draft.retentionDays !== stored.retentionDays) changes.retentionDays = draft.retentionDays;
+  if (draftPath !== (stored.path ?? ""))
+    changes.path = draftPath === "" ? null : draftPath;
+  if (draft.retentionDays !== stored.retentionDays)
+    changes.retentionDays = draft.retentionDays;
   return changes;
 }
 
@@ -122,6 +132,7 @@ export function buildRecycleBinSettingsInput(
     const trimmedPath = changes.path?.trim() ?? "";
     input.path = trimmedPath === "" ? null : trimmedPath;
   }
-  if (changes.retentionDays !== undefined) input.retentionDays = changes.retentionDays;
+  if (changes.retentionDays !== undefined)
+    input.retentionDays = changes.retentionDays;
   return input;
 }

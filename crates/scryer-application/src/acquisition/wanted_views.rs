@@ -855,11 +855,7 @@ pub struct AcquisitionSearchJobView {
 /// search, not a failure: the typed `NoAutoEligibleRelease` expresses the same
 /// outcome the old `Validation("no auto-eligible release found")` did.
 pub(crate) fn scope_search_error_is_failure(error: &AppError) -> bool {
-    match error {
-        AppError::NoAutoEligibleRelease { .. } => false,
-        AppError::Validation(message) if message == "no auto-eligible release found" => false,
-        _ => true,
-    }
+    !matches!(error, AppError::NoAutoEligibleRelease { .. })
 }
 /// The job's terminal status. It completes when no scope failed; it fails when
 /// nothing was grabbed and either every scope failed or a scope could not submit
@@ -982,7 +978,7 @@ mod acquisition_search_state_tests {
 
     #[test]
     fn a_search_that_finds_nothing_grabbable_is_not_a_failed_scope() {
-        assert!(!scope_search_error_is_failure(&AppError::Validation(
+        assert!(scope_search_error_is_failure(&AppError::Validation(
             "no auto-eligible release found".into()
         )));
         assert!(!scope_search_error_is_failure(
@@ -1075,9 +1071,7 @@ impl AppUseCase {
                 .is_none_or(|id| id.trim().is_empty())
                 || request.wanted_item_id.is_some())
         {
-            return Err(AppError::Validation(
-                "Automatic search requires a title and cannot select a Wanted item".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM, "Automatic search requires a title and cannot select a Wanted item"));
         }
         let search_guard = self
             .runtime
@@ -1086,7 +1080,7 @@ impl AppUseCase {
             .clone()
             .try_lock_owned()
             .map_err(|_| {
-                AppError::Validation("Another search is running. Wait for it to finish or cancel it before starting this search.".into())
+                AppError::validation_refused(crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING, "Another search is running. Wait for it to finish or cancel it before starting this search.")
             })?;
         if self
             .runtime
@@ -1095,8 +1089,9 @@ impl AppUseCase {
             .has_active_job(JobKey::AcquisitionSearch)
             .await
         {
-            return Err(AppError::Validation(
-                "Another search is running. Wait for it to finish or cancel it before starting this search.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::ANOTHER_SEARCH_RUNNING,
+                "Another search is running. Wait for it to finish or cancel it before starting this search.",
             ));
         }
 
@@ -1205,14 +1200,10 @@ impl AppUseCase {
             .validate_schema()
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let Some(job_run_id) = receipt.job_run_id.clone() else {
-            return Err(AppError::Validation(
-                "maintenance Search dispatch requires a preallocated job run id".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID, "maintenance Search dispatch requires a preallocated job run id"));
         };
         if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted {
-            return Err(AppError::Validation(
-                "maintenance Search dispatch requires an accepted receipt intent".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT, "maintenance Search dispatch requires an accepted receipt intent"));
         }
 
         if let Some(existing) = self
@@ -1268,8 +1259,9 @@ impl AppUseCase {
                 {
                     return Ok(existing);
                 }
-                return Err(AppError::Validation(
-                    "an acquisition search job is already running".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::acquisition::SEARCH_RUNNING,
+                    "an acquisition search job is already running",
                 ));
             }
         };
@@ -1280,8 +1272,9 @@ impl AppUseCase {
             .has_active_job(JobKey::AcquisitionSearch)
             .await
         {
-            return Err(AppError::Validation(
-                "an acquisition search job is already running".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::SEARCH_RUNNING,
+                "an acquisition search job is already running",
             ));
         }
 
@@ -1411,7 +1404,7 @@ impl AppUseCase {
             return Ok(ids);
         }
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().clone().spawn_worker(async move {
             // One worker at a time, sharing admission with live searches.
             for (mut run, cancellation) in reserved {
                 let guard = app
@@ -1428,7 +1421,7 @@ impl AppUseCase {
                         .job_runs
                         .get_job_run(&run.id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound("recovery search job".into()))?;
+                        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::RECOVERY_SEARCH_JOB_NOT_FOUND, "recovery search job"))?;
                     if persisted.status.is_terminal() {
                         return Ok(None);
                     }
@@ -1449,9 +1442,7 @@ impl AppUseCase {
                                 AppError::Repository(format!("invalid saved search: {e}"))
                             })?;
                     if summary["schema_version"].as_u64() != Some(1) {
-                        return Err(AppError::Validation(
-                            "unsupported saved search version".into(),
-                        ));
+                        return Err(AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_VERSION_UNSUPPORTED, "unsupported saved search version"));
                     }
                     let saved: SavedRequest =
                         serde_json::from_value(summary["maintenance_action_request"].clone())
@@ -1461,13 +1452,13 @@ impl AppUseCase {
                     let request = AcquisitionSearchRequest {
                         automatic: saved.automatic,
                         wanted_kind: WantedKind::parse(&saved.wanted_kind).ok_or_else(|| {
-                            AppError::Validation("invalid saved wanted kind".into())
+                            AppError::validation_refused(crate::error_reasons::acquisition::WANTED_KIND_INVALID, "invalid saved wanted kind")
                         })?,
                         facet: saved
                             .facet
                             .map(|facet| {
                                 MediaFacet::parse(&facet).ok_or_else(|| {
-                                    AppError::Validation("invalid saved search facet".into())
+                                    AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_FACET_INVALID, "invalid saved search facet")
                                 })
                             })
                             .transpose()?,
@@ -1477,7 +1468,7 @@ impl AppUseCase {
                         wanted_item_id: saved.wanted_item_id,
                     };
                     let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
-                        AppError::Validation("search actor is unavailable".into())
+                        AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
                     })?;
                     // A maintenance sequence dispatches its Search step as the
                     // synthetic system actor, which has no persisted user row.
@@ -1493,10 +1484,10 @@ impl AppUseCase {
                             .get_by_id(actor_id)
                             .await?
                             .ok_or_else(|| {
-                                AppError::Validation("search actor no longer exists".into())
+                                AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_NO_LONGER_EXISTS, "search actor no longer exists")
                             })?;
                         if !actor.login_status().is_enabled() {
-                            return Err(AppError::Unauthorized("search actor is disabled".into()));
+                            return Err(AppError::unauthorized_reason(crate::error_reasons::acquisition::SEARCH_ACTOR_DISABLED, "search actor is disabled"));
                         }
                         actor
                     };
@@ -1643,7 +1634,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })?;
             return self
                 .require_library_permission(
                     actor,
@@ -1697,14 +1693,24 @@ impl AppUseCase {
                 .title_id
                 .as_deref()
                 .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| AppError::Validation("Automatic search requires a title".into()))?;
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::acquisition::AUTOMATIC_SEARCH_REQUIRES_TITLE,
+                        "Automatic search requires a title",
+                    )
+                })?;
             let title = self
                 .services
                 .catalog
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound("The selected title no longer exists".into()))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::acquisition::TITLE_NO_LONGER_EXISTS_NOT_FOUND,
+                        "The selected title no longer exists",
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -1712,8 +1718,9 @@ impl AppUseCase {
             )
             .await?;
             if self.location_owned_title_ids().await?.contains(title_id) {
-                return Err(AppError::Validation(
-                    "This title is being moved. Search is available when the move finishes.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::acquisition::TITLE_BEING_MOVED_SEARCH_UNAVAILABLE,
+                    "This title is being moved. Search is available when the move finishes.",
                 ));
             }
             if let Some(season) = request.season_number {
@@ -1728,7 +1735,10 @@ impl AppUseCase {
                         collection.collection_index.trim().parse::<i32>().ok() == Some(season)
                     })
                 {
-                    return Err(AppError::Validation("The selected season no longer matches this title. Refresh the title and try again.".into()));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::acquisition::SELECTED_SEASON_NO_LONGER_MATCHES_TITLE,
+                        "The selected season no longer matches this title. Refresh the title and try again.",
+                    ));
                 }
             }
             let targets = self
@@ -1773,7 +1783,10 @@ impl AppUseCase {
                 })
                 .collect();
             if scopes.is_empty() && skipped > 0 {
-                return Err(AppError::Validation("The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::acquisition::MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING,
+                    "The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.",
+                ));
             }
             return Ok(scopes);
         }
@@ -1787,7 +1800,10 @@ impl AppUseCase {
                 .resolve_scope_identifier(identifier)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!("no acquisition scope for '{identifier}'"))
+                    AppError::not_found_reason(
+                        crate::error_reasons::acquisition::SCOPE_NOT_FOUND,
+                        format!("no acquisition scope for '{identifier}'"),
+                    )
                 })?;
             let label = self.acquisition_scope_label(&title_id, &scope).await;
             let scope_key = convergence_scope_key(&scope, &title_id).unwrap_or_default();
@@ -2271,7 +2287,10 @@ impl AppUseCase {
             Err(error) => {
                 let is_failure = scope_search_error_is_failure(&error);
                 if is_failure {
-                    if let AppError::Validation(message) = &error {
+                    if let AppError::Validation(message)
+                    | AppError::ValidationRefused { message, .. }
+                    | AppError::ValidationRefusedWithCount { message, .. } = &error
+                    {
                         run.error_text = Some(message.clone());
                     }
                     tracing::warn!(

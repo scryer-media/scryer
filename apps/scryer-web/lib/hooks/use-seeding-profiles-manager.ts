@@ -87,7 +87,9 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
       ]);
       if (listResult.error) throw listResult.error;
       if (defaultResult.error) throw defaultResult.error;
-      setProfiles((listResult.data?.seedingProfiles ?? []) as SeedingProfileRecord[]);
+      setProfiles(
+        (listResult.data?.seedingProfiles ?? []) as SeedingProfileRecord[],
+      );
       setDefaultProfileId(
         defaultResult.data?.defaultSeedingProfile?.seedingProfileId ?? null,
       );
@@ -145,11 +147,11 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
               .toPromise();
         if (result.error) throw result.error;
 
-        const saved = (isNew
-          ? result.data?.createSeedingProfile
-          : result.data?.updateSeedingProfile) as
-          | SeedingProfileRecord
-          | undefined;
+        const saved = (
+          isNew
+            ? result.data?.createSeedingProfile
+            : result.data?.updateSeedingProfile
+        ) as SeedingProfileRecord | undefined;
         if (saved) {
           setProfiles((previous) =>
             isNew
@@ -223,7 +225,9 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           result.data?.setMinimumSeedersFloor?.minimumSeedersFloor ?? floor,
         );
         setErrorMessage("");
-        showStatus(t("settings.seedingMinimumSeedersFloorSaved"), { level: "SUCCESS" });
+        showStatus(t("settings.seedingMinimumSeedersFloorSaved"), {
+          level: "SUCCESS",
+        });
         return true;
       } catch (err) {
         setMinimumSeedersFloorState(previousFloor);
@@ -256,7 +260,9 @@ export function useSeedingProfilesManager(): SeedingProfilesManager {
           result.data?.setDefaultSeedingProfile?.seedingProfileId ?? null,
         );
         setErrorMessage("");
-        showStatus(t("settings.seedingProfileDefaultSaved"), { level: "SUCCESS" });
+        showStatus(t("settings.seedingProfileDefaultSaved"), {
+          level: "SUCCESS",
+        });
         return true;
       } catch (err) {
         setDefaultProfileId(previousDefault);

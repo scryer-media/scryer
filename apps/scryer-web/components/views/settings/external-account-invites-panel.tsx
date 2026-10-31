@@ -510,235 +510,288 @@ export function ExternalAccountInvitesPanel({
 
       <div className="space-y-4 p-4 sm:p-5">
         {!inviteUnavailable ? (
-        <form
-          id="settings-external-account-invite-form"
-          className="space-y-4"
-          onSubmit={createExternalAccountInvite}
-        >
-          <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)_auto]">
-            <div className="space-y-1.5">
-              <Label htmlFor="settings-external-invite-user">
-                {t("settings.user")}
-              </Label>
-              <Select
-                value={externalInviteDraft.userId}
-                onValueChange={(userId) =>
-                  updateExternalInviteDraft({ userId })
-                }
-                disabled={externalInviteSubmitting}
-              >
-                <SelectTrigger
-                  id="settings-external-invite-user"
-                  className="w-full"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {users.map((user) => (
-                    <SelectItem
-                      id={selectorId(
-                        "settings-external-invite-user-option",
-                        user.username,
-                      )}
-                      key={user.id}
-                      value={user.id}
-                    >
-                      {user.username}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="settings-external-invite-provider-identifier">
-                  {t("settings.mediaServerUser")}
+          <form
+            id="settings-external-account-invite-form"
+            className="space-y-4"
+            onSubmit={createExternalAccountInvite}
+          >
+            <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)_auto]">
+              <div className="space-y-1.5">
+                <Label htmlFor="settings-external-invite-user">
+                  {t("settings.user")}
                 </Label>
-                {mediaServerUserSearchLoading ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <LoadingMark className="h-3 w-3" />
-                    {t("label.loading")}
-                  </span>
+                <Select
+                  value={externalInviteDraft.userId}
+                  onValueChange={(userId) =>
+                    updateExternalInviteDraft({ userId })
+                  }
+                  disabled={externalInviteSubmitting}
+                >
+                  <SelectTrigger
+                    id="settings-external-invite-user"
+                    className="w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {users.map((user) => (
+                      <SelectItem
+                        id={selectorId(
+                          "settings-external-invite-user-option",
+                          user.username,
+                        )}
+                        key={user.id}
+                        value={user.id}
+                      >
+                        {user.username}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="settings-external-invite-provider-identifier">
+                    {t("settings.mediaServerUser")}
+                  </Label>
+                  {mediaServerUserSearchLoading ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <LoadingMark className="h-3 w-3" />
+                      {t("label.loading")}
+                    </span>
+                  ) : null}
+                </div>
+                <MediaServerUserCombobox
+                  id="settings-external-invite-provider-identifier"
+                  value={externalInviteDraft.providerUserIdentifier}
+                  groups={mediaServerUserGroups}
+                  selectedOption={selectedMediaServerUserOption}
+                  loading={mediaServerUserSearchLoading}
+                  disabled={externalInviteSubmitting}
+                  placeholder={t("settings.mediaServerUserSearchPlaceholder")}
+                  emptyLabel={t("settings.mediaServerUserPickerEmpty")}
+                  serverEmptyLabel={t(
+                    "settings.mediaServerUserPickerServerEmpty",
+                  )}
+                  loadingLabel={t("label.loading")}
+                  onChange={(providerUserIdentifier) =>
+                    updateExternalInviteDraft({
+                      providerUserIdentifier,
+                      connectionId: "",
+                      providerUserId: "",
+                    })
+                  }
+                  onSelectOption={(option) =>
+                    updateExternalInviteDraft({
+                      provider: option.provider,
+                      connectionId: option.connectionId,
+                      providerUserIdentifier: option.username,
+                      providerUserId: option.id,
+                    })
+                  }
+                />
+                {mediaServerUserLookupError ? (
+                  <p className="text-xs text-destructive">
+                    {mediaServerUserLookupError}
+                  </p>
                 ) : null}
               </div>
-              <MediaServerUserCombobox
-                id="settings-external-invite-provider-identifier"
-                value={externalInviteDraft.providerUserIdentifier}
-                groups={mediaServerUserGroups}
-                selectedOption={selectedMediaServerUserOption}
-                loading={mediaServerUserSearchLoading}
-                disabled={externalInviteSubmitting}
-                placeholder={t("settings.mediaServerUserSearchPlaceholder")}
-                emptyLabel={t("settings.mediaServerUserPickerEmpty")}
-                serverEmptyLabel={t(
-                  "settings.mediaServerUserPickerServerEmpty",
-                )}
-                loadingLabel={t("label.loading")}
-                onChange={(providerUserIdentifier) =>
-                  updateExternalInviteDraft({
-                    providerUserIdentifier,
-                    connectionId: "",
-                    providerUserId: "",
-                  })
-                }
-                onSelectOption={(option) =>
-                  updateExternalInviteDraft({
-                    provider: option.provider,
-                    connectionId: option.connectionId,
-                    providerUserIdentifier: option.username,
-                    providerUserId: option.id,
-                  })
-                }
-              />
-              {mediaServerUserLookupError ? (
-                <p className="text-xs text-destructive">
-                  {mediaServerUserLookupError}
-                </p>
-              ) : null}
+              <div className="space-y-1.5">
+                <div aria-hidden="true" className="h-3.5" />
+                <Button
+                  id="settings-external-account-invite-create"
+                  type="submit"
+                  className="min-w-40"
+                  disabled={inviteCreateDisabled}
+                >
+                  {externalInviteSubmitting ? (
+                    <LoadingMark className="h-4 w-4" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  {externalInviteSubmitting
+                    ? t("label.saving")
+                    : t("settings.createInvite")}
+                </Button>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <div aria-hidden="true" className="h-3.5" />
-              <Button
-                id="settings-external-account-invite-create"
-                type="submit"
-                className="min-w-40"
-                disabled={inviteCreateDisabled}
-              >
-                {externalInviteSubmitting ? (
-                  <LoadingMark className="h-4 w-4" />
-                ) : (
-                  <Plus className="h-4 w-4" />
-                )}
-                {externalInviteSubmitting
-                  ? t("label.saving")
-                  : t("settings.createInvite")}
-              </Button>
-            </div>
-          </div>
-        </form>
+          </form>
         ) : null}
 
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
-          {t("settings.previousExternalAccountInvites")}
-        </h4>
-        <div className={EXTERNAL_INVITES_TABLE_SHELL_CLASS}>
-          <div className="overflow-x-auto">
-            <Table
-              id="settings-external-account-invites-table"
-              className="min-w-[1040px] table-fixed"
-            >
-              <TableHeader>
-                <TableRow className={EXTERNAL_INVITES_TABLE_HEADER_ROW_CLASS}>
-                  <TableHead className={cn("w-40", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("settings.user")}
-                  </TableHead>
-                  <TableHead className={cn("w-32", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("settings.provider")}
-                  </TableHead>
-                  <TableHead className={cn("w-44", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("profile.linkedAccountConnection")}
-                  </TableHead>
-                  <TableHead className={cn("w-52", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("settings.externalAccountInviteProviderUser")}
-                  </TableHead>
-                  <TableHead className={cn("w-36", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("profile.linkedAccountStatus")}
-                  </TableHead>
-                  <TableHead className={cn("w-36", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("settings.externalAccountInviteCreatedAt")}
-                  </TableHead>
-                  <TableHead className={cn("w-36", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("settings.externalAccountInviteLastLogin")}
-                  </TableHead>
-                  <TableHead className={cn("w-32 text-right", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
-                    {t("label.actions")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground">
-                      {t("label.loading")}
-                    </TableCell>
+        <div className="space-y-3">
+          <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
+            {t("settings.previousExternalAccountInvites")}
+          </h4>
+          <div className={EXTERNAL_INVITES_TABLE_SHELL_CLASS}>
+            <div className="overflow-x-auto">
+              <Table
+                id="settings-external-account-invites-table"
+                className="min-w-[1040px] table-fixed"
+              >
+                <TableHeader>
+                  <TableRow className={EXTERNAL_INVITES_TABLE_HEADER_ROW_CLASS}>
+                    <TableHead
+                      className={cn(
+                        "w-40",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("settings.user")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-32",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("settings.provider")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-44",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("profile.linkedAccountConnection")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-52",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("settings.externalAccountInviteProviderUser")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-36",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("profile.linkedAccountStatus")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-36",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("settings.externalAccountInviteCreatedAt")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-36",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("settings.externalAccountInviteLastLogin")}
+                    </TableHead>
+                    <TableHead
+                      className={cn(
+                        "w-32 text-right",
+                        EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
+                      {t("label.actions")}
+                    </TableHead>
                   </TableRow>
-                ) : sortedInvites.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground">
-                      {t("settings.noExternalAccountInvites")}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedInvites.map((invite) => {
-                    const status = inviteStatus(invite, t);
-                    return (
-                      <TableRow
-                        data-ui="settings-table-row"
-                        key={invite.id}
-                        id={selectorId(
-                          "settings-external-account-invite-row",
-                          usersById.get(invite.userId) ?? invite.userId,
-                          invite.provider,
-                          invite.username,
-                        )}
-                      >
-                        <TableCell>
-                          {usersById.get(invite.userId) ?? invite.userId}
-                        </TableCell>
-                        <TableCell>{providerLabel(invite.provider)}</TableCell>
-                        <TableCell>
-                          {inviteConnectionLabel(externalAuthSettings, invite)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <ProviderAvatar
-                              avatarUrl={invite.avatarUrl}
-                              label={invite.displayName ?? invite.username}
-                            />
-                            <span>{providerIdentityLabel(invite)}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${status.className}`}
-                          >
-                            {status.label}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {formatTimestamp(invite.createdAt, dateTimeFormat)}
-                        </TableCell>
-                        <TableCell>
-                          {formatTimestamp(invite.lastLoginAt, dateTimeFormat)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            id={selectorId("settings-external-account-invite-unlink", invite.id)}
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={unlinkingAccountId !== null}
-                            onClick={() => void unlinkExternalAccount(invite.id)}
-                          >
-                            {unlinkingAccountId === invite.id ? (
-                              <LoadingMark className="h-4 w-4" />
-                            ) : null}
-                            {invite.status === "PENDING_CLAIM"
-                              ? t("label.cancel")
-                              : t("profile.unlinkAccount")}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {loading ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-muted-foreground">
+                        {t("label.loading")}
+                      </TableCell>
+                    </TableRow>
+                  ) : sortedInvites.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-muted-foreground">
+                        {t("settings.noExternalAccountInvites")}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    sortedInvites.map((invite) => {
+                      const status = inviteStatus(invite, t);
+                      return (
+                        <TableRow
+                          data-ui="settings-table-row"
+                          key={invite.id}
+                          id={selectorId(
+                            "settings-external-account-invite-row",
+                            usersById.get(invite.userId) ?? invite.userId,
+                            invite.provider,
+                            invite.username,
+                          )}
+                        >
+                          <TableCell>
+                            {usersById.get(invite.userId) ?? invite.userId}
+                          </TableCell>
+                          <TableCell>
+                            {providerLabel(invite.provider)}
+                          </TableCell>
+                          <TableCell>
+                            {inviteConnectionLabel(
+                              externalAuthSettings,
+                              invite,
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <ProviderAvatar
+                                avatarUrl={invite.avatarUrl}
+                                label={invite.displayName ?? invite.username}
+                              />
+                              <span>{providerIdentityLabel(invite)}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${status.className}`}
+                            >
+                              {status.label}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            {formatTimestamp(invite.createdAt, dateTimeFormat)}
+                          </TableCell>
+                          <TableCell>
+                            {formatTimestamp(
+                              invite.lastLoginAt,
+                              dateTimeFormat,
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              id={selectorId(
+                                "settings-external-account-invite-unlink",
+                                invite.id,
+                              )}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={unlinkingAccountId !== null}
+                              onClick={() =>
+                                void unlinkExternalAccount(invite.id)
+                              }
+                            >
+                              {unlinkingAccountId === invite.id ? (
+                                <LoadingMark className="h-4 w-4" />
+                              ) : null}
+                              {invite.status === "PENDING_CLAIM"
+                                ? t("label.cancel")
+                                : t("profile.unlinkAccount")}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </div>
       </div>
-    </div>
     </div>
   );
 }

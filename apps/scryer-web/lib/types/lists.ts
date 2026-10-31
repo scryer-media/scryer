@@ -36,10 +36,7 @@ export type ListFilterKind =
   | "DIRECTOR_CREDITS_ONLY"
   | "NOT_SEQUEL_WITHOUT_BASE";
 export type ListAuthBadge =
-  | "NO_ACCOUNT"
-  | "NO_ACCOUNT_NEEDS_VALUE"
-  | "MEMBER_ACCOUNT"
-  | "SERVER_API_KEY";
+  "NO_ACCOUNT" | "NO_ACCOUNT_NEEDS_VALUE" | "MEMBER_ACCOUNT" | "SERVER_API_KEY";
 export type ListSourceParamType = "TEXT" | "URL" | "ENUM" | "SEASON";
 export type ListNoteTone = "INFO" | "WARN" | "BAD";
 
@@ -327,8 +324,20 @@ export type ListAccount = {
   errorMessage: string | null;
   linkedAt: string;
   lastUsedAt: string | null;
-  ownedLists: Array<{ id: string; name: string; kinds: Facet[]; sourceType: string; params: ListParam[] }>;
-  statuses: Array<{ key: string; label: string; kinds: Facet[]; sourceType: string; params: ListParam[] }>;
+  ownedLists: Array<{
+    id: string;
+    name: string;
+    kinds: Facet[];
+    sourceType: string;
+    params: ListParam[];
+  }>;
+  statuses: Array<{
+    key: string;
+    label: string;
+    kinds: Facet[];
+    sourceType: string;
+    params: ListParam[];
+  }>;
 };
 
 export type ListAccountLinkSession = {

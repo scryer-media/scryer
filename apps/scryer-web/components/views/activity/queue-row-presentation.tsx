@@ -3,7 +3,10 @@ import { Link } from "react-router";
 
 import { ActionTooltip } from "@/components/ui/tooltip";
 import type { DownloadQueueItem } from "@/lib/types";
-import { queueStateClasses, type TranslateFn } from "@/lib/utils/activity-utils";
+import {
+  queueStateClasses,
+  type TranslateFn,
+} from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
 import {
   deriveSeedingProgress,
@@ -38,6 +41,8 @@ export function ActivityQueueStatusBadge({
       type="button"
       className={className}
       aria-expanded={isExpanded}
+      id={`${detailId}-toggle`}
+      data-ui="activity-status-details"
       aria-controls={detailId}
       aria-label={`${statusLabel}. ${expandLabel}`}
       onClick={onToggle}
@@ -65,10 +70,15 @@ export function ActivityQueueTitleContent({
     <div className="space-y-1">
       <p className="break-words whitespace-normal text-sm text-foreground">
         {titleHref ? (
-          <Link to={titleHref} className="rounded underline decoration-muted-foreground underline-offset-4 hover:text-primary focus-visible:outline-2 focus-visible:outline-ring">
+          <Link
+            to={titleHref}
+            className="rounded underline decoration-muted-foreground underline-offset-4 hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+          >
             {displayTitle}
           </Link>
-        ) : displayTitle}
+        ) : (
+          displayTitle
+        )}
       </p>
       {releaseTitle !== displayTitle ? (
         <p
@@ -184,7 +194,9 @@ export function ActivityQueueDetailsPanel({
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             {t("queue.releaseTitle")}
           </p>
-          <p className="mt-1 break-words text-sm text-foreground">{releaseTitle}</p>
+          <p className="mt-1 break-words text-sm text-foreground">
+            {releaseTitle}
+          </p>
         </div>
         <div>
           {errorCode ? (
@@ -192,21 +204,25 @@ export function ActivityQueueDetailsPanel({
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 {t("queue.errorCode")}
               </p>
-              <p className="mt-1 break-words text-sm font-[var(--font-code)] text-foreground">{errorCode}</p>
+              <p className="mt-1 break-words text-sm font-[var(--font-code)] text-foreground">
+                {errorCode}
+              </p>
             </>
           ) : null}
         </div>
       </div>
-      {failureReason ? <div className="mt-4">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            {t("queue.blockReason")}
-          </p>
-          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
-            {failureReason}
-          </p>
+      {failureReason ? (
+        <div className="mt-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              {t("queue.blockReason")}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
+              {failureReason}
+            </p>
+          </div>
         </div>
-      </div> : null}
+      ) : null}
     </div>
   );
 }

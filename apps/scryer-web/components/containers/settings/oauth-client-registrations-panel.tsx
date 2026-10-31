@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import * as React from "react";
 import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useClient } from "urql";
@@ -78,77 +79,106 @@ function draftFromClient(client: OAuthClientRegistration): OAuthClientDraft {
 }
 
 export function OAuthClientRegistrationsPanel() {
+  const t = useTranslate();
   const client = useClient();
   const [clients, setClients] = React.useState<OAuthClientRegistration[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
-  const [editingClientId, setEditingClientId] = React.useState<string | null>(null);
+  const [editingClientId, setEditingClientId] = React.useState<string | null>(
+    null,
+  );
   const [draft, setDraft] = React.useState<OAuthClientDraft>(EMPTY_DRAFT);
-  const [deleteTarget, setDeleteTarget] = React.useState<OAuthClientRegistration | null>(null);
+  const [deleteTarget, setDeleteTarget] =
+    React.useState<OAuthClientRegistration | null>(null);
   const [jellyfinPublicBaseUrl, setJellyfinPublicBaseUrl] = React.useState("");
-  const [jellyfinPublicBaseUrlTouched, setJellyfinPublicBaseUrlTouched] = React.useState(false);
+  const [jellyfinPublicBaseUrlTouched, setJellyfinPublicBaseUrlTouched] =
+    React.useState(false);
   const [createdJellyfinClient, setCreatedJellyfinClient] = React.useState<{
     clientId: string;
     callbackUrl: string;
   } | null>(null);
-  const [uncertainJellyfinCallbackUrl, setUncertainJellyfinCallbackUrl] = React.useState<string | null>(null);
+  const [uncertainJellyfinCallbackUrl, setUncertainJellyfinCallbackUrl] =
+    React.useState<string | null>(null);
   const reloadGenerationRef = React.useRef(0);
   const jellyfinCreateKeyRef = React.useRef<string | null>(null);
   const [jellyfinConnections, setJellyfinConnections] = React.useState<
     JellyfinMediaServerConnection[] | null
   >(null);
 
-  const reload = React.useCallback(async (reconcileClient?: { clientId: string; callbackUrl: string }) => {
-    const reloadGeneration = ++reloadGenerationRef.current;
-    setLoading(true);
-    try {
-      const [result, jellyfinResult] = await Promise.all([
-        client
-          .query<{ oauthClientRegistrations?: OAuthClientRegistration[] }>(
-            oauthClientRegistrationsQuery,
-            {},
-            { requestPolicy: "network-only" },
+  const reload = React.useCallback(
+    async (reconcileClient?: { clientId: string; callbackUrl: string }) => {
+      const reloadGeneration = ++reloadGenerationRef.current;
+      setLoading(true);
+      try {
+        const [result, jellyfinResult] = await Promise.all([
+          client
+            .query<{ oauthClientRegistrations?: OAuthClientRegistration[] }>(
+              oauthClientRegistrationsQuery,
+              {},
+              { requestPolicy: "network-only" },
+            )
+            .toPromise(),
+          client
+            .query<{
+              mediaServerConnections?: JellyfinMediaServerConnection[];
+            }>(
+              mediaServerConnectionsQuery,
+              { provider: "JELLYFIN" },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise(),
+        ]);
+        if (result.error) throw result.error;
+        if (
+          !shouldApplyJellyfinPluginOAuthReload(
+            reloadGeneration,
+            reloadGenerationRef.current,
           )
-          .toPromise(),
-        client
-          .query<{ mediaServerConnections?: JellyfinMediaServerConnection[] }>(
-            mediaServerConnectionsQuery,
-            { provider: "JELLYFIN" },
-            { requestPolicy: "network-only" },
+        )
+          return;
+        const nextClients = result.data?.oauthClientRegistrations ?? [];
+        setClients(nextClients);
+        setUncertainJellyfinCallbackUrl(null);
+        setJellyfinConnections(
+          jellyfinResult.error
+            ? null
+            : (jellyfinResult.data?.mediaServerConnections ?? []),
+        );
+        setCreatedJellyfinClient((previousClient) => {
+          const clientToReconcile = reconcileClient ?? previousClient;
+          if (!clientToReconcile) return null;
+          return reconcileCreatedJellyfinPluginClient(
+            clientToReconcile,
+            nextClients,
+          );
+        });
+      } catch (error) {
+        if (
+          !shouldApplyJellyfinPluginOAuthReload(
+            reloadGeneration,
+            reloadGenerationRef.current,
           )
-          .toPromise(),
-      ]);
-      if (result.error) throw result.error;
-      if (!shouldApplyJellyfinPluginOAuthReload(
-        reloadGeneration,
-        reloadGenerationRef.current,
-      )) return;
-      const nextClients = result.data?.oauthClientRegistrations ?? [];
-      setClients(nextClients);
-      setUncertainJellyfinCallbackUrl(null);
-      setJellyfinConnections(
-        jellyfinResult.error ? null : (jellyfinResult.data?.mediaServerConnections ?? []),
-      );
-      setCreatedJellyfinClient((previousClient) => {
-        const clientToReconcile = reconcileClient ?? previousClient;
-        if (!clientToReconcile) return null;
-        return reconcileCreatedJellyfinPluginClient(clientToReconcile, nextClients);
-      });
-    } catch (error) {
-      if (!shouldApplyJellyfinPluginOAuthReload(
-        reloadGeneration,
-        reloadGenerationRef.current,
-      )) return;
-      toast.error(
-        userFacingGraphQlErrorMessage(error, "Unable to load OAuth applications."),
-      );
-    } finally {
-      if (shouldApplyJellyfinPluginOAuthReload(
-        reloadGeneration,
-        reloadGenerationRef.current,
-      )) setLoading(false);
-    }
-  }, [client]);
+        )
+          return;
+        toast.error(
+          userFacingGraphQlErrorMessage(
+            error,
+            t("error.fallback.unableToLoadOAuthApplications"),
+            t,
+          ),
+        );
+      } finally {
+        if (
+          shouldApplyJellyfinPluginOAuthReload(
+            reloadGeneration,
+            reloadGenerationRef.current,
+          )
+        )
+          setLoading(false);
+      }
+    },
+    [client, t],
+  );
 
   React.useEffect(() => {
     void reload();
@@ -158,7 +188,11 @@ export function OAuthClientRegistrationsPanel() {
     if (jellyfinPublicBaseUrlTouched || jellyfinPublicBaseUrl) return;
     const prefill = prefillJellyfinPublicBaseUrl(jellyfinConnections);
     if (prefill) setJellyfinPublicBaseUrl(prefill);
-  }, [jellyfinConnections, jellyfinPublicBaseUrl, jellyfinPublicBaseUrlTouched]);
+  }, [
+    jellyfinConnections,
+    jellyfinPublicBaseUrl,
+    jellyfinPublicBaseUrlTouched,
+  ]);
 
   React.useEffect(() => {
     const callbackUrl = jellyfinPluginCallbackUrl(
@@ -200,18 +234,24 @@ export function OAuthClientRegistrationsPanel() {
             .toPromise();
       if (result.error) throw result.error;
       toast.success(
-        editingClientId ? "OAuth application updated." : "OAuth application created.",
+        editingClientId
+          ? "OAuth application updated."
+          : "OAuth application created.",
       );
       resetDraft();
       await reload();
     } catch (error) {
       toast.error(
-        userFacingGraphQlErrorMessage(error, "Unable to save OAuth application."),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("error.fallback.unableToSaveOAuthApplication"),
+          t,
+        ),
       );
     } finally {
       setBusy(false);
     }
-  }, [client, draft, editingClientId, reload, resetDraft]);
+  }, [client, draft, editingClientId, reload, resetDraft, t]);
 
   const copyClientId = React.useCallback(async (clientId: string) => {
     if (!navigator.clipboard) {
@@ -226,30 +266,41 @@ export function OAuthClientRegistrationsPanel() {
     }
   }, []);
 
-  const copyJellyfinCallback = React.useCallback(async (callbackUrl: string) => {
-    if (!navigator.clipboard) {
-      toast.error("Unable to copy the Jellyfin callback URL.");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(callbackUrl);
-      toast.success("Jellyfin callback URL copied.");
-    } catch {
-      toast.error("Unable to copy the Jellyfin callback URL.");
-    }
-  }, []);
+  const copyJellyfinCallback = React.useCallback(
+    async (callbackUrl: string) => {
+      if (!navigator.clipboard) {
+        toast.error("Unable to copy the Jellyfin callback URL.");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(callbackUrl);
+        toast.success("Jellyfin callback URL copied.");
+      } catch {
+        toast.error("Unable to copy the Jellyfin callback URL.");
+      }
+    },
+    [],
+  );
 
   const createJellyfinPluginClient = React.useCallback(async () => {
-    const publicBaseUrl = normalizedPublicJellyfinBaseUrl(jellyfinPublicBaseUrl);
+    const publicBaseUrl = normalizedPublicJellyfinBaseUrl(
+      jellyfinPublicBaseUrl,
+    );
     if (!publicBaseUrl) {
       toast.error("Enter a valid public HTTPS Jellyfin base URL.");
       return;
     }
     const callbackUrl = jellyfinPluginCallbackUrl(publicBaseUrl)!;
-    if (!canStartJellyfinPluginClientCreation(jellyfinCreateKeyRef.current)) return;
-    const createDecision = jellyfinPluginClientCreateDecision(clients, callbackUrl);
+    if (!canStartJellyfinPluginClientCreation(jellyfinCreateKeyRef.current))
+      return;
+    const createDecision = jellyfinPluginClientCreateDecision(
+      clients,
+      callbackUrl,
+    );
     if (createDecision === "ambiguous") {
-      toast.error("Multiple custom OAuth clients use this exact Jellyfin callback. Remove duplicates before continuing.");
+      toast.error(
+        "Multiple custom OAuth clients use this exact Jellyfin callback. Remove duplicates before continuing.",
+      );
       return;
     }
     if (createDecision === "reuse") {
@@ -257,7 +308,10 @@ export function OAuthClientRegistrationsPanel() {
         isEligibleJellyfinPluginClient(registeredClient, callbackUrl),
       );
       if (!existingClient) return;
-      setCreatedJellyfinClient({ clientId: existingClient.clientId, callbackUrl });
+      setCreatedJellyfinClient({
+        clientId: existingClient.clientId,
+        callbackUrl,
+      });
       toast.success("Jellyfin plugin OAuth client is already configured.");
       return;
     }
@@ -267,7 +321,13 @@ export function OAuthClientRegistrationsPanel() {
       const result = await client
         .mutation<
           { createOAuthClientRegistration?: OAuthClientRegistration },
-          { input: { displayName: string; redirectUris: string[]; kind: OAuthClientKind } }
+          {
+            input: {
+              displayName: string;
+              redirectUris: string[];
+              kind: OAuthClientKind;
+            };
+          }
         >(createOAuthClientRegistrationMutation, {
           input: {
             displayName: JELLYFIN_PLUGIN_DISPLAY_NAME,
@@ -279,7 +339,9 @@ export function OAuthClientRegistrationsPanel() {
       const registration = result.data?.createOAuthClientRegistration;
       if (jellyfinPluginCreateNeedsReconciliation(registration)) {
         setUncertainJellyfinCallbackUrl(callbackUrl);
-        toast.error("The create result is uncertain. Reloading OAuth applications before another create is allowed.");
+        toast.error(
+          "The create result is uncertain. Reloading OAuth applications before another create is allowed.",
+        );
         await reload();
         return;
       }
@@ -295,15 +357,19 @@ export function OAuthClientRegistrationsPanel() {
       toast.error(
         userFacingGraphQlErrorMessage(
           error,
-          "The create result is uncertain. Reload OAuth applications before trying again.",
+          t(
+            "error.fallback.theCreateResultIsUncertainReloadOAuthApplicationsBeforeTryingAgain",
+          ),
+          t,
         ),
       );
       await reload();
     } finally {
-      if (jellyfinCreateKeyRef.current === callbackUrl) jellyfinCreateKeyRef.current = null;
+      if (jellyfinCreateKeyRef.current === callbackUrl)
+        jellyfinCreateKeyRef.current = null;
       setBusy(false);
     }
-  }, [client, clients, jellyfinPublicBaseUrl, reload]);
+  }, [client, clients, jellyfinPublicBaseUrl, reload, t]);
 
   const deleteClient = React.useCallback(async () => {
     if (!deleteTarget) return;
@@ -313,7 +379,9 @@ export function OAuthClientRegistrationsPanel() {
         .mutation<
           { deleteOAuthClientRegistration?: { deleted: boolean } },
           { clientId: string }
-        >(deleteOAuthClientRegistrationMutation, { clientId: deleteTarget.clientId })
+        >(deleteOAuthClientRegistrationMutation, {
+          clientId: deleteTarget.clientId,
+        })
         .toPromise();
       if (result.error) throw result.error;
       setDeleteTarget(null);
@@ -322,15 +390,20 @@ export function OAuthClientRegistrationsPanel() {
       await reload();
     } catch (error) {
       toast.error(
-        userFacingGraphQlErrorMessage(error, "Unable to delete OAuth application."),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("error.fallback.unableToDeleteOAuthApplication"),
+          t,
+        ),
       );
     } finally {
       setBusy(false);
     }
-  }, [client, deleteTarget, reload, resetDraft]);
+  }, [client, deleteTarget, reload, resetDraft, t]);
 
   const managedClients = clients.filter(
-    (client) => client.source === "MANAGED" && client.clientId !== "generic-native",
+    (client) =>
+      client.source === "MANAGED" && client.clientId !== "generic-native",
   );
   // A plugin client is identified by the kind stored on its registration, so it belongs to the
   // Jellyfin section rather than the generic custom-application list that created it.
@@ -339,29 +412,39 @@ export function OAuthClientRegistrationsPanel() {
     (client) => client.source === "CUSTOM" && client.kind === "CUSTOM",
   );
   const editingClient = clients.find(
-    (client) => client.source === "CUSTOM" && client.clientId === editingClientId,
+    (client) =>
+      client.source === "CUSTOM" && client.clientId === editingClientId,
   );
-  const callbackPreview = normalizedPublicJellyfinBaseUrl(jellyfinPublicBaseUrl);
+  const callbackPreview = normalizedPublicJellyfinBaseUrl(
+    jellyfinPublicBaseUrl,
+  );
   const previewCallbackUrl = jellyfinPluginCallbackUrl(callbackPreview);
-  const createdClientMatchesCallback = createdJellyfinClient && previewCallbackUrl
-    ? createdJellyfinClient.callbackUrl === previewCallbackUrl
-    : false;
-  const uncertainCreateMatchesCallback = uncertainJellyfinCallbackUrl && previewCallbackUrl
-    ? uncertainJellyfinCallbackUrl === previewCallbackUrl
-    : false;
+  const createdClientMatchesCallback =
+    createdJellyfinClient && previewCallbackUrl
+      ? createdJellyfinClient.callbackUrl === previewCallbackUrl
+      : false;
+  const uncertainCreateMatchesCallback =
+    uncertainJellyfinCallbackUrl && previewCallbackUrl
+      ? uncertainJellyfinCallbackUrl === previewCallbackUrl
+      : false;
   const jellyfinClientStatus = jellyfinPluginClientStatus(
     jellyfinPluginClients.length,
     Boolean(createdClientMatchesCallback),
     Boolean(uncertainCreateMatchesCallback),
   );
-  const reconcilingJellyfinClient = jellyfinPluginClients.length === 0 && createdClientMatchesCallback
-    ? createdJellyfinClient
-    : null;
+  const reconcilingJellyfinClient =
+    jellyfinPluginClients.length === 0 && createdClientMatchesCallback
+      ? createdJellyfinClient
+      : null;
   // Once a plugin client exists its stored callback, not the text box, defines the public URL.
-  const jellyfinPublicBaseUrlInEffect = jellyfinPluginClients.length === 1
-    ? jellyfinPluginClients[0].publicBaseUrl
-    : callbackPreview;
-  const linkingStatus = automaticLinkingStatus(jellyfinPublicBaseUrlInEffect, jellyfinConnections);
+  const jellyfinPublicBaseUrlInEffect =
+    jellyfinPluginClients.length === 1
+      ? jellyfinPluginClients[0].publicBaseUrl
+      : callbackPreview;
+  const linkingStatus = automaticLinkingStatus(
+    jellyfinPublicBaseUrlInEffect,
+    jellyfinConnections,
+  );
   const linkingIneligibilities = jellyfinConnectionIneligibilityReasons(
     jellyfinPublicBaseUrlInEffect,
     jellyfinConnections,
@@ -376,22 +459,33 @@ export function OAuthClientRegistrationsPanel() {
               OAuth applications
             </h3>
           </div>
-          {loading ? <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" /> : null}
+          {loading ? (
+            <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" />
+          ) : null}
         </div>
       </div>
 
       <div className="space-y-5 p-4">
-        <section className={`${INSET_CLASS} space-y-3 p-3`} aria-labelledby="jellyfin-plugin-oauth-title">
+        <section
+          className={`${INSET_CLASS} space-y-3 p-3`}
+          aria-labelledby="jellyfin-plugin-oauth-title"
+        >
           <div className="space-y-1">
-            <h4 id="jellyfin-plugin-oauth-title" className="text-sm font-medium text-[var(--scry-ink2)]">
+            <h4
+              id="jellyfin-plugin-oauth-title"
+              className="text-sm font-medium text-[var(--scry-ink2)]"
+            >
               Jellyfin plugin OAuth
             </h4>
             <p className="text-xs text-[var(--scry-muted3)]">
-              Create a standalone OAuth client for the Jellyfin plugin. This does not require a Jellyfin media-server connection or account linking.
+              Create a standalone OAuth client for the Jellyfin plugin. This
+              does not require a Jellyfin media-server connection or account
+              linking.
             </p>
             <div className="space-y-1 text-xs text-[var(--scry-muted3)]">
               <p>
-                OAuth client: {jellyfinClientStatus === "ready"
+                OAuth client:{" "}
+                {jellyfinClientStatus === "ready"
                   ? "ready"
                   : jellyfinClientStatus === "reconciling"
                     ? "reconciling the created client"
@@ -400,7 +494,8 @@ export function OAuthClientRegistrationsPanel() {
                       : "not configured for this callback"}
               </p>
               <p>
-                Automatic account linking: {linkingStatus === "ready"
+                Automatic account linking:{" "}
+                {linkingStatus === "ready"
                   ? "ready"
                   : linkingStatus === "ambiguous"
                     ? "ambiguous: more than one eligible Jellyfin connection matches this public URL"
@@ -425,7 +520,10 @@ export function OAuthClientRegistrationsPanel() {
                     </li>
                   ))}
                 </ul>
-                <p>The plugin still signs in; it grants library access only until this is fixed.</p>
+                <p>
+                  The plugin still signs in; it grants library access only until
+                  this is fixed.
+                </p>
               </div>
             ) : null}
           </div>
@@ -436,7 +534,8 @@ export function OAuthClientRegistrationsPanel() {
                   id="jellyfin-plugin-client-ambiguous"
                   className="rounded-[10px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-xs text-[var(--scry-warning-text)]"
                 >
-                  More than one OAuth client is registered as the Jellyfin plugin. Delete all but one before the plugin signs in.
+                  More than one OAuth client is registered as the Jellyfin
+                  plugin. Delete all but one before the plugin signs in.
                 </p>
               ) : null}
               {jellyfinPluginClients.map((registeredClient) => (
@@ -454,7 +553,10 @@ export function OAuthClientRegistrationsPanel() {
                           {registeredClient.enabled ? "Enabled" : "Disabled"}
                         </span>
                       </div>
-                      <ClientIdLine clientId={registeredClient.clientId} onCopy={copyClientId} />
+                      <ClientIdLine
+                        clientId={registeredClient.clientId}
+                        onCopy={copyClientId}
+                      />
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -493,14 +595,19 @@ export function OAuthClientRegistrationsPanel() {
                         size="icon-sm"
                         className="shrink-0"
                         aria-label="Copy Jellyfin plugin callback URL"
-                        onClick={() => void copyJellyfinCallback(registeredClient.callbackUrl!)}
+                        onClick={() =>
+                          void copyJellyfinCallback(
+                            registeredClient.callbackUrl!,
+                          )
+                        }
                       >
                         <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                       </Button>
                     </div>
                   ) : (
                     <p className="text-xs text-[var(--scry-muted3)]">
-                      This client has no callback URL registered. Edit it to add the plugin callback.
+                      This client has no callback URL registered. Edit it to add
+                      the plugin callback.
                     </p>
                   )}
                   {registeredClient.publicBaseUrl ? (
@@ -514,7 +621,9 @@ export function OAuthClientRegistrationsPanel() {
           ) : (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="jellyfin-plugin-public-base-url">Public Jellyfin base URL</Label>
+                <Label htmlFor="jellyfin-plugin-public-base-url">
+                  Public Jellyfin base URL
+                </Label>
                 <Input
                   id="jellyfin-plugin-public-base-url"
                   value={jellyfinPublicBaseUrl}
@@ -533,10 +642,16 @@ export function OAuthClientRegistrationsPanel() {
               </div>
               <Button
                 type="button"
-                disabled={!canCreateJellyfinPluginClient(busy, jellyfinClientStatus)}
+                disabled={
+                  !canCreateJellyfinPluginClient(busy, jellyfinClientStatus)
+                }
                 onClick={() => void createJellyfinPluginClient()}
               >
-                {busy ? <LoadingMark className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                {busy ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
                 Create Jellyfin plugin client
               </Button>
               {reconcilingJellyfinClient ? (
@@ -544,7 +659,10 @@ export function OAuthClientRegistrationsPanel() {
                   <p className="text-sm font-medium text-[var(--scry-ink2)]">
                     Jellyfin plugin OAuth client reconciliation pending
                   </p>
-                  <ClientIdLine clientId={reconcilingJellyfinClient.clientId} onCopy={copyClientId} />
+                  <ClientIdLine
+                    clientId={reconcilingJellyfinClient.clientId}
+                    onCopy={copyClientId}
+                  />
                   <div className="flex min-w-0 items-center gap-1.5">
                     <code className="min-w-0 break-all text-xs text-[var(--scry-muted3)]">
                       {reconcilingJellyfinClient.callbackUrl}
@@ -555,7 +673,11 @@ export function OAuthClientRegistrationsPanel() {
                       size="icon-sm"
                       className="shrink-0"
                       aria-label="Copy Jellyfin plugin callback URL"
-                      onClick={() => void copyJellyfinCallback(reconcilingJellyfinClient.callbackUrl)}
+                      onClick={() =>
+                        void copyJellyfinCallback(
+                          reconcilingJellyfinClient.callbackUrl,
+                        )
+                      }
                     >
                       <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                     </Button>
@@ -571,7 +693,8 @@ export function OAuthClientRegistrationsPanel() {
                   </Button>
                 </div>
               ) : null}
-              {jellyfinClientStatus === "reconciling" && !reconcilingJellyfinClient ? (
+              {jellyfinClientStatus === "reconciling" &&
+              !reconcilingJellyfinClient ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -587,16 +710,26 @@ export function OAuthClientRegistrationsPanel() {
         </section>
         {managedClients.length > 0 ? (
           <div className="space-y-2">
-            <h4 className="text-sm font-medium text-[var(--scry-ink2)]">Managed applications</h4>
+            <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
+              Managed applications
+            </h4>
             {managedClients.map((registeredClient) => (
-              <div key={registeredClient.clientId} className={`${INSET_CLASS} space-y-2 p-3`}>
+              <div
+                key={registeredClient.clientId}
+                className={`${INSET_CLASS} space-y-2 p-3`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium text-[var(--scry-ink2)]">
                     {registeredClient.displayName}
                   </span>
-                  <span className="text-xs text-[var(--scry-muted3)]">Managed by Scryer</span>
+                  <span className="text-xs text-[var(--scry-muted3)]">
+                    Managed by Scryer
+                  </span>
                 </div>
-                <ClientIdLine clientId={registeredClient.clientId} onCopy={copyClientId} />
+                <ClientIdLine
+                  clientId={registeredClient.clientId}
+                  onCopy={copyClientId}
+                />
                 <p className="text-xs text-[var(--scry-muted3)]">
                   {registeredClient.redirectUris.length > 0
                     ? registeredClient.redirectUris.join(", ")
@@ -608,15 +741,22 @@ export function OAuthClientRegistrationsPanel() {
         ) : null}
 
         <div className="space-y-2">
-          <h4 className="text-sm font-medium text-[var(--scry-ink2)]">Custom applications</h4>
+          <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
+            Custom applications
+          </h4>
           {customClients.length === 0 && !loading ? (
-            <p className={`${INSET_CLASS} p-3 text-xs text-[var(--scry-muted3)]`}>
+            <p
+              className={`${INSET_CLASS} p-3 text-xs text-[var(--scry-muted3)]`}
+            >
               No custom OAuth applications are registered.
             </p>
           ) : null}
           {customClients.map((registeredClient) => (
             <div
               key={registeredClient.clientId}
+              id={`oauth-client-${registeredClient.clientId}`}
+              data-ui="oauth-client-registration"
+              data-client-name={registeredClient.displayName}
               className={`${INSET_CLASS} space-y-3 p-3 ${registeredClient.enabled ? "" : "opacity-70"}`}
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -629,10 +769,14 @@ export function OAuthClientRegistrationsPanel() {
                       {registeredClient.enabled ? "Enabled" : "Disabled"}
                     </span>
                   </div>
-                  <ClientIdLine clientId={registeredClient.clientId} onCopy={copyClientId} />
+                  <ClientIdLine
+                    clientId={registeredClient.clientId}
+                    onCopy={copyClientId}
+                  />
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
+                    id={`oauth-client-edit-${registeredClient.clientId}`}
                     type="button"
                     variant="outline"
                     size="sm"
@@ -667,6 +811,7 @@ export function OAuthClientRegistrationsPanel() {
         </div>
 
         <form
+          id="oauth-client-form"
           className={`${INSET_CLASS} space-y-4 p-3`}
           onSubmit={(event) => {
             event.preventDefault();
@@ -675,10 +820,19 @@ export function OAuthClientRegistrationsPanel() {
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
-              {editingClient ? `Edit ${editingClient.displayName}` : "Register an application"}
+              {editingClient
+                ? `Edit ${editingClient.displayName}`
+                : "Register an application"}
             </h4>
             {editingClient ? (
-              <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={resetDraft}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                id="oauth-client-cancel"
+                onClick={resetDraft}
+              >
                 Cancel
               </Button>
             ) : null}
@@ -690,26 +844,36 @@ export function OAuthClientRegistrationsPanel() {
               value={draft.displayName}
               disabled={busy}
               onChange={(event) =>
-                setDraft((previous) => ({ ...previous, displayName: event.target.value }))
+                setDraft((previous) => ({
+                  ...previous,
+                  displayName: event.target.value,
+                }))
               }
               placeholder="Example integration"
               required
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="oauth-client-redirect-uris">HTTPS callback URLs</Label>
+            <Label htmlFor="oauth-client-redirect-uris">
+              HTTPS callback URLs
+            </Label>
             <textarea
               id="oauth-client-redirect-uris"
               className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 font-[var(--font-code)] text-xs shadow-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               value={draft.redirectUris}
               disabled={busy}
               onChange={(event) =>
-                setDraft((previous) => ({ ...previous, redirectUris: event.target.value }))
+                setDraft((previous) => ({
+                  ...previous,
+                  redirectUris: event.target.value,
+                }))
               }
               placeholder="https://service.example/oauth/callback"
               required
             />
-            <p className="text-xs text-[var(--scry-muted3)]">One exact HTTPS URL per line.</p>
+            <p className="text-xs text-[var(--scry-muted3)]">
+              One exact HTTPS URL per line.
+            </p>
           </div>
           {editingClient ? (
             <CheckboxField
@@ -717,15 +881,22 @@ export function OAuthClientRegistrationsPanel() {
               checked={draft.enabled}
               disabled={busy}
               onCheckedChange={(checked) =>
-                setDraft((previous) => ({ ...previous, enabled: checked === true }))
+                setDraft((previous) => ({
+                  ...previous,
+                  enabled: checked === true,
+                }))
               }
               label="Enabled"
               description="Disabling immediately revokes all existing grants and tokens for this application."
               className="rounded-[10px] border border-[var(--scry-line2)] px-3 py-2"
             />
           ) : null}
-          <Button type="submit" disabled={busy}>
-            {busy ? <LoadingMark className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          <Button id="oauth-client-save" type="submit" disabled={busy}>
+            {busy ? (
+              <LoadingMark className="h-4 w-4" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
             {editingClient ? "Save application" : "Create application"}
           </Button>
         </form>
@@ -756,7 +927,9 @@ function ClientIdLine({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <code className="min-w-0 truncate text-xs text-[var(--scry-muted3)]">{clientId}</code>
+      <code className="min-w-0 truncate text-xs text-[var(--scry-muted3)]">
+        {clientId}
+      </code>
       <Button
         type="button"
         variant="ghost"

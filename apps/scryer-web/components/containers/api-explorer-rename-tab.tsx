@@ -3,9 +3,18 @@ import { createPortal } from "react-dom";
 import { useGraphiQL, useGraphiQLActions } from "@graphiql/react";
 import { Pencil } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
-import { renameExplorerTab, restoreExplorerTabNames } from "@/lib/graphql/api-explorer-tabs";
+import {
+  renameExplorerTab,
+  restoreExplorerTabNames,
+} from "@/lib/graphql/api-explorer-tabs";
 
-function InlineTabName({ name, onFinish }: { name: string; onFinish: (name?: string) => void }) {
+function InlineTabName({
+  name,
+  onFinish,
+}: {
+  name: string;
+  onFinish: (name?: string) => void;
+}) {
   const t = useTranslate();
   const finished = useRef(false);
   const finish = (value?: string) => {
@@ -13,20 +22,27 @@ function InlineTabName({ name, onFinish }: { name: string; onFinish: (name?: str
     finished.current = true;
     onFinish(value);
   };
-  return <input className="scryer-api-tab-name" aria-label={t("apiExplorer.tabName")}
-    defaultValue={name} maxLength={100} autoFocus
-    style={{ width: `${Math.min(32, Math.max(12, name.length + 2))}ch` }}
-    onFocus={(event) => event.target.select()}
-    onPointerDown={(event) => event.stopPropagation()}
-    onBlur={(event) => finish(event.currentTarget.value)}
-    onKeyDown={(event) => {
-      event.stopPropagation();
-      if (event.nativeEvent.isComposing) return;
-      if (event.key === "Enter" || event.key === "Escape") {
-        event.preventDefault();
-        finish(event.key === "Enter" ? event.currentTarget.value : undefined);
-      }
-    }} />;
+  return (
+    <input
+      className="scryer-api-tab-name"
+      aria-label={t("apiExplorer.tabName")}
+      defaultValue={name}
+      maxLength={100}
+      autoFocus
+      style={{ width: `${Math.min(32, Math.max(12, name.length + 2))}ch` }}
+      onFocus={(event) => event.target.select()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onBlur={(event) => finish(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.nativeEvent.isComposing) return;
+        if (event.key === "Enter" || event.key === "Escape") {
+          event.preventDefault();
+          finish(event.key === "Enter" ? event.currentTarget.value : undefined);
+        }
+      }}
+    />
+  );
 }
 
 export function ApiExplorerRenameTab() {
@@ -36,12 +52,17 @@ export function ApiExplorerRenameTab() {
   const activeTabIndex = useGraphiQL((state) => state.activeTabIndex);
   const { storeTabs } = useGraphiQLActions();
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [targets, setTargets] = useState<{ id: string; element: HTMLElement }[]>([]);
-  const beginRename = useCallback((id: string) => {
-    const tab = tabs.find((tab) => tab.id === id);
-    if (!tab) return;
-    setEditingId(id);
-  }, [tabs]);
+  const [targets, setTargets] = useState<
+    { id: string; element: HTMLElement }[]
+  >([]);
+  const beginRename = useCallback(
+    (id: string) => {
+      const tab = tabs.find((tab) => tab.id === id);
+      if (!tab) return;
+      setEditingId(id);
+    },
+    [tabs],
+  );
 
   useLayoutEffect(() => {
     // Persist labels only. moveTab also calls Monaco.setValue, which resets the
@@ -78,22 +99,44 @@ export function ApiExplorerRenameTab() {
       next.push({ id: tab.id, element: slot });
     });
     setTargets(next);
-    return () => { for (const cleanup of cleanups) cleanup(); };
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+    };
   }, [editor, tabs, beginRename]);
 
-  return targets.map(({ id, element }) => createPortal(
-      editingId === id ? <InlineTabName name={tabs.find((tab) => tab.id === id)?.title ?? ""}
-        onFinish={(name) => {
-          setEditingId(null);
-          if (name === undefined) return;
-          const renamed = renameExplorerTab(tabs, tabs.findIndex((tab) => tab.id === id), name);
-          if (renamed) storeTabs({ tabs: renamed, activeTabIndex });
-        }} /> :
-        <button type="button" className="scryer-api-tab-rename"
-          aria-label={t("apiExplorer.renameTab")} title={t("apiExplorer.renameTab")}
+  return targets.map(({ id, element }) =>
+    createPortal(
+      editingId === id ? (
+        <InlineTabName
+          name={tabs.find((tab) => tab.id === id)?.title ?? ""}
+          onFinish={(name) => {
+            setEditingId(null);
+            if (name === undefined) return;
+            const renamed = renameExplorerTab(
+              tabs,
+              tabs.findIndex((tab) => tab.id === id),
+              name,
+            );
+            if (renamed) storeTabs({ tabs: renamed, activeTabIndex });
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="scryer-api-tab-rename"
+          aria-label={t("apiExplorer.renameTab")}
+          title={t("apiExplorer.renameTab")}
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => { event.stopPropagation(); beginRename(id); }}>
+          onClick={(event) => {
+            event.stopPropagation();
+            beginRename(id);
+          }}
+        >
           <Pencil size={12} aria-hidden="true" />
-        </button>, element, id,
-  ));
+        </button>
+      ),
+      element,
+      id,
+    ),
+  );
 }

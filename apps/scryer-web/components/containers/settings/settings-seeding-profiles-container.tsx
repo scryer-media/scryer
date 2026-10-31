@@ -22,7 +22,9 @@ export function SettingsSeedingProfilesContainer() {
   const manager = useSeedingProfilesManager();
   const t = useTranslate();
   const [isEditorOpen, setIsEditorOpen] = React.useState(false);
-  const [editorMode, setEditorMode] = React.useState<"create" | "edit">("create");
+  const [editorMode, setEditorMode] = React.useState<"create" | "edit">(
+    "create",
+  );
   const [pendingEditorAction, setPendingEditorAction] =
     React.useState<PendingSeedingProfileEditorAction>(null);
   const [pendingDeleteProfileId, setPendingDeleteProfileId] = React.useState<
@@ -173,7 +175,9 @@ export function SettingsSeedingProfilesContainer() {
         deleteProfile={(profileId) => setPendingDeleteProfileId(profileId)}
         loadProfileById={requestEditProfile}
         resetDraft={requestCloseEditor}
-        setDefaultProfile={(profileId) => void manager.setDefaultProfile(profileId)}
+        setDefaultProfile={(profileId) =>
+          void manager.setDefaultProfile(profileId)
+        }
         isEditorOpen={isEditorOpen}
         editorMode={editorMode}
         startCreateProfile={requestCreateEditor}
@@ -196,6 +200,9 @@ export function SettingsSeedingProfilesContainer() {
       />
       <ConfirmDialog
         open={pendingDeleteProfileId !== null}
+        contentId="settings-seeding-profile-delete-dialog"
+        confirmButtonId="settings-seeding-profile-delete-confirm"
+        cancelButtonId="settings-seeding-profile-delete-cancel"
         title={t("label.delete")}
         description={t("settings.seedingProfileDeleteConfirm")}
         confirmLabel={t("label.delete")}

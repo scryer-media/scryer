@@ -15,7 +15,10 @@ fn parse_subscribable_notification_event_type(
     event_type: &str,
 ) -> AppResult<NotificationEventType> {
     let parsed = NotificationEventType::parse(event_type).ok_or_else(|| {
-        AppError::Validation(format!("unknown notification event type: {event_type}"))
+        AppError::validation_refused(
+            crate::error_reasons::notifications::EVENT_TYPE_UNKNOWN,
+            format!("unknown notification event type: {event_type}"),
+        )
     })?;
 
     if crate::notifications::dispatcher::supported_notification_event_types()
@@ -24,9 +27,10 @@ fn parse_subscribable_notification_event_type(
     {
         Ok(parsed)
     } else {
-        Err(AppError::Validation(format!(
-            "notification event type is not subscribable: {event_type}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::notifications::EVENT_TYPE_NOT_SUBSCRIBABLE,
+            format!("notification event type is not subscribable: {event_type}"),
+        ))
     }
 }
 
@@ -211,23 +215,28 @@ impl AppUseCase {
         } = input;
 
         if name.trim().is_empty() {
-            return Err(AppError::Validation(
-                "channel name must not be empty".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::CHANNEL_NAME_REQUIRED,
+                "channel name must not be empty",
             ));
         }
-        let channel_type = scryer_domain::ChannelType::parse(channel_type.trim())
-            .ok_or_else(|| AppError::Validation(format!("invalid channel type: {channel_type}")))?;
+        let channel_type =
+            scryer_domain::ChannelType::parse(channel_type.trim()).ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::notifications::CHANNEL_TYPE_INVALID,
+                    format!("invalid channel type: {channel_type}"),
+                )
+            })?;
         if reject_media_provider && is_media_server_notification_provider(channel_type.as_str()) {
-            return Err(AppError::Validation(
-                "media server notification targets must be managed in Media Servers".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::MEDIA_SERVER_NOTIFICATION_TARGETS_INVALID,
+                "media server notification targets must be managed in Media Servers",
             ));
         }
         if normalize_notification_media_server_connection_id(media_server_connection_id.clone())
             .is_some()
         {
-            return Err(AppError::Validation(
-                "notification channels cannot reference media server connections".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::notifications::CHANNELS_CANNOT_REFERENCE_MEDIA_SERVER_CONNECTIONS, "notification channels cannot reference media server connections"));
         }
 
         let now = Utc::now();
@@ -316,15 +325,18 @@ impl AppUseCase {
             reject_media_provider,
         } = input;
 
-        let mut channel = repo
-            .get_channel(&id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("notification channel {id}")))?;
+        let mut channel = repo.get_channel(&id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::notifications::CHANNEL_NOT_FOUND,
+                format!("notification channel {id}"),
+            )
+        })?;
 
         if let Some(n) = name {
             if n.trim().is_empty() {
-                return Err(AppError::Validation(
-                    "channel name must not be empty".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::notifications::CHANNEL_NAME_REQUIRED,
+                    "channel name must not be empty",
                 ));
             }
             channel.name = n;
@@ -336,17 +348,16 @@ impl AppUseCase {
             if normalize_notification_media_server_connection_id(media_server_connection_id)
                 .is_some()
             {
-                return Err(AppError::Validation(
-                    "notification channels cannot reference media server connections".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::notifications::CHANNELS_CANNOT_REFERENCE_MEDIA_SERVER_CONNECTIONS, "notification channels cannot reference media server connections"));
             }
             channel.media_server_connection_id = None;
         }
         if reject_media_provider
             && is_media_server_notification_provider(channel.channel_type.as_str())
         {
-            return Err(AppError::Validation(
-                "media server notification targets must be managed in Media Servers".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::MEDIA_SERVER_NOTIFICATION_TARGETS_INVALID,
+                "media server notification targets must be managed in Media Servers",
             ));
         }
         if let Some(e) = is_enabled {
@@ -381,10 +392,12 @@ impl AppUseCase {
             .await?;
 
         let repo = self.notification_channels()?;
-        let channel = repo
-            .get_channel(id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("notification channel {id}")))?;
+        let channel = repo.get_channel(id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::notifications::CHANNEL_NOT_FOUND,
+                format!("notification channel {id}"),
+            )
+        })?;
 
         let provider = self
             .services
@@ -400,20 +413,26 @@ impl AppUseCase {
             .await?;
 
         if !provider.supports_test_for_provider(channel.channel_type.as_str()) {
-            return Err(AppError::Validation(format!(
-                "notification provider '{}' does not support test notifications",
-                channel.channel_type.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS,
+                format!(
+                    "notification provider '{}' does not support test notifications",
+                    channel.channel_type.as_str()
+                ),
+            ));
         }
 
         let channel = self
             .notification_channel_with_resolved_media_server_config(channel)
             .await?;
         let client = provider.client_for_channel(&channel).ok_or_else(|| {
-            AppError::NotFound(format!(
-                "no notification plugin for channel type '{}'",
-                channel.channel_type.as_str()
-            ))
+            AppError::not_found_reason(
+                crate::error_reasons::notifications::PLUGIN_CHANNEL_TYPE_NOT_FOUND,
+                format!(
+                    "no notification plugin for channel type '{}'",
+                    channel.channel_type.as_str()
+                ),
+            )
         })?;
 
         client
@@ -571,10 +590,12 @@ impl AppUseCase {
 
         // Find all subscriptions and locate ours
         let all = repo.list_subscriptions().await?;
-        let mut sub = all
-            .into_iter()
-            .find(|s| s.id == id)
-            .ok_or_else(|| AppError::NotFound(format!("notification subscription {id}")))?;
+        let mut sub = all.into_iter().find(|s| s.id == id).ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::notifications::SUBSCRIPTION_NOT_FOUND,
+                format!("notification subscription {id}"),
+            )
+        })?;
 
         if target_kind.is_some() || target_id.is_some() {
             let (next_kind, next_id) =
@@ -678,17 +699,19 @@ impl AppUseCase {
                     .get_channel(target_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("notification channel {target_id}"))
+                        AppError::not_found_reason(
+                            crate::error_reasons::notifications::CHANNEL_NOT_FOUND,
+                            format!("notification channel {target_id}"),
+                        )
                     })?;
                 if !channel.is_enabled {
-                    return Err(AppError::Validation(
-                        "notification channel is disabled".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::notifications::CHANNEL_DISABLED,
+                        "notification channel is disabled",
                     ));
                 }
                 if is_media_server_notification_provider(channel.channel_type.as_str()) {
-                    return Err(AppError::Validation(
-                        "media server notification providers must be targeted through media server connections".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::notifications::MEDIA_SERVER_NOTIFICATION_PROVIDERS_INVALID, "media server notification providers must be targeted through media server connections"));
                 }
                 self.validate_notification_provider_required_config(
                     channel.channel_type.as_str(),
@@ -704,11 +727,15 @@ impl AppUseCase {
                     .get_by_id(target_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("media server connection {target_id}"))
+                        AppError::not_found_reason(
+                            crate::error_reasons::notifications::MEDIA_SERVER_CONNECTION_NOT_FOUND,
+                            format!("media server connection {target_id}"),
+                        )
                     })?;
                 if !connection.enabled {
-                    return Err(AppError::Validation(
-                        "media server connection is disabled".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::notifications::MEDIA_SERVER_CONNECTION_DISABLED,
+                        "media server connection is disabled",
                     ));
                 }
                 let provider_type = connection.provider.as_str().to_string();
@@ -731,16 +758,20 @@ impl AppUseCase {
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(&provider_type))
         {
-            return Err(AppError::Validation(format!(
-                "notification provider '{provider_type}' is not available"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::PROVIDER_UNAVAILABLE,
+                format!("notification provider '{provider_type}' is not available"),
+            ));
         }
         let supported_events = provider.supported_events_for_provider(&provider_type);
         if !supported_events.is_empty() && !supported_events.contains(&event_type) {
-            return Err(AppError::Validation(format!(
-                "notification provider '{provider_type}' does not support event '{}'",
-                event_type.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::notifications::PROVIDER_DOES_NOT_SUPPORT_EVENT,
+                format!(
+                    "notification provider '{provider_type}' does not support event '{}'",
+                    event_type.as_str()
+                ),
+            ));
         }
 
         Ok(match target_kind {
@@ -760,7 +791,10 @@ impl AppUseCase {
             .get_by_id(connection_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("media server connection {connection_id}"))
+                AppError::not_found_reason(
+                    crate::error_reasons::notifications::MEDIA_SERVER_CONNECTION_NOT_FOUND,
+                    format!("media server connection {connection_id}"),
+                )
             })?;
         self.notification_channel_for_media_server_connection(connection)
             .await
@@ -772,10 +806,13 @@ impl AppUseCase {
     ) -> AppResult<NotificationChannelConfig> {
         let channel_type = scryer_domain::ChannelType::parse(connection.provider.as_str())
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "invalid media server provider '{}'",
-                    connection.provider.as_str()
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::notifications::MEDIA_SERVER_PROVIDER_INVALID,
+                    format!(
+                        "invalid media server provider '{}'",
+                        connection.provider.as_str()
+                    ),
+                )
             })?;
         let mut channel = NotificationChannelConfig {
             id: format!("media-server:{}", connection.id),
@@ -813,13 +850,14 @@ impl AppUseCase {
             .get_by_id(&connection_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("media server connection {connection_id}"))
+                AppError::not_found_reason(
+                    crate::error_reasons::notifications::MEDIA_SERVER_CONNECTION_NOT_FOUND,
+                    format!("media server connection {connection_id}"),
+                )
             })?;
         if connection.provider.as_str() != channel.channel_type.as_str() {
-            return Err(AppError::Validation(
-                "notification channel media server connection provider does not match channel type"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::notifications::CHANNEL_MEDIA_SERVER_CONNECTION_PROVIDER_DOES_NOT_MATCH_CHANNEL_TYPE, "notification channel media server connection provider does not match channel type"
+                    ));
         }
         channel.config_json =
             self.media_server_notification_config_json(&connection, Some(&channel.config_json))?;
@@ -849,10 +887,13 @@ impl AppUseCase {
         );
         if connection.provider == MediaServerProvider::Plex {
             let parsed = Url::parse(&connection.base_url).map_err(|err| {
-                AppError::Validation(format!(
-                    "invalid Plex media server base URL '{}': {err}",
-                    connection.base_url
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::notifications::PLEX_MEDIA_SERVER_BASE_URL_INVALID,
+                    format!(
+                        "invalid Plex media server base URL '{}': {err}",
+                        connection.base_url
+                    ),
+                )
             })?;
             if let Some(host) = parsed
                 .host_str()
@@ -922,12 +963,16 @@ impl AppUseCase {
         config_json: &str,
     ) -> AppResult<()> {
         let config = serde_json::from_str::<serde_json::Value>(config_json).map_err(|error| {
-            AppError::Validation(format!(
-                "notification configuration is not valid JSON: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::notifications::CONFIGURATION_INVALID,
+                format!("notification configuration is not valid JSON: {error}"),
+            )
         })?;
         let config = config.as_object().ok_or_else(|| {
-            AppError::Validation("notification configuration must be a JSON object".into())
+            AppError::validation_refused(
+                crate::error_reasons::notifications::CONFIGURATION_INVALID,
+                "notification configuration must be a JSON object",
+            )
         })?;
         for field in self.notification_provider_config_fields(provider_type) {
             if !field.required {
@@ -938,10 +983,13 @@ impl AppUseCase {
                 .and_then(|value| value.as_str())
                 .is_some_and(|value| !value.trim().is_empty());
             if !present {
-                return Err(AppError::Validation(format!(
-                    "notification provider '{provider_type}' requires '{}'",
-                    field.label
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::notifications::PROVIDER_REQUIRES,
+                    format!(
+                        "notification provider '{provider_type}' requires '{}'",
+                        field.label
+                    ),
+                ));
             }
         }
         Ok(())
@@ -1001,7 +1049,10 @@ fn normalize_notification_target(
         .as_deref()
         .map(|value| {
             NotificationTargetKind::parse(value).ok_or_else(|| {
-                AppError::Validation(format!("invalid notification target kind: {value}"))
+                AppError::validation_refused(
+                    crate::error_reasons::notifications::TARGET_KIND_INVALID,
+                    format!("invalid notification target kind: {value}"),
+                )
             })
         })
         .transpose()?;
@@ -1019,15 +1070,20 @@ fn normalize_notification_target(
         (Some(NotificationTargetKind::PluginChannel), None, Some(id)) => {
             Ok((NotificationTargetKind::PluginChannel, id))
         }
-        (Some(kind), None, _) => Err(AppError::Validation(format!(
-            "notification target id is required for target kind '{}'",
-            kind.as_str()
-        ))),
-        (None, Some(_), _) => Err(AppError::Validation(
-            "notification target kind is required when target id is provided".into(),
+        (Some(kind), None, _) => Err(AppError::validation_refused(
+            crate::error_reasons::notifications::TARGET_ID_REQUIRED_TARGET_KIND,
+            format!(
+                "notification target id is required for target kind '{}'",
+                kind.as_str()
+            ),
         )),
-        (None, None, None) => Err(AppError::Validation(
-            "notification subscription target is required".into(),
+        (None, Some(_), _) => Err(AppError::validation_refused(
+            crate::error_reasons::notifications::TARGET_KIND_REQUIRED_WHEN_TARGET_ID_PROVIDED,
+            "notification target kind is required when target id is provided",
+        )),
+        (None, None, None) => Err(AppError::validation_refused(
+            crate::error_reasons::notifications::SUBSCRIPTION_TARGET_REQUIRED,
+            "notification subscription target is required",
         )),
     }
 }

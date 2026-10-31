@@ -29,7 +29,10 @@ test("audio language labels render Original and concrete codes readably", () => 
     formatAudioLanguageLabels(["original", "jpn"], ORIGINAL_LABEL),
     `${ORIGINAL_LABEL}, Japanese`,
   );
-  assert.equal(formatAudioLanguageLabels(["ORIGINAL"], ORIGINAL_LABEL), ORIGINAL_LABEL);
+  assert.equal(
+    formatAudioLanguageLabels(["ORIGINAL"], ORIGINAL_LABEL),
+    ORIGINAL_LABEL,
+  );
 });
 
 test("audio language options speak the codes the backend stores", () => {
@@ -74,6 +77,8 @@ test("search language options use the stored terminological codes", () => {
   for (const bibliographic of ["ger", "fre", "chi", "zht", "pob", "scc"]) {
     assert.ok(!codes.includes(bibliographic), bibliographic);
   }
-  assert.ok(codes.includes("deu") && codes.includes("swe") && codes.includes("zho"));
+  assert.ok(
+    codes.includes("deu") && codes.includes("swe") && codes.includes("zho"),
+  );
   assert.equal(formatSearchLanguageLabels(["swe", "deu"]), "Swedish, German");
 });

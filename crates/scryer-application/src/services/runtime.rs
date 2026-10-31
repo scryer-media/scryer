@@ -263,6 +263,23 @@ pub(crate) const DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS: &str =
 /// per-download-client families live in the router crate and are described by
 /// `scryer_infrastructure_acquisition::describe_download_client_router_metrics`.
 pub fn describe_download_queue_metrics() {
+    metrics::describe_counter!(
+        "scryer_download_enrichment_cache_total",
+        "Stable enrichment cache lookups and evictions, by result."
+    );
+    metrics::describe_counter!(
+        "scryer_download_enrichment_batch_total",
+        "Enrichment repository batch operations, by lookup family."
+    );
+    metrics::describe_gauge!(
+        "scryer_download_enrichment_cache_entries",
+        "Retained stable enrichment cache entries."
+    );
+    metrics::describe_gauge!(
+        "scryer_download_enrichment_cache_bytes",
+        metrics::Unit::Bytes,
+        "Accounted retained enrichment keys, values and entry overhead."
+    );
     metrics::describe_gauge!(
         DOWNLOAD_QUEUE_ITEMS,
         "Download-queue items currently projected, by queue state."
@@ -496,8 +513,13 @@ impl DownloadQueueSnapshotCache {
             return;
         };
 
-        if item.attention_reason == item.import_error_message {
+        if item
+            .attention_reason_code
+            .as_deref()
+            .is_some_and(|code| code.starts_with("IMPORT_"))
+        {
             item.attention_reason = None;
+            item.attention_reason_code = None;
         }
         item.import_status = Some(record.status);
         item.import_type = Some(record.import_type);
@@ -505,6 +527,11 @@ impl DownloadQueueSnapshotCache {
         item.import_error_message = error_message.clone();
         if error_message.is_some() {
             item.attention_reason = error_message;
+            item.attention_reason_code = Some(
+                error_code
+                    .map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()))
+                    .unwrap_or_else(|| "IMPORT_FAILED".to_string()),
+            );
         }
         item.import_transfer_phase = record.import_transfer_phase;
         item.import_transfer_bytes = record.import_transfer_bytes;
@@ -741,6 +768,7 @@ mod download_queue_snapshot_cache_tests {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: id,
             download_id: None,
@@ -1056,6 +1084,7 @@ pub struct AppRuntimeAcquisitionState {
     /// [`AcquisitionTitleWalkLocks`] for why the two callers take it
     /// differently.
     pub(crate) title_walk_locks: AcquisitionTitleWalkLocks,
+    pub(crate) walk_priority: AcquisitionWalkPriority,
     /// Consecutive background cycles each facet was deferred behind an active
     /// library scan, reported so a starved facet is visible in the logs.
     pub(crate) scan_blocked_facet_streaks:
@@ -1091,6 +1120,8 @@ pub struct AppRuntimeAcquisitionState {
     /// not keep resolving). Bumping invalidates the whole memo; in steady
     /// state (history unchanged, nothing grabbed or imported) nothing bumps.
     pub(crate) download_registry_generation: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) download_enrichment:
+        Arc<crate::integration::download_enrichment::DownloadEnrichmentCache>,
     /// Process-wide memo of client-observation identity resolutions, shared by
     /// the queue-enrichment and tracked-download paths. See
     /// [`crate::download_identity::ObservationResolutionCache`].
@@ -1126,6 +1157,8 @@ pub struct AppRuntimeAcquisitionState {
             >,
         >,
     >,
+    pub(crate) raw_search_budget:
+        Arc<crate::catalog::interactive_release_search::memory::RawSearchBudget>,
     /// Landed bars the background cutoff pass already derived, keyed by every
     /// input of the derivation. See [`crate::quality::landed_bar_memo`].
     pub(crate) landed_bar_memo: Arc<crate::quality::landed_bar_memo::LandedBarMemo>,
@@ -2282,6 +2315,8 @@ pub struct AppRuntimeJobState {
     pub job_run_tracker: JobRunTracker,
     pub(crate) full_hash_start_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) full_hash_execution_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Image maintenance queues FIFO; hash backfill only tries immediate admission.
+    pub(crate) background_disk_maintenance: Arc<tokio::sync::Mutex<()>>,
     pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
@@ -2290,6 +2325,7 @@ pub struct AppRuntimeJobState {
     /// Serializes destructive whole-system maintenance such as restore and
     /// application upgrades for the lifetime of the operation.
     pub system_maintenance_lock: Arc<tokio::sync::Mutex<()>>,
+    pub restore: Arc<crate::RestoreCoordinator>,
     /// The executable host installs this callback once it has assembled its
     /// restart controller.
     pub application_upgrade_restart:
@@ -2435,6 +2471,11 @@ where
 #[derive(Clone)]
 pub struct AppRuntimeIntegrationState {
     pub managed_indexer_sync_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Managed children whose caps a pass asked for and did not get, so the
+    /// next passes wait before asking again. In memory on purpose: a restart
+    /// simply asks once more.
+    pub(crate) managed_caps_unanswered:
+        Arc<crate::integration::indexer_caps_cache::UnansweredCapsRequests>,
     pub(crate) navigation_badge_facts: NavigationBadgeFactsCache,
 }
 
@@ -2605,6 +2646,7 @@ impl AppRuntimeState {
                 download_submission_guards: DownloadSubmissionGuardTable::default(),
                 download_failure_guards: DownloadFailureGuardTable::default(),
                 title_walk_locks: AcquisitionTitleWalkLocks::default(),
+                walk_priority: AcquisitionWalkPriority::default(),
                 scan_blocked_facet_streaks: Arc::default(),
                 interrupted_walk_scope_keys: Arc::default(),
                 release_candidate_passwords: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -2620,6 +2662,7 @@ impl AppRuntimeState {
                 download_queue_read_model: DownloadQueueReadModelCache::default(),
                 wanted_projection_generation: Arc::new(std::sync::atomic::AtomicU64::new(1)),
                 download_registry_generation: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                download_enrichment: Arc::default(),
                 download_observation_resolutions: Arc::new(tokio::sync::Mutex::new(
                     Default::default(),
                 )),
@@ -2631,6 +2674,7 @@ impl AppRuntimeState {
                 download_client_category_admission: DownloadClientCategorySnapshotStore::default(),
                 acquisition_search_cancellation_tokens: Arc::new(Mutex::new(HashMap::new())),
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
+                raw_search_budget: Arc::default(),
                 landed_bar_memo: Arc::default(),
             },
             imports: AppRuntimeImportState {
@@ -2660,12 +2704,14 @@ impl AppRuntimeState {
                 job_run_tracker: JobRunTracker::new(),
                 full_hash_start_lock: Arc::new(tokio::sync::Mutex::new(())),
                 full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
+                background_disk_maintenance: Arc::new(tokio::sync::Mutex::new(())),
                 full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),
                 title_deletion_lock: Arc::new(tokio::sync::Mutex::new(())),
                 system_maintenance_lock: Arc::new(tokio::sync::Mutex::new(())),
+                restore: Arc::new(crate::RestoreCoordinator::default()),
                 application_upgrade_restart: Arc::new(std::sync::RwLock::new(None)),
                 #[cfg(not(windows))]
                 application_upgrade_bundle_signature_check: Arc::new(std::sync::RwLock::new(None)),
@@ -2689,6 +2735,7 @@ impl AppRuntimeState {
             },
             integrations: AppRuntimeIntegrationState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
+                managed_caps_unanswered: Arc::default(),
                 navigation_badge_facts: NavigationBadgeFactsCache::default(),
             },
         }

@@ -24,8 +24,9 @@ const PROXY_AVIF_QUALITY: u8 = 60;
 
 fn artwork_pool(workers: usize) -> AppResult<rayon::ThreadPool> {
     if !matches!(workers, 2 | 4) {
-        return Err(AppError::Validation(
-            "artwork worker count must be two or four".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_ARTWORK_WORKER_COUNT_INVALID,
+            "artwork worker count must be two or four",
         ));
     }
     let (ready, results) = std::sync::mpsc::channel();
@@ -98,7 +99,12 @@ impl HttpTitleImageProcessor {
         let target =
             scryer_outbound_http::prepare_untrusted_public_http_target(&source_url, "title image")
                 .await
-                .map_err(|error| AppError::Validation(error.to_string()))?;
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::MEDIA_IMAGE_SOURCE_REJECTED,
+                        error.to_string(),
+                    )
+                })?;
         let scope = title_image_scope(&source_url);
         let response = self
             .outbound_http
@@ -134,8 +140,9 @@ impl HttpTitleImageProcessor {
             })?;
 
         if response.status().is_redirection() {
-            return Err(AppError::Validation(
-                "title image redirects are not allowed".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_IMAGE_REDIRECT_FORBIDDEN,
+                "title image redirects are not allowed",
             ));
         }
 
@@ -153,10 +160,13 @@ impl HttpTitleImageProcessor {
             .and_then(|value| value.parse::<usize>().ok())
             && length > self.max_source_bytes
         {
-            return Err(AppError::Validation(format!(
-                "title image exceeds max size of {} bytes",
-                self.max_source_bytes
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE,
+                format!(
+                    "title image exceeds max size of {} bytes",
+                    self.max_source_bytes
+                ),
+            ));
         }
 
         if let Some(content_type) = response
@@ -165,9 +175,10 @@ impl HttpTitleImageProcessor {
             .and_then(|value| value.to_str().ok())
             && !content_type.starts_with("image/")
         {
-            return Err(AppError::Validation(format!(
-                "unsupported title image content type: {content_type}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_IMAGE_CONTENT_TYPE_UNSUPPORTED,
+                format!("unsupported title image content type: {content_type}"),
+            ));
         }
 
         let etag = response
@@ -185,10 +196,13 @@ impl HttpTitleImageProcessor {
             AppError::Repository(format!("failed to read title image bytes: {err}"))
         })?;
         if bytes.len() > self.max_source_bytes {
-            return Err(AppError::Validation(format!(
-                "title image exceeds max size of {} bytes",
-                self.max_source_bytes
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_IMAGE_TOO_LARGE,
+                format!(
+                    "title image exceeds max size of {} bytes",
+                    self.max_source_bytes
+                ),
+            ));
         }
 
         Ok((source_url, bytes.to_vec(), etag, last_modified))
@@ -203,18 +217,33 @@ impl HttpTitleImageProcessor {
         source_last_modified: Option<String>,
         variant_specs: Vec<TitleImageVariantSpec>,
     ) -> AppResult<TitleImageSourceResult> {
-        let guessed_format = image::guess_format(bytes)
-            .map_err(|err| AppError::Validation(format!("failed to detect image format: {err}")))?;
-        let source_format = SupportedImageFormat::from_image_format(guessed_format)
-            .ok_or_else(|| AppError::Validation("unsupported image format".to_string()))?;
-        let decoded = image::load_from_memory_with_format(bytes, guessed_format)
-            .map_err(|err| AppError::Validation(format!("failed to decode image: {err}")))?;
+        let guessed_format = image::guess_format(bytes).map_err(|err| {
+            AppError::validation_refused(
+                crate::error_reasons::MEDIA_IMAGE_FORMAT_DETECTION_FAILED,
+                format!("failed to detect image format: {err}"),
+            )
+        })?;
+        let source_format =
+            SupportedImageFormat::from_image_format(guessed_format).ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::MEDIA_IMAGE_FORMAT_UNSUPPORTED,
+                    "unsupported image format".to_string(),
+                )
+            })?;
+        let decoded =
+            image::load_from_memory_with_format(bytes, guessed_format).map_err(|err| {
+                AppError::validation_refused(
+                    crate::error_reasons::MEDIA_IMAGE_DECODE_FAILED,
+                    format!("failed to decode image: {err}"),
+                )
+            })?;
         let oriented = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1));
         let rgba = oriented.to_rgba8();
         let (source_width, source_height) = rgba.dimensions();
 
         if source_width == 0 || source_height == 0 {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_IMAGE_DIMENSIONS_EMPTY,
                 "image dimensions must be non-zero".to_string(),
             ));
         }
@@ -330,12 +359,16 @@ impl TitleImageProcessor for HttpTitleImageProcessor {
 
 fn encode_proxy_jpeg(bytes: &[u8], width: u32) -> AppResult<Vec<u8>> {
     if bytes.len() > MAX_SOURCE_BYTES || width == 0 || width > 1280 {
-        return Err(AppError::Validation(
-            "invalid cached JPEG size or target width".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_CACHED_JPEG_DIMENSIONS_INVALID,
+            "invalid cached JPEG size or target width",
         ));
     }
     if image::guess_format(bytes).ok() != Some(ImageFormat::Jpeg) {
-        return Err(AppError::Validation("cached image is not a JPEG".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_CACHED_IMAGE_NOT_JPEG,
+            "cached image is not a JPEG",
+        ));
     }
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
     let mut limits = image::Limits::default();
@@ -343,9 +376,12 @@ fn encode_proxy_jpeg(bytes: &[u8], width: u32) -> AppResult<Vec<u8>> {
     limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(128 * 1024 * 1024);
     reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|error| AppError::Validation(format!("failed to decode cached JPEG: {error}")))?;
+    let decoded = reader.decode().map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::MEDIA_CACHED_JPEG_DECODE_FAILED,
+            format!("failed to decode cached JPEG: {error}"),
+        )
+    })?;
     let rgba = apply_orientation(decoded, read_exif_orientation(bytes).unwrap_or(1)).to_rgba8();
     let width = width.min(rgba.width());
     let height = scaled_height(rgba.width(), rgba.height(), width);
@@ -423,7 +459,7 @@ fn resize_rgba_linear_box(image: &RgbaImage, width: u32, height: u32) -> AppResu
 
 fn rgba_to_premultiplied_linear(image: &RgbaImage) -> Vec<fir::pixels::F32x4> {
     let mut out = Vec::with_capacity(image.width() as usize * image.height() as usize);
-    for pixel in image.as_raw().chunks_exact(4) {
+    for pixel in image.as_raw().as_chunks::<4>().0 {
         let alpha = pixel[3] as f32 / 255.0;
         out.push(fir::pixels::F32x4::new([
             srgb_to_linear(pixel[0]) * alpha,

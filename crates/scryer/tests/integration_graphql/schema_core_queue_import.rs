@@ -2323,6 +2323,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
         episode_id: None,
@@ -3504,6 +3505,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
     let source_dir = tempfile::tempdir().expect("source tempdir");
     std::fs::write(source_dir.path().join("fixture.mkv"), b"video").expect("write fixture video");
     let item = DownloadQueueItem {
+        attention_reason_code: None,
         id: item_id.to_string(),
         title_id: None,
         episode_id: None,

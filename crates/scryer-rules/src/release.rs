@@ -150,6 +150,8 @@ pub struct StereoscopyDoc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReleaseDoc {
+    /// Download protocol frozen from the listing, or unknown.
+    pub protocol: Option<ReleaseProtocol>,
     /// Canonical parser claims and conflict tokens, independent of raw spelling.
     pub stereoscopy_tokens: Vec<String>,
     pub stereoscopy: Option<StereoscopyDoc>,
@@ -205,6 +207,34 @@ pub struct ReleaseDoc {
     /// Arbitrary plugin-supplied metadata, accessible as `input.release.extra.*` in Rego.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// The download protocol family exposed to scoring rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseProtocol {
+    Usenet,
+    Torrent,
+    Http,
+}
+
+impl ReleaseProtocol {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "usenet" => Some(Self::Usenet),
+            "torrent" => Some(Self::Torrent),
+            "http" => Some(Self::Http),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Usenet => "usenet",
+            Self::Torrent => "torrent",
+            Self::Http => "http",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -2077,6 +2107,7 @@ score_entry["internal"] := 300 if {
     fn test_input() -> UserRuleInput {
         UserRuleInput {
             release: ReleaseDoc {
+                protocol: None,
                 stereoscopy: None,
                 stereoscopy_tokens: vec![],
                 raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265".to_string(),

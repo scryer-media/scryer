@@ -4,7 +4,11 @@ import { useActivityEventStream } from "@/lib/hooks/use-activity-event-stream";
 import { TITLE_OVERVIEW_IMPORT_REFRESH_KINDS } from "@/lib/utils/title-overview-refresh-policy";
 import type { CurrentReleaseScope } from "@/lib/utils/current-release";
 import { currentReleaseFilesQuery } from "@/lib/graphql/queries";
-import { currentReleaseNames, releaseIdentityName, type CurrentReleaseFile } from "@/lib/utils/current-release";
+import {
+  currentReleaseNames,
+  releaseIdentityName,
+  type CurrentReleaseFile,
+} from "@/lib/utils/current-release";
 import {
   Ban,
   ArrowDown,
@@ -31,8 +35,15 @@ import {
 } from "@/lib/utils/dom-ids";
 import type { Release } from "@/lib/types";
 
-import { sortReleaseSearchResults as sortBy, type ReleaseSearchSortKey, type ReleaseSearchSortDirection } from "@/lib/utils/release-search-sort";
-export type { ReleaseSearchSortKey, ReleaseSearchSortDirection } from "@/lib/utils/release-search-sort";
+import {
+  sortReleaseSearchResults as sortBy,
+  type ReleaseSearchSortKey,
+  type ReleaseSearchSortDirection,
+} from "@/lib/utils/release-search-sort";
+export type {
+  ReleaseSearchSortKey,
+  ReleaseSearchSortDirection,
+} from "@/lib/utils/release-search-sort";
 type SortKey = ReleaseSearchSortKey;
 type SortDirection = ReleaseSearchSortDirection;
 type SearchResultPresentation = "default" | "selected-title";
@@ -120,13 +131,12 @@ function SearchResultRow({
       <span className="min-w-0 break-words">{blockReason}</span>
     </span>
   ) : null;
-  const approvedBadge =
-    decision?.allowed ? (
-      <span className="inline-flex items-center gap-1 rounded-[6px] bg-[var(--scry-success-bg-strong)] px-[7px] py-px text-[10px] font-bold text-[var(--scry-success-text-soft)]">
-        <Check className="h-2.5 w-2.5" />
-        Approved
-      </span>
-    ) : null;
+  const approvedBadge = decision?.allowed ? (
+    <span className="inline-flex items-center gap-1 rounded-[6px] bg-[var(--scry-success-bg-strong)] px-[7px] py-px text-[10px] font-bold text-[var(--scry-success-text-soft)]">
+      <Check className="h-2.5 w-2.5" />
+      Approved
+    </span>
+  ) : null;
   const currentFileBadge = currentFile ? (
     <span
       data-ui="release-search-result-current-file"
@@ -160,28 +170,53 @@ function SearchResultRow({
   const parsedMetadata = result.parsedRelease
     ? [
         result.parsedRelease.detectedHdr
-          ? { label: "HDR", className: "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]" }
+          ? {
+              label: "HDR",
+              className:
+                "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]",
+            }
           : null,
         result.parsedRelease.isDolbyVision
           ? {
               label: "Dolby Vision",
-              className: "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]",
+              className:
+                "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]",
             }
           : null,
         result.parsedRelease.isProperUpload
-          ? { label: "Proper", className: "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]" }
+          ? {
+              label: "Proper",
+              className:
+                "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]",
+            }
           : null,
         result.parsedRelease.isRemux
-          ? { label: "Remux", className: "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]" }
+          ? {
+              label: "Remux",
+              className:
+                "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]",
+            }
           : null,
         result.parsedRelease.isBdDisk
-          ? { label: "BD", className: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text)]" }
+          ? {
+              label: "BD",
+              className:
+                "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text)]",
+            }
           : null,
         result.parsedRelease.isAiEnhanced
-          ? { label: "AI Enhanced", className: "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text)]" }
+          ? {
+              label: "AI Enhanced",
+              className:
+                "bg-[var(--scry-danger-bg-strong)] text-[var(--scry-danger-text)]",
+            }
           : null,
         result.parsedRelease.isAtmos
-          ? { label: "Atmos", className: "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]" }
+          ? {
+              label: "Atmos",
+              className:
+                "bg-[var(--scry-info-bg-strong)] text-[var(--scry-info-text)]",
+            }
           : null,
       ]
         .filter(Boolean)
@@ -209,7 +244,8 @@ function SearchResultRow({
       : queueUnavailableCode === "minimum_seeders"
         ? t("queue.belowMinimumSeeders")
         : null;
-  const queueDisabled = disabled || queueRequested || queueUnavailableReason !== null;
+  const queueDisabled =
+    disabled || queueRequested || queueUnavailableReason !== null;
   const queueButtonMuted = queueUnavailableReason !== null;
   const additionalQueueDisabled =
     disabled ||
@@ -269,7 +305,6 @@ function SearchResultRow({
     }
   }, [additionalQueueDisabled, onQueueAdditional, result]);
 
-
   if (presentation === "selected-title") {
     const scoreClassName = scoreToneClassName(decision?.releaseScore);
     const selectedTitleTags = [
@@ -288,152 +323,154 @@ function SearchResultRow({
 
     return (
       <div className="border-b border-[var(--scry-line2)] last:border-b-0">
-      <div
-        id={rowId}
-        data-ui="release-search-result-row"
-        data-release-source={result.source ?? ""}
-        data-release-title={result.title}
-        data-release-link={result.link ?? ""}
-        data-release-download-url={result.downloadUrl ?? ""}
-        data-release-candidate-token={result.candidateToken ?? ""}
-        className="flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-[var(--scry-hover)] max-md:flex-col max-md:items-stretch"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="mb-1.5 break-words text-[13px] font-semibold leading-[1.35] text-[var(--scry-ink2)]">
-            {result.title}
-          </div>
-          <div className="mb-2 flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[11px] text-[var(--scry-faint)]">
-            <Database className="h-3 w-3 shrink-0" />
-            <span>{result.source ?? t("label.unknown")}</span>
-            {result.publishedAt ? (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="h-[3px] w-[3px] rounded-full bg-[var(--scry-faint4)]"
-                />
-                <span>{result.publishedAt}</span>
-              </>
-            ) : null}
-            {approvedBadge}
-            {currentFileBadge}{packBadge}
-            {rejectionBadge}
-          </div>
-          {selectedTitleTags.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {selectedTitleTags.map((metadataBit, index) => (
-                <span
-                  key={`${metadataBit.label}-${index}`}
-                  className={metadataBit.className}
-                >
-                  {metadataBit.label}
-                </span>
-              ))}
+        <div
+          id={rowId}
+          data-ui="release-search-result-row"
+          data-release-source={result.source ?? ""}
+          data-release-title={result.title}
+          data-release-link={result.link ?? ""}
+          data-release-download-url={result.downloadUrl ?? ""}
+          data-release-candidate-token={result.candidateToken ?? ""}
+          className="flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-[var(--scry-hover)] max-md:flex-col max-md:items-stretch"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="mb-1.5 break-words text-[13px] font-semibold leading-[1.35] text-[var(--scry-ink2)]">
+              {result.title}
             </div>
-          ) : null}
-          <MovieAvailabilityBadge result={result} className="mt-2" />
-          {queueUnavailableReason ? (
-            <p
-              id={queueReasonId}
-              data-ui="release-search-result-queue-reason"
-              data-reason={queueUnavailableCode ?? undefined}
-              className="mt-2 text-[11px] text-[var(--scry-faint)]"
-            >
-              {queueUnavailableReason}
-            </p>
-          ) : null}
-        </div>
-        <div className="w-[74px] shrink-0 text-center max-md:w-auto max-md:text-left">
-          {hasLog ? (
-            <button
-              type="button"
-              onClick={() => setExpanded((prev) => !prev)}
-              aria-expanded={expanded}
-              aria-label={
-                expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")
-              }
-              className={cn(
-                "text-[14px] font-bold tabular-nums underline-offset-2 hover:underline",
-                scoreClassName,
-              )}
-            >
-              {formatScore(decision?.releaseScore)}
-            </button>
-          ) : (
-            <div
-              className={cn(
-                "text-[14px] font-bold tabular-nums",
-                scoreClassName,
-              )}
-            >
-              {formatScore(decision?.releaseScore)}
-            </div>
-          )}
-          <div className="mt-0.5 text-[9.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint3)]">
-            {t("nzb.score")}
-          </div>
-        </div>
-        <div className="w-16 shrink-0 text-right max-md:w-auto max-md:text-left">
-          <div className="font-[var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
-            {bytesToWholeReadable(result.sizeBytes)}
-          </div>
-        </div>
-        <div className="flex w-[166px] shrink-0 flex-col gap-[7px] max-md:w-full">
-          <Button
-            id={queueButtonId}
-            data-ui="release-search-result-queue"
-            size="sm"
-            onClick={handleQueueClick}
-            disabled={queueDisabled}
-            className={cn(
-              "h-[38px] justify-center gap-[7px] rounded-[10px] border-0 text-[12.5px] font-bold text-[var(--scry-success-on-solid)] shadow-[0_6px_16px_rgba(var(--scry-success-rgb),0.28)]",
-              queueButtonMuted
-                ? "border border-[var(--scry-border2)] bg-[var(--scry-soft)] text-[var(--scry-muted3)] shadow-none hover:bg-[var(--scry-soft)] hover:text-[var(--scry-muted3)]"
-                : "bg-[var(--scry-success-solid)] hover:bg-[var(--scry-success-solid-hover)]",
-            )}
-          >
-            {queueRequested ? (
-              <>
-                <Check className="h-[15px] w-[15px]" />
-                {t("queue.state.queued")}
-              </>
-            ) : (
-              <>
-                <Download className="h-[15px] w-[15px]" />
-                {t("nzb.queue")}
-              </>
-            )}
-          </Button>
-          {onQueueAdditional ? (
-            <Button
-              id={queueAdditionalButtonId}
-              data-ui="release-search-result-queue-additional"
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={handleQueueAdditionalClick}
-              disabled={additionalQueueDisabled}
-              className={cn(
-                "h-[34px] justify-center gap-[7px] rounded-[10px] border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[11.5px] font-semibold text-[var(--scry-accent-text)] shadow-none hover:border-[var(--scry-accent)] hover:bg-[rgba(var(--scry-accent-rgb),0.26)] hover:text-[var(--scry-accent-text)]",
-                additionalQueueRequested &&
-                  "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)] hover:border-[var(--scry-success-border-strong)] hover:bg-[var(--scry-success-bg-strong)] hover:text-[var(--scry-success-text)]",
-              )}
-            >
-              {additionalQueueRequested ? (
+            <div className="mb-2 flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[11px] text-[var(--scry-faint)]">
+              <Database className="h-3 w-3 shrink-0" />
+              <span>{result.source ?? t("label.unknown")}</span>
+              {result.publishedAt ? (
                 <>
-                  <Check className="h-3.5 w-3.5" />
+                  <span
+                    aria-hidden="true"
+                    className="h-[3px] w-[3px] rounded-full bg-[var(--scry-faint4)]"
+                  />
+                  <span>{result.publishedAt}</span>
+                </>
+              ) : null}
+              {approvedBadge}
+              {currentFileBadge}
+              {packBadge}
+              {rejectionBadge}
+            </div>
+            {selectedTitleTags.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedTitleTags.map((metadataBit, index) => (
+                  <span
+                    key={`${metadataBit.label}-${index}`}
+                    className={metadataBit.className}
+                  >
+                    {metadataBit.label}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <MovieAvailabilityBadge result={result} className="mt-2" />
+            {queueUnavailableReason ? (
+              <p
+                id={queueReasonId}
+                data-ui="release-search-result-queue-reason"
+                data-reason={queueUnavailableCode ?? undefined}
+                className="mt-2 text-[11px] text-[var(--scry-faint)]"
+              >
+                {queueUnavailableReason}
+              </p>
+            ) : null}
+          </div>
+          <div className="w-[74px] shrink-0 text-center max-md:w-auto max-md:text-left">
+            {hasLog ? (
+              <button
+                type="button"
+                data-ui="score-log-toggle"
+                onClick={() => setExpanded((prev) => !prev)}
+                aria-expanded={expanded}
+                aria-label={
+                  expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")
+                }
+                className={cn(
+                  "text-[14px] font-bold tabular-nums underline-offset-2 hover:underline",
+                  scoreClassName,
+                )}
+              >
+                {formatScore(decision?.releaseScore)}
+              </button>
+            ) : (
+              <div
+                className={cn(
+                  "text-[14px] font-bold tabular-nums",
+                  scoreClassName,
+                )}
+              >
+                {formatScore(decision?.releaseScore)}
+              </div>
+            )}
+            <div className="mt-0.5 text-[9.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint3)]">
+              {t("nzb.score")}
+            </div>
+          </div>
+          <div className="w-16 shrink-0 text-right max-md:w-auto max-md:text-left">
+            <div className="font-[var(--font-code)] text-[15px] font-bold text-[var(--scry-ink2)]">
+              {bytesToWholeReadable(result.sizeBytes)}
+            </div>
+          </div>
+          <div className="flex w-[166px] shrink-0 flex-col gap-[7px] max-md:w-full">
+            <Button
+              id={queueButtonId}
+              data-ui="release-search-result-queue"
+              size="sm"
+              onClick={handleQueueClick}
+              disabled={queueDisabled}
+              className={cn(
+                "h-[38px] justify-center gap-[7px] rounded-[10px] border-0 text-[12.5px] font-bold text-[var(--scry-success-on-solid)] shadow-[0_6px_16px_rgba(var(--scry-success-rgb),0.28)]",
+                queueButtonMuted
+                  ? "border border-[var(--scry-border2)] bg-[var(--scry-soft)] text-[var(--scry-muted3)] shadow-none hover:bg-[var(--scry-soft)] hover:text-[var(--scry-muted3)]"
+                  : "bg-[var(--scry-success-solid)] hover:bg-[var(--scry-success-solid-hover)]",
+              )}
+            >
+              {queueRequested ? (
+                <>
+                  <Check className="h-[15px] w-[15px]" />
                   {t("queue.state.queued")}
                 </>
               ) : (
                 <>
-                  <FilePlus2 className="h-3.5 w-3.5" />
-                  {t("nzb.queueAdditionalFile")}
+                  <Download className="h-[15px] w-[15px]" />
+                  {t("nzb.queue")}
                 </>
               )}
             </Button>
-          ) : null}
+            {onQueueAdditional ? (
+              <Button
+                id={queueAdditionalButtonId}
+                data-ui="release-search-result-queue-additional"
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleQueueAdditionalClick}
+                disabled={additionalQueueDisabled}
+                className={cn(
+                  "h-[34px] justify-center gap-[7px] rounded-[10px] border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[11.5px] font-semibold text-[var(--scry-accent-text)] shadow-none hover:border-[var(--scry-accent)] hover:bg-[rgba(var(--scry-accent-rgb),0.26)] hover:text-[var(--scry-accent-text)]",
+                  additionalQueueRequested &&
+                    "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)] hover:border-[var(--scry-success-border-strong)] hover:bg-[var(--scry-success-bg-strong)] hover:text-[var(--scry-success-text)]",
+                )}
+              >
+                {additionalQueueRequested ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" />
+                    {t("queue.state.queued")}
+                  </>
+                ) : (
+                  <>
+                    <FilePlus2 className="h-3.5 w-3.5" />
+                    {t("nzb.queueAdditionalFile")}
+                  </>
+                )}
+              </Button>
+            ) : null}
+          </div>
         </div>
-      </div>
-      {expanded && hasLog ? <ScoringLogPanel decision={decision} /> : null}
+        {expanded && hasLog ? <ScoringLogPanel decision={decision} /> : null}
       </div>
     );
   }
@@ -472,10 +509,13 @@ function SearchResultRow({
                 {hasLog ? (
                   <button
                     type="button"
+                    data-ui="score-log-toggle"
                     onClick={() => setExpanded((prev) => !prev)}
                     aria-expanded={expanded}
                     aria-label={
-                      expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")
+                      expanded
+                        ? t("nzb.hideScoringLog")
+                        : t("nzb.showScoringLog")
                     }
                     className="inline-flex items-center gap-1"
                   >
@@ -498,7 +538,8 @@ function SearchResultRow({
                 )}
               </>
             ) : null}
-            {currentFileBadge}{packBadge}
+            {currentFileBadge}
+            {packBadge}
             {rejectionBadge}
           </div>
           {parsedBits.length > 0 ? (
@@ -624,7 +665,8 @@ function SearchResultRow({
                   <span>{result.publishedAt}</span>
                 </>
               ) : null}
-              {currentFileBadge}{packBadge}
+              {currentFileBadge}
+              {packBadge}
               {rejectionBadge}
             </div>
             {parsedBits.length > 0 ? (
@@ -670,6 +712,7 @@ function SearchResultRow({
               <button
                 type="button"
                 className={`text-sm font-[var(--font-code)] underline-offset-2 hover:underline ${scoreToneClassName(decision.releaseScore)}`}
+                data-ui="score-log-toggle"
                 onClick={() => setExpanded((prev) => !prev)}
                 aria-label={
                   expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")
@@ -765,7 +808,11 @@ function SearchResultRow({
 }
 
 const EMPTY_CURRENT_RELEASES = new Set<string>();
-const OWNED_RELEASE_REFRESH_KINDS = new Set([...TITLE_OVERVIEW_IMPORT_REFRESH_KINDS, "system_notice", "file_analyzed"]);
+const OWNED_RELEASE_REFRESH_KINDS = new Set([
+  ...TITLE_OVERVIEW_IMPORT_REFRESH_KINDS,
+  "system_notice",
+  "file_analyzed",
+]);
 type SearchResultBucketsProps = Omit<
   React.ComponentProps<typeof SearchResultBucketsContent>,
   "currentNames"
@@ -787,16 +834,25 @@ function TitleSearchResultBuckets({
   ownedScope,
   ...props
 }: SearchResultBucketsProps & { titleId: string }) {
-  const [{ data }, refresh] = useQuery<{ title: { id: string; mediaFiles: CurrentReleaseFile[] } | null }>({
+  const [{ data }, refresh] = useQuery<{
+    title: { id: string; mediaFiles: CurrentReleaseFile[] } | null;
+  }>({
     query: currentReleaseFilesQuery,
     variables: { id: titleId },
     requestPolicy: "cache-and-network",
   });
-  useActivityEventStream({ titleId, kinds: OWNED_RELEASE_REFRESH_KINDS,
+  useActivityEventStream({
+    titleId,
+    kinds: OWNED_RELEASE_REFRESH_KINDS,
     onStart: () => refresh({ requestPolicy: "network-only" }),
-    onEvent: () => refresh({ requestPolicy: "network-only" }) });
+    onEvent: () => refresh({ requestPolicy: "network-only" }),
+  });
   const currentNames = React.useMemo(
-    () => currentReleaseNames(data?.title?.id === titleId ? data.title.mediaFiles : [], ownedScope),
+    () =>
+      currentReleaseNames(
+        data?.title?.id === titleId ? data.title.mediaFiles : [],
+        ownedScope,
+      ),
     [data, titleId, ownedScope],
   );
   return <SearchResultBucketsContent {...props} currentNames={currentNames} />;
@@ -834,7 +890,8 @@ function SearchResultBucketsContent({
   presentation?: SearchResultPresentation;
 }) {
   const t = useTranslate();
-  const [localSortKey, setLocalSortKey] = React.useState<SortKey>("recommended");
+  const [localSortKey, setLocalSortKey] =
+    React.useState<SortKey>("recommended");
   const [localSortDirection, setLocalSortDirection] =
     React.useState<SortDirection>("desc");
   const sortKey = controlledSortKey ?? localSortKey;
@@ -850,11 +907,7 @@ function SearchResultBucketsContent({
   const handleSort = React.useCallback(
     (next: SortKey) => {
       const nextDirection: SortDirection =
-        sortKey === next
-          ? sortDirection === "asc"
-            ? "desc"
-            : "asc"
-          : "desc";
+        sortKey === next ? (sortDirection === "asc" ? "desc" : "asc") : "desc";
 
       if (controlledSortKey === undefined) {
         setLocalSortKey(next);
@@ -864,7 +917,13 @@ function SearchResultBucketsContent({
       }
       onSortChange?.(next, nextDirection);
     },
-    [controlledSortDirection, controlledSortKey, onSortChange, sortDirection, sortKey],
+    [
+      controlledSortDirection,
+      controlledSortKey,
+      onSortChange,
+      sortDirection,
+      sortKey,
+    ],
   );
 
   const renderSortIcon = React.useCallback(
@@ -886,11 +945,7 @@ function SearchResultBucketsContent({
       return (
         <div className="space-y-3">
           {hideInlineSortControls ? null : (
-            <div
-              className={cn(
-                "flex flex-wrap items-center gap-2",
-              )}
-            >
+            <div className={cn("flex flex-wrap items-center gap-2")}>
               <Button
                 type="button"
                 size="xs"
@@ -923,7 +978,9 @@ function SearchResultBucketsContent({
               <SearchResultRow
                 key={`${result.source}-${result.title}-${result.link}`}
                 result={result}
-                currentFile={currentNames.has(releaseIdentityName(result.title))}
+                currentFile={currentNames.has(
+                  releaseIdentityName(result.title),
+                )}
                 onQueue={onQueue}
                 onQueueAdditional={
                   onQueueAdditional &&
@@ -984,7 +1041,9 @@ function SearchResultBucketsContent({
                   <SearchResultRow
                     key={`${result.source}-${result.title}-${result.link}`}
                     result={result}
-                    currentFile={currentNames.has(releaseIdentityName(result.title))}
+                    currentFile={currentNames.has(
+                      releaseIdentityName(result.title),
+                    )}
                     onQueue={onQueue}
                     onQueueAdditional={
                       onQueueAdditional &&

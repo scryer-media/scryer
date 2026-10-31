@@ -93,7 +93,7 @@ export function SetupImportWizard({
   goToStep,
   onExit,
 }: SetupImportWizardProps) {
-  const wizard = useExternalImportSetup({ client });
+  const wizard = useExternalImportSetup({ client, t });
   const {
     loadPreview,
     pollAggregateProgress,
@@ -307,7 +307,7 @@ export function SetupImportWizard({
     case 5:
       body = (
         <SetupImportSummaryView wizard={wizard} t={t} onReconnect={reconnect} />
-      );;
+      );
       primaryLabel = t("setup.finishImport");
       primaryIcon = Check;
       // Finish needs the warmup complete AND a loaded preview whose every

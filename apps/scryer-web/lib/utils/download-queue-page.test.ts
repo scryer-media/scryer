@@ -34,7 +34,10 @@ test("queue page ranges append infinitely and deduplicate stable identities", ()
   );
   pages = mergeDownloadQueuePageRange(
     pages,
-    [item("item-49"), ...Array.from({ length: 49 }, (_, index) => item(`item-${index + 50}`))],
+    [
+      item("item-49"),
+      ...Array.from({ length: 49 }, (_, index) => item(`item-${index + 50}`)),
+    ],
     50,
     50,
     { reset: false, revision: 1, totalCount: 99 },
@@ -48,13 +51,11 @@ test("queue page ranges append infinitely and deduplicate stable identities", ()
 
 test("queue refreshes retain unchanged item references", () => {
   const original = item("unchanged");
-  const pages = mergeDownloadQueuePageRange(
-    new Map(),
-    [original],
-    0,
-    50,
-    { reset: true, revision: 1, totalCount: 1 },
-  );
+  const pages = mergeDownloadQueuePageRange(new Map(), [original], 0, 50, {
+    reset: true,
+    revision: 1,
+    totalCount: 1,
+  });
   const unchanged = mergeDownloadQueuePageRange(
     pages,
     [{ ...original }],
@@ -84,13 +85,32 @@ test("filter or sort resets discard retained queue pages", () => {
     revision: 2,
     totalCount: 1,
   });
-  assert.deepEqual(flattenDownloadQueuePages(reset).map((row) => row.id), ["new-0"]);
+  assert.deepEqual(
+    flattenDownloadQueuePages(reset).map((row) => row.id),
+    ["new-0"],
+  );
 });
 
 test("queue shrink evicts retained pages and recomputes the contiguous offset", () => {
   const existing = new Map<number, DownloadQueueRetainedPage>([
-    [0, { items: Array.from({ length: 50 }, (_, index) => item(`old-${index}`)), revision: 1, stale: false }],
-    [50, { items: Array.from({ length: 50 }, (_, index) => item(`old-${index + 50}`)), revision: 1, stale: false }],
+    [
+      0,
+      {
+        items: Array.from({ length: 50 }, (_, index) => item(`old-${index}`)),
+        revision: 1,
+        stale: false,
+      },
+    ],
+    [
+      50,
+      {
+        items: Array.from({ length: 50 }, (_, index) =>
+          item(`old-${index + 50}`),
+        ),
+        revision: 1,
+        stale: false,
+      },
+    ],
     [100, { items: [item("old-100")], revision: 1, stale: false }],
   ]);
   const next = mergeDownloadQueuePageRange(
@@ -116,7 +136,9 @@ test("retained pages become stale by revision and refresh when visible", () => {
 });
 
 test("queue sync refreshes the first 200 rows and the visible retained page", () => {
-  assert.deepEqual(downloadQueueSyncRefreshRanges(150, 120), [{ offset: 0, limit: 150 }]);
+  assert.deepEqual(downloadQueueSyncRefreshRanges(150, 120), [
+    { offset: 0, limit: 150 },
+  ]);
   assert.deepEqual(downloadQueueSyncRefreshRanges(350, 275), [
     { offset: 0, limit: 200 },
     { offset: 250, limit: 50 },
@@ -136,5 +158,12 @@ test("old or pre-sync queue responses cannot overwrite newer pages", () => {
 });
 
 test("a queue refresh that is briefly behind stays quiet until it keeps happening", () => {
-  assert.deepEqual([1, 2, 3, 4, 5, 6].map(shouldSurfaceRefreshBehind), [false, false, false, false, true, true]);
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(shouldSurfaceRefreshBehind), [
+    false,
+    false,
+    false,
+    false,
+    true,
+    true,
+  ]);
 });

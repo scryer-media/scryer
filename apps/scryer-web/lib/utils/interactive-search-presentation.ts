@@ -51,6 +51,9 @@ export function deriveInteractiveSearchPresentation({
       .map((indexer) => indexer.name),
     skippedIndexers: indexers
       .filter((indexer) => indexer.status === "SKIPPED")
-      .map((indexer) => ({ name: indexer.name, reason: indexer.failureReason })),
+      .map((indexer) => ({
+        name: indexer.name,
+        reason: indexer.failureReason,
+      })),
   };
 }

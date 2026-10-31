@@ -1,4 +1,10 @@
-import { Headphones, Scale, SlidersHorizontal, Zap, MonitorSmartphone } from "lucide-react";
+import {
+  Headphones,
+  Scale,
+  SlidersHorizontal,
+  Zap,
+  MonitorSmartphone,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   SetupBackButton,
@@ -24,11 +30,36 @@ interface SetupPersonaViewProps {
   saving: boolean;
 }
 
-const PERSONAS: { id: ScoringPersonaId; icon: typeof Scale; labelKey: string; descKey: string }[] = [
-  { id: "BALANCED", icon: Scale, labelKey: "qualityProfile.personaBalanced", descKey: "setup.personaBalancedDesc" },
-  { id: "AUDIOPHILE", icon: Headphones, labelKey: "qualityProfile.personaAudiophile", descKey: "setup.personaAudiophileDesc" },
-  { id: "EFFICIENT", icon: Zap, labelKey: "qualityProfile.personaEfficient", descKey: "setup.personaEfficientDesc" },
-  { id: "COMPATIBLE", icon: MonitorSmartphone, labelKey: "qualityProfile.personaCompatible", descKey: "setup.personaCompatibleDesc" },
+const PERSONAS: {
+  id: ScoringPersonaId;
+  icon: typeof Scale;
+  labelKey: string;
+  descKey: string;
+}[] = [
+  {
+    id: "BALANCED",
+    icon: Scale,
+    labelKey: "qualityProfile.personaBalanced",
+    descKey: "setup.personaBalancedDesc",
+  },
+  {
+    id: "AUDIOPHILE",
+    icon: Headphones,
+    labelKey: "qualityProfile.personaAudiophile",
+    descKey: "setup.personaAudiophileDesc",
+  },
+  {
+    id: "EFFICIENT",
+    icon: Zap,
+    labelKey: "qualityProfile.personaEfficient",
+    descKey: "setup.personaEfficientDesc",
+  },
+  {
+    id: "COMPATIBLE",
+    icon: MonitorSmartphone,
+    labelKey: "qualityProfile.personaCompatible",
+    descKey: "setup.personaCompatibleDesc",
+  },
 ];
 
 const QUALITY_TARGETS: QualityTargetId[] = ["1080p", "4k"];
@@ -62,9 +93,7 @@ export function SetupPersonaView({
           <div key={id} className="flex items-start gap-1.5 py-0.5">
             <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              <span className="font-medium text-foreground">
-                {t(labelKey)}
-              </span>{" "}
+              <span className="font-medium text-foreground">{t(labelKey)}</span>{" "}
               — {t(descKey)}
             </span>
           </div>
@@ -76,10 +105,7 @@ export function SetupPersonaView({
         {FACETS.map(({ id: facet, labelKey }) => {
           const prefs = facetPrefs[facet];
           return (
-            <div
-              key={facet}
-              className="rounded-lg border border-border p-4"
-            >
+            <div key={facet} className="rounded-lg border border-border p-4">
               <h3 className="mb-3 text-sm font-medium">{t(labelKey)}</h3>
               <div className="flex flex-wrap items-start gap-4">
                 {/* Quality target */}

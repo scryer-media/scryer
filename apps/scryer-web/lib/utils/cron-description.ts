@@ -45,14 +45,18 @@ const loadedLocales = new Set<string>([ENGLISH]);
 const pendingLoads = new Map<string, Promise<void>>();
 
 /** The cronstrue locale for an interface language code, English when there is none. */
-export function cronstrueLocaleFor(uiLanguage: string | null | undefined): string {
+export function cronstrueLocaleFor(
+  uiLanguage: string | null | undefined,
+): string {
   if (!uiLanguage) {
     return ENGLISH;
   }
   return CRONSTRUE_LOCALE_BY_UI_LANGUAGE[uiLanguage] ?? ENGLISH;
 }
 
-export function isCronDescriptionLocaleLoaded(uiLanguage: string | null | undefined): boolean {
+export function isCronDescriptionLocaleLoaded(
+  uiLanguage: string | null | undefined,
+): boolean {
   return loadedLocales.has(cronstrueLocaleFor(uiLanguage));
 }
 
@@ -60,7 +64,9 @@ export function isCronDescriptionLocaleLoaded(uiLanguage: string | null | undefi
  * Loads the cronstrue locale for an interface language. Resolves once
  * descriptions can be given in it; a failed load leaves descriptions in English.
  */
-export function loadCronDescriptionLocale(uiLanguage: string | null | undefined): Promise<void> {
+export function loadCronDescriptionLocale(
+  uiLanguage: string | null | undefined,
+): Promise<void> {
   const locale = cronstrueLocaleFor(uiLanguage);
   if (loadedLocales.has(locale)) {
     return Promise.resolve();
@@ -134,7 +140,11 @@ export function describeScriptSchedule(
   options: CronDescriptionOptions = {},
 ): string | null {
   if (schedule?.kind === "CRON" && schedule.expression) {
-    const described = describeCronExpression(schedule.expression, uiLanguage, options);
+    const described = describeCronExpression(
+      schedule.expression,
+      uiLanguage,
+      options,
+    );
     if (described) return described;
   }
   return serverDescription || null;

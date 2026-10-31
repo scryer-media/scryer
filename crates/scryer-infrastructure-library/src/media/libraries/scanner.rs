@@ -47,13 +47,17 @@ impl FileSystemLibraryScanner {
 
     async fn validate_root(root: &str) -> AppResult<PathBuf> {
         let root_path = scryer_application::stored_paths::stored_path_to_path_buf(root);
-        let metadata = fs::metadata(&root_path)
-            .await
-            .map_err(|err| AppError::Validation(format!("library path error: {err}")))?;
+        let metadata = fs::metadata(&root_path).await.map_err(|err| {
+            AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
+                format!("library path error: {err}"),
+            )
+        })?;
 
         if !metadata.is_dir() {
-            return Err(AppError::Validation(
-                "library path must be a directory".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_PATH_NOT_DIRECTORY,
+                "library path must be a directory",
             ));
         }
 
@@ -82,8 +86,9 @@ impl FileSystemLibraryScanner {
         batch_size: usize,
     ) -> AppResult<LibraryFileBatchReceiver> {
         if batch_size == 0 {
-            return Err(AppError::Validation(
-                "batch size must be greater than 0".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_SCAN_BATCH_SIZE_INVALID,
+                "batch size must be greater than 0",
             ));
         }
 
@@ -407,8 +412,12 @@ impl LibraryScanner for FileSystemLibraryScanner {
 
         tokio::task::spawn_blocking(move || {
             let mut files = Vec::new();
-            let entries = stdfs::read_dir(&root_path)
-                .map_err(|err| AppError::Validation(format!("library path error: {err}")))?;
+            let entries = stdfs::read_dir(&root_path).map_err(|err| {
+                AppError::validation_refused(
+                    crate::error_reasons::MEDIA_LIBRARY_PATH_UNAVAILABLE,
+                    format!("library path error: {err}"),
+                )
+            })?;
             for entry in entries.filter_map(|entry| entry.ok()) {
                 let path = entry.path();
                 let is_file = entry

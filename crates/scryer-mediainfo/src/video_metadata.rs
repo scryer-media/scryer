@@ -91,7 +91,7 @@ fn captions(
     }
     let mut digital = Vec::with_capacity(128);
     let mut expected = None;
-    for triplet in data[3..end].chunks_exact(3) {
+    for triplet in data[3..end].as_chunks::<3>().0 {
         if triplet[0] & 0xf8 != 0xf8 || triplet[0] & 4 == 0 {
             continue;
         }

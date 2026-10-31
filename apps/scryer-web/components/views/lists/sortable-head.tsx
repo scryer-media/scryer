@@ -14,10 +14,20 @@ type SortableHeadProps = {
 };
 
 /** A column heading that sorts its table: the first press sorts ascending, the next reverses it. */
-export function SortableHead({ id, label, active, descending, onSort, className }: SortableHeadProps) {
+export function SortableHead({
+  id,
+  label,
+  active,
+  descending,
+  onSort,
+  className,
+}: SortableHeadProps) {
   const Icon = !active ? ArrowUpDown : descending ? ArrowDown : ArrowUp;
   return (
-    <TableHead className={className} aria-sort={active ? (descending ? "descending" : "ascending") : "none"}>
+    <TableHead
+      className={className}
+      aria-sort={active ? (descending ? "descending" : "ascending") : "none"}
+    >
       <button
         id={id}
         type="button"
@@ -25,7 +35,10 @@ export function SortableHead({ id, label, active, descending, onSort, className 
         onClick={onSort}
       >
         <span>{label}</span>
-        <Icon aria-hidden="true" className={cn("h-3.5 w-3.5", !active && "text-[var(--scry-faint2)]")} />
+        <Icon
+          aria-hidden="true"
+          className={cn("h-3.5 w-3.5", !active && "text-[var(--scry-faint2)]")}
+        />
       </button>
     </TableHead>
   );

@@ -65,9 +65,12 @@ export function useManualImportLauncher({
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-  const { request: requestPasswordRetry, dialog: passwordRetryDialog } = useDownloadPasswordRetry();
+  const { request: requestPasswordRetry, dialog: passwordRetryDialog } =
+    useDownloadPasswordRetry();
   const [busyItemId, setBusyItemId] = React.useState<string | null>(null);
-  const [dialogTarget, setDialogTarget] = React.useState<DialogTarget | null>(null);
+  const [dialogTarget, setDialogTarget] = React.useState<DialogTarget | null>(
+    null,
+  );
   const onImportQueuedRef = React.useRef(onImportQueued);
   const onImportRetriedRef = React.useRef(onImportRetried ?? onImportQueued);
   React.useEffect(() => {
@@ -75,9 +78,11 @@ export function useManualImportLauncher({
     onImportRetriedRef.current = onImportRetried ?? onImportQueued;
   });
   const notifyImportRetried = React.useCallback((item: DownloadQueueItem) => {
-    void Promise.resolve().then(() => onImportRetriedRef.current(item)).catch((error: unknown) => {
-      console.error("[manual-import] refresh after retry failed:", error);
-    });
+    void Promise.resolve()
+      .then(() => onImportRetriedRef.current(item))
+      .catch((error: unknown) => {
+        console.error("[manual-import] refresh after retry failed:", error);
+      });
   }, []);
   const notifyImportQueued = React.useCallback((item: DownloadQueueItem) => {
     // The import is queued either way; a failed reload only leaves the page
@@ -96,18 +101,17 @@ export function useManualImportLauncher({
       extractArchives: boolean,
     ): Promise<ManualImportSelection | null> => {
       const { data, error } = await client
-        .mutation<{ beginManualImportSelection?: ManualImportSelection | null }>(
-          beginManualImportSelectionMutation,
-          {
-            input: {
-              clientId: item.clientId,
-              clientType: item.clientType,
-              downloadClientItemId: item.downloadClientItemId,
-              titleId,
-              ...(extractArchives ? { extractArchives: true } : {}),
-            },
+        .mutation<{
+          beginManualImportSelection?: ManualImportSelection | null;
+        }>(beginManualImportSelectionMutation, {
+          input: {
+            clientId: item.clientId,
+            clientType: item.clientType,
+            downloadClientItemId: item.downloadClientItemId,
+            titleId,
+            ...(extractArchives ? { extractArchives: true } : {}),
           },
-        )
+        })
         .toPromise();
       if (error) {
         throw error;
@@ -170,7 +174,11 @@ export function useManualImportLauncher({
         notifyImportQueued(item);
       } catch (error: unknown) {
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("queue.manualImportFailed")),
+          userFacingGraphQlErrorMessage(
+            error,
+            t("queue.manualImportFailed"),
+            t,
+          ),
           { level: "ERROR" },
         );
       } finally {
@@ -209,7 +217,16 @@ export function useManualImportLauncher({
     />
   ) : null;
 
-  return { launch, busyItemId, dialog: <>{dialog}{passwordRetryDialog}</> };
+  return {
+    launch,
+    busyItemId,
+    dialog: (
+      <>
+        {dialog}
+        {passwordRetryDialog}
+      </>
+    ),
+  };
 }
 
 /**
@@ -231,7 +248,9 @@ export function TitleManualImportButton({
   className?: string;
 }) {
   const t = useTranslate();
-  const item = completedDownloads.find((candidate) => allowsManualImport(candidate));
+  const item = completedDownloads.find((candidate) =>
+    allowsManualImport(candidate),
+  );
   if (!canManageTitle || !item) {
     return null;
   }

@@ -434,7 +434,7 @@ async fn pending_media_request_blocks_profile_removal_after_library_allowlist_ch
         .expect_err("persisted pending request must remain a deletion reference");
 
     assert!(
-        matches!(error, AppError::Validation(message) if message.contains("pending media request"))
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("pending media request"))
     );
 }
 
@@ -643,7 +643,7 @@ async fn submit_media_request_rejects_profiles_outside_library_request_allowlist
         .expect_err("request profile outside allowlist should fail");
 
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("not allowed")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("not allowed")),
         "unexpected error: {error:?}"
     );
     assert!(harness.media_requests.requests.lock().await.is_empty());
@@ -1092,7 +1092,7 @@ async fn submit_media_request_checks_existing_titles_against_enriched_ids() {
         .expect_err("enriched tmdb identity should block existing title request");
 
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("already exists")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("already exists")),
         "unexpected error: {error:?}"
     );
     assert!(harness.media_requests.requests.lock().await.is_empty());
@@ -1112,7 +1112,7 @@ async fn submit_media_request_rejects_ids_that_cannot_correlate_to_smg_search() 
         .expect_err("unsupported identity should fail");
 
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("searchable SMG identifier")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("searchable SMG identifier")),
         "unexpected error: {error:?}"
     );
 }
@@ -1182,7 +1182,7 @@ async fn submit_media_request_blocks_existing_title_in_target_library() {
         .expect_err("existing title identity should block request");
 
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("already exists")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("already exists")),
         "unexpected error: {error:?}"
     );
     assert!(harness.media_requests.requests.lock().await.is_empty());
@@ -1204,7 +1204,10 @@ async fn submit_media_request_requires_request_permission_and_matching_facet() {
         .await
         .expect_err("request permission should be required");
     assert!(
-        matches!(permission_error, AppError::Unauthorized(_)),
+        matches!(
+            permission_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "unexpected permission error: {permission_error:?}"
     );
 
@@ -1216,7 +1219,7 @@ async fn submit_media_request_requires_request_permission_and_matching_facet() {
         .await
         .expect_err("facet mismatch should fail");
     assert!(
-        matches!(facet_error, AppError::Validation(ref message) if message.contains("facet")),
+        matches!(facet_error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("facet")),
         "unexpected facet error: {facet_error:?}"
     );
 }
@@ -1242,7 +1245,10 @@ async fn submit_media_request_rejects_manage_titles_shadowed_request_permission(
         .expect_err("manage titles should suppress personal request submission");
 
     assert!(
-        matches!(error, AppError::Unauthorized(_)),
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "unexpected error: {error:?}"
     );
     assert!(harness.media_requests.requests.lock().await.is_empty());
@@ -1291,7 +1297,10 @@ async fn submit_media_request_allows_mixed_manage_and_request_libraries() {
         .expect_err("managed library should reject personal submission");
 
     assert!(
-        matches!(managed_error, AppError::Unauthorized(_)),
+        matches!(
+            managed_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "unexpected managed-library error: {managed_error:?}"
     );
     let requests = harness.media_requests.requests.lock().await;
@@ -1691,7 +1700,7 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
         .await
         .expect_err("resolved request cannot be updated");
     assert!(
-        matches!(update_error, AppError::Validation(ref message) if message.contains("no longer pending")),
+        matches!(update_error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("no longer pending")),
         "unexpected update error: {update_error:?}"
     );
 
@@ -1701,7 +1710,7 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
         .await
         .expect_err("resolved request cannot be canceled");
     assert!(
-        matches!(cancel_error, AppError::Validation(ref message) if message.contains("no longer pending")),
+        matches!(cancel_error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("no longer pending")),
         "unexpected cancel error: {cancel_error:?}"
     );
 }
@@ -1806,7 +1815,7 @@ async fn only_a_resolver_can_reopen_and_only_a_dismissed_request() {
         .await
         .expect_err("a pending request is not reopened");
     assert!(
-        matches!(pending_error, AppError::Validation(ref message) if message.contains("dismissed")),
+        matches!(pending_error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("dismissed")),
         "unexpected error: {pending_error:?}"
     );
 
@@ -1821,7 +1830,10 @@ async fn only_a_resolver_can_reopen_and_only_a_dismissed_request() {
         .await
         .expect_err("the requester cannot reopen their dismissed request");
     assert!(
-        matches!(requester_error, AppError::Unauthorized(_)),
+        matches!(
+            requester_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "unexpected error: {requester_error:?}"
     );
     assert_eq!(
@@ -1846,7 +1858,12 @@ async fn only_a_resolver_can_reopen_and_only_a_dismissed_request() {
         .await
         .expect_err("a canceled request is not reopened");
     assert!(
-        matches!(canceled_error, AppError::Validation(_)),
+        matches!(
+            canceled_error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "unexpected error: {canceled_error:?}"
     );
     assert!(
@@ -2364,7 +2381,7 @@ async fn submit_advanced_series_request_without_a_selection_is_rejected() {
         .await
         .expect_err("advanced without a selection is a validation error");
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("advanced monitoring")),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("advanced monitoring")),
         "unexpected error: {error:?}"
     );
 }
@@ -2383,7 +2400,7 @@ async fn submit_movie_request_rejects_the_advanced_monitor_type() {
         .await
         .expect_err("advanced monitoring is series-only");
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("series and anime")),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("series and anime")),
         "unexpected error: {error:?}"
     );
 }
@@ -2949,7 +2966,10 @@ async fn a_title_manager_sees_and_cancels_their_own_held_request() {
         .cancel_my_media_request(&other_manager, &outcome.request_id)
         .await
         .expect_err("a manager who did not file the request cannot withdraw it");
-    assert!(matches!(refused, AppError::Unauthorized(_)));
+    assert!(matches!(
+        refused,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
 
     let canceled = harness
         .app

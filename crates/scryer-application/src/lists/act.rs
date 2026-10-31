@@ -242,10 +242,14 @@ pub async fn act_on_candidate(
 /// so the item stays `Pending` and is retried next sync.
 fn failed_action_state(error: &AppError) -> ListMembershipState {
     match error {
-        AppError::Unauthorized(_) => ListMembershipState::BlockedPermission,
-        AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::NotFound(_) => {
-            ListMembershipState::Rejected
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. } => {
+            ListMembershipState::BlockedPermission
         }
+        AppError::Validation(_)
+        | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. }
+        | AppError::NotFound(_)
+        | AppError::NotFoundReason { .. } => ListMembershipState::Rejected,
         _ => ListMembershipState::Pending,
     }
 }
@@ -281,9 +285,11 @@ async fn add_outcome(
 /// viewers.
 fn action_failure_reason(error: &AppError) -> String {
     match error {
-        AppError::Unauthorized(_) => "not_permitted",
-        AppError::Validation(_) | AppError::ValidationRefused { .. } => REFUSED_REASON,
-        AppError::NotFound(_) => NOT_FOUND_REASON,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. } => "not_permitted",
+        AppError::Validation(_)
+        | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. } => REFUSED_REASON,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. } => NOT_FOUND_REASON,
         _ => "action_failed",
     }
     .to_string()

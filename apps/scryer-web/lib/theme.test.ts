@@ -39,7 +39,10 @@ test("stored theme migration is idempotent and leaves other preferences alone", 
     let value = initial;
     let writes = 0;
     const storage = {
-      getItem(key: string) { assert.equal(key, "theme"); return value; },
+      getItem(key: string) {
+        assert.equal(key, "theme");
+        return value;
+      },
       setItem(key: string, next: string) {
         assert.equal(key, "theme");
         value = next;
@@ -54,13 +57,15 @@ test("stored theme migration is idempotent and leaves other preferences alone", 
 });
 
 test("provider bootstrap applies dark for legacy read-only storage and preserves system themes", () => {
-  const markup = renderToStaticMarkup(createElement(ThemeProvider, {
-    attribute: "class",
-    defaultTheme: "dark",
-    enableSystem: true,
-    themes: [...SELECTABLE_THEMES],
-    value: THEME_CLASS_NAMES,
-  }));
+  const markup = renderToStaticMarkup(
+    createElement(ThemeProvider, {
+      attribute: "class",
+      defaultTheme: "dark",
+      enableSystem: true,
+      themes: [...SELECTABLE_THEMES],
+      value: THEME_CLASS_NAMES,
+    }),
+  );
   const script = markup.match(/<script[^>]*>([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script, "provider must render its initial theme script");
   for (const [stored, systemDark, expected] of [
@@ -75,13 +80,16 @@ test("provider bootstrap applies dark for legacy read-only storage and preserves
     runInNewContext(script, {
       localStorage: {
         getItem: () => stored,
-        setItem: () => { throw new Error("read-only storage"); },
+        setItem: () => {
+          throw new Error("read-only storage");
+        },
       },
       window: { matchMedia: () => ({ matches: systemDark }) },
       document: {
         documentElement: {
           classList: {
-            remove: (...names: string[]) => names.forEach((name) => classes.delete(name)),
+            remove: (...names: string[]) =>
+              names.forEach((name) => classes.delete(name)),
             add: (name: string) => classes.add(name),
           },
           style: {},

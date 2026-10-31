@@ -12,22 +12,34 @@ function encoded(value: string): string {
 }
 
 test("pretty prints valid JSON and preserves raw text", () => {
-  const body = presentIndexerErrorBody(encoded('{"error":{"code":429}}'), "application/json");
+  const body = presentIndexerErrorBody(
+    encoded('{"error":{"code":429}}'),
+    "application/json",
+  );
   assert.equal(body.format, "json");
   assert.equal(body.formattedText, '{\n  "error": {\n    "code": 429\n  }\n}');
   assert.equal(body.rawText, '{"error":{"code":429}}');
 });
 
 test("pretty prints valid XML and falls back for malformed XML", () => {
-  const valid = presentIndexerErrorBody(encoded("<error><code>100</code></error>"), "application/xml");
+  const valid = presentIndexerErrorBody(
+    encoded("<error><code>100</code></error>"),
+    "application/xml",
+  );
   assert.equal(valid.formattedText, "<error>\n  <code>100</code>\n</error>");
-  const invalid = presentIndexerErrorBody(encoded("<error><code></error>"), "application/xml");
+  const invalid = presentIndexerErrorBody(
+    encoded("<error><code></error>"),
+    "application/xml",
+  );
   assert.equal(invalid.formattedText, null);
   assert.equal(invalid.rawText, "<error><code></error>");
 });
 
 test("rejects multiple XML roots and mixed content instead of rewriting them", () => {
-  const multipleRoots = presentIndexerErrorBody(encoded("<first/><second/>"), "application/xml");
+  const multipleRoots = presentIndexerErrorBody(
+    encoded("<first/><second/>"),
+    "application/xml",
+  );
   assert.equal(multipleRoots.formattedText, null);
   assert.equal(multipleRoots.rawText, "<first/><second/>");
 
@@ -36,7 +48,10 @@ test("rejects multiple XML roots and mixed content instead of rewriting them", (
     "application/xml",
   );
   assert.equal(mixedContent.formattedText, null);
-  assert.equal(mixedContent.rawText, "<message>left <strong>important</strong> right</message>");
+  assert.equal(
+    mixedContent.rawText,
+    "<message>left <strong>important</strong> right</message>",
+  );
 });
 
 test("caps previews at one MiB and reports the full decoded length", () => {
@@ -59,7 +74,9 @@ test("keeps a UTF-8 preview when the byte cap splits a multibyte character", () 
 });
 
 test("treats invalid UTF-8 as binary", () => {
-  const body = presentIndexerErrorBody(Buffer.from([0xff, 0xfe]).toString("base64"));
+  const body = presentIndexerErrorBody(
+    Buffer.from([0xff, 0xfe]).toString("base64"),
+  );
   assert.equal(body.format, "binary");
   assert.equal(body.rawText, null);
 });
@@ -71,7 +88,13 @@ test("calculates padded and unpadded decoded sizes", () => {
 });
 
 test("recognizes sensitive response header names", () => {
-  for (const name of ["Authorization", "set-cookie", "X-Api-Key", "x-auth-token", "client-secret"]) {
+  for (const name of [
+    "Authorization",
+    "set-cookie",
+    "X-Api-Key",
+    "x-auth-token",
+    "client-secret",
+  ]) {
     assert.equal(isSensitiveIndexerErrorHeader(name), true, name);
   }
   assert.equal(isSensitiveIndexerErrorHeader("content-type"), false);

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -24,7 +25,9 @@ export function useTitleReleaseBlocklistClear({
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-  const [clearingEntryId, setClearingEntryId] = React.useState<string | null>(null);
+  const [clearingEntryId, setClearingEntryId] = React.useState<string | null>(
+    null,
+  );
 
   const clear = React.useCallback(
     async (entryId: string) => {
@@ -39,7 +42,10 @@ export function useTitleReleaseBlocklistClear({
         setGlobalStatus(t("status.blocklistEntryCleared"));
         await onCleared();
       } catch (error: unknown) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setClearingEntryId((current) => (current === entryId ? null : current));
       }

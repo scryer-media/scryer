@@ -75,7 +75,7 @@ pub(crate) fn quality_profile_by_id<'a>(
         return Ok(None);
     };
     if matches.next().is_some() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE, format!(
             "quality profile id '{profile_id}' is ambiguous because profile ids differ only by ASCII case"
         )));
     }
@@ -87,13 +87,11 @@ fn ensure_unique_quality_profile_ids(profiles: &[crate::QualityProfile]) -> AppR
     for profile in profiles {
         let profile_id = profile.id.trim();
         if profile_id.is_empty() {
-            return Err(AppError::Validation(
-                "quality profile id is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_ID_REQUIRED, "quality profile id is required".to_string()));
         }
         let identity = profile_id.to_ascii_lowercase();
         if let Some(existing) = seen.insert(identity, profile_id.to_string()) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE, format!(
                 "quality profile ids '{existing}' and '{profile_id}' differ only by ASCII case"
             )));
         }
@@ -320,7 +318,7 @@ impl AppUseCase {
             .iter()
             .find(|library_id| !known.contains(*library_id))
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY, format!(
                 "delay profile '{}' names an unknown library '{unknown}'",
                 profile.id
             )));
@@ -428,9 +426,7 @@ impl AppUseCase {
             && !can_request
             && !can_manage_lists
         {
-            return Err(AppError::Unauthorized(
-                "You do not have permission to view quality profiles".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::VIEW_QUALITY_PROFILES_PERMISSION_DENIED, "You do not have permission to view quality profiles".to_string()));
         }
         self.load_quality_profile_settings().await
     }
@@ -439,9 +435,7 @@ impl AppUseCase {
     pub async fn canonical_quality_profile_id(&self, profile_id: &str) -> AppResult<String> {
         let profile_id = profile_id.trim();
         if profile_id.is_empty() {
-            return Err(AppError::Validation(
-                "quality profile id is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_ID_REQUIRED, "quality profile id is required".to_string()));
         }
         let profiles = ensure_quality_profiles_exist(
             self.services
@@ -452,7 +446,7 @@ impl AppUseCase {
         );
         quality_profile_by_id(&profiles, profile_id)?
             .map(|profile| profile.id.clone())
-            .ok_or_else(|| AppError::Validation(format!("unknown quality profile '{profile_id}'")))
+            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_UNKNOWN, format!("unknown quality profile '{profile_id}'")))
     }
 
     pub async fn validate_quality_profile_id(&self, profile_id: &str) -> AppResult<()> {
@@ -496,7 +490,7 @@ impl AppUseCase {
                 .any(|removed| quality_profile_ids_equal(removed, profile_id))
         };
         if referenced(&current.global_profile_id) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT, format!(
                 "cannot remove quality profile '{}' because it is the global default",
                 current.global_profile_id
             )));
@@ -507,7 +501,7 @@ impl AppUseCase {
                 .as_deref()
                 .is_some_and(referenced)
         }) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED, format!(
                 "cannot remove quality profile '{}' because it is configured for {}",
                 selection.override_profile_id.as_deref().unwrap_or_default(),
                 selection.facet.as_str()
@@ -536,7 +530,7 @@ impl AppUseCase {
             })
             .find(|(_, profile_id)| referenced(profile_id))
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES, format!(
                 "cannot remove quality profile '{profile_id}' because library '{library_id}' references it"
             )));
         }
@@ -559,7 +553,7 @@ impl AppUseCase {
                     .map(|profile_id| (library_id, profile_id))
             })
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS, format!(
                 "cannot remove quality profile '{profile_id}' because library '{library_id}' allows it for requests"
             )));
         }
@@ -572,7 +566,7 @@ impl AppUseCase {
                 .count_by_quality_profile_id(profile_id)
                 .await?;
             if title_count > 0 {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE, format!(
                     "cannot remove quality profile '{profile_id}' because {title_count} title(s) reference it"
                 )));
             }
@@ -583,7 +577,7 @@ impl AppUseCase {
                 .count_quality_profile_references(profile_id)
                 .await?;
             if request_references.pending_requested > 0 {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE, format!(
                     "cannot remove quality profile '{profile_id}' because {} pending media request(s) reference it",
                     request_references.pending_requested
                 )));
@@ -637,7 +631,7 @@ impl AppUseCase {
             .map(|profile_id| {
                 quality_profile_by_id(&current_profiles, &profile_id)?.map_or_else(
                     || {
-                        Err(AppError::Validation(format!(
+                        Err(AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_UNKNOWN, format!(
                             "unknown quality profile '{profile_id}'"
                         )))
                     },
@@ -653,12 +647,10 @@ impl AppUseCase {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "profile_id is required when inherit_global is false".to_string(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::settings::PROFILE_ID_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE, "profile_id is required when inherit_global is false".to_string())
                     })?;
                 quality_profile_by_id(&current_profiles, profile_id)?.ok_or_else(|| {
-                    AppError::Validation(format!("unknown quality profile '{profile_id}'"))
+                    AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_UNKNOWN, format!("unknown quality profile '{profile_id}'"))
                 })?;
             }
         }
@@ -765,13 +757,11 @@ impl AppUseCase {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "profile_id is required when inherit_global is false".to_string(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::settings::PROFILE_ID_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE, "profile_id is required when inherit_global is false".to_string())
                     })?;
                 quality_profile_by_id(&current_profiles, profile_id)?
                     .ok_or_else(|| {
-                        AppError::Validation(format!("unknown quality profile '{profile_id}'"))
+                        AppError::validation_refused(crate::error_reasons::settings::QUALITY_PROFILE_UNKNOWN, format!("unknown quality profile '{profile_id}'"))
                     })?
                     .id
                     .clone()
@@ -811,9 +801,7 @@ impl AppUseCase {
                 QUALITY_PROFILE_INHERIT_VALUE.to_string()
             } else {
                 global_persona_as_setting(&selection.persona.ok_or_else(|| {
-                    AppError::Validation(
-                        "persona is required when inherit_global is false".to_string(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::settings::PERSONA_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE, "persona is required when inherit_global is false".to_string())
                 })?)
                 .to_string()
             };
@@ -866,13 +854,13 @@ impl AppUseCase {
 
         let requested_profile_id = profile_id.trim();
         if requested_profile_id.is_empty() {
-            return Err(AppError::Validation("profile_id is required".to_string()));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::PROFILE_ID_REQUIRED, "profile_id is required".to_string()));
         }
 
         let current = self.load_quality_profile_settings().await?;
         let profile_id = quality_profile_by_id(&current.profiles, requested_profile_id)?
             .map(|profile| profile.id.clone())
-            .ok_or_else(|| AppError::NotFound(format!("quality profile {requested_profile_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::QUALITY_PROFILE_NOT_FOUND, format!("quality profile {requested_profile_id}")))?;
         self.ensure_quality_profiles_are_unreferenced(
             &HashSet::from([profile_id.clone()]),
             &current,
@@ -922,9 +910,7 @@ impl AppUseCase {
 
         let profile = crate::normalize_delay_profile(profile);
         if profile.id.is_empty() {
-            return Err(AppError::Validation(
-                "delay profile id is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::DELAY_PROFILE_ID_REQUIRED, "delay profile id is required".to_string()));
         }
 
         let mut profiles = self.delay_profiles().await?;
@@ -937,7 +923,7 @@ impl AppUseCase {
             profiles.push(profile.clone());
         }
 
-        crate::validate_delay_profile_catalog(&profiles).map_err(AppError::Validation)?;
+        crate::validate_delay_profile_catalog(&profiles).map_err(|message| AppError::validation_refused(crate::error_reasons::settings::DELAY_PROFILE_CATALOG_INVALID, message))?;
         self.validate_delay_profile_libraries(&profile).await?;
         self.services
             .config
@@ -967,9 +953,7 @@ impl AppUseCase {
 
         let profile_id = profile_id.trim().to_string();
         if profile_id.is_empty() {
-            return Err(AppError::Validation(
-                "delay profile id is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::DELAY_PROFILE_ID_REQUIRED, "delay profile id is required".to_string()));
         }
 
         if !self
@@ -979,7 +963,7 @@ impl AppUseCase {
             .delete(&profile_id)
             .await?
         {
-            return Err(AppError::NotFound(format!("delay profile {profile_id}")));
+            return Err(AppError::not_found_reason(crate::error_reasons::settings::DELAY_PROFILE_NOT_FOUND, format!("delay profile {profile_id}")));
         }
 
         self.emit_configuration_changed_event(

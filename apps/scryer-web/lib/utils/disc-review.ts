@@ -10,23 +10,42 @@ import type {
  * The title inventory a person should be looking at: a failed inspection's own
  * titles when it produced any, otherwise the saved ones.
  */
-export function discReviewInventory(saved: MediaDiscMetadata | null, attempt?: MediaAnalysisAttempt | null) {
-  return attempt && !attempt.succeeded ? attempt.disc ?? saved : saved;
+export function discReviewInventory(
+  saved: MediaDiscMetadata | null,
+  attempt?: MediaAnalysisAttempt | null,
+) {
+  return attempt && !attempt.succeeded ? (attempt.disc ?? saved) : saved;
 }
 
 /** Whether this file is a disc image with titles to show at all. */
-export function hasDiscInventory(saved: MediaDiscMetadata | null, attempt?: MediaAnalysisAttempt | null) {
+export function hasDiscInventory(
+  saved: MediaDiscMetadata | null,
+  attempt?: MediaAnalysisAttempt | null,
+) {
   return discReviewInventory(saved, attempt) != null;
 }
 
-export function discTitleIdentity(id: string, inventory: MediaDiscMetadata | null) {
-  return inventory?.titles.find((title) => title.id === id || title.aliases.includes(id))?.id ?? id;
+export function discTitleIdentity(
+  id: string,
+  inventory: MediaDiscMetadata | null,
+) {
+  return (
+    inventory?.titles.find(
+      (title) => title.id === id || title.aliases.includes(id),
+    )?.id ?? id
+  );
 }
 
-export function discEpisodeSelections(saved: MediaDiscMetadata | null, inventory: MediaDiscMetadata | null) {
-  return Object.fromEntries((saved?.selection.episodeMappings ?? []).map((mapping) => [
-    discTitleIdentity(mapping.discTitleId, inventory), mapping.episodeIds[0] ?? "",
-  ]));
+export function discEpisodeSelections(
+  saved: MediaDiscMetadata | null,
+  inventory: MediaDiscMetadata | null,
+) {
+  return Object.fromEntries(
+    (saved?.selection.episodeMappings ?? []).map((mapping) => [
+      discTitleIdentity(mapping.discTitleId, inventory),
+      mapping.episodeIds[0] ?? "",
+    ]),
+  );
 }
 
 /**
@@ -48,11 +67,16 @@ export function discOutcome(
   attempt?: MediaAnalysisAttempt | null,
 ): DiscOutcome | null {
   if (!analysis || !hasDiscInventory(analysis.disc, attempt)) return null;
-  if (attempt && !attempt.succeeded) return { kind: "incomplete", status: attempt.report.status };
+  if (attempt && !attempt.succeeded)
+    return { kind: "incomplete", status: attempt.report.status };
   const disc = analysis.disc;
   if (!disc || disc.selectedTitleId == null) return { kind: "unselected" };
-  if (analysis.report.status !== "COMPLETE") return { kind: "incomplete", status: analysis.report.status };
-  return { kind: disc.automaticSelection ? "automatic" : "manual", titleId: disc.selectedTitleId };
+  if (analysis.report.status !== "COMPLETE")
+    return { kind: "incomplete", status: analysis.report.status };
+  return {
+    kind: disc.automaticSelection ? "automatic" : "manual",
+    titleId: disc.selectedTitleId,
+  };
 }
 
 /** Whether the outcome is one a person has to act on. */
@@ -66,7 +90,9 @@ export function discTitleSelectable(title: MediaDiscTitle): boolean {
 }
 
 /** "1h 52m", "23m 08s", "45s"; null when the disc never established a duration. */
-export function formatDiscDuration(seconds: number | null | undefined): string | null {
+export function formatDiscDuration(
+  seconds: number | null | undefined,
+): string | null {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
   const total = Math.round(seconds);
   const hours = Math.floor(total / 3600);
@@ -81,8 +107,10 @@ export function formatDiscDuration(seconds: number | null | undefined): string |
 export function discTitleVideoSummary(title: MediaDiscTitle): string | null {
   const video = title.streams.find((stream) => stream.kind === "VIDEO");
   if (!video) return null;
-  const parts = [video.height ? `${video.height}p` : null, video.codec ? video.codec.toUpperCase() : null]
-    .filter((part): part is string => part != null);
+  const parts = [
+    video.height ? `${video.height}p` : null,
+    video.codec ? video.codec.toUpperCase() : null,
+  ].filter((part): part is string => part != null);
   return parts.length ? parts.join(" ") : null;
 }
 

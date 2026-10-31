@@ -26,7 +26,10 @@ function record(overrides: Partial<RuleSetRecord>): RuleSetRecord {
   };
 }
 
-function pack(key: string, overrides: Partial<RuleSetRecord> = {}): RuleSetRecord {
+function pack(
+  key: string,
+  overrides: Partial<RuleSetRecord> = {},
+): RuleSetRecord {
   return record({
     id: key,
     name: key,

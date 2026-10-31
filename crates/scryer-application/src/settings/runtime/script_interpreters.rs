@@ -17,7 +17,7 @@ fn validate_script_interpreter_pin(key_name: &str, value: &str) -> AppResult<()>
     if is_bare_name || Path::new(value).is_absolute() {
         return Ok(());
     }
-    Err(AppError::Validation(format!(
+    Err(AppError::validation_refused(crate::error_reasons::settings::MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS, format!(
         "{key_name} must be an absolute path or a command name without path separators"
     )))
 }

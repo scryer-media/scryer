@@ -69,7 +69,8 @@ export type TitleCollectionEpisodeRecord = {
   id: string;
   titleId: string;
   collectionId?: string | null;
-  episodeType?: 'STANDARD' | 'SPECIAL' | 'OFFICIAL' | 'OVA' | 'ONA' | 'ALTERNATE' | null;
+  episodeType?:
+    "STANDARD" | "SPECIAL" | "OFFICIAL" | "OVA" | "ONA" | "ALTERNATE" | null;
   episodeNumber?: string | number | null;
   seasonNumber?: string | number | null;
   episodeLabel?: string | null;
@@ -90,7 +91,7 @@ export type TitleCollectionEpisodeRecord = {
 export type TitleCollectionRecord = {
   id: string;
   titleId: string;
-  collectionType?: 'SEASON' | 'MOVIE' | 'ARC' | 'SPECIALS' | null;
+  collectionType?: "SEASON" | "MOVIE" | "ARC" | "SPECIALS" | null;
   collectionIndex?: string | number | null;
   label?: string | null;
   orderedPath?: string | null;
@@ -122,7 +123,8 @@ export type TitleMediaFileRecord = {
   videoHeight?: number | null;
   videoBitrateKbps?: number | null;
   analysis?: import("@/lib/types/media-analysis").MediaAnalysisDetails;
-  analysisAttempt?: import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
+  analysisAttempt?:
+    import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
   videoBitDepth?: number | null;
   videoHdrFormat?: string | null;
   videoFrameRate?: string | null;
@@ -265,8 +267,8 @@ export type TitleRecord = {
   inheritsUseSeasonFolders?: boolean;
   monitorSpecials?: boolean | null;
   interSeasonMovies?: boolean | null;
-  fillerPolicy?: 'DOWNLOAD_ALL' | 'SKIP_FILLER' | null;
-  recapPolicy?: 'DOWNLOAD_ALL' | 'SKIP_RECAP' | null;
+  fillerPolicy?: "DOWNLOAD_ALL" | "SKIP_FILLER" | null;
+  recapPolicy?: "DOWNLOAD_ALL" | "SKIP_RECAP" | null;
   collections?: TitleCollectionRecord[] | null;
   mediaFiles?: TitleMediaFileRecord[] | null;
   credits?: TitleCreditRecord[] | null;
@@ -309,7 +311,10 @@ export type LibraryRecord = {
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;
   /** Effective settings, read only where the viewer may configure the library. */
-  settings?: Pick<LibrarySettingsRecord, "monitorSpecials" | "fillerPolicy" | "recapPolicy"> | null;
+  settings?: Pick<
+    LibrarySettingsRecord,
+    "monitorSpecials" | "fillerPolicy" | "recapPolicy"
+  > | null;
 };
 
 export type MediaRequestRequesterRecord = {
@@ -386,9 +391,9 @@ export type LibrarySettingsRecord = {
   scoringPersonaOverride: string | null;
   scoringPersona: string;
   fillerPolicyOverride: string | null;
-  fillerPolicy: 'DOWNLOAD_ALL' | 'SKIP_FILLER' | null;
+  fillerPolicy: "DOWNLOAD_ALL" | "SKIP_FILLER" | null;
   recapPolicyOverride: string | null;
-  recapPolicy: 'DOWNLOAD_ALL' | 'SKIP_RECAP' | null;
+  recapPolicy: "DOWNLOAD_ALL" | "SKIP_RECAP" | null;
   monitorSpecialsOverride: boolean | null;
   monitorSpecials: boolean | null;
   interSeasonMoviesOverride: boolean | null;
@@ -427,8 +432,8 @@ export type LibrarySettingsDraft = {
   qualityProfileId: string | null;
   requestQualityProfileIds: string[] | null;
   scoringPersona: string | null;
-  fillerPolicy: 'DOWNLOAD_ALL' | 'SKIP_FILLER' | null;
-  recapPolicy: 'DOWNLOAD_ALL' | 'SKIP_RECAP' | null;
+  fillerPolicy: "DOWNLOAD_ALL" | "SKIP_FILLER" | null;
+  recapPolicy: "DOWNLOAD_ALL" | "SKIP_RECAP" | null;
   monitorSpecials: boolean | null;
   interSeasonMovies: boolean | null;
   monitorFillerMovies: boolean | null;

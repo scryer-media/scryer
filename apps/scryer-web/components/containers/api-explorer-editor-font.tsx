@@ -9,7 +9,9 @@ export function ApiExplorerEditorFont() {
   const monaco = useMonaco((state) => state.monaco);
 
   useEffect(() => {
-    const fontFamily = getComputedStyle(document.documentElement).getPropertyValue("--font-code").trim();
+    const fontFamily = getComputedStyle(document.documentElement)
+      .getPropertyValue("--font-code")
+      .trim();
     if (!fontFamily) return;
     // Configure Monaco itself so glyph measurements and the caret match the font.
     for (const editor of [query, variables, headers, response]) {

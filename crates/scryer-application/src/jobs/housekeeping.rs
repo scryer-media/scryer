@@ -27,14 +27,16 @@ const RECYCLE_BIN_BATCH_MAX_ITEMS: usize = 250;
 
 fn normalize_recycle_batch_ids(entry_ids: Vec<String>) -> AppResult<Vec<String>> {
     if entry_ids.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::RECYCLE_BIN_ITEM_REQUIRED,
             "select at least one recycle-bin item".to_string(),
         ));
     }
     if entry_ids.len() > RECYCLE_BIN_BATCH_MAX_ITEMS {
-        return Err(AppError::Validation(format!(
-            "recycle-bin batches are limited to {RECYCLE_BIN_BATCH_MAX_ITEMS} items"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::RECYCLE_BIN_BATCHES_LIMITED_ITEMS,
+            format!("recycle-bin batches are limited to {RECYCLE_BIN_BATCH_MAX_ITEMS} items"),
+        ));
     }
 
     let requested_count = entry_ids.len();
@@ -42,7 +44,8 @@ fn normalize_recycle_batch_ids(entry_ids: Vec<String>) -> AppResult<Vec<String>>
     normalized.sort();
     normalized.dedup();
     if normalized.len() != requested_count {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE,
             "recycle-bin batches cannot include the same item more than once".to_string(),
         ));
     }
@@ -91,22 +94,31 @@ async fn validate_replace_existing_restore_target(
     };
 
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "refusing to replace restore destination {} because it is a symlink",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::SYMLINK_REFUSED,
+            format!(
+                "refusing to replace restore destination {} because it is a symlink",
+                path.display()
+            ),
+        ));
     }
     if !metadata.is_file() {
-        return Err(AppError::Validation(format!(
-            "refusing to replace restore destination {} because it is not a regular file",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::REGULAR_FILE_REQUIRED,
+            format!(
+                "refusing to replace restore destination {} because it is not a regular file",
+                path.display()
+            ),
+        ));
     }
     if !recycle_config.enabled || !recycle_config.cleanup_enabled {
-        return Err(AppError::Validation(format!(
-            "refusing to replace {} because the recycle bin is unavailable",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::REPLACE_RECYCLE_BIN_UNAVAILABLE,
+            format!(
+                "refusing to replace {} because the recycle bin is unavailable",
+                path.display()
+            ),
+        ));
     }
 
     Ok(())
@@ -307,7 +319,8 @@ impl AppUseCase {
             return Ok(());
         }
 
-        Err(AppError::Unauthorized(
+        Err(AppError::unauthorized_reason(
+            crate::error_reasons::jobs::VIEW_RECYCLE_BIN_PERMISSION_DENIED,
             "You do not have permission to view the recycle bin".to_string(),
         ))
     }
@@ -1090,9 +1103,10 @@ impl AppUseCase {
             .try_acquire(&guard_key)
             .await
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "a recycle restore is already running for {entry_id}"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::jobs::RECYCLE_RESTORE_ALREADY_RUNNING,
+                    format!("a recycle restore is already running for {entry_id}"),
+                )
             })?;
         let library_id = self.validate_restore_recycled_item(actor, entry_id).await?;
 
@@ -1146,7 +1160,7 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         let entry_id = entry_id.to_string();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_restore_recycled_item_job(run, actor_event, actor, entry_id, restore_guard)
                 .await;
         });
@@ -1216,17 +1230,16 @@ impl AppUseCase {
             ));
             if !destination_keys.insert(format!("recycle-destination:{}", original_path.display()))
             {
-                return Err(AppError::Validation(
-                    "selected recycle entries cannot share the same restore destination"
-                        .to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::jobs::SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION, "selected recycle entries cannot share the same restore destination"
+                        .to_string()));
             }
             expected_target_states.insert(entry_id.clone(), target_state);
             library_ids.insert(context.library_id);
         }
         let fingerprint = fingerprint_parts.join("\n");
         if preview_fingerprint != fingerprint {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::RECYCLE_RESTORE_PREVIEW_STALE,
                 "recycle restore preview is stale; review the conflict choice again".to_string(),
             ));
         }
@@ -1241,10 +1254,8 @@ impl AppUseCase {
                 .try_acquire(&guard_key)
                 .await
                 .ok_or_else(|| {
-                    AppError::Validation(
-                        "a recycle restore is already running for one of the selected destinations"
-                            .to_string(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::jobs::RECYCLE_RESTORE_ALREADY_RUNNING_ONE_SELECTED_DESTINATIONS, "a recycle restore is already running for one of the selected destinations"
+                            .to_string())
                 })?;
             guards.push(guard);
         }
@@ -1254,7 +1265,8 @@ impl AppUseCase {
             let current_state =
                 restore_target_fingerprint(&context.manifest.original_path_buf()).await?;
             if expected_target_states.get(entry_id) != Some(&current_state) {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::jobs::RECYCLE_RESTORE_PREVIEW_STALE,
                     "recycle restore preview is stale; review the conflict choice again"
                         .to_string(),
                 ));
@@ -1278,7 +1290,7 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         let job_entry_ids = entry_ids.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_restore_recycled_items_job(
                 run,
                 actor_event,
@@ -1308,9 +1320,12 @@ impl AppUseCase {
             .collect::<HashMap<_, _>>();
         let mut library_ids = HashSet::new();
         for entry_id in &entry_ids {
-            let library_id = available_by_id
-                .get(entry_id)
-                .ok_or_else(|| AppError::NotFound(format!("recycle entry {entry_id}")))?;
+            let library_id = available_by_id.get(entry_id).ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+                    format!("recycle entry {entry_id}"),
+                )
+            })?;
             library_ids.insert(library_id.clone());
         }
 
@@ -1331,7 +1346,7 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         let job_entry_ids = entry_ids.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_purge_recycled_items_job(run, actor_event, actor, job_entry_ids, guards)
                 .await;
         });
@@ -1353,9 +1368,10 @@ impl AppUseCase {
                 .try_acquire(&guard_key)
                 .await
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "a recycle operation is already running for {entry_id}"
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::jobs::RECYCLE_OPERATION_ALREADY_RUNNING,
+                        format!("a recycle operation is already running for {entry_id}"),
+                    )
                 })?;
             guards.push(guard);
         }
@@ -1465,7 +1481,10 @@ impl AppUseCase {
                     .resolve_recycle_entry_library(&entry, &roots)
                     .await?
                     .ok_or_else(|| {
-                        AppError::Unauthorized("You do not have access to this library".to_string())
+                        AppError::unauthorized_reason(
+                            crate::error_reasons::jobs::LIBRARY_ACCESS_DENIED,
+                            "You do not have access to this library".to_string(),
+                        )
                     })?;
                 self.require_library_permission(
                     actor,
@@ -1479,10 +1498,13 @@ impl AppUseCase {
                     &original_path,
                     &library_roots,
                 ) {
-                    return Err(AppError::Validation(format!(
-                        "refusing to restore recycle entry {} because original path is outside the resolved library roots: {}",
-                        entry_id, manifest.original_path
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::jobs::PATH_OUTSIDE_LIBRARY_ROOT,
+                        format!(
+                            "refusing to restore recycle entry {} because original path is outside the resolved library roots: {}",
+                            entry_id, manifest.original_path
+                        ),
+                    ));
                 }
 
                 crate::folder_ownership::ensure_restore_ownership(
@@ -1508,7 +1530,10 @@ impl AppUseCase {
             }
         }
 
-        Err(AppError::NotFound(format!("recycle entry {}", entry_id)))
+        Err(AppError::not_found_reason(
+            crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+            format!("recycle entry {}", entry_id),
+        ))
     }
 
     async fn restore_recycled_item_from_context(
@@ -1812,10 +1837,13 @@ impl AppUseCase {
         }
 
         if !context.recycle_config.enabled || !context.recycle_config.cleanup_enabled {
-            return Err(AppError::Validation(format!(
-                "refusing to replace {} because the recycle bin is unavailable",
-                original_path.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::REPLACE_RECYCLE_BIN_UNAVAILABLE,
+                format!(
+                    "refusing to replace {} because the recycle bin is unavailable",
+                    original_path.display()
+                ),
+            ));
         }
 
         let original_path_text = original_path.to_string_lossy().to_string();
@@ -1958,10 +1986,8 @@ impl AppUseCase {
                 let current_state =
                     restore_target_fingerprint(&context.manifest.original_path_buf()).await?;
                 if expected_target_states.get(entry_id) != Some(&current_state) {
-                    return Err(AppError::Validation(
-                        "restore destination changed after confirmation; preview and retry this item"
-                            .to_string(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::jobs::RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION, "restore destination changed after confirmation; preview and retry this item"
+                            .to_string()));
                 }
                 self.restore_recycled_item_from_context(&actor, context, conflict_policy)
                     .await
@@ -2258,7 +2284,10 @@ impl AppUseCase {
                     .resolve_recycle_entry_library(&entry, &roots)
                     .await?
                     .ok_or_else(|| {
-                        AppError::Unauthorized("You do not have access to this library".to_string())
+                        AppError::unauthorized_reason(
+                            crate::error_reasons::jobs::LIBRARY_ACCESS_DENIED,
+                            "You do not have access to this library".to_string(),
+                        )
                     })?;
                 self.require_library_permission(
                     actor,
@@ -2278,7 +2307,10 @@ impl AppUseCase {
             }
         }
 
-        Err(AppError::NotFound(format!("recycle entry {}", entry_id)))
+        Err(AppError::not_found_reason(
+            crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+            format!("recycle entry {}", entry_id),
+        ))
     }
 
     /// Accept a tracked background purge without scanning recycle directories in the request.
@@ -2302,7 +2334,10 @@ impl AppUseCase {
             .try_acquire("recycle-bin-empty")
             .await
             .ok_or_else(|| {
-                AppError::Validation("emptying the recycle bin is already running".into())
+                AppError::validation_refused(
+                    crate::error_reasons::jobs::EMPTYING_RECYCLE_BIN_ALREADY_RUNNING,
+                    "emptying the recycle bin is already running",
+                )
             })?;
         let (run, job_run, actor_event) = self
             .create_recycle_batch_job_run(
@@ -2314,7 +2349,7 @@ impl AppUseCase {
             .await?;
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let _guard = guard;
             // An empty explicit scope must not become "all accessible" on revalidation.
             let result = if library_ids.is_empty() {

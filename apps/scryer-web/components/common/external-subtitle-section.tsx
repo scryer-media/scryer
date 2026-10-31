@@ -44,18 +44,18 @@ function SubtitleFlag({
   className: string;
 }) {
   return (
-    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${className}`}>
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${className}`}
+    >
       {label}
     </span>
   );
 }
 
-type PendingSubtitleAction =
-  | {
-      kind: "delete" | "blocklist";
-      subtitle: ExternalSubtitleRecord;
-    }
-  | null;
+type PendingSubtitleAction = {
+  kind: "delete" | "blocklist";
+  subtitle: ExternalSubtitleRecord;
+} | null;
 
 export function ExternalSubtitleSection({
   downloads,
@@ -74,15 +74,14 @@ export function ExternalSubtitleSection({
   const dateTimeFormat = useUiDateTimeFormat();
   const setGlobalStatus = useGlobalStatus();
   const client = useClient();
-  const [pendingAction, setPendingAction] = React.useState<PendingSubtitleAction>(null);
+  const [pendingAction, setPendingAction] =
+    React.useState<PendingSubtitleAction>(null);
   const [typedConfirmation, setTypedConfirmation] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
   const deletePreviewVariables = React.useMemo(
     () =>
-      pendingAction
-        ? { externalSubtitleId: pendingAction.subtitle.id }
-        : null,
+      pendingAction ? { externalSubtitleId: pendingAction.subtitle.id } : null,
     [pendingAction],
   );
   const {
@@ -155,10 +154,9 @@ export function ExternalSubtitleSection({
       setTypedConfirmation("");
       await onChanged?.();
     } catch (error) {
-      setGlobalStatus(
-        deleteErrorMessage(error, t, t("status.apiError")),
-        { level: "ERROR" },
-      );
+      setGlobalStatus(deleteErrorMessage(error, t, t("status.apiError")), {
+        level: "ERROR",
+      });
     } finally {
       setSubmitting(false);
     }
@@ -184,12 +182,17 @@ export function ExternalSubtitleSection({
   return (
     <>
       <div className="space-y-2">
-        <p className="text-sm font-medium text-muted-foreground">{t("subtitle.external")}</p>
+        <p className="text-sm font-medium text-muted-foreground">
+          {t("subtitle.external")}
+        </p>
         <div className="space-y-2">
           {downloads.map((download) => {
             const canBlocklist =
-              allowBlocklist && canManageSubtitles && canBlocklistSubtitle(download);
-            const canDelete = canManageSubtitles && typeof onChanged === "function";
+              allowBlocklist &&
+              canManageSubtitles &&
+              canBlocklistSubtitle(download);
+            const canDelete =
+              canManageSubtitles && typeof onChanged === "function";
             return (
               <div
                 key={download.id}
@@ -242,7 +245,9 @@ export function ExternalSubtitleSection({
                     ) : null}
                     {download.scorePercent != null ? (
                       <span className="text-[11px] text-muted-foreground">
-                        {t("subtitle.scoreWithValue", { score: `${download.scorePercent}%` })}
+                        {t("subtitle.scoreWithValue", {
+                          score: `${download.scorePercent}%`,
+                        })}
                       </span>
                     ) : null}
                   </div>
@@ -253,7 +258,10 @@ export function ExternalSubtitleSection({
                           label={t("subtitle.blocklist")}
                           tone="disabled"
                           onClick={() => {
-                            setPendingAction({ kind: "blocklist", subtitle: download });
+                            setPendingAction({
+                              kind: "blocklist",
+                              subtitle: download,
+                            });
                             setTypedConfirmation("");
                           }}
                         >
@@ -265,7 +273,10 @@ export function ExternalSubtitleSection({
                           label={t("label.delete")}
                           tone="delete"
                           onClick={() => {
-                            setPendingAction({ kind: "delete", subtitle: download });
+                            setPendingAction({
+                              kind: "delete",
+                              subtitle: download,
+                            });
                             setTypedConfirmation("");
                           }}
                         >
@@ -279,7 +290,9 @@ export function ExternalSubtitleSection({
                   {download.filePath}
                 </p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                  <span>{formatDateTime(download.downloadedAt, dateTimeFormat)}</span>
+                  <span>
+                    {formatDateTime(download.downloadedAt, dateTimeFormat)}
+                  </span>
                 </div>
               </div>
             );
@@ -288,9 +301,17 @@ export function ExternalSubtitleSection({
       </div>
       <ConfirmDialog
         open={pendingAction !== null}
-        title={pendingAction?.kind === "blocklist" ? t("subtitle.blocklist") : t("label.delete")}
+        title={
+          pendingAction?.kind === "blocklist"
+            ? t("subtitle.blocklist")
+            : t("label.delete")
+        }
         description={pendingAction?.subtitle.filePath ?? ""}
-        confirmLabel={pendingAction?.kind === "blocklist" ? t("subtitle.blocklist") : t("label.delete")}
+        confirmLabel={
+          pendingAction?.kind === "blocklist"
+            ? t("subtitle.blocklist")
+            : t("label.delete")
+        }
         cancelLabel={t("label.cancel")}
         isBusy={submitting}
         confirmDisabled={confirmDisabled}

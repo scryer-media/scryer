@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Client } from "urql";
 
@@ -27,9 +28,13 @@ import type {
 
 interface UseDownloadClientSetupArgs {
   client: Client;
+  t: NonNullable<Parameters<typeof userFacingGraphQlErrorMessage>[2]>;
 }
 
-export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
+export function useDownloadClientSetup({
+  client,
+  t,
+}: UseDownloadClientSetupArgs) {
   // ── Step 4 (fresh): Download Client ─────────────────────────────────
   const [dcDraft, setDcDraft] = useState<DownloadClientDraft>({
     ...DEFAULT_DOWNLOAD_CLIENT_DRAFT,
@@ -41,8 +46,9 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
       (option) => !isHostlessDownloadClientType(option.value),
     ),
   );
-  const [dcLocalPathStyle, setDcLocalPathStyle] =
-    useState<LocalPathStyle | undefined>(undefined);
+  const [dcLocalPathStyle, setDcLocalPathStyle] = useState<
+    LocalPathStyle | undefined
+  >(undefined);
   const [dcTesting, setDcTesting] = useState(false);
   const [dcTestResult, setDcTestResult] = useState<"success" | "failed" | null>(
     null,
@@ -86,8 +92,9 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
       return;
     }
     setDcDraft((current) => {
-      const defaults =
-        defaultDownloadClientConfigValuesForFields(selectedDcConfigFields);
+      const defaults = defaultDownloadClientConfigValuesForFields(
+        selectedDcConfigFields,
+      );
       const missingDefaults = Object.entries(defaults).filter(
         ([key]) => current.configValues[key] === undefined,
       );
@@ -112,8 +119,7 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
         const prevDefault =
           DEFAULT_PORT_FOR_CLIENT_TYPE[dcDraft.clientType] ?? "8080";
         if (dcDraft.port === "" || dcDraft.port === prevDefault) {
-          next.port =
-            DEFAULT_PORT_FOR_CLIENT_TYPE[nextClientType] ?? "8080";
+          next.port = DEFAULT_PORT_FOR_CLIENT_TYPE[nextClientType] ?? "8080";
         }
         const nextFields =
           dcTypeOptions.find(
@@ -201,12 +207,15 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
       // The wizard's intent is "a client named X exists with this config", not
       // "insert a row", so adopt the existing client and update it in place.
       const existing = await client
-        .query(libraryDownloadClientsQuery, {}, { requestPolicy: "network-only" })
+        .query(
+          libraryDownloadClientsQuery,
+          {},
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       const match = (
         existing.data?.downloadClientConfigs as
-          | Array<{ id: string; name: string }>
-          | undefined
+          Array<{ id: string; name: string }> | undefined
       )?.find((candidate) => candidate.name?.trim() === name);
       if (!match) {
         throw error;
@@ -226,11 +235,13 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
       if (updateError) throw updateError;
       setDcSaved(true);
     } catch (err) {
-      setDcError(err instanceof Error ? err.message : "Failed to save");
+      setDcError(
+        userFacingGraphQlErrorMessage(err, t("error.fallback.failedToSave"), t),
+      );
     } finally {
       setDcSaving(false);
     }
-  }, [client, dcDraft, selectedDcConfigFields]);
+  }, [client, dcDraft, selectedDcConfigFields, t]);
 
   const handleDcTestAndSave = useCallback(async () => {
     setDcTesting(true);
@@ -263,10 +274,16 @@ export function useDownloadClientSetup({ client }: UseDownloadClientSetupArgs) {
       // the Next button simply never enabled and the only diagnosis available
       // was reading the server's container log.
       setDcTestResult("failed");
-      setDcError(err instanceof Error ? err.message : "Connection test failed");
+      setDcError(
+        userFacingGraphQlErrorMessage(
+          err,
+          t("error.fallback.connectionTestFailed"),
+          t,
+        ),
+      );
       setDcTesting(false);
     }
-  }, [client, dcDraft, saveDownloadClient, selectedDcConfigFields]);
+  }, [client, dcDraft, saveDownloadClient, selectedDcConfigFields, t]);
 
   return {
     dcDraft,

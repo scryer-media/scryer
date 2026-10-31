@@ -85,8 +85,9 @@ impl HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "Jellyfin admin token cannot list API keys".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_API_KEY_LIST_ACCESS_DENIED,
+                    "Jellyfin admin token cannot list API keys",
                 ));
             }
             status => {
@@ -152,7 +153,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         let connection_id = connection_id.trim();
         let token = plex_auth_token.trim();
         if token.is_empty() {
-            return Err(AppError::Unauthorized("Plex auth token is required".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_REQUIRED,
+                "Plex auth token is required",
+            ));
         }
 
         let account_response = self
@@ -167,7 +171,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match account_response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized("invalid Plex auth token".into()));
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_INVALID,
+                    "invalid Plex auth token",
+                ));
             }
             status => {
                 return Err(AppError::Repository(format!(
@@ -211,7 +218,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             match resources_response.status() {
                 StatusCode::OK => {}
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                    return Err(AppError::Unauthorized("invalid Plex auth token".into()));
+                    return Err(AppError::unauthorized_reason(
+                        crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_INVALID,
+                        "invalid Plex auth token",
+                    ));
                 }
                 status => {
                     return Err(AppError::Repository(format!(
@@ -223,8 +233,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
                 AppError::Repository(format!("invalid Plex resources response: {error}"))
             })?;
             if !plex_resources_include_machine(&resources_xml, machine_id)? {
-                return Err(AppError::Unauthorized(
-                    "Plex account does not have access to the configured server".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_PLEX_SERVER_ACCESS_DENIED,
+                    "Plex account does not have access to the configured server",
                 ));
             }
         }
@@ -247,7 +258,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     ) -> AppResult<Vec<PlexServerDiscovery>> {
         let token = plex_auth_token.trim();
         if token.is_empty() {
-            return Err(AppError::Unauthorized("Plex auth token is required".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_REQUIRED,
+                "Plex auth token is required",
+            ));
         }
         let resources_response = self
             .client
@@ -262,7 +276,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match resources_response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized("invalid Plex auth token".into()));
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_INVALID,
+                    "invalid Plex auth token",
+                ));
             }
             status => {
                 return Err(AppError::Repository(format!(
@@ -285,7 +302,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     ) -> AppResult<VerifiedExternalIdentity> {
         let base_url = jellyfin_base_url(base_url)?;
         let auth_url = base_url.join("Users/AuthenticateByName").map_err(|error| {
-            AppError::Validation(format!("Jellyfin authentication URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_AUTHENTICATION_URL_INVALID,
+                format!("Jellyfin authentication URL is invalid: {error}"),
+            )
         })?;
 
         let response = self
@@ -306,13 +326,15 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "invalid Jellyfin credentials".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_CREDENTIALS_INVALID,
+                    "invalid Jellyfin credentials",
                 ));
             }
             StatusCode::BAD_REQUEST => {
-                return Err(AppError::Unauthorized(
-                    "invalid Jellyfin credentials".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_CREDENTIALS_INVALID,
+                    "invalid Jellyfin credentials",
                 ));
             }
             status => {
@@ -356,7 +378,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     async fn test_jellyfin_connection(&self, base_url: &str) -> AppResult<()> {
         let base_url = jellyfin_base_url(base_url)?;
         let info_url = base_url.join("System/Info/Public").map_err(|error| {
-            AppError::Validation(format!("Jellyfin system info URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_SYSTEM_INFO_URL_INVALID,
+                format!("Jellyfin system info URL is invalid: {error}"),
+            )
         })?;
         let response = self
             .client
@@ -387,13 +412,15 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .ok_or_else(|| {
-                AppError::Validation(
-                    "the supplied URL did not identify itself as a Jellyfin server".into(),
+                AppError::validation_refused(
+                    crate::error_reasons::IDENTITY_JELLYFIN_SERVER_NOT_RECOGNIZED,
+                    "the supplied URL did not identify itself as a Jellyfin server",
                 )
             })?;
         if !product_name.to_ascii_lowercase().contains("jellyfin") {
-            return Err(AppError::Validation(
-                "the supplied URL did not identify itself as a Jellyfin server".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_SERVER_NOT_RECOGNIZED,
+                "the supplied URL did not identify itself as a Jellyfin server",
             ));
         }
         Ok(())
@@ -402,7 +429,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     async fn test_jellyfin_api_key(&self, base_url: &str, api_key: &str) -> AppResult<()> {
         let base_url = jellyfin_base_url(base_url)?;
         let users_url = base_url.join("Users").map_err(|error| {
-            AppError::Validation(format!("Jellyfin users URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_USERS_URL_INVALID,
+                format!("Jellyfin users URL is invalid: {error}"),
+            )
         })?;
         let response = self
             .client
@@ -417,8 +447,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
 
         match response.status() {
             StatusCode::OK => Ok(()),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(AppError::Unauthorized(
-                "Jellyfin API key is invalid or does not have user-list access".into(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_JELLYFIN_API_KEY_USER_LIST_ACCESS_DENIED,
+                "Jellyfin API key is invalid or does not have user-list access",
             )),
             status => Err(AppError::Repository(format!(
                 "Jellyfin API key validation failed with status {status}"
@@ -436,7 +467,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         let base_url = jellyfin_base_url(base_url)?;
         let device_id = jellyfin::device_id(connection_id);
         let auth_url = base_url.join("Users/AuthenticateByName").map_err(|error| {
-            AppError::Validation(format!("Jellyfin authentication URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_AUTHENTICATION_URL_INVALID,
+                format!("Jellyfin authentication URL is invalid: {error}"),
+            )
         })?;
         let response = self
             .client
@@ -456,8 +490,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "invalid Jellyfin admin credentials".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_ADMIN_CREDENTIALS_INVALID,
+                    "invalid Jellyfin admin credentials",
                 ));
             }
             status => {
@@ -479,8 +514,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .as_ref()
             .is_some_and(|policy| policy.is_administrator)
         {
-            return Err(AppError::Unauthorized(
-                "Jellyfin account must be an administrator to create a Scryer API key".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_JELLYFIN_ADMINISTRATOR_REQUIRED,
+                "Jellyfin account must be an administrator to create a Scryer API key",
             ));
         }
         let Some(token) = auth
@@ -495,7 +531,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         };
 
         let keys_url = base_url.join("Auth/Keys").map_err(|error| {
-            AppError::Validation(format!("Jellyfin API key URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_API_KEY_URL_INVALID,
+                format!("Jellyfin API key URL is invalid: {error}"),
+            )
         })?;
         if let Some(existing) = self
             .find_jellyfin_api_key(&keys_url, token, &device_id, SCRYER_PRODUCT)
@@ -539,7 +578,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     ) -> AppResult<Vec<JellyfinServerUser>> {
         let base_url = jellyfin_base_url(base_url)?;
         let users_url = base_url.join("Users").map_err(|error| {
-            AppError::Validation(format!("Jellyfin users URL is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_JELLYFIN_USERS_URL_INVALID,
+                format!("Jellyfin users URL is invalid: {error}"),
+            )
         })?;
         let response = self
             .client
@@ -554,8 +596,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "Jellyfin API key is invalid or cannot list users".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_USER_LIST_ACCESS_DENIED,
+                    "Jellyfin API key is invalid or cannot list users",
                 ));
             }
             status => {
@@ -607,19 +650,28 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         const MAX_RESPONSE_BYTES: usize = 64 * 1024;
         const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-        let canonical_user_id = canonicalize_jellyfin_user_id(canonical_user_id)
-            .ok_or_else(|| AppError::Validation("Jellyfin user ID is invalid".into()))?;
+        let canonical_user_id =
+            canonicalize_jellyfin_user_id(canonical_user_id).ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::IDENTITY_JELLYFIN_USER_ID_INVALID,
+                    "Jellyfin user ID is invalid",
+                )
+            })?;
         let api_key = api_key.trim();
         if api_key.is_empty() {
-            return Err(AppError::Unauthorized(
-                "Jellyfin API key is unavailable".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_JELLYFIN_API_KEY_UNAVAILABLE,
+                "Jellyfin API key is unavailable",
             ));
         }
         let base_url = jellyfin_base_url(base_url)?;
         let user_url = base_url
             .join(&format!("Users/{canonical_user_id}"))
             .map_err(|error| {
-                AppError::Validation(format!("Jellyfin user URL is invalid: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::IDENTITY_JELLYFIN_USER_URL_INVALID,
+                    format!("Jellyfin user URL is invalid: {error}"),
+                )
             })?;
         let response = tokio::time::timeout(
             TIMEOUT,
@@ -637,8 +689,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
-                return Err(AppError::Unauthorized(
-                    "Jellyfin user verification failed".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED,
+                    "Jellyfin user verification failed",
                 ));
             }
             status if status.is_redirection() => {
@@ -682,11 +735,16 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         let user = serde_json::from_slice::<JellyfinUser>(&body).map_err(|error| {
             AppError::Repository(format!("invalid Jellyfin identity response: {error}"))
         })?;
-        let verified_user_id = canonicalize_jellyfin_user_id(&user.id)
-            .ok_or_else(|| AppError::Unauthorized("Jellyfin user verification failed".into()))?;
+        let verified_user_id = canonicalize_jellyfin_user_id(&user.id).ok_or_else(|| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED,
+                "Jellyfin user verification failed",
+            )
+        })?;
         if verified_user_id != canonical_user_id {
-            return Err(AppError::Unauthorized(
-                "Jellyfin user verification failed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED,
+                "Jellyfin user verification failed",
             ));
         }
         let username = user.name.clone().unwrap_or_else(|| user.id.clone());
@@ -881,7 +939,10 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
     ) -> AppResult<Vec<PlexServerUser>> {
         let token = plex_auth_token.trim();
         if token.is_empty() {
-            return Err(AppError::Unauthorized("Plex auth token is required".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_PLEX_AUTH_TOKEN_REQUIRED,
+                "Plex auth token is required",
+            ));
         }
         let response = self
             .client
@@ -894,8 +955,9 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "Plex token is invalid or cannot list users".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_PLEX_USER_LIST_ACCESS_DENIED,
+                    "Plex token is invalid or cannot list users",
                 ));
             }
             status => {
@@ -986,11 +1048,16 @@ struct JellyfinUserPolicy {
 }
 
 fn jellyfin_base_url(base_url: &str) -> AppResult<Url> {
-    let mut base_url = Url::parse(base_url)
-        .map_err(|error| AppError::Validation(format!("Jellyfin base URL is invalid: {error}")))?;
+    let mut base_url = Url::parse(base_url).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_JELLYFIN_BASE_URL_INVALID,
+            format!("Jellyfin base URL is invalid: {error}"),
+        )
+    })?;
     if base_url.query().is_some() || base_url.fragment().is_some() {
-        return Err(AppError::Validation(
-            "Jellyfin connection base URL must not include a query or fragment".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::IDENTITY_JELLYFIN_BASE_URL_QUERY_FRAGMENT_FORBIDDEN,
+            "Jellyfin connection base URL must not include a query or fragment",
         ));
     }
     if !base_url.path().ends_with('/') {
@@ -1281,7 +1348,12 @@ async fn refresh_media_server_paths(
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty())
-        .ok_or_else(|| AppError::Validation("media server refresh requires an API key".into()))?;
+        .ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED,
+                "media server refresh requires an API key",
+            )
+        })?;
 
     match connection.provider {
         MediaServerProvider::Jellyfin => {
@@ -1304,7 +1376,10 @@ async fn refresh_media_server_paths(
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| {
-                    AppError::Validation("Plex refresh requires a selected server".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::IDENTITY_PLEX_REFRESH_SERVER_REQUIRED,
+                        "Plex refresh requires a selected server",
+                    )
                 })?;
             refresh_plex_paths(verifier, machine_id, api_key, &paths).await
         }
@@ -1446,7 +1521,10 @@ async fn scan_media_server_catalog(
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .ok_or_else(|| {
-            AppError::Validation("media server catalog scan requires an API key".into())
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_MEDIA_SERVER_SCAN_API_KEY_REQUIRED,
+                "media server catalog scan requires an API key",
+            )
         })?;
     match connection.provider {
         MediaServerProvider::Jellyfin => {
@@ -1470,7 +1548,10 @@ async fn scan_media_server_catalog(
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .ok_or_else(|| {
-                    AppError::Validation("Plex catalog scan requires a selected server".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::IDENTITY_PLEX_SCAN_SERVER_REQUIRED,
+                        "Plex catalog scan requires a selected server",
+                    )
                 })?;
             scan_plex_catalog(verifier, machine_id, api_key, recent_only).await
         }
@@ -2138,7 +2219,10 @@ mod tests {
 
         let result = verifier.test_jellyfin_connection(&server.uri()).await;
 
-        assert!(matches!(result, Err(AppError::Repository(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Repository(_) | AppError::RepositoryFailure { .. })
+        ));
     }
 
     #[tokio::test]
@@ -2155,7 +2239,10 @@ mod tests {
             .verify_jellyfin("jellyfin-main", &server.uri(), "jelly", "bad")
             .await;
 
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
     }
 
     #[tokio::test]
@@ -2404,7 +2491,10 @@ mod tests {
 
         let result = verifier.verify_plex("plex-main", None, "bad-token").await;
 
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
     }
 
     #[tokio::test]
@@ -2450,7 +2540,10 @@ mod tests {
 
         let result = verifier.list_plex_users("bad-token", None).await;
 
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
     }
 
     #[tokio::test]
@@ -2541,6 +2634,9 @@ mod tests {
             .verify_plex("plex-main", Some("machine-1"), "token")
             .await;
 
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
     }
 }

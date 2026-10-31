@@ -248,7 +248,12 @@ impl AppUseCase {
             .external_import_warmup_orchestrator
             .snapshot(&actor.id, session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("no warmup session '{session_id}'")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::external_import::SESSION_GONE,
+                    format!("no warmup session '{session_id}'"),
+                )
+            })
     }
 
     pub async fn subscribe_external_import_monitor_warmup_progress(
@@ -264,7 +269,12 @@ impl AppUseCase {
             .external_import_warmup_orchestrator
             .subscribe(&actor.id, session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("no warmup session '{session_id}'")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::external_import::SESSION_GONE,
+                    format!("no warmup session '{session_id}'"),
+                )
+            })
     }
 
     pub async fn cancel_external_import_monitor_warmup(
@@ -312,7 +322,12 @@ impl AppUseCase {
             .external_import_warmup_orchestrator
             .claim(&actor.id, session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("no warmup session '{session_id}'")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::external_import::SESSION_GONE,
+                    format!("no warmup session '{session_id}'"),
+                )
+            })
     }
 
     pub async fn external_import_monitor_warmup_connection_fingerprint(
@@ -328,7 +343,12 @@ impl AppUseCase {
             .external_import_warmup_orchestrator
             .connection_fingerprint(&actor.id, session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("no warmup session '{session_id}'")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::external_import::SESSION_GONE,
+                    format!("no warmup session '{session_id}'"),
+                )
+            })
     }
 
     pub async fn update_external_import_monitor_warmup_progress(
@@ -399,7 +419,10 @@ impl AppUseCase {
             .arr_source_result(&actor.id, session_id)
             .await
             .ok_or_else(|| {
-                AppError::NotFound(format!("no arr source warmup result '{session_id}'"))
+                AppError::not_found_reason(
+                    crate::error_reasons::import::ARR_SOURCE_WARMUP_RESULT_NOT_FOUND,
+                    format!("no arr source warmup result '{session_id}'"),
+                )
             })
     }
 
@@ -416,7 +439,12 @@ impl AppUseCase {
             .external_import_warmup_orchestrator
             .prowlarr_result(&actor.id, session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("no prowlarr warmup result '{session_id}'")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::import::PROWLARR_WARMUP_RESULT_NOT_FOUND,
+                    format!("no prowlarr warmup result '{session_id}'"),
+                )
+            })
     }
 
     pub async fn external_import_monitor_warmup_scan_hints(
@@ -445,13 +473,14 @@ fn validate_external_import_setup_secret_draft(
     draft: ExternalImportSetupSecretDraftInput,
 ) -> AppResult<ExternalImportSetupSecretDraftInput> {
     if draft.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY,
             "external import setup secret draft cannot be empty; clear the draft instead"
                 .to_string(),
         ));
     }
     if draft.instance_api_keys.len() > MAX_IMPORT_SETUP_SECRET_INSTANCES {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS, format!(
             "external import setup secret draft supports at most {MAX_IMPORT_SETUP_SECRET_INSTANCES} instance API keys"
         )));
     }
@@ -470,9 +499,12 @@ fn validate_external_import_setup_secret_draft(
         ),
     ] {
         if len > MAX_IMPORT_SETUP_SECRET_OVERRIDES {
-            return Err(AppError::Validation(format!(
-                "external import setup secret draft supports at most {MAX_IMPORT_SETUP_SECRET_OVERRIDES} {label}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST,
+                format!(
+                    "external import setup secret draft supports at most {MAX_IMPORT_SETUP_SECRET_OVERRIDES} {label}"
+                ),
+            ));
         }
     }
 
@@ -486,9 +518,10 @@ fn validate_external_import_setup_secret_draft(
         )?;
         let api_key = required_trimmed(entry.api_key, "apiKey", MAX_IMPORT_SETUP_SECRET_VALUE_LEN)?;
         if !instance_ids.insert(instance_id.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate external import setup instanceId: {instance_id}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED,
+                format!("duplicate external import setup instanceId: {instance_id}"),
+            ));
         }
         instance_api_keys.push(ExternalImportSetupInstanceApiKeyDraft {
             instance_id,
@@ -528,9 +561,10 @@ fn validate_secret_overrides(
         )?;
         let secret = required_trimmed(entry.secret, label, MAX_IMPORT_SETUP_SECRET_VALUE_LEN)?;
         if !keys.insert(dedup_key.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate external import setup dedupKey in {label}: {dedup_key}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED,
+                format!("duplicate external import setup dedupKey in {label}: {dedup_key}"),
+            ));
         }
         normalized.push(ExternalImportSetupSecretOverrideDraft { dedup_key, secret });
     }
@@ -540,14 +574,16 @@ fn validate_secret_overrides(
 fn required_trimmed(value: String, label: &str, max_len: usize) -> AppResult<String> {
     let value = value.trim().to_string();
     if value.is_empty() {
-        return Err(AppError::Validation(format!(
-            "external import setup secret draft {label} cannot be empty"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED,
+            format!("external import setup secret draft {label} cannot be empty"),
+        ));
     }
     if value.len() > max_len {
-        return Err(AppError::Validation(format!(
-            "external import setup secret draft {label} must be at most {max_len} bytes"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE,
+            format!("external import setup secret draft {label} must be at most {max_len} bytes"),
+        ));
     }
     Ok(value)
 }

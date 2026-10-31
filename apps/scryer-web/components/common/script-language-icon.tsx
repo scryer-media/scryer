@@ -1,6 +1,7 @@
 import type { ScriptLanguageValue } from "@/lib/types/scripts";
 
-const languageLogo = (file: string) => `${import.meta.env.BASE_URL}script-languages/${file}`;
+const languageLogo = (file: string) =>
+  `${import.meta.env.BASE_URL}script-languages/${file}`;
 
 const SCRIPT_LANGUAGE_LOGOS: Partial<Record<ScriptLanguageValue, string>> = {
   PYTHON: languageLogo("python.svg"),
@@ -15,10 +16,21 @@ const SCRIPT_LANGUAGE_PROMPTS: Partial<Record<ScriptLanguageValue, string>> = {
 };
 
 /** The mark of a script language: its logo, or the prompt its shell shows. */
-export function ScriptLanguageIcon({ language }: { language: ScriptLanguageValue }) {
+export function ScriptLanguageIcon({
+  language,
+}: {
+  language: ScriptLanguageValue;
+}) {
   const logo = SCRIPT_LANGUAGE_LOGOS[language];
   if (logo) {
-    return <img src={logo} alt="" aria-hidden="true" className="h-3.5 w-auto shrink-0" />;
+    return (
+      <img
+        src={logo}
+        alt=""
+        aria-hidden="true"
+        className="h-3.5 w-auto shrink-0"
+      />
+    );
   }
   const prompt = SCRIPT_LANGUAGE_PROMPTS[language];
   if (!prompt) return null;

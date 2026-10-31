@@ -33,7 +33,7 @@ impl AppUseCase {
             .get_plugin_installation_wasm_payload(&installation.plugin_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::plugins::MISSING_PERSISTED_WASM_PAYLOAD, format!(
                     "plugin '{}' is missing persisted WASM payload",
                     installation.plugin_id
                 ))
@@ -147,7 +147,7 @@ impl AppUseCase {
                     })?;
             }
             other => {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_RUNTIME_UPSERT_UNSUPPORTED, format!(
                     "unsupported plugin_type '{}' for runtime upsert",
                     other
                 )));
@@ -190,14 +190,12 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(&installation.plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("plugin is no longer installed".into()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::NO_LONGER_INSTALLED_NOT_FOUND, "plugin is no longer installed"))?;
         if current.id != installation.id
             || current.version != installation.version
             || !current.is_enabled
         {
-            return Err(AppError::Validation(
-                "plugin changed while its runtime was being prepared".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::CHANGED_WHILE_RUNTIME_BEING_PREPARED, "plugin changed while its runtime was being prepared"));
         }
         plugin.installation_id = Some(current.id.clone());
         plugin.settings = self
@@ -237,12 +235,10 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RESOURCE_NOT_FOUND, format!("plugin '{plugin_id}' not installed")))?;
 
         if installation.is_builtin && installation.source_kind == PluginSourceKind::Bundled {
-            return Err(AppError::Validation(
-                "cannot uninstall built-in plugins; disable them instead".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::CANNOT_UNINSTALL_BUILT_PLUGINS, "cannot uninstall built-in plugins; disable them instead".to_string()));
         }
 
         if installation.is_builtin && installation.source_kind == PluginSourceKind::Downloaded {
@@ -253,7 +249,7 @@ impl AppUseCase {
                     &installation.provider_type,
                 ))
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::plugins::CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE, format!(
                         "cannot revert built-in plugin '{}' because no bundled definition is available",
                         plugin_id
                     ))
@@ -367,7 +363,7 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RESOURCE_NOT_FOUND, format!("plugin '{plugin_id}' not installed")))?;
         let runtime_plugin = self
             .load_runtime_plugin_for_installation(&installation)
             .await?;
@@ -402,7 +398,7 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RESOURCE_NOT_FOUND, format!("plugin '{plugin_id}' not installed")))?;
 
         let prepared_runtime_plugin = if enabled {
             if installation.is_builtin && installation.source_kind == PluginSourceKind::Bundled {

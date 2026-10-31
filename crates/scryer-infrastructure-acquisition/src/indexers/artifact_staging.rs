@@ -429,10 +429,13 @@ fn decoded_chunk_error(compression: NzbCompression, error: std::io::Error) -> Ap
         .get_ref()
         .is_some_and(|inner| inner.is::<RawNzbBodyError>())
     {
-        return AppError::Validation(format!(
-            "nzb download payload is {}-compressed but could not be decompressed: {error}",
-            compression.label()
-        ));
+        return AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_NZB_DECOMPRESSION_FAILED,
+            format!(
+                "nzb download payload is {}-compressed but could not be decompressed: {error}",
+                compression.label()
+            ),
+        );
     }
     match error
         .into_inner()
@@ -469,9 +472,12 @@ pub(crate) async fn inflate_compressed_nzb(bytes: Vec<u8>) -> AppResult<Vec<u8>>
 /// disk, which NZB staging does not have; say so rather than reporting the
 /// payload as malformed XML.
 fn unsupported_packaging(format: &str) -> AppError {
-    AppError::Validation(format!(
-        "nzb download payload is a {format} file; only plain, gzip, zlib or zstd NZBs can be staged"
-    ))
+    AppError::validation_refused(
+        crate::error_reasons::ACQUISITION_NZB_COMPRESSION_UNSUPPORTED,
+        format!(
+            "nzb download payload is a {format} file; only plain, gzip, zlib or zstd NZBs can be staged"
+        ),
+    )
 }
 
 async fn stage_validated_nzb_stream<S, B>(
@@ -605,11 +611,15 @@ fn body_read_failed(error: impl std::fmt::Display) -> AppError {
 /// itself, so a retry would fetch the same oversized payload: a validation
 /// failure the operator can read, not a masked repository error.
 fn payload_exceeded(label: &str) -> AppError {
-    AppError::Validation(format!("{label} payload exceeded {MAX_NZB_BYTES} bytes"))
+    AppError::validation_refused(
+        crate::error_reasons::ACQUISITION_STAGED_PAYLOAD_TOO_LARGE,
+        format!("{label} payload exceeded {MAX_NZB_BYTES} bytes"),
+    )
 }
 
 fn cancellation_error<T>() -> AppResult<T> {
     Err(AppError::TemporaryUnavailable {
+        reason: None,
         message: "nzb artifact resolution was cancelled".into(),
         retry_after: None,
         rate_limit_cooldown: scryer_application::RateLimitCooldownAction::None,
@@ -803,7 +813,10 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             Ok(Event::Decl(_)) | Ok(Event::DocType(_)) if !saw_root => {}
             Ok(Event::Text(text)) if depth == 0 => {
                 let text = quick_xml::escape::unescape(text.as_ref()).map_err(|error| {
-                    AppError::Validation(format!("nzb XML text decode failed: {error}"))
+                    AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_TEXT_DECODE_FAILED,
+                        format!("nzb XML text decode failed: {error}"),
+                    )
                 })?;
                 if !text
                     .trim_matches(|ch: char| {
@@ -811,15 +824,17 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
                     })
                     .is_empty()
                 {
-                    return Err(AppError::Validation(
-                        "nzb download payload did not look like xml".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_PAYLOAD_NOT_XML,
+                        "nzb download payload did not look like xml",
                     ));
                 }
             }
             Ok(Event::Start(start)) if !saw_root => {
                 if !is_nzb_root_name(start.name().as_ref()) {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 saw_root = true;
@@ -827,8 +842,9 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             }
             Ok(Event::Empty(start)) if !saw_root => {
                 if !is_nzb_root_name(start.name().as_ref()) {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 saw_root = true;
@@ -837,27 +853,31 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             Ok(Event::End(_)) if depth > 0 => depth -= 1,
             Ok(Event::Eof) => {
                 if !saw_root {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 if depth != 0 {
-                    return Err(AppError::Validation(
-                        "nzb download payload was not valid xml: unexpected end of file".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_XML_INVALID,
+                        "nzb download payload was not valid xml: unexpected end of file",
                     ));
                 }
                 return Ok(reader);
             }
             Ok(_) if depth == 0 => {
-                return Err(AppError::Validation(
-                    "nzb download payload contains content outside its root element".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_NZB_TRAILING_CONTENT,
+                    "nzb download payload contains content outside its root element",
                 ));
             }
             Ok(_) => {}
             Err(error) => {
-                return Err(AppError::Validation(format!(
-                    "nzb download payload was not valid xml: {error}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_NZB_XML_INVALID,
+                    format!("nzb download payload was not valid xml: {error}"),
+                ));
             }
         }
         event_buf.clear();
@@ -1226,7 +1246,13 @@ mod tests {
         .await
         .err()
         .expect("category gate must reject the inflated NZB");
-        assert!(matches!(denied, AppError::Validation(_)), "{denied:?}");
+        assert!(
+            matches!(
+                denied,
+                AppError::Validation(_) | AppError::ValidationRefused { .. }
+            ),
+            "{denied:?}"
+        );
 
         let not_nzb = stage_nzb_from_bytes(
             &store,
@@ -1271,7 +1297,7 @@ mod tests {
         .err()
         .expect("an NZB inflating past the limit must reject");
         assert!(
-            matches!(&error, AppError::Validation(message) if message.contains("payload exceeded")),
+            matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } if message.contains("payload exceeded")),
             "{error:?}"
         );
         assert!(!contains_partial(tempdir.path()));
@@ -1279,7 +1305,13 @@ mod tests {
         let error = super::inflate_compressed_nzb(compressed)
             .await
             .expect_err("in-memory inflation is capped too");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_) | AppError::ValidationRefused { .. }
+            ),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -1307,7 +1339,7 @@ mod tests {
             .err()
             .expect("corrupt compressed payload must reject");
             assert!(
-                matches!(&error, AppError::Validation(message)
+                matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. }
                     if message.contains(&format!("{label}-compressed"))),
                 "{label}: {error:?}"
             );
@@ -1333,7 +1365,7 @@ mod tests {
             .err()
             .expect("archive payload must reject");
             assert!(
-                matches!(&error, AppError::Validation(message)
+                matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. }
                     if message.contains(&format!("a {label} file"))),
                 "{label}: {error:?}"
             );
@@ -1472,7 +1504,10 @@ mod tests {
             Ok(_) => panic!("category assertion must reject"),
             Err(error) => error,
         };
-        assert!(matches!(denied, AppError::Validation(_)));
+        assert!(matches!(
+            denied,
+            AppError::Validation(_) | AppError::ValidationRefused { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1555,7 +1590,7 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            matches!(&error, AppError::Validation(message) if message.contains("payload exceeded")),
+            matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } if message.contains("payload exceeded")),
             "{error:?}"
         );
         assert!(!contains_partial(tempdir.path()));
@@ -1565,7 +1600,13 @@ mod tests {
         let error = super::read_artifact_prefix(&mut oversized_prefix, &CancellationToken::new())
             .await
             .expect_err("an oversized prefix must reject");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_) | AppError::ValidationRefused { .. }
+            ),
+            "{error:?}"
+        );
 
         let truncated = stream::iter(vec![
             Ok::<_, std::io::Error>(b"<?xml version=\"1.0\"?><nzb>".to_vec()),

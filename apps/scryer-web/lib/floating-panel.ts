@@ -21,8 +21,10 @@ export function resolveFloatingPanelPlacement({
   offset = 4,
   viewportPadding = 8,
 }: ResolveFloatingPanelPlacementArgs): FloatingPanelPlacement {
-  const viewportWidth = typeof window === "undefined" ? desiredWidth : window.innerWidth;
-  const viewportHeight = typeof window === "undefined" ? desiredMaxHeight : window.innerHeight;
+  const viewportWidth =
+    typeof window === "undefined" ? desiredWidth : window.innerWidth;
+  const viewportHeight =
+    typeof window === "undefined" ? desiredMaxHeight : window.innerHeight;
 
   const availableBelow = Math.max(
     0,
@@ -41,7 +43,10 @@ export function resolveFloatingPanelPlacement({
     desiredWidth,
     Math.max(240, viewportWidth - viewportPadding * 2),
   );
-  const maxLeft = Math.max(viewportPadding, viewportWidth - viewportPadding - width);
+  const maxLeft = Math.max(
+    viewportPadding,
+    viewportWidth - viewportPadding - width,
+  );
   const left = Math.min(Math.max(anchorRect.left, viewportPadding), maxLeft);
   const top =
     side === "bottom"

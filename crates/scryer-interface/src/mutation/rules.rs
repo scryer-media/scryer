@@ -1,6 +1,6 @@
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::types::*;
-use async_graphql::{Context, Error, ID, Json, Object, Result as GqlResult};
+use async_graphql::{Context, ID, Json, Object, Result as GqlResult};
 use scryer_domain::{AppPermission, RulePackInstallation, RuleSet, User};
 use std::collections::HashMap;
 
@@ -66,7 +66,11 @@ async fn tracked_rule_pack_payload(
         .map_err(to_gql_error)?
         .into_iter()
         .find(|installation| installation.pack_id == pack_id)
-        .ok_or_else(|| Error::new("tracked rule pack was not found after mutation"))?;
+        .ok_or_else(|| {
+            to_gql_error(scryer_application::AppError::Repository(
+                "tracked rule pack was not found after mutation".into(),
+            ))
+        })?;
     let rule_sets = app
         .list_rule_sets(actor)
         .await
@@ -252,6 +256,17 @@ impl RulesMutations {
             .map_err(to_gql_error)?;
 
         Ok(RuleValidationResultPayload {
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| RuleValidationDiagnosticPayload {
+                    code: diagnostic.code.into(),
+                    message: diagnostic.message,
+                    line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
+                    column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
+                    path: diagnostic.path,
+                })
+                .collect(),
             valid: result.valid,
             errors: result.errors,
         })
@@ -300,6 +315,9 @@ impl RulesMutations {
             release_name: result.release_name,
             media_file_id: result.media_file_id.map(ID::from),
             listing: result.listing.map(|listing| RuleSetTestListingPayload {
+                protocol: listing
+                    .protocol
+                    .map(|protocol| protocol.as_str().to_string()),
                 published_at: listing.published_at,
                 age_days: listing
                     .age_days
@@ -526,12 +544,19 @@ fn listing_input(
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::Object(map)) => Some(map),
         Some(_) => {
-            return Err(to_gql_error(scryer_application::AppError::Validation(
-                "listing extra must be a JSON object".into(),
-            )));
+            return Err(to_gql_error(
+                scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_RELEASE_EXTRA_INVALID,
+                    "listing extra must be a JSON object",
+                ),
+            ));
         }
     };
     Ok(scryer_application::RuleSetTestListingInput {
+        protocol: input
+            .protocol
+            .as_deref()
+            .and_then(scryer_application::ReleaseProtocol::parse),
         published_at: input.published_at,
         thumbs_up: input.thumbs_up,
         thumbs_down: input.thumbs_down,

@@ -10,9 +10,9 @@ export function shouldLoadProfilePasskeys({
   userId: string | null | undefined;
 }): boolean {
   return (
-    !authLoading
-    && effectiveFormLoginEnabled === true
-    && passkeyEnabled
-    && Boolean(userId)
+    !authLoading &&
+    effectiveFormLoginEnabled === true &&
+    passkeyEnabled &&
+    Boolean(userId)
   );
 }

@@ -58,7 +58,7 @@ impl AppUseCase {
                 .get_title_tag_definition(id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation(format!("pending rename refers to missing title tag {id}"))
+                    AppError::validation_refused(crate::error_reasons::catalog::PENDING_RENAME_REFERS_MISSING_TITLE_TAG, format!("pending rename refers to missing title tag {id}"))
                 })?;
             if definition.label == rename.previous_label {
                 // The registry transaction never committed. Nothing outside
@@ -66,7 +66,7 @@ impl AppUseCase {
                 continue;
             }
             if definition.label != rename.next_label {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_TAG_CHANGED_WHILE_RENAME_PENDING, format!(
                     "title tag {id} changed while its rename was pending"
                 )));
             }
@@ -164,7 +164,7 @@ impl AppUseCase {
             .await?;
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
         self.resume_pending_title_tag_mutations_locked().await?;
-        let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
+        let label = crate::normalize_user_title_tag(label).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
         let now = Utc::now();
         let definition = scryer_domain::TitleTagDefinition {
             id: Id::new().0,
@@ -201,7 +201,7 @@ impl AppUseCase {
         label: &str,
         description: &str,
     ) -> AppResult<()> {
-        let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
+        let label = crate::normalize_user_title_tag(label).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
         self.resume_pending_title_tag_mutations_locked().await?;
         let titles = &self.services.catalog.titles;
@@ -247,7 +247,7 @@ impl AppUseCase {
         let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
         self.resume_pending_title_tag_mutations_locked().await?;
         let next_label = label
-            .map(|label| crate::normalize_user_title_tag(&label).map_err(AppError::Validation))
+            .map(|label| crate::normalize_user_title_tag(&label).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message)))
             .transpose()?;
         let description = description.map(normalize_title_tag_description);
 
@@ -257,7 +257,7 @@ impl AppUseCase {
             .titles
             .get_title_tag_definition(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title tag {id}")))?;
         let previous_label = existing.label.clone();
         let renamed = next_label
             .as_ref()
@@ -378,7 +378,7 @@ impl AppUseCase {
             .titles
             .get_title_tag_definition(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title tag {id}")))?;
         let references = self
             .count_rule_sets_referencing_title_tag(&existing.label)
             .await?;
@@ -446,12 +446,10 @@ impl AppUseCase {
         add: &[String],
         remove: &[String],
     ) -> AppResult<Vec<Title>> {
-        let add = crate::normalize_user_title_tags(add).map_err(AppError::Validation)?;
-        let remove = crate::normalize_user_title_tags(remove).map_err(AppError::Validation)?;
+        let add = crate::normalize_user_title_tags(add).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
+        let remove = crate::normalize_user_title_tags(remove).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
         if add.is_empty() && remove.is_empty() {
-            return Err(AppError::Validation(
-                "at least one tag to add or remove must be provided".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::TAG_ADD_REMOVE_REQUIRED, "at least one tag to add or remove must be provided".to_string()));
         }
         require_disjoint_tag_patch(&add, &remove)?;
         // Only additions are gated on the registry. Removing a label that was
@@ -472,13 +470,11 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
             titles.push(title);
         }
         if titles.is_empty() {
-            return Err(AppError::Validation(
-                "at least one title must be provided".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_REQUIRED, "at least one title must be provided".to_string()));
         }
         for title in &titles {
             self.require_library_permission(
@@ -534,12 +530,10 @@ impl AppUseCase {
         add: &[String],
         remove: &[String],
     ) -> AppResult<Vec<scryer_domain::SeriesMovieLink>> {
-        let add = crate::normalize_user_title_tags(add).map_err(AppError::Validation)?;
-        let remove = crate::normalize_user_title_tags(remove).map_err(AppError::Validation)?;
+        let add = crate::normalize_user_title_tags(add).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
+        let remove = crate::normalize_user_title_tags(remove).map_err(|message| AppError::validation_refused(crate::error_reasons::catalog::TAG_INVALID, message))?;
         if add.is_empty() && remove.is_empty() {
-            return Err(AppError::Validation(
-                "at least one tag to add or remove must be provided".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::TAG_ADD_REMOVE_REQUIRED, "at least one tag to add or remove must be provided".to_string()));
         }
         require_disjoint_tag_patch(&add, &remove)?;
         // Additions only, for the same reason titles gate additions only:
@@ -559,13 +553,11 @@ impl AppUseCase {
                 .shows
                 .get_series_movie_link_by_id(link_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("series movie {link_id}")))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::SERIES_MOVIE_NOT_FOUND, format!("series movie {link_id}")))?;
             links.push(link);
         }
         if links.is_empty() {
-            return Err(AppError::Validation(
-                "at least one series movie must be provided".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::SERIES_MOVIE_REQUIRED, "at least one series movie must be provided".to_string()));
         }
 
         // Every parent series is resolved and checked before the first write, so
@@ -582,7 +574,7 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&link.series_title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", link.series_title_id)))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", link.series_title_id)))?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -681,7 +673,7 @@ impl AppUseCase {
             .collect::<HashSet<_>>();
         for label in unprefixed {
             if !defined.contains(label) {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::NOT_DEFINED_TAG, format!(
                     "'{label}' is not a defined tag; an administrator has to add it in Settings before it can be applied"
                 )));
             }
@@ -866,7 +858,7 @@ fn normalize_title_tag_description(description: Option<String>) -> Option<String
 /// matches the bulk dialog, which never submits an overlap.
 fn require_disjoint_tag_patch(add: &[String], remove: &[String]) -> AppResult<()> {
     if let Some(label) = add.iter().find(|label| remove.contains(*label)) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::catalog::LISTED_BOTH_ADD_REMOVE, format!(
             "'{label}' is listed both to add and to remove; choose one"
         )));
     }
@@ -892,7 +884,7 @@ fn preflight_user_tag_patch(tags: &[String], add: &[String], remove: &[String]) 
         .filter(|tag| !crate::is_reserved_title_tag(tag))
         .count();
     if count > crate::MAX_USER_TAGS_PER_TITLE {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_CARRY_MOST_TAGS, format!(
             "a title can carry at most {} tags; this change would leave it with {count}",
             crate::MAX_USER_TAGS_PER_TITLE,
         )));

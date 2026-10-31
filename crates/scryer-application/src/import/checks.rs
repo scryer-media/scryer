@@ -4,7 +4,6 @@
 //! `run_import_checks` executes them in order and short-circuits on the first
 //! `Reject`.
 
-use std::io::Read;
 use std::path::Path;
 
 use crate::release_parser::ParsedReleaseMetadata;
@@ -120,28 +119,19 @@ fn available_disk_space(path: &Path) -> std::io::Result<u64> {
     Ok(crate::filesystem_space_raw(path)?.available_bytes)
 }
 
-fn files_have_identical_contents(
-    source_path: &Path,
-    dest_path: &Path,
-    size: u64,
-) -> std::io::Result<bool> {
-    let mut source = std::fs::File::open(source_path)?;
-    let mut destination = std::fs::File::open(dest_path)?;
-    let mut source_buffer = [0; 64 * 1024];
-    let mut destination_buffer = [0; 64 * 1024];
-    let mut remaining = size;
-
-    while remaining > 0 {
-        let chunk_size = remaining.min(source_buffer.len() as u64) as usize;
-        source.read_exact(&mut source_buffer[..chunk_size])?;
-        destination.read_exact(&mut destination_buffer[..chunk_size])?;
-        if source_buffer[..chunk_size] != destination_buffer[..chunk_size] {
-            return Ok(false);
+/// Prove a same-sized destination holds the source's bytes with the shared
+/// sampled import content proof (size plus first/last-window BLAKE3), the
+/// same proof additional imports use. This check runs inline on the async
+/// runtime, so it must never read whole files.
+fn files_have_identical_contents(source_path: &Path, dest_path: &Path) -> bool {
+    let proof = |path: &Path| crate::fs_integrity::import_content_proof(path).ok();
+    match (proof(source_path), proof(dest_path)) {
+        (Some(source), Some(destination)) => {
+            source.size_bytes == destination.size_bytes
+                && source.sample_blake3 == destination.sample_blake3
         }
-        remaining -= chunk_size as u64;
+        _ => false,
     }
-
-    Ok(true)
 }
 
 // ── Individual checks ────────────────────────────────────────────────────────
@@ -254,8 +244,7 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
         .unwrap_or(0);
 
     if existing_size == ctx.source_size
-        && files_have_identical_contents(ctx.source_path, ctx.dest_path, ctx.source_size)
-            .unwrap_or(false)
+        && files_have_identical_contents(ctx.source_path, ctx.dest_path)
     {
         ImportVerdict::Reject {
             reason: format!(

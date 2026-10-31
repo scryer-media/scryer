@@ -170,7 +170,9 @@ async fn create_library_rejects_root_used_by_other_facet_library() {
         .expect_err("duplicate cross-facet root should be rejected");
 
     match error {
-        AppError::Validation(message) => {
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. } => {
             assert!(message.contains("/Volumes/Media/TV"));
             assert!(message.contains(&series_library.name));
         }
@@ -232,7 +234,9 @@ async fn update_library_rejects_root_used_by_other_facet_library() {
         .expect_err("duplicate cross-facet root should be rejected");
 
     match error {
-        AppError::Validation(message) => {
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. } => {
             assert!(message.contains("/Volumes/Media/TV"));
             assert!(message.contains(&series_library.name));
         }
@@ -251,7 +255,7 @@ async fn delete_library_rejects_default_library() {
         .expect_err("default library delete should be rejected");
 
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("default libraries cannot be deleted")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("default libraries cannot be deleted")),
         "unexpected delete error: {error:?}"
     );
 }
@@ -559,7 +563,7 @@ async fn delete_library_returns_error_when_title_dependency_cleanup_fails() {
         .expect_err("library delete should fail");
 
     assert!(
-        matches!(error, AppError::Repository(ref message) if message.contains("pending release cleanup failed")),
+        matches!(error, AppError::Repository(ref message) | AppError::RepositoryFailure { ref message, .. } | AppError::RepositoryFailed { ref message, .. } if message.contains("pending release cleanup failed")),
         "unexpected delete error: {error:?}"
     );
     assert!(
@@ -795,7 +799,12 @@ async fn library_search_languages_reject_unknown_codes_and_oversized_lists_witho
             .err()
             .unwrap_or_else(|| panic!("{languages:?} must be refused"));
         assert!(
-            matches!(error, AppError::Validation(_)),
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
             "{languages:?}: {error:?}"
         );
         assert_eq!(
@@ -931,7 +940,12 @@ async fn import_permission_settings_validate_chmod_and_normalize_empty_group() {
         )
         .await
         .expect_err("invalid chmod should be rejected");
-    assert!(matches!(error, AppError::Validation(_)));
+    assert!(matches!(
+        error,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
 
     app.update_media_settings(
         &user,
@@ -1193,7 +1207,9 @@ async fn import_mode_settings_reject_invalid_stored_value() {
         .expect_err("invalid import mode should be rejected");
 
     match error {
-        AppError::Validation(message) => {
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. } => {
             assert!(message.contains("invalid import.mode setting value"));
         }
         other => panic!("expected validation error, got {other:?}"),
@@ -1391,7 +1407,9 @@ async fn resolve_quality_profile_rejects_a_missing_configured_reference() {
         .await
         .expect_err("configured missing profile must fail closed");
 
-    assert!(matches!(error, AppError::Validation(message) if message.contains("missing-profile")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("missing-profile"))
+    );
 }
 
 #[tokio::test]
@@ -1420,7 +1438,7 @@ async fn title_add_and_update_reject_unknown_quality_profile_tags() {
         .await
         .expect_err("add must reject an unknown quality profile");
     assert!(
-        matches!(add_error, AppError::Validation(message) if message.contains("missing-profile"))
+        matches!(add_error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("missing-profile"))
     );
 
     let title = app
@@ -1445,7 +1463,7 @@ async fn title_add_and_update_reject_unknown_quality_profile_tags() {
         .await
         .expect_err("update must reject an unknown quality profile");
     assert!(
-        matches!(update_error, AppError::Validation(message) if message.contains("missing-profile"))
+        matches!(update_error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("missing-profile"))
     );
 }
 
@@ -1540,7 +1558,9 @@ async fn update_library_settings_rejects_an_unknown_quality_profile_before_writi
         .await
         .expect_err("unknown profile must be rejected");
 
-    assert!(matches!(error, AppError::Validation(message) if message.contains("missing-profile")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("missing-profile"))
+    );
     assert!(
         settings
             .get_scoped_value(SETTINGS_SCOPE_SYSTEM, QUALITY_PROFILE_ID_KEY, &library_id)
@@ -1582,7 +1602,7 @@ async fn saving_quality_profiles_rejects_ids_that_differ_only_by_ascii_case() {
         .expect_err("case-colliding profile ids must be rejected");
 
     assert!(
-        matches!(error, AppError::Validation(message) if message.contains("differ only by ASCII case"))
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("differ only by ASCII case"))
     );
 }
 
@@ -1863,7 +1883,9 @@ async fn deleting_profile_rejects_a_title_reference() {
         .await
         .expect_err("referenced profile must not be deleted");
 
-    assert!(matches!(error, AppError::Validation(message) if message.contains("1 title")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("1 title"))
+    );
 }
 
 #[tokio::test]
@@ -1969,7 +1991,9 @@ async fn title_add_winning_the_profile_lock_prevents_profile_deletion() {
     let error = deletion
         .await
         .expect_err("deletion observes the newly persisted title reference");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("title")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("title"))
+    );
     assert!(
         title
             .tags
@@ -2033,7 +2057,9 @@ async fn profile_deletion_winning_the_lock_rejects_the_later_title_writer() {
     let error = writer
         .await
         .expect_err("later writer validates against the removed profile catalog");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("1080p")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("1080p"))
+    );
 }
 
 #[tokio::test]
@@ -2111,7 +2137,9 @@ async fn resolve_quality_profile_propagates_catalog_repository_failures() {
         .await
         .expect_err("catalog repository failures must not fall back to 4k");
 
-    assert!(matches!(error, AppError::Repository(message) if message.contains("unavailable")));
+    assert!(
+        matches!(error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message.contains("unavailable"))
+    );
 }
 
 #[tokio::test]
@@ -2307,7 +2335,9 @@ async fn movie_library_rejects_plexmatch_override() {
         .expect_err("movie library should reject plexmatch override");
 
     match error {
-        AppError::Validation(message) => {
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. } => {
             assert!(message.contains("plexmatch_write_on_import"));
         }
         other => panic!("expected validation error, got {other:?}"),
@@ -2442,7 +2472,7 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         )
         .await
     {
-        Err(AppError::Unauthorized(_)) => {}
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {}
         other => panic!("expected manage-titles to need a grant, got {other:?}"),
     }
 
@@ -2455,7 +2485,7 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         .expect("app permission mask should be stored");
     user.authorization.loaded = false;
     match app.get_title(&user, &created.title.id).await {
-        Err(AppError::Unauthorized(_)) => {}
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {}
         other => panic!("expected unauthorized without a grant, got {other:?}"),
     }
 }
@@ -2557,7 +2587,7 @@ async fn library_access_surfaces_agree_for_catalog_settings_only_users() {
     assert!(matches!(
         app.require_library_permission(&user, &library.id, manage)
             .await,
-        Err(AppError::Unauthorized(_))
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
     ));
     assert!(
         !app.has_any_library_permission(&user, manage)
@@ -2824,7 +2854,12 @@ async fn folder_ownership_refuses_a_folder_inside_another_librarys_root() {
     )
     .await
     .expect_err("invalid ownership must stop the caller");
-    assert!(matches!(error, AppError::Validation(_)));
+    assert!(matches!(
+        error,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
     let mut invalid_owner = title.clone();
     invalid_owner.folder_path = Some(foreign.to_string());
     assert!(

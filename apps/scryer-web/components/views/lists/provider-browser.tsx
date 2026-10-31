@@ -43,7 +43,10 @@ type ProviderBrowserProps = {
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
   /** Stored server-wide settings, with non-secret values; null until loaded. */
   providerSettings?: ListProviderSettings[] | null;
-  onSaveProviderSettings?: (provider: string, changes: ListProviderSettingChange[]) => Promise<boolean>;
+  onSaveProviderSettings?: (
+    provider: string,
+    changes: ListProviderSettingChange[],
+  ) => Promise<boolean>;
 };
 
 /**
@@ -64,21 +67,38 @@ export function ProviderBrowser({
   const t = useTranslate();
   const catalog = React.useMemo(() => publicProviders(providers), [providers]);
   const [selectedType, setSelectedType] = React.useState<string | null>(null);
-  const rail = catalog.filter((provider) => provider.providerType !== CUSTOM_PROVIDER_TYPE);
+  const rail = catalog.filter(
+    (provider) => provider.providerType !== CUSTOM_PROVIDER_TYPE,
+  );
   const selected =
     selectedType === CUSTOM
       ? null
-      : (rail.find((provider) => provider.providerType === selectedType) ?? rail[0] ?? null);
+      : (rail.find((provider) => provider.providerType === selectedType) ??
+        rail[0] ??
+        null);
   // The provider whose lists the pane offers: the custom entry offers the custom provider's.
-  const shown = selected ?? catalog.find((provider) => provider.providerType === CUSTOM_PROVIDER_TYPE) ?? null;
+  const shown =
+    selected ??
+    catalog.find(
+      (provider) => provider.providerType === CUSTOM_PROVIDER_TYPE,
+    ) ??
+    null;
   const settingFields = shown
-    ? (providerSettings?.find((entry) => entry.providerType === shown.providerType)?.fields ?? shown.configFields)
+    ? (providerSettings?.find(
+        (entry) => entry.providerType === shown.providerType,
+      )?.fields ?? shown.configFields)
     : [];
 
   return (
-    <div id="lists-catalog" className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+    <div
+      id="lists-catalog"
+      className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]"
+    >
       {catalog.length === 0 ? (
-        <p id="lists-catalog-empty" className="text-[13px] text-[var(--scry-muted)] md:col-span-2">
+        <p
+          id="lists-catalog-empty"
+          className="text-[13px] text-[var(--scry-muted)] md:col-span-2"
+        >
           {t("lists.catalog.empty")}
         </p>
       ) : null}
@@ -112,7 +132,11 @@ export function ProviderBrowser({
       <div className="min-w-0 space-y-4">
         {/* The rail already says which provider is open, so the pane starts with its lists. */}
         {selected ? null : (
-          <AddByUrlCard providers={providers} onPreviewUrl={onPreviewUrl} onRecognized={onFollowUrl} />
+          <AddByUrlCard
+            providers={providers}
+            onPreviewUrl={onPreviewUrl}
+            onRecognized={onFollowUrl}
+          />
         )}
         {shown && onSaveProviderSettings && settingFields.length > 0 ? (
           <ProviderSettingsCard
@@ -126,7 +150,11 @@ export function ProviderBrowser({
           const authBadgeKey = AUTH_BADGE_KEY[group.authBadge];
           return (
             // The group's name is not shown; it names the group to a screen reader.
-            <section key={group.label} aria-label={group.label} className="space-y-2">
+            <section
+              key={group.label}
+              aria-label={group.label}
+              className="space-y-2"
+            >
               {authBadgeKey ? (
                 <Badge tone="outline" className="text-[10.5px]">
                   {t(authBadgeKey)}
@@ -148,7 +176,11 @@ export function ProviderBrowser({
                   // can be followed again with a different value.
                   followed:
                     item.params.length === 0 &&
-                    isListSourceFollowed(subscriptions, { provider: shown.providerType, sourceType: item.sourceType, params: [] }),
+                    isListSourceFollowed(subscriptions, {
+                      provider: shown.providerType,
+                      sourceType: item.sourceType,
+                      params: [],
+                    }),
                   followId: `lists-catalog-follow-${shown.providerType}-${item.id}`,
                   onFollow: () => onFollow(shown, item),
                   // A list that needs a value has nothing to read until it is given one.

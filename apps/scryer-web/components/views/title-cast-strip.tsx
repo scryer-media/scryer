@@ -144,7 +144,11 @@ function TitleCastCard({
 
   return (
     <div
-      className={placeholder ? "flex shrink-0 justify-center opacity-45" : "flex shrink-0 justify-center"}
+      className={
+        placeholder
+          ? "flex shrink-0 justify-center opacity-45"
+          : "flex shrink-0 justify-center"
+      }
       style={
         slotSpan > 1
           ? { width: `calc(${slotSpan * 6}rem + ${(slotSpan - 1) * gapPx}px)` }
@@ -174,7 +178,10 @@ function TitleCastCard({
           {placeholder ? "—" : credit.personName}
         </p>
         {character ? (
-          <p className="truncate text-[11px] text-muted-foreground" title={character}>
+          <p
+            className="truncate text-[11px] text-muted-foreground"
+            title={character}
+          >
             {character}
           </p>
         ) : null}

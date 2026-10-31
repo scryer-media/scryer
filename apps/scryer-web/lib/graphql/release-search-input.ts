@@ -13,6 +13,7 @@ export type InteractiveReleaseSearchInput = {
   indexerIds?: string[];
   categories?: string[];
   limit?: number;
+  aggregatePageSize?: number;
 };
 
 /** What part of a catalog title an interactive search covers. */

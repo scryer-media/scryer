@@ -15,9 +15,19 @@ import { useSessionUser } from "@/lib/hooks/use-auth";
 import type { GutterPanelMemory } from "@/lib/hooks/use-gutter-panel";
 import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
-import { listAccountQuery, listTabCountsQuery, myListAccountsQuery, myListSubscriptionsQuery, personalListRouteOptionsQuery, unlinkListAccountMutation } from "@/lib/graphql/list-accounts";
+import {
+  listAccountQuery,
+  listTabCountsQuery,
+  myListAccountsQuery,
+  myListSubscriptionsQuery,
+  personalListRouteOptionsQuery,
+  unlinkListAccountMutation,
+} from "@/lib/graphql/list-accounts";
 import { hasGraphQlErrorCode } from "@/lib/graphql/error-message";
-import { listErrorMessage, listRefusalKey } from "@/lib/utils/list-error-message";
+import {
+  listErrorMessage,
+  listRefusalKey,
+} from "@/lib/utils/list-error-message";
 import {
   addListExclusionMutation,
   removeListExclusionMutation,
@@ -103,7 +113,10 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
  * the sections left behind stay current; the section on screen is counted
  * from what it has loaded.
  */
-function useListTabCounts(canManageLists: boolean, section: ListsSection): ListTabCounts {
+function useListTabCounts(
+  canManageLists: boolean,
+  section: ListsSection,
+): ListTabCounts {
   const client = useClient();
   const user = useSessionUser();
   const userId = user?.id;
@@ -143,7 +156,11 @@ type ListsContainerBodyProps = ListsContainerProps & {
   pluginsPanelMemory: GutterPanelMemory;
 };
 
-function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: ListsContainerBodyProps) {
+function ListsContainerBody({
+  canManageLists,
+  tabCounts,
+  pluginsPanelMemory,
+}: ListsContainerBodyProps) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -152,21 +169,36 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   const requestedSection = listsSectionFromPath(location.pathname);
   const section: ListsSection = requestedSection;
   const user = useSessionUser();
-  const canManageProviderApps = hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
+  const canManageProviderApps = hasAppPermission(
+    user,
+    APP_PERMISSIONS.manageSystemSettings,
+  );
   const personal = section === "personal";
 
   const [providers, setProviders] = React.useState<ListProviderManifest[]>([]);
   const [accounts, setAccounts] = React.useState<ListAccount[]>([]);
-  const [managedAccounts, setManagedAccounts] = React.useState<ListAccount[]>([]);
+  const [managedAccounts, setManagedAccounts] = React.useState<ListAccount[]>(
+    [],
+  );
   // The latest read of an open provider's accounts; an earlier one still in flight is dropped.
   const manageRun = React.useRef(0);
   const [accountLoading, setAccountLoading] = React.useState(false);
-  const [accountReadErrors, setAccountReadErrors] = React.useState<Readonly<Record<string, string>>>({});
-  const [providerSettings, setProviderSettings] = React.useState<ListProviderSettings[] | null>(null);
-  const [publicSubscriptions, setPublicSubscriptions] = React.useState<ListSubscription[]>([]);
-  const [personalSubscriptions, setPersonalSubscriptions] = React.useState<ListSubscription[]>([]);
+  const [accountReadErrors, setAccountReadErrors] = React.useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [providerSettings, setProviderSettings] = React.useState<
+    ListProviderSettings[] | null
+  >(null);
+  const [publicSubscriptions, setPublicSubscriptions] = React.useState<
+    ListSubscription[]
+  >([]);
+  const [personalSubscriptions, setPersonalSubscriptions] = React.useState<
+    ListSubscription[]
+  >([]);
   const subscriptions = personal ? personalSubscriptions : publicSubscriptions;
-  const setSubscriptions = personal ? setPersonalSubscriptions : setPublicSubscriptions;
+  const setSubscriptions = personal
+    ? setPersonalSubscriptions
+    : setPublicSubscriptions;
   const [exclusions, setExclusions] = React.useState<ListExclusion[]>([]);
   const [routeOptions, setRouteOptions] = React.useState<ListRouteOptions>({
     libraries: [],
@@ -199,27 +231,41 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   }, []);
 
   /** Reads the followed lists. Null when a newer read replaced this one. */
-  const loadSubscriptions = React.useCallback(async (): Promise<ListSubscription[] | null> => {
+  const loadSubscriptions = React.useCallback(async (): Promise<
+    ListSubscription[] | null
+  > => {
     const isNewest = reads.subscriptions.begin();
     const result = await client
-      .query(personal ? myListSubscriptionsQuery : listSubscriptionsQuery, {}, { requestPolicy: "network-only" })
+      .query(
+        personal ? myListSubscriptionsQuery : listSubscriptionsQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
       .toPromise();
     if (!isNewest()) return null;
     if (result.error) {
       throw result.error;
     }
-    const loaded = (personal ? result.data?.myListSubscriptions : result.data?.listSubscriptions) ?? [];
+    const loaded =
+      (personal
+        ? result.data?.myListSubscriptions
+        : result.data?.listSubscriptions) ?? [];
     setSubscriptions(loaded);
     return loaded;
   }, [client, personal, reads, setSubscriptions]);
 
-  const loadAccounts = React.useCallback(async (isCurrent: () => boolean = () => true) => {
-    const isNewest = reads.accounts.begin();
-    const result = await client.query(myListAccountsQuery, {}, { requestPolicy: "network-only" }).toPromise();
-    if (!isCurrent() || !isNewest()) return;
-    if (result.error) throw result.error;
-    setAccounts((result.data?.myListAccounts ?? []) as ListAccount[]);
-  }, [client, reads]);
+  const loadAccounts = React.useCallback(
+    async (isCurrent: () => boolean = () => true) => {
+      const isNewest = reads.accounts.begin();
+      const result = await client
+        .query(myListAccountsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
+      if (!isCurrent() || !isNewest()) return;
+      if (result.error) throw result.error;
+      setAccounts((result.data?.myListAccounts ?? []) as ListAccount[]);
+    },
+    [client, reads],
+  );
   const accountLink = useListAccountLink(loadAccounts);
 
   const manageAccounts = async (open: ListAccount[]) => {
@@ -231,24 +277,34 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
     // An account that cannot be read keeps its place without lists, and the others still load.
     // Nobody asked for this read, so why it failed is said beside the account rather than announced.
     const failed: Record<string, string> = {};
-    const loaded = await Promise.all(open.map(async (account): Promise<ListAccount | null> => {
-      try {
-        const result = await client.query(listAccountQuery, { id: account.id }, { requestPolicy: "network-only" }).toPromise();
-        if (result.error) throw result.error;
-        return result.data?.listAccount ?? null;
-      } catch (error) {
-        const refusal = listRefusalKey(error);
-        failed[account.id] = t(
-          refusal ??
-            (hasGraphQlErrorCode(error, "TEMPORARY_UNAVAILABLE")
-              ? "lists.refusal.accountAuthProviderUnavailable"
-              : "status.failedToLoad"),
-        );
-        return null;
-      }
-    }));
+    const loaded = await Promise.all(
+      open.map(async (account): Promise<ListAccount | null> => {
+        try {
+          const result = await client
+            .query(
+              listAccountQuery,
+              { id: account.id },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          if (result.error) throw result.error;
+          return result.data?.listAccount ?? null;
+        } catch (error) {
+          const refusal = listRefusalKey(error);
+          failed[account.id] = t(
+            refusal ??
+              (hasGraphQlErrorCode(error, "TEMPORARY_UNAVAILABLE")
+                ? "lists.refusal.accountAuthProviderUnavailable"
+                : "status.failedToLoad"),
+          );
+          return null;
+        }
+      }),
+    );
     if (run !== manageRun.current) return;
-    setManagedAccounts(loaded.filter((account): account is ListAccount => account !== null));
+    setManagedAccounts(
+      loaded.filter((account): account is ListAccount => account !== null),
+    );
     setAccountReadErrors(failed);
     setAccountLoading(false);
   };
@@ -256,16 +312,24 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   const unlinkAccount = async (account: ListAccount) => {
     markBusy(account.id, true);
     try {
-      const result = await client.mutation(unlinkListAccountMutation, { id: account.id }).toPromise();
+      const result = await client
+        .mutation(unlinkListAccountMutation, { id: account.id })
+        .toPromise();
       if (result.error) throw result.error;
-      setManagedAccounts((current) => current.filter((entry) => entry.id !== account.id));
+      setManagedAccounts((current) =>
+        current.filter((entry) => entry.id !== account.id),
+      );
       await Promise.all([loadAccounts(), loadSubscriptions()]);
       setGlobalStatus(t("lists.accounts.unlinked"));
       return true;
     } catch (error) {
-      setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+      setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), {
+        level: "ERROR",
+      });
       return false;
-    } finally { markBusy(account.id, false); }
+    } finally {
+      markBusy(account.id, false);
+    }
   };
 
   const loadPage = React.useCallback(async () => {
@@ -280,20 +344,35 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       ]);
       if (providersResult.error) throw providersResult.error;
       if (providersNewest()) {
-        setProviders((providersResult.data?.listProviders ?? []) as ListProviderManifest[]);
+        setProviders(
+          (providersResult.data?.listProviders ?? []) as ListProviderManifest[],
+        );
       }
       if (canManageLists || personal) {
         const [optionsResult, policiesResult] = await Promise.all([
-          client.query(personal ? personalListRouteOptionsQuery : listRouteOptionsQuery, {}).toPromise(),
+          client
+            .query(
+              personal ? personalListRouteOptionsQuery : listRouteOptionsQuery,
+              {},
+            )
+            .toPromise(),
           // Read apart from the routing choices: effective library settings need
           // library-management permission, and lacking it only leaves the
           // "inherit" choices unlabelled.
-          client.query(listLibraryEpisodePoliciesQuery, {}, { requestPolicy: "network-only" }).toPromise(),
+          client
+            .query(
+              listLibraryEpisodePoliciesQuery,
+              {},
+              { requestPolicy: "network-only" },
+            )
+            .toPromise(),
         ]);
         const settingsByLibraryId = new Map(
-          ((policiesResult.data?.libraries ?? []) as Array<Pick<LibraryRecord, "id" | "settings">>).map(
-            (library) => [library.id, library.settings],
-          ),
+          (
+            (policiesResult.data?.libraries ?? []) as Array<
+              Pick<LibraryRecord, "id" | "settings">
+            >
+          ).map((library) => [library.id, library.settings]),
         );
         const withSettings = (library: LibraryRecord): LibraryRecord => ({
           ...library,
@@ -311,9 +390,22 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
         }
         setRouteOptions({
           libraries: personal
-            ? [...new Map([...(optionsResult.data?.requestableLibraries ?? []), ...(optionsResult.data?.manageableLibraries ?? [])].map((library: LibraryRecord) => [library.id, withSettings(library)])).values()]
-            : ((optionsResult.data?.libraries ?? []) as LibraryRecord[]).map(withSettings),
-          qualityProfiles: (optionsResult.data?.qualityProfileSettings?.profiles ?? []) as Array<{
+            ? [
+                ...new Map(
+                  [
+                    ...(optionsResult.data?.requestableLibraries ?? []),
+                    ...(optionsResult.data?.manageableLibraries ?? []),
+                  ].map((library: LibraryRecord) => [
+                    library.id,
+                    withSettings(library),
+                  ]),
+                ).values(),
+              ]
+            : ((optionsResult.data?.libraries ?? []) as LibraryRecord[]).map(
+                withSettings,
+              ),
+          qualityProfiles: (optionsResult.data?.qualityProfileSettings
+            ?.profiles ?? []) as Array<{
             id: string;
             name: string;
           }>,
@@ -324,27 +416,41 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
     } finally {
       setLoading(false);
     }
-  }, [canManageLists, client, loadAccounts, loadSubscriptions, personal, reads, setGlobalStatus, t]);
+  }, [
+    canManageLists,
+    client,
+    loadAccounts,
+    loadSubscriptions,
+    personal,
+    reads,
+    setGlobalStatus,
+    t,
+  ]);
 
   // A background read leaves the table on screen rather than showing it as loading.
-  const loadExclusions = React.useCallback(async ({ background = false }: { background?: boolean } = {}) => {
-    if (!canManageLists) return;
-    const isNewest = reads.exclusions.begin();
-    if (!background) setExclusionsLoading(true);
-    try {
-      const result = await client
-        .query(listExclusionsQuery, {}, { requestPolicy: "network-only" })
-        .toPromise();
-      if (!isNewest()) return;
-      if (result.error) throw result.error;
-      setExclusions((result.data?.listExclusions ?? []) as ListExclusion[]);
-      setExclusionsLoaded(true);
-    } catch (error) {
-      setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), { level: "ERROR" });
-    } finally {
-      if (!background) setExclusionsLoading(false);
-    }
-  }, [canManageLists, client, reads, setGlobalStatus, t]);
+  const loadExclusions = React.useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      if (!canManageLists) return;
+      const isNewest = reads.exclusions.begin();
+      if (!background) setExclusionsLoading(true);
+      try {
+        const result = await client
+          .query(listExclusionsQuery, {}, { requestPolicy: "network-only" })
+          .toPromise();
+        if (!isNewest()) return;
+        if (result.error) throw result.error;
+        setExclusions((result.data?.listExclusions ?? []) as ListExclusion[]);
+        setExclusionsLoaded(true);
+      } catch (error) {
+        setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), {
+          level: "ERROR",
+        });
+      } finally {
+        if (!background) setExclusionsLoading(false);
+      }
+    },
+    [canManageLists, client, reads, setGlobalStatus, t],
+  );
 
   const loadProviderSettings = React.useCallback(async () => {
     if (!canManageLists) return;
@@ -355,9 +461,13 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
         .toPromise();
       if (!isNewest()) return;
       if (result.error) throw result.error;
-      setProviderSettings((result.data?.listProviderSettings ?? []) as ListProviderSettings[]);
+      setProviderSettings(
+        (result.data?.listProviderSettings ?? []) as ListProviderSettings[],
+      );
     } catch (error) {
-      setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), { level: "ERROR" });
+      setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), {
+        level: "ERROR",
+      });
     }
   }, [canManageLists, client, reads, setGlobalStatus, t]);
 
@@ -371,34 +481,49 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
 
   const refreshProviders = React.useCallback(async () => {
     const isNewest = reads.providers.begin();
-    const result = await client.query(listProvidersQuery, {}, { requestPolicy: "network-only" }).toPromise();
+    const result = await client
+      .query(listProvidersQuery, {}, { requestPolicy: "network-only" })
+      .toPromise();
     if (isNewest()) {
       if (result.error) throw result.error;
-      setProviders((result.data?.listProviders ?? []) as ListProviderManifest[]);
+      setProviders(
+        (result.data?.listProviders ?? []) as ListProviderManifest[],
+      );
     }
     await loadProviderSettings();
   }, [client, loadProviderSettings, reads]);
 
   const saveProviderSettings = React.useCallback(
-    async (provider: string, changes: ListProviderSettingChange[]): Promise<boolean> => {
+    async (
+      provider: string,
+      changes: ListProviderSettingChange[],
+    ): Promise<boolean> => {
       try {
         const result = await client
           .mutation(updateListProviderSettingsMutation, { provider, changes })
           .toPromise();
         if (result.error) throw result.error;
-        const saved = result.data?.updateListProviderSettings as ListProviderSettings | undefined;
+        const saved = result.data?.updateListProviderSettings as
+          ListProviderSettings | undefined;
         if (saved) {
           // A read still in flight predates this save and must not undo it.
           reads.providerSettings.invalidate();
           setProviderSettings((current) => [
-            ...(current ?? []).filter((entry) => entry.providerType !== saved.providerType),
+            ...(current ?? []).filter(
+              (entry) => entry.providerType !== saved.providerType,
+            ),
             saved,
           ]);
         }
-        setGlobalStatus(t("lists.providerSettings.saved"), { level: "SUCCESS" });
+        setGlobalStatus(t("lists.providerSettings.saved"), {
+          level: "SUCCESS",
+        });
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       }
     },
@@ -415,7 +540,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
     try {
       await loadSubscriptions();
     } catch (error) {
-      setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), { level: "ERROR" });
+      setGlobalStatus(listErrorMessage(error, t, t("status.failedToLoad")), {
+        level: "ERROR",
+      });
     }
   }, [loadSubscriptions, setGlobalStatus, t]);
 
@@ -438,18 +565,26 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       membershipOffset = 0,
       { background = false }: { background?: boolean } = {},
     ): Promise<ListSyncRun[] | null> => {
-      const read = async (background: boolean): Promise<ListSyncRun[] | null> => {
+      const read = async (
+        background: boolean,
+      ): Promise<ListSyncRun[] | null> => {
         // A background refresh only updates a panel that is still showing this
         // list; it never opens the panel or shows it as loading.
         if (background && detailLoadingRef.current) {
           detailRefreshOwedRef.current = true;
           return null;
         }
-        const request = background ? detailRequestRef.current : ++detailRequestRef.current;
-        const backgroundRequest = background ? ++detailBackgroundRef.current : detailBackgroundRef.current;
+        const request = background
+          ? detailRequestRef.current
+          : ++detailRequestRef.current;
+        const backgroundRequest = background
+          ? ++detailBackgroundRef.current
+          : detailBackgroundRef.current;
         const isCurrent = () =>
           request === detailRequestRef.current &&
-          (!background || (!detailLoadingRef.current && backgroundRequest === detailBackgroundRef.current));
+          (!background ||
+            (!detailLoadingRef.current &&
+              backgroundRequest === detailBackgroundRef.current));
         if (!background) {
           detailLoadingRef.current = true;
           // This load reads after every change heard so far.
@@ -457,7 +592,16 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           setDetail((current) =>
             current?.id === id
               ? { ...current, loading: true }
-              : { id, loading: true, subscription: null, memberships: null, runs: [], moreRuns: false, membershipOffset: 0, error: null },
+              : {
+                  id,
+                  loading: true,
+                  subscription: null,
+                  memberships: null,
+                  runs: [],
+                  moreRuns: false,
+                  membershipOffset: 0,
+                  error: null,
+                },
           );
         }
         const expanded = expandedRunsRef.current === id;
@@ -469,7 +613,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
                 id,
                 membershipLimit: MEMBERSHIP_PAGE_SIZE,
                 membershipOffset,
-                runLimit: expanded ? LIST_SYNC_RUNS_MAX : LIST_SYNC_RUNS_SHOWN + 1,
+                runLimit: expanded
+                  ? LIST_SYNC_RUNS_MAX
+                  : LIST_SYNC_RUNS_SHOWN + 1,
               },
               { requestPolicy: "network-only" },
             )
@@ -487,8 +633,10 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
               : {
                   id,
                   loading: false,
-                  subscription: (result.data?.listSubscription ?? null) as ListSubscription | null,
-                  memberships: (result.data?.listSubscriptionMemberships ?? null) as ListMembershipPage | null,
+                  subscription: (result.data?.listSubscription ??
+                    null) as ListSubscription | null,
+                  memberships: (result.data?.listSubscriptionMemberships ??
+                    null) as ListMembershipPage | null,
                   runs,
                   moreRuns,
                   membershipOffset,
@@ -504,7 +652,11 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           if (background || !isCurrent()) return null;
           detailLoadingRef.current = false;
           const message = listErrorMessage(error, t, t("status.failedToLoad"));
-          setDetail((current) => (current?.id !== id ? current : { ...current, loading: false, error: message }));
+          setDetail((current) =>
+            current?.id !== id
+              ? current
+              : { ...current, loading: false, error: message },
+          );
           return null;
         }
       };
@@ -536,7 +688,11 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   );
 
   const runPreview = React.useCallback(
-    async (query: string, variables: Record<string, unknown>, field: string): Promise<ListPreview | null> => {
+    async (
+      query: string,
+      variables: Record<string, unknown>,
+      field: string,
+    ): Promise<ListPreview | null> => {
       try {
         const result = await client
           .query(query, variables, { requestPolicy: "network-only" })
@@ -544,7 +700,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
         if (result.error) throw result.error;
         return (result.data?.[field] ?? null) as ListPreview | null;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("lists.preview.failed")), { level: "ERROR" });
+        setGlobalStatus(listErrorMessage(error, t, t("lists.preview.failed")), {
+          level: "ERROR",
+        });
         return null;
       }
     },
@@ -567,7 +725,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           input: {
             provider: source.provider,
             sourceType: source.sourceType,
-            params: source.params.filter((param) => param.value.trim()).map(listParamInput),
+            params: source.params
+              .filter((param) => param.value.trim())
+              .map(listParamInput),
             url: source.url,
             credentialId: source.credentialId ?? null,
           },
@@ -578,27 +738,42 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   );
 
   const previewSubscription = React.useCallback(
-    (id: string, draft?: ListSubscriptionDraft) => runPreview(listSubscriptionPreviewQuery, {
-      id,
-      filters: draft?.filters.map(listFilterInput) ?? null,
-      kinds: draft?.kinds ?? null,
-      ...(draft ? { maxPerSync: draft.maxPerSync } : {}),
-    }, "listSubscriptionPreview"),
+    (id: string, draft?: ListSubscriptionDraft) =>
+      runPreview(
+        listSubscriptionPreviewQuery,
+        {
+          id,
+          filters: draft?.filters.map(listFilterInput) ?? null,
+          kinds: draft?.kinds ?? null,
+          ...(draft ? { maxPerSync: draft.maxPerSync } : {}),
+        },
+        "listSubscriptionPreview",
+      ),
     [runPreview],
   );
 
   const subscribe = React.useCallback(
-    async (source: ListSourceDraft, draft: ListSubscriptionDraft): Promise<boolean> => {
+    async (
+      source: ListSourceDraft,
+      draft: ListSubscriptionDraft,
+    ): Promise<boolean> => {
       try {
         const result = await client
-          .mutation(subscribeListMutation, { input: draftToSubscribeInput(source, draft) })
+          .mutation(subscribeListMutation, {
+            input: draftToSubscribeInput(source, draft),
+          })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.status.followed", { name: draft.name.trim() }));
+        setGlobalStatus(
+          t("lists.status.followed", { name: draft.name.trim() }),
+        );
         await refreshAfterChange();
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       }
     },
@@ -610,21 +785,38 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       markBusy(id, true);
       try {
         const result = await client
-          .mutation(updateListSubscriptionMutation, { id, input: draftToUpdateInput(draft) })
+          .mutation(updateListSubscriptionMutation, {
+            id,
+            input: draftToUpdateInput(draft),
+          })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.status.updated", { name: draft.name.trim() }), { level: "SUCCESS" });
+        setGlobalStatus(
+          t("lists.status.updated", { name: draft.name.trim() }),
+          { level: "SUCCESS" },
+        );
         await refreshAfterChange();
         if (detail?.id === id) void loadDetail(id, detail.membershipOffset);
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       } finally {
         markBusy(id, false);
       }
     },
-    [client, detail, loadDetail, markBusy, refreshAfterChange, setGlobalStatus, t],
+    [
+      client,
+      detail,
+      loadDetail,
+      markBusy,
+      refreshAfterChange,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const setEnabled = React.useCallback(
@@ -633,22 +825,41 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       // A read still in flight predates this change and must not undo it.
       reads.subscriptions.invalidate();
       setSubscriptions((current) =>
-        current.map((entry) => (entry.id === subscription.id ? { ...entry, enabled } : entry)),
+        current.map((entry) =>
+          entry.id === subscription.id ? { ...entry, enabled } : entry,
+        ),
       );
       try {
         const result = await client
-          .mutation(setListSubscriptionEnabledMutation, { id: subscription.id, enabled })
+          .mutation(setListSubscriptionEnabledMutation, {
+            id: subscription.id,
+            enabled,
+          })
           .toPromise();
         if (result.error) throw result.error;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
       } finally {
         markBusy(subscription.id, false);
         await refreshAfterChange();
-        if (detail?.id === subscription.id) void loadDetail(subscription.id, detail.membershipOffset);
+        if (detail?.id === subscription.id)
+          void loadDetail(subscription.id, detail.membershipOffset);
       }
     },
-    [client, detail, loadDetail, markBusy, reads, refreshAfterChange, setGlobalStatus, setSubscriptions, t],
+    [
+      client,
+      detail,
+      loadDetail,
+      markBusy,
+      reads,
+      refreshAfterChange,
+      setGlobalStatus,
+      setSubscriptions,
+      t,
+    ],
   );
 
   const detailRef = React.useRef(detail);
@@ -664,11 +875,13 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   // read lands, so the page cannot settle on something older than the server.
   useListsReactiveRefresh(followedListsChanged, () => {
     const shown = detailRef.current;
-    if (shown) void loadDetail(shown.id, shown.membershipOffset, { background: true });
+    if (shown)
+      void loadDetail(shown.id, shown.membershipOffset, { background: true });
     void loadSubscriptions()
       .then((loaded) => {
         const open = detailRef.current;
-        if (!loaded || !open || loaded.some((entry) => entry.id === open.id)) return;
+        if (!loaded || !open || loaded.some((entry) => entry.id === open.id))
+          return;
         // The list on the panel was unfollowed elsewhere; nothing is left to show.
         detailRequestRef.current += 1;
         detailLoadingRef.current = false;
@@ -705,9 +918,14 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           .mutation(syncListSubscriptionMutation, { id: subscription.id })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.status.syncQueued", { name: subscription.name }));
+        setGlobalStatus(
+          t("lists.status.syncQueued", { name: subscription.name }),
+        );
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
       } finally {
         markBusy(subscription.id, false);
       }
@@ -717,11 +935,17 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
 
   const syncAll = React.useCallback(async () => {
     try {
-      const result = await client.mutation(syncAllListsMutation, { scope: personal ? "PERSONAL" : "PUBLIC" }).toPromise();
+      const result = await client
+        .mutation(syncAllListsMutation, {
+          scope: personal ? "PERSONAL" : "PUBLIC",
+        })
+        .toPromise();
       if (result.error) throw result.error;
       setGlobalStatus(t("lists.status.syncAllQueued"));
     } catch (error) {
-      setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+      setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), {
+        level: "ERROR",
+      });
     }
   }, [client, personal, setGlobalStatus, t]);
 
@@ -733,12 +957,17 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           .mutation(unsubscribeListMutation, { id: subscription.id })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.status.unfollowed", { name: subscription.name }));
+        setGlobalStatus(
+          t("lists.status.unfollowed", { name: subscription.name }),
+        );
         if (detail?.id === subscription.id) setDetail(null);
         await refreshAfterChange();
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       } finally {
         markBusy(subscription.id, false);
@@ -750,13 +979,20 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
   const addExclusion = React.useCallback(
     async (input: AddListExclusionInput): Promise<boolean> => {
       try {
-        const result = await client.mutation(addListExclusionMutation, { input }).toPromise();
+        const result = await client
+          .mutation(addListExclusionMutation, { input })
+          .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.exclusions.added", { name: input.displayTitle }));
+        setGlobalStatus(
+          t("lists.exclusions.added", { name: input.displayTitle }),
+        );
         await loadExclusions();
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       }
     },
@@ -771,13 +1007,20 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
           .mutation(removeListExclusionMutation, { id: exclusion.id })
           .toPromise();
         if (result.error) throw result.error;
-        setGlobalStatus(t("lists.exclusions.removed", { name: exclusion.displayTitle }));
+        setGlobalStatus(
+          t("lists.exclusions.removed", { name: exclusion.displayTitle }),
+        );
         // A read still in flight predates this removal and must not bring it back.
         reads.exclusions.invalidate();
-        setExclusions((current) => current.filter((entry) => entry.id !== exclusion.id));
+        setExclusions((current) =>
+          current.filter((entry) => entry.id !== exclusion.id),
+        );
         return true;
       } catch (error) {
-        setGlobalStatus(listErrorMessage(error, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(error, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
         return false;
       } finally {
         markBusy(exclusion.id, false);
@@ -795,7 +1038,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
 
   const shownTabCounts: ListTabCounts = {
     ...tabCounts,
-    ...(loading || loadError ? {} : { [personal ? "personal" : "public"]: subscriptions.length }),
+    ...(loading || loadError
+      ? {}
+      : { [personal ? "personal" : "public"]: subscriptions.length }),
     ...(exclusionsLoaded ? { exclusions: exclusions.length } : {}),
   };
 
@@ -815,7 +1060,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       linkingProvider={accountLink.provider}
       checkingAccountKey={accountLink.checkingKey}
       accountLinkError={accountLink.error}
-      onLinkAccount={(provider, memberKey) => void accountLink.start(provider, memberKey)}
+      onLinkAccount={(provider, memberKey) =>
+        void accountLink.start(provider, memberKey)
+      }
       onCancelLink={accountLink.cancel}
       onManageAccounts={(open) => void manageAccounts(open)}
       onUnlinkAccount={unlinkAccount}
@@ -836,7 +1083,9 @@ function ListsContainerBody({ canManageLists, tabCounts, pluginsPanelMemory }: L
       onPreviewSubscription={previewSubscription}
       onSubscribe={subscribe}
       onUpdate={update}
-      onSetEnabled={(subscription, enabled) => void setEnabled(subscription, enabled)}
+      onSetEnabled={(subscription, enabled) =>
+        void setEnabled(subscription, enabled)
+      }
       onSyncNow={(subscription) => void syncNow(subscription)}
       onSyncAll={() => void syncAll()}
       onUnsubscribe={unsubscribe}

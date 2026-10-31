@@ -887,7 +887,7 @@ async fn assignment_cleanup_failure_restores_the_previous_folder_and_its_media()
         .await
         .expect_err("cleanup failure should abort the assignment");
     assert!(
-        matches!(&error, AppError::Repository(message)
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. }
             if message.contains("injected unmatched-item cleanup failure")),
         "the cleanup error should reach the caller, got {error:?}"
     );
@@ -932,7 +932,7 @@ async fn assignment_detach_failure_restores_the_previous_folder() {
         .await
         .expect_err("detach failure should abort the assignment");
     assert!(
-        matches!(&error, AppError::Repository(message)
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. }
             if message.contains("injected media detach failure")),
         "the detach error should reach the caller, got {error:?}"
     );
@@ -1261,7 +1261,12 @@ async fn reconciling_a_title_recorded_at_the_library_root_is_refused() {
         .await
         .expect_err("a root record is refused");
     assert!(
-        matches!(error, AppError::Validation(_)),
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "unexpected error: {error}"
     );
     assert!(
@@ -1366,7 +1371,12 @@ async fn a_scan_of_a_movie_recorded_above_the_library_root_is_refused() {
         .expect_err("a record above the library root is refused");
 
     assert!(
-        matches!(error, AppError::Validation(_)),
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "unexpected error: {error}"
     );
     seeded.assert_untouched(&fixture).await;
@@ -1481,7 +1491,12 @@ async fn a_title_recorded_at_the_library_root_cannot_swap_its_record_away() {
         .await
         .expect_err("a library root is not a folder to swap");
     assert!(
-        matches!(error, AppError::Validation(_)),
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "unexpected error: {error}"
     );
     assert_eq!(
@@ -1537,7 +1552,7 @@ async fn assigning_an_owned_folder_is_refused_and_names_the_owner() {
         .await
         .expect_err("assigning an owned folder should be refused");
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains(&owner.name)),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains(&owner.name)),
         "expected a validation error naming the owner, got {error:?}"
     );
     // Nothing moved: both titles still own what they owned.
@@ -1651,7 +1666,7 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
         .await
         .expect_err("a folder outside the library roots should be refused");
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("is not inside a root")),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("is not inside a root")),
         "expected a root-scope validation error, got {error:?}"
     );
 
@@ -1665,7 +1680,12 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
         )
         .await
         .expect_err("a folder outside the library roots should be refused");
-    assert!(matches!(error, AppError::Validation(_)));
+    assert!(matches!(
+        error,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
 }
 
 /// A folder spelled with `..` can read as inside a root while naming somewhere
@@ -1693,7 +1713,7 @@ async fn folders_spelled_with_dot_components_are_rejected() {
             .await
             .expect_err("a dotted folder should be refused");
         assert!(
-            matches!(&error, AppError::Validation(message) if message.contains(". or .. components")),
+            matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains(". or .. components")),
             "expected a dot-component validation error, got {error:?}"
         );
     }
@@ -1721,7 +1741,10 @@ async fn changing_a_folder_match_requires_library_management_permission() {
         .change_title_folder_preview(&viewer, &title.id, other_folder.to_string_lossy().as_ref())
         .await
         .expect_err("preview should require management permission");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
 
     let error = fixture
         .app
@@ -1733,7 +1756,10 @@ async fn changing_a_folder_match_requires_library_management_permission() {
         )
         .await
         .expect_err("apply should require management permission");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
     assert_eq!(
         fixture.folder_path_of(&title.id).await.as_deref(),
         Some(folder.to_string_lossy().as_ref())
@@ -1834,7 +1860,7 @@ async fn a_swap_whose_second_ownership_commit_fails_leaves_both_titles_on_their_
         .await
         .expect_err("the swap should fail when the second ownership commit fails");
     assert!(
-        matches!(&error, AppError::Repository(message)
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. }
             if message.contains("injected ownership commit failure")),
         "the original cause should reach the caller, got {error:?}"
     );
@@ -1867,7 +1893,7 @@ async fn a_swap_that_fails_while_rescanning_restores_both_titles_and_their_assoc
         .await
         .expect_err("the swap should fail when the new folder cannot be scanned");
     assert!(
-        matches!(&error, AppError::Repository(message) if message.contains("injected scan failure")),
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message.contains("injected scan failure")),
         "the scan failure should reach the caller, got {error:?}"
     );
     assert_eq!(
@@ -1917,7 +1943,7 @@ async fn a_takeover_that_fails_while_rescanning_restores_both_titles_and_queues_
         .await
         .expect_err("the takeover should fail when the taken folder cannot be scanned");
     assert!(
-        matches!(&error, AppError::Repository(message) if message.contains("injected scan failure")),
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message.contains("injected scan failure")),
         "the scan failure should reach the caller, got {error:?}"
     );
     assert_eq!(

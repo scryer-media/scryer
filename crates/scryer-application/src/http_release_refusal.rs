@@ -24,6 +24,18 @@ pub const SEPARATE_TRACKS: &str = "HTTP_RELEASE_SEPARATE_TRACKS";
 pub const NO_MEDIA_RESOURCE: &str = "HTTP_RELEASE_NO_MEDIA_RESOURCE";
 /// Subtitle sidecars are required and none in a wanted language is offered.
 pub const NO_SUBTITLE_RESOURCE: &str = "HTTP_RELEASE_NO_SUBTITLE_RESOURCE";
+/// No complete resource satisfies the required audio languages.
+pub const NO_AUDIO_RESOURCE: &str = "HTTP_RELEASE_NO_AUDIO_RESOURCE";
+/// The resource requires provider authentication the client cannot supply.
+pub const UNSUPPORTED_AUTH: &str = "HTTP_RELEASE_UNSUPPORTED_AUTH";
+/// An opaque payload could not be identified as a supported video container.
+pub const UNKNOWN_CONTAINER: &str = "HTTP_RELEASE_UNKNOWN_CONTAINER";
+/// A destination is already occupied by a different file.
+pub const DESTINATION_EXISTS: &str = "HTTP_RELEASE_DESTINATION_EXISTS";
+/// The filesystem cannot publish the partial without replacing a destination.
+pub const PUBLICATION_FAILED: &str = "HTTP_RELEASE_PUBLICATION_FAILED";
+/// An existing output lacks matching durable publication evidence.
+pub const RECOVERY_UNVERIFIED: &str = "HTTP_RELEASE_RECOVERY_UNVERIFIED";
 
 /// Every reason an HTTP release refusal can name. Clients key translations
 /// on these, so adding, renaming, or removing one must be deliberate.
@@ -36,6 +48,12 @@ pub const ALL: &[&str] = &[
     SEPARATE_TRACKS,
     NO_MEDIA_RESOURCE,
     NO_SUBTITLE_RESOURCE,
+    NO_AUDIO_RESOURCE,
+    UNSUPPORTED_AUTH,
+    UNKNOWN_CONTAINER,
+    DESTINATION_EXISTS,
+    PUBLICATION_FAILED,
+    RECOVERY_UNVERIFIED,
 ];
 
 #[cfg(test)]

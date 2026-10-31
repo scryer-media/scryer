@@ -13,12 +13,7 @@ export type DownloadQueueState =
   | "FAILED";
 
 export type ImportStatus =
-  | "PENDING"
-  | "RUNNING"
-  | "PROCESSING"
-  | "COMPLETED"
-  | "FAILED"
-  | "SKIPPED";
+  "PENDING" | "RUNNING" | "PROCESSING" | "COMPLETED" | "FAILED" | "SKIPPED";
 
 export type ImportErrorCode =
   | "FILE_NOT_FOUND"
@@ -29,15 +24,14 @@ export type ImportErrorCode =
   | "IO_FAILED"
   | "PERMISSION_DENIED"
   | "DISK_FULL"
+  | "SCENE_SUBTITLE_PENDING"
   | "UNKNOWN";
 
 export type DownloadQueueDeleteStatus =
-  | "QUEUED"
-  | "RUNNING"
-  | "COMPLETED"
-  | "FAILED";
+  "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
 
 export type TrackedDownloadState =
+  | "MISSING"
   | "DOWNLOADING"
   | "IMPORT_PENDING"
   | "IMPORTING"
@@ -51,11 +45,7 @@ export type TrackedDownloadState =
 export type TrackedDownloadStatus = "OK" | "WARNING" | "ERROR";
 
 export type DownloadSeedingState =
-  | "NONE"
-  | "SEEDING"
-  | "GOAL_MET"
-  | "HELD_PRIVATE"
-  | "NEVER_REMOVE";
+  "NONE" | "SEEDING" | "GOAL_MET" | "HELD_PRIVATE" | "NEVER_REMOVE";
 
 export type DownloadDisplayState =
   | "QUEUED"
@@ -84,16 +74,15 @@ export type DownloadActivityFilter =
   | "WARNING";
 
 export type DownloadImportFilter =
-  | "ALL"
-  | "ATTENTION"
-  | "IMPORTING"
-  | "PENDING"
-  | "BLOCKED"
-  | "FAILED";
+  "ALL" | "ATTENTION" | "IMPORTING" | "PENDING" | "BLOCKED" | "FAILED";
 
 export type DownloadActivityStatus = Exclude<DownloadActivityFilter, "ALL">;
-export type DownloadImportStatus = Exclude<DownloadImportFilter, "ALL" | "ATTENTION">;
-export type ActivitySortKey = "TITLE" | "CLIENT" | "STATUS" | "PROGRESS" | "SIZE";
+export type DownloadImportStatus = Exclude<
+  DownloadImportFilter,
+  "ALL" | "ATTENTION"
+>;
+export type ActivitySortKey =
+  "TITLE" | "CLIENT" | "STATUS" | "PROGRESS" | "SIZE";
 export type SortDirection = "ASC" | "DESC";
 export type SortConfig = {
   key: ActivitySortKey;
@@ -101,11 +90,7 @@ export type SortConfig = {
 };
 
 export type TitleMatchType =
-  | "SUBMISSION"
-  | "CLIENT_PARAMETER"
-  | "TITLE_PARSE"
-  | "ID_ONLY"
-  | "UNMATCHED";
+  "SUBMISSION" | "CLIENT_PARAMETER" | "TITLE_PARSE" | "ID_ONLY" | "UNMATCHED";
 
 export type HeldImportSourcesReason =
   | "SUBTITLES_PENDING"
@@ -113,7 +98,8 @@ export type HeldImportSourcesReason =
   | "UNKNOWN"
   | "ARCHIVE_EXTRACTION_FAILED";
 
-export type HeldDownloadClientPolicy = "REMOVES" | "REMOVES_AFTER_SEEDING" | "KEEPS" | "UNKNOWN";
+export type HeldDownloadClientPolicy =
+  "REMOVES" | "REMOVES_AFTER_SEEDING" | "KEEPS" | "UNKNOWN";
 
 export type HeldImportSourcesSettlement =
   | "IMPORTED"
@@ -167,7 +153,8 @@ export type DownloadQueueItem = {
   state: DownloadQueueState;
   displayState: DownloadDisplayState;
   progressPercent: number;
-  importTransferPhase: "WAITING" | "EXTRACTING" | "COPYING" | "VERIFYING" | "FINALIZING" | null;
+  importTransferPhase:
+    "WAITING" | "EXTRACTING" | "COPYING" | "VERIFYING" | "FINALIZING" | null;
   importTransferBytes: number | null;
   importTransferTotalBytes: number | null;
   importTransferStartedAt: string | null;
@@ -177,8 +164,10 @@ export type DownloadQueueItem = {
   queuedAt: string | null;
   lastUpdatedAt: string | null;
   attentionRequired: boolean;
+  attentionReasonCode?: string | null;
   attentionReason: string | null;
-  passwordFailureCode?: "ARCHIVE_PASSWORD_REQUIRED" | "ARCHIVE_PASSWORD_OR_CORRUPTION" | null;
+  passwordFailureCode?:
+    "ARCHIVE_PASSWORD_REQUIRED" | "ARCHIVE_PASSWORD_OR_CORRUPTION" | null;
   passwordRetryImportId?: string | null;
   /** Held sources of this download that the viewer may release. */
   heldImportSources?: HeldImportSources | null;
@@ -230,7 +219,13 @@ export type ActiveImportStream = {
   facet: string;
   sourcePath: string;
   destinationPath: string;
-  phase: "QUEUED" | "EXTRACTING" | "PLACING" | "COPYING" | "VERIFYING" | "FINALIZING";
+  phase:
+    | "QUEUED"
+    | "EXTRACTING"
+    | "PLACING"
+    | "COPYING"
+    | "VERIFYING"
+    | "FINALIZING";
   bytes: number;
   totalBytes: number;
   queuedAt: string;

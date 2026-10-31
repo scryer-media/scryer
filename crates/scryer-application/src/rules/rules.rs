@@ -51,19 +51,33 @@ impl AppUseCase {
         let rewritten_source = scryer_rules::rewrite_package_declaration(&rego_source, &id);
 
         if !retired_release_input_fields(&rewritten_source)
-            .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::rules::VALIDATION_FAILED,
+                    format!("rule validation failed: {error}"),
+                )
+            })?
             .is_empty()
         {
-            return Err(AppError::Validation(RETIRED_GUIDE_FACTS_REASON.to_string()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::INPUT_RETIRED,
+                RETIRED_GUIDE_FACTS_REASON.to_string(),
+            ));
         }
 
         // Validate the rewritten Rego source
-        let validation = validate_user_rule(&rewritten_source, &id)
-            .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+        let validation = validate_user_rule(&rewritten_source, &id).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::VALIDATION_FAILED,
+                format!("rule validation failed: {e}"),
+            )
+        })?;
         if !validation.valid {
-            return Err(AppError::Validation(format_rule_validation_errors(
-                &validation,
-            )));
+            return Err(AppError::validation_refused_with_diagnostics(
+                crate::error_reasons::rules::SOURCE_INVALID,
+                format_rule_validation_errors(&validation),
+                validation.diagnostics,
+            ));
         }
 
         let now = Utc::now();
@@ -76,6 +90,7 @@ impl AppUseCase {
             priority,
             evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
             exclusive_group: None,
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets,
             created_at: now,
@@ -126,8 +141,9 @@ impl AppUseCase {
             || applied_facets.is_some()
             || priority.is_some();
         if !edits_authored_fields && managed_tag_filter.is_none() {
-            return Err(AppError::Validation(
-                "at least one rule set field must be provided".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::SET_FIELD_REQUIRED,
+                "at least one rule set field must be provided",
             ));
         }
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
@@ -140,7 +156,12 @@ impl AppUseCase {
             .rule_sets
             .get_rule_set(&id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("rule set {id} not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::SET_NOT_FOUND,
+                    format!("rule set {id} not found"),
+                )
+            })?;
 
         let tracked_pack = self
             .services
@@ -150,25 +171,29 @@ impl AppUseCase {
             .await?;
 
         if tracked_pack.is_some() {
-            return Err(AppError::Validation(
-                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic, or copy it to customize its content.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TRACKED_COMMUNITY_PACK,
+                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic, or copy it to customize its content.",
             ));
         }
 
         if rule_set.is_managed {
             if edits_authored_fields {
-                return Err(AppError::Validation(
-                    "This rule is managed by a convenience setting. Change the setting instead of editing the rule directly.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::rules::MANAGED_CONVENIENCE_SETTING,
+                    "This rule is managed by a convenience setting. Change the setting instead of editing the rule directly.",
                 ));
             }
             if managed_tag_filter.is_some() {
-                return Err(AppError::Validation(
-                    "Managed TRaSH Guides locale packs use their predefined locale policy and cannot be filtered.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::rules::MANAGED_LOCALE_FILTER_FORBIDDEN,
+                    "Managed TRaSH Guides locale packs use their predefined locale policy and cannot be filtered.",
                 ));
             }
         } else if managed_tag_filter.is_some() {
-            return Err(AppError::Validation(
-                "A tag filter only applies to managed rule sets.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TAG_FILTER_ONLY_APPLIES_MANAGED_RULE_SETS,
+                "A tag filter only applies to managed rule sets.",
             ));
         }
 
@@ -177,19 +202,30 @@ impl AppUseCase {
             // Rewrite the package declaration to match the existing rule ID.
             let rewritten = scryer_rules::rewrite_package_declaration(new_source, &rule_set.id);
             let retired = retired_release_input_fields(&rewritten).map_err(|error| {
-                AppError::Validation(format!("rule validation failed: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::rules::VALIDATION_FAILED,
+                    format!("rule validation failed: {error}"),
+                )
             })?;
             if !retired.is_empty() {
                 rule_set.rego_source = rewritten;
                 rule_set.enabled = false;
                 rule_set.disabled_reason = Some(RETIRED_GUIDE_FACTS_REASON.to_string());
+                rule_set.disabled_reason_code =
+                    Some(crate::error_reasons::rules::INPUT_RETIRED.to_string());
             } else {
-                let validation = validate_user_rule(&rewritten, &rule_set.id)
-                    .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+                let validation = validate_user_rule(&rewritten, &rule_set.id).map_err(|e| {
+                    AppError::validation_refused(
+                        crate::error_reasons::rules::VALIDATION_FAILED,
+                        format!("rule validation failed: {e}"),
+                    )
+                })?;
                 if !validation.valid {
-                    return Err(AppError::Validation(format_rule_validation_errors(
-                        &validation,
-                    )));
+                    return Err(AppError::validation_refused_with_diagnostics(
+                        crate::error_reasons::rules::SOURCE_INVALID,
+                        format_rule_validation_errors(&validation),
+                        validation.diagnostics,
+                    ));
                 }
                 rule_set.rego_source = rewritten;
                 repaired_retired_source = true;
@@ -209,6 +245,7 @@ impl AppUseCase {
         }
         if repaired_retired_source {
             rule_set.disabled_reason = None;
+            rule_set.disabled_reason_code = None;
         }
         rule_set.updated_at = Utc::now();
         let engine = self.prospective_engine(&[rule_set.clone()], &[]).await?;
@@ -246,8 +283,9 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(
-                "This rule is tracked by a community pack. Uninstall the pack or copy the rule to customize it.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TRACKED_COMMUNITY_PACK,
+                "This rule is tracked by a community pack. Uninstall the pack or copy the rule to customize it.",
             ));
         }
 
@@ -259,8 +297,9 @@ impl AppUseCase {
             .await?
             && rule_set.is_managed
         {
-            return Err(AppError::Validation(
-                "This rule is managed by a convenience setting. Remove the setting instead of deleting the rule directly.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::MANAGED_CONVENIENCE_SETTING,
+                "This rule is managed by a convenience setting. Remove the setting instead of deleting the rule directly.",
             ));
         }
 
@@ -295,7 +334,12 @@ impl AppUseCase {
             .rule_sets
             .get_rule_set(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("rule set {id} not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::SET_NOT_FOUND,
+                    format!("rule set {id} not found"),
+                )
+            })?;
 
         if self
             .services
@@ -305,23 +349,33 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(
-                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TRACKED_COMMUNITY_PACK,
+                "This rule is tracked by a community pack. Change its settings through the tracked pack so membership revisions remain atomic.",
             ));
         }
 
         if enabled
             && !rule_set.enabled
             && !retired_release_input_fields(&rule_set.rego_source)
-                .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::rules::VALIDATION_FAILED,
+                        format!("rule validation failed: {error}"),
+                    )
+                })?
                 .is_empty()
         {
-            return Err(AppError::Validation(RETIRED_GUIDE_FACTS_REASON.to_string()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::INPUT_RETIRED,
+                RETIRED_GUIDE_FACTS_REASON.to_string(),
+            ));
         }
 
         rule_set.enabled = enabled;
         if enabled {
             rule_set.disabled_reason = None;
+            rule_set.disabled_reason_code = None;
         }
         rule_set.updated_at = Utc::now();
         let engine = self.prospective_engine(&[rule_set.clone()], &[]).await?;
@@ -354,13 +408,21 @@ impl AppUseCase {
         // Rewrite the package declaration so validation works regardless of
         // what the user typed.
         let rewritten = scryer_rules::rewrite_package_declaration(rego_source, rule_set_id);
-        let validation = validate_user_rule(&rewritten, rule_set_id)
-            .map_err(|e| AppError::Validation(format!("rule validation error: {e}")))?;
+        let validation = validate_user_rule(&rewritten, rule_set_id).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::VALIDATION_ERROR,
+                format!("rule validation error: {e}"),
+            )
+        })?;
         if !validation.valid {
             return Ok(validation);
         }
-        let retired = retired_release_input_fields(&rewritten)
-            .map_err(|error| AppError::Validation(format!("rule validation error: {error}")))?;
+        let retired = retired_release_input_fields(&rewritten).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::VALIDATION_ERROR,
+                format!("rule validation error: {error}"),
+            )
+        })?;
         if !retired.is_empty() {
             return Ok(ValidationResult::invalid(format!(
                 "uses retired release input field(s): {}",
@@ -548,6 +610,7 @@ impl AppUseCase {
             priority: 0,
             evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
             exclusive_group: None,
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets,
             created_at: now,
@@ -642,10 +705,13 @@ impl AppUseCase {
             .into_iter()
             .find(|(_, members)| members.len() > 1)
         {
-            return Err(AppError::Validation(format!(
-                "only one enabled rule may use exclusive group {group}: {}",
-                members.join(", ")
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP,
+                format!(
+                    "only one enabled rule may use exclusive group {group}: {}",
+                    members.join(", ")
+                ),
+            ));
         }
         rule_sets.sort_by(|left, right| {
             right
@@ -713,7 +779,12 @@ impl AppUseCase {
             &tag_filters,
             Some(std::sync::Arc::new(super::metrics::RulesObserver(purpose))),
         )
-        .map_err(|e| AppError::Validation(format!("failed to build rules engine: {e}")))?;
+        .map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::FAILED_BUILD_RULES_ENGINE,
+                format!("failed to build rules engine: {e}"),
+            )
+        })?;
 
         tracing::info!(
             user_rule_count = user_count,
@@ -1152,6 +1223,7 @@ pub(crate) mod tests {
             priority: -100,
             evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
             exclusive_group: None,
+            disabled_reason_code: None,
             disabled_reason: None,
             applied_facets: vec![MediaFacet::Anime],
             created_at: now,
@@ -1169,6 +1241,7 @@ pub(crate) mod tests {
     ) -> scryer_rules::UserRuleInput {
         scryer_rules::UserRuleInput {
             release: scryer_rules::ReleaseDoc {
+                protocol: None,
                 stereoscopy_tokens: vec![],
                 stereoscopy: None,
                 raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265".to_string(),

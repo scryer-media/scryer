@@ -24,12 +24,10 @@ type LibraryMultiSelectProps = {
 };
 
 function groupLibrariesByFacet(libraries: LibraryRecord[]) {
-  return FACET_ORDER
-    .map((facet) => ({
-      facet,
-      libraries: libraries.filter((library) => library.facet === facet),
-    }))
-    .filter((group) => group.libraries.length > 0);
+  return FACET_ORDER.map((facet) => ({
+    facet,
+    libraries: libraries.filter((library) => library.facet === facet),
+  })).filter((group) => group.libraries.length > 0);
 }
 
 export function LibraryMultiSelect({
@@ -84,7 +82,8 @@ export function LibraryMultiSelect({
     });
   }, [selectedLibraries, showFacetGroups, t]);
 
-  const implicitAllSelected = libraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
+  const implicitAllSelected =
+    libraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
   const allLibraryIds = React.useMemo(
     () => libraries.map((library) => library.id),
     [libraries],
@@ -95,7 +94,9 @@ export function LibraryMultiSelect({
   const optionGroups = React.useMemo<MultiSelectGroup[]>(
     () =>
       groupedLibraries.map((group) => ({
-        label: showFacetGroups ? localizedFacetLabel(t, group.facet) : undefined,
+        label: showFacetGroups
+          ? localizedFacetLabel(t, group.facet)
+          : undefined,
         options: group.libraries.map((library) => ({
           value: library.id,
           label: library.name,
@@ -111,7 +112,8 @@ export function LibraryMultiSelect({
   const handleSelectedLibraryIdsChange = React.useCallback(
     (nextSelection: string[]) => {
       onSelectedLibraryIdsChange(
-        nextSelection.length === 0 || nextSelection.length === allLibraryIds.length
+        nextSelection.length === 0 ||
+          nextSelection.length === allLibraryIds.length
           ? []
           : nextSelection,
       );

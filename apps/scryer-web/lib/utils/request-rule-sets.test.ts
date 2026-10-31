@@ -26,7 +26,9 @@ test("requester mentioned only in a comment or another field does not", () => {
     false,
   );
   assert.equal(
-    requestRuleReadsRequester('manual if {\n  input.request.origin == "api"\n}'),
+    requestRuleReadsRequester(
+      'manual if {\n  input.request.origin == "api"\n}',
+    ),
     false,
   );
 });

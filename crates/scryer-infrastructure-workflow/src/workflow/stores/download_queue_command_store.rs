@@ -11,6 +11,11 @@ use scryer_domain::{DownloadQueueCommandAction, DownloadQueueDeleteStatus, Id};
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
 
+/// Sources per delete-command lookup query: far below SQLite's 1000-deep
+/// expression limit, and at four parameters per source below even the legacy
+/// 999 bound-parameter limit.
+const DELETE_COMMAND_SOURCE_CHUNK: usize = 200;
+
 #[derive(Clone)]
 pub struct DownloadQueueCommandStore {
     datastore: StoreDatastore,
@@ -260,49 +265,54 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
         sources: &[(Option<String>, String, String, bool)],
         completed_only: bool,
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
-        if sources.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut args = Vec::new();
-        let mut clauses = Vec::with_capacity(sources.len());
-        for (client_id, client_type, download_client_item_id, is_history) in sources {
-            let normalized_client_id = normalize_download_client_id(client_id.as_deref());
-            let client_clause = if normalized_client_id.is_empty() {
-                "COALESCE(client_id, '') = ''".to_string()
-            } else {
-                args.push(SqlArg::Text(normalized_client_id));
-                "(COALESCE(client_id, '') = {} OR COALESCE(client_id, '') = '')".to_string()
-            };
-            args.push(SqlArg::Text(client_type.clone()));
-            args.push(SqlArg::Text(download_client_item_id.clone()));
-            args.push(SqlArg::Bool(*is_history));
-            clauses.push(format!(
-                "({client_clause} AND client_type = {{}} AND download_client_item_id = {{}} AND is_history = {{}})"
-            ));
-        }
         let completed_clause = if completed_only {
             " AND status = 'completed'"
         } else {
             ""
         };
-        let rows = fetch_delete_commands(
-            self.datastore.read_exec(),
-            &format!(
-                "WHERE action = 'delete'{completed_clause} AND ({}) ORDER BY created_at DESC, id DESC",
-                clauses.join(" OR ")
-            ),
-            &args,
-        )
-        .await?;
+        // SQLite rejects an OR chain deeper than 1000 terms and caps bound
+        // parameters, so the sources are queried in chunks. Every row of a
+        // given (client_id, client_type, item_id, is_history) key matches every
+        // source that selects that key, so any chunk that returns a key returns
+        // all of its rows, newest first. Keeping the first row seen per key
+        // across chunks therefore still selects the newest command.
         let mut latest = HashMap::new();
-        for record in rows {
-            let key = (
-                record.client_id.clone().unwrap_or_default(),
-                record.client_type.clone(),
-                record.download_client_item_id.clone(),
-                record.is_history,
-            );
-            latest.entry(key).or_insert(record);
+        for chunk in sources.chunks(DELETE_COMMAND_SOURCE_CHUNK) {
+            let mut args = Vec::with_capacity(chunk.len() * 4);
+            let mut clauses = Vec::with_capacity(chunk.len());
+            for (client_id, client_type, download_client_item_id, is_history) in chunk {
+                let normalized_client_id = normalize_download_client_id(client_id.as_deref());
+                let client_clause = if normalized_client_id.is_empty() {
+                    "COALESCE(client_id, '') = ''".to_string()
+                } else {
+                    args.push(SqlArg::Text(normalized_client_id));
+                    "(COALESCE(client_id, '') = {} OR COALESCE(client_id, '') = '')".to_string()
+                };
+                args.push(SqlArg::Text(client_type.clone()));
+                args.push(SqlArg::Text(download_client_item_id.clone()));
+                args.push(SqlArg::Bool(*is_history));
+                clauses.push(format!(
+                    "({client_clause} AND client_type = {{}} AND download_client_item_id = {{}} AND is_history = {{}})"
+                ));
+            }
+            let rows = fetch_delete_commands(
+                self.datastore.read_exec(),
+                &format!(
+                    "WHERE action = 'delete'{completed_clause} AND ({}) ORDER BY created_at DESC, id DESC",
+                    clauses.join(" OR ")
+                ),
+                &args,
+            )
+            .await?;
+            for record in rows {
+                let key = (
+                    record.client_id.clone().unwrap_or_default(),
+                    record.client_type.clone(),
+                    record.download_client_item_id.clone(),
+                    record.is_history,
+                );
+                latest.entry(key).or_insert(record);
+            }
         }
         Ok(latest.into_values().collect())
     }
@@ -498,5 +508,77 @@ mod tests {
 
         assert_eq!(evidence.len(), 1);
         assert_eq!(evidence[0].id, completed.id);
+    }
+
+    #[tokio::test]
+    async fn latest_delete_commands_load_for_more_sources_than_one_query_allows() {
+        let store = store().await;
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("fixture store should be sqlite");
+        };
+        const SOURCE_COUNT: usize = 1_200;
+        let source = |index: usize| {
+            (
+                Some("client-1".to_string()),
+                "weaver".to_string(),
+                format!("fixture-job-{index:04}"),
+                index % 2 == 1,
+            )
+        };
+        let mut tx = pool.begin().await.expect("begin fixture insert");
+        for index in 0..SOURCE_COUNT {
+            let (client_id, client_type, item_id, is_history) = source(index);
+            sqlx::query(
+                "INSERT INTO download_queue_commands
+                 (id, action, client_id, client_type, download_client_item_id, is_history, status, created_at, updated_at)
+                 VALUES (?, 'delete', ?, ?, ?, ?, 'completed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            )
+            .bind(format!("cmd-{index:04}"))
+            .bind(client_id)
+            .bind(client_type)
+            .bind(item_id)
+            .bind(is_history)
+            .execute(&mut *tx)
+            .await
+            .expect("insert fixture delete command");
+        }
+        sqlx::query(
+            "INSERT INTO download_queue_commands
+             (id, action, client_id, client_type, download_client_item_id, is_history, status, created_at, updated_at)
+             VALUES ('cmd-0000-newer', 'delete', 'client-1', 'weaver', 'fixture-job-0000', 0, 'queued', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("insert newer fixture delete command");
+        tx.commit().await.expect("commit fixture insert");
+
+        // The doubled source is requested again at the end so it is looked up
+        // in both the first and the last chunk.
+        let mut sources = (0..SOURCE_COUNT).map(source).collect::<Vec<_>>();
+        sources.push(source(0));
+
+        let commands = store
+            .list_latest_delete_commands_for_sources(&sources, false)
+            .await
+            .expect("load delete commands for every source");
+
+        assert_eq!(commands.len(), SOURCE_COUNT);
+        let by_item = commands
+            .iter()
+            .map(|command| (command.download_client_item_id.as_str(), command))
+            .collect::<HashMap<_, _>>();
+        for index in 0..SOURCE_COUNT {
+            let (_, _, item_id, is_history) = source(index);
+            let command = by_item
+                .get(item_id.as_str())
+                .unwrap_or_else(|| panic!("missing delete command for {item_id}"));
+            assert_eq!(command.is_history, is_history);
+            let expected_id = if index == 0 {
+                "cmd-0000-newer".to_string()
+            } else {
+                format!("cmd-{index:04}")
+            };
+            assert_eq!(command.id, expected_id);
+        }
     }
 }

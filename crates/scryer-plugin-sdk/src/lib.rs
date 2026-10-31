@@ -44,7 +44,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.19.0";
+pub const SDK_VERSION: &str = "3.20.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -741,6 +741,10 @@ where
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct IndexerCapabilities {
+    /// Accepts exact Nab operations and explicit recent-feed paging on raw
+    /// requests. Older components must not silently reinterpret those fields.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub raw_nab_search: bool,
     /// Resolve instance-specific HTTP origins before any ordinary operation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub resolve_network_endpoints: bool,
@@ -828,6 +832,7 @@ pub struct IndexerHttpCapabilities {
 impl Default for IndexerCapabilities {
     fn default() -> Self {
         Self {
+            raw_nab_search: false,
             resolve_network_endpoints: false,
             rss: true,
             supported_ids: HashMap::new(),
@@ -3320,6 +3325,71 @@ pub struct PluginSearchRequest {
     /// capabilities; every other plugin ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_cursor: Option<String>,
+    /// Explicit recent-feed continuation. Never infer it from an empty query;
+    /// it is mutually exclusive with background `rss_catch_up`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recent_paging: bool,
+    /// Host-resolved caps, including a permissive empty snapshot on a failed
+    /// refresh. When present, a Nab adapter must not consult or fetch caps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_caps: Option<PluginSearchCaps>,
+    /// An exact Nab operation. Its protocol parameters are validated against
+    /// the selected source's caps; they are not a title-search strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nab: Option<PluginNabSearch>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginNabOperation {
+    Search,
+    Tv,
+    Movie,
+    Music,
+    Book,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginNabSearch {
+    pub operation: PluginNabOperation,
+    /// Nab mode parameters only; credentials, transport options, query,
+    /// categories, limit and offset are carried by their owning boundaries.
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginCapsSearchNode {
+    pub available: bool,
+    #[serde(default)]
+    pub supported_params: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_engine: Option<String>,
+}
+
+/// Capability data resolved once by the host for every search surface.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSearchCaps {
+    #[serde(default)]
+    pub searching_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits_default: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits_max: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<PluginCapsSearchNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tv_search: Option<PluginCapsSearchNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub movie_search: Option<PluginCapsSearchNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music_search: Option<PluginCapsSearchNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_search: Option<PluginCapsSearchNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_search: Option<PluginCapsSearchNode>,
+    #[serde(default)]
+    pub categories: IndexerCategoryModel,
 }
 
 /// The newest release the host saw on the previous successful RSS poll of one
@@ -3487,9 +3557,33 @@ pub enum PluginNewznabAttributeValueKind {
     PasswordMetadata,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginReleaseAttributeOrigin {
+    Attribute,
+    Element,
+}
+
+/// Original feed metadata, in source order, including repeated values. Keep
+/// separate from normalized maps so serializing a result does not lose data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginReleaseAttribute {
+    pub origin: PluginReleaseAttributeOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Resolved XML namespace, including source-local prefix bindings. JSON
+    /// Nab attributes can omit this and use the standard prefix's namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_uri: Option<String>,
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PluginSearchResult {
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<PluginReleaseAttribute>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3833,6 +3927,8 @@ impl DownloadHttpCapabilities {
 pub struct TaggedAlias {
     pub name: String,
     pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -4083,6 +4179,7 @@ mod tests {
                     context: None,
                     rss_catch_up: None,
                     page_cursor: None,
+                    ..Default::default()
                 },
             }],
         };
@@ -5102,6 +5199,9 @@ mod tests {
             request.get("page_cursor").is_none(),
             "an absent cursor must not reach plugins built against an older SDK"
         );
+        assert!(request.get("host_caps").is_none());
+        assert!(request.get("recent_paging").is_none());
+        assert!(request.get("nab").is_none());
         let response = serde_json::to_value(PluginSearchResponse::default()).unwrap();
         assert!(response.get("next_cursor").is_none());
         let limits = serde_json::to_value(IndexerLimitCapabilities {
@@ -5116,6 +5216,9 @@ mod tests {
             serde_json::from_value(serde_json::json!({"query": "Sample Show", "limit": 1000}))
                 .unwrap();
         assert!(parsed.page_cursor.is_none());
+        assert!(parsed.host_caps.is_none());
+        assert!(!parsed.recent_paging);
+        assert!(parsed.nab.is_none());
         let parsed: PluginSearchResponse =
             serde_json::from_value(serde_json::json!({"results": [], "api_current": 3})).unwrap();
         assert!(parsed.next_cursor.is_none());
@@ -6059,3 +6162,6 @@ mod tests {
         assert_eq!(nothing.captcha_request, None);
     }
 }
+
+#[cfg(test)]
+mod nab_contract_tests;

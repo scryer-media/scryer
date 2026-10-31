@@ -102,6 +102,11 @@ pub(crate) struct Incumbent {
 /// and it does not exist at all for pre-0.18 rows.
 #[derive(Debug, Clone)]
 pub(crate) struct QueuedRelease {
+    /// This claim is retained recent-grab history rather than a live client job.
+    pub missing_history: bool,
+    /// A recent missing grab has met both the quality and score cutoffs.
+    /// Live client jobs do not use the history cutoff.
+    pub history_cutoff_reached: bool,
     pub release_group: Option<String>,
     /// The release name, for the operator-facing message.
     pub title: String,
@@ -611,6 +616,15 @@ fn queued_candidate_win(
     queued: &QueuedRelease,
     policy: &AdmissionPolicy,
 ) -> Option<QueueWin> {
+    if queued.history_cutoff_reached
+        && candidate.revision_cmp(
+            queued.tier_index,
+            queued.release_group.as_deref(),
+            queued.revision,
+        ) != std::cmp::Ordering::Greater
+    {
+        return None;
+    }
     match tier_cmp(candidate.tier_index, queued.tier_index) {
         std::cmp::Ordering::Greater => Some(QueueWin::Tier),
         std::cmp::Ordering::Less => None,

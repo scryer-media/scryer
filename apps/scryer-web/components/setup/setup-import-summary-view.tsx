@@ -301,100 +301,104 @@ export default function SetupImportSummaryView({
           </div>
         ) : (
           <>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={accentTileStyle}>
-            <Eye size={18} strokeWidth={2} aria-hidden />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={accentTileStyle}>
+                <Eye size={18} strokeWidth={2} aria-hidden />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 14.5,
+                    fontWeight: 600,
+                    color: "#f1f5ff",
+                  }}
+                >
+                  {warmupComplete
+                    ? t("setup.monitoredStatusSynced")
+                    : t("setup.fetchingMonitoredStatus")}
+                </div>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: "var(--scry-muted3)",
+                  }}
+                >
+                  {warmupComplete
+                    ? t("setup.monitoredStatusSyncedDetail")
+                    : t("setup.fetchingMonitoredStatusDetail")}
+                </div>
+              </div>
+              <div
+                style={{
+                  flex: "none",
+                  fontFamily: "var(--font-space-grotesk)",
+                  fontWeight: 700,
+                  fontSize: 22,
+                  color: warmupComplete
+                    ? "var(--scry-success-text-soft)"
+                    : "#fff",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {pct}%
+              </div>
+            </div>
+
+            <Progress
+              value={pct}
+              className="mt-3.5 h-2"
+              style={{ background: "var(--scry-page2)" }}
+              indicatorClassName={
+                warmupComplete ? "bg-[var(--scry-success-solid)]" : undefined
+              }
+            />
+
             <div
               style={{
-                fontSize: 14.5,
-                fontWeight: 600,
-                color: "#f1f5ff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginTop: 12,
               }}
             >
-              {warmupComplete
-                ? t("setup.monitoredStatusSynced")
-                : t("setup.fetchingMonitoredStatus")}
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  fontSize: 12.5,
+                  color: warmupComplete
+                    ? "var(--scry-success-text-soft)"
+                    : "var(--scry-accent-text)",
+                }}
+              >
+                {warmupComplete ? (
+                  <CircleCheckBig size={15} strokeWidth={2} aria-hidden />
+                ) : (
+                  <LoadingMark className="size-[15px]" />
+                )}
+                <span>
+                  {warmupComplete
+                    ? t("setup.importGateDoneHint")
+                    : t("setup.importGateHint")}
+                </span>
+              </div>
+              <div
+                style={{
+                  flex: "none",
+                  fontFamily: "var(--font-code)",
+                  fontSize: 12.5,
+                  color: "var(--scry-faint)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("setup.titlesFetched", {
+                  fetched: titlesFetched.toLocaleString(),
+                  total: titlesTotal.toLocaleString(),
+                })}
+              </div>
             </div>
-            <div
-              style={{
-                fontSize: 12.5,
-                color: "var(--scry-muted3)",
-              }}
-            >
-              {warmupComplete
-                ? t("setup.monitoredStatusSyncedDetail")
-                : t("setup.fetchingMonitoredStatusDetail")}
-            </div>
-          </div>
-          <div
-            style={{
-              flex: "none",
-              fontFamily: "var(--font-space-grotesk)",
-              fontWeight: 700,
-              fontSize: 22,
-              color: warmupComplete ? "var(--scry-success-text-soft)" : "#fff",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            {pct}%
-          </div>
-        </div>
-
-        <Progress
-          value={pct}
-          className="mt-3.5 h-2"
-          style={{ background: "var(--scry-page2)" }}
-          indicatorClassName={warmupComplete ? "bg-[var(--scry-success-solid)]" : undefined}
-        />
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            marginTop: 12,
-          }}
-        >
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 7,
-              fontSize: 12.5,
-              color: warmupComplete
-                ? "var(--scry-success-text-soft)"
-                : "var(--scry-accent-text)",
-            }}
-          >
-            {warmupComplete ? (
-              <CircleCheckBig size={15} strokeWidth={2} aria-hidden />
-            ) : (
-              <LoadingMark className="size-[15px]" />
-            )}
-            <span>
-              {warmupComplete
-                ? t("setup.importGateDoneHint")
-                : t("setup.importGateHint")}
-            </span>
-          </div>
-          <div
-            style={{
-              flex: "none",
-              fontFamily: "var(--font-code)",
-              fontSize: 12.5,
-              color: "var(--scry-faint)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {t("setup.titlesFetched", {
-              fetched: titlesFetched.toLocaleString(),
-              total: titlesTotal.toLocaleString(),
-            })}
-          </div>
-        </div>
           </>
         )}
       </div>
@@ -446,7 +450,11 @@ export default function SetupImportSummaryView({
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
-                    style={{ fontSize: 14.5, fontWeight: 600, color: "#f1f5ff" }}
+                    style={{
+                      fontSize: 14.5,
+                      fontWeight: 600,
+                      color: "#f1f5ff",
+                    }}
                   >
                     {finalizeDone
                       ? t("setup.importApplied")

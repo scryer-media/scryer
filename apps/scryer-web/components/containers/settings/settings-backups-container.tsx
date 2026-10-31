@@ -1,10 +1,10 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
 import {
   Download,
   Eye,
   EyeOff,
   FolderOpen,
-  LockKeyhole,
   Plus,
   RotateCcw,
   Trash2,
@@ -50,7 +50,11 @@ import {
   updateAutoBackupSettingsMutation,
   updateBackupSettingsMutation,
 } from "@/lib/graphql/mutations";
-import { autoBackupSettingsQuery, backupSettingsQuery, backupsQuery } from "@/lib/graphql/queries";
+import {
+  autoBackupSettingsQuery,
+  backupSettingsQuery,
+  backupsQuery,
+} from "@/lib/graphql/queries";
 import { scryerFetch } from "@/lib/graphql/urql-client";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import { buildAppUrl } from "@/lib/runtime-config";
@@ -139,6 +143,12 @@ const DEFAULT_BACKUP_SETTINGS: BackupSettings = {
   effectiveBackupPath: "",
 };
 const AUTO_BACKUP_KEY_MIN_LENGTH = 8;
+type AutoBackupDraft = {
+  enabled: boolean;
+  dailyTimeLocal: string;
+  key: string;
+  clearKey: boolean;
+};
 const BACKUPS_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const BACKUPS_PANEL_HEADER_CLASS =
@@ -150,11 +160,12 @@ const BACKUPS_INSET_CLASS =
   "rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const BACKUPS_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 
-function mutationErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-  return fallback;
+function mutationErrorMessage(
+  error: unknown,
+  fallback: string,
+  translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
+): string {
+  return userFacingGraphQlErrorMessage(error, fallback, translate);
 }
 
 function nonWhitespaceCharacterCount(value: string): number {
@@ -165,14 +176,21 @@ function sortBackups(backups: BackupInfoRecord[]): BackupInfoRecord[] {
   return [...backups].sort((left, right) => {
     const leftTime = Date.parse(left.createdAt);
     const rightTime = Date.parse(right.createdAt);
-    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+    if (
+      Number.isFinite(leftTime) &&
+      Number.isFinite(rightTime) &&
+      leftTime !== rightTime
+    ) {
       return rightTime - leftTime;
     }
     return right.filename.localeCompare(left.filename);
   });
 }
 
-function upsertBackup(backups: BackupInfoRecord[], nextBackup: BackupInfoRecord): BackupInfoRecord[] {
+function upsertBackup(
+  backups: BackupInfoRecord[],
+  nextBackup: BackupInfoRecord,
+): BackupInfoRecord[] {
   return sortBackups([
     nextBackup,
     ...backups.filter((backup) => backup.filename !== nextBackup.filename),
@@ -218,7 +236,10 @@ function formatBytes(sizeBytes: number): string {
   return `${current.toFixed(current >= 100 ? 0 : current >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
-function formatDateTime(value: string, dateTimeFormat: UiDateTimeFormat): string {
+function formatDateTime(
+  value: string,
+  dateTimeFormat: UiDateTimeFormat,
+): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) {
     return value;
@@ -276,43 +297,76 @@ export function SettingsBackupsContainer() {
   const [savedBackupSettings, setSavedBackupSettings] =
     React.useState<BackupSettings>(DEFAULT_BACKUP_SETTINGS);
   const [backupPathDraft, setBackupPathDraft] = React.useState("");
-  const [backupSettingsLoading, setBackupSettingsLoading] = React.useState(true);
+  const [backupSettingsLoading, setBackupSettingsLoading] =
+    React.useState(true);
   const [backupSettingsSaving, setBackupSettingsSaving] = React.useState(false);
   const [folderBrowserOpen, setFolderBrowserOpen] = React.useState(false);
-  const [autoBackupExpanded, setAutoBackupExpanded] = React.useState(false);
   const [autoBackupKey, setAutoBackupKey] = React.useState("");
-  const [clearAutoBackupKey, setClearAutoBackupKey] = React.useState(false);
   const [showAutoBackupKey, setShowAutoBackupKey] = React.useState(false);
+  // The key's problem shows only once the field is left with a key that
+  // fails it, and hides again while the key is being edited.
+  const [autoBackupKeyErrorShown, setAutoBackupKeyErrorShown] =
+    React.useState(false);
+  const [clearAutoBackupKeyConfirmOpen, setClearAutoBackupKeyConfirmOpen] =
+    React.useState(false);
+  const [resetBackupPathConfirmOpen, setResetBackupPathConfirmOpen] =
+    React.useState(false);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [creatingRequest, setCreatingRequest] = React.useState(false);
-  const [selectedBackupFilenames, setSelectedBackupFilenames] = React.useState<Set<string>>(
+  const [selectedBackupFilenames, setSelectedBackupFilenames] = React.useState<
+    Set<string>
+  >(() => new Set());
+  const [pendingDeleteFilenames, setPendingDeleteFilenames] = React.useState<
+    string[]
+  >([]);
+  const [deletingFilenames, setDeletingFilenames] = React.useState<Set<string>>(
     () => new Set(),
   );
-  const [pendingDeleteFilenames, setPendingDeleteFilenames] = React.useState<string[]>([]);
-  const [deletingFilenames, setDeletingFilenames] = React.useState<Set<string>>(() => new Set());
-  const [downloadingFilename, setDownloadingFilename] = React.useState<string | null>(null);
+  const [downloadingFilename, setDownloadingFilename] = React.useState<
+    string | null
+  >(null);
   const hasCreatingManualBackup = backups.some(
     (backup) => backup.status === "creating" && backup.trigger === "manual",
   );
   const passwordRequired = password.trim().length === 0;
   const confirmPasswordRequired = confirmPassword.length === 0;
-  const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
-  const autoBackupReplacementKeyPresent = autoBackupKey.trim().length > 0;
-  const autoBackupReplacementKeyTooShort =
-    autoBackupReplacementKeyPresent &&
-    nonWhitespaceCharacterCount(autoBackupKey) < AUTO_BACKUP_KEY_MIN_LENGTH;
-  const autoBackupWillHaveKey =
-    !clearAutoBackupKey &&
-    (autoBackupReplacementKeyPresent || autoBackupSettings.autoBackupKeyPresent);
-  const autoBackupKeyRequired = autoBackupSettings.enabled && !autoBackupWillHaveKey;
-  const autoBackupKeyValidationMessage = autoBackupKeyRequired
-    ? t("settings.autoBackupsKeyRequired", { count: AUTO_BACKUP_KEY_MIN_LENGTH })
-    : autoBackupReplacementKeyTooShort
-      ? t("settings.autoBackupsKeyTooShort", { count: AUTO_BACKUP_KEY_MIN_LENGTH })
-      : null;
-  const canSaveAutoBackupSettings = !autoBackupSaving && !autoBackupKeyValidationMessage;
+  const passwordMismatch =
+    confirmPassword.length > 0 && password !== confirmPassword;
+  // Each automatic backup control saves its own change: the switch and the
+  // clear-key box at once, the time when its picker closes and the key when
+  // its field loses focus. A draft that cannot be saved yet, such as backups
+  // switched on without a key, stays unsaved with its reason shown.
+  const autoBackupDraftError = (draft: AutoBackupDraft): string | null => {
+    const replacementKeyPresent = draft.key.trim().length > 0;
+    const willHaveKey =
+      !draft.clearKey &&
+      (replacementKeyPresent || savedAutoBackupSettings.autoBackupKeyPresent);
+    if (draft.enabled && !willHaveKey) {
+      return t("settings.autoBackupsKeyRequired", {
+        count: AUTO_BACKUP_KEY_MIN_LENGTH,
+      });
+    }
+    if (
+      replacementKeyPresent &&
+      nonWhitespaceCharacterCount(draft.key) < AUTO_BACKUP_KEY_MIN_LENGTH
+    ) {
+      return t("settings.autoBackupsKeyTooShort", {
+        count: AUTO_BACKUP_KEY_MIN_LENGTH,
+      });
+    }
+    return null;
+  };
+  const currentAutoBackupDraft: AutoBackupDraft = {
+    enabled: autoBackupSettings.enabled,
+    dailyTimeLocal: autoBackupSettings.dailyTimeLocal,
+    key: autoBackupKey,
+    clearKey: false,
+  };
+  const autoBackupKeyValidationMessage = autoBackupDraftError(
+    currentAutoBackupDraft,
+  );
   const normalizedBackupPathDraft = normalizeBackupPathDraft(backupPathDraft);
   const savedCustomBackupPath = savedBackupSettings.customBackupPath ?? null;
   const backupPathDirty = normalizedBackupPathDraft !== savedCustomBackupPath;
@@ -325,7 +379,8 @@ export function SettingsBackupsContainer() {
     !passwordMismatch;
   const pageLoading = loading || autoBackupLoading || backupSettingsLoading;
   const selectableBackups = backups.filter(
-    (backup) => backup.status !== "creating" && !deletingFilenames.has(backup.filename),
+    (backup) =>
+      backup.status !== "creating" && !deletingFilenames.has(backup.filename),
   );
   const selectedBackups = selectableBackups.filter((backup) =>
     selectedBackupFilenames.has(backup.filename),
@@ -336,46 +391,71 @@ export function SettingsBackupsContainer() {
       : selectedBackups.length === selectableBackups.length
         ? true
         : "indeterminate";
+  // Backups switched on but held back because no key is saved yet.
+  const autoBackupWaitingForKey =
+    autoBackupSettings.enabled &&
+    !savedAutoBackupSettings.enabled &&
+    !savedAutoBackupSettings.autoBackupKeyPresent;
   const autoBackupNextRunLabel =
     autoBackupSettings.enabled && autoBackupSettings.nextRunAt
       ? formatDateTime(autoBackupSettings.nextRunAt, dateTimeFormat)
-      : t("label.disabled");
-  const autoBackupKeyPlaceholder = clearAutoBackupKey
-    ? ""
-    : autoBackupSettings.autoBackupKeyPresent
-      ? t("settings.autoBackupsKeyAlreadySetHint")
-      : t("settings.autoBackupsSetKey");
+      : autoBackupWaitingForKey
+        ? t("settings.autoBackupsNextRunNeedsKey")
+        : t("label.disabled");
+  const autoBackupKeyPlaceholder = autoBackupSettings.autoBackupKeyPresent
+    ? t("settings.autoBackupsKeyAlreadySetHint")
+    : t("settings.autoBackupsSetKey");
+  // The button beside the key saves a typed key, or clears the saved one
+  // when nothing is typed. The server keeps a key while backups are on.
+  const autoBackupKeyTyped = autoBackupKey.trim().length > 0;
+  const autoBackupKeyAction: "save" | "clear" =
+    !autoBackupKeyTyped && autoBackupSettings.autoBackupKeyPresent
+      ? "clear"
+      : "save";
   const autoBackupTriggerLabel = (trigger: BackupTrigger) =>
-    trigger === "auto" ? t("settings.backupsAutomatic") : t("settings.backupsManual");
+    trigger === "auto"
+      ? t("settings.backupsAutomatic")
+      : t("settings.backupsManual");
   const autoBackupDirty =
     !autoBackupSettingsEqual(autoBackupSettings, savedAutoBackupSettings) ||
-    autoBackupKey.length > 0 ||
-    clearAutoBackupKey;
+    autoBackupKey.length > 0;
   const shouldBlockNavigation =
-    (autoBackupDirty || backupPathDirty) && !autoBackupSaving && !backupSettingsSaving;
+    (autoBackupDirty || backupPathDirty) &&
+    !autoBackupSaving &&
+    !backupSettingsSaving;
   const autoBackupNavigationBlocker = useBlocker(shouldBlockNavigation);
 
   useBeforeUnload(
-    React.useCallback((event: BeforeUnloadEvent) => {
-      if (!shouldBlockNavigation) {
-        return;
-      }
-      event.preventDefault();
-      event.returnValue = "";
-    }, [shouldBlockNavigation]),
+    React.useCallback(
+      (event: BeforeUnloadEvent) => {
+        if (!shouldBlockNavigation) {
+          return;
+        }
+        event.preventDefault();
+        event.returnValue = "";
+      },
+      [shouldBlockNavigation],
+    ),
   );
 
   const fetchBackups = React.useCallback(async () => {
     try {
       const { data, error } = await client
-        .query<BackupsQueryResult>(backupsQuery, {}, { requestPolicy: "network-only" })
+        .query<BackupsQueryResult>(
+          backupsQuery,
+          {},
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       if (error) {
         throw error;
       }
       setBackups(sortBackups(data?.backups ?? []));
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
+      setGlobalStatus(
+        mutationErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setLoading(false);
     }
@@ -393,11 +473,15 @@ export function SettingsBackupsContainer() {
       if (error) {
         throw error;
       }
-      const nextSettings = data?.autoBackupSettings ?? DEFAULT_AUTO_BACKUP_SETTINGS;
+      const nextSettings =
+        data?.autoBackupSettings ?? DEFAULT_AUTO_BACKUP_SETTINGS;
       setSavedAutoBackupSettings(nextSettings);
       setAutoBackupSettings(nextSettings);
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
+      setGlobalStatus(
+        mutationErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setAutoBackupLoading(false);
     }
@@ -419,7 +503,10 @@ export function SettingsBackupsContainer() {
       setSavedBackupSettings(nextSettings);
       setBackupPathDraft(nextSettings.customBackupPath ?? "");
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
+      setGlobalStatus(
+        mutationErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setBackupSettingsLoading(false);
     }
@@ -436,15 +523,6 @@ export function SettingsBackupsContainer() {
   React.useEffect(() => {
     void fetchBackupSettings();
   }, [fetchBackupSettings]);
-
-  React.useEffect(() => {
-    if (autoBackupSettings.enabled) {
-      setAutoBackupExpanded(true);
-      return;
-    }
-
-    setAutoBackupExpanded(false);
-  }, [autoBackupSettings.enabled]);
 
   useSettingsSubscription(
     React.useCallback(
@@ -510,7 +588,10 @@ export function SettingsBackupsContainer() {
       setCreateDialogOpen(false);
       setGlobalStatus(t("settings.backupsQueued"));
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
+      setGlobalStatus(
+        mutationErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setCreatingRequest(false);
     }
@@ -557,7 +638,11 @@ export function SettingsBackupsContainer() {
           deletedFilenames.add(filename);
         } catch (error) {
           failedFilenames.add(filename);
-          firstFailureMessage ??= mutationErrorMessage(error, t("status.failedToDelete"));
+          firstFailureMessage ??= mutationErrorMessage(
+            error,
+            t("status.failedToDelete"),
+            t,
+          );
         }
       }
 
@@ -577,7 +662,9 @@ export function SettingsBackupsContainer() {
       if (failedFilenames.size > 0) {
         setGlobalStatus(
           firstFailureMessage ??
-            t("settings.backupsDeleteFailedCount", { count: failedFilenames.size }),
+            t("settings.backupsDeleteFailedCount", {
+              count: failedFilenames.size,
+            }),
           { level: "ERROR" },
         );
       } else {
@@ -592,58 +679,78 @@ export function SettingsBackupsContainer() {
     }
   }, [client, pendingDeleteFilenames, setGlobalStatus, t]);
 
-  const handleDownloadBackup = React.useCallback(async (backup: BackupInfoRecord) => {
-    setDownloadingFilename(backup.filename);
-    try {
-      const { data, error } = await client
-        .mutation<PrepareBackupDownloadMutationResult>(prepareBackupDownloadMutation, {
-          input: { filename: backup.filename },
-        })
-        .toPromise();
-      const downloadUrl = data?.prepareBackupDownload?.downloadUrl;
-      const downloadAuthorizationToken = data?.prepareBackupDownload?.downloadAuthorizationToken;
-      if (error || !downloadUrl || !downloadAuthorizationToken) {
-        throw error ?? new Error(t("status.failedToLoad"));
-      }
+  const handleDownloadBackup = React.useCallback(
+    async (backup: BackupInfoRecord) => {
+      setDownloadingFilename(backup.filename);
+      try {
+        const { data, error } = await client
+          .mutation<PrepareBackupDownloadMutationResult>(
+            prepareBackupDownloadMutation,
+            {
+              input: { filename: backup.filename },
+            },
+          )
+          .toPromise();
+        const downloadUrl = data?.prepareBackupDownload?.downloadUrl;
+        const downloadAuthorizationToken =
+          data?.prepareBackupDownload?.downloadAuthorizationToken;
+        if (error || !downloadUrl || !downloadAuthorizationToken) {
+          throw error ?? new Error(t("status.failedToLoad"));
+        }
 
-      const response = await scryerFetch(buildAppUrl(downloadUrl), {
-        headers: {
-          Authorization: `Bearer ${downloadAuthorizationToken}`,
-        },
-      });
-      if (!response.ok) {
-        throw new Error(
-          await readResponseErrorMessage(response, t("status.failedToLoad")),
+        const response = await scryerFetch(buildAppUrl(downloadUrl), {
+          headers: {
+            Authorization: `Bearer ${downloadAuthorizationToken}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(
+            await readResponseErrorMessage(response, t("status.failedToLoad")),
+          );
+        }
+
+        await saveDownloadResponse(response, backup.filename);
+      } catch (error) {
+        setGlobalStatus(
+          mutationErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
         );
+      } finally {
+        setDownloadingFilename(null);
       }
+    },
+    [client, setGlobalStatus, t],
+  );
 
-      await saveDownloadResponse(response, backup.filename);
-    } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToLoad")), { level: "ERROR" });
-    } finally {
-      setDownloadingFilename(null);
-    }
-  }, [client, setGlobalStatus, t]);
-
-  const handleSaveAutoBackupSettings = React.useCallback(async () => {
-    if (autoBackupKeyValidationMessage) {
-      setGlobalStatus(autoBackupKeyValidationMessage);
+  const saveAutoBackupDraft = async (
+    draft: AutoBackupDraft,
+    successMessage?: string,
+  ) => {
+    const replacementKeyPresent = draft.key.trim().length > 0;
+    const unchanged =
+      draft.enabled === savedAutoBackupSettings.enabled &&
+      draft.dailyTimeLocal === savedAutoBackupSettings.dailyTimeLocal &&
+      !replacementKeyPresent &&
+      !draft.clearKey;
+    if (autoBackupSaving || unchanged || autoBackupDraftError(draft)) {
       return;
     }
 
     setAutoBackupSaving(true);
     try {
-      const nextAutoBackupKey =
-        clearAutoBackupKey ? null : autoBackupReplacementKeyPresent ? autoBackupKey : null;
       const { data, error } = await client
-        .mutation<UpdateAutoBackupSettingsMutationResult>(updateAutoBackupSettingsMutation, {
-          input: {
-            enabled: autoBackupSettings.enabled,
-            dailyTimeLocal: autoBackupSettings.dailyTimeLocal,
-            setAutoBackupKey: nextAutoBackupKey,
-            clearAutoBackupKey,
+        .mutation<UpdateAutoBackupSettingsMutationResult>(
+          updateAutoBackupSettingsMutation,
+          {
+            input: {
+              enabled: draft.enabled,
+              dailyTimeLocal: draft.dailyTimeLocal,
+              setAutoBackupKey:
+                !draft.clearKey && replacementKeyPresent ? draft.key : null,
+              clearAutoBackupKey: draft.clearKey,
+            },
           },
-        })
+        )
         .toPromise();
       if (error || !data?.updateAutoBackupSettings) {
         throw error ?? new Error(t("status.failedToUpdate"));
@@ -652,57 +759,93 @@ export function SettingsBackupsContainer() {
       setSavedAutoBackupSettings(data.updateAutoBackupSettings);
       setAutoBackupSettings(data.updateAutoBackupSettings);
       setAutoBackupKey("");
-      setClearAutoBackupKey(false);
       setShowAutoBackupKey(false);
-      setGlobalStatus(t("settings.autoBackupsSaved"), { level: "SUCCESS" });
+      setGlobalStatus(successMessage ?? t("settings.autoBackupsSaved"), {
+        level: "SUCCESS",
+      });
     } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
+      setGlobalStatus(
+        mutationErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setAutoBackupSaving(false);
     }
-  }, [
-    autoBackupKey,
-    autoBackupKeyValidationMessage,
-    autoBackupReplacementKeyPresent,
-    autoBackupSettings.dailyTimeLocal,
-    autoBackupSettings.enabled,
-    clearAutoBackupKey,
-    client,
-    setGlobalStatus,
-    t,
-  ]);
+  };
 
-  const handleSaveBackupSettings = React.useCallback(async () => {
-    setBackupSettingsSaving(true);
-    try {
-      const customBackupPath = normalizeBackupPathDraft(backupPathDraft);
-      const { data, error } = await client
-        .mutation<UpdateBackupSettingsMutationResult>(updateBackupSettingsMutation, {
-          input: { customBackupPath },
-        })
-        .toPromise();
-      if (error || !data?.updateBackupSettings) {
-        throw error ?? new Error(t("status.failedToUpdate"));
+  // Backups cannot run without a key, so clearing it also switches them off.
+  const clearAutoBackupKeyConfirmed = async () => {
+    await saveAutoBackupDraft(
+      { ...currentAutoBackupDraft, enabled: false, key: "", clearKey: true },
+      autoBackupSettings.enabled
+        ? t("settings.autoBackupsKeyClearedBackupsOff")
+        : t("settings.autoBackupsKeyCleared"),
+    );
+    setClearAutoBackupKeyConfirmOpen(false);
+  };
+
+  const saveAutoBackupKey = () => {
+    setAutoBackupKeyErrorShown(autoBackupKeyValidationMessage !== null);
+    void saveAutoBackupDraft(currentAutoBackupDraft);
+  };
+
+  const saveBackupPath = React.useCallback(
+    async (pathDraft: string) => {
+      setBackupSettingsSaving(true);
+      try {
+        const customBackupPath = normalizeBackupPathDraft(pathDraft);
+        const { data, error } = await client
+          .mutation<UpdateBackupSettingsMutationResult>(
+            updateBackupSettingsMutation,
+            {
+              input: { customBackupPath },
+            },
+          )
+          .toPromise();
+        if (error || !data?.updateBackupSettings) {
+          throw error ?? new Error(t("status.failedToUpdate"));
+        }
+
+        setSavedBackupSettings(data.updateBackupSettings);
+        setBackupPathDraft(data.updateBackupSettings.customBackupPath ?? "");
+        await fetchBackups();
+        setGlobalStatus(t("settings.backupLocationSaved"), {
+          level: "SUCCESS",
+        });
+      } catch (error) {
+        setGlobalStatus(
+          mutationErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        setBackupSettingsSaving(false);
       }
+    },
+    [client, fetchBackups, setGlobalStatus, t],
+  );
 
-      setSavedBackupSettings(data.updateBackupSettings);
-      setBackupPathDraft(data.updateBackupSettings.customBackupPath ?? "");
-      await fetchBackups();
-      setGlobalStatus(t("settings.backupLocationSaved"), { level: "SUCCESS" });
-    } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToUpdate")), { level: "ERROR" });
-    } finally {
-      setBackupSettingsSaving(false);
+  const handleSaveBackupSettings = () => saveBackupPath(backupPathDraft);
+
+  // Nothing saved to undo: the draft just empties. Otherwise confirm, then
+  // save the default straight away.
+  const handleResetBackupPath = () => {
+    if (!savedCustomBackupPath) {
+      setBackupPathDraft("");
+      return;
     }
-  }, [backupPathDraft, client, fetchBackups, setGlobalStatus, t]);
+    setResetBackupPathConfirmOpen(true);
+  };
 
-  const handleResetBackupPath = React.useCallback(() => {
-    setBackupPathDraft("");
-  }, []);
+  const resetBackupPathConfirmed = async () => {
+    await saveBackupPath("");
+    setResetBackupPathConfirmOpen(false);
+  };
 
   if (pageLoading) {
     return (
-      <div className={`flex items-center gap-2 text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}>
+      <div
+        className={`flex items-center gap-2 text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}
+      >
         <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
@@ -712,26 +855,15 @@ export function SettingsBackupsContainer() {
   return (
     <>
       <div className="space-y-4 text-sm">
-        <section className={BACKUPS_PANEL_CLASS}>
+        <section id="auto-backups-panel" className={BACKUPS_PANEL_CLASS}>
           <div className={BACKUPS_PANEL_HEADER_CLASS}>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                onClick={() => setAutoBackupExpanded((current) => !current)}
-                aria-expanded={autoBackupExpanded}
-              >
-                <div className="min-w-0 flex-1 space-y-1">
-                  <h2 className={BACKUPS_PANEL_TITLE_CLASS}>
-                    {t("settings.autoBackupsTitle")}
-                  </h2>
-                  <p className={`text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}>
-                    {t("settings.autoBackupsDescription")}
-                  </p>
-                </div>
-              </button>
-              <div className="flex shrink-0 justify-end sm:pt-1">
+            <div className="flex items-center justify-between gap-4">
+              <h2 className={`min-w-0 ${BACKUPS_PANEL_TITLE_CLASS}`}>
+                {t("settings.autoBackupsTitle")}
+              </h2>
+              <div className="flex shrink-0">
                 <SettingsToggleSwitch
+                  id="auto-backups-enabled"
                   checked={autoBackupSettings.enabled}
                   disabled={autoBackupSaving}
                   size="lg"
@@ -740,62 +872,56 @@ export function SettingsBackupsContainer() {
                       ? t("label.enabled")
                       : t("label.disabled")
                   }
-                  onChange={(nextValue) =>
+                  onChange={(nextValue) => {
                     setAutoBackupSettings((current) => ({
                       ...current,
                       enabled: nextValue,
-                    }))
-                  }
+                    }));
+                    void saveAutoBackupDraft({
+                      ...currentAutoBackupDraft,
+                      enabled: nextValue,
+                    });
+                  }}
                 />
               </div>
             </div>
           </div>
-          {autoBackupExpanded ? (
-            <div className={`${BACKUPS_PANEL_BODY_CLASS} space-y-4`}>
-              <div className="grid gap-4 md:grid-cols-2 md:items-stretch">
-                <div className={`flex h-full min-h-32 flex-col p-4 ${BACKUPS_INSET_CLASS}`}>
-                  <Label
-                    htmlFor="auto-backups-time"
-                    className="text-sm font-medium text-[var(--scry-ink2)]"
-                  >
-                    {t("settings.autoBackupsTime")}
-                  </Label>
-                  <div className="mt-3">
-                    <TimePicker
-                      id="auto-backups-time"
-                      value={autoBackupSettings.dailyTimeLocal}
-                      disabled={autoBackupSaving}
-                      hourLabel={t("settings.autoBackupsHour")}
-                      minuteLabel={t("settings.autoBackupsMinute")}
-                      onChange={(nextValue) =>
-                        setAutoBackupSettings((current) => ({
-                          ...current,
-                          dailyTimeLocal: nextValue,
-                        }))
-                      }
-                    />
-                  </div>
-                  <p className={`mt-auto pt-4 text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
-                    {t("settings.autoBackupsTimeHelp")}
-                  </p>
-                </div>
-
-                <div className={`flex h-full min-h-32 flex-col p-4 ${BACKUPS_INSET_CLASS}`}>
-                  <p className="text-sm font-medium text-[var(--scry-ink2)]">
-                    {t("settings.autoBackupsNextRun")}
-                  </p>
-                  <p className="mt-3 text-base font-medium text-[var(--scry-ink2)]">
-                    {autoBackupNextRunLabel}
-                  </p>
-                  <p className={`mt-auto pt-4 text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
-                    {t("settings.autoBackupsNextRunHelp")}
-                  </p>
+          <div className={`${BACKUPS_PANEL_BODY_CLASS} space-y-4`}>
+            <div className="grid gap-4 md:grid-cols-2 md:items-stretch xl:grid-cols-3">
+              <div
+                className={`flex h-full flex-col p-4 ${BACKUPS_INSET_CLASS}`}
+              >
+                <Label
+                  htmlFor="auto-backups-time"
+                  className="text-sm font-medium text-[var(--scry-ink2)]"
+                >
+                  {t("settings.autoBackupsTime")}
+                </Label>
+                <div className="mt-3">
+                  <TimePicker
+                    id="auto-backups-time"
+                    value={autoBackupSettings.dailyTimeLocal}
+                    disabled={autoBackupSaving}
+                    hourLabel={t("settings.autoBackupsHour")}
+                    minuteLabel={t("settings.autoBackupsMinute")}
+                    onChange={(nextValue) =>
+                      setAutoBackupSettings((current) => ({
+                        ...current,
+                        dailyTimeLocal: nextValue,
+                      }))
+                    }
+                    onClose={() =>
+                      void saveAutoBackupDraft(currentAutoBackupDraft)
+                    }
+                  />
                 </div>
               </div>
 
-              <div className="space-y-2 text-sm">
+              <div
+                className={`flex h-full flex-col gap-3 p-4 ${BACKUPS_INSET_CLASS}`}
+              >
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-[var(--scry-ink2)]">
+                  <span className="text-sm font-medium text-[var(--scry-ink2)]">
                     {t("settings.autoBackupsKeyLabel")}
                   </span>
                   <InfoHelp
@@ -805,20 +931,30 @@ export function SettingsBackupsContainer() {
                     ariaLabel={t("settings.autoBackupsKeyHelpLabel")}
                   />
                 </div>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <div className="w-full max-w-sm space-y-2">
-                    <div className="relative">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative min-w-0 flex-1">
                       <Input
                         type={showAutoBackupKey ? "text" : "password"}
+                        ignorePasswordManagers
                         value={autoBackupKey}
                         placeholder={autoBackupKeyPlaceholder}
                         className="pr-11"
-                        disabled={autoBackupSaving || clearAutoBackupKey}
+                        disabled={autoBackupSaving}
                         onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setAutoBackupKey(nextValue);
-                          if (nextValue.trim().length > 0) {
-                            setClearAutoBackupKey(false);
+                          setAutoBackupKey(event.target.value);
+                          setAutoBackupKeyErrorShown(false);
+                        }}
+                        onBlur={() => {
+                          setAutoBackupKeyErrorShown(
+                            autoBackupKeyTyped &&
+                              autoBackupKeyValidationMessage !== null,
+                          );
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && autoBackupKeyTyped) {
+                            event.preventDefault();
+                            saveAutoBackupKey();
                           }
                         }}
                       />
@@ -830,8 +966,10 @@ export function SettingsBackupsContainer() {
                             ? t("settings.autoBackupsHideKey")
                             : t("settings.autoBackupsShowKey")
                         }
-                        disabled={autoBackupSaving || clearAutoBackupKey}
-                        onClick={() => setShowAutoBackupKey((current) => !current)}
+                        disabled={autoBackupSaving}
+                        onClick={() =>
+                          setShowAutoBackupKey((current) => !current)
+                        }
                       >
                         {showAutoBackupKey ? (
                           <EyeOff className="h-4 w-4" />
@@ -840,60 +978,51 @@ export function SettingsBackupsContainer() {
                         )}
                       </button>
                     </div>
-                    {autoBackupKeyValidationMessage ? (
-                      <p className="text-xs text-destructive">
-                        {autoBackupKeyValidationMessage}
-                      </p>
-                    ) : null}
+                    {autoBackupKeyAction === "clear" ? (
+                      <Button
+                        id="auto-backups-clear-key"
+                        type="button"
+                        variant="destructive"
+                        disabled={autoBackupSaving}
+                        onClick={() => setClearAutoBackupKeyConfirmOpen(true)}
+                      >
+                        {t("label.clear")}
+                      </Button>
+                    ) : (
+                      <Button
+                        id="auto-backups-save-key"
+                        type="button"
+                        variant="primary"
+                        disabled={autoBackupSaving || !autoBackupKeyTyped}
+                        onClick={saveAutoBackupKey}
+                      >
+                        {autoBackupSaving ? (
+                          <LoadingMark className="h-4 w-4" />
+                        ) : null}
+                        {t("label.save")}
+                      </Button>
+                    )}
                   </div>
-
-                  <div className="flex shrink-0 flex-wrap items-center gap-3 sm:min-w-64">
-                    <Button
-                      type="button"
-                      variant="primary"
-                      onClick={() => void handleSaveAutoBackupSettings()}
-                      disabled={!canSaveAutoBackupSettings}
-                    >
-                      {autoBackupSaving ? <LoadingMark className="h-4 w-4" /> : null}
-                      {t("label.save")}
-                    </Button>
-
-                    {autoBackupSettings.autoBackupKeyPresent ? (
-                      <div className={`flex min-w-0 items-center gap-3 px-4 py-3 sm:max-w-xl ${BACKUPS_INSET_CLASS}`}>
-                        <Checkbox
-                          id="auto-backups-clear-key"
-                          checked={clearAutoBackupKey}
-                          disabled={
-                            autoBackupSaving || autoBackupSettings.enabled || autoBackupKey.length > 0
-                          }
-                          onCheckedChange={(checked) => {
-                            const shouldClear = checked === true;
-                            setClearAutoBackupKey(shouldClear);
-                            if (shouldClear) {
-                              setAutoBackupKey("");
-                              setShowAutoBackupKey(false);
-                            }
-                          }}
-                        />
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Label
-                            htmlFor="auto-backups-clear-key"
-                            className="truncate text-[var(--scry-ink2)]"
-                          >
-                            {t("settings.autoBackupsClearKey")}
-                          </Label>
-                          <InfoHelp
-                            text={t("settings.autoBackupsClearKeyHelp")}
-                            ariaLabel={t("settings.autoBackupsClearKey")}
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
+                  {autoBackupKeyErrorShown && autoBackupKeyValidationMessage ? (
+                    <p className="text-xs text-destructive">
+                      {autoBackupKeyValidationMessage}
+                    </p>
+                  ) : null}
                 </div>
               </div>
+
+              <div
+                className={`flex h-full flex-col p-4 ${BACKUPS_INSET_CLASS}`}
+              >
+                <p className="text-sm font-medium text-[var(--scry-ink2)]">
+                  {t("settings.autoBackupsNextRun")}
+                </p>
+                <p className="mt-3 text-base font-medium text-[var(--scry-ink2)]">
+                  {autoBackupNextRunLabel}
+                </p>
+              </div>
             </div>
-          ) : null}
+          </div>
         </section>
 
         <section className={BACKUPS_PANEL_CLASS}>
@@ -901,77 +1030,69 @@ export function SettingsBackupsContainer() {
             <h2 className={BACKUPS_PANEL_TITLE_CLASS}>
               {t("settings.backupLocationTitle")}
             </h2>
-            <p className={`mt-1 text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}>
-              {t("settings.backupLocationDescription")}
-            </p>
           </div>
-          <div className={`${BACKUPS_PANEL_BODY_CLASS} space-y-4`}>
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.75fr)]">
-              <div className="space-y-2">
-                <Label htmlFor="backup-location-path" className="text-[var(--scry-ink2)]">
-                  {t("settings.backupLocationCustomPath")}
-                </Label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    id="backup-location-path"
-                    value={backupPathDraft}
-                    placeholder={savedBackupSettings.defaultBackupPath}
-                    disabled={backupSettingsSaving}
-                    onChange={(event) => setBackupPathDraft(event.target.value)}
-                    className="font-[var(--font-code)]"
-                  />
+          <div className={`${BACKUPS_PANEL_BODY_CLASS} space-y-2`}>
+            <Label
+              htmlFor="backup-location-path"
+              className="text-[var(--scry-ink2)]"
+            >
+              {t("settings.backupLocationCustomPath")}
+            </Label>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Input
+                id="backup-location-path"
+                value={backupPathDraft}
+                placeholder={savedBackupSettings.defaultBackupPath}
+                disabled={backupSettingsSaving}
+                onChange={(event) => setBackupPathDraft(event.target.value)}
+                className="min-w-0 flex-1 font-[var(--font-code)]"
+              />
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  id="backup-location-browse"
+                  type="button"
+                  variant="outline"
+                  disabled={backupSettingsSaving}
+                  onClick={() => setFolderBrowserOpen(true)}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  {t("settings.backupLocationBrowse")}
+                </Button>
+                {backupPathDraft.trim().length > 0 || savedCustomBackupPath ? (
                   <Button
-                    id="backup-location-browse"
                     type="button"
                     variant="outline"
-                    className="shrink-0"
+                    onClick={handleResetBackupPath}
                     disabled={backupSettingsSaving}
-                    onClick={() => setFolderBrowserOpen(true)}
                   >
-                    <FolderOpen className="h-4 w-4" />
-                    {t("settings.backupLocationBrowse")}
+                    <RotateCcw className="h-4 w-4" />
+                    {t("settings.backupLocationReset")}
                   </Button>
-                </div>
-              </div>
-
-              <div className={`space-y-2 p-4 ${BACKUPS_INSET_CLASS}`}>
-                <p className={`text-xs font-medium uppercase ${BACKUPS_MUTED_TEXT_CLASS}`}>
-                  {t("settings.backupLocationEffectivePath")}
-                </p>
-                <p
-                  id="backup-location-effective-path"
-                  className="break-all font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                ) : null}
+                <Button
+                  id="backup-location-save"
+                  type="button"
+                  variant="primary"
+                  onClick={() => void handleSaveBackupSettings()}
+                  disabled={!canSaveBackupSettings}
                 >
-                  {savedBackupSettings.effectiveBackupPath || savedBackupSettings.defaultBackupPath}
-                </p>
+                  {backupSettingsSaving ? (
+                    <LoadingMark className="h-4 w-4" />
+                  ) : null}
+                  {t("label.save")}
+                </Button>
               </div>
             </div>
-
-            <p className={`text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
-              {t("settings.backupLocationHelp")}
+            <p className={`break-all text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
+              {t("settings.backupLocationEffectivePath")}{" "}
+              <span
+                id="backup-location-effective-path"
+                className="font-[var(--font-code)] text-[var(--scry-ink2)]"
+              >
+                {savedBackupSettings.effectiveBackupPath ||
+                  savedBackupSettings.defaultBackupPath}
+              </span>
             </p>
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Button
-                id="backup-location-save"
-                type="button"
-                variant="primary"
-                onClick={() => void handleSaveBackupSettings()}
-                disabled={!canSaveBackupSettings}
-              >
-                {backupSettingsSaving ? <LoadingMark className="h-4 w-4" /> : null}
-                {t("label.save")}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleResetBackupPath}
-                disabled={backupSettingsSaving || backupPathDraft.trim().length === 0}
-              >
-                <RotateCcw className="h-4 w-4" />
-                {t("settings.backupLocationReset")}
-              </Button>
-            </div>
           </div>
         </section>
 
@@ -986,7 +1107,9 @@ export function SettingsBackupsContainer() {
                     variant="outline"
                     className="text-[var(--scry-danger-text-soft)] hover:text-[var(--scry-danger-text)]"
                     onClick={() =>
-                      setPendingDeleteFilenames(selectedBackups.map((backup) => backup.filename))
+                      setPendingDeleteFilenames(
+                        selectedBackups.map((backup) => backup.filename),
+                      )
                     }
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1009,7 +1132,9 @@ export function SettingsBackupsContainer() {
           </div>
           {backups.length === 0 ? (
             <div className={`${BACKUPS_PANEL_BODY_CLASS}`}>
-              <div className={`rounded-[12px] border border-dashed border-[var(--scry-border3)] px-4 py-8 text-center text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}>
+              <div
+                className={`rounded-[12px] border border-dashed border-[var(--scry-border3)] px-4 py-8 text-center text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}
+              >
                 {t("settings.backupsEmpty")}
               </div>
             </div>
@@ -1033,13 +1158,29 @@ export function SettingsBackupsContainer() {
                         }
                       />
                     </TableCheckboxHead>
-                    <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>Bundle</TableHead>
-                    <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>Created</TableHead>
-                    <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>
+                    <TableHead
+                      className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
+                    >
+                      Bundle
+                    </TableHead>
+                    <TableHead
+                      className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
+                    >
+                      Created
+                    </TableHead>
+                    <TableHead
+                      className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
+                    >
                       {t("label.status")}
                     </TableHead>
-                    <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>Size</TableHead>
-                    <TableHead className={`text-right font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>
+                    <TableHead
+                      className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
+                    >
+                      Size
+                    </TableHead>
+                    <TableHead
+                      className={`text-right font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
+                    >
                       {t("label.actions")}
                     </TableHead>
                   </TableRow>
@@ -1047,33 +1188,50 @@ export function SettingsBackupsContainer() {
                 <TableBody>
                   {backups.map((backup) => {
                     const isDeleting = deletingFilenames.has(backup.filename);
-                    const isDownloading = downloadingFilename === backup.filename;
-                    const disableActions = backup.status === "creating" || isDeleting;
+                    const isDownloading =
+                      downloadingFilename === backup.filename;
+                    const disableActions =
+                      backup.status === "creating" || isDeleting;
                     const statusLabel =
                       backup.status === "creating"
                         ? t("settings.backupsCreating")
                         : backup.status === "invalid"
                           ? t("settings.backupsInvalid")
-                        : backup.status === "failed"
-                          ? t("settings.backupsFailed")
-                          : t("settings.backupsReady");
+                          : backup.status === "failed"
+                            ? t("settings.backupsFailed")
+                            : t("settings.backupsReady");
 
                     return (
                       <TableRow
                         data-ui="settings-table-row"
                         key={backup.filename}
-                        id={selectorId("settings-backup-row", "created-at", backup.createdAt)}
+                        id={selectorId(
+                          "settings-backup-row",
+                          "created-at",
+                          backup.createdAt,
+                        )}
                         className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                       >
                         <TableCheckboxCell>
                           <Checkbox
-                            id={selectorId("settings-backup-select", "created-at", backup.createdAt)}
+                            id={selectorId(
+                              "settings-backup-select",
+                              "created-at",
+                              backup.createdAt,
+                            )}
                             size="table"
-                            checked={selectedBackupFilenames.has(backup.filename)}
+                            checked={selectedBackupFilenames.has(
+                              backup.filename,
+                            )}
                             disabled={disableActions}
-                            aria-label={t("settings.backupsSelect", { name: backup.filename })}
+                            aria-label={t("settings.backupsSelect", {
+                              name: backup.filename,
+                            })}
                             onCheckedChange={(checked) =>
-                              toggleBackupSelection([backup.filename], checked === true)
+                              toggleBackupSelection(
+                                [backup.filename],
+                                checked === true,
+                              )
                             }
                           />
                         </TableCheckboxCell>
@@ -1089,7 +1247,9 @@ export function SettingsBackupsContainer() {
                             >
                               {backup.filename}
                             </div>
-                            <div className={`flex flex-wrap items-center gap-2 text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
+                            <div
+                              className={`flex flex-wrap items-center gap-2 text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}
+                            >
                               <span className="rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-0.5">
                                 {backup.encrypted
                                   ? t("settings.backupsEncrypted")
@@ -1100,14 +1260,20 @@ export function SettingsBackupsContainer() {
                               </span>
                               <span>{backup.formatVersion}</span>
                               <span>{backup.sourceEngine}</span>
-                              {backup.sourceMigrationKey ? <span>{backup.sourceMigrationKey}</span> : null}
+                              {backup.sourceMigrationKey ? (
+                                <span>{backup.sourceMigrationKey}</span>
+                              ) : null}
                             </div>
                             {backup.errorMessage ? (
-                              <p className="text-xs text-destructive">{backup.errorMessage}</p>
+                              <p className="text-xs text-destructive">
+                                {backup.errorMessage}
+                              </p>
                             ) : null}
                           </div>
                         </TableCell>
-                        <TableCell className={`whitespace-nowrap ${BACKUPS_MUTED_TEXT_CLASS}`}>
+                        <TableCell
+                          className={`whitespace-nowrap ${BACKUPS_MUTED_TEXT_CLASS}`}
+                        >
                           {formatDateTime(backup.createdAt, dateTimeFormat)}
                         </TableCell>
                         <TableCell>
@@ -1122,7 +1288,9 @@ export function SettingsBackupsContainer() {
                             label={statusLabel}
                           />
                         </TableCell>
-                        <TableCell className={`align-middle font-[var(--font-code)] text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}>
+                        <TableCell
+                          className={`align-middle font-[var(--font-code)] text-xs ${BACKUPS_MUTED_TEXT_CLASS}`}
+                        >
                           {formatBytes(backup.sizeBytes)}
                         </TableCell>
                         <TableCell>
@@ -1137,7 +1305,9 @@ export function SettingsBackupsContainer() {
                                 label={t("settings.backupsDownload")}
                                 tone="install"
                                 disabled={isDownloading || isDeleting}
-                                onClick={() => void handleDownloadBackup(backup)}
+                                onClick={() =>
+                                  void handleDownloadBackup(backup)
+                                }
                               >
                                 {isDownloading ? (
                                   <LoadingMark className="h-4 w-4" />
@@ -1147,11 +1317,17 @@ export function SettingsBackupsContainer() {
                               </IconButton>
                             ) : null}
                             <IconButton
-                              id={selectorId("settings-backup-delete", "created-at", backup.createdAt)}
+                              id={selectorId(
+                                "settings-backup-delete",
+                                "created-at",
+                                backup.createdAt,
+                              )}
                               label={t("settings.backupsDelete")}
                               tone="delete"
                               disabled={disableActions}
-                              onClick={() => setPendingDeleteFilenames([backup.filename])}
+                              onClick={() =>
+                                setPendingDeleteFilenames([backup.filename])
+                              }
                             >
                               {isDeleting ? (
                                 <LoadingMark className="h-4 w-4" />
@@ -1198,10 +1374,15 @@ export function SettingsBackupsContainer() {
           }
         }}
       >
-        <DialogContent id={selectorId("settings-backups-create-dialog")} className="sm:max-w-md">
+        <DialogContent
+          id={selectorId("settings-backups-create-dialog")}
+          className="sm:max-w-md"
+        >
           <DialogHeader>
             <DialogTitle>{t("settings.backupsCreateTitle")}</DialogTitle>
-            <DialogDescription>{t("settings.backupsCreateDescription")}</DialogDescription>
+            <DialogDescription>
+              {t("settings.backupsCreateDescription")}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <label className="block space-y-2 text-sm">
@@ -1224,7 +1405,9 @@ export function SettingsBackupsContainer() {
               />
             </label>
             <label className="block space-y-2 text-sm">
-              <span className="font-medium">{t("settings.backupsConfirmPassword")}</span>
+              <span className="font-medium">
+                {t("settings.backupsConfirmPassword")}
+              </span>
               <Input
                 id={selectorId("settings-backups-create-confirm-password")}
                 type="password"
@@ -1241,13 +1424,6 @@ export function SettingsBackupsContainer() {
                 </p>
               ) : null}
             </label>
-            <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <div className="mb-1 flex items-center gap-2 text-foreground">
-                <LockKeyhole className="h-3.5 w-3.5" />
-                <span>{t("settings.backupsRequiredPassword")}</span>
-              </div>
-              <p>{t("settings.backupsPasswordHelp")}</p>
-            </div>
           </div>
           <DialogFooter>
             <Button
@@ -1290,6 +1466,41 @@ export function SettingsBackupsContainer() {
             return;
           }
           setPendingDeleteFilenames([]);
+        }}
+      />
+      <ConfirmDialog
+        open={clearAutoBackupKeyConfirmOpen}
+        title={t("settings.autoBackupsClearKeyTitle")}
+        description={
+          autoBackupSettings.enabled
+            ? t("settings.autoBackupsClearKeyConfirmBackupsOff")
+            : t("settings.autoBackupsClearKeyConfirm")
+        }
+        confirmLabel={t("label.clear")}
+        cancelLabel={t("label.cancel")}
+        isBusy={autoBackupSaving}
+        onConfirm={() => void clearAutoBackupKeyConfirmed()}
+        onCancel={() => {
+          if (!autoBackupSaving) {
+            setClearAutoBackupKeyConfirmOpen(false);
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={resetBackupPathConfirmOpen}
+        title={t("settings.backupLocationResetTitle")}
+        description={t("settings.backupLocationResetConfirm", {
+          path: savedBackupSettings.defaultBackupPath,
+        })}
+        confirmLabel={t("settings.backupLocationReset")}
+        cancelLabel={t("label.cancel")}
+        confirmButtonVariant="primary"
+        isBusy={backupSettingsSaving}
+        onConfirm={() => void resetBackupPathConfirmed()}
+        onCancel={() => {
+          if (!backupSettingsSaving) {
+            setResetBackupPathConfirmOpen(false);
+          }
         }}
       />
       <ConfirmDialog

@@ -21,11 +21,16 @@ import {
 } from "./provider-config.ts";
 import { parseHostInput } from "./url-input.ts";
 
-type BuiltInDownloadClientType = (typeof BUILT_IN_DOWNLOAD_CLIENT_TYPES)[number];
+type BuiltInDownloadClientType =
+  (typeof BUILT_IN_DOWNLOAD_CLIENT_TYPES)[number];
 
-export function isBuiltInDownloadClientType(value: string): value is BuiltInDownloadClientType {
+export function isBuiltInDownloadClientType(
+  value: string,
+): value is BuiltInDownloadClientType {
   const normalized = value.trim().toLowerCase();
-  return BUILT_IN_DOWNLOAD_CLIENT_TYPES.includes(normalized as BuiltInDownloadClientType);
+  return BUILT_IN_DOWNLOAD_CLIENT_TYPES.includes(
+    normalized as BuiltInDownloadClientType,
+  );
 }
 
 /// A built-in client with no server address (Scryer's own HTTP downloader).
@@ -40,7 +45,9 @@ export function isBuiltInDownloadClientConfigField(
   field: ConfigFieldDef,
 ): boolean {
   return (
-    BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[clientType.trim().toLowerCase()]?.some(
+    BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[
+      clientType.trim().toLowerCase()
+    ]?.some(
       (builtIn) => builtIn.key === field.key && builtIn.label === field.label,
     ) ?? false
   );
@@ -57,13 +64,14 @@ export function normalizeDownloadClientType(
 export function buildDownloadClientTypeOptions(
   providerTypes: ProviderTypeInfo[],
 ): DownloadClientTypeOption[] {
-  const options: DownloadClientTypeOption[] = BUILT_IN_DOWNLOAD_CLIENT_TYPES.map((value) => ({
-    value,
-    label: BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS[value],
-    ...(BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[value]
-      ? { configFields: BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[value] }
-      : {}),
-  }));
+  const options: DownloadClientTypeOption[] =
+    BUILT_IN_DOWNLOAD_CLIENT_TYPES.map((value) => ({
+      value,
+      label: BUILT_IN_DOWNLOAD_CLIENT_TYPE_LABELS[value],
+      ...(BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[value]
+        ? { configFields: BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS[value] }
+        : {}),
+    }));
   const seenValues = new Set(options.map((option) => option.value));
 
   for (const providerType of providerTypes) {
@@ -238,16 +246,23 @@ function parseJsonPayloadObject(raw: string | null | undefined) {
   }
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse download client config JSON", { raw, error });
+      console.warn("Failed to parse download client config JSON", {
+        raw,
+        error,
+      });
     }
     return null;
   }
 }
 
-export function parseJsonPayload(raw: string | null | undefined): DownloadClientConfigPayloadRecord {
+export function parseJsonPayload(
+  raw: string | null | undefined,
+): DownloadClientConfigPayloadRecord {
   const parsed = parseJsonPayloadObject(raw);
   return parsed ? (parsed as DownloadClientConfigPayloadRecord) : {};
 }
@@ -276,16 +291,18 @@ export function readConfigBooleanValue(
       continue;
     }
     const rawValue = payload[key];
-    if (typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean") {
+    if (
+      typeof rawValue === "string" ||
+      typeof rawValue === "number" ||
+      typeof rawValue === "boolean"
+    ) {
       return readConfigValueAsBoolean(rawValue);
     }
   }
   return fallback;
 }
 
-export function splitBaseUrlForDraft(
-  rawBaseUrl: string | null | undefined,
-): {
+export function splitBaseUrlForDraft(rawBaseUrl: string | null | undefined): {
   host: string;
   port: string;
   urlBase: string;
@@ -306,7 +323,8 @@ export function splitBaseUrlForDraft(
     const parsed = new URL(withScheme);
     const host = parsed.hostname.trim();
     const port = parsed.port.trim();
-    const normalizedPath = parsed.pathname === "/" ? "" : parsed.pathname.trim();
+    const normalizedPath =
+      parsed.pathname === "/" ? "" : parsed.pathname.trim();
     return {
       host,
       port,
@@ -315,7 +333,10 @@ export function splitBaseUrlForDraft(
     };
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse download client base URL", { rawBaseUrl: raw, error });
+      console.warn("Failed to parse download client base URL", {
+        rawBaseUrl: raw,
+        error,
+      });
     }
     return {
       host: "",
@@ -347,7 +368,8 @@ export function normalizeDownloadClientDraft(
   const port = parsed.port !== "" ? parsed.port : draft.port.trim();
   const urlBase =
     parsed.path !== "" ? parsed.path : draft.urlBase.trim().replace(/\/+$/, "");
-  const useSsl = parsed.scheme === null ? draft.useSsl : parsed.scheme === "https";
+  const useSsl =
+    parsed.scheme === null ? draft.useSsl : parsed.scheme === "https";
   if (
     parsed.host === draft.host &&
     port === draft.port &&
@@ -367,7 +389,9 @@ export function buildDownloadClientBaseUrl(rawDraft: DownloadClientDraft) {
   if (!host) {
     return "";
   }
-  const normalizedPort = draft.port.trim().length ? `:${draft.port.trim()}` : "";
+  const normalizedPort = draft.port.trim().length
+    ? `:${draft.port.trim()}`
+    : "";
   const protocol = draft.useSsl ? "https" : "http";
   const basePath = draft.urlBase.trim();
   const normalizedPath = basePath ? `/${basePath.replace(/^\/+/, "")}` : "";
@@ -379,7 +403,10 @@ export function buildDownloadClientBaseUrl(rawDraft: DownloadClientDraft) {
 /// way a save accepts it.
 export function downloadClientConnectionTestBlocker(
   rawDraft: DownloadClientDraft,
-): "settings.downloadClientValidation" | "settings.downloadClientBaseUrlRequired" | null {
+):
+  | "settings.downloadClientValidation"
+  | "settings.downloadClientBaseUrlRequired"
+  | null {
   const draft = normalizeDownloadClientDraft(rawDraft);
   const hostless = isHostlessDownloadClientType(draft.clientType);
   if (!draft.name.trim() || (!draft.host.trim() && !hostless)) {
@@ -392,16 +419,19 @@ export function downloadClientConnectionTestBlocker(
 }
 
 export function cleanPayloadObject(payload: Record<string, unknown>) {
-  return Object.entries(payload).reduce<Record<string, unknown>>((accumulator, [key, value]) => {
-    if (typeof value === "undefined" || value === null) {
+  return Object.entries(payload).reduce<Record<string, unknown>>(
+    (accumulator, [key, value]) => {
+      if (typeof value === "undefined" || value === null) {
+        return accumulator;
+      }
+      if (typeof value === "string" && !value.trim()) {
+        return accumulator;
+      }
+      accumulator[key] = value;
       return accumulator;
-    }
-    if (typeof value === "string" && !value.trim()) {
-      return accumulator;
-    }
-    accumulator[key] = value;
-    return accumulator;
-  }, {});
+    },
+    {},
+  );
 }
 
 /// Whether a field should offer the folder browser.
@@ -413,7 +443,9 @@ export function cleanPayloadObject(payload: Record<string, unknown>) {
 /// `role` and `valueSource` used to be sniffed the same way. They cannot match:
 /// the only values they take are `CONNECTION_URL`, `USER` and `HOST_BINDING`,
 /// none of which contain any of these words.
-export function isFileBackedDownloadClientConfigField(field: ConfigFieldDef): boolean {
+export function isFileBackedDownloadClientConfigField(
+  field: ConfigFieldDef,
+): boolean {
   const key = field.key.trim().toLowerCase();
   const hostBinding = field.hostBinding?.trim().toLowerCase() ?? "";
   const pathPattern = /(?:^|[_\-.])(path|folder|directory|file)(?:$|[_\-.])/;
@@ -455,23 +487,28 @@ export function buildDownloadClientConfigValues(
   }
   if (
     (normalizedClientType === "sabnzbd" || normalizedClientType === "weaver") &&
-    !descriptorOwnsAnyField(descriptorFieldKeys, ["api_key", "apiKey", "apikey"])
+    !descriptorOwnsAnyField(descriptorFieldKeys, [
+      "api_key",
+      "apiKey",
+      "apikey",
+    ])
   ) {
     payload.api_key = draft.apiKey.trim();
   }
 
   const fieldsByKey = configFieldByKey(fields);
   const cleaned = cleanPayloadObject(payload);
-  const values = Object.entries(cleaned).map(([key, value]): ProviderConfigValueInput =>
-    configValueInput(key, value, fieldsByKey.get(key)),
+  const values = Object.entries(cleaned).map(
+    ([key, value]): ProviderConfigValueInput =>
+      configValueInput(key, value, fieldsByKey.get(key)),
   );
   const explicitSecretClears = fields
     .filter(
       (field) =>
-        field.fieldType === "PASSWORD"
-        && storedSecretKeys.has(field.key)
-        && Object.hasOwn(draft.configValues, field.key)
-        && draft.configValues[field.key] === "",
+        field.fieldType === "PASSWORD" &&
+        storedSecretKeys.has(field.key) &&
+        Object.hasOwn(draft.configValues, field.key) &&
+        draft.configValues[field.key] === "",
     )
     .map((field): ProviderConfigValueInput => ({
       key: field.key,
@@ -480,7 +517,9 @@ export function buildDownloadClientConfigValues(
   return [...values, ...explicitSecretClears];
 }
 
-export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord): DownloadClientDraft {
+export function buildDownloadClientDraftFromRecord(
+  record: DownloadClientRecord,
+): DownloadClientDraft {
   const baseUrlParts = splitBaseUrlForDraft(record.baseUrl);
   const config = providerConfigValuesToRecord(record.config);
 
@@ -488,7 +527,9 @@ export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord)
   // entries that resolve host/port/ssl from config rather than a full URL).
   const host = baseUrlParts.host || readConfigStringValue(config, ["host"]);
   const port = baseUrlParts.port || readConfigStringValue(config, ["port"]);
-  const urlBase = baseUrlParts.urlBase || readConfigStringValue(config, ["url_base", "urlBase"]);
+  const urlBase =
+    baseUrlParts.urlBase ||
+    readConfigStringValue(config, ["url_base", "urlBase"]);
 
   return {
     ...DEFAULT_DOWNLOAD_CLIENT_DRAFT,
@@ -502,9 +543,16 @@ export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord)
     apiKey: readConfigStringValue(config, ["api_key", "apiKey", "apikey"]),
     username: readConfigStringValue(config, ["username"]),
     password: "",
-    remotePathMappings: readConfigStringValue(config, ["remote_path_mappings", "remotePathMappings"]),
+    remotePathMappings: readConfigStringValue(config, [
+      "remote_path_mappings",
+      "remotePathMappings",
+    ]),
     configValues: config,
-    useSsl: readConfigBooleanValue(config, ["use_ssl", "useSsl"], baseUrlParts.useSsl),
+    useSsl: readConfigBooleanValue(
+      config,
+      ["use_ssl", "useSsl"],
+      baseUrlParts.useSsl,
+    ),
   };
 }
 

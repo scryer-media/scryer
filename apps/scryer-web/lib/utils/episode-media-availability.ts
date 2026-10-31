@@ -22,7 +22,8 @@ export function episodeAvailabilityPill(
     case "AVAILABLE":
       return {
         tone: "positive",
-        label: availability.primaryQualityLabel || translate("episode.fileOnDisk"),
+        label:
+          availability.primaryQualityLabel || translate("episode.fileOnDisk"),
       };
     case "PENDING_SCAN":
       return { tone: "warning", label: translate("mediaFile.pendingScan") };

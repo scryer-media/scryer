@@ -8,6 +8,7 @@ async fn foreign_swedish_download_resolves_unique_local_alias_without_year_or_id
     title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Över Atlanten".into(),
         language: "swe".into(),
+        country: None,
     }];
     let app = build_app(vec![title.clone()], vec![], vec![], vec![]);
     let mut td = build_tracked_download("", "series", release);
@@ -33,6 +34,7 @@ async fn foreign_swedish_download_refuses_equivalent_unmonitored_local_competito
     title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Över Atlanten".into(),
         language: "swe".into(),
+        country: None,
     }];
     let mut rival = build_title("other-show", "Over Atlanten", MediaFacet::Series);
     rival.monitored = false;

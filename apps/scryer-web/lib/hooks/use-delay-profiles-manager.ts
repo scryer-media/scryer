@@ -13,7 +13,10 @@ import {
   DELAY_PROFILE_CATALOG_KEY,
   validateDelayProfileDraft,
 } from "@/lib/utils/delay-profiles";
-import type { DelayProfileDraft, ParsedDelayProfile } from "@/lib/types/delay-profiles";
+import type {
+  DelayProfileDraft,
+  ParsedDelayProfile,
+} from "@/lib/types/delay-profiles";
 import type { LibraryRecord } from "@/lib/types";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 
@@ -35,7 +38,9 @@ type DelayProfilePayload = {
   enabled: boolean;
 };
 
-function fromDelayProfilePayload(profile: DelayProfilePayload): ParsedDelayProfile {
+function fromDelayProfilePayload(
+  profile: DelayProfilePayload,
+): ParsedDelayProfile {
   return {
     id: profile.id,
     name: profile.name,
@@ -104,11 +109,17 @@ export function useDelayProfilesManager() {
       // Deleting a library can unlink and disable profiles, so both lists
       // reload together on the same settings event.
       const [result, libraryResult] = await Promise.all([
-        client.query(delayProfilesQuery, {}, { requestPolicy: "network-only" }).toPromise(),
-        client.query(librariesQuery, {}, { requestPolicy: "network-only" }).toPromise(),
+        client
+          .query(delayProfilesQuery, {}, { requestPolicy: "network-only" })
+          .toPromise(),
+        client
+          .query(librariesQuery, {}, { requestPolicy: "network-only" })
+          .toPromise(),
       ]);
       if (result.error) throw result.error;
-      const parsed = (result.data?.delayProfiles ?? []).map(fromDelayProfilePayload);
+      const parsed = (result.data?.delayProfiles ?? []).map(
+        fromDelayProfilePayload,
+      );
       setProfiles(parsed);
       if (!libraryResult.error) {
         setLibraries((libraryResult.data?.libraries ?? []) as LibraryRecord[]);
@@ -144,9 +155,7 @@ export function useDelayProfilesManager() {
         return false;
       }
       const isNew = !draft.id;
-      const id = isNew
-        ? createDelayProfileId(draft.name, profiles)
-        : draft.id;
+      const id = isNew ? createDelayProfileId(draft.name, profiles) : draft.id;
       const entry: ParsedDelayProfile = { ...draft, id };
       const validationError = validateDelayProfileDraft(entry);
       if (validationError) {
@@ -170,7 +179,9 @@ export function useDelayProfilesManager() {
           : entry;
         const next = isNew
           ? [...profiles, saved]
-          : profiles.map((profile) => (profile.id === saved.id ? saved : profile));
+          : profiles.map((profile) =>
+              profile.id === saved.id ? saved : profile,
+            );
         setProfiles(next);
         setDraft(cloneDelayProfileDraft(buildDelayProfileTemplate(next)));
         showStatus(t("settings.delayProfilesSaved"), { level: "SUCCESS" });

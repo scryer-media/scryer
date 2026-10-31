@@ -5,9 +5,15 @@ export const THEME_CYCLE_ORDER = [...SELECTABLE_THEMES, "system"] as const;
 export type ThemePreference = (typeof THEME_CYCLE_ORDER)[number];
 
 // Keep old browser preferences readable without retaining a separate theme.
-export const THEME_CLASS_NAMES = { light: "light", dark: "dark", pride: "dark" };
+export const THEME_CLASS_NAMES = {
+  light: "light",
+  dark: "dark",
+  pride: "dark",
+};
 
-export function migrateStoredTheme(storage: Pick<Storage, "getItem" | "setItem">): void {
+export function migrateStoredTheme(
+  storage: Pick<Storage, "getItem" | "setItem">,
+): void {
   if (storage.getItem("theme") === "pride") {
     storage.setItem("theme", "dark");
   }
@@ -100,7 +106,9 @@ const ACCENT_CSS_VARS = [
   "--scry-baccent",
 ] as const;
 
-export function isHighlightColor(value: string | null | undefined): value is string {
+export function isHighlightColor(
+  value: string | null | undefined,
+): value is string {
   return typeof value === "string" && HEX_COLOR_PATTERN.test(value);
 }
 
@@ -144,7 +152,7 @@ function hslToHex({ h, s, l }: Hsl): string {
   const sn = clamp(s, 0, 100) / 100;
   const ln = clamp(l, 0, 100) / 100;
   const c = (1 - Math.abs(2 * ln - 1)) * sn;
-  const hp = ((((h % 360) + 360) % 360)) / 60;
+  const hp = (((h % 360) + 360) % 360) / 60;
   const x = c * (1 - Math.abs((hp % 2) - 1));
   let r: number;
   let g: number;
@@ -209,7 +217,8 @@ export function deriveAccentCssVars(
     const value = channel / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
-  const luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
+  const luminance =
+    0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
   return {
     "--primary-foreground": luminance > 0.179 ? "#000000" : "#ffffff",
     "--scry-accent": accent,

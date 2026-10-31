@@ -146,11 +146,34 @@ impl InputPathContext {
     }
 }
 
+/// A validation condition, with source facts separate from its display text.
+#[derive(Debug, Clone)]
+pub struct ValidationDiagnostic {
+    pub code: &'static str,
+    pub message: String,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub path: Option<String>,
+}
+
+impl ValidationDiagnostic {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            line: None,
+            column: None,
+            path: None,
+        }
+    }
+}
+
 /// Result of validating a user-authored Rego rule.
 #[derive(Debug, Clone)]
 pub struct ValidationResult {
     pub valid: bool,
     pub errors: Vec<String>,
+    pub diagnostics: Vec<ValidationDiagnostic>,
 }
 
 impl ValidationResult {
@@ -158,14 +181,40 @@ impl ValidationResult {
         Self {
             valid: true,
             errors: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
     pub fn invalid(message: impl Into<String>) -> Self {
+        Self::invalid_code(crate::diagnostic_codes::RULE_VALIDATION_FAILED, message)
+    }
+
+    pub fn invalid_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self::from_diagnostics(vec![ValidationDiagnostic::new(code, message)])
+    }
+
+    pub fn from_diagnostics(diagnostics: Vec<ValidationDiagnostic>) -> Self {
         Self {
-            valid: false,
-            errors: vec![message.into()],
+            valid: diagnostics.is_empty(),
+            errors: diagnostics.iter().map(|d| d.message.clone()).collect(),
+            diagnostics,
         }
+    }
+
+    /// Regorus exposes compiler locations only in its diagnostic text. Decode
+    /// that third-party format once here, before crossing the public boundary.
+    fn compilation_error(error: impl std::fmt::Display) -> Self {
+        let text = error.to_string();
+        let mut diagnostic = ValidationDiagnostic::new(
+            crate::diagnostic_codes::RULE_COMPILATION_ERROR,
+            format!("compilation error: {text}"),
+        );
+        if let Some((_, location)) = text.split_once(".rego:") {
+            let mut parts = location.split(':');
+            diagnostic.line = parts.next().and_then(|s| s.parse().ok());
+            diagnostic.column = parts.next().and_then(|s| s.parse().ok());
+        }
+        Self::from_diagnostics(vec![diagnostic])
     }
 }
 
@@ -851,14 +900,21 @@ pub fn validate_baseline_dependencies(
     }
 }
 
-fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<String> {
-    let mut errors = BTreeSet::new();
+fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<ValidationDiagnostic> {
+    let mut errors = std::collections::BTreeMap::new();
     walk_module_input_paths(module, ctx, |path| {
         if let Some(error) = validate_input_reference_path(path, ctx) {
-            errors.insert(error);
+            let code = if path.has_dynamic_component() {
+                crate::diagnostic_codes::RULE_DYNAMIC_INPUT_PATH
+            } else {
+                crate::diagnostic_codes::RULE_UNKNOWN_INPUT_PATH
+            };
+            let mut diagnostic = ValidationDiagnostic::new(code, error.clone());
+            diagnostic.path = Some(path.display.clone());
+            errors.insert(error, diagnostic);
         }
     });
-    errors.into_iter().collect()
+    errors.into_values().collect()
 }
 
 /// Names of the `input.facts.<name>` facts a maintenance policy references.
@@ -1395,9 +1451,10 @@ pub fn validate_user_rule_with_limits(
     // Check package declaration
     let has_pkg = rego_source.lines().any(|line| line.trim() == expected_pkg);
     if !has_pkg {
-        return Ok(ValidationResult::invalid(format!(
-            "package declaration must be: {expected_pkg}"
-        )));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
+            format!("package declaration must be: {expected_pkg}"),
+        ));
     }
 
     // Compile in a throwaway engine
@@ -1405,14 +1462,14 @@ pub fn validate_user_rule_with_limits(
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
     let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         score_entry_wrapper_policy_path(rule_set_id),
         score_entry_wrapper_source(rule_set_id),
     ) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
 
     let input_path_errors = module_input_path_errors(
@@ -1420,10 +1477,7 @@ pub fn validate_user_rule_with_limits(
         InputPathContext::release(),
     );
     if !input_path_errors.is_empty() {
-        return Ok(ValidationResult {
-            valid: false,
-            errors: input_path_errors,
-        });
+        return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
     // Dry-run against synthetic input
@@ -1443,19 +1497,31 @@ pub fn validate_user_rule_with_limits(
             if let Some(v) = value
                 && let Err(e) = validate_score_entry_shape(v)
             {
-                return Ok(ValidationResult::invalid(format!("output error: {e}")));
+                return Ok(ValidationResult::invalid_code(
+                    crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+                    format!("output error: {e}"),
+                ));
             }
             match engine.eval_rule(score_entry_wrapper_rule_path(rule_set_id)) {
                 Ok(value) => {
                     if let Err(e) = validate_score_entry_shape(&value) {
-                        return Ok(ValidationResult::invalid(format!("output error: {e}")));
+                        return Ok(ValidationResult::invalid_code(
+                            crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+                            format!("output error: {e}"),
+                        ));
                     }
                     Ok(ValidationResult::valid())
                 }
-                Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+                Err(e) => Ok(ValidationResult::invalid_code(
+                    crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+                    format!("runtime error: {e}"),
+                )),
             }
         }
-        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+        Err(e) => Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            format!("runtime error: {e}"),
+        )),
     }
 }
 
@@ -1473,22 +1539,23 @@ pub fn validate_runtime_wrapper(
     let expected_pkg = format!("package scryer.rules.user.{rule_set_id}");
     let has_pkg = rego_source.lines().any(|line| line.trim() == expected_pkg);
     if !has_pkg {
-        return Ok(ValidationResult::invalid(format!(
-            "package declaration must be: {expected_pkg}"
-        )));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
+            format!("package declaration must be: {expected_pkg}"),
+        ));
     }
 
     let mut engine = runtime::configured_engine(&RuntimeLimits::release_defaults());
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path, rego_source.to_string()) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
     if let Err(e) = engine.add_policy(
         score_entry_wrapper_policy_path(rule_set_id),
         score_entry_wrapper_source(rule_set_id),
     ) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
 
     let input_value =
@@ -1498,9 +1565,15 @@ pub fn validate_runtime_wrapper(
     match engine.eval_rule(score_entry_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match validate_score_entry_shape(&value) {
             Ok(()) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+            Err(e) => Ok(ValidationResult::invalid_code(
+                crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+                format!("output error: {e}"),
+            )),
         },
-        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+        Err(e) => Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            format!("runtime error: {e}"),
+        )),
     }
 }
 
@@ -1542,41 +1615,43 @@ pub fn validate_maintenance_rule(
 ) -> Result<ValidationResult, RulesError> {
     let expected_pkg = format!("package {MAINTENANCE_USER_PACKAGE_PREFIX}.{rule_set_id}");
     if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
-        return Ok(ValidationResult::invalid(format!(
-            "package declaration must be: {expected_pkg}"
-        )));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
+            format!("package declaration must be: {expected_pkg}"),
+        ));
     }
 
     let mut engine = runtime::configured_engine(&RuntimeLimits::maintenance_defaults());
 
     let policy_path = maintenance::user_policy_path(rule_set_id);
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
     let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         maintenance::decision_wrapper_policy_path(rule_set_id),
         maintenance::decision_wrapper_source(rule_set_id),
     ) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
 
     let module = &engine.get_modules()[policy_module_index];
 
     if let Some(error) = input_import_error(module, "maintenance") {
-        return Ok(ValidationResult::invalid(error));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_INPUT_IMPORT_UNSUPPORTED,
+            error,
+        ));
     }
 
     let input_path_errors = module_input_path_errors(module, InputPathContext::maintenance());
     if !input_path_errors.is_empty() {
-        return Ok(ValidationResult {
-            valid: false,
-            errors: input_path_errors,
-        });
+        return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
     if !module_defines_rule(module, "match") {
-        return Ok(ValidationResult::invalid(
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_MATCH_REQUIRED,
             "maintenance rule must define a boolean 'match' rule, for example: match if { ... }",
         ));
     }
@@ -1588,9 +1663,15 @@ pub fn validate_maintenance_rule(
     match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match maintenance::decode_decision(&value) {
             Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+            Err(e) => Ok(ValidationResult::invalid_code(
+                crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+                format!("output error: {e}"),
+            )),
         },
-        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+        Err(e) => Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            format!("runtime error: {e}"),
+        )),
     }
 }
 
@@ -1623,44 +1704,46 @@ pub fn validate_request_rule(
 ) -> Result<ValidationResult, RulesError> {
     let expected_pkg = format!("package {REQUEST_USER_PACKAGE_PREFIX}.{rule_set_id}");
     if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
-        return Ok(ValidationResult::invalid(format!(
-            "package declaration must be: {expected_pkg}"
-        )));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
+            format!("package declaration must be: {expected_pkg}"),
+        ));
     }
 
     let mut engine = runtime::configured_engine(&RuntimeLimits::request_defaults());
 
     let policy_path = request::user_policy_path(rule_set_id);
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
     let policy_module_index = engine.get_modules().len() - 1;
     if let Err(e) = engine.add_policy(
         request::decision_wrapper_policy_path(rule_set_id),
         request::decision_wrapper_source(rule_set_id),
     ) {
-        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+        return Ok(ValidationResult::compilation_error(e));
     }
 
     let module = &engine.get_modules()[policy_module_index];
 
     if let Some(error) = input_import_error(module, "request") {
-        return Ok(ValidationResult::invalid(error));
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_INPUT_IMPORT_UNSUPPORTED,
+            error,
+        ));
     }
 
     let input_path_errors = module_input_path_errors(module, InputPathContext::request());
     if !input_path_errors.is_empty() {
-        return Ok(ValidationResult {
-            valid: false,
-            errors: input_path_errors,
-        });
+        return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
     if !REQUEST_VOTE_HEADS
         .iter()
         .any(|head| module_defines_rule(module, head))
     {
-        return Ok(ValidationResult::invalid(
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_VOTE_REQUIRED,
             "request rule can never vote: define at least one of 'approve', 'deny', 'manual', \
              or 'tags', for example: approve if { ... }",
         ));
@@ -1673,9 +1756,15 @@ pub fn validate_request_rule(
     match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match request::decode_decision(&value) {
             Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+            Err(e) => Ok(ValidationResult::invalid_code(
+                crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+                format!("output error: {e}"),
+            )),
         },
-        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+        Err(e) => Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            format!("runtime error: {e}"),
+        )),
     }
 }
 
@@ -1725,6 +1814,7 @@ fn validate_score_entry_shape(value: &Value) -> Result<(), String> {
 fn synthetic_test_input() -> UserRuleInput {
     UserRuleInput {
         release: ReleaseDoc {
+            protocol: None,
             stereoscopy_tokens: vec![],
             stereoscopy: None,
             raw_title: "Test.Movie.2024.2160p.WEB-DL.H.265.DDP.5.1".to_string(),
@@ -2899,10 +2989,7 @@ mod tests {
         let score = |protocol: &str, raw_title: &str| {
             let mut input = synthetic_test_input();
             input.release.raw_title = raw_title.to_string();
-            input
-                .release
-                .extra
-                .insert("protocol".to_string(), serde_json::json!(protocol));
+            input.release.protocol = crate::ReleaseProtocol::parse(protocol);
             let result = evaluate_template("block-exe-torrents", input, "movie");
             assert!(result.errors.is_empty(), "{raw_title}: {:?}", result.errors);
             result
@@ -2914,6 +3001,8 @@ mod tests {
         assert!(score("torrent", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
         assert!(score("torrent", "Sample.Movie.2024.1080p.mkv.lnk"));
         assert!(!score("usenet", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
+        assert!(!score("http", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
+        assert!(!score("unknown", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
         assert!(!score(
             "torrent",
             "Sample.Batch.Movie.2024.1080p.WEB-DL.x264"

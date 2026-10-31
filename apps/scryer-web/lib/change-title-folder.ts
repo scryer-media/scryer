@@ -2,19 +2,14 @@ import type { Translate } from "@/components/root/types";
 
 /** How a candidate folder relates to the title being edited. */
 export type FolderMatchOwnership =
-  | "UNOWNED"
-  | "OWNED_BY_THIS_TITLE"
-  | "OWNED_BY_ANOTHER_TITLE";
+  "UNOWNED" | "OWNED_BY_THIS_TITLE" | "OWNED_BY_ANOTHER_TITLE";
 
 /** How the user chose to settle a candidate folder's ownership. */
 export type FolderMatchResolution = "ASSIGN" | "SWAP" | "TAKE_OVER";
 
 /** What a folder-match correction actually did. */
 export type FolderMatchOutcome =
-  | "ALREADY_OWNED"
-  | "ASSIGNED"
-  | "SWAPPED"
-  | "TAKEN_OVER";
+  "ALREADY_OWNED" | "ASSIGNED" | "SWAPPED" | "TAKEN_OVER";
 
 export type FolderMatchTitleRef = {
   id: string;

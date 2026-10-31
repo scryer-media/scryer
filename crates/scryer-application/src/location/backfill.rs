@@ -11,9 +11,8 @@
 //!
 //! - **Single-threaded.** One file at a time, in id order. No fan-out, no
 //!   per-title batching.
-//! - **Throttled.** A pause between files and between read chunks
-//!   ([`FullHashBackfillOptions`]), plus a bounded number of files per run so a
-//!   sweep of a large catalog is many short jobs rather than one long one.
+//! - **Bounded.** Sequential reads at background priority, with file and time
+//!   limits checked between files. Image maintenance gets admission first.
 //! - **Resumable.** See the cursor note below.
 //! - **Skips** unavailable mounts, files an active location operation owns, and
 //!   files that already carry a current full hash.
@@ -59,13 +58,14 @@ use crate::{AppError, AppResult, AppUseCase, MediaFileHashCandidate};
 /// Hashing has its own cadence and lifetime; acquisition, RSS and pending
 /// releases never await this worker.
 const FULL_HASH_BACKFILL_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const FULL_HASH_BACKFILL_WINDOW_START_HOUR: u32 = 2;
 const FULL_HASH_BACKFILL_WINDOW_END_HOUR: u32 = 6;
 
 pub(crate) fn full_hash_backfill_window_open<T: TimeZone>(now: &DateTime<T>) -> bool {
-    now.hour() < FULL_HASH_BACKFILL_WINDOW_END_HOUR
+    (FULL_HASH_BACKFILL_WINDOW_START_HOUR..FULL_HASH_BACKFILL_WINDOW_END_HOUR).contains(&now.hour())
 }
 
-/// Resolves the next local midnight independently so daylight-saving changes
+/// Resolves the next local 02:00 window independently so daylight-saving changes
 /// never turn the overnight window into a fixed 24-hour delay.
 pub(crate) fn next_full_hash_backfill_window<T: TimeZone>(
     now: &DateTime<T>,
@@ -76,16 +76,18 @@ pub(crate) fn next_full_hash_backfill_window<T: TimeZone>(
     }
 
     let zone = now.timezone();
-    // Past the early return, tonight's window is never the answer: either it is
-    // already closed, or the caller asked for the window *after* this one. Both
-    // mean the next local midnight. Starting the scan on today's date instead
-    // let a call made inside the window return `now + 1 minute` — at 05:45 the
-    // next run landed at 05:46, so the tail of the window degenerated into a
-    // per-minute sweep rather than the 30-minute cadence the job schedules.
-    let mut date = now.date_naive().succ_opt()?;
+    // Before 02:00 today's window is still ahead. Otherwise, resolve tomorrow's
+    // opening rather than returning a minute inside the current window.
+    let mut date = if now.hour() < FULL_HASH_BACKFILL_WINDOW_START_HOUR {
+        now.date_naive()
+    } else {
+        now.date_naive().succ_opt()?
+    };
     for _ in 0..3 {
-        // If midnight is skipped locally, use the first valid minute in the window.
-        for minute in 0..FULL_HASH_BACKFILL_WINDOW_END_HOUR * 60 {
+        // If 02:00 is skipped locally, use the first valid minute in the window.
+        for minute in
+            FULL_HASH_BACKFILL_WINDOW_START_HOUR * 60..FULL_HASH_BACKFILL_WINDOW_END_HOUR * 60
+        {
             let local = date.and_hms_opt(minute / 60, minute % 60, 0)?;
             if let Some(candidate) = zone.from_local_datetime(&local).earliest()
                 && candidate > *now
@@ -99,9 +101,15 @@ pub(crate) fn next_full_hash_backfill_window<T: TimeZone>(
 }
 
 pub(crate) fn next_full_hash_backfill_run<T: TimeZone>(now: &DateTime<T>) -> Option<DateTime<Utc>> {
+    // Stay on local half-hour ticks instead of delaying from completion or
+    // immediately catching up on a tick missed while the previous batch ran.
+    let elapsed = chrono::Duration::seconds(
+        i64::from(now.minute() * 60 + now.second()) % FULL_HASH_BACKFILL_INTERVAL.as_secs() as i64,
+    ) + chrono::Duration::nanoseconds(i64::from(now.nanosecond()));
     let next_tick = now.with_timezone(&Utc)
         + chrono::Duration::from_std(FULL_HASH_BACKFILL_INTERVAL)
-            .expect("full-hash backfill interval fits chrono duration");
+            .expect("full-hash backfill interval fits chrono duration")
+        - elapsed;
     if full_hash_backfill_window_open(&next_tick.with_timezone(&now.timezone())) {
         Some(next_tick)
     } else {
@@ -135,8 +143,6 @@ pub async fn start_full_hash_backfill_worker(
             continue;
         }
 
-        next_run = next_full_hash_backfill_run(&now)
-            .expect("a future full-hash backfill run must be available");
         let run_app = app.clone();
         let mut run = tokio::spawn(async move {
             run_app
@@ -154,6 +160,9 @@ pub async fn start_full_hash_backfill_worker(
                 run.await
             },
         };
+        next_run =
+            next_full_hash_backfill_run(&app.runtime.environment.now().with_timezone(&Local))
+                .expect("a future full-hash backfill run must be available");
         match outcome {
             Ok(Ok(())) => {}
             Ok(Err(error)) => tracing::warn!(%error, "periodic full-hash backfill failed"),
@@ -172,29 +181,18 @@ pub const FULL_HASH_BACKFILL_PAGE_SIZE: u32 = 32;
 /// Activity can only ever show as "running".
 pub const FULL_HASH_BACKFILL_FILES_PER_RUN: usize = 250;
 
-/// Pause between files. The point is not the delay itself but that the runtime
-/// gets a scheduling point between every two files, so a scan or an import
-/// never queues behind this job's I/O.
-pub const FULL_HASH_BACKFILL_FILE_PAUSE: Duration = Duration::from_millis(250);
-
 /// Bytes read per hashing chunk.
 const FULL_HASH_BACKFILL_CHUNK_BYTES: usize = 1024 * 1024;
 
-/// Pause between read chunks, on the blocking thread doing the reading. This is
-/// the "low I/O priority" mechanism: neither platform gives us a portable
-/// ionice, so the job simply asks for the device less often. At 1 MiB chunks
-/// this caps the job near 100 MiB/s of device time even on hardware that could
-/// do far more, which is the intent.
-const FULL_HASH_BACKFILL_CHUNK_PAUSE: Duration = Duration::from_millis(10);
-
-/// Knobs the job runs with. Production uses [`Default`]; tests drive the pauses
-/// to zero so a throttling assertion is about *ordering*, never wall clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Invocation limits, checked between files without throttling sequential reads.
+#[derive(Debug, Clone)]
 pub struct FullHashBackfillOptions {
     pub page_size: u32,
     pub files_per_run: usize,
-    pub file_pause: Duration,
-    pub chunk_pause: Duration,
+    pub max_duration: Duration,
+    pub scheduled: bool,
+    #[cfg(test)]
+    pub after_file: Option<std::sync::Arc<tokio::sync::Semaphore>>,
 }
 
 impl Default for FullHashBackfillOptions {
@@ -202,21 +200,19 @@ impl Default for FullHashBackfillOptions {
         Self {
             page_size: FULL_HASH_BACKFILL_PAGE_SIZE,
             files_per_run: FULL_HASH_BACKFILL_FILES_PER_RUN,
-            file_pause: FULL_HASH_BACKFILL_FILE_PAUSE,
-            chunk_pause: FULL_HASH_BACKFILL_CHUNK_PAUSE,
+            max_duration: FULL_HASH_BACKFILL_INTERVAL,
+            scheduled: false,
+            #[cfg(test)]
+            after_file: None,
         }
     }
 }
 
 impl FullHashBackfillOptions {
-    /// Same rules, no waiting. For tests only.
+    /// Tests use the same sequential reader and limits as production.
     #[cfg(test)]
     pub(crate) fn unthrottled() -> Self {
-        Self {
-            file_pause: Duration::ZERO,
-            chunk_pause: Duration::ZERO,
-            ..Self::default()
-        }
+        Self::default()
     }
 }
 
@@ -242,6 +238,18 @@ enum BackfillSkip {
     AlreadyHashed,
 }
 
+/// Stable, structured reason an invocation stopped admitting files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FullHashBackfillStopReason {
+    ImageMaintenance,
+    FileLimit,
+    TimeLimit,
+    WindowClosed,
+    QueueDrained,
+    Cancelled,
+}
+
 /// What one run did. Serialized into the job run's summary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -252,6 +260,17 @@ pub struct FullHashBackfillSummary {
     pub hashed: usize,
     /// Bytes read to produce those hashes.
     pub bytes_hashed: u64,
+    /// Includes bytes read from files that later failed validation.
+    #[serde(default)]
+    pub bytes_read: u64,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub read_ms: u64,
+    #[serde(default)]
+    pub hash_ms: u64,
+    #[serde(default)]
+    pub stop_reason: Option<FullHashBackfillStopReason>,
     pub skipped_unavailable: usize,
     pub skipped_owned: usize,
     pub skipped_already_hashed: usize,
@@ -363,29 +382,68 @@ impl AppUseCase {
     /// mount is a normal state for this job, not a job failure. Only a store or
     /// settings failure — something that makes the *queue* unreadable — stops
     /// the run.
-    pub(crate) async fn run_full_hash_backfill_job(&self) -> AppResult<FullHashBackfillSummary> {
-        self.run_full_hash_backfill_with_options(FullHashBackfillOptions::default())
-            .await
+    pub(crate) async fn run_full_hash_backfill_job(
+        &self,
+        trigger: crate::JobTriggerSource,
+    ) -> AppResult<FullHashBackfillSummary> {
+        self.run_full_hash_backfill_with_options(FullHashBackfillOptions {
+            scheduled: trigger != crate::JobTriggerSource::Manual,
+            ..Default::default()
+        })
+        .await
     }
 
     pub(crate) async fn run_full_hash_backfill_with_options(
         &self,
         options: FullHashBackfillOptions,
     ) -> AppResult<FullHashBackfillSummary> {
-        // The blocking reader retains a share of this permit if its awaiting
-        // future is dropped. A replacement run cannot overlap the old I/O.
-        let permit = std::sync::Arc::new(
-            self.runtime
-                .jobs
-                .full_hash_execution_lock
-                .clone()
-                .try_lock_owned()
-                .map_err(|_| {
-                    AppError::Validation("Full-hash backfill is already running".into())
-                })?,
-        );
         let cancellation = self.runtime.jobs.full_hash_shutdown.child_token();
         let _cancel_on_drop = cancellation.clone().drop_guard();
+        let app = self.clone();
+        // Drain filesystem calls as well as the reader thread if the caller is
+        // dropped. Tokio filesystem operations may outlive their awaiter.
+        tokio::spawn(async move { app.run_full_hash_backfill_pass(options, cancellation).await })
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("full-hash invocation failed: {error}"))
+            })?
+    }
+
+    async fn run_full_hash_backfill_pass(
+        &self,
+        options: FullHashBackfillOptions,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> AppResult<FullHashBackfillSummary> {
+        // The blocking reader retains a share of this permit if its awaiting
+        // future is dropped. A replacement run cannot overlap the old I/O.
+        let execution = self
+            .runtime
+            .jobs
+            .full_hash_execution_lock
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| {
+                AppError::validation_refused(
+                    crate::error_reasons::location::FULL_HASH_BACKFILL_ALREADY_RUNNING,
+                    "Full-hash backfill is already running",
+                )
+            })?;
+        let Ok(maintenance) = self
+            .runtime
+            .jobs
+            .background_disk_maintenance
+            .clone()
+            .try_lock_owned()
+        else {
+            return Ok(FullHashBackfillSummary {
+                stop_reason: Some(FullHashBackfillStopReason::ImageMaintenance),
+                resume_after_id: self.read_full_hash_backfill_cursor().await,
+                ..Default::default()
+            });
+        };
+        let permit = std::sync::Arc::new((execution, maintenance));
+        let started = tokio::time::Instant::now();
+        let io = std::sync::Arc::new(HashIoStats::default());
         let owned = self.full_hash_backfill_owned_scope().await?;
         let mut cursor = self.read_full_hash_backfill_cursor().await;
         let mut summary = FullHashBackfillSummary::default();
@@ -417,12 +475,24 @@ impl AppUseCase {
                     summary.cancelled = true;
                     break 'sweep;
                 }
+                if started.elapsed() >= options.max_duration {
+                    summary.stop_reason = Some(FullHashBackfillStopReason::TimeLimit);
+                    break 'sweep;
+                }
+                if options.scheduled
+                    && !full_hash_backfill_window_open(
+                        &self.runtime.environment.now().with_timezone(&Local),
+                    )
+                {
+                    summary.stop_reason = Some(FullHashBackfillStopReason::WindowClosed);
+                    break 'sweep;
+                }
 
                 match self
                     .backfill_one_media_file(
                         &candidate,
                         &owned,
-                        options,
+                        io.clone(),
                         &cancellation,
                         permit.clone(),
                     )
@@ -458,10 +528,11 @@ impl AppUseCase {
                 // scheduling point even when this run is hashing nothing but
                 // skips.
                 tokio::task::yield_now().await;
-                if !options.file_pause.is_zero() {
+                #[cfg(test)]
+                if let Some(checkpoint) = &options.after_file {
                     tokio::select! {
                         _ = cancellation.cancelled() => {},
-                        _ = tokio::time::sleep(options.file_pause) => {},
+                        permit = checkpoint.acquire() => { if let Ok(permit) = permit { permit.forget(); } },
                     }
                 }
             }
@@ -469,6 +540,22 @@ impl AppUseCase {
 
         summary.resume_after_id = cursor.clone();
         self.write_full_hash_backfill_cursor(cursor).await;
+        summary.stop_reason = Some(if summary.cancelled {
+            FullHashBackfillStopReason::Cancelled
+        } else if summary.completed_sweep {
+            FullHashBackfillStopReason::QueueDrained
+        } else {
+            summary
+                .stop_reason
+                .unwrap_or(FullHashBackfillStopReason::FileLimit)
+        });
+        summary.elapsed_ms = duration_ms(started.elapsed());
+        summary.bytes_read = io.bytes.load(std::sync::atomic::Ordering::Relaxed);
+        summary.read_ms = io.read_ns.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+        summary.hash_ms = io.hash_ns.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+        tracing::info!(bytes_read = summary.bytes_read, elapsed_ms = summary.elapsed_ms,
+            read_ms = summary.read_ms, hash_ms = summary.hash_ms, stop_reason = ?summary.stop_reason,
+            "full-hash backfill invocation finished");
         Ok(summary)
     }
 
@@ -478,9 +565,9 @@ impl AppUseCase {
         &self,
         candidate: &MediaFileHashCandidate,
         owned: &OwnedScope,
-        options: FullHashBackfillOptions,
+        io: std::sync::Arc<HashIoStats>,
         cancellation: &tokio_util::sync::CancellationToken,
-        permit: std::sync::Arc<tokio::sync::OwnedMutexGuard<()>>,
+        permit: std::sync::Arc<BackfillPermits>,
     ) -> Result<Option<u64>, BackfillOutcome> {
         let path = stored_path_to_path_buf(&candidate.file_path);
 
@@ -523,14 +610,10 @@ impl AppUseCase {
             ));
         }
 
-        let hashes = hash_file_cancellable(
-            path.clone(),
-            options.chunk_pause,
-            cancellation.child_token(),
-            Some(permit),
-        )
-        .await
-        .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
+        let hashes =
+            hash_file_cancellable(path.clone(), io, cancellation.child_token(), Some(permit))
+                .await
+                .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
         let bytes = hashes.size_bytes;
         let after = tokio::fs::metadata(&path)
             .await
@@ -643,8 +726,23 @@ enum BackfillOutcome {
     Failed(String),
 }
 
-/// Reads a file end to end through the same hasher a verified copy uses (D2),
-/// pausing between chunks so the job never monopolizes the device.
+type BackfillPermits = (
+    tokio::sync::OwnedMutexGuard<()>,
+    tokio::sync::OwnedMutexGuard<()>,
+);
+
+#[derive(Default)]
+struct HashIoStats {
+    bytes: std::sync::atomic::AtomicU64,
+    read_ns: std::sync::atomic::AtomicU64,
+    hash_ns: std::sync::atomic::AtomicU64,
+}
+
+fn duration_ms(value: Duration) -> u64 {
+    value.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+/// Reads a file sequentially on a dedicated background thread.
 ///
 /// The CRC costs nothing extra next to the BLAKE3 this job exists to produce
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
@@ -652,63 +750,129 @@ enum BackfillOutcome {
 /// value instead of re-reading the source.
 async fn hash_file_cancellable(
     path: PathBuf,
-    chunk_pause: Duration,
+    io: std::sync::Arc<HashIoStats>,
     cancellation: tokio_util::sync::CancellationToken,
-    permit: Option<std::sync::Arc<tokio::sync::OwnedMutexGuard<()>>>,
+    permit: Option<std::sync::Arc<BackfillPermits>>,
 ) -> AppResult<crate::location::model::StreamedContentHashes> {
     let _cancel_on_drop = cancellation.clone().drop_guard();
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        use std::io::Read;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("full-hash-backfill".into())
+        .spawn(move || {
+            let _permit = permit;
+            if let Err(error) = hash_reader_priority() {
+                static REPORTED: std::sync::Once = std::sync::Once::new();
+                REPORTED.call_once(
+                    || tracing::warn!(%error, "full-hash background priority unavailable"),
+                );
+            }
+            let result = (|| {
+                use std::io::Read;
 
-        if cancellation.is_cancelled() {
-            return Err(AppError::Validation("Full-hash backfill cancelled".into()));
-        }
-        let mut file = std::fs::File::open(&path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open {} for full-hash backfill: {error}",
-                path.display()
-            ))
+                if cancellation.is_cancelled() {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
+                        "Full-hash backfill cancelled",
+                    ));
+                }
+                let mut file = std::fs::File::open(&path).map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to open {} for full-hash backfill: {error}",
+                        path.display()
+                    ))
+                })?;
+                let before = file
+                    .metadata()
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let mut hasher = StreamedContentHasher::new();
+                let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
+                loop {
+                    // Cancellation cannot interrupt an OS read already in progress.
+                    // Check again before every bounded read and before publishing.
+                    if cancellation.is_cancelled() {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
+                            "Full-hash backfill cancelled",
+                        ));
+                    }
+                    let read_started = std::time::Instant::now();
+                    let read_result = file.read(&mut buffer);
+                    io.read_ns.fetch_add(
+                        read_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    let read = read_result.map_err(|error| {
+                        AppError::Repository(format!(
+                            "failed to read {} for full-hash backfill: {error}",
+                            path.display()
+                        ))
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    io.bytes
+                        .fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
+                    let hash_started = std::time::Instant::now();
+                    hasher.update(&buffer[..read]);
+                    io.hash_ns.fetch_add(
+                        hash_started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                let after = std::fs::metadata(&path)
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                if cancellation.is_cancelled() {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::FULL_HASH_BACKFILL_CANCELLED,
+                        "Full-hash backfill cancelled",
+                    ));
+                }
+                if !same_file_version(&before, &after) {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::FILE_CHANGED_WHILE_HASHING,
+                        "file changed while hashing",
+                    ));
+                }
+                Ok(hasher.finalize())
+            })();
+            drop(_permit);
+            let _ = send.send(result);
+        })
+        .map_err(|error| {
+            AppError::Repository(format!("full-hash reader thread could not start: {error}"))
         })?;
-        let before = file
-            .metadata()
-            .map_err(|error| AppError::Repository(error.to_string()))?;
-        let mut hasher = StreamedContentHasher::new();
-        let mut buffer = vec![0u8; FULL_HASH_BACKFILL_CHUNK_BYTES];
-        loop {
-            // Cancellation cannot interrupt an OS read already in progress.
-            // Check again before every bounded read and before publishing.
-            if cancellation.is_cancelled() {
-                return Err(AppError::Validation("Full-hash backfill cancelled".into()));
-            }
-            let read = file.read(&mut buffer).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read {} for full-hash backfill: {error}",
-                    path.display()
-                ))
-            })?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-            if !chunk_pause.is_zero() {
-                std::thread::sleep(chunk_pause);
-            }
-        }
-        let after =
-            std::fs::metadata(&path).map_err(|error| AppError::Repository(error.to_string()))?;
-        if cancellation.is_cancelled() {
-            return Err(AppError::Validation("Full-hash backfill cancelled".into()));
-        }
-        if !same_file_version(&before, &after) {
-            return Err(AppError::Validation("file changed while hashing".into()));
-        }
-        Ok(hasher.finalize())
-    })
-    .await
-    .map_err(|error| {
+    receive.await.map_err(|error| {
         AppError::Repository(format!("full-hash backfill task failed to join: {error}"))
     })?
+}
+
+/// Applied only to this short-lived reader thread, never to a runtime pool.
+fn hash_reader_priority() -> std::io::Result<()> {
+    crate::background_worker_priority()?;
+    #[cfg(target_os = "linux")]
+    {
+        // Best-effort I/O class, lowest priority. Unsupported schedulers may
+        // ignore this hint; it is not an application bandwidth limiter.
+        if unsafe { libc::syscall(libc::SYS_ioprio_set, 1, 0, (2 << 13) | 7) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+        };
+        if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    return Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "background I/O priority is unsupported",
+    ));
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    Ok(())
 }
 
 pub(super) fn same_file_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
@@ -738,9 +902,16 @@ mod tests {
     use chrono::{FixedOffset, TimeZone};
 
     #[test]
-    fn full_hash_backfill_window_follows_local_midnight_to_six() {
+    fn full_hash_backfill_window_follows_local_two_to_six() {
         let zone = FixedOffset::west_opt(6 * 60 * 60).unwrap();
-        for (hour, open) in [(23, false), (0, true), (5, true), (6, false)] {
+        for (hour, open) in [
+            (23, false),
+            (0, false),
+            (1, false),
+            (2, true),
+            (5, true),
+            (6, false),
+        ] {
             let now = zone.with_ymd_and_hms(2026, 9, 12, hour, 0, 0).unwrap();
             assert_eq!(full_hash_backfill_window_open(&now), open);
 
@@ -750,13 +921,48 @@ mod tests {
             if open {
                 assert_eq!(next, now);
             } else {
-                assert_eq!(next.hour(), 0);
+                assert_eq!(next.hour(), 2);
                 assert_eq!(
                     next.date_naive(),
                     now.date_naive() + chrono::Duration::days(i64::from(hour >= 6))
                 );
             }
         }
+    }
+
+    #[test]
+    fn full_hash_backfill_skips_ticks_missed_by_long_batches() {
+        let zone = FixedOffset::west_opt(6 * 60 * 60).unwrap();
+        let started = zone.with_ymd_and_hms(2026, 9, 12, 2, 0, 0).unwrap();
+        for (duration_minutes, next_hour, next_minute) in
+            [(5, 2, 30), (30, 3, 0), (45, 3, 0), (95, 4, 0)]
+        {
+            let completed = started + chrono::Duration::minutes(duration_minutes);
+            let next = next_full_hash_backfill_run(&completed)
+                .unwrap()
+                .with_timezone(&zone);
+            assert_eq!(
+                next,
+                zone.with_ymd_and_hms(2026, 9, 12, next_hour, next_minute, 0)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn full_hash_backfill_next_tick_has_no_completion_time_drift() {
+        let zone = FixedOffset::east_opt(5 * 3600 + 45 * 60).unwrap();
+        let completed = zone
+            .with_ymd_and_hms(2026, 9, 12, 2, 45, 17)
+            .unwrap()
+            .with_nanosecond(123_456_789)
+            .unwrap();
+        assert_eq!(
+            next_full_hash_backfill_run(&completed)
+                .unwrap()
+                .with_timezone(&zone),
+            zone.with_ymd_and_hms(2026, 9, 12, 3, 0, 0).unwrap()
+        );
     }
 
     #[test]
@@ -770,12 +976,14 @@ mod tests {
             zone.with_ymd_and_hms(2026, 9, 12, 2, 30, 0).unwrap()
         );
 
-        let final_run = zone.with_ymd_and_hms(2026, 9, 12, 5, 45, 0).unwrap();
-        assert_eq!(
-            next_full_hash_backfill_run(&final_run)
-                .unwrap()
-                .with_timezone(&zone),
-            zone.with_ymd_and_hms(2026, 9, 13, 0, 0, 0).unwrap()
-        );
+        for (hour, minute) in [(5, 45), (6, 0), (7, 15)] {
+            let completed = zone.with_ymd_and_hms(2026, 9, 12, hour, minute, 0).unwrap();
+            assert_eq!(
+                next_full_hash_backfill_run(&completed)
+                    .unwrap()
+                    .with_timezone(&zone),
+                zone.with_ymd_and_hms(2026, 9, 13, 2, 0, 0).unwrap()
+            );
+        }
     }
 }

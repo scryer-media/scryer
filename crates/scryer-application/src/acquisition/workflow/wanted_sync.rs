@@ -49,7 +49,7 @@ impl AppUseCase {
                 .get_by_id(&item.title_id)
                 .await?
                 .map(|title| title.library_id)
-                .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?,
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?,
         };
         self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
             .await?;
@@ -586,14 +586,14 @@ impl AppUseCase {
         let item = self
             .resolve_or_create_wanted_state_row(wanted_item_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("wanted item not found".to_string()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND, "wanted item not found".to_string()))?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&item.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -621,14 +621,14 @@ impl AppUseCase {
         let item = self
             .resolve_or_create_wanted_state_row(wanted_item_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("wanted item not found".to_string()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND, "wanted item not found".to_string()))?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&item.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,

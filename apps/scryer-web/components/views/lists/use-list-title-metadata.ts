@@ -1,7 +1,10 @@
 import * as React from "react";
 import { useClient } from "urql";
 
-import { metadataMovieSummaryQuery, metadataSeriesSummaryQuery } from "@/lib/graphql/queries";
+import {
+  metadataMovieSummaryQuery,
+  metadataSeriesSummaryQuery,
+} from "@/lib/graphql/queries";
 import type { ListTitleMetadataLookup } from "@/lib/utils/lists";
 import type { TitleExternalRating } from "@/lib/utils/title-ratings";
 
@@ -21,7 +24,9 @@ export type ListTitleMetadata = {
  */
 export function useListTitleMetadata(lookup: ListTitleMetadataLookup | null) {
   const client = useClient();
-  const [metadata, setMetadata] = React.useState<ListTitleMetadata | null>(null);
+  const [metadata, setMetadata] = React.useState<ListTitleMetadata | null>(
+    null,
+  );
   const requested = React.useRef(false);
 
   const request = () => {
@@ -30,7 +35,11 @@ export function useListTitleMetadata(lookup: ListTitleMetadataLookup | null) {
     void client
       .query(
         lookup.movie ? metadataMovieSummaryQuery : metadataSeriesSummaryQuery,
-        { input: lookup.movie ? lookup.input : { ...lookup.input, includeEpisodes: false } },
+        {
+          input: lookup.movie
+            ? lookup.input
+            : { ...lookup.input, includeEpisodes: false },
+        },
       )
       .toPromise()
       .then(({ data }) => {

@@ -1,4 +1,4 @@
-//! Trap / exit / protocol error mapping for the native wasmtime archive host.
+//! Trap / exit / protocol error mapping for the native wasmtime plugin hosts.
 //!
 //! `AppError` has no dedicated timeout/resource-limit/protocol variant, so every
 //! failure category maps to `AppError::Repository` with a distinct, categorized
@@ -42,8 +42,31 @@ impl RunFailure {
     }
 }
 
+/// The kind of plugin a failed invocation ran, which names it in the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginHostKind {
+    ArchiveExtractor,
+    DownloadClient,
+    List,
+    Notification,
+    Subtitle,
+}
+
+impl PluginHostKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ArchiveExtractor => "archive extractor plugin",
+            Self::DownloadClient => "download client plugin",
+            Self::List => "list plugin",
+            Self::Notification => "notification plugin",
+            Self::Subtitle => "subtitle provider plugin",
+        }
+    }
+}
+
 /// Context threaded into the operator-facing message.
 pub(crate) struct InvocationContext<'a> {
+    pub(crate) plugin_kind: PluginHostKind,
     pub(crate) plugin_id: &'a str,
     pub(crate) plugin_version: &'a str,
     pub(crate) operation: &'a str,
@@ -87,7 +110,12 @@ pub(crate) fn protocol_failure(detail: impl Into<String>) -> RunFailure {
 
 /// Flatten a classified failure into the operator-facing `AppError`.
 pub(crate) fn to_app_error(failure: &RunFailure, ctx: &InvocationContext<'_>) -> AppError {
-    let plugin = format!("{}@{}", ctx.plugin_id, ctx.plugin_version);
+    let plugin = format!(
+        "{} {}@{}",
+        ctx.plugin_kind.label(),
+        ctx.plugin_id,
+        ctx.plugin_version
+    );
     let stderr = if ctx.stderr_tail.trim().is_empty() {
         String::new()
     } else {
@@ -95,19 +123,19 @@ pub(crate) fn to_app_error(failure: &RunFailure, ctx: &InvocationContext<'_>) ->
     };
     let message = match failure.kind {
         FailureKind::Timeout => format!(
-            "archive extractor plugin {plugin} timed out during {} after {:?}: {}",
+            "{plugin} timed out during {} after {:?}: {}",
             ctx.operation, ctx.budget, failure.detail
         ),
         FailureKind::ResourceLimit => format!(
-            "archive extractor plugin {plugin} exceeded its memory limit during {}: {}{stderr}",
+            "{plugin} exceeded its memory limit during {}: {}{stderr}",
             ctx.operation, failure.detail
         ),
         FailureKind::PluginFailure => format!(
-            "archive extractor plugin {plugin} failed during {}: {}{stderr}",
+            "{plugin} failed during {}: {}{stderr}",
             ctx.operation, failure.detail
         ),
         FailureKind::Protocol => format!(
-            "archive extractor plugin {plugin} returned a malformed response during {}: {}{stderr}",
+            "{plugin} returned a malformed response during {}: {}{stderr}",
             ctx.operation, failure.detail
         ),
     };
@@ -171,6 +199,7 @@ mod tests {
     #[test]
     fn app_error_messages_are_categorized() {
         let ctx = InvocationContext {
+            plugin_kind: PluginHostKind::ArchiveExtractor,
             plugin_id: "com.scryer.archive",
             plugin_version: "1.2.3",
             operation: "ExtractArchive",
@@ -193,5 +222,40 @@ mod tests {
         };
         assert!(message.contains("malformed response"));
         assert!(message.contains("stderr: boom"));
+    }
+
+    #[test]
+    fn the_message_names_the_kind_of_plugin_that_failed() {
+        let failure = RunFailure::new(FailureKind::Timeout, "epoch deadline exceeded");
+        for (plugin_kind, plugin_id, label) in [
+            (
+                PluginHostKind::Subtitle,
+                "com.example.subtitles",
+                "subtitle provider plugin com.example.subtitles@2.0.0 timed out",
+            ),
+            (
+                PluginHostKind::ArchiveExtractor,
+                "com.example.archive",
+                "archive extractor plugin com.example.archive@2.0.0 timed out",
+            ),
+            (
+                PluginHostKind::Notification,
+                "com.example.notify",
+                "notification plugin com.example.notify@2.0.0 timed out",
+            ),
+        ] {
+            let ctx = InvocationContext {
+                plugin_kind,
+                plugin_id,
+                plugin_version: "2.0.0",
+                operation: "Search",
+                budget: std::time::Duration::from_secs(30),
+                stderr_tail: "",
+            };
+            let AppError::Repository(message) = to_app_error(&failure, &ctx) else {
+                panic!("expected Repository");
+            };
+            assert!(message.starts_with(label), "{message}");
+        }
     }
 }

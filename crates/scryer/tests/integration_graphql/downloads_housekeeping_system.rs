@@ -6,7 +6,7 @@ where
 {
     std::thread::Builder::new()
         .name("graphql-large-stack-test".to_string())
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -987,6 +987,48 @@ async fn graphql_smg_version_compatibility_notice_reads_persisted_notice() {
         body["data"]["smgVersionCompatibilityNotice"]["upgradeDeadline"],
         "2026-06-01"
     );
+}
+
+#[tokio::test]
+async fn graphql_smg_clock_skew_notice_returns_reason_and_clears_after_recovery() {
+    let ctx = TestContext::new().await;
+    ctx.settings_store
+        .batch_ensure_setting_definitions(vec![SettingDefinitionSeed {
+            category: "service".into(),
+            scope: "system".into(),
+            key_name: "smg.clock_skew_notice".into(),
+            data_type: "bool".into(),
+            default_value_json: "false".into(),
+            is_sensitive: false,
+            validation_json: None,
+        }])
+        .await
+        .unwrap();
+    let query = "{ smgVersionCompatibilityNotice { status } }";
+    for active in [true, false] {
+        ctx.settings_store
+            .upsert_setting_value(
+                "system",
+                "smg.clock_skew_notice",
+                None,
+                active.to_string(),
+                "test",
+                None,
+            )
+            .await
+            .unwrap();
+        let body = gql(&ctx, query, json!({})).await;
+        if active {
+            assert_eq!(body["errors"][0]["extensions"]["code"], "VALIDATION_ERROR");
+            assert_eq!(
+                body["errors"][0]["extensions"]["reason"],
+                "METADATA_GATEWAY_CLOCK_SKEW"
+            );
+        } else {
+            assert_no_errors(&body);
+            assert!(body["data"]["smgVersionCompatibilityNotice"].is_null());
+        }
+    }
 }
 
 #[tokio::test]

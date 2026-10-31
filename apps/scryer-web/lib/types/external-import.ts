@@ -89,11 +89,7 @@ export type ExternalImportResult = {
 };
 
 export type ExternalImportMonitorWarmupStatus =
-  | "QUEUED"
-  | "RUNNING"
-  | "COMPLETED"
-  | "CANCELED"
-  | "FAILED";
+  "QUEUED" | "RUNNING" | "COMPLETED" | "CANCELED" | "FAILED";
 
 export type ExternalImportMonitorWarmupPhase =
   | "LOADING_INDEXERS"

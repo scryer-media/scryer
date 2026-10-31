@@ -1,9 +1,16 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -34,7 +41,9 @@ export function MovieAvailabilitySettingsFields() {
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
   const { user } = useAuth();
-  const canManage = hasAnyAppPermission(user, [APP_PERMISSIONS.manageCatalogSettings]);
+  const canManage = hasAnyAppPermission(user, [
+    APP_PERMISSIONS.manageCatalogSettings,
+  ]);
   const [draft, setDraft] = useState<MovieAvailabilitySettings | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -47,7 +56,10 @@ export function MovieAvailabilitySettingsFields() {
       )
       .toPromise();
     if (error) {
-      setGlobalStatus(error.message || t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
       return;
     }
     setDraft(data?.mediaSettings ?? null);
@@ -90,9 +102,12 @@ export function MovieAvailabilitySettingsFields() {
       if (data?.updateMediaSettings) setDraft(data.updateMediaSettings);
       setGlobalStatus(t("settings.mediaSettingsSaved"), { level: "SUCCESS" });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), {
-        level: "ERROR",
-      });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        {
+          level: "ERROR",
+        },
+      );
     } finally {
       setSaving(false);
     }
@@ -108,9 +123,14 @@ export function MovieAvailabilitySettingsFields() {
           <Select
             value={draft.defaultMovieAvailability ?? "released"}
             disabled={disabled}
-            onValueChange={(defaultMovieAvailability) => update({ defaultMovieAvailability })}
+            onValueChange={(defaultMovieAvailability) =>
+              update({ defaultMovieAvailability })
+            }
           >
-            <SelectTrigger id="settings-movie-default-availability" className="w-full">
+            <SelectTrigger
+              id="settings-movie-default-availability"
+              className="w-full"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -134,10 +154,14 @@ export function MovieAvailabilitySettingsFields() {
             value={draft.movieReleaseMarket ?? ""}
             maxLength={2}
             disabled={disabled}
-            onChange={(event) => update({ movieReleaseMarket: event.target.value.toUpperCase() })}
+            onChange={(event) =>
+              update({ movieReleaseMarket: event.target.value.toUpperCase() })
+            }
             className="max-w-[120px]"
           />
-          <p className="text-xs text-muted-foreground">{t("settings.movieReleaseMarketHelp")}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.movieReleaseMarketHelp")}
+          </p>
         </div>
         <div className="space-y-2">
           <Label htmlFor="settings-movie-availability-delay-days">
@@ -150,7 +174,9 @@ export function MovieAvailabilitySettingsFields() {
             disabled={disabled}
             onChange={(event) => {
               const next = Number.parseInt(event.target.value, 10);
-              update({ movieAvailabilityDelayDays: Number.isNaN(next) ? 0 : next });
+              update({
+                movieAvailabilityDelayDays: Number.isNaN(next) ? 0 : next,
+              });
             }}
             className="max-w-[160px]"
           />
@@ -159,7 +185,11 @@ export function MovieAvailabilitySettingsFields() {
           </p>
         </div>
       </div>
-      <Button id="settings-movie-availability-save" disabled={disabled} onClick={() => void save()}>
+      <Button
+        id="settings-movie-availability-save"
+        disabled={disabled}
+        onClick={() => void save()}
+      >
         {saving ? <LoadingMark className="mr-1 h-4 w-4" /> : null}
         {t("label.save")}
       </Button>

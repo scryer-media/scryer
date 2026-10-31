@@ -1199,7 +1199,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<crate::TitleCredit>> {
         self.get_movie_entity(actor, title_id, movie_entity_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("movie entity {movie_entity_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::MOVIE_ENTITY_NOT_FOUND, format!("movie entity {movie_entity_id}")))?;
         self.services
             .catalog
             .shows
@@ -1351,14 +1351,14 @@ impl AppUseCase {
             )
             .await?;
         if collection_type.trim().is_empty() {
-            return Err(AppError::Validation("collection type is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_TYPE_REQUIRED, "collection type is required"));
         }
         let parsed_type = CollectionType::parse(collection_type.trim().to_lowercase().as_str())
             .ok_or_else(|| {
-                AppError::Validation(format!("unknown collection type: {}", collection_type))
+                AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_TYPE_UNKNOWN, format!("unknown collection type: {}", collection_type))
             })?;
         if collection_index.trim().is_empty() {
-            return Err(AppError::Validation("collection index is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_INDEX_REQUIRED, "collection index is required"));
         }
         let collection = Collection {
             id: Id::new().0,
@@ -1417,13 +1417,13 @@ impl AppUseCase {
             )
             .await?;
         if episode_type.trim().is_empty() {
-            return Err(AppError::Validation("episode type is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::EPISODE_TYPE_REQUIRED, "episode type is required"));
         }
 
         let parsed_episode_type =
             scryer_domain::EpisodeType::parse(episode_type.trim().to_lowercase().as_str())
                 .ok_or_else(|| {
-                    AppError::Validation(format!("unknown episode type: {}", episode_type))
+                    AppError::validation_refused(crate::error_reasons::catalog::EPISODE_TYPE_UNKNOWN, format!("unknown episode type: {}", episode_type))
                 })?;
         let episode = Episode {
             id: Id::new().0,

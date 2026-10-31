@@ -208,8 +208,12 @@ fn datastore_config_from_url(
     data_dir: PathBuf,
     migration_mode: MigrationMode,
 ) -> AppResult<DatastoreConfig> {
-    let parsed = url::Url::parse(&raw_url)
-        .map_err(|error| AppError::Validation(format!("invalid SCRYER_DB_URL: {error}")))?;
+    let parsed = url::Url::parse(&raw_url).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_URL_INVALID,
+            format!("invalid SCRYER_DB_URL: {error}"),
+        )
+    })?;
     match parsed.scheme() {
         "sqlite" => Ok(DatastoreConfig::sqlite_with_source(
             raw_url,
@@ -227,22 +231,27 @@ fn datastore_config_from_url(
                 migration_mode,
             ))
         }
-        scheme => Err(AppError::Validation(format!(
-            "unsupported datastore URL scheme '{scheme}'; expected sqlite, postgres, or postgresql"
-        ))),
+        scheme => Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_URL_SCHEME_UNSUPPORTED,
+            format!(
+                "unsupported datastore URL scheme '{scheme}'; expected sqlite, postgres, or postgresql"
+            ),
+        )),
     }
 }
 
 fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
     if url.host_str().is_none_or(|host| host.trim().is_empty()) {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_HOST_REQUIRED,
             "PostgreSQL datastore URL must include a host".to_string(),
         ));
     }
 
     let database_name = url.path().trim_start_matches('/').trim();
     if database_name.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_DATABASE_REQUIRED,
             "PostgreSQL datastore URL must include a database name".to_string(),
         ));
     }
@@ -252,7 +261,8 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
         .find(|(key, _)| key == "sslmode")
         .map(|(_, value)| value.to_string());
     let Some(sslmode) = sslmode else {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_SSLMODE_REQUIRED,
             "PostgreSQL datastore URL must include an explicit sslmode".to_string(),
         ));
     };
@@ -260,9 +270,12 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
         sslmode.as_str(),
         "disable" | "prefer" | "require" | "verify-ca" | "verify-full"
     ) {
-        return Err(AppError::Validation(format!(
-            "unsupported PostgreSQL sslmode '{sslmode}'; expected disable, prefer, require, verify-ca, or verify-full"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_SSLMODE_UNSUPPORTED,
+            format!(
+                "unsupported PostgreSQL sslmode '{sslmode}'; expected disable, prefer, require, verify-ca, or verify-full"
+            ),
+        ));
     }
 
     let username = env_string("SCRYER_DB_USER")
@@ -275,7 +288,8 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
             }
         })
         .ok_or_else(|| {
-            AppError::Validation(
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_POSTGRES_USERNAME_REQUIRED,
                 "PostgreSQL datastore requires SCRYER_DB_USER or a URL username".to_string(),
             )
         })?;
@@ -283,10 +297,16 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
     let password = postgres_password(&url)?;
 
     url.set_username(&username).map_err(|_| {
-        AppError::Validation("failed to set PostgreSQL username on datastore URL".to_string())
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_USERNAME_INVALID,
+            "failed to set PostgreSQL username on datastore URL".to_string(),
+        )
     })?;
     url.set_password(Some(&password)).map_err(|_| {
-        AppError::Validation("failed to set PostgreSQL password on datastore URL".to_string())
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_POSTGRES_PASSWORD_INVALID,
+            "failed to set PostgreSQL password on datastore URL".to_string(),
+        )
     })?;
 
     let mut redacted = url.clone();
@@ -299,14 +319,18 @@ fn resolve_postgres_url(mut url: url::Url) -> AppResult<(String, String)> {
 fn postgres_password(url: &url::Url) -> AppResult<String> {
     if let Some(password_file) = env_string("SCRYER_DB_PASSWORD_FILE") {
         let password = std::fs::read_to_string(&password_file).map_err(|error| {
-            AppError::Validation(format!(
-                "failed to read SCRYER_DB_PASSWORD_FILE {}: {error}",
-                password_file
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_PASSWORD_FILE_UNREADABLE,
+                format!(
+                    "failed to read SCRYER_DB_PASSWORD_FILE {}: {error}",
+                    password_file
+                ),
+            )
         })?;
         let password = password.trim_end().to_string();
         if password.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::DATASTORE_PASSWORD_FILE_EMPTY,
                 "SCRYER_DB_PASSWORD_FILE did not contain a password".to_string(),
             ));
         }
@@ -321,10 +345,8 @@ fn postgres_password(url: &url::Url) -> AppResult<String> {
         .map(str::to_string)
         .filter(|password| !password.trim().is_empty())
         .ok_or_else(|| {
-            AppError::Validation(
-                "PostgreSQL datastore requires SCRYER_DB_PASSWORD, SCRYER_DB_PASSWORD_FILE, or a URL password"
-                    .to_string(),
-            )
+            AppError::validation_refused(crate::error_reasons::DATASTORE_POSTGRES_PASSWORD_REQUIRED, "PostgreSQL datastore requires SCRYER_DB_PASSWORD, SCRYER_DB_PASSWORD_FILE, or a URL password"
+                    .to_string())
         })
 }
 
@@ -1929,8 +1951,9 @@ pub async fn restore_prepared_backup_directory_to_datastore(
     prepared_root: &Path,
 ) -> AppResult<scryer_application::BackupRestorePreparedBundle> {
     match config.engine {
-        DatastoreEngine::Sqlite => Err(AppError::Validation(
-            "prepared backup directory restore is only supported for PostgreSQL".into(),
+        DatastoreEngine::Sqlite => Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_DIRECTORY_RESTORE_ENGINE_UNSUPPORTED,
+            "prepared backup directory restore is only supported for PostgreSQL",
         )),
         DatastoreEngine::Postgres => {
             let services =
@@ -1952,6 +1975,7 @@ pub async fn restore_backup_bundle_to_datastore_path(
     bundle_path: &Path,
     passphrase: Option<&str>,
 ) -> AppResult<scryer_application::BackupRestorePreparedBundle> {
+    scryer_application::check_restore_deadline()?;
     let services =
         SqliteServices::new_with_mode(target_db_path.to_string_lossy(), migration_mode).await?;
     let restore_result = crate::sqlite_backup::restore_backup_bundle_into_sqlite_pool(
@@ -1961,16 +1985,22 @@ pub async fn restore_backup_bundle_to_datastore_path(
     )
     .await;
 
-    let checkpoint_result = if restore_result.is_ok() {
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(services.pool())
-            .await
-            .map(|_| ())
-            .map_err(|error| {
-                AppError::Repository(format!("failed to checkpoint restored database: {error}"))
-            })
-    } else {
-        Ok(())
+    let checkpoint_work = async {
+        if restore_result.is_ok() {
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(services.pool())
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    AppError::Repository(format!("failed to checkpoint restored database: {error}"))
+                })
+        } else {
+            Ok(())
+        }
+    };
+    let checkpoint_result = match scryer_application::current_restore_deadline() {
+        Some(deadline) => deadline.run(checkpoint_work).await,
+        None => checkpoint_work.await,
     };
 
     services.pool().close().await;
@@ -2099,7 +2129,9 @@ mod tests {
 
     fn validation_message(result: AppResult<DatastoreConfig>) -> String {
         match result {
-            Err(AppError::Validation(message)) => message,
+            Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. }) => {
+                message
+            }
             other => panic!("expected validation error, got {other:?}"),
         }
     }
@@ -2442,6 +2474,13 @@ mod tests {
                     .map_err(|error| AppError::Repository(error.to_string()))?;
             let definition_count = u64::try_from(definition_count)
                 .expect("setting definition count must be nonnegative");
+            let setting_value_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM settings_values")
+                    .fetch_one(source.sqlite.as_ref().expect("sqlite source").pool())
+                    .await
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+            let setting_value_count = u64::try_from(setting_value_count)
+                .expect("setting value count must be nonnegative");
             target.seed_stale_ephemeral_rows().await?;
             let outcome = source.export_backup(&bundle_path, passphrase).await?;
             let inspected = inspect_backup_bundle(&bundle_path, Some(passphrase))?;
@@ -2473,7 +2512,7 @@ mod tests {
             );
             assert_eq!(
                 inspected.row_counts.get("settings_values").copied(),
-                Some(5),
+                Some(setting_value_count),
                 "inspected bundle should persist the seeded setting value row count"
             );
             assert_eq!(
@@ -2726,6 +2765,18 @@ mod tests {
 
     async fn seed_backup_matrix_lists(pool: &sqlx::SqlitePool) -> AppResult<()> {
         for statement in [
+            "INSERT INTO indexers
+             (id, name, provider_type, base_url, is_enabled, enable_interactive_search,
+              enable_auto_search, created_at, updated_at)
+             VALUES ('backup-indexer', 'Fixture indexer', 'newznab', 'https://example.invalid',
+                     1, 1, 1, '2026-01-01', '2026-01-01')",
+            "INSERT INTO indexer_api_clients
+             (id, name, enabled, protocols_json, lookup_id, secret_hash, key_generation,
+              revision, created_at, updated_at)
+             VALUES ('backup-client', 'Fixture client', 1, '[\"newznab\"]', 'fixture-lookup',
+                     'fixture-hash', 1, 1, '2026-01-01', '2026-01-01')",
+            "INSERT INTO indexer_api_client_grants (client_id, indexer_id, categories_json)
+             VALUES ('backup-client', 'backup-indexer', '[2000]')",
             "INSERT INTO user_list_accounts
              (id, user_id, provider, external_user_id, username, credential_encrypted,
               linked_at, updated_at)
@@ -2771,6 +2822,10 @@ mod tests {
 
     async fn verify_backup_matrix_lists(pool: &sqlx::SqlitePool) -> AppResult<()> {
         for (query, expected) in [
+            ("SELECT secret_hash FROM indexer_api_clients WHERE id = 'backup-client'",
+             "fixture-hash"),
+            ("SELECT categories_json FROM indexer_api_client_grants WHERE client_id = 'backup-client' AND indexer_id = 'backup-indexer'",
+             "[2000]"),
             ("SELECT credential_encrypted FROM user_list_accounts WHERE id = 'backup-account'",
              "fixture-ciphertext"),
             ("SELECT credential_id || ':' || on_leave FROM list_subscriptions WHERE id = 'backup-list'",

@@ -12,23 +12,50 @@ test("file deletion translates each shared refusal independently of server wordi
     ["DELETE_ROOT_UNAVAILABLE", "titleDelete.refusal.unavailable"],
     ["DELETE_PATH_OUTSIDE_ROOTS", "titleDelete.refusal.outsideRoots"],
   ]) {
-    const error = { graphQLErrors: [{ message: "changed server wording", extensions: {
-      code: "VALIDATION_ERROR", reason,
-    } }] };
+    const error = {
+      graphQLErrors: [
+        {
+          message: "changed server wording",
+          extensions: {
+            code: "VALIDATION_ERROR",
+            reason,
+          },
+        },
+      ],
+    };
     assert.equal(deleteErrorMessage(error, t, "failed"), en[expected]);
   }
 });
 
 test("unknown file deletion reasons preserve the server explanation", () => {
-  const error = { graphQLErrors: [{ message: "validation: new condition", extensions: {
-    code: "VALIDATION_ERROR", reason: "DELETE_FUTURE_CONDITION",
-  } }] };
+  const error = {
+    graphQLErrors: [
+      {
+        message: "validation: new condition",
+        extensions: {
+          code: "VALIDATION_ERROR",
+          reason: "DELETE_FUTURE_CONDITION",
+        },
+      },
+    ],
+  };
   assert.equal(deleteErrorMessage(error, t, "failed"), "new condition");
 });
 
 test("file deletion does not treat non-validation failures as validation refusals", () => {
-  const error = { graphQLErrors: [{ message: "repository unavailable", extensions: {
-    code: "REPOSITORY_ERROR", reason: "DELETE_PREVIEW_STALE",
-  } }] };
-  assert.equal(deleteErrorMessage(error, t, "failed"), "repository unavailable");
+  const error = {
+    graphQLErrors: [
+      {
+        message: "repository unavailable",
+        extensions: {
+          code: "REPOSITORY_ERROR",
+          reason: "DELETE_PREVIEW_STALE",
+        },
+      },
+    ],
+  };
+  assert.equal(
+    deleteErrorMessage(error, t, "failed"),
+    "repository unavailable",
+  );
 });

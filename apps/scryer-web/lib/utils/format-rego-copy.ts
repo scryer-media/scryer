@@ -5,10 +5,26 @@
  * structure falls back to the original source so copying never loses a draft.
  */
 export function formatRegoCopy(source: string): string {
-  const tokens = /"(?:\\[\s\S]|[^"\\])*"|`[^`]*`|#[^\r\n]*|\r\n|[\r\n]|[ \t]+|[A-Za-z_][A-Za-z_0-9]*|(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|:=|==|!=|<=|>=|[^\s]/gy;
+  const tokens =
+    /"(?:\\[\s\S]|[^"\\])*"|`[^`]*`|#[^\r\n]*|\r\n|[\r\n]|[ \t]+|[A-Za-z_][A-Za-z_0-9]*|(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|:=|==|!=|<=|>=|[^\s]/gy;
   const frames: { close: string; body: boolean }[] = [];
   const lines: string[] = [];
-  const operators = new Set([":=", "=", "==", "!=", "<=", ">=", "<", ">", "+", "*", "/", "%", "&", "|"]);
+  const operators = new Set([
+    ":=",
+    "=",
+    "==",
+    "!=",
+    "<=",
+    ">=",
+    "<",
+    ">",
+    "+",
+    "*",
+    "/",
+    "%",
+    "&",
+    "|",
+  ]);
   let line = "";
   let space = false;
   let originalNewline = false;
@@ -57,9 +73,19 @@ export function formatRegoCopy(source: string): string {
       if (frame.body) endLine();
       append(token);
     } else {
-      const body = token === "{" && ["if", "else"].includes(previous) && beforePrevious !== ".";
-      append(token, body || operators.has(token) || operators.has(previous) || [",", ":", ";"].includes(previous));
-      const close = token === "{" ? "}" : token === "[" ? "]" : token === "(" ? ")" : null;
+      const body =
+        token === "{" &&
+        ["if", "else"].includes(previous) &&
+        beforePrevious !== ".";
+      append(
+        token,
+        body ||
+          operators.has(token) ||
+          operators.has(previous) ||
+          [",", ":", ";"].includes(previous),
+      );
+      const close =
+        token === "{" ? "}" : token === "[" ? "]" : token === "(" ? ")" : null;
       if (close) {
         frames.push({ close, body });
         if (frames.length > 128) return source;

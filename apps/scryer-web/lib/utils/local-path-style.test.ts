@@ -24,8 +24,14 @@ test("Unix runtime local path validation accepts only Unix absolute paths", () =
 test("Windows runtime local path validation accepts Windows absolute paths", () => {
   assert.equal(isAbsoluteLocalPathForStyle("C:\\Downloads", "windows"), true);
   assert.equal(isAbsoluteLocalPathForStyle("C:/Downloads", "windows"), true);
-  assert.equal(isAbsoluteLocalPathForStyle("\\\\server\\share", "windows"), true);
-  assert.equal(isAbsoluteLocalPathForStyle("/data/downloads", "windows"), false);
+  assert.equal(
+    isAbsoluteLocalPathForStyle("\\\\server\\share", "windows"),
+    true,
+  );
+  assert.equal(
+    isAbsoluteLocalPathForStyle("/data/downloads", "windows"),
+    false,
+  );
   assert.equal(isAbsoluteLocalPathForStyle("downloads", "windows"), false);
   assert.equal(isAbsoluteLocalPathForStyle("../downloads", "windows"), false);
   assert.equal(isAbsoluteLocalPathForStyle("", "windows"), false);
@@ -40,15 +46,27 @@ test("GraphQL runtime path style maps to frontend local path style", () => {
 });
 
 test("Unknown runtime path style skips local path format validation", () => {
-  assert.equal(isLocalPathFormatValidForStyle("C:\\Downloads", undefined), true);
-  assert.equal(isLocalPathFormatValidForStyle("/data/downloads", undefined), true);
-  assert.equal(isLocalPathFormatValidForStyle("relative/path", undefined), true);
+  assert.equal(
+    isLocalPathFormatValidForStyle("C:\\Downloads", undefined),
+    true,
+  );
+  assert.equal(
+    isLocalPathFormatValidForStyle("/data/downloads", undefined),
+    true,
+  );
+  assert.equal(
+    isLocalPathFormatValidForStyle("relative/path", undefined),
+    true,
+  );
 });
 
 test("Known runtime path style enforces local path format validation", () => {
   assert.equal(isLocalPathFormatValidForStyle("/data/downloads", "unix"), true);
   assert.equal(isLocalPathFormatValidForStyle("C:\\Downloads", "unix"), false);
-  assert.equal(isLocalPathFormatValidForStyle("C:\\Downloads", "windows"), true);
+  assert.equal(
+    isLocalPathFormatValidForStyle("C:\\Downloads", "windows"),
+    true,
+  );
   assert.equal(
     isLocalPathFormatValidForStyle("/data/downloads", "windows"),
     false,

@@ -137,7 +137,9 @@ async fn an_unknown_chart_is_an_error_not_an_empty_list() {
         .list_chart_items("tmdb", "tmdb.missing", "global", 250, "eng")
         .await
         .expect_err("unknown chart");
-    assert!(matches!(&error, AppError::Repository(message) if message == "unknown chart"));
+    assert!(
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } if message == "unknown chart")
+    );
 }
 
 fn alias_ref(source: &str, value: &str) -> TitleExternalRef {

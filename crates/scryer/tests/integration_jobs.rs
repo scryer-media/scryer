@@ -22,6 +22,15 @@ async fn seed_media_path_settings(ctx: &TestContext) {
     ctx.settings_store
         .batch_ensure_setting_definitions(vec![
             SettingDefinitionSeed {
+                category: "service".into(),
+                scope: "system".into(),
+                key_name: scryer_application::SETUP_COMPLETE_KEY.into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
                 category: "media".into(),
                 scope: "media".into(),
                 key_name: "movies.path".into(),
@@ -51,6 +60,15 @@ async fn seed_media_path_settings(ctx: &TestContext) {
         ])
         .await
         .expect("seed media path settings");
+    let operator = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("load fixture administrator");
+    ctx.app
+        .complete_setup(&operator)
+        .await
+        .expect("complete scheduled-job fixture setup");
 }
 
 async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {

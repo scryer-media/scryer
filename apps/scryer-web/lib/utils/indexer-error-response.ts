@@ -17,17 +17,25 @@ function normalizedBase64(value: string): string {
 export function decodedBase64Length(value: string): number {
   const normalized = normalizedBase64(value);
   if (normalized.length === 0) return 0;
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const padding = normalized.endsWith("==")
+    ? 2
+    : normalized.endsWith("=")
+      ? 1
+      : 0;
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
 function base64ToBytes(value: string, maximumBytes?: number): Uint8Array {
   const normalized = normalizedBase64(value);
-  const encoded = maximumBytes == null
-    ? normalized
-    : normalized.slice(0, Math.ceil(maximumBytes / 3) * 4);
+  const encoded =
+    maximumBytes == null
+      ? normalized
+      : normalized.slice(0, Math.ceil(maximumBytes / 3) * 4);
   const binary = atob(encoded);
-  const length = maximumBytes == null ? binary.length : Math.min(binary.length, maximumBytes);
+  const length =
+    maximumBytes == null
+      ? binary.length
+      : Math.min(binary.length, maximumBytes);
   const bytes = new Uint8Array(length);
   for (let index = 0; index < length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
@@ -39,8 +47,13 @@ export function decodeIndexerErrorBody(value: string): Uint8Array {
   return base64ToBytes(value);
 }
 
-function decodeUtf8(bytes: Uint8Array, allowIncompleteTrailingCodePoint: boolean): string | null {
-  const maximumTrim = allowIncompleteTrailingCodePoint ? Math.min(3, bytes.length) : 0;
+function decodeUtf8(
+  bytes: Uint8Array,
+  allowIncompleteTrailingCodePoint: boolean,
+): string | null {
+  const maximumTrim = allowIncompleteTrailingCodePoint
+    ? Math.min(3, bytes.length)
+    : 0;
   for (let trim = 0; trim <= maximumTrim; trim += 1) {
     try {
       return new TextDecoder("utf-8", { fatal: true }).decode(
@@ -53,10 +66,18 @@ function decodeUtf8(bytes: Uint8Array, allowIncompleteTrailingCodePoint: boolean
   return null;
 }
 
-function declaredFormat(contentType: string | null | undefined): IndexerErrorBodyFormat | null {
+function declaredFormat(
+  contentType: string | null | undefined,
+): IndexerErrorBodyFormat | null {
   const normalized = contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (normalized === "application/json" || normalized.endsWith("+json")) return "json";
-  if (normalized === "application/xml" || normalized === "text/xml" || normalized.endsWith("+xml")) return "xml";
+  if (normalized === "application/json" || normalized.endsWith("+json"))
+    return "json";
+  if (
+    normalized === "application/xml" ||
+    normalized === "text/xml" ||
+    normalized.endsWith("+xml")
+  )
+    return "xml";
   if (normalized.startsWith("text/")) return "text";
   return null;
 }
@@ -101,9 +122,8 @@ function prettyPrintXml(value: string): string | null {
       const next = tokens[index + 1];
       const following = tokens[index + 2];
       const matchingClose = following?.match(/^<\/\s*([^\s>]+)\s*>$/);
-      const nextIsText = next != null && (
-        !next.startsWith("<") || next.startsWith("<![CDATA[")
-      );
+      const nextIsText =
+        next != null && (!next.startsWith("<") || next.startsWith("<![CDATA["));
       if (!selfClosing && nextIsText && matchingClose?.[1] === opening[1]) {
         lines.push(`${"  ".repeat(stack.length)}${trimmed}${next}${following}`);
         index += 2;
@@ -116,7 +136,8 @@ function prettyPrintXml(value: string): string | null {
     }
     if (special) {
       if (/^<\?xml\b/i.test(trimmed) && rootSeen) return null;
-      if (/^<!DOCTYPE\b/i.test(trimmed) && (rootSeen || stack.length > 0)) return null;
+      if (/^<!DOCTYPE\b/i.test(trimmed) && (rootSeen || stack.length > 0))
+        return null;
       lines.push(`${"  ".repeat(stack.length)}${trimmed}`);
       continue;
     }
@@ -140,7 +161,13 @@ export function presentIndexerErrorBody(
   );
   const text = decodeUtf8(previewBytes, truncated);
   if (text == null) {
-    return { byteLength, format: "binary", formattedText: null, rawText: null, truncated };
+    return {
+      byteLength,
+      format: "binary",
+      formattedText: null,
+      rawText: null,
+      truncated,
+    };
   }
 
   const format = declaredFormat(contentType) ?? sniffFormat(text);
@@ -160,7 +187,8 @@ export function presentIndexerErrorBody(
 
 export function isSensitiveIndexerErrorHeader(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return normalized === "authorization" ||
+  return (
+    normalized === "authorization" ||
     normalized === "proxy-authorization" ||
     normalized === "cookie" ||
     normalized === "set-cookie" ||
@@ -168,7 +196,8 @@ export function isSensitiveIndexerErrorHeader(name: string): boolean {
     normalized.includes("apikey") ||
     normalized.includes("api_key") ||
     normalized.includes("token") ||
-    normalized.includes("secret");
+    normalized.includes("secret")
+  );
 }
 
 export function indexerErrorDownloadExtension(

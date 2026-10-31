@@ -14,33 +14,60 @@ import {
 
 test("select all materializes off-page records with their action context", async () => {
   const records = Array.from({ length: 5 }, (_, index) => ({
-    id: `title-${index}`, libraryId: `library-${index % 2}`,
-    monitored: index % 2 === 0, rootFolderId: `root-${index}`,
+    id: `title-${index}`,
+    libraryId: `library-${index % 2}`,
+    monitored: index % 2 === 0,
+    rootFolderId: `root-${index}`,
   }));
   const offsets: number[] = [];
-  const selected = await loadTitleCatalogSelection(2, async (offset) => {
-    offsets.push(offset);
-    return { items: records.slice(offset, offset + 2), hasMore: offset + 2 < records.length };
-  }, () => true);
+  const selected = await loadTitleCatalogSelection(
+    2,
+    async (offset) => {
+      offsets.push(offset);
+      return {
+        items: records.slice(offset, offset + 2),
+        hasMore: offset + 2 < records.length,
+      };
+    },
+    () => true,
+  );
   assert.deepEqual(offsets, [0, 2, 4]);
   assert.deepEqual(selected, records);
 });
 
 test("selection discards stale pages and never returns partial records on failure", async () => {
   let calls = 0;
-  const stale = await loadTitleCatalogSelection(2, async () => {
-    calls += 1;
-    return { items: [{ id: "old-title" }], hasMore: true };
-  }, () => false);
+  const stale = await loadTitleCatalogSelection(
+    2,
+    async () => {
+      calls += 1;
+      return { items: [{ id: "old-title" }], hasMore: true };
+    },
+    () => false,
+  );
   assert.equal(stale, null);
   assert.equal(calls, 1);
-  await assert.rejects(loadTitleCatalogSelection(2, async (offset) => {
-    if (offset) throw new Error("page failed");
-    return { items: [{ id: "first-title" }], hasMore: true };
-  }, () => true), /page failed/);
-  await assert.rejects(loadTitleCatalogSelection(2, async () => ({
-    items: [], hasMore: true,
-  }), () => true));
+  await assert.rejects(
+    loadTitleCatalogSelection(
+      2,
+      async (offset) => {
+        if (offset) throw new Error("page failed");
+        return { items: [{ id: "first-title" }], hasMore: true };
+      },
+      () => true,
+    ),
+    /page failed/,
+  );
+  await assert.rejects(
+    loadTitleCatalogSelection(
+      2,
+      async () => ({
+        items: [],
+        hasMore: true,
+      }),
+      () => true,
+    ),
+  );
 });
 
 test("title catalog variables include quick filters like 0.16.6", () => {
@@ -313,10 +340,13 @@ test("title catalog query key changes when quick filters change", () => {
 });
 
 test("title catalog sort input maps optional table columns", () => {
-  assert.deepEqual(titleCatalogSortInput({ key: "runtime", direction: "desc" }), {
-    key: "RUNTIME",
-    direction: "DESC",
-  });
+  assert.deepEqual(
+    titleCatalogSortInput({ key: "runtime", direction: "desc" }),
+    {
+      key: "RUNTIME",
+      direction: "DESC",
+    },
+  );
   assert.deepEqual(
     titleCatalogSortInput({ key: "ratingMetacriticUser", direction: "desc" }),
     {

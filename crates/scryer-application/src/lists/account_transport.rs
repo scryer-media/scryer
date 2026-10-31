@@ -87,27 +87,29 @@ pub fn auth_failure(code: &str) -> AppError {
     let message = format!("{AUTH_FAILURE_PREFIX}{code}");
     match auth_failure_reason(code) {
         Some(reason) => refused(reason, message),
-        None => AppError::Validation(message),
+        None => refused(refusal::ACCOUNT_AUTH_PROVIDER_REJECTED, message),
     }
 }
 
 /// A `rate_limited` failure. It keeps the same message as every other
 /// `auth_failure` but carries the provider's requested pause.
 pub fn rate_limited_failure(retry_after: Option<std::time::Duration>) -> AppError {
-    AppError::temporary_unavailable(format!("{AUTH_FAILURE_PREFIX}{RATE_LIMITED}"), retry_after)
+    AppError::temporary_unavailable_reason(
+        refusal::ACCOUNT_AUTH_RATE_LIMITED,
+        format!("{AUTH_FAILURE_PREFIX}{RATE_LIMITED}"),
+        retry_after,
+    )
 }
 
 /// The code of an `auth_failure` or `rate_limited_failure`, or `None` for any
 /// other error.
 pub fn auth_failure_code(error: &AppError) -> Option<&str> {
-    match error {
-        AppError::Validation(message)
-        | AppError::ValidationRefused { message, .. }
-        | AppError::TemporaryUnavailable { message, .. } => {
-            message.strip_prefix(AUTH_FAILURE_PREFIX)
-        }
-        _ => None,
-    }
+    error.reason().and_then(|reason| {
+        AUTH_FAILURE_CODES
+            .iter()
+            .copied()
+            .find(|code| auth_failure_reason(code) == Some(reason))
+    })
 }
 
 /// The reason a temporarily unavailable answer names, when it is a

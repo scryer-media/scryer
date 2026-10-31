@@ -11,8 +11,9 @@ use scryer_application::{AppError, AppResult, TitleImageKind};
 pub fn normalize_title_image_source_url(source_url: &str) -> AppResult<String> {
     let trimmed = source_url.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "title image URL must not be empty".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_IMAGE_URL_EMPTY,
+            "title image URL must not be empty",
         ));
     }
 
@@ -21,23 +22,31 @@ pub fn normalize_title_image_source_url(source_url: &str) -> AppResult<String> {
         Err(_) => {
             let relative = trimmed.trim_start_matches('/');
             url::Url::parse(&format!("https://artworks.thetvdb.com/{relative}")).map_err(
-                |error| AppError::Validation(format!("invalid title image URL: {error}")),
+                |error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::MEDIA_TITLE_IMAGE_URL_INVALID,
+                        format!("invalid title image URL: {error}"),
+                    )
+                },
             )?
         }
     };
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(AppError::Validation(
-            "title image URL must use http or https".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_IMAGE_URL_SCHEME_UNSUPPORTED,
+            "title image URL must use http or https",
         ));
     }
     if parsed.host_str().is_none() {
-        return Err(AppError::Validation(
-            "title image URL must include a host".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_IMAGE_URL_HOST_REQUIRED,
+            "title image URL must include a host",
         ));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(AppError::Validation(
-            "title image URL must not include credentials".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_IMAGE_URL_CREDENTIALS_FORBIDDEN,
+            "title image URL must not include credentials",
         ));
     }
 
@@ -49,10 +58,10 @@ pub fn normalize_title_image_source_url(source_url: &str) -> AppResult<String> {
         .join("/");
     parsed.set_path(&format!("/{normalized_path}"));
     image_proxy_store::approved_upstream_url(parsed.as_str()).ok_or_else(|| {
-        AppError::Validation(
+        AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_IMAGE_HOST_UNAPPROVED,
             "title image URL host must be image.tmdb.org, artworks.thetvdb.com, \
-             cdn.myanimelist.net, or an AniList CDN shard"
-                .into(),
+             cdn.myanimelist.net, or an AniList CDN shard",
         )
     })
 }

@@ -69,6 +69,7 @@ impl RateLimitSignal {
                 message,
                 retry_after,
                 rate_limit_cooldown,
+                ..
             } if *rate_limit_cooldown != RateLimitCooldownAction::None => Some(Self {
                 retry_after: *retry_after,
                 source: RateLimitSignalSource::AppTemporaryUnavailable,

@@ -56,8 +56,12 @@ type LoginPayload = {
 };
 
 type PublicKeyCredentialJsonHelpers = {
-  parseCreationOptionsFromJSON?: (value: unknown) => PublicKeyCredentialCreationOptions;
-  parseRequestOptionsFromJSON?: (value: unknown) => PublicKeyCredentialRequestOptions;
+  parseCreationOptionsFromJSON?: (
+    value: unknown,
+  ) => PublicKeyCredentialCreationOptions;
+  parseRequestOptionsFromJSON?: (
+    value: unknown,
+  ) => PublicKeyCredentialRequestOptions;
 };
 
 type ConditionalMediationCredential = typeof PublicKeyCredential & {
@@ -67,7 +71,10 @@ type ConditionalMediationCredential = typeof PublicKeyCredential & {
 export class PasskeyClientError extends Error {
   readonly code: "unsupported" | "cancelled" | "invalid_response" | "failed";
 
-  constructor(code: "unsupported" | "cancelled" | "invalid_response" | "failed", message: string) {
+  constructor(
+    code: "unsupported" | "cancelled" | "invalid_response" | "failed",
+    message: string,
+  ) {
     super(message);
     this.code = code;
   }
@@ -85,7 +92,10 @@ function ensurePasskeySupport() {
     typeof navigator.credentials?.create !== "function" ||
     typeof navigator.credentials?.get !== "function"
   ) {
-    throw new PasskeyClientError("unsupported", "Passkeys are not supported in this browser.");
+    throw new PasskeyClientError(
+      "unsupported",
+      "Passkeys are not supported in this browser.",
+    );
   }
 }
 
@@ -108,7 +118,9 @@ function base64UrlToBuffer(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function bufferToBase64Url(value: ArrayBuffer | ArrayBufferView | null | undefined): string | null {
+function bufferToBase64Url(
+  value: ArrayBuffer | ArrayBufferView | null | undefined,
+): string | null {
   if (!value) {
     return null;
   }
@@ -236,7 +248,9 @@ function parseRequestOptions(
 }
 
 function credentialToJson(credential: PublicKeyCredential): unknown {
-  const jsonValue = (credential as PublicKeyCredential & { toJSON?: () => unknown }).toJSON?.();
+  const jsonValue = (
+    credential as PublicKeyCredential & { toJSON?: () => unknown }
+  ).toJSON?.();
   if (jsonValue) {
     return jsonValue;
   }
@@ -283,9 +297,14 @@ async function runMutation<TData, TVariables extends object>(
   variables: TVariables,
   field: keyof TData,
 ): Promise<TData[keyof TData]> {
-  const result = await client.mutation<TData, TVariables>(mutation, variables).toPromise();
+  const result = await client
+    .mutation<TData, TVariables>(mutation, variables)
+    .toPromise();
   if (result.error || !result.data?.[field]) {
-    throw result.error ?? new PasskeyClientError("failed", "Passkey request failed.");
+    throw (
+      result.error ??
+      new PasskeyClientError("failed", "Passkey request failed.")
+    );
   }
 
   return result.data[field];
@@ -324,8 +343,9 @@ export async function conditionalPasskeyMediationSupported(): Promise<boolean> {
 
   try {
     return (
-      (await (PublicKeyCredential as ConditionalMediationCredential)
-        .isConditionalMediationAvailable?.()) ?? false
+      (await (
+        PublicKeyCredential as ConditionalMediationCredential
+      ).isConditionalMediationAvailable?.()) ?? false
     );
   } catch {
     return false;
@@ -359,12 +379,21 @@ export async function authenticateWithPasskey(
       parseRequestOptions(start.optionsJson, "manual"),
     );
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("invalid_response", "No passkey assertion was returned.");
+      throw new PasskeyClientError(
+        "invalid_response",
+        "No passkey assertion was returned.",
+      );
     }
 
     return runMutation<
       { webauthnAuthenticateComplete: LoginPayload },
-      { input: { challengeId: string; responseJson: unknown; persistSession?: boolean } }
+      {
+        input: {
+          challengeId: string;
+          responseJson: unknown;
+          persistSession?: boolean;
+        };
+      }
     >(
       client,
       webauthnAuthenticateCompleteMutation,
@@ -396,12 +425,20 @@ export async function reauthenticateAccountSecurityWithPasskey(
         };
       },
       Record<string, never>
-    >(client, accountSecurityPasskeyStartMutation, {}, "accountSecurityPasskeyStart");
+    >(
+      client,
+      accountSecurityPasskeyStartMutation,
+      {},
+      "accountSecurityPasskeyStart",
+    );
     const credential = await navigator.credentials.get(
       parseRequestOptions(start.optionsJson, "manual"),
     );
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("invalid_response", "No passkey assertion was returned.");
+      throw new PasskeyClientError(
+        "invalid_response",
+        "No passkey assertion was returned.",
+      );
     }
 
     return runMutation<
@@ -448,17 +485,29 @@ export async function authenticateWithConditionalPasskey(
       "webauthnAuthenticateStart",
     );
     onChallengeStarted?.(start.expiresAt);
-    const options = parseRequestOptions(start.optionsJson, "conditional") as CredentialRequestOptions & {
+    const options = parseRequestOptions(
+      start.optionsJson,
+      "conditional",
+    ) as CredentialRequestOptions & {
       signal?: AbortSignal;
     };
     options.signal = signal;
     const credential = await navigator.credentials.get(options);
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("cancelled", "No passkey assertion was selected.");
+      throw new PasskeyClientError(
+        "cancelled",
+        "No passkey assertion was selected.",
+      );
     }
     return runMutation<
       { webauthnAuthenticateComplete: LoginPayload },
-      { input: { challengeId: string; responseJson: unknown; persistSession?: boolean } }
+      {
+        input: {
+          challengeId: string;
+          responseJson: unknown;
+          persistSession?: boolean;
+        };
+      }
     >(
       client,
       webauthnAuthenticateCompleteMutation,
@@ -498,13 +547,19 @@ export async function authenticateLoginVerificationPasskey(
       { challengeId: loginChallengeId },
       "loginVerificationPasskeyStart",
     );
-    const options = parseRequestOptions(start.optionsJson, "manual") as CredentialRequestOptions & {
+    const options = parseRequestOptions(
+      start.optionsJson,
+      "manual",
+    ) as CredentialRequestOptions & {
       signal?: AbortSignal;
     };
     options.signal = signal;
     const credential = await navigator.credentials.get(options);
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("invalid_response", "No passkey assertion was returned.");
+      throw new PasskeyClientError(
+        "invalid_response",
+        "No passkey assertion was returned.",
+      );
     }
     return runMutation<
       { loginVerificationPasskeyComplete: LoginPayload },
@@ -546,10 +601,20 @@ export async function registerLoginEnrollmentPasskey(
         };
       },
       Record<string, never>
-    >(client, webauthnLoginEnrollmentStartMutation, {}, "webauthnLoginEnrollmentStart");
-    const credential = await navigator.credentials.create(parseCreationOptions(start.optionsJson));
+    >(
+      client,
+      webauthnLoginEnrollmentStartMutation,
+      {},
+      "webauthnLoginEnrollmentStart",
+    );
+    const credential = await navigator.credentials.create(
+      parseCreationOptions(start.optionsJson),
+    );
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("invalid_response", "No passkey registration was returned.");
+      throw new PasskeyClientError(
+        "invalid_response",
+        "No passkey registration was returned.",
+      );
     }
     return runMutation<
       {
@@ -598,9 +663,14 @@ export async function registerPasskey(
       Record<string, never>
     >(client, webauthnRegisterStartMutation, {}, "webauthnRegisterStart");
 
-    const credential = await navigator.credentials.create(parseCreationOptions(start.optionsJson));
+    const credential = await navigator.credentials.create(
+      parseCreationOptions(start.optionsJson),
+    );
     if (!(credential instanceof PublicKeyCredential)) {
-      throw new PasskeyClientError("invalid_response", "No passkey registration was returned.");
+      throw new PasskeyClientError(
+        "invalid_response",
+        "No passkey registration was returned.",
+      );
     }
 
     return runMutation<

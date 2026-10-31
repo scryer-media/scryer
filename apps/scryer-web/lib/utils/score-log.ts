@@ -26,15 +26,22 @@ export function scoreTone(score: number | null | undefined): ScoreTone {
   return score < 0 ? "negative" : "positive";
 }
 
-export function scoreEntryTone(entry: Pick<ScoreLogEntry, "delta" | "kind">): ScoreTone {
-  if (entry.kind === "mandatory_rejection" || entry.kind === "final_score_rejection") {
+export function scoreEntryTone(
+  entry: Pick<ScoreLogEntry, "delta" | "kind">,
+): ScoreTone {
+  if (
+    entry.kind === "mandatory_rejection" ||
+    entry.kind === "final_score_rejection"
+  ) {
     return "negative";
   }
   return entry.delta < 0 ? "negative" : "positive";
 }
 
 function scoringKind(value: unknown): ScoringEntryKind | undefined {
-  return value === "score_contribution" || value === "mandatory_rejection" || value === "final_score_rejection"
+  return value === "score_contribution" ||
+    value === "mandatory_rejection" ||
+    value === "final_score_rejection"
     ? value
     : undefined;
 }
@@ -49,22 +56,30 @@ function readSource(
   source: unknown,
   ruleSetName: unknown,
 ): Pick<ScoreLogEntry, "origin" | "ruleSetName"> {
-  const name = typeof ruleSetName === "string" && ruleSetName.trim() ? ruleSetName : undefined;
+  const name =
+    typeof ruleSetName === "string" && ruleSetName.trim()
+      ? ruleSetName
+      : undefined;
   if (typeof source === "string") {
-    if (source.startsWith("user:")) return { origin: "user", ...(name ? { ruleSetName: name } : {}) };
-    if (source.startsWith("system:")) return { origin: "system", ...(name ? { ruleSetName: name } : {}) };
-    if (source === "builtin" || !source.trim()) return name ? { ruleSetName: name } : {};
+    if (source.startsWith("user:"))
+      return { origin: "user", ...(name ? { ruleSetName: name } : {}) };
+    if (source.startsWith("system:"))
+      return { origin: "system", ...(name ? { ruleSetName: name } : {}) };
+    if (source === "builtin" || !source.trim())
+      return name ? { ruleSetName: name } : {};
     return { ruleSetName: name ?? source };
   }
   if (source && typeof source === "object" && "kind" in source) {
-    const objectName = "name" in source && typeof source.name === "string" && source.name.trim()
-      ? source.name
-      : name;
-    const origin: ScoreLogOrigin | undefined = source.kind === "user_rule"
-      ? "user"
-      : source.kind === "system_rule"
-        ? "system"
-        : undefined;
+    const objectName =
+      "name" in source && typeof source.name === "string" && source.name.trim()
+        ? source.name
+        : name;
+    const origin: ScoreLogOrigin | undefined =
+      source.kind === "user_rule"
+        ? "user"
+        : source.kind === "system_rule"
+          ? "system"
+          : undefined;
     return {
       ...(origin ? { origin } : {}),
       ...(objectName ? { ruleSetName: objectName } : {}),
@@ -78,9 +93,13 @@ export function toScoreLogEntry(raw: unknown): ScoreLogEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
   if (typeof record.code !== "string" || !record.code.trim()) return null;
-  if (typeof record.delta !== "number" || !Number.isFinite(record.delta)) return null;
+  if (typeof record.delta !== "number" || !Number.isFinite(record.delta))
+    return null;
   const kind = scoringKind(record.kind);
-  const origin = record.origin === "user" || record.origin === "system" ? record.origin : undefined;
+  const origin =
+    record.origin === "user" || record.origin === "system"
+      ? record.origin
+      : undefined;
   return {
     code: record.code,
     delta: record.delta,
@@ -90,7 +109,9 @@ export function toScoreLogEntry(raw: unknown): ScoreLogEntry | null {
   };
 }
 
-export function toScoreLogEntries(raw: readonly unknown[] | null | undefined): ScoreLogEntry[] {
+export function toScoreLogEntries(
+  raw: readonly unknown[] | null | undefined,
+): ScoreLogEntry[] {
   return (raw ?? []).flatMap((entry) => {
     const normalized = toScoreLogEntry(entry);
     return normalized ? [normalized] : [];
@@ -116,12 +137,19 @@ export function parseScoreLog(value: unknown): ParsedScoreLog {
   if (Array.isArray(parsed)) return { entries: toScoreLogEntries(parsed) };
   if (!parsed || typeof parsed !== "object") return { entries: [] };
   const record = parsed as Record<string, unknown>;
-  const decision = record.quality_profile_decision && typeof record.quality_profile_decision === "object"
-    ? record.quality_profile_decision as Record<string, unknown>
-    : record;
+  const decision =
+    record.quality_profile_decision &&
+    typeof record.quality_profile_decision === "object"
+      ? (record.quality_profile_decision as Record<string, unknown>)
+      : record;
   const log = Array.isArray(decision.scoring_log) ? decision.scoring_log : [];
-  const total = typeof decision.release_score === "number" && Number.isFinite(decision.release_score)
-    ? decision.release_score
-    : undefined;
-  return { entries: toScoreLogEntries(log), ...(total != null ? { total } : {}) };
+  const total =
+    typeof decision.release_score === "number" &&
+    Number.isFinite(decision.release_score)
+      ? decision.release_score
+      : undefined;
+  return {
+    entries: toScoreLogEntries(log),
+    ...(total != null ? { total } : {}),
+  };
 }

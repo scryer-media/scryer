@@ -80,7 +80,9 @@ export type SettingsProxiesSectionProps = {
   mutatingProxyId: string | null;
   testingProxyId: string | null;
   resettingHostKeyProxyId: string | null;
-  submitProxy: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  submitProxy: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   resetProxyDraft: () => void;
   startCreateProxy: () => void;
   changeProxyProvider: (providerType: ProxyProviderTypeValue) => void;
@@ -154,10 +156,11 @@ export function SettingsProxiesSection({
   const [configText, setConfigText] = React.useState("");
   const [isWireguardPrivateKeyFocused, setIsWireguardPrivateKeyFocused] =
     React.useState(false);
-  const [isWireguardDetailsOpen, setIsWireguardDetailsOpen] =
-    React.useState(
-      () => editingProxyId !== null && isWireguardProxyProvider(proxyDraft.providerType),
-    );
+  const [isWireguardDetailsOpen, setIsWireguardDetailsOpen] = React.useState(
+    () =>
+      editingProxyId !== null &&
+      isWireguardProxyProvider(proxyDraft.providerType),
+  );
   const configFileRef = React.useRef<HTMLInputElement>(null);
 
   const applyConfigText = React.useCallback(
@@ -232,7 +235,7 @@ export function SettingsProxiesSection({
   const editingProxy = React.useMemo(
     () =>
       editingProxyId
-        ? proxyConfigs.find((proxy) => proxy.id === editingProxyId) ?? null
+        ? (proxyConfigs.find((proxy) => proxy.id === editingProxyId) ?? null)
         : null,
     [editingProxyId, proxyConfigs],
   );
@@ -240,7 +243,10 @@ export function SettingsProxiesSection({
   return (
     <div id="settings-proxies-section" className="flex flex-col gap-4 text-sm">
       <div id="settings-indexer-proxies-panel" className="space-y-4">
-        <div id="settings-indexer-proxies-card" className="rounded border border-border">
+        <div
+          id="settings-indexer-proxies-card"
+          className="rounded border border-border"
+        >
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <CardTitle className="flex items-center gap-2 text-base">
               {t("settings.proxies")}
@@ -257,10 +263,14 @@ export function SettingsProxiesSection({
                   <TableHead>{t("label.name")}</TableHead>
                   <TableHead>{t("settings.provider")}</TableHead>
                   <TableHead>{t("settings.baseUrl")}</TableHead>
-                  <TableHead className="text-center">{t("label.enabled")}</TableHead>
+                  <TableHead className="text-center">
+                    {t("label.enabled")}
+                  </TableHead>
                   <TableHead>{t("settings.proxyHealth")}</TableHead>
                   <TableHead>{t("settings.proxyLastError")}</TableHead>
-                  <TableHead className="text-right">{t("label.actions")}</TableHead>
+                  <TableHead className="text-right">
+                    {t("label.actions")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -285,11 +295,18 @@ export function SettingsProxiesSection({
                     {group.proxies.map((proxy) => (
                       <TableRow
                         key={proxy.id}
-                        id={selectorId("settings-indexer-proxy-row", proxy.name)}
+                        id={selectorId(
+                          "settings-indexer-proxy-row",
+                          proxy.name,
+                        )}
                         data-ui="settings-table-row"
                       >
-                        <TableCell className="font-medium">{proxy.name}</TableCell>
-                        <TableCell>{formatProxyProvider(proxy.providerType)}</TableCell>
+                        <TableCell className="font-medium">
+                          {proxy.name}
+                        </TableCell>
+                        <TableCell>
+                          {formatProxyProvider(proxy.providerType)}
+                        </TableCell>
                         <TableCell className="max-w-[280px] truncate">
                           {proxy.baseUrl}
                           {proxy.hasCredentials ? (
@@ -309,16 +326,26 @@ export function SettingsProxiesSection({
                             label={`${t("label.enabled")}: ${proxy.name}`}
                           />
                         </TableCell>
-                        <TableCell>{formatProxyHealth(proxy.lastHealthStatus)}</TableCell>
+                        <TableCell>
+                          {formatProxyHealth(proxy.lastHealthStatus)}
+                        </TableCell>
                         <TableCell>
                           {/* The operator's own date format rather than an
                               English relative phrase, so the column reads the
                               same in every locale. */}
                           {proxy.lastErrorAt ? (
-                            <span title={proxy.lastErrorMessage ?? proxy.lastErrorAt}>
-                              {formatUiDateTime(proxy.lastErrorAt, dateTimeFormat, {
-                                fallback: proxy.lastErrorAt,
-                              })}
+                            <span
+                              title={
+                                proxy.lastErrorMessage ?? proxy.lastErrorAt
+                              }
+                            >
+                              {formatUiDateTime(
+                                proxy.lastErrorAt,
+                                dateTimeFormat,
+                                {
+                                  fallback: proxy.lastErrorAt,
+                                },
+                              )}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
@@ -327,7 +354,10 @@ export function SettingsProxiesSection({
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
                             <ProxyActionButton
-                              id={selectorId("settings-indexer-proxy-test", proxy.name)}
+                              id={selectorId(
+                                "settings-indexer-proxy-test",
+                                proxy.name,
+                              )}
                               tone="search"
                               onClick={() => void testProxy(proxy)}
                               disabled={
@@ -343,7 +373,10 @@ export function SettingsProxiesSection({
                               )}
                             </ProxyActionButton>
                             <ProxyActionButton
-                              id={selectorId("settings-indexer-proxy-edit", proxy.name)}
+                              id={selectorId(
+                                "settings-indexer-proxy-edit",
+                                proxy.name,
+                              )}
                               tone="edit"
                               onClick={() => editProxy(proxy)}
                               disabled={mutatingProxyId !== null}
@@ -352,7 +385,10 @@ export function SettingsProxiesSection({
                               <Edit className="h-4 w-4" />
                             </ProxyActionButton>
                             <ProxyActionButton
-                              id={selectorId("settings-indexer-proxy-delete", proxy.name)}
+                              id={selectorId(
+                                "settings-indexer-proxy-delete",
+                                proxy.name,
+                              )}
                               tone="delete"
                               onClick={() => void deleteProxy(proxy)}
                               disabled={mutatingProxyId === proxy.id}
@@ -402,7 +438,9 @@ export function SettingsProxiesSection({
                     }))
                   }
                 />
-                <span className="text-sm font-medium">{t("label.enabled")}</span>
+                <span className="text-sm font-medium">
+                  {t("label.enabled")}
+                </span>
               </label>
             </CardHeader>
             <CardContent>
@@ -445,18 +483,26 @@ export function SettingsProxiesSection({
                             <SelectLabel>
                               {t(PROXY_FAMILY_LABEL_KEYS[family])}
                             </SelectLabel>
-                            {OFFERED_PROXY_PROVIDER_TYPES_BY_FAMILY[family].map((providerType) => (
-                              <SelectItem key={providerType} value={providerType}>
-                                {formatProxyProvider(providerType)}
-                              </SelectItem>
-                            ))}
+                            {OFFERED_PROXY_PROVIDER_TYPES_BY_FAMILY[family].map(
+                              (providerType) => (
+                                <SelectItem
+                                  key={providerType}
+                                  value={providerType}
+                                >
+                                  {formatProxyProvider(providerType)}
+                                </SelectItem>
+                              ),
+                            )}
                           </SelectGroup>
                         ))}
                       </SelectContent>
                     </Select>
                   </label>
                   <label>
-                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-name">
+                    <Label
+                      className="mb-2 h-5"
+                      htmlFor="settings-indexer-proxy-name"
+                    >
                       {t("label.name")}
                     </Label>
                     <Input
@@ -476,7 +522,9 @@ export function SettingsProxiesSection({
                       className="mb-2 h-5 gap-1.5"
                       htmlFor="settings-indexer-proxy-base-url"
                     >
-                      {isTunnelDraft || isWireguardDraft || proxyDraft.providerType === "http3"
+                      {isTunnelDraft ||
+                      isWireguardDraft ||
+                      proxyDraft.providerType === "http3"
                         ? t("settings.proxyEndpoint")
                         : t("settings.baseUrl")}
                       {isTunnelDraft || isWireguardDraft ? (
@@ -503,8 +551,12 @@ export function SettingsProxiesSection({
                     />
                   </label>
                   <label>
-                    <Label className="mb-2 h-5" htmlFor="settings-indexer-proxy-timeout">
-                      {t("settings.proxyTimeout")} <span className="text-muted-foreground">(s)</span>
+                    <Label
+                      className="mb-2 h-5"
+                      htmlFor="settings-indexer-proxy-timeout"
+                    >
+                      {t("settings.proxyTimeout")}{" "}
+                      <span className="text-muted-foreground">(s)</span>
                     </Label>
                     <Input
                       id="settings-indexer-proxy-timeout"
@@ -602,7 +654,10 @@ export function SettingsProxiesSection({
                           >
                             {t("settings.proxyUsername")}
                             {!isTunnelDraft ? (
-                              <span className="text-muted-foreground"> (optional)</span>
+                              <span className="text-muted-foreground">
+                                {" "}
+                                (optional)
+                              </span>
                             ) : null}
                           </Label>
                           <Input
@@ -611,7 +666,9 @@ export function SettingsProxiesSection({
                             autoComplete="off"
                             value={proxyDraft.username}
                             disabled={proxyDraft.clearCredentials}
-                            required={isTunnelDraft && !proxyDraft.hasStoredCredentials}
+                            required={
+                              isTunnelDraft && !proxyDraft.hasStoredCredentials
+                            }
                             placeholder={
                               proxyDraft.hasStoredCredentials
                                 ? t("settings.proxyCredentialUnchanged")
@@ -632,7 +689,10 @@ export function SettingsProxiesSection({
                               htmlFor="settings-indexer-proxy-password"
                             >
                               {t("settings.proxyPassword")}
-                              <span className="text-muted-foreground"> (optional)</span>
+                              <span className="text-muted-foreground">
+                                {" "}
+                                (optional)
+                              </span>
                             </Label>
                             <Input
                               id="settings-indexer-proxy-password"
@@ -698,7 +758,6 @@ export function SettingsProxiesSection({
                           <span>{t("settings.proxyClearCredentials")}</span>
                         </label>
                       ) : null}
-
                     </div>
                   </div>
                 ) : null}
@@ -794,7 +853,10 @@ export function SettingsProxiesSection({
                             htmlFor="settings-indexer-proxy-private-key-passphrase"
                           >
                             {t("settings.proxyPrivateKeyPassphrase")}
-                            <span className="text-muted-foreground"> (optional)</span>
+                            <span className="text-muted-foreground">
+                              {" "}
+                              (optional)
+                            </span>
                           </Label>
                           <Input
                             id="settings-indexer-proxy-private-key-passphrase"
@@ -903,7 +965,9 @@ export function SettingsProxiesSection({
                                     }))
                                   }
                                 />
-                                <span>{t("settings.proxyClearPresharedKey")}</span>
+                                <span>
+                                  {t("settings.proxyClearPresharedKey")}
+                                </span>
                               </label>
                             ) : null}
                           </div>
@@ -946,7 +1010,9 @@ export function SettingsProxiesSection({
                               <span className="inline-flex items-center gap-1.5">
                                 {t("settings.proxyTunnelDnsServers")}
                                 <InfoHelp
-                                  ariaLabel={t("settings.proxyTunnelDnsServers")}
+                                  ariaLabel={t(
+                                    "settings.proxyTunnelDnsServers",
+                                  )}
                                   text={t("settings.proxyTunnelDnsServersHelp")}
                                 />
                               </span>
@@ -1012,7 +1078,8 @@ export function SettingsProxiesSection({
                                 <InfoHelp
                                   ariaLabel={t("settings.proxyTunnelKeepalive")}
                                   text={t("settings.proxyTunnelKeepaliveHelp", {
-                                    default: WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
+                                    default:
+                                      WIREGUARD_KEEPALIVE_DEFAULT_SECONDS,
                                   })}
                                 />
                               </span>
@@ -1054,7 +1121,9 @@ export function SettingsProxiesSection({
                                 className="w-auto max-w-full pr-10 font-mono text-xs"
                                 size={48}
                                 value={editingProxy?.tunnelPublicKey ?? ""}
-                                placeholder={t("settings.proxyTunnelPublicKeyPending")}
+                                placeholder={t(
+                                  "settings.proxyTunnelPublicKeyPending",
+                                )}
                                 readOnly
                               />
                               <IconButton

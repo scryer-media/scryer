@@ -4,7 +4,9 @@ import test from "node:test";
 import type { MediaServerConnectionDraft } from "../types/index.ts";
 import { normalizeMediaServerConnectionDraft } from "./media-server-input.ts";
 
-function draft(overrides: Partial<MediaServerConnectionDraft>): MediaServerConnectionDraft {
+function draft(
+  overrides: Partial<MediaServerConnectionDraft>,
+): MediaServerConnectionDraft {
   return {
     provider: "JELLYFIN",
     displayName: "Living room",
@@ -38,23 +40,27 @@ function draft(overrides: Partial<MediaServerConnectionDraft>): MediaServerConne
 test("a media server address is taken as it was typed", () => {
   // A LAN address on the server's own port is plain HTTP.
   assert.equal(
-    normalizeMediaServerConnectionDraft(draft({ baseUrl: "192.168.1.5:32400" })).baseUrl,
+    normalizeMediaServerConnectionDraft(draft({ baseUrl: "192.168.1.5:32400" }))
+      .baseUrl,
     "http://192.168.1.5:32400",
   );
   assert.equal(
-    normalizeMediaServerConnectionDraft(draft({ baseUrl: "jellyfin.lan/" })).baseUrl,
+    normalizeMediaServerConnectionDraft(draft({ baseUrl: "jellyfin.lan/" }))
+      .baseUrl,
     "http://jellyfin.lan",
   );
   // The public URL is usually a name on the internet.
   assert.equal(
-    normalizeMediaServerConnectionDraft(draft({ externalUrl: "plex.example.com" }))
-      .externalUrl,
+    normalizeMediaServerConnectionDraft(
+      draft({ externalUrl: "plex.example.com" }),
+    ).externalUrl,
     "https://plex.example.com",
   );
   // A scheme the operator wrote stands.
   assert.equal(
-    normalizeMediaServerConnectionDraft(draft({ baseUrl: "http://plex.example.com/" }))
-      .baseUrl,
+    normalizeMediaServerConnectionDraft(
+      draft({ baseUrl: "http://plex.example.com/" }),
+    ).baseUrl,
     "http://plex.example.com",
   );
 });
@@ -70,5 +76,8 @@ test("empty and already-clean addresses leave the draft untouched", () => {
   assert.equal(normalizeMediaServerConnectionDraft(clean), clean);
   // A value we should not touch is handed on as typed.
   const credentials = draft({ baseUrl: "http://admin:pw@jellyfin.lan:8096" });
-  assert.equal(normalizeMediaServerConnectionDraft(credentials).baseUrl, credentials.baseUrl);
+  assert.equal(
+    normalizeMediaServerConnectionDraft(credentials).baseUrl,
+    credentials.baseUrl,
+  );
 });

@@ -4,6 +4,7 @@ import { instanceFeaturesQuery } from "@/lib/graphql/queries";
 import { AUTH_SESSION_CHANGED_EVENT, getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { scheduleAfterFirstPaint } from "@/lib/utils/scheduling";
+import { decodeJwtPayload } from "@/lib/utils/jwt";
 import type { InstanceFeatures } from "@/lib/types/settings";
 
 /**
@@ -42,17 +43,24 @@ function normalizeInstanceFeatures(
   };
 }
 
+function sessionIdentity(): string | null {
+  const token = getAuthToken();
+  const claims = token ? decodeJwtPayload(token) : null;
+  return claims?.sub ? JSON.stringify([claims.iss, claims.sub]) : null;
+}
+
 export function InstanceFeaturesProvider({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const client = useClient();
-  const [instanceFeatures, setInstanceFeatures] = React.useState<InstanceFeatures>(
-    DEFAULT_INSTANCE_FEATURES,
-  );
-  const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] = React.useState(false);
+  const [instanceFeatures, setInstanceFeatures] =
+    React.useState<InstanceFeatures>(DEFAULT_INSTANCE_FEATURES);
+  const [instanceFeaturesLoaded, setInstanceFeaturesLoaded] =
+    React.useState(false);
   const requestSequenceRef = React.useRef(0);
+  const sessionIdentityRef = React.useRef<string | null>(null);
 
   const loadInstanceFeatures = React.useCallback(async () => {
     const requestId = requestSequenceRef.current + 1;
@@ -108,14 +116,26 @@ export function InstanceFeaturesProvider({
       return undefined;
     }
 
+    sessionIdentityRef.current = sessionIdentity();
     const handleAuthSessionChanged = () => {
-      setInstanceFeatures(DEFAULT_INSTANCE_FEATURES);
-      setInstanceFeaturesLoaded(false);
+      const identity = sessionIdentity();
+      // MFA refreshes the same user's session while a gated form is pending.
+      // Keep that form mounted so its one-time mutation result can be shown.
+      if (identity === null || identity !== sessionIdentityRef.current) {
+        setInstanceFeatures(DEFAULT_INSTANCE_FEATURES);
+        setInstanceFeaturesLoaded(false);
+      }
+      sessionIdentityRef.current = identity;
       void loadInstanceFeatures();
     };
-    const handleFocus = () => { void loadInstanceFeatures(); };
+    const handleFocus = () => {
+      void loadInstanceFeatures();
+    };
 
-    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleAuthSessionChanged);
+    window.addEventListener(
+      AUTH_SESSION_CHANGED_EVENT,
+      handleAuthSessionChanged,
+    );
     window.addEventListener("focus", handleFocus);
     const cancelScheduledQuery = scheduleAfterFirstPaint(() => {
       void loadInstanceFeatures();
@@ -177,5 +197,7 @@ export function useExperimentalFeaturesEnabled(): boolean {
  * the page is unavailable. Outside the provider the defaults are the answer.
  */
 export function useInstanceFeaturesLoaded(): boolean {
-  return React.useContext(InstanceFeaturesContext)?.instanceFeaturesLoaded ?? true;
+  return (
+    React.useContext(InstanceFeaturesContext)?.instanceFeaturesLoaded ?? true
+  );
 }

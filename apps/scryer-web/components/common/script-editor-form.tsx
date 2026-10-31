@@ -4,14 +4,21 @@ import { FolderOpen } from "lucide-react";
 import { FacetSelect } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
 import { LabeledFieldset } from "@/components/common/labeled-fieldset";
-import { LazyCodeEditor, type CodeEditorLanguage } from "@/components/common/lazy-code-editor";
+import {
+  LazyCodeEditor,
+  type CodeEditorLanguage,
+} from "@/components/common/lazy-code-editor";
 import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { ScriptLanguageIcon } from "@/components/common/script-language-icon";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -25,7 +32,13 @@ import {
 import { defaultScriptSchedule } from "@/lib/utils/script-schedule";
 
 function editorLanguageFor(language: ScriptLanguageValue): CodeEditorLanguage {
-  const languages = { SHELL: "shell", PYTHON: "python", POWERSHELL: "powershell", BATCH: "batch", GO: "go" } as const;
+  const languages = {
+    SHELL: "shell",
+    PYTHON: "python",
+    POWERSHELL: "powershell",
+    BATCH: "batch",
+    GO: "go",
+  } as const;
   return languages[language];
 }
 
@@ -68,7 +81,10 @@ export function ScriptEditorForm({
   /** The control id and, when a legacy id holds the control, the wrapper id. */
   const ids = (key: string, legacySuffix: string) =>
     legacyIdPrefix
-      ? { control: `${legacyIdPrefix}-${legacySuffix}`, wrapper: `script-editor-${key}` }
+      ? {
+          control: `${legacyIdPrefix}-${legacySuffix}`,
+          wrapper: `script-editor-${key}`,
+        }
       : { control: `script-editor-${key}`, wrapper: undefined };
   const nameIds = ids("name", "name");
   const descriptionIds = ids("description", "description");
@@ -81,7 +97,10 @@ export function ScriptEditorForm({
   const cancelIds = ids("cancel", "cancel");
   const inlineTypeId = ids("type-inline", "script-type-inline").control;
   const fileTypeId = ids("type-file", "script-type-file").control;
-  const blockingId = ids("execution-mode-blocking", "execution-blocking").control;
+  const blockingId = ids(
+    "execution-mode-blocking",
+    "execution-blocking",
+  ).control;
   const fireAndForgetId = ids(
     "execution-mode-fire-and-forget",
     "execution-fire-and-forget",
@@ -89,11 +108,20 @@ export function ScriptEditorForm({
 
   const saveButton = (
     <Button id={saveIds.control} type="submit" disabled={isSaving}>
-      {isSaving ? t("label.saving") : isEditing ? t("label.update") : t("label.create")}
+      {isSaving
+        ? t("label.saving")
+        : isEditing
+          ? t("label.update")
+          : t("label.create")}
     </Button>
   );
   const cancelButton = (
-    <Button id={cancelIds.control} type="button" variant="secondary" onClick={onCancel}>
+    <Button
+      id={cancelIds.control}
+      type="button"
+      variant="secondary"
+      onClick={onCancel}
+    >
       {t("label.cancel")}
     </Button>
   );
@@ -107,19 +135,27 @@ export function ScriptEditorForm({
           <Input
             id={nameIds.control}
             value={draft.name}
-            onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+            onChange={(e) =>
+              setDraft((prev) => ({ ...prev, name: e.target.value }))
+            }
             required
             placeholder={
-              isScheduled ? t("script.editor.jobNamePlaceholder") : t("settings.pp.namePlaceholder")
+              isScheduled
+                ? t("script.editor.jobNamePlaceholder")
+                : t("settings.pp.namePlaceholder")
             }
           />
         </label>
         <label id={descriptionIds.wrapper}>
-          <Label className="mb-2 block">{t("settings.pp.descriptionLabel")}</Label>
+          <Label className="mb-2 block">
+            {t("settings.pp.descriptionLabel")}
+          </Label>
           <Input
             id={descriptionIds.control}
             value={draft.description}
-            onChange={(e) => setDraft((prev) => ({ ...prev, description: e.target.value }))}
+            onChange={(e) =>
+              setDraft((prev) => ({ ...prev, description: e.target.value }))
+            }
             placeholder={t("settings.pp.descriptionPlaceholder")}
           />
         </label>
@@ -153,7 +189,10 @@ export function ScriptEditorForm({
           help={t("script.editor.interpreterHelp")}
           value={draft.language}
           onValueChange={(language) =>
-            setDraft((prev) => ({ ...prev, language: language as ScriptLanguageValue }))
+            setDraft((prev) => ({
+              ...prev,
+              language: language as ScriptLanguageValue,
+            }))
           }
           options={SCRIPT_LANGUAGES.map((language) => ({
             value: language,
@@ -174,7 +213,9 @@ export function ScriptEditorForm({
               <LazyCodeEditor
                 id={contentIds.control}
                 value={draft.scriptContent}
-                onChange={(value) => setDraft((prev) => ({ ...prev, scriptContent: value }))}
+                onChange={(value) =>
+                  setDraft((prev) => ({ ...prev, scriptContent: value }))
+                }
                 language={editorLanguageFor(draft.language)}
                 scriptTrigger={trigger}
                 scriptTranslate={t}
@@ -186,7 +227,9 @@ export function ScriptEditorForm({
         ) : (
           <>
             <Label htmlFor={pathIds.control} className="mb-2 block">
-              {isScheduled ? t("script.editor.filePathHelp") : t("settings.pp.filePathHelp")}
+              {isScheduled
+                ? t("script.editor.filePathHelp")
+                : t("settings.pp.filePathHelp")}
             </Label>
             {/* The path is always one picked from the host, never typed. */}
             <div id={pathIds.wrapper} className="flex">
@@ -209,7 +252,9 @@ export function ScriptEditorForm({
             <FolderBrowserDialog
               open={folderBrowserOpen}
               onOpenChange={setFolderBrowserOpen}
-              onSelect={(path) => setDraft((prev) => ({ ...prev, scriptContent: path }))}
+              onSelect={(path) =>
+                setDraft((prev) => ({ ...prev, scriptContent: path }))
+              }
               selectionTypes={["file"]}
               initialPath={
                 draft.scriptContent.startsWith("/")
@@ -223,7 +268,10 @@ export function ScriptEditorForm({
       </div>
 
       {isScheduled ? (
-        <LabeledFieldset id="script-editor-schedule" label={t("script.editor.schedule")}>
+        <LabeledFieldset
+          id="script-editor-schedule"
+          label={t("script.editor.schedule")}
+        >
           <ScriptScheduleEditor
             value={draft.schedule ?? defaultScriptSchedule()}
             onChange={(schedule) => setDraft((prev) => ({ ...prev, schedule }))}
@@ -253,7 +301,9 @@ export function ScriptEditorForm({
         <RadioGroup
           id="script-editor-execution-mode"
           value={draft.executionMode}
-          onValueChange={(value) => setDraft((prev) => ({ ...prev, executionMode: value }))}
+          onValueChange={(value) =>
+            setDraft((prev) => ({ ...prev, executionMode: value }))
+          }
         >
           <label htmlFor={blockingId} className="flex items-center gap-2">
             <RadioGroupItem id={blockingId} value="BLOCKING" />
@@ -271,7 +321,9 @@ export function ScriptEditorForm({
             <div id={timeoutIds.wrapper}>
               {/* The same label row on both fields keeps their inputs level. */}
               <div className="mb-1.5 flex h-5 items-center">
-                <Label htmlFor={timeoutIds.control}>{t("settings.pp.timeoutLabel")}</Label>
+                <Label htmlFor={timeoutIds.control}>
+                  {t("settings.pp.timeoutLabel")}
+                </Label>
               </div>
               <div className="relative">
                 <Input
@@ -294,7 +346,9 @@ export function ScriptEditorForm({
             {isScheduled ? null : (
               <div>
                 <div className="mb-1.5 flex h-5 items-center gap-1.5">
-                  <Label htmlFor={priorityId}>{t("settings.pp.priority")}</Label>
+                  <Label htmlFor={priorityId}>
+                    {t("settings.pp.priority")}
+                  </Label>
                   <InfoHelp
                     text={t("settings.pp.priorityHelp")}
                     ariaLabel={t("settings.pp.priority")}

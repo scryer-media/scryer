@@ -8,8 +8,16 @@ import { hdrFormatPills } from "./media-format-pills.ts";
 import type { MediaFileReleaseListing } from "../types/titles.ts";
 
 export type AudioStreamDetail = {
-  metadata?: Pick<MediaStreamMetadata, "channelLayout" | "disposition" | "programId"> &
-    Partial<Pick<MediaStreamMetadata, "id" | "sampleRate" | "sampleFormat" | "sampleBitDepth">>;
+  metadata?: Pick<
+    MediaStreamMetadata,
+    "channelLayout" | "disposition" | "programId"
+  > &
+    Partial<
+      Pick<
+        MediaStreamMetadata,
+        "id" | "sampleRate" | "sampleFormat" | "sampleBitDepth"
+      >
+    >;
   profile?: string | null;
   name?: string | null;
   codec: string | null;
@@ -30,7 +38,8 @@ export type SubtitleStreamDetail = {
 export type MediaInfoFile = {
   id?: string;
   analysis?: MediaAnalysisDetails;
-  analysisAttempt?: import("../types/media-analysis.ts").MediaAnalysisAttempt | null;
+  analysisAttempt?:
+    import("../types/media-analysis.ts").MediaAnalysisAttempt | null;
   scanStatus: string;
   videoCodec: string | null;
   videoWidth: number | null;
@@ -59,7 +68,8 @@ export type MediaInfoFile = {
   videoCodecParsed?: string | null;
   audioCodecParsed?: string | null;
   acquisitionScore?: number | null;
-  currentScoreEvaluation?: import("../types/file-score").FileScoreEvaluation | null;
+  currentScoreEvaluation?:
+    import("../types/file-score").FileScoreEvaluation | null;
   scoringLog?: string | null;
   indexerSource?: string | null;
   grabbedReleaseTitle?: string | null;
@@ -80,7 +90,11 @@ export type MediaInfoFileDetails = MediaInfoFile & {
 
 /** One label/value row. `label`, when set, is shown verbatim instead of translating `labelKey`. */
 export type MediaInfoRow = { labelKey: string; value: string; label?: string };
-export type MediaInfoSection = { id: string; titleKey: string; rows: MediaInfoRow[] };
+export type MediaInfoSection = {
+  id: string;
+  titleKey: string;
+  rows: MediaInfoRow[];
+};
 
 export type MediaInfoAudioTrackRow = {
   index: number;
@@ -127,12 +141,19 @@ export type MediaInfoCaptionRow = {
   language: string | null;
 };
 
-export function resolveResolution(width: number | null, height: number | null): string | null {
+export function resolveResolution(
+  width: number | null,
+  height: number | null,
+): string | null {
   if (width == null && height == null) return null;
-  if ((width != null && width >= 7680) || (height != null && height >= 4200)) return "8K";
-  if ((width != null && width >= 3840) || (height != null && height >= 2100)) return "4K";
-  if ((width != null && width >= 1920) || (height != null && height >= 1000)) return "1080p";
-  if ((width != null && width >= 1280) || (height != null && height >= 700)) return "720p";
+  if ((width != null && width >= 7680) || (height != null && height >= 4200))
+    return "8K";
+  if ((width != null && width >= 3840) || (height != null && height >= 2100))
+    return "4K";
+  if ((width != null && width >= 1920) || (height != null && height >= 1000))
+    return "1080p";
+  if ((width != null && width >= 1280) || (height != null && height >= 700))
+    return "720p";
   return height != null ? `${height}p` : null;
 }
 
@@ -157,7 +178,10 @@ export function resolveAudioCodec(codec: string | null): string | null {
   return codec.toUpperCase();
 }
 
-export function resolveAudioChannels(channels: number | null, layout?: string | null): string | null {
+export function resolveAudioChannels(
+  channels: number | null,
+  layout?: string | null,
+): string | null {
   if (layout) return layout;
   if (channels == null) return null;
   return `${channels}ch`;
@@ -168,7 +192,9 @@ let displayNamesCache: Intl.DisplayNames | null = null;
 export function formatLanguage(code: string | null): string {
   if (!code) return "?";
   try {
-    displayNamesCache ??= new Intl.DisplayNames(undefined, { type: "language" });
+    displayNamesCache ??= new Intl.DisplayNames(undefined, {
+      type: "language",
+    });
     return displayNamesCache.of(code) ?? code;
   } catch {
     return code;
@@ -232,7 +258,9 @@ export function resolveAudioLanguage(stream: AudioStreamDetail): {
 } {
   const inferred = !stream.language && Boolean(stream.inferredLanguage);
   return {
-    label: formatLanguage(inferred ? (stream.inferredLanguage ?? null) : stream.language),
+    label: formatLanguage(
+      inferred ? (stream.inferredLanguage ?? null) : stream.language,
+    ),
     inferred,
   };
 }
@@ -255,7 +283,9 @@ export function formatSingleSubtitleTrack(track: SubtitleStreamDetail): string {
   return parts.filter(Boolean).join(" ");
 }
 
-export function formatMediaFileSize(sizeBytes: number | null | undefined): string {
+export function formatMediaFileSize(
+  sizeBytes: number | null | undefined,
+): string {
   const bytes = sizeBytes ?? Number.NaN;
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return "-";
@@ -289,8 +319,11 @@ export function audioStreamsForFile(file: MediaInfoFile): AudioStreamDetail[] {
   }
   if (file.audioStreams.length > 0) return file.audioStreams;
 
-  const languages = file.audioLanguages.filter((language) => language.trim() !== "");
-  if (!file.audioCodec && file.audioChannels == null && languages.length === 0) return [];
+  const languages = file.audioLanguages.filter(
+    (language) => language.trim() !== "",
+  );
+  if (!file.audioCodec && file.audioChannels == null && languages.length === 0)
+    return [];
   const template = {
     codec: file.audioCodec,
     channels: file.audioChannels,
@@ -310,14 +343,21 @@ function audioStreamFromAnalysis(stream: MediaStreamDetail): AudioStreamDetail {
     name: stream.name,
     metadata: stream.metadata,
     bitrateKbps:
-      stream.metadata.bitrateBps == null ? null : Number(stream.metadata.bitrateBps) / 1000,
+      stream.metadata.bitrateBps == null
+        ? null
+        : Number(stream.metadata.bitrateBps) / 1000,
   };
 }
 
 /** The per-track subtitle list, with the same fallback the file rows use. */
-export function subtitleStreamsForFile(file: MediaInfoFile): SubtitleStreamDetail[] {
+export function subtitleStreamsForFile(
+  file: MediaInfoFile,
+): SubtitleStreamDetail[] {
   if (file.subtitleStreams.length > 0) return file.subtitleStreams;
-  const length = Math.max(file.subtitleLanguages.length, file.subtitleCodecs.length);
+  const length = Math.max(
+    file.subtitleLanguages.length,
+    file.subtitleCodecs.length,
+  );
   return Array.from({ length }, (_, index) => ({
     language: file.subtitleLanguages[index] ?? null,
     codec: file.subtitleCodecs[index] ?? null,
@@ -330,48 +370,73 @@ export function subtitleStreamsForFile(file: MediaInfoFile): SubtitleStreamDetai
 export function selectedVideoStream(
   analysis: MediaAnalysisDetails | null | undefined,
 ): MediaStreamDetail | null {
-  const videos = analysis?.streams.filter((stream) => stream.kind === "VIDEO") ?? [];
+  const videos =
+    analysis?.streams.filter((stream) => stream.kind === "VIDEO") ?? [];
   const selected = videos.find(
-    (stream) => stream.metadata.id != null && stream.metadata.id === analysis?.selectedVideoId,
+    (stream) =>
+      stream.metadata.id != null &&
+      stream.metadata.id === analysis?.selectedVideoId,
   );
   return selected ?? videos[0] ?? null;
 }
 
-export function formatDurationSeconds(seconds: number | null | undefined): string | null {
+export function formatDurationSeconds(
+  seconds: number | null | undefined,
+): string | null {
   if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const whole = Math.round(seconds);
   const hours = Math.floor(whole / 3600);
   const minutes = Math.floor((whole % 3600) / 60);
   const rest = whole % 60;
-  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(rest).padStart(2, "0")}s`;
+  if (hours > 0)
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(rest).padStart(2, "0")}s`;
   if (minutes > 0) return `${minutes}m ${String(rest).padStart(2, "0")}s`;
   return `${rest}s`;
 }
 
-export function formatBitrateBps(bps: number | string | null | undefined): string | null {
+export function formatBitrateBps(
+  bps: number | string | null | undefined,
+): string | null {
   if (bps == null) return null;
   const value = Number(bps);
   if (!Number.isFinite(value) || value <= 0) return null;
   return `${Math.round(value / 1000).toLocaleString()} kbps`;
 }
 
-function formatRational(value: MediaRational | null | undefined): string | null {
+function formatRational(
+  value: MediaRational | null | undefined,
+): string | null {
   if (!value) return null;
   const numerator = Number(value.numerator);
   const denominator = Number(value.denominator);
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return null;
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    denominator === 0
+  )
+    return null;
   return `${numerator}/${denominator}`;
 }
 
-function formatFrameRate(value: MediaRational | null | undefined): string | null {
+function formatFrameRate(
+  value: MediaRational | null | undefined,
+): string | null {
   if (!value) return null;
   const numerator = Number(value.numerator);
   const denominator = Number(value.denominator);
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return null;
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    denominator === 0
+  )
+    return null;
   return `${(numerator / denominator).toLocaleString(undefined, { maximumFractionDigits: 3 })} fps`;
 }
 
-function row(labelKey: string, value: string | null | undefined): MediaInfoRow | null {
+function row(
+  labelKey: string,
+  value: string | null | undefined,
+): MediaInfoRow | null {
   const trimmed = typeof value === "string" ? value.trim() : value;
   return trimmed ? { labelKey, value: trimmed } : null;
 }
@@ -380,7 +445,11 @@ function compactRows(rows: (MediaInfoRow | null)[]): MediaInfoRow[] {
   return rows.filter((entry): entry is MediaInfoRow => entry != null);
 }
 
-function section(id: string, titleKey: string, rows: (MediaInfoRow | null)[]): MediaInfoSection | null {
+function section(
+  id: string,
+  titleKey: string,
+  rows: (MediaInfoRow | null)[],
+): MediaInfoSection | null {
   const kept = compactRows(rows);
   return kept.length > 0 ? { id, titleKey, rows: kept } : null;
 }
@@ -408,7 +477,9 @@ export function mediaInfoFileSection(
     row("mediaInfo.container", resolveContainerFormat(file.containerFormat)),
     row(
       "mediaInfo.duration",
-      formatDurationSeconds(file.analysis?.durationSeconds ?? file.durationSeconds),
+      formatDurationSeconds(
+        file.analysis?.durationSeconds ?? file.durationSeconds,
+      ),
     ),
     row("mediaInfo.chapterCount", chapters ? String(chapters) : null),
     row("mediaInfo.scanStatus", file.scanStatus),
@@ -442,7 +513,10 @@ export function mediaInfoVideoSection(
 
   return section("media-info-video", "mediaInfo.sectionVideo", [
     row("mediaInfo.resolution", dimensions),
-    row("mediaInfo.videoCodec", resolveVideoCodec(stream?.codec ?? file.videoCodec)),
+    row(
+      "mediaInfo.videoCodec",
+      resolveVideoCodec(stream?.codec ?? file.videoCodec),
+    ),
     row("mediaInfo.profile", metadata?.profile ?? file.videoProfile),
     row("mediaInfo.bitDepth", bitDepth == null ? null : `${bitDepth}-bit`),
     row("mediaInfo.hdr", hdr),
@@ -456,7 +530,9 @@ export function mediaInfoVideoSection(
     row(
       "mediaInfo.videoBitrate",
       formatBitrateBps(metadata?.bitrateBps) ??
-        (file.videoBitrateKbps == null ? null : `${file.videoBitrateKbps.toLocaleString()} kbps`),
+        (file.videoBitrateKbps == null
+          ? null
+          : `${file.videoBitrateKbps.toLocaleString()} kbps`),
     ),
     row("mediaInfo.pixelFormat", metadata?.pixelFormat),
     row("mediaInfo.fieldOrder", metadata?.fieldOrder),
@@ -476,13 +552,15 @@ export function mediaInfoVideoSection(
     ),
     row(
       "mediaInfo.contentLight",
-      contentLight && (contentLight.maxCll != null || contentLight.maxFall != null)
+      contentLight &&
+        (contentLight.maxCll != null || contentLight.maxFall != null)
         ? `${contentLight.maxCll ?? "?"} / ${contentLight.maxFall ?? "?"}`
         : null,
     ),
     row(
       "mediaInfo.masteringDisplay",
-      mastering && (mastering.minLuminance != null || mastering.maxLuminance != null)
+      mastering &&
+        (mastering.minLuminance != null || mastering.maxLuminance != null)
         ? `${mastering.minLuminance ?? "?"}–${mastering.maxLuminance ?? "?"} cd/m²`
         : null,
     ),
@@ -502,7 +580,10 @@ export function mediaInfoReleaseSection(
   return section("media-info-release", "mediaInfo.sectionRelease", [
     row("mediaInfo.sceneName", file.sceneName),
     row("mediaInfo.releaseGroup", file.releaseGroup),
-    row("mediaInfo.sourceType", file.sourceType ? resolveSourceType(file.sourceType) : null),
+    row(
+      "mediaInfo.sourceType",
+      file.sourceType ? resolveSourceType(file.sourceType) : null,
+    ),
     row("mediaInfo.parsedResolution", file.resolution),
     row("mediaInfo.parsedVideoCodec", file.videoCodecParsed),
     row("mediaInfo.parsedAudioCodec", file.audioCodecParsed),
@@ -524,7 +605,8 @@ export function formatListingExtraValue(value: unknown): string | null {
     const trimmed = value.trim();
     return trimmed === "" ? null : trimmed;
   }
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   if (Array.isArray(value)) {
     const parts = value
       .map((item) => formatListingExtraValue(Array.isArray(item) ? null : item))
@@ -562,26 +644,36 @@ export function mediaInfoReleaseListingSection(
       const value = formatListingExtraValue(listing.extra[key]);
       return value == null ? null : { labelKey: key, label: key, value };
     });
-  return section("media-info-release-listing", "mediaInfo.sectionReleaseListing", [
-    row("mediaInfo.listingPublishedAt", labels.listingPublishedAt),
-    row("mediaInfo.listingAgeAtGrab", labels.listingAgeAtGrab),
-    row("mediaInfo.listingThumbsUp", listing.thumbsUp == null ? null : String(listing.thumbsUp)),
-    row(
-      "mediaInfo.listingThumbsDown",
-      listing.thumbsDown == null ? null : String(listing.thumbsDown),
-    ),
-    row(
-      "mediaInfo.listingPasswordProtected",
-      listing.isPasswordProtected == null
-        ? null
-        : listing.isPasswordProtected
-          ? labels.yes
-          : labels.no,
-    ),
-    row("mediaInfo.listingIndexerLanguages", listing.indexerLanguages.join(", ")),
-    row("mediaInfo.listingCapturedAt", labels.listingCapturedAt),
-    ...extraRows,
-  ]);
+  return section(
+    "media-info-release-listing",
+    "mediaInfo.sectionReleaseListing",
+    [
+      row("mediaInfo.listingPublishedAt", labels.listingPublishedAt),
+      row("mediaInfo.listingAgeAtGrab", labels.listingAgeAtGrab),
+      row(
+        "mediaInfo.listingThumbsUp",
+        listing.thumbsUp == null ? null : String(listing.thumbsUp),
+      ),
+      row(
+        "mediaInfo.listingThumbsDown",
+        listing.thumbsDown == null ? null : String(listing.thumbsDown),
+      ),
+      row(
+        "mediaInfo.listingPasswordProtected",
+        listing.isPasswordProtected == null
+          ? null
+          : listing.isPasswordProtected
+            ? labels.yes
+            : labels.no,
+      ),
+      row(
+        "mediaInfo.listingIndexerLanguages",
+        listing.indexerLanguages.join(", "),
+      ),
+      row("mediaInfo.listingCapturedAt", labels.listingCapturedAt),
+      ...extraRows,
+    ],
+  );
 }
 
 export function audioTrackRows(file: MediaInfoFile): MediaInfoAudioTrackRow[] {
@@ -592,8 +684,10 @@ export function audioTrackRows(file: MediaInfoFile): MediaInfoAudioTrackRow[] {
     if (disposition?.forced) roleKeys.push("mediaInfo.roleForced");
     if (disposition?.original) roleKeys.push("mediaInfo.roleOriginal");
     if (disposition?.commentary) roleKeys.push("mediaFile.commentary");
-    if (disposition?.visualImpaired) roleKeys.push("mediaFile.audioDescription");
-    if (disposition?.hearingImpaired) roleKeys.push("mediaFile.hearingImpaired");
+    if (disposition?.visualImpaired)
+      roleKeys.push("mediaFile.audioDescription");
+    if (disposition?.hearingImpaired)
+      roleKeys.push("mediaFile.hearingImpaired");
     const language = resolveAudioLanguage(stream);
     return {
       index: index + 1,
@@ -601,7 +695,10 @@ export function audioTrackRows(file: MediaInfoFile): MediaInfoAudioTrackRow[] {
       languageInferred: language.inferred,
       codec: resolveAudioCodec(stream.codec),
       profile: stream.profile ?? null,
-      channels: resolveAudioChannels(stream.channels, stream.metadata?.channelLayout),
+      channels: resolveAudioChannels(
+        stream.channels,
+        stream.metadata?.channelLayout,
+      ),
       bitrate:
         stream.bitrateKbps == null
           ? null
@@ -611,14 +708,18 @@ export function audioTrackRows(file: MediaInfoFile): MediaInfoAudioTrackRow[] {
           ? null
           : `${stream.metadata.sampleRate.toLocaleString()} Hz`,
       sampleDepth:
-        stream.metadata?.sampleBitDepth == null ? null : `${stream.metadata.sampleBitDepth}-bit`,
+        stream.metadata?.sampleBitDepth == null
+          ? null
+          : `${stream.metadata.sampleBitDepth}-bit`,
       roleKeys,
       name: stream.name ?? null,
     };
   });
 }
 
-export function subtitleTrackRows(file: MediaInfoFile): MediaInfoSubtitleTrackRow[] {
+export function subtitleTrackRows(
+  file: MediaInfoFile,
+): MediaInfoSubtitleTrackRow[] {
   return subtitleStreamsForFile(file).map((track, index) => ({
     index: index + 1,
     language: formatLanguage(track.language),
@@ -654,7 +755,8 @@ export function captionRows(file: MediaInfoFile): MediaInfoCaptionRow[] {
   return (file.analysis?.captionServices ?? []).map((caption) => ({
     streamId: caption.streamId,
     standard: caption.standard,
-    serviceNumber: caption.serviceNumber == null ? null : String(caption.serviceNumber),
+    serviceNumber:
+      caption.serviceNumber == null ? null : String(caption.serviceNumber),
     language: caption.language,
   }));
 }
@@ -672,7 +774,9 @@ export function mediaInfoSections(
   ].filter((entry): entry is MediaInfoSection => entry != null);
 }
 
-export function mediaFileBaseName(filePath: string | null | undefined): string | null {
+export function mediaFileBaseName(
+  filePath: string | null | undefined,
+): string | null {
   const trimmed = filePath?.trim();
   if (!trimmed) return null;
   return trimmed.split(/[\\/]/).filter(Boolean).pop() ?? trimmed;

@@ -41,7 +41,10 @@ test("a movie's TMDB id and a series' TVDB id stay kindless", () => {
     ],
   );
   assert.deepEqual(
-    metadataResultExternalIds({ tvdbId: "12345", smgId: null, tmdbId: null, imdbId: null }, "ANIME"),
+    metadataResultExternalIds(
+      { tvdbId: "12345", smgId: null, tmdbId: null, imdbId: null },
+      "ANIME",
+    ),
     [{ source: "tvdb", value: "12345" }],
   );
 });

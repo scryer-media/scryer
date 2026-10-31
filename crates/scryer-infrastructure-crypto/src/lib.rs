@@ -2,6 +2,7 @@ use aws_lc_rs::aead::{self, AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, Unb
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
+pub mod artifact_reference;
 pub mod config;
 
 const ENCRYPTED_PREFIX: &str = "enc:v1:";

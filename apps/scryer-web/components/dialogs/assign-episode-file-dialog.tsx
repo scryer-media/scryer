@@ -1,6 +1,9 @@
 import * as React from "react";
 
-import { EpisodeTargetSelect, type EpisodeTargetPickerLabels } from "@/components/common/episode-target-picker";
+import {
+  EpisodeTargetSelect,
+  type EpisodeTargetPickerLabels,
+} from "@/components/common/episode-target-picker";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,7 +50,10 @@ type Props = {
   requireChange: boolean;
   /** Whether a primary-file conflict can be resolved by replacing it. */
   replaceSupported: boolean;
-  onConfirm: (episodeIds: string[], replace: boolean) => Promise<AssignEpisodeFileOutcome>;
+  onConfirm: (
+    episodeIds: string[],
+    replace: boolean,
+  ) => Promise<AssignEpisodeFileOutcome>;
 };
 
 export function AssignEpisodeFileDialog({
@@ -65,7 +71,9 @@ export function AssignEpisodeFileDialog({
   onConfirm,
 }: Props) {
   const t = useTranslate();
-  const [value, setValue] = React.useState(() => episodeSelectionTargetValue(initialEpisodeIds));
+  const [value, setValue] = React.useState(() =>
+    episodeSelectionTargetValue(initialEpisodeIds),
+  );
   const [applying, setApplying] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [conflict, setConflict] = React.useState(false);
@@ -73,7 +81,9 @@ export function AssignEpisodeFileDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    setValue(episodeSelectionTargetValue(initialKey ? initialKey.split(",") : []));
+    setValue(
+      episodeSelectionTargetValue(initialKey ? initialKey.split(",") : []),
+    );
     setError(null);
     setConflict(false);
     setApplying(false);
@@ -86,7 +96,10 @@ export function AssignEpisodeFileDialog({
   const targetLabels = React.useMemo(() => {
     const labels = new Map<string, string>();
     (episodes ?? []).forEach((episode) => {
-      labels.set(episodeTargetValue([episode.id]), episodeTargetLabel(episode, t));
+      labels.set(
+        episodeTargetValue([episode.id]),
+        episodeTargetLabel(episode, t),
+      );
     });
     return labels;
   }, [episodes, t]);
@@ -105,8 +118,10 @@ export function AssignEpisodeFileDialog({
   );
 
   const selectedIds = React.useMemo(() => episodeTargetIds(value), [value]);
-  const unchanged = requireChange && sameEpisodeSelection(selectedIds, initialEpisodeIds);
-  const canApply = !applying && episodes !== null && selectedIds.length > 0 && !unchanged;
+  const unchanged =
+    requireChange && sameEpisodeSelection(selectedIds, initialEpisodeIds);
+  const canApply =
+    !applying && episodes !== null && selectedIds.length > 0 && !unchanged;
 
   const handleChange = React.useCallback((next: string) => {
     setValue(next);
@@ -136,11 +151,22 @@ export function AssignEpisodeFileDialog({
   );
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (applying ? undefined : onOpenChange(next))}>
-      <DialogContent id={`${idPrefix}-dialog`} className="max-h-[90dvh] overflow-y-auto sm:max-w-lg" aria-describedby={description ? `${idPrefix}-description` : undefined}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => (applying ? undefined : onOpenChange(next))}
+    >
+      <DialogContent
+        id={`${idPrefix}-dialog`}
+        className="max-h-[90dvh] overflow-y-auto sm:max-w-lg"
+        aria-describedby={description ? `${idPrefix}-description` : undefined}
+      >
         <DialogHeader>
           <DialogTitle>{t("episodeAssign.dialogTitle")}</DialogTitle>
-          {description ? <DialogDescription id={`${idPrefix}-description`}>{description}</DialogDescription> : null}
+          {description ? (
+            <DialogDescription id={`${idPrefix}-description`}>
+              {description}
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
         <div className="space-y-4">
           {fileName ? (
@@ -186,7 +212,9 @@ export function AssignEpisodeFileDialog({
                 onChange={handleChange}
               />
               {unchanged && selectedIds.length > 0 ? (
-                <p className="text-xs text-muted-foreground">{t("episodeAssign.unchanged")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("episodeAssign.unchanged")}
+                </p>
               ) : null}
             </div>
           )}

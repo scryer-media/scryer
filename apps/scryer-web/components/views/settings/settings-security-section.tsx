@@ -3,7 +3,11 @@ import { InfoHelp } from "@/components/common/info-help";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { CheckboxField } from "@/components/ui/checkbox";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { SecuritySettings } from "@/lib/types/settings";
@@ -128,7 +132,9 @@ export function SettingsSecuritySection({
                 onClick={() => onToggle(!settings.formLoginEnabled)}
               >
                 {busy ? <LoadingMark className="h-4 w-4" /> : null}
-                {settings.formLoginEnabled ? t("label.disable") : t("label.enable")}
+                {settings.formLoginEnabled
+                  ? t("label.disable")
+                  : t("label.enable")}
               </Button>
             </div>
           </div>
@@ -152,15 +158,21 @@ export function SettingsSecuritySection({
                       value={passwordMinLengthDraft}
                       disabled={busy}
                       onBlur={(event) =>
-                        void onPasswordMinLengthSubmit(event.currentTarget.value)
+                        void onPasswordMinLengthSubmit(
+                          event.currentTarget.value,
+                        )
                       }
                       onChange={(event) =>
-                        onPasswordMinLengthDraftChange(sanitizeDigits(event.target.value))
+                        onPasswordMinLengthDraftChange(
+                          sanitizeDigits(event.target.value),
+                        )
                       }
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
-                          void onPasswordMinLengthSubmit(event.currentTarget.value);
+                          void onPasswordMinLengthSubmit(
+                            event.currentTarget.value,
+                          );
                         }
                       }}
                     />
@@ -177,13 +189,21 @@ export function SettingsSecuritySection({
                         value={sessionDurationDraft}
                         disabled={busy}
                         onChange={(event) =>
-                          onSessionDurationDraftChange(sanitizeDigits(event.target.value))
+                          onSessionDurationDraftChange(
+                            sanitizeDigits(event.target.value),
+                          )
                         }
-                        onBlur={(event) => void onSessionDurationSubmit(event.currentTarget.value)}
+                        onBlur={(event) =>
+                          void onSessionDurationSubmit(
+                            event.currentTarget.value,
+                          )
+                        }
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
                             event.preventDefault();
-                            void onSessionDurationSubmit(event.currentTarget.value);
+                            void onSessionDurationSubmit(
+                              event.currentTarget.value,
+                            );
                           }
                         }}
                       />
@@ -291,7 +311,9 @@ export function SettingsSecuritySection({
                   id="security-mfa-emby-login"
                   checked={settings.mfaRequireEmbyLogin}
                   disabled={busy}
-                  onCheckedChange={(checked) => onTotpEmbyLoginChange(checked === true)}
+                  onCheckedChange={(checked) =>
+                    onTotpEmbyLoginChange(checked === true)
+                  }
                   label="Require MFA for Emby login"
                   labelAccessory={
                     <InfoHelp
@@ -309,7 +331,9 @@ export function SettingsSecuritySection({
         {settings.envOverrideActive ? (
           <div className="space-y-3 rounded-[14px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-4 shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
             <div className="space-y-1">
-              <h4 className="text-sm font-medium text-[var(--scry-ink2)]">{t("settings.securityOverrideTitle")}</h4>
+              <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
+                {t("settings.securityOverrideTitle")}
+              </h4>
               <p className="text-xs text-[var(--scry-muted3)]">
                 {t("settings.securityOverrideDescription")}
               </p>
@@ -395,11 +419,16 @@ export function SettingsSecuritySection({
               autoComplete="new-password"
               ignorePasswordManagers
               value={newPasswordConfirm}
-              onChange={(event) => onNewPasswordConfirmChange(event.target.value)}
+              onChange={(event) =>
+                onNewPasswordConfirmChange(event.target.value)
+              }
             />
           </div>
           {setPasswordError ? (
-            <p id="settings-security-set-password-error" className="text-xs text-destructive">
+            <p
+              id="settings-security-set-password-error"
+              className="text-xs text-destructive"
+            >
               {setPasswordError}
             </p>
           ) : null}
@@ -437,7 +466,10 @@ export function SettingsSecuritySection({
             />
           </div>
           {confirmError ? (
-            <p id="settings-security-confirm-error" className="text-xs text-destructive">
+            <p
+              id="settings-security-confirm-error"
+              className="text-xs text-destructive"
+            >
               {confirmError}
             </p>
           ) : null}

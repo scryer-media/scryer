@@ -92,25 +92,34 @@ fn parse_backup_download_authorization(
         .as_ref()
         .is_some_and(|query| query.split('&').any(|pair| pair.starts_with("ticket=")))
     {
-        return Err(AppError::Unauthorized(
-            "backup download ticket query is not accepted".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_BACKUP_TICKET_QUERY_FORBIDDEN,
+            "backup download ticket query is not accepted",
         ));
     }
 
     let Some(value) = headers.get(header::AUTHORIZATION) else {
-        return Err(AppError::Unauthorized(
-            "backup download authorization is required".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_BACKUP_DOWNLOAD_AUTHORIZATION_REQUIRED,
+            "backup download authorization is required",
         ));
     };
-    let value = value
-        .to_str()
-        .map_err(|_| AppError::Unauthorized("backup download authorization is invalid".into()))?;
-    let (scheme, token) = value
-        .split_once(' ')
-        .ok_or_else(|| AppError::Unauthorized("backup download authorization is invalid".into()))?;
+    let value = value.to_str().map_err(|_| {
+        AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_BACKUP_DOWNLOAD_AUTHORIZATION_INVALID,
+            "backup download authorization is invalid",
+        )
+    })?;
+    let (scheme, token) = value.split_once(' ').ok_or_else(|| {
+        AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_BACKUP_DOWNLOAD_AUTHORIZATION_INVALID,
+            "backup download authorization is invalid",
+        )
+    })?;
     if !scheme.eq_ignore_ascii_case("bearer") || token.trim().is_empty() || token.contains(' ') {
-        return Err(AppError::Unauthorized(
-            "backup download authorization is invalid".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_BACKUP_DOWNLOAD_AUTHORIZATION_INVALID,
+            "backup download authorization is invalid",
         ));
     }
 
@@ -186,8 +195,11 @@ fn stage_file_for_promotion(source: &Path, target: &Path) -> std::io::Result<()>
     }
     let temp = promotion_temp_path(target);
     remove_file_if_exists(&temp)?;
-    std::fs::copy(source, &temp)?;
-    ensure_owner_only_permissions(&temp)
+    let mut input = scryer_application::RestoreReader::new(std::fs::File::open(source)?);
+    let mut output = std::fs::File::create(&temp)?;
+    ensure_owner_only_permissions(&temp)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()
 }
 
 fn promote_staged_file(target: &Path) -> std::io::Result<()> {
@@ -214,6 +226,34 @@ fn retire_live_file_without_replacement(target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Make renames inside `directory` durable. Windows offers no directory
+/// handle to flush; NTFS journals the rename itself.
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::File::open(directory)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn sync_parent_directories(targets: &[PathBuf]) -> std::io::Result<()> {
+    let mut synced: Vec<&Path> = Vec::new();
+    for parent in targets.iter().filter_map(|target| target.parent()) {
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        if !synced.contains(&parent) {
+            sync_directory(parent)?;
+            synced.push(parent);
+        }
+    }
+    Ok(())
+}
+
 fn recover_interrupted_restore_promotion(targets: &[PathBuf]) -> std::io::Result<()> {
     for target in targets {
         restore_backup_file_if_present(target)?;
@@ -230,8 +270,12 @@ fn cleanup_restore_promotion_artifacts(targets: &[PathBuf]) -> std::io::Result<(
 
 fn load_backup_metadata(backup_dir: &Path, filename: &str) -> Result<BackupInfo, AppError> {
     let path = metadata_path_for_backup(backup_dir, filename);
-    let bytes = std::fs::read(&path)
-        .map_err(|error| AppError::NotFound(format!("backup metadata not found: {error}")))?;
+    let bytes = std::fs::read(&path).map_err(|error| {
+        AppError::not_found_reason(
+            crate::error_reasons::HTTP_BACKUP_METADATA_NOT_FOUND,
+            format!("backup metadata not found: {error}"),
+        )
+    })?;
     serde_json::from_slice::<BackupInfo>(&bytes)
         .map_err(|error| AppError::Repository(format!("backup metadata is invalid: {error}")))
 }
@@ -260,7 +304,10 @@ pub(crate) async fn download_backup_handler(
         Err(error) => return map_app_error(error),
     };
     if !is_supported_backup_filename(&filename) {
-        return map_app_error(AppError::Validation("invalid backup filename".into()));
+        return map_app_error(AppError::validation_refused(
+            crate::error_reasons::HTTP_BACKUP_FILENAME_INVALID,
+            "invalid backup filename",
+        ));
     }
     let info = match load_backup_metadata(&backup_dir, &filename) {
         Ok(info) => info,
@@ -290,9 +337,10 @@ pub(crate) async fn download_backup_handler(
     let file = match tokio::fs::File::open(&bundle).await {
         Ok(file) => file,
         Err(error) => {
-            return map_app_error(AppError::NotFound(format!(
-                "backup bundle not found: {error}"
-            )));
+            return map_app_error(AppError::not_found_reason(
+                crate::error_reasons::HTTP_BACKUP_BUNDLE_NOT_FOUND,
+                format!("backup bundle not found: {error}"),
+            ));
         }
     };
     let content_length = match file.metadata().await {
@@ -350,6 +398,21 @@ where
     if !pending_dir.exists() {
         return Ok(false);
     }
+    let target_secrets = managed_instance_secrets_path(data_dir);
+    let mut promotion_targets = vec![target_secrets.clone()];
+    if datastore_config.engine == DatastoreEngine::Sqlite {
+        promotion_targets.extend(sqlite_related_paths(&datastore_file_path(
+            &datastore_config.database_url,
+        )));
+    }
+    let promoted_marker = pending_dir.join("restore-promoted");
+    if std::fs::read(&promoted_marker).is_ok_and(|bytes| bytes == b"complete") {
+        // All replacements committed before cleanup began. A restart during
+        // cleanup must never roll back only the backups that remain.
+        cleanup_restore_promotion_artifacts(&promotion_targets).map_err(restore_recovery_error)?;
+        let _ = std::fs::remove_dir_all(&pending_dir);
+        return Ok(true);
+    }
     if !pending_ready.exists() {
         let _ = std::fs::remove_dir_all(&pending_dir);
         return Ok(false);
@@ -362,91 +425,252 @@ where
             "pending restore secrets are missing",
         ));
     }
+    recover_interrupted_restore_promotion(&promotion_targets).map_err(restore_recovery_error)?;
+    scryer_application::check_restore_deadline().map_err(std::io::Error::other)?;
 
-    let target_secrets = managed_instance_secrets_path(data_dir);
-    let mut promotion_targets = vec![target_secrets.clone()];
-    recover_interrupted_restore_promotion(&promotion_targets)?;
-
-    let promotion_result = match datastore_config.engine {
-        DatastoreEngine::Postgres => {
-            let prepared_bundle_dir = pending_restore_prepared_bundle_dir(data_dir);
-            if !prepared_bundle_dir.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "pending restore bundle is missing",
-                ));
-            }
-            restore_postgres_bundle(prepared_bundle_dir, datastore_config.clone())
-                .await
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            stage_file_for_promotion(&pending_secrets, &target_secrets)?;
-            promote_staged_file(&target_secrets)
-        }
-        DatastoreEngine::Sqlite => {
-            let pending_db = pending_restore_db_path(data_dir);
-            if !pending_db.exists() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "pending restore database is missing",
-                ));
-            }
-
-            let target_db = datastore_file_path(&datastore_config.database_url);
-            let target_db_paths = sqlite_related_paths(&target_db);
-            promotion_targets.extend(target_db_paths.clone());
-            recover_interrupted_restore_promotion(&target_db_paths)?;
-
-            for (pending_path, target_path) in sqlite_related_paths(&pending_db)
-                .into_iter()
-                .zip(target_db_paths.iter())
-            {
-                if pending_path.exists() {
-                    stage_file_for_promotion(&pending_path, target_path)?;
+    let mut postgres_committed = false;
+    let promotion_result = async {
+        match datastore_config.engine {
+            DatastoreEngine::Postgres => {
+                let prepared_bundle_dir = pending_restore_prepared_bundle_dir(data_dir);
+                if !prepared_bundle_dir.exists() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "pending restore bundle is missing",
+                    ));
                 }
+                stage_file_for_promotion(&pending_secrets, &target_secrets)?;
+                restore_postgres_bundle(prepared_bundle_dir, datastore_config.clone())
+                    .await
+                    .map_err(std::io::Error::other)?;
+                postgres_committed = true;
+                promote_staged_file(&target_secrets)
             }
-            stage_file_for_promotion(&pending_secrets, &target_secrets)?;
-
-            for (pending_path, target_path) in sqlite_related_paths(&pending_db)
-                .into_iter()
-                .zip(target_db_paths.iter())
-            {
-                if pending_path.exists() {
-                    promote_staged_file(target_path)?;
-                } else {
-                    retire_live_file_without_replacement(target_path)?;
+            DatastoreEngine::Sqlite => {
+                let pending_db = pending_restore_db_path(data_dir);
+                if !pending_db.exists() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "pending restore database is missing",
+                    ));
                 }
+
+                let target_db = datastore_file_path(&datastore_config.database_url);
+                let target_db_paths = sqlite_related_paths(&target_db);
+
+                for (pending_path, target_path) in sqlite_related_paths(&pending_db)
+                    .into_iter()
+                    .zip(target_db_paths.iter())
+                {
+                    if pending_path.exists() {
+                        stage_file_for_promotion(&pending_path, target_path)?;
+                    }
+                }
+                stage_file_for_promotion(&pending_secrets, &target_secrets)?;
+
+                // Promotion is recovery-protected once it starts. Expiry before
+                // that boundary leaves the live files intact; expiry afterward
+                // must not interrupt the multi-file promotion.
+                scryer_application::check_restore_deadline().map_err(std::io::Error::other)?;
+                for (pending_path, target_path) in sqlite_related_paths(&pending_db)
+                    .into_iter()
+                    .zip(target_db_paths.iter())
+                {
+                    if pending_path.exists() {
+                        promote_staged_file(target_path)?;
+                    } else {
+                        retire_live_file_without_replacement(target_path)?;
+                    }
+                }
+                promote_staged_file(&target_secrets)
             }
-            promote_staged_file(&target_secrets)
         }
-    };
+    }
+    .await;
 
     if let Err(error) = promotion_result {
-        let _ = recover_interrupted_restore_promotion(&promotion_targets);
+        if postgres_committed {
+            // The transaction is committed. Restoring old secrets here could
+            // pair them with the new database; retain all recovery artifacts.
+            return Err(restore_recovery_error(error));
+        }
+        recover_interrupted_restore_promotion(&promotion_targets)
+            .map_err(restore_recovery_error)?;
         return Err(error);
     }
 
-    cleanup_restore_promotion_artifacts(&promotion_targets)?;
+    // The marker lives in another directory from the files it vouches for,
+    // so their renames must be durable before it is. Then the marker's own
+    // entry must be durable before cleanup removes any rollback copy.
+    sync_parent_directories(&promotion_targets).map_err(restore_recovery_error)?;
+    std::fs::write(&promoted_marker, b"complete").map_err(restore_recovery_error)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&promoted_marker)
+        .and_then(|file| file.sync_all())
+        .map_err(restore_recovery_error)?;
+    sync_directory(&pending_dir).map_err(restore_recovery_error)?;
+    cleanup_restore_promotion_artifacts(&promotion_targets).map_err(restore_recovery_error)?;
     let _ = std::fs::remove_dir_all(&pending_dir);
     Ok(true)
+}
+
+fn restore_recovery_error(error: std::io::Error) -> std::io::Error {
+    std::io::Error::other(AppError::validation_refused(
+        scryer_application::restore_refusal::RESTORE_RECOVERY_REQUIRED,
+        format!("Restore promotion needs recovery: {error}"),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn staged_fixture(data: &Path) {
+        std::fs::create_dir_all(pending_restore_dir(data)).unwrap();
+        std::fs::write(pending_restore_db_path(data), b"restored database").unwrap();
+        std::fs::write(
+            pending_restore_instance_secrets_path(data),
+            b"restored secrets",
+        )
+        .unwrap();
+        std::fs::write(pending_restore_ready_path(data), b"ready").unwrap();
+        std::fs::write(data.join("scryer.db"), b"original database").unwrap();
+        std::fs::write(managed_instance_secrets_path(data), b"original secrets").unwrap();
+        std::fs::write(data.join("unrelated"), b"preserve").unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_restore_expiry_before_promotion_preserves_live_files() {
+        let fixture = tempfile::tempdir().unwrap();
+        let data = fixture.path();
+        staged_fixture(data);
+        let deadline = scryer_application::RestoreDeadline::new();
+        deadline.cancel();
+        let config = DatastoreConfig::sqlite(
+            format!("sqlite://{}", data.join("scryer.db").display()),
+            data,
+            scryer_infrastructure_datastore::MigrationMode::Apply,
+        );
+        let error = deadline
+            .scope(finalize_pending_restore_if_present(data, &config))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<AppError>()
+                .unwrap()
+                .validation_reason(),
+            Some(scryer_application::restore_refusal::RESTORE_DEADLINE_EXCEEDED)
+        );
+        assert_eq!(
+            std::fs::read(data.join("scryer.db")).unwrap(),
+            b"original database"
+        );
+        assert_eq!(
+            std::fs::read(managed_instance_secrets_path(data)).unwrap(),
+            b"original secrets"
+        );
+        assert_eq!(std::fs::read(data.join("unrelated")).unwrap(), b"preserve");
+    }
+
+    #[tokio::test]
+    async fn background_restore_committed_promotion_cleanup_never_partially_rolls_back() {
+        let fixture = tempfile::tempdir().unwrap();
+        let data = fixture.path();
+        staged_fixture(data);
+        let db = data.join("scryer.db");
+        std::fs::write(&db, b"committed database").unwrap();
+        std::fs::write(managed_instance_secrets_path(data), b"committed secrets").unwrap();
+        // Only one backup remains after a crash during cleanup.
+        std::fs::write(promotion_backup_path(&db), b"original database").unwrap();
+        std::fs::write(
+            pending_restore_dir(data).join("restore-promoted"),
+            b"complete",
+        )
+        .unwrap();
+        // Interrupted staging-directory cleanup may already have removed
+        // its inputs. The durable commit marker still owns recovery.
+        std::fs::remove_file(pending_restore_ready_path(data)).unwrap();
+        std::fs::remove_file(pending_restore_instance_secrets_path(data)).unwrap();
+        let deadline = scryer_application::RestoreDeadline::new();
+        deadline.cancel();
+        let config = DatastoreConfig::sqlite(
+            format!("sqlite://{}", db.display()),
+            data,
+            scryer_infrastructure_datastore::MigrationMode::Apply,
+        );
+        assert!(
+            deadline
+                .scope(finalize_pending_restore_if_present(data, &config))
+                .await
+                .unwrap()
+        );
+        assert_eq!(std::fs::read(db).unwrap(), b"committed database");
+        assert_eq!(
+            std::fs::read(managed_instance_secrets_path(data)).unwrap(),
+            b"committed secrets"
+        );
+        assert_eq!(std::fs::read(data.join("unrelated")).unwrap(), b"preserve");
+    }
+
+    #[tokio::test]
+    async fn background_restore_expiry_after_postgres_commit_finishes_secret_promotion() {
+        let fixture = tempfile::tempdir().unwrap();
+        let data = fixture.path();
+        staged_fixture(data);
+        std::fs::create_dir_all(pending_restore_prepared_bundle_dir(data)).unwrap();
+        let deadline = scryer_application::RestoreDeadline::new();
+        let config = DatastoreConfig::postgres(
+            "postgres://unused/fixture",
+            "postgres://unused/fixture",
+            scryer_infrastructure_runtime::DatastoreConfigSource::EnvDbUrl,
+            data,
+            scryer_infrastructure_datastore::MigrationMode::Apply,
+        );
+        let result = deadline
+            .scope(finalize_pending_restore_if_present_with_postgres_restore(
+                data,
+                &config,
+                |_, _| async {
+                    deadline.cancel();
+                    Ok(())
+                },
+            ))
+            .await
+            .unwrap();
+        assert!(result);
+        assert_eq!(
+            std::fs::read(managed_instance_secrets_path(data)).unwrap(),
+            b"restored secrets"
+        );
+        assert_eq!(std::fs::read(data.join("unrelated")).unwrap(), b"preserve");
+    }
+
     #[test]
     fn parse_backup_download_authorization_requires_bearer_token() {
         let missing = parse_backup_download_authorization(&HeaderMap::new(), None).unwrap_err();
-        assert!(matches!(missing, AppError::Unauthorized(_)));
+        assert!(matches!(
+            missing,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ));
 
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer "));
         let blank = parse_backup_download_authorization(&headers, None).unwrap_err();
-        assert!(matches!(blank, AppError::Unauthorized(_)));
+        assert!(matches!(
+            blank,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ));
 
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic abc"));
         let wrong_scheme = parse_backup_download_authorization(&headers, None).unwrap_err();
-        assert!(matches!(wrong_scheme, AppError::Unauthorized(_)));
+        assert!(matches!(
+            wrong_scheme,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ));
     }
 
     #[test]
@@ -472,7 +696,10 @@ mod tests {
 
         let error = parse_backup_download_authorization(&headers, Some("ticket=abc.def"))
             .expect_err("query tickets should be rejected");
-        assert!(matches!(error, AppError::Unauthorized(_)));
+        assert!(matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ));
     }
 
     #[tokio::test]

@@ -1,49 +1,72 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "此发布的详细信息已不可用。请重新搜索以获取。",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "系统时钟偏差超过 5 分钟，Scryer 无法连接到元数据网关。请同步系统时钟并重启 Scryer。",
+  "httpRelease.refusal.detailsUnavailable":
+    "此发布的详细信息已不可用。请重新搜索以获取。",
   "httpRelease.refusal.live": "此发布是直播，无法下载。",
   "httpRelease.refusal.upcoming": "此发布尚未发布。",
   "httpRelease.refusal.removed": "此发布已被提供方移除。",
-  "httpRelease.refusal.unsupportedTransport": "此发布未以 HTTP 下载器可获取的形式提供。",
-  "httpRelease.refusal.separateTracks": "此发布仅以分离的音频和视频轨道提供，无法合并。",
+  "httpRelease.refusal.unsupportedTransport":
+    "此发布未以 HTTP 下载器可获取的形式提供。",
+  "httpRelease.refusal.separateTracks":
+    "此发布仅以分离的音频和视频轨道提供，无法合并。",
   "httpRelease.refusal.noMediaResource": "此发布没有可下载的媒体文件。",
   "httpRelease.refusal.noSubtitleResource": "此发布未提供所需语言的字幕。",
   "titleDelete.refusal.selection": "请选择不重复的标题。",
   "titleDelete.refusal.busy": "删除操作已在进行中。",
   "titleDelete.refusal.preview": "请刷新删除预览并确认。",
   "titleDelete.refusal.confirmation": "输入 DELETE 以确认删除。",
-  "titleDelete.refusal.boundary": "标题文件夹必须位于媒体库根目录内，不能是根目录本身。",
+  "titleDelete.refusal.boundary":
+    "标题文件夹必须位于媒体库根目录内，不能是根目录本身。",
   "titleDelete.refusal.ownership": "无法验证文件夹的归属。文件已保留。",
   "titleDelete.refusal.layout": "无法将此文件夹或其内容作为单个标题安全删除。",
-  "titleDelete.refusal.unavailable": "媒体库根目录不可用。请恢复访问后重新预览。",
-  "titleDelete.refusal.outsideRoots": "文件路径不在任何已配置的媒体库根目录内。请修正媒体库根目录或标题文件夹后重新预览。",
-  "queue.attention.downloadPasswordRetry": "下载密码重试正在等待核对。如果客户端已不再有该任务，请移除此下载。",
+  "titleDelete.refusal.unavailable":
+    "媒体库根目录不可用。请恢复访问后重新预览。",
+  "titleDelete.refusal.outsideRoots":
+    "文件路径不在任何已配置的媒体库根目录内。请修正媒体库根目录或标题文件夹后重新预览。",
+  "queue.attention.downloadPasswordRetry":
+    "下载密码重试正在等待核对。如果客户端已不再有该任务，请移除此下载。",
   "titleDelete.refusal.recycle": "标题已删除，但部分回收站条目无法清除。",
   "titleDelete.refusal.retry": "目录清理失败。请获取新的预览后再重试。",
   "settings.downloadClientHttpDownloadDir": "下载文件夹",
-  "settings.downloadClientHttpDownloadDirHelp": "完成的文件及其部分文件的写入位置（Scryer 看到的路径）。此下载器的队列保存在其中的 .scryer-http 文件夹里。",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "完成的文件及其部分文件的写入位置（Scryer 看到的路径）。此下载器的队列保存在其中的 .scryer-http 文件夹里。",
   "settings.downloadClientHttpMaxConcurrentDownloads": "同时下载数",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "同时下载的发布数量（1 到 8）。",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "同时下载的发布数量（1 到 8）。",
   "settings.downloadClientHttpMaxConnectionsPerHost": "每个主机的连接数",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "可同时从同一服务器获取的下载数量（1 到 8）。",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "可同时从同一服务器获取的下载数量（1 到 8）。",
   "settings.downloadClientHttpBandwidthLimit": "带宽限制（KB/s）",
-  "settings.downloadClientHttpBandwidthLimitHelp": "由此客户端的所有下载共享。留空或 0 表示不限制。",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "由此客户端的所有下载共享。留空或 0 表示不限制。",
   "settings.publicUrlTitle": "公共 URL",
-  "settings.publicUrlHelp": "用户和服务访问 Scryer 所用的地址，例如 https://scryer.example.com。账户关联和 OAuth 会立即使用更改；通行密钥在 Scryer 重启后才使用。",
+  "settings.publicUrlHelp":
+    "用户和服务访问 Scryer 所用的地址，例如 https://scryer.example.com。账户关联和 OAuth 会立即使用更改；通行密钥在 Scryer 重启后才使用。",
   "settings.publicUrlLabel": "公共 URL",
-  "settings.publicUrlEnvironmentLocked": "由 SCRYER_PUBLIC_URL 设置。请修改环境变量以更改它。",
+  "settings.publicUrlEnvironmentLocked":
+    "由 SCRYER_PUBLIC_URL 设置。请修改环境变量以更改它。",
   "settings.publicUrlInvalid": "配置的公共 URL 无效，未被使用：{{error}}",
-  "settings.publicUrlError.invalid_url": "请输入绝对的 http 或 https URL，例如 https://scryer.example.com。",
-  "settings.publicUrlError.wildcard_host": "公共 URL 必须指定单个主机，不能使用通配符。",
+  "settings.publicUrlError.invalid_url":
+    "请输入绝对的 http 或 https URL，例如 https://scryer.example.com。",
+  "settings.publicUrlError.wildcard_host":
+    "公共 URL 必须指定单个主机，不能使用通配符。",
   "settings.publicUrlError.credentials": "公共 URL 不能包含用户名或密码。",
-  "settings.publicUrlError.query_or_fragment": "公共 URL 不能包含查询字符串或片段。",
-  "settings.publicUrlError.path_not_allowed": "Scryer 在根路径提供服务，因此公共 URL 不能包含路径。",
-  "settings.publicUrlError.path_mismatch": "公共 URL 的路径必须为空或与 Scryer 的基础路径一致。",
-  "settings.publicUrlError.environment_locked": "公共 URL 由 SCRYER_PUBLIC_URL 设置，无法在此更改。",
+  "settings.publicUrlError.query_or_fragment":
+    "公共 URL 不能包含查询字符串或片段。",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer 在根路径提供服务，因此公共 URL 不能包含路径。",
+  "settings.publicUrlError.path_mismatch":
+    "公共 URL 的路径必须为空或与 Scryer 的基础路径一致。",
+  "settings.publicUrlError.environment_locked":
+    "公共 URL 由 SCRYER_PUBLIC_URL 设置，无法在此更改。",
   "settings.publicUrlError.save_and_reset": "不能同时保存和清除公共 URL。",
-  "settings.publicUrlError.passkey_acknowledgement_required": "此更改会使已注册的通行密钥失效。请确认后再保存。",
-  "settings.publicUrlPasskeyRestart": "通行密钥会在 Scryer 重启后采用更改后的公共 URL。",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "此更改会使已注册的通行密钥失效。请确认后再保存。",
+  "settings.publicUrlPasskeyRestart":
+    "通行密钥会在 Scryer 重启后采用更改后的公共 URL。",
   "settings.publicUrlClear": "清除公共 URL",
   "settings.publicUrlSaved": "公共 URL 已保存。",
   "settings.publicUrlLoadError": "无法加载公共 URL。",
@@ -64,16 +87,22 @@ const zh_CN: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "默认",
   "settings.publicUrlSourcePublicUrl": "公共 URL",
   "settings.publicUrlPasskeyWarningTitle": "现有通行密钥将无法使用",
-  "settings.publicUrlPasskeyWarningChanged": "已为 {{rpId}} 注册通行密钥。下次重启后，通行密钥将改用 {{nextRpId}}，所有现有通行密钥都将无法登录。",
-  "settings.publicUrlPasskeyWarningDisabled": "已为 {{rpId}} 注册通行密钥。此公共 URL 无法使用通行密钥（需要 https 域名或 localhost），因此下次重启后通行密钥将被关闭，所有现有通行密钥都将无法登录。",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}} 位用户拥有通行密钥。其中 {{passkeyOnly}} 位没有身份验证器应用作为第二因素，将被锁定：在其验证因素被重置之前完全无法登录。",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer 无法统计已注册的通行密钥；请假定部分用户会被锁定。",
-  "settings.publicUrlPasskeyWarningRecovery": "要恢复访问，仍能登录的管理员可以打开“{{users}}”，对每位被锁定的用户使用“{{reset}}”；或者恢复原来的公共 URL 并重启 Scryer；或者使用 SCRYER_RECOVERY_ADMIN_PASSWORD 启动 Scryer，以恢复管理员身份登录。",
+  "settings.publicUrlPasskeyWarningChanged":
+    "已为 {{rpId}} 注册通行密钥。下次重启后，通行密钥将改用 {{nextRpId}}，所有现有通行密钥都将无法登录。",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "已为 {{rpId}} 注册通行密钥。此公共 URL 无法使用通行密钥（需要 https 域名或 localhost），因此下次重启后通行密钥将被关闭，所有现有通行密钥都将无法登录。",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}} 位用户拥有通行密钥。其中 {{passkeyOnly}} 位没有身份验证器应用作为第二因素，将被锁定：在其验证因素被重置之前完全无法登录。",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer 无法统计已注册的通行密钥；请假定部分用户会被锁定。",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "要恢复访问，仍能登录的管理员可以打开“{{users}}”，对每位被锁定的用户使用“{{reset}}”；或者恢复原来的公共 URL 并重启 Scryer；或者使用 SCRYER_RECOVERY_ADMIN_PASSWORD 启动 Scryer，以恢复管理员身份登录。",
   "settings.publicUrlPasskeyWarningConfirm": "仍然保存",
   "scoring.mandatoryRejection": "未满足强制要求",
   "scoring.finalScoreRejection": "最终评分不合格",
   "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分惩罚",
-  "settings.arrImportBlockScoreHelp": "总分必须高于 -9000 且达到配置的最低分数。强制要求仍然有效。",
+  "settings.arrImportBlockScoreHelp":
+    "总分必须高于 -9000 且达到配置的最低分数。强制要求仍然有效。",
   "label.ready": "就绪",
   "label.moreInfo": "更多信息",
   "label.search": "搜索",
@@ -103,7 +132,8 @@ const zh_CN: LocaleDictionary = {
   "label.cancel": "取消",
   "folderBrowser.selectPath": "选择路径",
   "folderBrowser.go": "前往",
-  "folderBrowser.descriptionFileOrFolder": "浏览 Scryer 主机上的路径并选择文件或文件夹。",
+  "folderBrowser.descriptionFileOrFolder":
+    "浏览 Scryer 主机上的路径并选择文件或文件夹。",
   "folderBrowser.descriptionFile": "浏览 Scryer 主机上的路径并选择文件。",
   "folderBrowser.descriptionFolder": "浏览 Scryer 主机上的路径并选择文件夹。",
   "folderBrowser.loading": "正在加载文件夹",
@@ -112,6 +142,39 @@ const zh_CN: LocaleDictionary = {
   "folderBrowser.error": "无法浏览该路径。",
   "folderBrowser.browseRoot": "浏览 /",
   "folderBrowser.selectFolder": "选择文件夹",
+  "folderBrowser.newFolder": "新建文件夹",
+  "folderBrowser.newFolderName": "文件夹名称",
+  "folderBrowser.create": "创建",
+  "folderBrowser.newFolderFailed": "无法创建文件夹。",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED": "请输入文件夹名称。",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "该名称为保留名称，不能用作文件夹名称。",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    '文件夹名称不能包含 / \\ : * ? " < > | 或控制字符。',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT": "文件夹名称不能以点结尾。",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "文件夹名称不能以点开头，否则文件夹会被隐藏。",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG": "该名称对此驱动器来说太长。",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "此驱动器不接受该名称，请换一个更简单的名称。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE": "请选择绝对文件夹路径。",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING": "当前文件夹已不存在或无法访问。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "当前路径是文件，而不是文件夹。",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "此处已有同名的文件或文件夹。有些驱动器不区分大小写。",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer 无权在此创建文件夹。请检查运行 Scryer 的用户（Docker 中的 PUID 和 PGID）对该文件夹的权限。",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "此驱动器为只读。如果 Scryer 在 Docker 中运行，请检查卷是否以只读方式（:ro）挂载。",
+  "error.reason.FOLDER_CREATE_DISK_FULL": "驱动器已满，或存储配额已用完。",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "此文件夹中的子文件夹数量已达到驱动器允许的上限。",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED": "此位置不支持创建文件夹。",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "驱动器或网络共享没有响应。请检查它是否已连接并挂载。",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer 无法创建文件夹。详细信息请查看服务器日志。",
   "label.clear": "清除",
   "label.add": "添加",
   "label.remove": "移除",
@@ -273,7 +336,6 @@ const zh_CN: LocaleDictionary = {
   "settings.users": "用户",
   "settings.indexers": "索引器",
   "settings.indexerSearch": "索引器搜索",
-  "settings.indexerSearchBetaNotice": "索引器搜索处于测试阶段，其行为和结果在版本之间仍可能变化。",
   "settings.pluginBeta": "测试版",
   "settings.proxies": "代理",
   "settings.proxyUsername": "用户名",
@@ -281,12 +343,15 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyCredentialsStored": "已设置凭据",
   "settings.proxyCredentialUnchanged": "保持不变",
   "settings.proxyClearCredentials": "清除已保存的凭据",
-  "settings.proxyCredentialsHelp": "凭据以加密方式保存，不会再次显示。如果代理不需要凭据，请将两项留空。",
-  "settings.proxyCredentialsStoredHelp": "该代理已保存凭据。留空以保留，或输入新值以替换。",
+  "settings.proxyCredentialsHelp":
+    "凭据以加密方式保存，不会再次显示。如果代理不需要凭据，请将两项留空。",
+  "settings.proxyCredentialsStoredHelp":
+    "该代理已保存凭据。留空以保留，或输入新值以替换。",
   "settings.proxyRemoteDns": "在代理端解析 DNS",
   "settings.proxyRemoteDnsHelp":
     "在代理端解析 DNS 即 socks5h 行为：由代理解析目标主机名，而不是本机。",
-  "settings.proxiesHelp": "代理会为分配给它的索引器和下载客户端转发流量。求解器负责应答浏览器挑战，标准代理是 HTTP 或 SOCKS 中转，隧道则自行建立传输通道。",
+  "settings.proxiesHelp":
+    "代理会为分配给它的索引器和下载客户端转发流量。求解器负责应答浏览器挑战，标准代理是 HTTP 或 SOCKS 中转，隧道则自行建立传输通道。",
   "settings.proxyFamilySolver": "求解器",
   "settings.proxyFamilyStandard": "标准",
   "settings.proxyFamilyTunnel": "隧道",
@@ -312,9 +377,11 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyDisabledHelp": "已分配的代理已停用。",
   "settings.proxyDisabledSuffix": "（已停用）",
   "settings.proxyClearPassword": "清除已保存的密码",
-  "settings.proxyTunnelAuthHelp": "SSH 需要用户名和 Ed25519 私钥，不支持密码认证。",
+  "settings.proxyTunnelAuthHelp":
+    "SSH 需要用户名和 Ed25519 私钥，不支持密码认证。",
   "settings.proxyPrivateKey": "私钥",
-  "settings.proxyPrivateKeyHelp": "仅支持 Ed25519 私钥；请使用 `ssh-keygen -t ed25519` 生成，并粘贴 OpenSSH 格式的私钥。",
+  "settings.proxyPrivateKeyHelp":
+    "仅支持 Ed25519 私钥；请使用 `ssh-keygen -t ed25519` 生成，并粘贴 OpenSSH 格式的私钥。",
   "settings.proxyPrivateKeyStored": "已设置私钥",
   "settings.proxyPrivateKeyUnchanged": "已保存私钥。粘贴新的私钥即可替换。",
   "settings.proxyClearPrivateKey": "清除已保存的私钥",
@@ -322,54 +389,74 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyPrivateKeyPassphraseHelp": "仅当私钥受口令保护时才需要填写。",
   "settings.proxyHostKey": "主机密钥",
   "settings.proxyHostKeyPinnedAt": "固定于 {{time}}。",
-  "settings.proxyHostKeyUnpinned": "尚未固定。首次连接成功时会固定服务器的主机密钥。",
+  "settings.proxyHostKeyUnpinned":
+    "尚未固定。首次连接成功时会固定服务器的主机密钥。",
   "settings.proxyHostKeyReset": "重置主机密钥",
-  "settings.proxyHostKeyResetDescription": "忘记已固定的主机密钥。下次连接会直接信任并固定服务器提供的密钥，因此只有在确认服务器密钥确实更换时才执行。",
+  "settings.proxyHostKeyResetDescription":
+    "忘记已固定的主机密钥。下次连接会直接信任并固定服务器提供的密钥，因此只有在确认服务器密钥确实更换时才执行。",
   "settings.proxyValidationTunnelUsername": "隧道需要用户名。",
   "settings.proxyValidationTunnelAuth": "SSH 隧道需要 Ed25519 私钥。",
-  "settings.downloadClientProxyHelp": "可以分配任意类型的代理。原生客户端的请求并非由插件发出，因此挑战求解器对其无效。",
+  "settings.downloadClientProxyHelp":
+    "可以分配任意类型的代理。原生客户端的请求并非由插件发出，因此挑战求解器对其无效。",
   "status.proxyCreated": "已创建代理。",
   "status.proxyUpdated": "已更新代理。",
   "status.proxyDeleted": "已删除代理 {{name}}。",
   "status.proxyTestPassed": "代理测试通过。",
   "status.proxyTestFailed": "代理测试失败。",
   "status.editingProxy": "正在编辑代理 {{name}}。",
-  "status.proxyHostKeyReset": "已重置 {{name}} 的主机密钥。下次连接会重新固定。",
-  "settings.proxyEndpointHelpWireguard": "wireguard://主机:端口。省略端口时使用 51820。",
-  "settings.proxyPrivateKeyHelpWireguard": "WireGuard 密钥是 32 字节的 base64，与 `wg genkey` 输出的完全一致（44 个字符，以 `=` 结尾）",
+  "status.proxyHostKeyReset":
+    "已重置 {{name}} 的主机密钥。下次连接会重新固定。",
+  "settings.proxyEndpointHelpWireguard":
+    "wireguard://主机:端口。省略端口时使用 51820。",
+  "settings.proxyPrivateKeyHelpWireguard":
+    "WireGuard 密钥是 32 字节的 base64，与 `wg genkey` 输出的完全一致（44 个字符，以 `=` 结尾）",
   "settings.proxyPeerPublicKey": "对端公钥",
-  "settings.proxyPeerPublicKeyHelp": "服务器 `[Peer]` 段中的 `PublicKey` 行。公钥本就是公开的，因此完整显示。",
+  "settings.proxyPeerPublicKeyHelp":
+    "服务器 `[Peer]` 段中的 `PublicKey` 行。公钥本就是公开的，因此完整显示。",
   "settings.proxyPresharedKey": "预共享密钥",
-  "settings.proxyPresharedKeyHelp": "可选。服务器使用预共享密钥时，填入 `PresharedKey` 行。",
+  "settings.proxyPresharedKeyHelp":
+    "可选。服务器使用预共享密钥时，填入 `PresharedKey` 行。",
   "settings.proxyPresharedKeyStored": "已设置预共享密钥",
-  "settings.proxyPresharedKeyUnchanged": "已保存预共享密钥。粘贴新的密钥可替换它。",
+  "settings.proxyPresharedKeyUnchanged":
+    "已保存预共享密钥。粘贴新的密钥可替换它。",
   "settings.proxyClearPresharedKey": "清除已保存的预共享密钥",
   "settings.proxyTunnelAddresses": "地址",
-  "settings.proxyTunnelAddressesHelp": "`[Interface]` 段中的 `Address` 行，例如 10.6.0.2/32。每行一个，或用逗号分隔。",
+  "settings.proxyTunnelAddressesHelp":
+    "`[Interface]` 段中的 `Address` 行，例如 10.6.0.2/32。每行一个，或用逗号分隔。",
   "settings.proxyTunnelDnsServers": "DNS 服务器",
-  "settings.proxyTunnelDnsServersHelp": "通过隧道访问的可选解析器，每行一个或用逗号分隔。不填时只能用 IP 地址访问目标。",
+  "settings.proxyTunnelDnsServersHelp":
+    "通过隧道访问的可选解析器，每行一个或用逗号分隔。不填时只能用 IP 地址访问目标。",
   "settings.proxyTunnelMtu": "MTU",
-  "settings.proxyTunnelMtuHelp": "可选，取值在 {{min}} 到 {{max}} 之间。留空则使用默认值 {{default}}。",
+  "settings.proxyTunnelMtuHelp":
+    "可选，取值在 {{min}} 到 {{max}} 之间。留空则使用默认值 {{default}}。",
   "settings.proxyTunnelKeepalive": "保活间隔",
-  "settings.proxyTunnelKeepaliveHelp": "可选，单位为秒。留空则使用默认值 {{default}}，填 0 可关闭保活。",
+  "settings.proxyTunnelKeepaliveHelp":
+    "可选，单位为秒。留空则使用默认值 {{default}}，填 0 可关闭保活。",
   "settings.proxyTunnelPublicKey": "此隧道的公钥",
-  "settings.proxyTunnelPublicKeyHelp": "把这一行粘贴到服务器 `[Peer]` 段的 `PublicKey` 中。",
+  "settings.proxyTunnelPublicKeyHelp":
+    "把这一行粘贴到服务器 `[Peer]` 段的 `PublicKey` 中。",
   "settings.proxyTunnelPublicKeyPending": "保存私钥后生成。",
   "settings.proxyTunnelPublicKeyCopy": "复制",
   "settings.proxyImportConfig": "导入 WireGuard 配置",
-  "settings.proxyImportConfigHelp": "粘贴 VPN 提供商给你的整份配置，或选择 .conf 文件，下面的字段会据此填充。每个字段同样接受单独粘贴的一行。",
+  "settings.proxyImportConfigHelp":
+    "粘贴 VPN 提供商给你的整份配置，或选择 .conf 文件，下面的字段会据此填充。每个字段同样接受单独粘贴的一行。",
   "settings.proxyImportConfigApply": "填充表单",
   "settings.proxyImportConfigFile": "选择文件",
   "status.proxyImportConfigFilled": "已根据 WireGuard 配置填充表单。",
   "status.proxyImportConfigUnreadable": "这看起来不是 WireGuard 配置。",
-  "status.proxyImportConfigFirstPeer": "其中有 {{count}} 个对端；只导入了第一个。",
+  "status.proxyImportConfigFirstPeer":
+    "其中有 {{count}} 个对端；只导入了第一个。",
   "status.proxyImportConfigIgnored": "已忽略 {{keys}}，隧道代理不会使用它。",
   "settings.proxyValidationWireguardPrivateKey": "WireGuard 需要私钥。",
   "settings.proxyValidationWireguardPeerPublicKey": "WireGuard 需要对端公钥。",
-  "settings.proxyValidationWireguardAddresses": "WireGuard 至少需要一个接口地址，例如 10.6.0.2/32。",
-  "settings.proxyValidationWireguardKeyShape": "{{field}}看起来不是 WireGuard 密钥：密钥是 32 字节的 base64，与 `wg genkey` 输出的完全一致（44 个字符，以 `=` 结尾）。",
-  "settings.proxyValidationWireguardMtu": "隧道 MTU 必须在 {{min}} 到 {{max}} 之间。",
-  "settings.proxyValidationWireguardKeepalive": "保活间隔是以秒为单位的整数，填 0 可关闭。",
+  "settings.proxyValidationWireguardAddresses":
+    "WireGuard 至少需要一个接口地址，例如 10.6.0.2/32。",
+  "settings.proxyValidationWireguardKeyShape":
+    "{{field}}看起来不是 WireGuard 密钥：密钥是 32 字节的 base64，与 `wg genkey` 输出的完全一致（44 个字符，以 `=` 结尾）。",
+  "settings.proxyValidationWireguardMtu":
+    "隧道 MTU 必须在 {{min}} 到 {{max}} 之间。",
+  "settings.proxyValidationWireguardKeepalive":
+    "保活间隔是以秒为单位的整数，填 0 可关闭。",
   "status.proxyTunnelPublicKeyCopied": "已复制公钥。",
   "status.proxyTunnelPublicKeyCopyFailed": "无法复制公钥。",
   "settings.qualityProfiles": "质量配置",
@@ -469,6 +556,10 @@ const zh_CN: LocaleDictionary = {
   "jobs.column.status": "状态",
   "jobs.action.run": "运行",
   "jobs.action.runNow": "立即运行",
+  "jobs.cancelSearchRequested":
+    "已请求取消。当前搜索步骤完成后，其余步骤将停止。",
+  "jobs.cancelSearchNotRunning": "此搜索已不在运行。",
+  "jobs.cancelSearchFailed": "无法取消搜索。",
   "jobs.status.idle": "空闲",
   "jobs.status.queued": "队列中",
   "jobs.status.discovering": "发现中",
@@ -482,7 +573,8 @@ const zh_CN: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "系统内部",
   "deletePreview.counting": "正在计算要删除的文件...",
   "deletePreview.error": "无法准备删除预览。",
-  "deletePreview.folderUnknown": "Scryer 无法确定哪个文件夹存放此作品的文件，因此不会从磁盘删除任何内容。",
+  "deletePreview.folderUnknown":
+    "Scryer 无法确定哪个文件夹存放此作品的文件，因此不会从磁盘删除任何内容。",
   "deletePreview.removeFromCatalogOnly": "仅从目录中移除",
   "deletePreview.files": "文件",
   "deletePreview.media": "媒体",
@@ -512,21 +604,28 @@ const zh_CN: LocaleDictionary = {
   "settings.delayProfiles": "延迟配置",
   "settings.acquisition": "获取",
   "settings.acquisitionSaved": "获取设置已保存。",
-  "settings.acquisitionIntro": "RSS 是稳态获取路径：每个想要的项目在每个索引器上主动搜索一次，之后通过 RSS 监控。主动回填有节奏且有限。",
+  "settings.acquisitionIntro":
+    "RSS 是稳态获取路径：每个想要的项目在每个索引器上主动搜索一次，之后通过 RSS 监控。主动回填有节奏且有限。",
   "settings.acquisitionEnabled": "启用自动获取",
-  "settings.acquisitionEnabledHelp": "运行后台获取循环：收敛搜索扫描与 RSS 匹配。",
+  "settings.acquisitionEnabledHelp":
+    "运行后台获取循环：收敛搜索扫描与 RSS 匹配。",
   "settings.acquisitionThresholds": "升级阈值",
   "settings.acquisitionSameTierMinDelta": "同级最小分数差",
-  "settings.acquisitionSameTierMinDeltaHelp": "同一质量级别的资源必须比当前文件的分数至少高出此值。",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "同一质量级别的资源必须比当前文件的分数至少高出此值。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",
-  "settings.acquisitionPollIntervalSecondsHelp": "检查下载客户端中失败下载的频率。",
+  "settings.acquisitionPollIntervalSecondsHelp":
+    "检查下载客户端中失败下载的频率。",
   "settings.acquisitionWalkIntervalSeconds": "搜索遍历间隔（秒）",
-  "settings.acquisitionWalkIntervalSecondsHelp": "检查媒体库中缺失和可升级的媒体并搜索一批标题的频率。添加标题、编辑质量配置等更改会立即开始一次遍历。遍历的运行频率不会高于轮询间隔。",
+  "settings.acquisitionWalkIntervalSecondsHelp":
+    "检查媒体库中缺失和可升级的媒体并搜索一批标题的频率。添加标题、编辑质量配置等更改会立即开始一次遍历。遍历的运行频率不会高于轮询间隔。",
   "settings.acquisitionMaxScopesPerCycle": "每周期最大评估数",
-  "settings.acquisitionMaxScopesPerCycleHelp": "单个回填周期的评估上限。实际请求速率由索引器速率限制决定，而非此值。",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "单个回填周期的评估上限。实际请求速率由索引器速率限制决定，而非此值。",
   "settings.acquisitionReconvergeDays": "重新收敛间隔（天）",
-  "settings.acquisitionReconvergeDaysHelp": "0 表示禁用（推荐）：已收敛项目通过 RSS 监控。仅当某个源确实不完整时，作为应急复查启用。",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0 表示禁用（推荐）：已收敛项目通过 RSS 监控。仅当某个源确实不完整时，作为应急复查启用。",
   "settings.delayProfileExisting": "现有延迟配置",
   "settings.delayProfileNone": "未配置延迟配置。版本将被立即抓取。",
   "settings.delayProfileCreate": "创建配置",
@@ -564,7 +663,8 @@ const zh_CN: LocaleDictionary = {
   "settings.delayProfileFacetsHelp":
     "此配置适用的内容类型。全部取消选中则适用于所有类型。",
   "settings.delayProfileLibrariesLabel": "媒体库",
-  "settings.delayProfileLibrariesHelp": "此配置适用的媒体库。保持全选则适用于所有媒体库。删除配置的最后一个媒体库会停用该配置。",
+  "settings.delayProfileLibrariesHelp":
+    "此配置适用的媒体库。保持全选则适用于所有媒体库。删除配置的最后一个媒体库会停用该配置。",
   "settings.delayProfileUnknownLibrary": "未知媒体库",
   "settings.delayProfileAllFacets": "全部",
   "settings.delayProfileTagsLabel": "标签",
@@ -681,7 +781,8 @@ const zh_CN: LocaleDictionary = {
   "settings.renameSectionTitle": "文件重命名",
   "settings.renameTokenTitle": "标题名称",
   "settings.renameTokenYear": "发行年份",
-  "settings.renameTokenTitleWithYear": "标题名称加年份（仅当名称末尾尚无年份时添加）",
+  "settings.renameTokenTitleWithYear":
+    "标题名称加年份（仅当名称末尾尚无年份时添加）",
   "settings.renameTokenTitleWithoutYear": "去掉末尾年份的标题名称",
   "settings.renameTokenQuality": "质量（例如 1080p）",
   "settings.renameTokenEdition": "版本（例如 导演剪辑版）",
@@ -692,6 +793,9 @@ const zh_CN: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "来源（例如 BluRay、WEB-DL）",
+  "settings.renameTokenDynamicRange": "动态范围（例如 HDR10、DV、HDR10+）",
+  "settings.renameTokenRevision": "发行修订版（Proper/REPACK）",
+  "settings.renameTokenIs3d": "3D 标记",
   "settings.renameTokenVideoCodec": "视频编码器（例如 x265）",
   "settings.renameTokenAudioCodec": "音频编码器（例如 DTS）",
   "settings.renameTokenAudioChannels": "音频声道（例如 5.1）",
@@ -720,13 +824,17 @@ const zh_CN: LocaleDictionary = {
   "settings.sectionTitle": "设置 • {{section}}",
   "settings.generalText": "通用应用程序设置。",
   "settings.verificationDepthTitle": "导入副本校验",
-  "settings.verificationDepthHelp": "Scryer 在动源文件之前，对复制出的文件核对得有多严格。",
-  "settings.verificationDepthScope": "仅适用于下载客户端的导入副本。无论此处如何选择，媒体库和根目录的移动始终执行完整校验。",
+  "settings.verificationDepthHelp":
+    "Scryer 在动源文件之前，对复制出的文件核对得有多严格。",
+  "settings.verificationDepthScope":
+    "仅适用于下载客户端的导入副本。无论此处如何选择，媒体库和根目录的移动始终执行完整校验。",
   "settings.verificationDepthLabel": "校验深度",
   "settings.verificationDepthFull": "完整回读",
-  "settings.verificationDepthFullHelp": "完整回读副本，并与复制过程中计算的校验和比对。",
+  "settings.verificationDepthFullHelp":
+    "完整回读副本，并与复制过程中计算的校验和比对。",
   "settings.verificationDepthQuick": "快速检查（默认）",
-  "settings.verificationDepthQuickHelp": "比对文件大小以及首尾抽样内容。更快，但保证更弱。",
+  "settings.verificationDepthQuickHelp":
+    "比对文件大小以及首尾抽样内容。更快，但保证更弱。",
   "settings.verificationDepthSaved": "校验深度已保存。",
   "settings.generalPlaceholder": "配置语言和其他全局偏好设置。",
   "settings.historyRetentionTitle": "历史保留",
@@ -741,8 +849,7 @@ const zh_CN: LocaleDictionary = {
   "settings.personalizedDiscoveryLabel": "个性化发现",
   "settings.personalizedDiscoveryHelp":
     "将你的媒体库摘要发送到元数据网关，让发现页可以根据你拥有的内容推荐条目。关闭后，发现页仅使用公共信息流。",
-  "settings.srrdbFilenameRecoveryLabel":
-    "通过 srrdb.com 恢复混淆的文件名",
+  "settings.srrdbFilenameRecoveryLabel": "通过 srrdb.com 恢复混淆的文件名",
   "settings.srrdbFilenameRecoveryHelp":
     "当来自 SABnzbd 或 NZBGet 的自动导入包含名称被混淆的视频文件时，Scryer 会将每个文件的 CRC-32 校验和与大小发送到第三方服务 srrdb.com，以查询原始文件名。不会发送有关你的媒体库或该文件的其他任何信息。磁盘上的文件永远不会被重命名。",
   "discovery.personalizedDisabled": "此实例已关闭个性化发现。",
@@ -906,7 +1013,6 @@ const zh_CN: LocaleDictionary = {
   "title.episodeRange": "第 {{start}} 集 - 第 {{end}} 集",
   "title.episodeCountOne": "{{count}} 集",
   "title.episodeCountOther": "{{count}} 集",
-  "title.searchingReleases": "正在索引站中搜索发布资源…",
   "title.noReleasesFound": "未找到 {{name}} 的发布资源。",
   "title.searchNeedsDownloadClientTitle": "搜索需要下载客户端",
   "title.searchNeedsDownloadClientDescription":
@@ -958,8 +1064,7 @@ const zh_CN: LocaleDictionary = {
   "title.changeFolderCurrentRoot": "当前根目录",
   "title.changeFolderCurrentRootUnknown": "未知",
   "title.changeFolderRootLabel": "根目录",
-  "title.changeFolderRootScopeHelp":
-    "只能选择该标题所属库的根目录内的文件夹。",
+  "title.changeFolderRootScopeHelp": "只能选择该标题所属库的根目录内的文件夹。",
   "title.changeFolderNoRoots": "该标题所属的库没有可浏览的根目录。",
   "title.changeFolderBrowseLoading": "正在加载文件夹…",
   "title.changeFolderBrowseEmpty": "此处没有子文件夹。",
@@ -980,7 +1085,8 @@ const zh_CN: LocaleDictionary = {
   "title.changeFolderNoFilesMoved":
     "不会移动任何文件。仅更改文件夹匹配以及由此派生的媒体关联。",
   "title.changeFolderConflictHeading": "此文件夹已属于另一个标题",
-  "title.changeFolderChooseResolution": "请选择“交换文件夹”或“接管文件夹”以继续。",
+  "title.changeFolderChooseResolution":
+    "请选择“交换文件夹”或“接管文件夹”以继续。",
   "title.changeFolderSwapAction": "交换文件夹",
   "title.changeFolderSwapExplanation":
     "{{owner}} 取得该标题的当前文件夹，该标题取得 {{folder}}。两个标题都会被重新扫描。",
@@ -1097,30 +1203,45 @@ const zh_CN: LocaleDictionary = {
   "queue.ignoreFailed": "无法忽略下载。",
   "queue.releaseHeldSources": "释放保留的源文件",
   "queue.releaseHeldSourcesConfirmTitle": "释放保留的源文件？",
-  "queue.releaseHeldSourcesConfirmDescription": "{{client}} 中的 {{download}} 已完成导入，但其源文件仍被保留。释放后将解除此下载所有导入的保留。临时解压文件夹仅在其中所有视频均已导入且没有其他用途时才会删除。",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}} 设置为移除已完成的下载。Scryer 确认导入后，此下载及其文件将从下载器中移除。",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}} 设置为保留已完成的下载，因此此下载将保留在下载器中。",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{client}} 中的 {{download}} 已完成导入，但其源文件仍被保留。释放后将解除此下载所有导入的保留。临时解压文件夹仅在其中所有视频均已导入且没有其他用途时才会删除。",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}} 设置为移除已完成的下载。Scryer 确认导入后，此下载及其文件将从下载器中移除。",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}} 设置为保留已完成的下载，因此此下载将保留在下载器中。",
   "queue.releaseHeldSourcesSuccess": "已释放保留的源文件。",
   "queue.releaseHeldSourcesFailed": "无法释放保留的源文件。",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "由于字幕仍需处理，源文件被保留。释放后将停止等待并清除警告。",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "由于删除此导入所替换的文件未完成，源文件被保留。",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "此下载的压缩包解压失败，未解压的压缩包从未被导入。只有在证明每个预期文件都已导入时，释放才会将此下载标记为已导入，下载器才可能将其移除；从未导入的内容会一并被移除。",
-  "queue.releaseHeldSourcesReasonUnknown": "Scryer 没有记录这些源文件被保留的原因。只有在证明每个预期文件都已导入时，释放才会将此下载标记为已导入，下载器才可能将其移除；其中从未导入的内容会一并被移除。",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "由于字幕仍需处理，源文件被保留。释放后将停止等待并清除警告。",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "由于删除此导入所替换的文件未完成，源文件被保留。",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "此下载的压缩包解压失败，未解压的压缩包从未被导入。只有在证明每个预期文件都已导入时，释放才会将此下载标记为已导入，下载器才可能将其移除；从未导入的内容会一并被移除。",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "Scryer 没有记录这些源文件被保留的原因。只有在证明每个预期文件都已导入时，释放才会将此下载标记为已导入，下载器才可能将其移除；其中从未导入的内容会一并被移除。",
   "queue.releaseHeldSourcesTitles": "此次释放涉及：{{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}} 会在满足做种要求后移除已完成的下载。Scryer 确认导入后，此下载及其文件将在做种结束时移除。",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "Scryer 无法确定释放后 {{client}} 将如何处理此下载。",
-  "queue.releaseHeldSourcesAwaitingImport": "已释放保留的源文件。下载尚未完全导入，因此已返回导入流程，未移除任何内容。",
-  "queue.releaseHeldSourcesNotSettled": "已释放保留的源文件，但无法更新该下载。请再次释放以完成。",
-  "queue.releaseHeldSourcesUnproven": "已释放保留的源文件，但无法证明此下载的每个文件都已导入，因此未将其标记为已导入，也未清理任何内容。请导入其余文件或自行移除此下载。",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "已释放保留的源文件，但该下载未完成结算，也未清理任何内容。",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "部分临时解压文件夹已保留：{{reasons}}。",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}} 会在满足做种要求后移除已完成的下载。Scryer 确认导入后，此下载及其文件将在做种结束时移除。",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "Scryer 无法确定释放后 {{client}} 将如何处理此下载。",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "已释放保留的源文件。下载尚未完全导入，因此已返回导入流程，未移除任何内容。",
+  "queue.releaseHeldSourcesNotSettled":
+    "已释放保留的源文件，但无法更新该下载。请再次释放以完成。",
+  "queue.releaseHeldSourcesUnproven":
+    "已释放保留的源文件，但无法证明此下载的每个文件都已导入，因此未将其标记为已导入，也未清理任何内容。请导入其余文件或自行移除此下载。",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "已释放保留的源文件，但该下载未完成结算，也未清理任何内容。",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "部分临时解压文件夹已保留：{{reasons}}。",
   "queue.releaseHeldSourcesPreservedNotOwned": "无法确认所有权",
   "queue.releaseHeldSourcesPreservedUnsafe": "内容异常或无法读取",
   "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "包含从未导入的视频",
   "queue.releaseHeldSourcesPreservedInUse": "其他导入仍需要",
   "queue.releaseHeldSourcesPreservedUnverified": "无法确认已导入的文件",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "移除失败",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "未能确认该下载已导入",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "未能确认该下载已导入",
   "queue.releaseHeldSourcesPreservedLookupIncomplete": "无法检查所有文件夹",
   "queue.pause": "暂停",
   "queue.pauseSuccess": "下载已暂停。",
@@ -1136,7 +1257,8 @@ const zh_CN: LocaleDictionary = {
     "确定要从队列中移除此下载吗？此操作无法撤销。",
   "queue.manualUnavailableForResult": "此结果不支持手动入队。",
   "importHistory.retry": "重试导入",
-  "importHistory.retryHelp": "使用当前分配和质量配置重新评估已下载的文件，不会重新下载。",
+  "importHistory.retryHelp":
+    "使用当前分配和质量配置重新评估已下载的文件，不会重新下载。",
   "importHistory.retryWithPassword": "使用密码重试导入",
   "importHistory.passwordRequired": "需要密码",
   "importHistory.passwordPlaceholder": "压缩包密码",
@@ -1176,7 +1298,8 @@ const zh_CN: LocaleDictionary = {
   "settings.indexerStatus": "状态",
   "settings.indexerDisabledUntil": "退避 {{time}}",
   "settings.indexerCoolingDownUntil": "冷却中 · {{time}} 恢复",
-  "settings.indexerCoolingDownHelp": "索引器要求 Scryer 放慢速度。搜索将自动恢复。",
+  "settings.indexerCoolingDownHelp":
+    "索引器要求 Scryer 放慢速度。搜索将自动恢复。",
   "settings.indexerLastError": "错误 {{time}}",
   "settings.indexerLastSearched": "搜索于 {{time}}",
   "settings.indexerNoActivity": "无活动",
@@ -1192,15 +1315,20 @@ const zh_CN: LocaleDictionary = {
   "settings.indexerLoginChallengeError": "无法加载登录图片：{{error}}",
   "settings.indexerLoginChallengeRefresh": "换一张",
   "settings.indexerLoginChallengeRefusal.malformed": "无法读取插件的登录图片。",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "此索引器要求一种 Scryer 无法显示的登录验证。",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "登录图片的格式 Scryer 不显示。",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "登录图片太大，无法显示。",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "此索引器要求一种 Scryer 无法显示的登录验证。",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "登录图片的格式 Scryer 不显示。",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "登录图片太大，无法显示。",
   "settings.newPassword": "新密码",
   "settings.rules": "自定义规则",
   "settings.noRulesFound": "未配置自定义规则。",
   "settings.trashPacksTitle": "TRaSH Guides 区域包",
-  "settings.trashPacksHelp": "源自 TRaSH Guides 的纯打分包。默认关闭。启用后的包会应用于所有符合其条件的条目；设置标签筛选可将其收窄到符合包的区域意图或所列标签的条目。",
-  "settings.trashPackFrenchConflict": "“{{name}}”已启用。启用其他法语包前请先将其停用。",
+  "settings.trashPacksHelp":
+    "源自 TRaSH Guides 的纯打分包。默认关闭。启用后的包会应用于所有符合其条件的条目；设置标签筛选可将其收窄到符合包的区域意图或所列标签的条目。",
+  "settings.trashPackFrenchConflict":
+    "“{{name}}”已启用。启用其他法语包前请先将其停用。",
   "settings.ruleCreate": "创建规则",
   "settings.ruleUpdate": "更新规则",
   "settings.ruleDescription": "描述",
@@ -1526,7 +1654,8 @@ const zh_CN: LocaleDictionary = {
   "status.editingIndexer": "正在编辑索引器 {{name}}",
   "status.editingDownloadClient": "正在编辑下载客户端 {{name}}",
   "status.deletingUser": "删除用户 {{name}}？",
-  "status.deletingUserListsWarning": "此用户关注的列表及其同步记录也会一并删除。",
+  "status.deletingUserListsWarning":
+    "此用户关注的列表及其同步记录也会一并删除。",
   "status.deletingIndexer": "删除索引器 {{name}}？",
   "status.userRequired": "用户名和密码为必填项。",
   "status.passwordRequired": "密码为必填项。",
@@ -1543,31 +1672,44 @@ const zh_CN: LocaleDictionary = {
   "status.titleMonitoringDisabled": "标题监控已禁用。",
   "status.indexerDeleted": "已删除索引器 {{name}}。",
   "plugins.failure.invalidConfig": "插件无法使用这些设置。请检查后重试。",
-  "plugins.failure.authFailed": "服务拒绝了登录信息。请检查 API 密钥、用户名或密码。",
+  "plugins.failure.authFailed":
+    "服务拒绝了登录信息。请检查 API 密钥、用户名或密码。",
   "plugins.failure.rateLimited": "服务要求 Scryer 放慢请求速度。请稍后重试。",
-  "plugins.failure.upstreamUnavailable": "无法连接到服务，或服务没有响应。请检查地址后重试。",
+  "plugins.failure.upstreamUnavailable":
+    "无法连接到服务，或服务没有响应。请检查地址后重试。",
   "plugins.failure.unsupported": "插件不支持此操作。",
   "plugins.failure.temporary": "插件遇到临时问题。请稍后重试。",
-  "plugins.failure.permanent": "插件无法完成此请求。在情况发生变化之前，重试也无济于事。",
+  "plugins.failure.permanent":
+    "插件无法完成此请求。在情况发生变化之前，重试也无济于事。",
   "plugins.failure.hostFailure": "插件意外停止。详细信息请查看 Scryer 日志。",
   "plugins.failure.timedOut": "插件响应时间过长。",
   "plugins.failure.resourceLimit": "插件内存不足。",
   "plugins.failure.withDetail": "{{reason}} 详细信息：{{detail}}",
-  "plugins.failure.invalidUsernamePassword": "服务拒绝了用户名或密码。请检查后重试。",
+  "plugins.failure.invalidUsernamePassword":
+    "服务拒绝了用户名或密码。请检查后重试。",
   "plugins.failure.invalidApiKey": "服务拒绝了 API 密钥。请检查密钥后重试。",
-  "plugins.failure.invalidPasskey": "服务拒绝了 Passkey。请检查 Passkey 后重试。",
-  "plugins.failure.invalidCookie": "服务拒绝了会话 Cookie。请从浏览器复制新的 Cookie 后重试。",
-  "plugins.failure.captchaRequired": "服务要求完成验证码。请先在其网站上登录一次，然后重试。",
-  "plugins.failure.twoFactorRequired": "此次登录需要两步验证码。请改用 API 密钥或应用专用密码。",
+  "plugins.failure.invalidPasskey":
+    "服务拒绝了 Passkey。请检查 Passkey 后重试。",
+  "plugins.failure.invalidCookie":
+    "服务拒绝了会话 Cookie。请从浏览器复制新的 Cookie 后重试。",
+  "plugins.failure.captchaRequired":
+    "服务要求完成验证码。请先在其网站上登录一次，然后重试。",
+  "plugins.failure.twoFactorRequired":
+    "此次登录需要两步验证码。请改用 API 密钥或应用专用密码。",
   "plugins.failure.accountBanned": "服务已封禁此账号。请联系该服务解决。",
-  "plugins.failure.accountDisabled": "服务已停用此账号。请在该服务的网站上检查账号状态。",
-  "plugins.failure.endpointNotFound": "在此地址找不到该服务。请检查 URL 和基础路径。",
+  "plugins.failure.accountDisabled":
+    "服务已停用此账号。请在该服务的网站上检查账号状态。",
+  "plugins.failure.endpointNotFound":
+    "在此地址找不到该服务。请检查 URL 和基础路径。",
   "plugins.failure.tlsError": "无法与服务建立安全连接。请检查地址及其证书。",
-  "plugins.failure.invalidResponse": "服务返回了插件无法读取的响应。请确认地址指向正确的服务。",
-  "plugins.failure.quotaExceeded": "此账号在该服务的配额已用完。请等待配额重置或提高上限。",
+  "plugins.failure.invalidResponse":
+    "服务返回了插件无法读取的响应。请确认地址指向正确的服务。",
+  "plugins.failure.quotaExceeded":
+    "此账号在该服务的配额已用完。请等待配额重置或提高上限。",
   "plugins.failure.itemNotFound": "服务上已不再有此项目。",
   "plugins.failure.downloadRejected": "下载客户端拒绝了此下载。",
-  "plugins.failure.pathNotWritable": "插件无法写入配置的文件夹。请确认文件夹存在且可写入。",
+  "plugins.failure.pathNotWritable":
+    "插件无法写入配置的文件夹。请确认文件夹存在且可写入。",
   "plugins.failure.unknown": "插件报告了一个问题：{{code}}",
   "status.testingIndexerConnection": "正在测试连接…",
   "status.indexerConnectionTestPassed": "索引器连接测试通过。",
@@ -1583,8 +1725,10 @@ const zh_CN: LocaleDictionary = {
   "status.testingDownloadClient": "正在测试 {{client}} 连接…",
   "status.downloadClientConnectionTestPassed": "{{client}} 连接测试通过。",
   "status.downloadClientConnectionTestFailed": "{{client}} 连接测试失败。",
-  "status.autoSearchNoCandidates": "未找到 {{name}} 的发布：没有索引器返回候选。请检查索引器路由分类和索引器状态。",
-  "status.autoSearchAllRejected": "未找到 {{name}} 的发布：自动搜索拒绝了全部 {{count}} 个候选。{{reasons}}",
+  "status.autoSearchNoCandidates":
+    "未找到 {{name}} 的发布：没有索引器返回候选。请检查索引器路由分类和索引器状态。",
+  "status.autoSearchAllRejected":
+    "未找到 {{name}} 的发布：自动搜索拒绝了全部 {{count}} 个候选。{{reasons}}",
   "status.queueFailed": "队列操作失败。",
   "status.apiError": "请求失败",
   "user.created": "已创建用户 {{name}}。",
@@ -1611,14 +1755,18 @@ const zh_CN: LocaleDictionary = {
   "wanted.colIndexers": "索引器",
   "wanted.convergence.searching": "搜索中 {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS 监控中",
-  "wanted.convergence.convergedHint": "已搜索全部索引器 — 新资源将通过 RSS 到达。如需重新检查请运行搜索。",
+  "wanted.convergence.convergedHint":
+    "已搜索全部索引器 — 新资源将通过 RSS 到达。如需重新检查请运行搜索。",
   "wanted.convergence.deferred": "等待索引器配额",
-  "wanted.convergence.deferredHint": "其余索引器均在冷却或配额耗尽；搜索将自动恢复。",
+  "wanted.convergence.deferredHint":
+    "其余索引器均在冷却或配额耗尽；搜索将自动恢复。",
   "wanted.convergence.queuedHot": "排队中 · 近期",
   "wanted.convergence.queuedCold": "排队中 · 长尾",
   "wanted.searchJobStarted": "搜索已开始。",
-  "wanted.searchJobComplete": "搜索完成：已搜索 {{processed}} 项，抓取 {{grabbed}} 项，失败 {{failed}} 项。",
-  "wanted.searchJobCancelled": "已在处理 {{processed}} 项后取消搜索；已抓取 {{grabbed}} 项。",
+  "wanted.searchJobComplete":
+    "搜索完成：已搜索 {{processed}} 项，抓取 {{grabbed}} 项，失败 {{failed}} 项。",
+  "wanted.searchJobCancelled":
+    "已在处理 {{processed}} 项后取消搜索；已抓取 {{grabbed}} 项。",
   "wanted.colPhase": "阶段",
   "wanted.colScore": "分数",
   "wanted.searchNow": "立即搜索",
@@ -1862,6 +2010,7 @@ const zh_CN: LocaleDictionary = {
   "history.seedingStarted": "做种中",
   "history.seedingCompleted": "做种完成",
   "history.downloadIgnored": "已忽略",
+  "history.downloadMissing": "客户端中不可见",
   "history.facet": "分类",
   "history.actions": "操作",
   "history.expandDetails": "展开事件详情",
@@ -1892,12 +2041,18 @@ const zh_CN: LocaleDictionary = {
   "settings.recycleBinRecycled": "回收时间",
   "status.recycleBinEmptied": "回收站已清空（{{count}} 项目已删除）。",
   "status.recycleBinSettingsSaved": "回收站设置已保存。",
-  "settings.recycleBinPathExistingItems": "更改文件夹后，已在回收站中的项目会移动到新文件夹。无法移动的项目会留在原文件夹中，并在保存后显示在此处。",
-  "settings.recycleBinRelocatedOne": "已将 {{count}} 个回收站项目移动到新文件夹。",
-  "settings.recycleBinRelocatedOther": "已将 {{count}} 个回收站项目移动到新文件夹。",
-  "settings.recycleBinRelocationFailedOne": "有 {{count}} 个回收站项目无法移动：",
-  "settings.recycleBinRelocationFailedOther": "有 {{count}} 个回收站项目无法移动：",
-  "status.recycleBinSettingsSavedWithRelocationFailures": "回收站设置已保存，但部分项目无法移动。",
+  "settings.recycleBinPathExistingItems":
+    "更改文件夹后，已在回收站中的项目会移动到新文件夹。无法移动的项目会留在原文件夹中，并在保存后显示在此处。",
+  "settings.recycleBinRelocatedOne":
+    "已将 {{count}} 个回收站项目移动到新文件夹。",
+  "settings.recycleBinRelocatedOther":
+    "已将 {{count}} 个回收站项目移动到新文件夹。",
+  "settings.recycleBinRelocationFailedOne":
+    "有 {{count}} 个回收站项目无法移动：",
+  "settings.recycleBinRelocationFailedOther":
+    "有 {{count}} 个回收站项目无法移动：",
+  "status.recycleBinSettingsSavedWithRelocationFailures":
+    "回收站设置已保存，但部分项目无法移动。",
   "appUpgrade.title": "应用升级",
   "appUpgrade.subtitle": "版本和升级管理",
   "appUpgrade.upgradeNow": "立即升级",
@@ -1925,9 +2080,12 @@ const zh_CN: LocaleDictionary = {
   "appUpgrade.eligibility.disabled_by_operator": "运维人员已禁用应用内升级。",
   "appUpgrade.eligibility.unsupported_layout": "不支持此安装布局。",
   "appUpgrade.eligibility.install_dir_not_writable": "安装目录不可写。",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS 正在从临时副本运行 Scryer。请将 Scryer 移动到应用程序文件夹后再打开。",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer 正在从只读卷运行。请将 Scryer 拖到应用程序文件夹后再打开。",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "此应用不是由 Scryer 应用启动的，因此升级后无法重新启动。",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS 正在从临时副本运行 Scryer。请将 Scryer 移动到应用程序文件夹后再打开。",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer 正在从只读卷运行。请将 Scryer 拖到应用程序文件夹后再打开。",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "此应用不是由 Scryer 应用启动的，因此升级后无法重新启动。",
   "appUpgrade.eligibility.unknown": "无法获取升级资格。",
   "appUpgrade.rebootRequired": "请重新启动 Windows 以完成此次升级。",
   "appUpgrade.activeRun": "正在升级",
@@ -1981,20 +2139,25 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRuleActionPlaceholder": "选择操作",
   "settings.maintenanceRuleNoActions": "没有可用的标题级操作。",
   "settings.maintenanceRuleGraceDays": "宽限天数",
-  "settings.maintenanceRuleGraceDaysHelp": "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",
+  "settings.maintenanceRuleGraceDaysHelp":
+    "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",
   "settings.maintenanceRuleTargetProfile": "目标质量配置",
-  "settings.maintenanceRuleTargetProfileHelp": "此操作会将匹配的标题切换到的配置。",
+  "settings.maintenanceRuleTargetProfileHelp":
+    "此操作会将匹配的标题切换到的配置。",
   "settings.maintenanceRuleTargetProfileIdHelp": "质量配置 ID。",
   "settings.maintenanceRuleLibraries": "媒体库范围",
-  "settings.maintenanceRuleLibrariesHelp": "不勾选任何媒体库时，规则将作用于整个收藏。",
+  "settings.maintenanceRuleLibrariesHelp":
+    "不勾选任何媒体库时，规则将作用于整个收藏。",
   "settings.maintenanceRuleLibrariesAll": "所有媒体库",
   "settings.maintenanceRuleCreate": "创建维护规则",
   "settings.maintenanceRuleUpdate": "更新维护规则",
   "settings.maintenanceRuleCopy": "复制为新规则",
   "settings.maintenanceRuleCreateNew": "新建维护规则",
-  "settings.maintenanceRuleValidationRequired": "名称、匹配器源码和操作为必填项。",
+  "settings.maintenanceRuleValidationRequired":
+    "名称、匹配器源码和操作为必填项。",
   "settings.maintenanceRuleConfirmDiscardTitle": "放弃未保存的更改？",
-  "settings.maintenanceRuleConfirmDiscardDescription": "维护规则编辑器中有未保存的更改，将会丢失。",
+  "settings.maintenanceRuleConfirmDiscardDescription":
+    "维护规则编辑器中有未保存的更改，将会丢失。",
   "settings.maintenanceRuleDeleting": "删除维护规则 {{name}}？",
   "settings.noMaintenanceRulesFound": "暂无维护规则。",
   "settings.maintenanceRuleRevision": "修订版",
@@ -2004,16 +2167,24 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRiskMedium": "中等风险",
   "settings.maintenanceRiskHigh": "高风险",
   "settings.maintenanceActionDoNothing": "不执行任何操作",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles": "取消监控该范围，保留文件",
+  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+    "取消监控该范围，保留文件",
   "settings.maintenanceActionDeleteTitleAndFiles": "删除该标题及其文件",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles": "取消监控该标题，删除全部文件",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles": "取消监控该剧集，删除现有文件",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles": "取消监控该范围，删除其文件",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty": "取消监控该季，删除其文件，若剧集为空则删除该剧集",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty": "取消监控该季，若剧集为空则取消监控该剧集",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged": "更改质量配置，若发生变化则执行搜索",
+  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+    "取消监控该标题，删除全部文件",
+  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+    "取消监控该剧集，删除现有文件",
+  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+    "取消监控该范围，删除其文件",
+  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+    "取消监控该季，删除其文件，若剧集为空则删除该剧集",
+  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+    "取消监控该季，若剧集为空则取消监控该剧集",
+  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+    "更改质量配置，若发生变化则执行搜索",
   "settings.maintenancePreviewTitle": "预览",
-  "settings.maintenancePreviewSubtitle": "针对真实标题运行匹配器。预览为只读：仅报告哪些内容会匹配，不做任何更改。",
+  "settings.maintenancePreviewSubtitle":
+    "针对真实标题运行匹配器。预览为只读：仅报告哪些内容会匹配，不做任何更改。",
   "settings.maintenancePreviewSource": "匹配器",
   "settings.maintenancePreviewSourceStored": "已保存的规则",
   "settings.maintenancePreviewSourceDraft": "编辑器草稿",
@@ -2047,10 +2218,14 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceArmingReversible": "可逆",
   "settings.maintenanceArmingDestructive": "破坏性",
   "settings.maintenanceArmDestructiveLoading": "正在统计该规则已持有的候选项…",
-  "settings.maintenanceArmDestructiveCount": "有 {{count}} 个候选项可能被处理。",
-  "settings.maintenanceArmDestructiveNoCandidates": "该规则目前没有可被处理的候选项。",
-  "settings.maintenanceArmDestructiveCountChanged": "你阅读期间数量发生了变化：该规则现在持有 {{count}} 个。请核对数字并再次确认。",
-  "settings.maintenanceArmDestructiveAcknowledge": "我明白该规则可能删除 {{count}} 个标题的文件。",
+  "settings.maintenanceArmDestructiveCount":
+    "有 {{count}} 个候选项可能被处理。",
+  "settings.maintenanceArmDestructiveNoCandidates":
+    "该规则目前没有可被处理的候选项。",
+  "settings.maintenanceArmDestructiveCountChanged":
+    "你阅读期间数量发生了变化：该规则现在持有 {{count}} 个。请核对数字并再次确认。",
+  "settings.maintenanceArmDestructiveAcknowledge":
+    "我明白该规则可能删除 {{count}} 个标题的文件。",
 
   // ── 维护规则 — 候选项 ──
   "settings.maintenanceCandidatesFilterRule": "规则",
@@ -2103,7 +2278,8 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRunColCounts": "计数",
   "settings.maintenanceRunColDuration": "耗时",
   "settings.maintenanceRunColError": "错误",
-  "settings.maintenanceRunCounts": "已评估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 错误 {{errors}}",
+  "settings.maintenanceRunCounts":
+    "已评估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 错误 {{errors}}",
   "settings.maintenanceRunDuration": "{{seconds}} 秒",
   "settings.maintenanceRunRevision": "修订 {{revision}}",
   "settings.maintenanceRunStatusRunning": "运行中",
@@ -2117,7 +2293,8 @@ const zh_CN: LocaleDictionary = {
 
   // ── 维护规则 — 排除项 ──
   "settings.maintenanceExclusionsTitle": "排除项",
-  "settings.maintenanceExclusionsSubtitle": "维护规则绝不能处理的标题。全局排除对所有规则生效。",
+  "settings.maintenanceExclusionsSubtitle":
+    "维护规则绝不能处理的标题。全局排除对所有规则生效。",
   "settings.maintenanceExclusionsEmpty": "没有排除项。",
   "settings.maintenanceExclusionColScope": "范围",
   "settings.maintenanceExclusionColReason": "原因",
@@ -2127,7 +2304,8 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceExclusionRemoved": "已移除 {{title}} 的排除。",
   "settings.maintenanceExclusionRemoving": "要移除 {{title}} 的排除吗？",
   "settings.maintenanceExcludeTitle": "从维护中排除",
-  "settings.maintenanceExcludeBody": "{{title}} 将从下一次评估起被排除，其候选项会转为已排除。",
+  "settings.maintenanceExcludeBody":
+    "{{title}} 将从下一次评估起被排除，其候选项会转为已排除。",
   "settings.maintenanceExcludeScope": "范围",
   "settings.maintenanceExcludeScopeGlobal": "全部规则",
   "settings.maintenanceExcludeReason": "原因",
@@ -2140,19 +2318,23 @@ const zh_CN: LocaleDictionary = {
   "move.destinationRoot": "目标根目录",
   "move.destinationRootPlaceholder": "选择根目录",
   "move.actionHeading": "移动到…",
-  "move.actionDescription": "将该标题的文件移动到另一个根目录，或移动到另一个库。",
+  "move.actionDescription":
+    "将该标题的文件移动到另一个根目录，或移动到另一个库。",
   "move.actionButton": "移动到…",
   "move.wizardKindDescription": "请选择该标题的去向。",
   "move.kindRootHeading": "移动到另一个根目录",
-  "move.kindRootHelp": "标题仍留在当前库中，只把它的文件移动到该库的另一个根目录。",
+  "move.kindRootHelp":
+    "标题仍留在当前库中，只把它的文件移动到该库的另一个根目录。",
   "move.kindLibraryHeading": "移动到另一个库",
   "move.kindLibraryHelp": "将该标题转移到另一个库，放入该库的某个根目录。",
-  "move.noOtherRoots": "当前库没有其他可作为目标的根目录。请为该库添加根目录，或把该标题移动到另一个库。",
+  "move.noOtherRoots":
+    "当前库没有其他可作为目标的根目录。请为该库添加根目录，或把该标题移动到另一个库。",
   "move.back": "返回",
   "move.next": "下一步",
   "move.destinationRootHelp": "更改目标会打开移动流程，而不是保存标题。",
   "move.destinationNoSelection": "未选择任何标题。",
-  "move.destinationMixedSourceLibraries": "所选内容跨越多个库；请一次移动一个库。",
+  "move.destinationMixedSourceLibraries":
+    "所选内容跨越多个库；请一次移动一个库。",
   "move.destinationCrossLibraryNotice":
     "这些标题将离开当前库，成为 {{library}} 的一部分。",
   "move.destinationLibraryInMoveWorkflow":
@@ -2168,7 +2350,8 @@ const zh_CN: LocaleDictionary = {
   "move.mergeSummaryHeading": "这次合并会做什么",
   "move.mergeNoDetails": "这次合并不会带走其他内容。",
   "move.mergeBlockedHeading": "此合并无法执行：以下记录无法迁移。",
-  "move.mergeCarried": "{{files}} 个媒体文件和 {{history}} 条历史记录会一并带过去。",
+  "move.mergeCarried":
+    "{{files}} 个媒体文件和 {{history}} 条历史记录会一并带过去。",
   "move.mergeDropped":
     "被合并标题的其他 {{count}} 条记录不会被接管，将随其一并退役。",
   "move.mergeRoleChangesHeading": "{{demotions}} 个文件将成为附加副本",
@@ -2188,9 +2371,12 @@ const zh_CN: LocaleDictionary = {
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
   "move.mode.FILES_ALREADY_THERE": "文件已经在那里",
-  "move.modeHelp.MOVE_WITH_SCRYER": "Scryer 会移动或复制文件，并在更改目录前逐个校验。",
-  "move.modeHelp.FILES_ALREADY_THERE": "Scryer 会扫描目标位置并接管你自己移动的文件。",
-  "move.catalogOnlyFastPath": "这些标题在磁盘上没有文件，因此这只是目录重新分配：不移动任何内容，也无需选择模式。",
+  "move.modeHelp.MOVE_WITH_SCRYER":
+    "Scryer 会移动或复制文件，并在更改目录前逐个校验。",
+  "move.modeHelp.FILES_ALREADY_THERE":
+    "Scryer 会扫描目标位置并接管你自己移动的文件。",
+  "move.catalogOnlyFastPath":
+    "这些标题在磁盘上没有文件，因此这只是目录重新分配：不移动任何内容，也无需选择模式。",
   "move.selectDestinationPrompt": "选择一个目标根目录以查看计划。",
   "move.previewLoading": "正在生成计划…",
   "move.previewFailed": "无法预览此次移动。",
@@ -2212,9 +2398,12 @@ const zh_CN: LocaleDictionary = {
   "move.startRefusedNoSpace":
     "目标位置的可用空间不足以完成此次移动。请释放空间或减少要移动的作品数量后重试。",
   "move.freeSpaceNotProbed": "无法测量目标卷。",
-  "move.freeSpaceRecycleOtherVolume": "回收站位于另一个卷上，需要 {{required}}。",
-  "move.verificationStatementFull": "全部 {{files}} 个文件（{{bytes}}）都会被完整回读并比对。",
-  "move.verificationStatementQuick": "全部 {{files}} 个文件（{{bytes}}）都会按头部、尾部和大小进行核对。",
+  "move.freeSpaceRecycleOtherVolume":
+    "回收站位于另一个卷上，需要 {{required}}。",
+  "move.verificationStatementFull":
+    "全部 {{files}} 个文件（{{bytes}}）都会被完整回读并比对。",
+  "move.verificationStatementQuick":
+    "全部 {{files}} 个文件（{{bytes}}）都会按头部、尾部和大小进行核对。",
   "move.verificationNotApplicable": "没有文件移动，因此无需校验。",
   "move.verificationStampFull": "已校验（完整）",
   "move.verificationStampQuick": "已校验（快速）",
@@ -2312,12 +2501,15 @@ const zh_CN: LocaleDictionary = {
   "rootChange.rowAction": "更改根目录",
   "rootChange.unavailableWhileUnsaved": "请先保存或放弃未保存的根目录改动。",
   "rootChange.dialogTitle": "更改根目录",
-  "rootChange.dialogDescription": "{path} 上的所有内容都会移动。整根操作不能落下任何一个条目。",
+  "rootChange.dialogDescription":
+    "{path} 上的所有内容都会移动。整根操作不能落下任何一个条目。",
   "rootChange.destinationHeading": "这个根目录去往何处",
   "rootChange.destinationNewPath": "一个新路径",
-  "rootChange.destinationNewPathHelp": "根目录保留其身份和条目归属，只有路径会改变。",
+  "rootChange.destinationNewPathHelp":
+    "根目录保留其身份和条目归属，只有路径会改变。",
   "rootChange.destinationExistingRoot": "本媒体库的另一个根目录",
-  "rootChange.destinationExistingRootHelp": "这个根目录会并入你选择的根目录，其配置随后被停用。",
+  "rootChange.destinationExistingRootHelp":
+    "这个根目录会并入你选择的根目录，其配置随后被停用。",
   "rootChange.destinationNoOtherRoots": "本媒体库没有可供并入的其他根目录。",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
   "rootChange.planChanged": "自你预览以来计划已发生变化。请在确认前重新预览。",
@@ -2328,12 +2520,16 @@ const zh_CN: LocaleDictionary = {
   "rootChange.startFailed": "无法开始此次根目录更改。",
   "rootChange.startedHeading": "根目录更改已开始。可在活动中跟踪。",
   "rootChange.viewInActivity": "在活动中查看",
-  "rootChange.identityKeepsRoot": "该根目录保留其身份以及全部 {titles} 项条目归属。",
+  "rootChange.identityKeepsRoot":
+    "该根目录保留其身份以及全部 {titles} 项条目归属。",
   "rootChange.identityKeepsDefault": "它仍然是本媒体库的默认根目录。",
   "rootChange.identityLosesDefault": "它不再是本媒体库的默认根目录。",
-  "rootChange.consolidationStatement": "该根目录上的全部 {titles} 个条目都会移动到你选择的根目录。",
-  "rootChange.consolidationRetiresConfiguration": "源根目录的配置会在所有内容落位、回收站处理全部完成之后停用。",
-  "rootChange.defaultTransfers": "目标根目录将成为本媒体库的默认根目录，新内容会保存到那里。",
+  "rootChange.consolidationStatement":
+    "该根目录上的全部 {titles} 个条目都会移动到你选择的根目录。",
+  "rootChange.consolidationRetiresConfiguration":
+    "源根目录的配置会在所有内容落位、回收站处理全部完成之后停用。",
+  "rootChange.defaultTransfers":
+    "目标根目录将成为本媒体库的默认根目录，新内容会保存到那里。",
   "rootChange.defaultStays": "本媒体库的默认根目录不变。",
   "rootChange.accountingHeading": "该根目录上的每一个条目",
   "rootChange.accountingAssigned": "已归属",
@@ -2342,7 +2538,8 @@ const zh_CN: LocaleDictionary = {
   "rootChange.accountingBlocked": "受阻",
   "rootChange.accountingDoesNotClose": "各项数字与总数不符。请勿确认此计划。",
   "rootChange.blockedTitlesHeading": "有 {count} 个条目无法进入本次操作。",
-  "rootChange.blockedTitlesNoExclude": "请在开始前修复。整根操作不能落下任何一个条目。",
+  "rootChange.blockedTitlesNoExclude":
+    "请在开始前修复。整根操作不能落下任何一个条目。",
   "rootChange.groupsHeading": "这次合并会做什么",
   "rootChange.group.movingIntoUnusedFolders": "移入空闲文件夹",
   "rootChange.group.mergingWithDestinationTitles": "合并",
@@ -2358,48 +2555,77 @@ const zh_CN: LocaleDictionary = {
   "rootChange.contentCompanions": "附属文件",
   "rootChange.contentUnknown": "无法解释",
   "rootChange.contentSampled": "此处仅列出前若干条。",
-  "rootChange.unknownContentHelp": "有 {bytes} 的内容不受任何跟踪。它们不会被移动，也不会被删除，因此旧位置会保留。",
+  "rootChange.unknownContentHelp":
+    "有 {bytes} 的内容不受任何跟踪。它们不会被移动，也不会被删除，因此旧位置会保留。",
   "rootChange.retirementHeading": "此后的旧位置",
-  "rootChange.retirementEmptyDirectoriesOnly": "只会删除空目录：共 {count} 个。",
-  "rootChange.retirementVerificationFirst": "在目标副本通过校验之前，源端不会删除任何内容。",
+  "rootChange.retirementEmptyDirectoriesOnly":
+    "只会删除空目录：共 {count} 个。",
+  "rootChange.retirementVerificationFirst":
+    "在目标副本通过校验之前，源端不会删除任何内容。",
   "rootChange.retirementRetainedHeading": "连同内容一并保留：",
   "rootChange.retirementBlockedHeading": "在下列问题解决之前，旧位置会保留：",
   "rootChange.retirementPermitted": "没有任何因素阻止停用旧位置。",
-  "rootChange.verificationStatement": "在任何源文件进入回收站之前，会在目标端完整校验 {files} 个文件（{bytes}）。",
+  "rootChange.verificationStatement":
+    "在任何源文件进入回收站之前，会在目标端完整校验 {files} 个文件（{bytes}）。",
   "rootChange.insufficientSpace": "目标位置没有本次所需的 {required} 空间。",
   "rootChange.typedConfirmationPrompt": "输入该短语以确认",
-  "rootChange.reason.root_identity_retained": "根目录保留其身份，只有路径改变。",
-  "rootChange.reason.catalog_only_root_change": "没有已跟踪的文件，因此这只是目录记录上的重新归属。",
-  "rootChange.reason.title_blocked_for_root_change": "该条目暂时无法进入根目录更改。",
-  "rootChange.reason.unknown_root_content": "根目录上没有任何条目能解释的内容。",
+  "rootChange.reason.root_identity_retained":
+    "根目录保留其身份，只有路径改变。",
+  "rootChange.reason.catalog_only_root_change":
+    "没有已跟踪的文件，因此这只是目录记录上的重新归属。",
+  "rootChange.reason.title_blocked_for_root_change":
+    "该条目暂时无法进入根目录更改。",
+  "rootChange.reason.unknown_root_content":
+    "根目录上没有任何条目能解释的内容。",
   "rootChange.reason.source_retirement_blocked": "旧位置暂时无法停用。",
-  "rootChange.reason.file_outside_title_folder": "一个位于其条目文件夹之外的已跟踪文件。",
-  "rootChange.reason.hardlinked_source": "源文件还有其他硬链接，它们不会随移动一起走。",
-  "rootChange.reason.roots_consolidated": "该根目录上的每个条目都会移动到目标根目录。",
-  "rootChange.reason.default_root_transferred": "目标根目录将成为本媒体库的默认根目录。",
+  "rootChange.reason.file_outside_title_folder":
+    "一个位于其条目文件夹之外的已跟踪文件。",
+  "rootChange.reason.hardlinked_source":
+    "源文件还有其他硬链接，它们不会随移动一起走。",
+  "rootChange.reason.roots_consolidated":
+    "该根目录上的每个条目都会移动到目标根目录。",
+  "rootChange.reason.default_root_transferred":
+    "目标根目录将成为本媒体库的默认根目录。",
   "rootChange.reason.moves_into_unused_folder": "移入一个无人占用的文件夹。",
-  "rootChange.reason.merges_with_destination_title": "与共享同一身份的目标条目合并。",
-  "rootChange.reason.folder_name_uniqued": "目标端的文件夹名已被占用，因此此文件夹会改名。",
-  "rootChange.reason.catalog_only_consolidation": "没有已跟踪的文件，因此这只是目录记录上的重新归属。",
+  "rootChange.reason.merges_with_destination_title":
+    "与共享同一身份的目标条目合并。",
+  "rootChange.reason.folder_name_uniqued":
+    "目标端的文件夹名已被占用，因此此文件夹会改名。",
+  "rootChange.reason.catalog_only_consolidation":
+    "没有已跟踪的文件，因此这只是目录记录上的重新归属。",
   "rootChange.reason.destination_folder_exists": "目标文件夹已存在。",
   "rootChange.retirementBlocker.blocked_titles": "有些条目无法进入本次操作。",
-  "rootChange.retirementBlocker.unexplained_source_content": "源端有无法解释的内容。",
+  "rootChange.retirementBlocker.unexplained_source_content":
+    "源端有无法解释的内容。",
   "rootChange.refusal.root_change_path_not_absolute": "请填写绝对路径。",
-  "rootChange.refusal.root_change_paths_overlap": "新路径位于旧路径之内，或者反过来。",
-  "rootChange.refusal.root_change_source_root_is_symlink": "该根目录是符号链接。请先将其指向真实目录。",
-  "rootChange.refusal.root_change_source_root_unavailable": "该根目录当前不可读，因此无法规划其内容。",
-  "rootChange.refusal.root_change_destination_not_empty": "新路径中已有内容。请选择一个空目录或新目录。",
-  "rootChange.refusal.root_change_destination_parent_missing": "新路径的上级目录不存在。",
-  "rootChange.refusal.root_change_destination_is_configured_root": "该路径已被配置为另一个媒体库的根目录。",
-  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin": "该路径与自定义回收站重叠：它既不能包含回收站，也不能位于回收站之内。",
-  "rootChange.refusal.root_change_mode_not_supported": "更改根目录总是移动文件；此处不提供“文件已就位”。",
+  "rootChange.refusal.root_change_paths_overlap":
+    "新路径位于旧路径之内，或者反过来。",
+  "rootChange.refusal.root_change_source_root_is_symlink":
+    "该根目录是符号链接。请先将其指向真实目录。",
+  "rootChange.refusal.root_change_source_root_unavailable":
+    "该根目录当前不可读，因此无法规划其内容。",
+  "rootChange.refusal.root_change_destination_not_empty":
+    "新路径中已有内容。请选择一个空目录或新目录。",
+  "rootChange.refusal.root_change_destination_parent_missing":
+    "新路径的上级目录不存在。",
+  "rootChange.refusal.root_change_destination_is_configured_root":
+    "该路径已被配置为另一个媒体库的根目录。",
+  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin":
+    "该路径与自定义回收站重叠：它既不能包含回收站，也不能位于回收站之内。",
+  "rootChange.refusal.root_change_mode_not_supported":
+    "更改根目录总是移动文件；此处不提供“文件已就位”。",
   "rootChange.refusal.root_consolidation_path_not_absolute": "请填写绝对路径。",
   "rootChange.refusal.root_consolidation_same_root": "根目录不能并入其自身。",
-  "rootChange.refusal.root_consolidation_paths_overlap": "这两个根目录中的一个位于另一个之内。",
-  "rootChange.refusal.root_consolidation_source_root_is_symlink": "该根目录是符号链接。请先将其指向真实目录。",
-  "rootChange.refusal.root_consolidation_source_root_unavailable": "该根目录当前不可读，因此无法规划其内容。",
-  "rootChange.refusal.root_consolidation_destination_root_unavailable": "目标根目录当前不可读，因此无法针对其已有内容进行规划。",
-  "rootChange.refusal.root_consolidation_mode_not_supported": "合并总是移动文件；此处不提供“文件已就位”。",
+  "rootChange.refusal.root_consolidation_paths_overlap":
+    "这两个根目录中的一个位于另一个之内。",
+  "rootChange.refusal.root_consolidation_source_root_is_symlink":
+    "该根目录是符号链接。请先将其指向真实目录。",
+  "rootChange.refusal.root_consolidation_source_root_unavailable":
+    "该根目录当前不可读，因此无法规划其内容。",
+  "rootChange.refusal.root_consolidation_destination_root_unavailable":
+    "目标根目录当前不可读，因此无法针对其已有内容进行规划。",
+  "rootChange.refusal.root_consolidation_mode_not_supported":
+    "合并总是移动文件；此处不提供“文件已就位”。",
   "indexerSearch.searchWithThisIndexer": "使用此索引器搜索",
   "indexerSearch.queryPlaceholder": "在所有索引器中搜索发布…",
   "indexerSearch.kindLabel": "类型",
@@ -2413,7 +2639,8 @@ const zh_CN: LocaleDictionary = {
   "indexerSearch.scope.indexersAllOption": "所有索引器",
   "indexerSearch.scope.categories": "分类",
   "indexerSearch.scope.categoriesDefault": "按类型默认",
-  "indexerSearch.scope.categoriesHelp": "以逗号分隔的 Newznab 分类 ID。留空则使用所选类型的默认分类。",
+  "indexerSearch.scope.categoriesHelp":
+    "以逗号分隔的 Newznab 分类 ID。留空则使用所选类型的默认分类。",
   "indexerSearch.advanced": "高级",
   "indexerSearch.advanced.minSize": "最小体积",
   "indexerSearch.advanced.maxSize": "最大体积",
@@ -2429,7 +2656,8 @@ const zh_CN: LocaleDictionary = {
   "indexerSearch.health.releases": "{{count}} 个发布",
   "indexerSearch.health.indexers": "索引器 {{answered}}/{{total}}",
   "indexerSearch.health.elapsed": "{{seconds}} 秒",
-  "indexerSearch.health.stillSearching": "{{total}} 个中有 {{count}} 个仍在搜索",
+  "indexerSearch.health.stillSearching":
+    "{{total}} 个中有 {{count}} 个仍在搜索",
   "indexerSearch.health.failed": "失败",
   "indexerSearch.health.coolingDown": "冷却中",
   "indexerSearch.health.skipped": "跳过",
@@ -2508,8 +2736,7 @@ const zh_CN: LocaleDictionary = {
   "grabDialog.gap.wanted": "待获取",
   "grabDialog.season": "季",
   "grabDialog.episode": "集",
-  "grabDialog.episodic.help":
-    "两项都留空，Scryer 会从发布名称中读取季和集。",
+  "grabDialog.episodic.help": "两项都留空，Scryer 会从发布名称中读取季和集。",
   "grabDialog.episodic.incomplete": "请同时填写季和集，或者两项都留空。",
   "grabDialog.client": "下载客户端",
   "grabDialog.client.routed": "按索引器映射",
@@ -2537,7 +2764,8 @@ const zh_CN: LocaleDictionary = {
   "settings.noRequestRulesFound": "暂无请求规则。",
   "settings.requestRuleLibraries": "库",
   "settings.requestRuleLibrariesAll": "所有库",
-  "settings.requestRuleLibrariesHelp": "全部不勾选，则此规则适用于所有库中的请求。",
+  "settings.requestRuleLibrariesHelp":
+    "全部不勾选，则此规则适用于所有库中的请求。",
   "settings.requestRuleRevision": "修订版",
   "settings.requestRuleDecisionCount": "决策数",
   "settings.requestRuleCopy": "复制规则",
@@ -2550,14 +2778,19 @@ const zh_CN: LocaleDictionary = {
   "settings.requestRuleDeleting": "删除请求规则 {{name}}？它记录的决策会保留。",
   "settings.requestRuleValidationRequired": "请求规则需要名称和匹配器。",
   "settings.requestRuleConfirmDiscardTitle": "放弃未保存的更改？",
-  "settings.requestRuleConfirmDiscardDescription": "编辑器中的匹配器尚未保存，继续将会替换它。",
+  "settings.requestRuleConfirmDiscardDescription":
+    "编辑器中的匹配器尚未保存，继续将会替换它。",
   "settings.requestRuleRequesters": "在此规则中指定人员",
-  "settings.requestRuleRequestersHelp": "勾选此规则针对的账户并应用。编辑器中的匹配器会被改写，您可以在保存前先读一遍。",
+  "settings.requestRuleRequestersHelp":
+    "勾选此规则针对的账户并应用。编辑器中的匹配器会被改写，您可以在保存前先读一遍。",
   "settings.requestRuleRequestersApply": "把这些名字写入匹配器",
-  "settings.requestRuleRequestersUnavailable": "列出账户需要本页面不具备的权限，因此名字需要手动写入匹配器。",
-  "settings.requestRuleRequestersNoTarget": "此匹配器没有指定任何人，所选账户无处写入。请先添加 requesters 集合或用户名比较。",
+  "settings.requestRuleRequestersUnavailable":
+    "列出账户需要本页面不具备的权限，因此名字需要手动写入匹配器。",
+  "settings.requestRuleRequestersNoTarget":
+    "此匹配器没有指定任何人，所选账户无处写入。请先添加 requesters 集合或用户名比较。",
   "settings.requestPreviewTitle": "用一个请求试运行此规则",
-  "settings.requestPreviewSubtitle": "针对您描述的请求运行一个匹配器。不会提交任何内容，也不会留下记录。",
+  "settings.requestPreviewSubtitle":
+    "针对您描述的请求运行一个匹配器。不会提交任何内容，也不会留下记录。",
   "settings.requestPreviewSource": "匹配器",
   "settings.requestPreviewSourceStored": "已保存的规则",
   "settings.requestPreviewSourceDraft": "编辑器草稿",
@@ -2577,7 +2810,8 @@ const zh_CN: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "运行预览",
   "settings.requestPreviewRunning": "正在运行…",
-  "settings.requestPreviewEmpty": "描述一个请求并运行预览，即可看到此规则会怎么判断。",
+  "settings.requestPreviewEmpty":
+    "描述一个请求并运行预览，即可看到此规则会怎么判断。",
   "settings.requestPreviewMetadataPartial": "元数据不完整",
   "settings.requestPreviewShowInput": "显示匹配器看到的输入",
   "settings.requestPreviewHideInput": "隐藏输入",
@@ -2598,12 +2832,14 @@ const zh_CN: LocaleDictionary = {
   "search.keepForDays": "{{count}} 天",
   "search.keepForCustom": "指定天数…",
   "search.keepForCustomLabel": "保留天数",
-  "search.keepForHelp": "Scryer 为您保留此媒体的时长。到期后维护规则可能会将其删除；永久保留不会到期。",
+  "search.keepForHelp":
+    "Scryer 为您保留此媒体的时长。到期后维护规则可能会将其删除；永久保留不会到期。",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "标签",
   "settings.titleTagsExisting": "已定义的标签",
-  "settings.titleTagsHelp": "只有在这里定义的标签才能应用到条目上。重命名标签会同时改写带有该标签的所有条目和延迟配置；删除标签会将它从所有条目上移除。",
+  "settings.titleTagsHelp":
+    "只有在这里定义的标签才能应用到条目上。重命名标签会同时改写带有该标签的所有条目和延迟配置；删除标签会将它从所有条目上移除。",
   "settings.titleTagsNone": "尚未定义任何标签。",
   "settings.titleTagsLoadError": "无法加载标签。",
   "settings.titleTagLabelLabel": "标签名",
@@ -2620,13 +2856,17 @@ const zh_CN: LocaleDictionary = {
   "settings.titleTagDeleteError": "无法删除该标签。",
   "settings.titleTagDeleted": "已从 {{count}} 个条目上删除 {{label}}。",
   "settings.titleTagDeleteConfirmTitle": "删除标签",
-  "settings.titleTagDeleteConfirm": "{{label}} 位于 {{count}} 个条目上。删除后会从这些条目以及以它筛选的延迟配置中移除。引用它的规则将不再匹配。",
+  "settings.titleTagDeleteConfirm":
+    "{{label}} 位于 {{count}} 个条目上。删除后会从这些条目以及以它筛选的延迟配置中移除。引用它的规则将不再匹配。",
   "settings.titleTagLabelRequired": "请输入标签名。",
-  "settings.titleTagLabelReserved": "标签名不能以 scryer: 开头，该前缀保留给 Scryer 自行写入的设置。",
+  "settings.titleTagLabelReserved":
+    "标签名不能以 scryer: 开头，该前缀保留给 Scryer 自行写入的设置。",
   "settings.titleTagLabelTooLong": "标签名最多 64 个字符。",
   "settings.titleTagLabelInvalid": "标签名不能包含控制字符。",
-  "settings.titleTagRenameSummary": "已重命名为 {{label}}。改写了 {{titles}} 个条目、{{seriesMovies}} 部剧集电影和 {{delayProfiles}} 个延迟配置。",
-  "settings.titleTagRenameWarning": "规则源永远不会被改写，因此仍有 {{count}} 处规则引用旧标签 {{label}}，它们将不再匹配：{{references}}。",
+  "settings.titleTagRenameSummary":
+    "已重命名为 {{label}}。改写了 {{titles}} 个条目、{{seriesMovies}} 部剧集电影和 {{delayProfiles}} 个延迟配置。",
+  "settings.titleTagRenameWarning":
+    "规则源永远不会被改写，因此仍有 {{count}} 处规则引用旧标签 {{label}}，它们将不再匹配：{{references}}。",
   "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} 个维护规则集",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} 个发布规则集",
   "settings.titleTagReferenceManagedTagFilters": "{{count}} 个托管标签过滤器",
@@ -2636,7 +2876,8 @@ const zh_CN: LocaleDictionary = {
   "title.tagsAdd": "添加标签…",
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "移除 {{label}}",
-  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsEmptyRegistry":
+    "No tags are defined yet. An administrator defines them in Settings > Tags.",
   "title.bulkAddTags": "添加标签",
   "title.bulkRemoveTags": "移除标签",
   "title.catalogFilters.themes": "主题",
@@ -2652,13 +2893,16 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceActionRemoveTags": "移除标签",
   "settings.maintenanceRuleTags": "标签",
   "settings.maintenanceRuleTagsNone": "尚未选择标签",
-  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceRuleTagsHelp":
+    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.maintenanceCandidatesTagPatchAdd": "添加 {{tags}}",
   "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "标记为待删除",
-  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateTaggedForRemovalDescription":
+    'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.maintenanceTemplateFlagForReviewTitle": "标记待审核",
-  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+  "settings.maintenanceTemplateFlagForReviewDescription":
+    "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
@@ -2727,7 +2971,8 @@ const zh_CN: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "该音轨没有语言字段，因此根据音轨名称推断。",
+  "mediaInfo.inferredLanguageFootnote":
+    "该音轨没有语言字段，因此根据音轨名称推断。",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -2753,10 +2998,12 @@ const zh_CN: LocaleDictionary = {
   "lists.url.submit": "检查列表",
   "lists.url.help": "粘贴受支持提供方的列表地址。",
   "lists.url.recognized": "{{provider}} · {{list}}",
-  "lists.url.unrecognized": "Scryer 无法关注此地址。请在下方的提供方目录中查看受支持的列表。",
+  "lists.url.unrecognized":
+    "Scryer 无法关注此地址。请在下方的提供方目录中查看受支持的列表。",
   "lists.followed.heading": "已关注的列表",
   "lists.followed.empty": "尚未关注任何公开列表。",
-  "lists.followed.emptyManager": "还没有公开列表。在上方粘贴 URL，或从下方目录中选择。",
+  "lists.followed.emptyManager":
+    "还没有公开列表。在上方粘贴 URL，或从下方目录中选择。",
   "lists.table.list": "列表",
   "lists.table.coverage": "覆盖率",
   "lists.table.mode": "模式",
@@ -2779,7 +3026,8 @@ const zh_CN: LocaleDictionary = {
   "lists.mode.hold": "留待审批",
   "lists.mode.request": "请求",
   "lists.mode.discover": "仅在发现中显示",
-  "lists.modeHelp.add": "按每种类型选择的监控设置添加新作品。受监控的作品会被搜索，未受监控的不会。",
+  "lists.modeHelp.add":
+    "按每种类型选择的监控设置添加新作品。受监控的作品会被搜索，未受监控的不会。",
   "lists.modeHelp.hold": "为每个新作品创建待处理请求，由他人审批。",
   "lists.modeHelp.request": "以成员身份请求新作品。",
   "lists.modeHelp.discover": "只记录列表中的作品，不添加任何内容。",
@@ -2828,14 +3076,16 @@ const zh_CN: LocaleDictionary = {
   "lists.follow.kinds": "包含",
   "lists.follow.modeHeading": "出现新作品时",
   "lists.follow.routesHeading": "作品去向",
-  "lists.follow.routesHelp": "每种作品都需要一个媒体库。没有媒体库的类型永远不会被添加。",
+  "lists.follow.routesHelp":
+    "每种作品都需要一个媒体库。没有媒体库的类型永远不会被添加。",
   "lists.follow.filtersHeading": "过滤条件",
   "lists.follow.syncHeading": "同步",
   "lists.follow.maxPerSync": "每次同步最多作品数",
   "lists.follow.maxPerSyncPlaceholder": "不限",
   "lists.follow.maxPerSyncHelp": "超出上限的作品会等到下次同步。",
   "lists.follow.onLeave": "作品离开列表时",
-  "lists.follow.onLeaveHelp": "仅适用于由此列表添加、且不在其他任何列表中的作品。列表永远不会删除作品。",
+  "lists.follow.onLeaveHelp":
+    "仅适用于由此列表添加、且不在其他任何列表中的作品。列表永远不会删除作品。",
   "lists.follow.interval": "同步计划由提供方决定：每 {{interval}} 一次。",
   "lists.follow.problem.name": "请为列表命名。",
   "lists.follow.problem.kinds": "请至少包含一种作品类型。",
@@ -2858,7 +3108,8 @@ const zh_CN: LocaleDictionary = {
   "lists.filter.languages": "原始语言",
   "lists.filter.languagesPlaceholder": "en, ja",
   "lists.filter.releasedOnly": "仅已上映的作品",
-  "lists.filter.releasedOnlyHelp": "跳过尚未上映的作品。每次同步时都会重新检查。",
+  "lists.filter.releasedOnlyHelp":
+    "跳过尚未上映的作品。每次同步时都会重新检查。",
   "lists.preview.heading": "预览",
   "lists.preview.nextSyncHeading": "下次同步将添加",
   "lists.preview.run": "预览",
@@ -2870,7 +3121,8 @@ const zh_CN: LocaleDictionary = {
   "lists.preview.filtered": "已过滤",
   "lists.preview.excluded": "已排除",
   "lists.preview.unresolved": "无匹配",
-  "lists.preview.unresolvedHelp": "有 {{count}} 个作品尚未匹配，每次同步时都会重试。",
+  "lists.preview.unresolvedHelp":
+    "有 {{count}} 个作品尚未匹配，每次同步时都会重试。",
   "lists.preview.wouldAddHeading": "下次同步将添加的作品",
   "lists.preview.nothingToAdd": "目前没有需要添加的新内容。",
   "lists.detail.coverage": "覆盖率",
@@ -2879,7 +3131,8 @@ const zh_CN: LocaleDictionary = {
   "lists.detail.nextSync": "下次同步",
   "lists.detail.noCap": "不限",
   "lists.detail.openAtProvider": "在提供方处打开",
-  "lists.detail.pausedUntil": "提供方要求 Scryer 降低请求频率。同步将在 {{time}} 之后恢复。",
+  "lists.detail.pausedUntil":
+    "提供方要求 Scryer 降低请求频率。同步将在 {{time}} 之后恢复。",
   "lists.detail.titles": "作品（{{count}}）",
   "lists.detail.title": "作品",
   "lists.detail.state": "状态",
@@ -2892,7 +3145,8 @@ const zh_CN: LocaleDictionary = {
   "lists.detail.noRuns": "尚未同步过。",
   "lists.detail.runCounts": "列表 {{total}} · 添加 {{added}} · 保留 {{held}}",
   "lists.unfollow.title": "取消关注 {{name}}？",
-  "lists.unfollow.description": "Scryer 将停止同步此列表。作品会保留在媒体库中，待处理的请求也会保留在请求页中。",
+  "lists.unfollow.description":
+    "Scryer 将停止同步此列表。作品会保留在媒体库中，待处理的请求也会保留在请求页中。",
   "lists.status.followed": "已关注 {{name}}。",
   "lists.status.updated": "已保存 {{name}}。",
   "lists.status.unfollowed": "已取消关注 {{name}}。",
@@ -2914,10 +3168,13 @@ const zh_CN: LocaleDictionary = {
   "lists.exclusions.created": "添加时间",
   "lists.exclusions.remove": "取消排除 {{name}}",
   "lists.exclusions.removeTitle": "取消排除 {{name}}？",
-  "lists.exclusions.removeDescription": "列表在下次同步时可能会再次添加此作品。",
+  "lists.exclusions.removeDescription":
+    "列表在下次同步时可能会再次添加此作品。",
   "lists.exclusions.deleteCheckbox": "同时从列表中排除",
-  "lists.exclusions.deleteNoIds": "已删除 {{name}}，但它没有可用于从列表中排除的外部 ID。",
-  "lists.exclusions.deleteFailed": "已删除 {{name}}，但从列表中排除失败。请在列表页面添加排除项。",
+  "lists.exclusions.deleteNoIds":
+    "已删除 {{name}}，但它没有可用于从列表中排除的外部 ID。",
+  "lists.exclusions.deleteFailed":
+    "已删除 {{name}}，但从列表中排除失败。请在列表页面添加排除项。",
   "lists.policy.heading": "成员列表策略",
   "lists.policy.help": "控制成员的个人列表如何转为请求。",
   "lists.policy.empty": "没有可显示的成员。",
@@ -2928,18 +3185,27 @@ const zh_CN: LocaleDictionary = {
   "lists.policy.value.auto": "自动批准",
   "lists.policy.value.approval": "需要审批",
   "lists.policy.value.none": "不允许使用列表",
-  "settings.refMaintFactsListsAddedByList": "是否由列表而非用户将该对象添加到媒体库",
-  "settings.refMaintFactsListsOnEnabledList": "是否仍有已启用的列表（公开或个人）包含该对象",
+  "settings.refMaintFactsListsAddedByList":
+    "是否由列表而非用户将该对象添加到媒体库",
+  "settings.refMaintFactsListsOnEnabledList":
+    "是否仍有已启用的列表（公开或个人）包含该对象",
   "settings.refMaintFactsListsNames": "仍包含该对象的已启用公开列表的名称",
-  "settings.refMaintFactsListsLeftAll": "曾包含该对象的所有列表是否都已将其移除",
+  "settings.refMaintFactsListsLeftAll":
+    "曾包含该对象的所有列表是否都已将其移除",
   "settings.refMaintFactsListsLeftAt": "最后一个列表移除该对象的时间",
   "settings.refMaintFactsListsLastListName": "该对象最近离开的公开列表",
-  "settings.refMaintFactsListsAddedByListValue": "列表同步创建了该作品时为 true；无法读取列表存储时为未知，原因为 list_store_unreadable",
-  "settings.refMaintFactsListsOnEnabledListValue": "至少有一个已启用列表包含该对象时为 true",
-  "settings.refMaintFactsListsNamesValue": "仅包含公开列表名称并已排序；从不显示成员的个人列表名称",
-  "settings.refMaintFactsListsLeftAllValue": "所有曾包含该对象的列表都已将其移除时为 true；仍有列表包含或从未进入任何列表时为 false",
-  "settings.refMaintFactsListsLeftAtValue": "RFC3339 时间戳；仍有列表包含该对象时缺失，原因为 not_left_every_list",
-  "settings.refMaintFactsListsLastListNameValue": "该公开列表的名称；对象从未离开公开列表时缺失，原因为 no_public_list_left",
+  "settings.refMaintFactsListsAddedByListValue":
+    "列表同步创建了该作品时为 true；无法读取列表存储时为未知，原因为 list_store_unreadable",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "至少有一个已启用列表包含该对象时为 true",
+  "settings.refMaintFactsListsNamesValue":
+    "仅包含公开列表名称并已排序；从不显示成员的个人列表名称",
+  "settings.refMaintFactsListsLeftAllValue":
+    "所有曾包含该对象的列表都已将其移除时为 true；仍有列表包含或从未进入任何列表时为 false",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339 时间戳；仍有列表包含该对象时缺失，原因为 not_left_every_list",
+  "settings.refMaintFactsListsLastListNameValue":
+    "该公开列表的名称；对象从未离开公开列表时缺失，原因为 no_public_list_left",
   "lists.providerSettings.heading": "提供方设置",
   "lists.providerSettings.copy": "此服务器上该提供方的所有列表共用这些设置。",
   "lists.providerSettings.required": "必填",
@@ -2954,7 +3220,8 @@ const zh_CN: LocaleDictionary = {
   "title.listProvenance.left": "已离开列表 {{name}}",
   "lists.tab.personal": "个人",
   "lists.accounts.heading": "你的账户",
-  "lists.accounts.copy": "连接账户以关注你的私密列表和待看列表。只有你能查看你的账户和个人列表。",
+  "lists.accounts.copy":
+    "连接账户以关注你的私密列表和待看列表。只有你能查看你的账户和个人列表。",
   "lists.accounts.connect": "连接",
   "lists.accounts.connected": "已连接",
   "lists.accounts.reconnect": "重新连接",
@@ -2963,8 +3230,10 @@ const zh_CN: LocaleDictionary = {
   "lists.accounts.private": "只有你能查看这些列表和账户信息。",
   "lists.accounts.waiting": "在提供方窗口中完成授权。系统会自动检查批准状态。",
   "lists.accounts.linkFailed": "账户连接失败。请重新开始连接。",
-  "lists.accounts.pollRetrying": "暂时无法检查授权状态。将持续重试，直到会话过期。",
-  "lists.accounts.originNotAllowed": "无法从此地址连接账户。如果通过已发布的容器端口、反向代理或主机名访问 Scryer，请管理员设置 Scryer 的公开 URL；否则请通过 localhost 或 Scryer 监听的地址打开。",
+  "lists.accounts.pollRetrying":
+    "暂时无法检查授权状态。将持续重试，直到会话过期。",
+  "lists.accounts.originNotAllowed":
+    "无法从此地址连接账户。如果通过已发布的容器端口、反向代理或主机名访问 Scryer，请管理员设置 Scryer 的公开 URL；否则请通过 localhost 或 Scryer 监听的地址打开。",
   "lists.accounts.linkExpired": "此账户连接会话已过期。请从列表页面重新连接。",
   "lists.accounts.popupBlocked": "请允许弹出窗口以批准此账户，然后重新连接。",
   "lists.accounts.finishing": "正在完成账户连接…",
@@ -2975,23 +3244,30 @@ const zh_CN: LocaleDictionary = {
   "lists.accounts.statuses": "可用状态：{{statuses}}",
   "lists.accounts.unlink": "解除账户连接",
   "lists.accounts.confirmUnlink": "确认解除连接",
-  "lists.accounts.unlinkHelp": "解除连接会移除使用此账户的订阅。你的媒体库文件将被保留。",
+  "lists.accounts.unlinkHelp":
+    "解除连接会移除使用此账户的订阅。你的媒体库文件将被保留。",
   "lists.accounts.unlinked": "账户连接已解除。",
-  "lists.accounts.personalRouting": "个人列表属于你。添加和搜索模式需要在每个所选媒体库中拥有管理标题的权限。请求遵循你的列表策略和请求规则。",
+  "lists.accounts.personalRouting":
+    "个人列表属于你。添加和搜索模式需要在每个所选媒体库中拥有管理标题的权限。请求遵循你的列表策略和请求规则。",
   "lists.providerApps.heading": "自定义 OAuth",
   "lists.providerApps.settingsLabel": "列表 · 自定义 OAuth",
-  "lists.providerApps.copy": "默认项目应用无需注册即可使用。你也可以注册自己的 Trakt、AniList 或 MyAnimeList 应用，从此实例直接连接。",
+  "lists.providerApps.copy":
+    "默认项目应用无需注册即可使用。你也可以注册自己的 Trakt、AniList 或 MyAnimeList 应用，从此实例直接连接。",
   "lists.providerApps.simklDefault": "Simkl 使用默认项目应用。",
   "lists.providerApps.useOwn": "使用自己的提供方应用",
   "lists.providerApps.clientId": "客户端 ID",
   "lists.providerApps.clientSecret": "客户端密钥",
-  "lists.providerApps.traktSecretHint": "Trakt 可不填。Trakt 使用 PKCE 让成员登录；只有旧版 Trakt 应用才需要密钥。",
+  "lists.providerApps.traktSecretHint":
+    "Trakt 可不填。Trakt 使用 PKCE 让成员登录；只有旧版 Trakt 应用才需要密钥。",
   "lists.providerApps.redirectUri": "重定向 URI",
-  "lists.providerApps.redirectHelp": "在提供方注册此实例的 /lists/oauth/callback URL。将密钥留空可保留已保存的值。",
+  "lists.providerApps.redirectHelp":
+    "在提供方注册此实例的 /lists/oauth/callback URL。将密钥留空可保留已保存的值。",
   "episodeAssign.action": "重新分配",
   "episodeAssign.dialogTitle": "分配到剧集",
-  "episodeAssign.dialogDescription": "选择 {{name}} 所属的剧集。Scryer 会按该剧集重命名文件，并将其移动到位。",
-  "episodeAssign.pendingDescription": "Scryer 无法判断 {{name}} 是哪一集。选择剧集后，Scryer 会将其导入到该剧集。",
+  "episodeAssign.dialogDescription":
+    "选择 {{name}} 所属的剧集。Scryer 会按该剧集重命名文件，并将其移动到位。",
+  "episodeAssign.pendingDescription":
+    "Scryer 无法判断 {{name}} 是哪一集。选择剧集后，Scryer 会将其导入到该剧集。",
   "episodeAssign.unnamed": "此文件",
   "episodeAssign.targetLabel": "剧集",
   "episodeAssign.loadingEpisodes": "正在加载剧集…",
@@ -3001,7 +3277,8 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.originalReleaseName": "原始发布名称",
   "episodeAssign.applying": "正在分配…",
   "episodeAssign.replaceTitle": "此剧集已有文件",
-  "episodeAssign.replaceDescription": "分配此文件后，它将成为该剧集的主文件。当前文件会作为附加文件保留在磁盘上。",
+  "episodeAssign.replaceDescription":
+    "分配此文件后，它将成为该剧集的主文件。当前文件会作为附加文件保留在磁盘上。",
   "episodeAssign.replaceApply": "替换并分配",
   "episodeAssign.success": "文件已分配并重命名。",
   "episodeAssign.failed": "无法分配文件。",
@@ -3015,10 +3292,14 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.refusal.outsideTitle": "该剧集属于其他作品。",
   "episodeAssign.refusal.primaryConflict": "此剧集已有主文件。",
   "episodeAssign.refusal.notEpisodic": "只有剧集和动漫文件可以分配到剧集。",
-  "episodeAssign.refusal.unsupportedFile": "此文件无法在剧集之间移动。系列电影文件和光盘镜像会保留在原位。",
-  "episodeAssign.refusal.destinationOccupied": "此剧集生成的名称已被另一个文件占用。请移动或移除该文件后重试。",
-  "episodeAssign.refusal.renameRefused": "Scryer 无法为此剧集命名文件。请检查该作品的媒体库文件夹和命名模板。",
-  "episodeAssign.refusal.renameFailed": "将文件移动到新名称失败。文件及其剧集保持原样。",
+  "episodeAssign.refusal.unsupportedFile":
+    "此文件无法在剧集之间移动。系列电影文件和光盘镜像会保留在原位。",
+  "episodeAssign.refusal.destinationOccupied":
+    "此剧集生成的名称已被另一个文件占用。请移动或移除该文件后重试。",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer 无法为此剧集命名文件。请检查该作品的媒体库文件夹和命名模板。",
+  "episodeAssign.refusal.renameFailed":
+    "将文件移动到新名称失败。文件及其剧集保持原样。",
   "pendingImports.reason.anime_numbering_ambiguous": "剧集编号不明确",
 };
 

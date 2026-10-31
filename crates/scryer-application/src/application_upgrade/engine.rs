@@ -111,43 +111,49 @@ impl AppUseCase {
         request: ApplicationUpgradeJobRequest,
     ) -> AppResult<ApplicationUpgradeJobAccepted> {
         if request.expected_tag.trim().is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::EXPECTEDTAG_REQUIRED,
                 "expectedTag must not be empty".to_string(),
             ));
         }
         if request.expected_version.trim().is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::EXPECTEDVERSION_REQUIRED,
                 "expectedVersion must not be empty".to_string(),
             ));
         }
 
         let notice = self.smg_scryer_update_notice().await?.ok_or_else(|| {
-            AppError::Validation("no application update notice is available".to_string())
+            AppError::validation_refused(
+                crate::error_reasons::application_upgrade::NO_APPLICATION_UPDATE_NOTICE_UNAVAILABLE,
+                "no application update notice is available".to_string(),
+            )
         })?;
         if !notice.available {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::APPLICATION_UPDATE_NOTICE_UNAVAILABLE,
                 "the application update notice is not available".to_string(),
             ));
         }
         if notice.latest_tag != request.expected_tag {
-            return Err(AppError::Validation(
-                "expectedTag does not match the current application update notice".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::application_upgrade::EXPECTEDTAG_DOES_NOT_MATCH_CURRENT_APPLICATION_UPDATE_NOTICE, "expectedTag does not match the current application update notice".to_string()));
         }
         if notice.latest_version != request.expected_version {
-            return Err(AppError::Validation(
-                "expectedVersion does not match the current application update notice".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::application_upgrade::EXPECTEDVERSION_DOES_NOT_MATCH_CURRENT_APPLICATION_UPDATE_NOTICE, "expectedVersion does not match the current application update notice".to_string()));
         }
 
         let expected_version = Version::parse(&request.expected_version).map_err(|error| {
-            AppError::Validation(format!("expectedVersion must be valid semver: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::application_upgrade::EXPECTEDVERSION_INVALID,
+                format!("expectedVersion must be valid semver: {error}"),
+            )
         })?;
         let running_version = Version::parse(SCRYER_VERSION).map_err(|error| {
             AppError::Repository(format!("running application version is invalid: {error}"))
         })?;
         if expected_version <= running_version {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::EXPECTEDVERSION_INVALID,
                 "expectedVersion must be strictly newer than the running version".to_string(),
             ));
         }
@@ -158,7 +164,8 @@ impl AppUseCase {
                 | InstallationKind::DirectMsi
                 | InstallationKind::MacosAppBundle
         ) {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::INSTALLATION_UNAVAILABLE,
                 "application upgrade installation is not eligible".to_string(),
             ));
         }
@@ -171,7 +178,8 @@ impl AppUseCase {
             .has_active_job(JobKey::ApplicationUpgrade)
             .await
         {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::JOB_ALREADY_RUNNING,
                 "an application upgrade job is already running".to_string(),
             ));
         }
@@ -323,14 +331,10 @@ impl AppUseCase {
         dependencies: UpgradePipelineDependencies<'_>,
     ) -> AppResult<()> {
         if manifest.tag != request.expected_tag {
-            return Err(AppError::Validation(
-                "upgrade manifest tag does not match expectedTag".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::application_upgrade::UPGRADE_MANIFEST_TAG_DOES_NOT_MATCH_EXPECTEDTAG, "upgrade manifest tag does not match expectedTag".to_string()));
         }
         if manifest.version != request.expected_version {
-            return Err(AppError::Validation(
-                "upgrade manifest version does not match expectedVersion".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::application_upgrade::UPGRADE_MANIFEST_VERSION_DOES_NOT_MATCH_EXPECTEDVERSION, "upgrade manifest version does not match expectedVersion".to_string()));
         }
         let artifact = select_artifact(manifest, request.installation_kind)?.clone();
 
@@ -673,7 +677,10 @@ impl AppUseCase {
                 AppError::Repository("failed to resolve the running executable path".to_string())
             })?;
         let install_dir = executable_path.parent().map(PathBuf::from).ok_or_else(|| {
-            AppError::Validation("running executable has no parent directory".to_string())
+            AppError::validation_refused(
+                crate::error_reasons::application_upgrade::RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY,
+                "running executable has no parent directory".to_string(),
+            )
         })?;
         let direct_relaunch_args = std::env::args_os()
             .skip(1)
@@ -704,10 +711,13 @@ impl AppUseCase {
             .iter()
             .find(|path| path.exists())
         {
-            return Err(AppError::Validation(format!(
-                "refusing to overwrite existing application backup '{}'",
-                existing_backup.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::BACKUP_ALREADY_EXISTS,
+                format!(
+                    "refusing to overwrite existing application backup '{}'",
+                    existing_backup.display()
+                ),
+            ));
         }
         write_journal(&handoff.plan.journal_path, &handoff.journal)?;
         self.update_application_upgrade_progress(
@@ -813,10 +823,13 @@ impl AppUseCase {
             return Ok(Vec::new());
         };
         if journal.schema != JOURNAL_SCHEMA {
-            return Err(AppError::Validation(format!(
-                "unsupported application upgrade journal schema '{}'",
-                journal.schema
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::JOURNAL_SCHEMA_UNSUPPORTED,
+                format!(
+                    "unsupported application upgrade journal schema '{}'",
+                    journal.schema
+                ),
+            ));
         }
         let current_executable = std::env::current_exe().map_err(|error| {
             AppError::Repository(format!("failed to resolve running executable: {error}"))
@@ -925,10 +938,13 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
         if journal.phase != phases::RESTARTING {
-            return Err(AppError::Validation(format!(
-                "unsupported application upgrade journal phase '{}'",
-                journal.phase
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::application_upgrade::JOURNAL_PHASE_UNSUPPORTED,
+                format!(
+                    "unsupported application upgrade journal phase '{}'",
+                    journal.phase
+                ),
+            ));
         }
 
         if expected_version_booted && expected_executable_booted {
@@ -1033,7 +1049,10 @@ impl AppUseCase {
             .get_job_run(&journal.run_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("application upgrade run {}", journal.run_id))
+                AppError::not_found_reason(
+                    crate::error_reasons::application_upgrade::RUN_NOT_FOUND,
+                    format!("application upgrade run {}", journal.run_id),
+                )
             })?;
         // A run that already reached a terminal status was finalized by the
         // pipeline itself; re-finalizing would rewrite its outcome. Recovery
@@ -1415,10 +1434,13 @@ fn ensure_available_space(path: &Path, required_bytes: u64) -> AppResult<()> {
         ))
     })?;
     if space.available_bytes < required_bytes {
-        return Err(AppError::Validation(format!(
-            "insufficient free space for application upgrade: need {required_bytes} bytes, have {} bytes",
-            space.available_bytes
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::application_upgrade::INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE,
+            format!(
+                "insufficient free space for application upgrade: need {required_bytes} bytes, have {} bytes",
+                space.available_bytes
+            ),
+        ));
     }
     Ok(())
 }

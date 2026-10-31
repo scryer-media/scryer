@@ -38,17 +38,24 @@ function nullableText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function normalizeInstallationKind(value: unknown): ApplicationInstallationKind {
-  return typeof value === "string" && INSTALLATION_KINDS.has(value as ApplicationInstallationKind)
-    ? value as ApplicationInstallationKind
+function normalizeInstallationKind(
+  value: unknown,
+): ApplicationInstallationKind {
+  return typeof value === "string" &&
+    INSTALLATION_KINDS.has(value as ApplicationInstallationKind)
+    ? (value as ApplicationInstallationKind)
     : "UNSUPPORTED";
 }
 
-function normalizeManagementOwner(value: unknown): ApplicationUpgradeManagementOwner {
+function normalizeManagementOwner(
+  value: unknown,
+): ApplicationUpgradeManagementOwner {
   return value === "IN_APP" ? "IN_APP" : "OPERATOR";
 }
 
-function normalizeUpgradeStatus(value: unknown): ApplicationUpgradeStatus | null {
+function normalizeUpgradeStatus(
+  value: unknown,
+): ApplicationUpgradeStatus | null {
   if (!isRecord(value) || typeof value.currentVersion !== "string") {
     return null;
   }
@@ -61,7 +68,8 @@ function normalizeUpgradeStatus(value: unknown): ApplicationUpgradeStatus | null
     installationKind: normalizeInstallationKind(value.installationKind),
     managementOwner: normalizeManagementOwner(value.managementOwner),
     eligible: value.eligible === true,
-    eligibilityReason: nullableText(value.eligibilityReason) ?? "unsupported_layout",
+    eligibilityReason:
+      nullableText(value.eligibilityReason) ?? "unsupported_layout",
     activeRun: normalizeJobRun(value.activeRun),
     latestRun: normalizeJobRun(value.latestRun),
   };
@@ -69,7 +77,9 @@ function normalizeUpgradeStatus(value: unknown): ApplicationUpgradeStatus | null
 
 export function useApplicationUpgradeStatus(
   enabled = true,
-  { settingsSubscriptionEnabled = true }: { settingsSubscriptionEnabled?: boolean } = {},
+  {
+    settingsSubscriptionEnabled = true,
+  }: { settingsSubscriptionEnabled?: boolean } = {},
 ) {
   const client = useClient();
   const [status, setStatus] = useState<ApplicationUpgradeStatus | null>(null);
@@ -96,8 +106,12 @@ export function useApplicationUpgradeStatus(
         throw result.error;
       }
 
-      const nextStatus = normalizeUpgradeStatus(result.data?.applicationUpgradeStatus);
-      const progress = normalizeApplicationUpgradeProgress(nextStatus?.activeRun?.progressJson);
+      const nextStatus = normalizeUpgradeStatus(
+        result.data?.applicationUpgradeStatus,
+      );
+      const progress = normalizeApplicationUpgradeProgress(
+        nextStatus?.activeRun?.progressJson,
+      );
       activeRunRef.current = nextStatus?.activeRun ?? null;
       previousPhaseRef.current = progress?.phase ?? null;
       setStatus(nextStatus);
@@ -108,7 +122,8 @@ export function useApplicationUpgradeStatus(
       }
       return nextStatus;
     } catch (caught) {
-      const nextError = caught instanceof Error ? caught : new Error(String(caught));
+      const nextError =
+        caught instanceof Error ? caught : new Error(String(caught));
       setError(nextError);
       if (
         previousPhaseRef.current === "awaiting_elevation" &&

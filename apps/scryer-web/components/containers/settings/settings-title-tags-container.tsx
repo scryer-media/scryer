@@ -3,7 +3,10 @@ import * as React from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsTitleTagsSection } from "@/components/views/settings/settings-title-tags-section";
 import { useTranslate } from "@/lib/context/translate-context";
-import { emptyTitleTagDraft, useTitleTagsManager } from "@/lib/hooks/use-title-tags-manager";
+import {
+  emptyTitleTagDraft,
+  useTitleTagsManager,
+} from "@/lib/hooks/use-title-tags-manager";
 
 type SettingsTitleTagsContainerProps = {
   /**
@@ -20,8 +23,12 @@ export function SettingsTitleTagsContainer({
   const manager = useTitleTagsManager();
   const t = useTranslate();
   const [isEditorOpen, setIsEditorOpen] = React.useState(false);
-  const [editorMode, setEditorMode] = React.useState<"create" | "edit">("create");
-  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
+  const [editorMode, setEditorMode] = React.useState<"create" | "edit">(
+    "create",
+  );
+  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(
+    null,
+  );
 
   const { resetDraft, setDraft, loadDefinitionById } = manager;
 
@@ -74,7 +81,11 @@ export function SettingsTitleTagsContainer({
       return;
     }
     const deleted = await manager.deleteDefinition(pendingDeleteId);
-    if (deleted && editorMode === "edit" && manager.draft.id === pendingDeleteId) {
+    if (
+      deleted &&
+      editorMode === "edit" &&
+      manager.draft.id === pendingDeleteId
+    ) {
       closeEditor();
     }
     setPendingDeleteId(null);

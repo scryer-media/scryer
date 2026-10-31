@@ -11,7 +11,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("title not found".to_string()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::TITLE_NOT_FOUND, "title not found".to_string()))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -36,7 +36,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("title not found".to_string()))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::acquisition::TITLE_NOT_FOUND, "title not found".to_string()))?;
 
         let now = Utc::now();
         let outcome = if let Some(handler) = self.facet_registry.get(&title.facet) {

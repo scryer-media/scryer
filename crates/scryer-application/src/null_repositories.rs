@@ -68,9 +68,10 @@ use crate::{
     TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
     TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
-    UiCatalogViewSetting, UiCatalogViewUpdate, UiSettings, UiSettingsUpdate, UpstreamScheduler,
-    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
-    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
+    UiCatalogViewSetting, UiCatalogViewUpdate, UiDashboardBreakpoint, UiDashboardLayout,
+    UiSettings, UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository,
+    UserUiSettingsRepository, VerifiedExternalIdentity, WebauthnChallengeRecord,
+    WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
     WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
     ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
     types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
@@ -4099,7 +4100,6 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.high_contrast_mode = settings.high_contrast_mode;
         current.reduce_motion = settings.reduce_motion;
         current.hide_sponsor_button = settings.hide_sponsor_button;
-        current.no_glow = settings.no_glow;
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
@@ -4123,6 +4123,23 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         }
         current.table_columns = update.columns.unwrap_or_default();
         Ok(current)
+    }
+    async fn set_dashboard_layout(
+        &self,
+        user_id: &str,
+        layout: UiDashboardLayout,
+    ) -> AppResult<UiSettings> {
+        let mut current = UiSettings::defaults_for_user(user_id.to_string());
+        current.dashboard_layouts.push(layout);
+        Ok(current)
+    }
+
+    async fn reset_dashboard_layouts(
+        &self,
+        user_id: &str,
+        _breakpoint: Option<UiDashboardBreakpoint>,
+    ) -> AppResult<Option<UiSettings>> {
+        Ok(Some(UiSettings::defaults_for_user(user_id.to_string())))
     }
 }
 

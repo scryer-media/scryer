@@ -11,9 +11,15 @@ type FormatPillStream = {
     id: string | null;
     profile: string | null;
     channelLayout: string | null;
-    disposition?: Pick<MediaStreamDisposition, "commentary" | "visualImpaired"> | null;
+    disposition?: Pick<
+      MediaStreamDisposition,
+      "commentary" | "visualImpaired"
+    > | null;
     hdr?:
-      | (Pick<MediaHdrCapabilities, "dolbyVision" | "hdr10plus" | "hdr10" | "hlg" | "pq"> & {
+      | (Pick<
+          MediaHdrCapabilities,
+          "dolbyVision" | "hdr10plus" | "hdr10" | "hlg" | "pq"
+        > & {
           dovi?: Pick<MediaDolbyVision, "baseLayerCompatibilityId"> | null;
         })
       | null;
@@ -21,7 +27,10 @@ type FormatPillStream = {
 };
 
 export type MediaFormatPillSource = {
-  analysis?: { selectedVideoId: string | null; streams: FormatPillStream[] } | null;
+  analysis?: {
+    selectedVideoId: string | null;
+    streams: FormatPillStream[];
+  } | null;
   videoHdrFormat: string | null;
   audioChannels: number | null;
   audioStreams: { profile?: string | null; channels: number | null }[];
@@ -45,10 +54,13 @@ const CHANNEL_COUNT_LAYOUTS: Record<number, string> = {
 };
 
 function selectedVideoHdr(analysis: MediaFormatPillSource["analysis"]) {
-  const videoStreams = analysis?.streams.filter((stream) => stream.kind === "VIDEO") ?? [];
+  const videoStreams =
+    analysis?.streams.filter((stream) => stream.kind === "VIDEO") ?? [];
   const selected =
     videoStreams.find(
-      (stream) => stream.metadata.id != null && stream.metadata.id === analysis?.selectedVideoId,
+      (stream) =>
+        stream.metadata.id != null &&
+        stream.metadata.id === analysis?.selectedVideoId,
     ) ?? videoStreams[0];
   return selected?.metadata.hdr ?? null;
 }
@@ -110,13 +122,17 @@ function audioPillStreams(source: MediaFormatPillSource): AudioPillStream[] {
       channelLayout: null,
     }));
   }
-  return [{ channels: source.audioChannels, profile: null, channelLayout: null }];
+  return [
+    { channels: source.audioChannels, profile: null, channelLayout: null },
+  ];
 }
 
 function surroundLayout(stream: AudioPillStream): SurroundLayout | null {
   const layout = stream.channelLayout?.match(/^\d+(?:\.\d+){1,2}/)?.[0];
   if (layout) {
-    const channels = layout.split(".").reduce((sum, part) => sum + Number(part), 0);
+    const channels = layout
+      .split(".")
+      .reduce((sum, part) => sum + Number(part), 0);
     return channels > 2 ? { label: layout, channels } : null;
   }
   if (stream.channels == null || stream.channels <= 2) return null;
@@ -134,11 +150,14 @@ export function audioFormatPills(source: MediaFormatPillSource): string[] {
   const widest = streams
     .map(surroundLayout)
     .reduce<SurroundLayout | null>(
-      (best, layout) => (layout && (!best || layout.channels > best.channels) ? layout : best),
+      (best, layout) =>
+        layout && (!best || layout.channels > best.channels) ? layout : best,
       null,
     );
   const pills: string[] = widest ? [widest.label] : [];
-  if (streams.some((stream) => /atmos/i.test(stream.profile ?? ""))) pills.push("Atmos");
-  if (streams.some((stream) => /dts:x/i.test(stream.profile ?? ""))) pills.push("DTS:X");
+  if (streams.some((stream) => /atmos/i.test(stream.profile ?? "")))
+    pills.push("Atmos");
+  if (streams.some((stream) => /dts:x/i.test(stream.profile ?? "")))
+    pills.push("DTS:X");
   return pills;
 }

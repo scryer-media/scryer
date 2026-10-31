@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -66,7 +67,7 @@ import { SetupSummaryView } from "./setup-summary-view";
 import SetupImportWizard from "./setup-import-wizard";
 import { SetupPluginsView } from "./setup-plugins-view";
 import { SetupRestoreView } from "./setup-restore-view";
-import { SetupIntroMark, setupIntroFlies } from "./setup-intro";
+import { useSetupIntroTarget } from "./setup-intro";
 
 const FALLBACK_PROVIDER_OPTIONS: SetupIndexerProviderOption[] = [];
 
@@ -76,7 +77,6 @@ interface SetupWizardContainerProps {
     values?: Record<string, string | number | boolean | null | undefined>,
   ) => string;
   isReentry?: boolean;
-  onBackendRestarting: () => void;
 }
 
 function formatQualityTarget(target: QualityTargetId): string {
@@ -94,7 +94,6 @@ function formatQualityTarget(target: QualityTargetId): string {
 export function SetupWizardContainer({
   t,
   isReentry,
-  onBackendRestarting,
 }: SetupWizardContainerProps) {
   const client = useClient();
   const navigate = useNavigate();
@@ -121,20 +120,11 @@ export function SetupWizardContainer({
   const currentStep = parseInt(searchParams.get("step") || "0", 10);
   const [canRestoreSetup, setCanRestoreSetup] = useState(false);
 
-  // The welcome plays once, when setup first opens — not when it is reopened
-  // from Settings, and not on moving between steps.
-  const [intro, setIntro] = useState<"waiting" | "playing" | null>(() =>
-    !isReentry && setupIntroFlies() ? "waiting" : null,
-  );
-  const [introFlightDelayMs, setIntroFlightDelayMs] = useState(0);
-  const headerLogoRef = useRef<HTMLDivElement>(null);
-  const startIntro = useCallback((flightDelayMs: number) => {
-    setIntroFlightDelayMs(flightDelayMs);
-    setIntro("playing");
-  }, []);
-  const finishIntro = useCallback(() => setIntro(null), []);
   const [restoreAvailabilityChecked, setRestoreAvailabilityChecked] =
     useState(false);
+  const headerLogoRef = useSetupIntroTarget<HTMLDivElement>(
+    restoreAvailabilityChecked,
+  );
 
   const goToStep = useCallback(
     (step: number, path?: "fresh" | "import" | "restore") => {
@@ -184,7 +174,11 @@ export function SetupWizardContainer({
   }, [client]);
 
   useEffect(() => {
-    if (wizardPath !== "restore" || !restoreAvailabilityChecked || canRestoreSetup) {
+    if (
+      wizardPath !== "restore" ||
+      !restoreAvailabilityChecked ||
+      canRestoreSetup
+    ) {
       return;
     }
 
@@ -270,7 +264,7 @@ export function SetupWizardContainer({
     handleDcDraftChange,
     testDownloadClient,
     handleDcTestAndSave,
-  } = useDownloadClientSetup({ client });
+  } = useDownloadClientSetup({ client, t });
 
   // ── Step 5 (fresh): Indexer ─────────────────────────────────────────
   const {
@@ -315,8 +309,7 @@ export function SetupWizardContainer({
       setDcTypeOptions(
         buildDownloadClientTypeOptions(
           (data?.downloadClientProviderTypes as
-            | ProviderTypeInfo[]
-            | undefined) ?? [],
+            ProviderTypeInfo[] | undefined) ?? [],
         ).filter((option) => !isHostlessDownloadClientType(option.value)),
       );
 
@@ -340,12 +333,7 @@ export function SetupWizardContainer({
       );
       setIdxProviderOptions(FALLBACK_PROVIDER_OPTIONS);
     }
-  }, [
-    client,
-    setDcLocalPathStyle,
-    setDcTypeOptions,
-    setIdxProviderOptions,
-  ]);
+  }, [client, setDcLocalPathStyle, setDcTypeOptions, setIdxProviderOptions]);
 
   const {
     plugins,
@@ -359,11 +347,13 @@ export function SetupWizardContainer({
     installPlugin,
     uninstallPlugin,
   } = usePluginManagement({ client, t, refreshProviderOptions });
-  const { rulePacks, rulePacksLoading, setRulePackEnabled } = useSetupRulePacks({
-    client,
-    active: wizardPath === "fresh" && currentStep === 3,
-    t,
-  });
+  const { rulePacks, rulePacksLoading, setRulePackEnabled } = useSetupRulePacks(
+    {
+      client,
+      active: wizardPath === "fresh" && currentStep === 3,
+      t,
+    },
+  );
 
   // ── Step labels per path ────────────────────────────────────────────
   const stepLabels =
@@ -462,7 +452,10 @@ export function SetupWizardContainer({
     (field: SetupMediaPathField, edit: (roots: SetupRoot[]) => SetupRoot[]) => {
       mediaRootsEdited.current = true;
       setMediaPathValidationUnavailable(false);
-      setMediaRoots((current) => ({ ...current, [field]: edit(current[field]) }));
+      setMediaRoots((current) => ({
+        ...current,
+        [field]: edit(current[field]),
+      }));
     },
     [],
   );
@@ -476,11 +469,7 @@ export function SetupWizardContainer({
         roots: mediaRoots,
         validatePath: async (path) => {
           const { error } = await client
-            .query(
-              browsePathQuery,
-              { path },
-              { requestPolicy: "network-only" },
-            )
+            .query(browsePathQuery, { path }, { requestPolicy: "network-only" })
             .toPromise();
           return error;
         },
@@ -499,10 +488,9 @@ export function SetupWizardContainer({
               .toPromise();
             if (error) throw error;
             // Saved, so going back and pressing Next again changes nothing.
-            libraries[save.field] =
-              setupMediaLibraries(data?.updateLibrary ? [data.updateLibrary] : [])[
-                save.field
-              ] ?? { id: save.libraryId, roots: save.roots };
+            libraries[save.field] = setupMediaLibraries(
+              data?.updateLibrary ? [data.updateLibrary] : [],
+            )[save.field] ?? { id: save.libraryId, roots: save.roots };
           }
           savingField = null;
         },
@@ -516,7 +504,11 @@ export function SetupWizardContainer({
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to save";
+      const message = userFacingGraphQlErrorMessage(
+        err,
+        t("error.fallback.failedToSave"),
+        t,
+      );
       setMediaPathsError(
         savingField
           ? `${t(SETUP_MEDIA_PATH_LABEL_KEYS[savingField])}: ${message}`
@@ -572,23 +564,16 @@ export function SetupWizardContainer({
       ? "max-w-4xl"
       : isPluginsStep
         ? "max-w-6xl"
-      : isPersonaStep
-        ? "max-w-3xl"
-        : "max-w-2xl";
+        : isPersonaStep
+          ? "max-w-3xl"
+          : "max-w-2xl";
 
   return (
     <div
       className={cn(
         "mx-auto flex min-h-screen w-full flex-col items-center justify-center px-4 py-10",
         shellMaxWidth,
-        intro && "setup-intro",
-        intro === "playing" && "setup-intro-playing",
       )}
-      style={
-        intro === "playing"
-          ? ({ "--setup-intro-flight-delay": `${introFlightDelayMs}ms` } as React.CSSProperties)
-          : undefined
-      }
     >
       {wizardPath !== "import" ? (
         <div className="setup-intro-header mb-8 flex items-center">
@@ -596,14 +581,6 @@ export function SetupWizardContainer({
             <ScryerLogo className="h-20 w-20" />
           </div>
         </div>
-      ) : null}
-      {intro ? (
-        <SetupIntroMark
-          targetRef={headerLogoRef}
-          ready={restoreAvailabilityChecked}
-          onStart={startIntro}
-          onDone={finishIntro}
-        />
       ) : null}
 
       {currentStep > 0 && (
@@ -655,7 +632,9 @@ export function SetupWizardContainer({
             editMediaRoots(field, (roots) => addSetupRoot(roots, path))
           }
           onReplaceRoot={(field, index, path) =>
-            editMediaRoots(field, (roots) => replaceSetupRoot(roots, index, path))
+            editMediaRoots(field, (roots) =>
+              replaceSetupRoot(roots, index, path),
+            )
           }
           onRemoveRoot={(field, index) =>
             editMediaRoots(field, (roots) => removeSetupRoot(roots, index))
@@ -759,11 +738,7 @@ export function SetupWizardContainer({
       {/* ════════════════════════════════════════════════════════════════ */}
 
       {currentStep === 1 && wizardPath === "restore" && canRestoreSetup && (
-        <SetupRestoreView
-          t={t}
-          onBack={() => goToStep(0)}
-          onBackendRestarting={onBackendRestarting}
-        />
+        <SetupRestoreView t={t} onBack={() => goToStep(0)} />
       )}
 
       {wizardPath === "import" && currentStep >= 1 && (

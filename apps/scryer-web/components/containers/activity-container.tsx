@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient, useMutation } from "urql";
@@ -22,7 +23,10 @@ import {
 } from "@/lib/graphql/mutations";
 import { downloadClientsQuery } from "@/lib/graphql/queries";
 import { useDownloadImport } from "@/lib/hooks/use-download-import";
-import { canRetryDownloadPassword, useDownloadPasswordRetry } from "@/lib/hooks/use-download-password-retry";
+import {
+  canRetryDownloadPassword,
+  useDownloadPasswordRetry,
+} from "@/lib/hooks/use-download-password-retry";
 import { useActiveImportStreams } from "@/lib/hooks/use-active-import-streams";
 import { useDownloadQueuePage } from "@/lib/hooks/use-download-queue-page";
 import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
@@ -62,7 +66,10 @@ const DEFAULT_SORT_CONFIG_BY_TAB: SortConfigByTab = {
   activity: ACTIVITY_QUEUE_SORT,
 };
 
-function toggleSelectedValue<T extends string>(current: T[], nextValue: T): T[] {
+function toggleSelectedValue<T extends string>(
+  current: T[],
+  nextValue: T,
+): T[] {
   return current.includes(nextValue)
     ? current.filter((value) => value !== nextValue)
     : [...current, nextValue];
@@ -99,9 +106,13 @@ function mergeDownloadClientFilterOptions(
   }
 
   return Array.from(merged.values()).sort((left, right) =>
-    (left.clientName || left.clientType).localeCompare(right.clientName || right.clientType, undefined, {
-      sensitivity: "base",
-    }),
+    (left.clientName || left.clientType).localeCompare(
+      right.clientName || right.clientType,
+      undefined,
+      {
+        sensitivity: "base",
+      },
+    ),
   );
 }
 
@@ -120,35 +131,46 @@ export const ActivityContainer = memo(function ActivityContainer({
     next.delete("operation");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
-  const [, executeAssignTrackedDownloadTitle] = useMutation(assignTrackedDownloadTitleMutation);
-  const [, executeIgnoreTrackedDownload] = useMutation(ignoreTrackedDownloadMutation);
-  const [, executeMarkTrackedDownloadFailed] = useMutation(markTrackedDownloadFailedMutation);
+  const [, executeAssignTrackedDownloadTitle] = useMutation(
+    assignTrackedDownloadTitleMutation,
+  );
+  const [, executeIgnoreTrackedDownload] = useMutation(
+    ignoreTrackedDownloadMutation,
+  );
+  const [, executeMarkTrackedDownloadFailed] = useMutation(
+    markTrackedDownloadFailedMutation,
+  );
   const [, executePauseDownload] = useMutation(pauseDownloadMutation);
   const [, executeResumeDownload] = useMutation(resumeDownloadMutation);
   const [, executeDeleteDownload] = useMutation(deleteDownloadMutation);
   const [, executeCancelActiveImport] = useMutation(cancelActiveImportMutation);
-  const { request: requestPasswordRetry, dialog: passwordRetryDialog } = useDownloadPasswordRetry();
+  const { request: requestPasswordRetry, dialog: passwordRetryDialog } =
+    useDownloadPasswordRetry();
 
   const activeTab = activitySection;
   const importTabActive = activeTab === "import";
   const activityTabActive = activeTab === "activity";
-  const { streams: activeImportStreams } = useActiveImportStreams(activityTabActive);
-  const [selectedImportStatuses, setSelectedImportStatuses] = useState<DownloadImportStatus[]>([
-    ...IMPORT_ATTENTION_STATUSES,
-  ]);
+  const { streams: activeImportStreams } =
+    useActiveImportStreams(activityTabActive);
+  const [selectedImportStatuses, setSelectedImportStatuses] = useState<
+    DownloadImportStatus[]
+  >([...IMPORT_ATTENTION_STATUSES]);
   const [selectedActivityStatuses, setSelectedActivityStatuses] = useState<
     DownloadActivityStatus[]
   >([...ACTIVITY_STATUS_OPTIONS]);
-  const [activityScryerSubmittedOnly, setActivityScryerSubmittedOnly] = useState(true);
-  const [selectedActivityClientIds, setSelectedActivityClientIds] = useState<string[] | null>(
-    null,
+  const [activityScryerSubmittedOnly, setActivityScryerSubmittedOnly] =
+    useState(true);
+  const [selectedActivityClientIds, setSelectedActivityClientIds] = useState<
+    string[] | null
+  >(null);
+  const [sortConfigByTab, setSortConfigByTab] = useState<SortConfigByTab>(
+    DEFAULT_SORT_CONFIG_BY_TAB,
   );
-  const [sortConfigByTab, setSortConfigByTab] =
-    useState<SortConfigByTab>(DEFAULT_SORT_CONFIG_BY_TAB);
   const [configuredClientOptions, setConfiguredClientOptions] = useState<
     DownloadClientFilterOption[]
   >([]);
-  const [assignTitleItem, setAssignTitleItem] = useState<DownloadQueueItem | null>(null);
+  const [assignTitleItem, setAssignTitleItem] =
+    useState<DownloadQueueItem | null>(null);
   const [optimisticallyRemovedKeys, setOptimisticallyRemovedKeys] = useState<
     Record<string, true>
   >({});
@@ -189,7 +211,9 @@ export const ActivityContainer = memo(function ActivityContainer({
     filter: "ATTENTION",
   });
   const filteredImportItems = useMemo(() => {
-    return importItems.filter((item) => matchesImportStatuses(item, selectedImportStatuses));
+    return importItems.filter((item) =>
+      matchesImportStatuses(item, selectedImportStatuses),
+    );
   }, [importItems, selectedImportStatuses]);
   const activityAvailableClients = useMemo<DownloadClientFilterOption[]>(() => {
     return mergeDownloadClientFilterOptions(
@@ -199,13 +223,15 @@ export const ActivityContainer = memo(function ActivityContainer({
   }, [configuredClientOptions, queueAvailableClients]);
   const visibleItems = useMemo(() => {
     const sourceItems =
-      activeTab === "import"
-        ? filteredImportItems
-        : activityQueueItems;
+      activeTab === "import" ? filteredImportItems : activityQueueItems;
     return sourceItems
-      .filter((item) => !optimisticallyRemovedKeys[downloadQueueItemIdentityKey(item)])
+      .filter(
+        (item) =>
+          !optimisticallyRemovedKeys[downloadQueueItemIdentityKey(item)],
+      )
       .map((item) => {
-        const optimistic = optimisticQueueStates[downloadQueueItemIdentityKey(item)];
+        const optimistic =
+          optimisticQueueStates[downloadQueueItemIdentityKey(item)];
         return optimistic ? { ...item, ...optimistic } : item;
       });
   }, [
@@ -216,29 +242,39 @@ export const ActivityContainer = memo(function ActivityContainer({
     optimisticallyRemovedKeys,
   ]);
   const initialImportLoading =
-    importLoading && filteredImportItems.length === 0 && importLastRefreshedAt === null;
+    importLoading &&
+    filteredImportItems.length === 0 &&
+    importLastRefreshedAt === null;
   const initialActivityLoading =
-    queueLoading && activityQueueItems.length === 0 && queueLastRefreshedAt === null;
+    queueLoading &&
+    activityQueueItems.length === 0 &&
+    queueLastRefreshedAt === null;
   const visibleLoading =
-    activeTab === "import"
-      ? initialImportLoading
-      : initialActivityLoading;
+    activeTab === "import" ? initialImportLoading : initialActivityLoading;
   const visibleLoadingMore =
-    activeTab === "import" ? importLoadingMore : activeTab === "activity" ? queueLoadingMore : false;
-  const visibleHasMore =
-    activeTab === "import" ? importHasMore : activeTab === "activity" ? queueHasMore : false;
-  const visibleError =
     activeTab === "import"
-      ? importError
-      : queueError;
+      ? importLoadingMore
+      : activeTab === "activity"
+        ? queueLoadingMore
+        : false;
+  const visibleHasMore =
+    activeTab === "import"
+      ? importHasMore
+      : activeTab === "activity"
+        ? queueHasMore
+        : false;
+  const visibleError = activeTab === "import" ? importError : queueError;
 
   const refreshConfiguredClients = useCallback(async () => {
     try {
-      const { data, error } = await client.query(downloadClientsQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(downloadClientsQuery, {})
+        .toPromise();
       if (error) {
         throw error;
       }
-      const configuredClients: DownloadClientRecord[] = data?.downloadClientConfigs || [];
+      const configuredClients: DownloadClientRecord[] =
+        data?.downloadClientConfigs || [];
       setConfiguredClientOptions(
         configuredClients
           .filter((downloadClient) => downloadClient.isEnabled)
@@ -249,7 +285,10 @@ export const ActivityContainer = memo(function ActivityContainer({
           })),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     }
   }, [client, setGlobalStatus, t]);
 
@@ -261,7 +300,9 @@ export const ActivityContainer = memo(function ActivityContainer({
   }, [activityTabActive, refreshConfiguredClients]);
 
   useEffect(() => {
-    const availableClientIds = activityAvailableClients.map((client) => client.clientId);
+    const availableClientIds = activityAvailableClients.map(
+      (client) => client.clientId,
+    );
     setSelectedActivityClientIds((current) =>
       reconcileActivityClientSelection(current, availableClientIds),
     );
@@ -284,12 +325,14 @@ export const ActivityContainer = memo(function ActivityContainer({
       await refreshImport();
       return;
     }
-
   }, [importTabActive, refreshImport]);
 
-  useImportHistorySubscription(() => {
-    void refreshImportDrivenViews();
-  }, { pause: activityTabActive });
+  useImportHistorySubscription(
+    () => {
+      void refreshImportDrivenViews();
+    },
+    { pause: activityTabActive },
+  );
 
   useEffect(() => {
     if (Object.keys(optimisticallyRemovedKeys).length === 0) {
@@ -298,7 +341,10 @@ export const ActivityContainer = memo(function ActivityContainer({
 
     const authoritativeItems = [...activityQueueItems, ...importItems];
     const authoritativeByKey = new Map(
-      authoritativeItems.map((item) => [downloadQueueItemIdentityKey(item), item]),
+      authoritativeItems.map((item) => [
+        downloadQueueItemIdentityKey(item),
+        item,
+      ]),
     );
 
     setOptimisticallyRemovedKeys((current) => {
@@ -313,7 +359,9 @@ export const ActivityContainer = memo(function ActivityContainer({
         }),
       );
 
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
     });
   }, [activityQueueItems, importItems, optimisticallyRemovedKeys]);
 
@@ -335,12 +383,14 @@ export const ActivityContainer = memo(function ActivityContainer({
             return false;
           }
           return (
-            (authoritative.state !== optimistic.state ||
-              authoritative.displayState !== optimistic.displayState)
+            authoritative.state !== optimistic.state ||
+            authoritative.displayState !== optimistic.displayState
           );
         }),
       );
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
     });
   }, [activityQueueItems, importItems, optimisticQueueStates]);
 
@@ -350,7 +400,9 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   // Series and anime open the mapper dialog; movies import straight away.
   const manualImport = useManualImportLauncher({
-    onImportRetried: () => { void refreshVisibleTab(); },
+    onImportRetried: () => {
+      void refreshVisibleTab();
+    },
     onImportQueued: (item) => {
       setOptimisticQueueStates((current) => ({
         ...current,
@@ -375,7 +427,11 @@ export const ActivityContainer = memo(function ActivityContainer({
         },
       });
       if (result.error) {
-        const message = result.error.message ?? t("queue.assignTitleFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.assignTitleFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
@@ -395,7 +451,11 @@ export const ActivityContainer = memo(function ActivityContainer({
         },
       });
       if (result.error) {
-        const message = result.error.message ?? t("queue.ignoreFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.ignoreFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
@@ -416,12 +476,18 @@ export const ActivityContainer = memo(function ActivityContainer({
         },
       });
       if (result.error) {
-        const message = result.error.message ?? t("queue.markFailedFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.markFailedFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(
-        skipReacquire ? t("queue.markFailedOnlySuccess") : t("queue.markFailedSearchSuccess"),
+        skipReacquire
+          ? t("queue.markFailedOnlySuccess")
+          : t("queue.markFailedSearchSuccess"),
         { level: "SUCCESS" },
       );
       await refreshVisibleTab();
@@ -453,13 +519,18 @@ export const ActivityContainer = memo(function ActivityContainer({
         )
         .toPromise();
       const data = result.data ?? {};
-      const succeeded = targets.filter((_, index) => Boolean(data[`item${index}`])).length;
+      const succeeded = targets.filter((_, index) =>
+        Boolean(data[`item${index}`]),
+      ).length;
       const failed = targets.length - succeeded;
 
       if (succeeded === 0) {
         setGlobalStatus(t("queue.bulkIgnoreFailed"), { level: "ERROR" });
       } else if (failed > 0) {
-        setGlobalStatus(t("queue.bulkIgnorePartial", { count: succeeded, failed }), { level: "ERROR" });
+        setGlobalStatus(
+          t("queue.bulkIgnorePartial", { count: succeeded, failed }),
+          { level: "ERROR" },
+        );
       } else {
         setGlobalStatus(t("queue.bulkIgnoreSuccess", { count: succeeded }));
       }
@@ -486,7 +557,11 @@ export const ActivityContainer = memo(function ActivityContainer({
           const { [itemKey]: _removed, ...next } = current;
           return next;
         });
-        const message = result.error.message ?? t("queue.pauseFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.pauseFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
@@ -519,14 +594,24 @@ export const ActivityContainer = memo(function ActivityContainer({
           const { [itemKey]: _removed, ...next } = current;
           return next;
         });
-        const message = result.error.message ?? t("queue.resumeFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.resumeFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus(t("queue.resumeSuccess"));
       await refreshVisibleTab();
     },
-    [executeResumeDownload, requestPasswordRetry, refreshVisibleTab, setGlobalStatus, t],
+    [
+      executeResumeDownload,
+      requestPasswordRetry,
+      refreshVisibleTab,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const requestDelete = useCallback(
@@ -540,7 +625,11 @@ export const ActivityContainer = memo(function ActivityContainer({
         },
       });
       if (result.error) {
-        const message = result.error.message ?? t("queue.deleteFailed");
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("queue.deleteFailed"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
@@ -590,7 +679,9 @@ export const ActivityContainer = memo(function ActivityContainer({
         )
         .toPromise();
       const data = result.data ?? {};
-      const succeededItems = targets.filter((_, index) => Boolean(data[`item${index}`]));
+      const succeededItems = targets.filter((_, index) =>
+        Boolean(data[`item${index}`]),
+      );
 
       const succeeded = succeededItems.length;
       const failed = targets.length - succeeded;
@@ -614,9 +705,14 @@ export const ActivityContainer = memo(function ActivityContainer({
       if (succeeded === 0) {
         setGlobalStatus(t("queue.bulkDeleteFailed"), { level: "ERROR" });
       } else if (failed > 0) {
-        setGlobalStatus(t("queue.bulkDeletePartial", { count: succeeded, failed }), { level: "ERROR" });
+        setGlobalStatus(
+          t("queue.bulkDeletePartial", { count: succeeded, failed }),
+          { level: "ERROR" },
+        );
       } else {
-        setGlobalStatus(t("queue.bulkDeleteQueued", { count: succeeded }), { level: "SUCCESS" });
+        setGlobalStatus(t("queue.bulkDeleteQueued", { count: succeeded }), {
+          level: "SUCCESS",
+        });
       }
 
       void refreshQueue();
@@ -636,13 +732,17 @@ export const ActivityContainer = memo(function ActivityContainer({
     async (stream: ActiveImportStream) => {
       const result = await executeCancelActiveImport({ streamId: stream.id });
       if (result.error) {
-        const message = result.error.message ?? "Unable to cancel import.";
+        const message = userFacingGraphQlErrorMessage(
+          result.error,
+          t("error.fallback.unableToCancelImport"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
         throw result.error;
       }
       setGlobalStatus("Import cancellation requested.");
     },
-    [executeCancelActiveImport, setGlobalStatus],
+    [executeCancelActiveImport, setGlobalStatus, t],
   );
 
   return (
@@ -659,11 +759,15 @@ export const ActivityContainer = memo(function ActivityContainer({
         state={{
           queueItems: visibleItems,
           queueLoading: visibleLoading,
-          queueRefreshing: activeTab === "import" ? importLoading : queueLoading,
+          queueRefreshing:
+            activeTab === "import" ? importLoading : queueLoading,
           requestRefresh: activeTab === "import" ? refreshImport : refreshQueue,
           queueLoadingMore: visibleLoadingMore,
           queueError: visibleError,
-          queueStale: activeTab === "activity" ? queueStale : Boolean(importError && importLastRefreshedAt),
+          queueStale:
+            activeTab === "activity"
+              ? queueStale
+              : Boolean(importError && importLastRefreshedAt),
           activeImportStreams,
           onVisibleQueueOffsetChange:
             activeTab === "activity" ? setVisibleQueueOffset : undefined,
@@ -693,7 +797,8 @@ export const ActivityContainer = memo(function ActivityContainer({
                   currentConfig.key === nextKey
                     ? {
                         key: nextKey,
-                        direction: currentConfig.direction === "ASC" ? "DESC" : "ASC",
+                        direction:
+                          currentConfig.direction === "ASC" ? "DESC" : "ASC",
                       }
                     : DEFAULT_SORT_CONFIG_BY_TAB[tab].key === nextKey
                       ? DEFAULT_SORT_CONFIG_BY_TAB[tab]
@@ -707,25 +812,32 @@ export const ActivityContainer = memo(function ActivityContainer({
           },
           selectedImportStatuses,
           toggleImportStatus: (status) => {
-            setSelectedImportStatuses((current) => toggleSelectedValue(current, status));
+            setSelectedImportStatuses((current) =>
+              toggleSelectedValue(current, status),
+            );
           },
           selectedActivityStatuses,
           toggleActivityStatus: (status) => {
-            setSelectedActivityStatuses((current) => toggleSelectedValue(current, status));
+            setSelectedActivityStatuses((current) =>
+              toggleSelectedValue(current, status),
+            );
           },
           activityAvailableClients,
           selectedActivityClientIds:
-            selectedActivityClientIds ?? activityAvailableClients.map((client) => client.clientId),
+            selectedActivityClientIds ??
+            activityAvailableClients.map((client) => client.clientId),
           toggleActivityClientId: (clientId) => {
             setSelectedActivityClientIds((current) =>
-              toggleSelectedValue(current ?? activityAvailableClients.map((client) => client.clientId), clientId),
+              toggleSelectedValue(
+                current ??
+                  activityAvailableClients.map((client) => client.clientId),
+                clientId,
+              ),
             );
           },
           visibleHasMore,
           requestMoreItems:
-            activeTab === "import"
-              ? loadMoreImport
-              : loadMoreQueue,
+            activeTab === "import" ? loadMoreImport : loadMoreQueue,
         }}
       />
       {manualImport.dialog}

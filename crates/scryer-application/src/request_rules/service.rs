@@ -352,8 +352,12 @@ impl AppUseCase {
 
         let scratch_id = Id::new_rego_safe().0;
         let rewritten = rewrite_package_declaration(rego_source, &scratch_id);
-        validate_request_rule(&rewritten, &scratch_id)
-            .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))
+        validate_request_rule(&rewritten, &scratch_id).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_VALIDATION_FAILED,
+                format!("rule validation failed: {error}"),
+            )
+        })
     }
 
     /// Run one matcher against one hypothetical request. Nothing is written.
@@ -380,7 +384,12 @@ impl AppUseCase {
             .users
             .get_by_id(sample.user_id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound("sample requester not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::SAMPLE_REQUESTER_NOT_FOUND,
+                    "sample requester not found",
+                )
+            })?;
         let requester = self.attach_user_authorization(requester).await?;
         let library = self
             .services
@@ -388,7 +397,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(sample.library_id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound("sample library not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::SAMPLE_LIBRARY_NOT_FOUND,
+                    "sample library not found",
+                )
+            })?;
 
         let external_ids =
             crate::media_requests::normalize_media_request_external_ids(sample.external_ids)?;
@@ -457,12 +471,19 @@ impl AppUseCase {
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
-        let engine = RequestRulesEngine::build(std::slice::from_ref(&policy))
-            .map_err(|error| AppError::Validation(format!("rule failed to compile: {error}")))?;
+        let engine = RequestRulesEngine::build(std::slice::from_ref(&policy)).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_FAILED_COMPILE,
+                format!("rule failed to compile: {error}"),
+            )
+        })?;
         let mut evaluator = engine.evaluator();
-        let outcome = evaluator
-            .evaluate(&input)
-            .map_err(|error| AppError::Validation(format!("rule evaluation failed: {error}")))?;
+        let outcome = evaluator.evaluate(&input).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_EVALUATION_FAILED,
+                format!("rule evaluation failed: {error}"),
+            )
+        })?;
 
         let (vote, held, reasons, tags, error) =
             match (outcome.records.first(), outcome.errors.first()) {
@@ -539,8 +560,12 @@ impl AppUseCase {
         rego_source: &str,
         rule_set_id: &str,
     ) -> AppResult<()> {
-        let paths = request_person_targeted_paths(rego_source, rule_set_id)
-            .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
+        let paths = request_person_targeted_paths(rego_source, rule_set_id).map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::request_rules::RULE_VALIDATION_FAILED,
+                format!("rule validation failed: {error}"),
+            )
+        })?;
         if paths.is_empty() {
             return Ok(());
         }
@@ -552,10 +577,13 @@ impl AppUseCase {
             return Ok(());
         }
 
-        Err(AppError::Unauthorized(format!(
-            "This rule reads facts about specific people ({}), so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-            paths.join(", ")
-        )))
+        Err(AppError::unauthorized_reason(
+            crate::error_reasons::request_rules::PERSON_TARGETING_PERMISSION_REQUIRED,
+            format!(
+                "This rule reads facts about specific people ({}), so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
+                paths.join(", ")
+            ),
+        ))
     }
 
     pub(crate) async fn require_request_rule_set(&self, id: &str) -> AppResult<RequestRuleSet> {
@@ -564,7 +592,12 @@ impl AppUseCase {
             .request_rule_sets
             .get_rule_set(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("request rule set {id} not found")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::SET_NOT_FOUND,
+                    format!("request rule set {id} not found"),
+                )
+            })
     }
 
     pub(crate) async fn load_request_rule_detail(
@@ -625,13 +658,29 @@ pub(crate) struct PreparedMatcher {
 /// to hold before a revision is written.
 fn prepare_matcher(rule_id: &str, rego_source: &str) -> AppResult<PreparedMatcher> {
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
-    let validation = validate_request_rule(&rewritten, rule_id)
-        .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
+    let validation = validate_request_rule(&rewritten, rule_id).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::request_rules::RULE_VALIDATION_FAILED,
+            format!("rule validation failed: {error}"),
+        )
+    })?;
     if !validation.valid {
-        return Err(AppError::Validation(format!(
-            "Request rule validation failed:\n- {}",
-            validation.errors.join("\n- ")
-        )));
+        return Err(AppError::validation_refused_with_diagnostics(
+            if validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == crate::error_reasons::rules::TARGETS_PERSON)
+            {
+                crate::error_reasons::rules::TARGETS_PERSON
+            } else {
+                crate::error_reasons::request_rules::RULE_VALIDATION_FAILED
+            },
+            format!(
+                "Request rule validation failed:\n- {}",
+                validation.errors.join("\n- ")
+            ),
+            validation.diagnostics,
+        ));
     }
     Ok(PreparedMatcher {
         content_hash: content_hash(&rewritten),
@@ -660,7 +709,10 @@ fn build_revision(
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(format!("{field} must not be empty")));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::request_rules::FIELD_REQUIRED,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(trimmed.to_string())
 }
@@ -686,36 +738,49 @@ fn preview_sample_title(facet: &MediaFacet) -> String {
 /// reused: it takes a Rego value.
 pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
     if tags.len() > MAX_TAGS {
-        return Err(AppError::Validation(format!(
-            "a request may carry at most {MAX_TAGS} tags, {} were supplied",
-            tags.len()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::request_rules::REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+            format!(
+                "a request may carry at most {MAX_TAGS} tags, {} were supplied",
+                tags.len()
+            ),
+        ));
     }
     let mut validated: Vec<String> = Vec::with_capacity(tags.len());
     for tag in tags {
         let tag = tag.trim().to_string();
         if tag.is_empty() {
-            return Err(AppError::Validation("tag must not be empty".to_string()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::TAG_REQUIRED,
+                "tag must not be empty".to_string(),
+            ));
         }
         if tag.len() > MAX_TAG_LEN {
-            return Err(AppError::Validation(format!(
-                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
-                tag.len()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::TAG_CHARACTERS_MOST_ALLOWED,
+                format!(
+                    "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                    tag.len()
+                ),
+            ));
         }
         if tag.starts_with(RESERVED_TAG_PREFIX) {
-            return Err(AppError::Validation(format!(
-                "tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::TAG_USES_RESERVED_PREFIX,
+                format!("tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"),
+            ));
         }
         if let Some(bad) = tag
             .chars()
             .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')))
         {
-            return Err(AppError::Validation(format!(
-                "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, '.', \
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::TAG_CONTAINS_UNSUPPORTED_CHARACTER,
+                format!(
+                    "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, '.', \
                  '_', '-', or spaces"
-            )));
+                ),
+            ));
         }
         if !validated.contains(&tag) {
             validated.push(tag);
@@ -728,12 +793,16 @@ pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
 pub fn validate_lease_days(lease_days: Option<i64>) -> AppResult<Option<i64>> {
     match lease_days {
         None => Ok(None),
-        Some(days) if days < 1 => Err(AppError::Validation(
+        Some(days) if days < 1 => Err(AppError::validation_refused(
+            crate::error_reasons::request_rules::LEASE_OUT_OF_RANGE,
             "a lease must be at least one day, or forever".to_string(),
         )),
-        Some(days) if days > REQUEST_MAX_LEASE_DAYS => Err(AppError::Validation(format!(
-            "a lease must be at most {REQUEST_MAX_LEASE_DAYS} days (ten years), or forever"
-        ))),
+        Some(days) if days > REQUEST_MAX_LEASE_DAYS => Err(AppError::validation_refused(
+            crate::error_reasons::request_rules::LEASE_OUT_OF_RANGE,
+            format!(
+                "a lease must be at most {REQUEST_MAX_LEASE_DAYS} days (ten years), or forever"
+            ),
+        )),
         Some(days) => Ok(Some(days)),
     }
 }

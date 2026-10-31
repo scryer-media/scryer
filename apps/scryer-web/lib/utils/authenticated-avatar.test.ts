@@ -29,14 +29,19 @@ test("only same-origin media-server avatar routes receive authentication", () =>
     ),
     false,
   );
-  assert.equal(isProtectedMediaServerAvatarUrl("/ordinary-avatar.png", origin), false);
+  assert.equal(
+    isProtectedMediaServerAvatarUrl("/ordinary-avatar.png", origin),
+    false,
+  );
 });
 
 test("authenticated avatar fetch sends bearer in a header and returns an image blob", async () => {
   const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
   const fetchImage: typeof fetch = async (input, init) => {
     calls.push({ input, init });
-    return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }));
+    return new Response(
+      new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
+    );
   };
   const url = "/api/media-server-avatars/connection/user/tag";
 
@@ -51,7 +56,10 @@ test("authenticated avatar fetch sends bearer in a header and returns an image b
   assert.equal(blob.type, "image/png");
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.input, url);
-  assert.equal(new Headers(calls[0]?.init?.headers).get("authorization"), "Bearer secret-token");
+  assert.equal(
+    new Headers(calls[0]?.init?.headers).get("authorization"),
+    "Bearer secret-token",
+  );
   assert.equal(String(calls[0]?.input).includes("secret-token"), false);
 });
 

@@ -6,16 +6,22 @@ fn normalize_managed_child_routing_scopes(
     for scope in scopes {
         let scope_id = scope.scope_id.trim().to_ascii_lowercase();
         if !MANAGED_INDEXER_SCOPE_IDS.contains(&scope_id.as_str()) {
-            return Err(AppError::Validation(format!(
-                "managed child routing scope '{}' is not supported",
-                scope.scope_id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED,
+                format!(
+                    "managed child routing scope '{}' is not supported",
+                    scope.scope_id
+                ),
+            ));
         }
         if routing_by_scope.contains_key(&scope_id) {
-            return Err(AppError::Validation(format!(
-                "managed child routing contains duplicate scope '{}'",
-                scope_id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE,
+                format!(
+                    "managed child routing contains duplicate scope '{}'",
+                    scope_id
+                ),
+            ));
         }
         routing_by_scope.insert(scope_id, normalize_routing_categories(scope.categories));
     }
@@ -59,7 +65,7 @@ impl AppUseCase {
 
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             if let Err(error) = app.sync_indexer_config(&actor, &config_id).await {
                 tracing::warn!(
                     config_id = %config_id,
@@ -78,7 +84,7 @@ impl AppUseCase {
 
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             if let Err(error) = app
                 .enrich_managed_indexer_children(&actor, &config_id)
                 .await
@@ -113,10 +119,12 @@ impl AppUseCase {
             .lock_owned()
             .await;
         let indexer_configs = &self.services.integrations.indexer_configs;
-        let parent = indexer_configs
-            .get_by_id(config_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+        let parent = indexer_configs.get_by_id(config_id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::integration::INDEXER_CONFIG_NOT_FOUND,
+                format!("indexer config '{config_id}' not found"),
+            )
+        })?;
         let existing_by_key = indexer_configs
             .list(None)
             .await?
@@ -133,6 +141,7 @@ impl AppUseCase {
             .collect::<HashMap<_, _>>();
         let system_backoffs = indexer_configs.list_system_backoffs().await?;
         let now = Utc::now();
+        let unanswered = &self.runtime.integrations.managed_caps_unanswered;
         let caps_due = existing_by_key
             .iter()
             .filter(|(_, child)| child.is_enabled)
@@ -157,6 +166,16 @@ impl AppUseCase {
                 }
                 !backed_off
             })
+            .filter(|(_, child)| {
+                let waiting = unanswered.waiting(child, now);
+                if waiting {
+                    tracing::debug!(
+                        config_id = %child.id,
+                        "skipping managed child caps fetch until its unanswered request is due again"
+                    );
+                }
+                !waiting
+            })
             .map(|(child_key, _)| child_key.clone())
             .collect::<HashSet<_>>();
         if caps_due.is_empty() {
@@ -176,18 +195,21 @@ impl AppUseCase {
         let client = provider
             .management_client_for_provider(&parent)
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::integration::NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE, format!(
                     "no indexer management client available for provider type '{}'",
                     parent.provider_type
                 ))
             })?;
-        let Some(plan) = client.enrichment_sync_plan(&parent.id, &caps_due).await? else {
-            return Ok(());
+        let plan = client.enrichment_sync_plan(&parent.id, &caps_due).await?;
+        let desired_children = match plan {
+            Some(plan) => {
+                self.prepare_managed_indexer_sync_plan(&parent, plan)
+                    .await?
+            }
+            None => Vec::new(),
         };
-        let desired_children = self
-            .prepare_managed_indexer_sync_plan(&parent, plan)
-            .await?;
 
+        let mut answered = HashSet::new();
         let mut enriched = 0_usize;
         let mut changed = false;
         for desired in desired_children {
@@ -250,6 +272,24 @@ impl AppUseCase {
             }
             changed |= content_changed;
             enriched = enriched.saturating_add(1);
+            answered.insert(desired.child_key.clone());
+        }
+        // A due child the pass got no caps for waits before it is asked again,
+        // rather than being asked on every sync.
+        for child_key in &caps_due {
+            let Some(child) = existing_by_key.get(child_key) else {
+                continue;
+            };
+            if answered.contains(child_key) {
+                unanswered.record_answered(&child.id);
+            } else {
+                let retry_at = unanswered.record_unanswered(child, now);
+                tracing::debug!(
+                    config_id = %child.id,
+                    retry_at = %retry_at,
+                    "managed child returned no caps; asking again later"
+                );
+            }
         }
         // A refetch that only renews the fetch time changes nothing anyone sees.
         if changed {
@@ -277,12 +317,13 @@ impl AppUseCase {
         for child in plan.children {
             let child_key = child.child_key.trim().to_string();
             if child_key.is_empty() {
-                return Err(AppError::Validation(
-                    "managed child plan entries require child_key".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::integration::MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY,
+                    "managed child plan entries require child_key",
                 ));
             }
             if !seen_child_keys.insert(child_key.clone()) {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::integration::MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY, format!(
                     "managed child plan contains duplicate child_key '{}'",
                     child_key
                 )));
@@ -290,18 +331,18 @@ impl AppUseCase {
 
             let name = child.name.trim().to_string();
             if name.is_empty() {
-                return Err(AppError::Validation(format!(
-                    "managed child '{}' requires a name",
-                    child_key
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::integration::MANAGED_CHILD_REQUIRES_NAME,
+                    format!("managed child '{}' requires a name", child_key),
+                ));
             }
 
             let provider_type = child.provider_type.trim().to_ascii_lowercase();
             if provider_type.is_empty() {
-                return Err(AppError::Validation(format!(
-                    "managed child '{}' requires provider_type",
-                    child_key
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::integration::MANAGED_CHILD_REQUIRES_PROVIDER_TYPE,
+                    format!("managed child '{}' requires provider_type", child_key),
+                ));
             }
 
             let fields = self.indexer_config_fields_for_provider_type(&provider_type)?;

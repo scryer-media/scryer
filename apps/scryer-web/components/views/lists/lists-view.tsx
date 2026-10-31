@@ -6,10 +6,17 @@ import { UnderlineFilterButton } from "@/components/common/underline-filter-butt
 import type { ListsSection } from "@/components/root/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { GutterPanel, GutterPanelButton } from "@/components/common/gutter-panel";
+import {
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
 import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
 import { useTranslate } from "@/lib/context/translate-context";
-import { type GutterPanelMemory, type GutterPanelSize, useGutterPanel } from "@/lib/hooks/use-gutter-panel";
+import {
+  type GutterPanelMemory,
+  type GutterPanelSize,
+  useGutterPanel,
+} from "@/lib/hooks/use-gutter-panel";
 import type { ListAccountMemberKey } from "@/lib/hooks/use-list-account-link";
 import type {
   ListAccount,
@@ -57,7 +64,9 @@ export type ListDetailState = {
   error: string | null;
 };
 
-export type ListTabCounts = Partial<Record<Exclude<ListsSection, "providerApps">, number>>;
+export type ListTabCounts = Partial<
+  Record<Exclude<ListsSection, "providerApps">, number>
+>;
 
 type ListsViewProps = {
   section: ListsSection;
@@ -93,8 +102,14 @@ type ListsViewProps = {
   membershipPageSize: number;
   onPreviewUrl: (url: string) => Promise<ListPreview | null>;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
-  onPreviewSubscription: (id: string, draft?: ListSubscriptionDraft) => Promise<ListPreview | null>;
-  onSubscribe: (source: ListSourceDraft, draft: ListSubscriptionDraft) => Promise<boolean>;
+  onPreviewSubscription: (
+    id: string,
+    draft?: ListSubscriptionDraft,
+  ) => Promise<ListPreview | null>;
+  onSubscribe: (
+    source: ListSourceDraft,
+    draft: ListSubscriptionDraft,
+  ) => Promise<boolean>;
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
   onSetEnabled: (subscription: ListSubscription, enabled: boolean) => void;
   onSyncNow: (subscription: ListSubscription) => void;
@@ -105,10 +120,14 @@ type ListsViewProps = {
   onAddExclusion: (input: AddListExclusionInput) => Promise<boolean>;
   onRemoveExclusion: (exclusion: ListExclusion) => Promise<boolean>;
   providerSettings?: ListProviderSettings[] | null;
-  onSaveProviderSettings?: (provider: string, changes: ListProviderSettingChange[]) => Promise<boolean>;
+  onSaveProviderSettings?: (
+    provider: string,
+    changes: ListProviderSettingChange[],
+  ) => Promise<boolean>;
 };
 
-const PANEL_HEADING = "font-display text-[17px] font-bold text-[var(--scry-ink)]";
+const PANEL_HEADING =
+  "font-display text-[17px] font-bold text-[var(--scry-ink)]";
 
 export function ListsView(props: ListsViewProps) {
   const {
@@ -126,17 +145,27 @@ export function ListsView(props: ListsViewProps) {
     detail,
   } = props;
   const t = useTranslate();
-  const [followTarget, setFollowTarget] = React.useState<FollowListTarget | null>(null);
+  const [followTarget, setFollowTarget] =
+    React.useState<FollowListTarget | null>(null);
   const canManageSubscriptions = canManageLists || section === "personal";
   const providerByType = React.useMemo(
-    () => new Map(providers.map((provider) => [provider.providerType, provider])),
+    () =>
+      new Map(providers.map((provider) => [provider.providerType, provider])),
     [providers],
   );
 
-  const followFromCatalog = (manifest: ListProviderManifest, item: ListProviderItem) => {
+  const followFromCatalog = (
+    manifest: ListProviderManifest,
+    item: ListProviderItem,
+  ) => {
     setFollowTarget({
       kind: "new",
-      source: { provider: manifest.providerType, sourceType: item.sourceType, params: [], url: null },
+      source: {
+        provider: manifest.providerType,
+        sourceType: item.sourceType,
+        params: [],
+        url: null,
+      },
       manifest,
       item,
       name: item.name,
@@ -146,10 +175,13 @@ export function ListsView(props: ListsViewProps) {
   };
 
   const followFromUrl = (url: string, preview: ListPreview) => {
-    const manifest = preview.provider ? (providerByType.get(preview.provider) ?? null) : null;
+    const manifest = preview.provider
+      ? (providerByType.get(preview.provider) ?? null)
+      : null;
     const item =
-      manifest?.groups.flatMap((group) => group.items).find((entry) => entry.sourceType === preview.sourceType) ??
-      null;
+      manifest?.groups
+        .flatMap((group) => group.items)
+        .find((entry) => entry.sourceType === preview.sourceType) ?? null;
     setFollowTarget({
       kind: "new",
       source: {
@@ -166,7 +198,9 @@ export function ListsView(props: ListsViewProps) {
     });
   };
 
-  const detailFallback = detail ? (subscriptions.find((entry) => entry.id === detail.id) ?? null) : null;
+  const detailFallback = detail
+    ? (subscriptions.find((entry) => entry.id === detail.id) ?? null)
+    : null;
   const detailSubscription = detail?.subscription ?? detailFallback;
   // Every tab keeps the same rail so switching tabs never opens or closes it.
   const showPlugins = props.canManageProviderApps;
@@ -180,7 +214,6 @@ export function ListsView(props: ListsViewProps) {
     props.pluginsPanelMemory,
   );
 
-
   const plugins = showPlugins ? (
     <FilteredPluginList
       family="LIST"
@@ -190,162 +223,232 @@ export function ListsView(props: ListsViewProps) {
   ) : null;
 
   return (
-    <section ref={scrollRef} id="lists-view" className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-transparent [scrollbar-gutter:stable]">
+    <section
+      ref={scrollRef}
+      id="lists-view"
+      className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-transparent [scrollbar-gutter:stable]"
+    >
       <div className="w-full px-4 py-6 sm:px-6 lg:px-8">
-      <div ref={contentRef} className="mx-auto flex max-w-[1280px] flex-col gap-4">
-        <div className="flex items-center gap-4">
-          <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
-            <ListPlus className="h-5 w-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="flex flex-wrap items-center gap-2.5 font-display text-[25px] font-bold leading-tight text-[var(--scry-ink)]">
-              {t("nav.lists")}
-              <Badge id="lists-beta" tone="warning" className="text-[11px]">
-                {t("settings.pluginBeta")}
-              </Badge>
-            </h1>
-          </div>
-          {showPlugins ? (
-            <GutterPanelButton
-              panelId="lists-plugins-panel"
-              label={t("settings.plugins")}
-              icon={<Puzzle className="h-4 w-4" />}
-              open={pluginsPanel.open}
-              onOpenChange={pluginsPanel.setOpen}
-            />
-          ) : null}
-        </div>
-
-        <div className="flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
-          <div role="tablist" aria-label={t("nav.lists")} className="relative top-px flex min-h-12 flex-wrap gap-x-2">
-            <UnderlineFilterButton
-              id="lists-tab-public"
-              role="tab"
-              size="lg"
-              aria-selected={section === "public"}
-              selected={section === "public"}
-              label={t("lists.tab.public")}
-              count={tabCounts.public}
-              onClick={() => onSectionChange("public")}
-            />
-            <UnderlineFilterButton
-              id="lists-tab-personal"
-              role="tab"
-              size="lg"
-              aria-selected={section === "personal"}
-              selected={section === "personal"}
-              label={t("lists.tab.personal")}
-              count={tabCounts.personal}
-              onClick={() => onSectionChange("personal")}
-            />
-            {canManageLists ? (
-              <UnderlineFilterButton
-                id="lists-tab-exclusions"
-                role="tab"
-                size="lg"
-                aria-selected={section === "exclusions"}
-                selected={section === "exclusions"}
-                label={t("lists.tab.exclusions")}
-                count={tabCounts.exclusions}
-                onClick={() => onSectionChange("exclusions")}
-              />
-            ) : null}
-            {props.canManageProviderApps ? (
-              <UnderlineFilterButton
-                id="lists-tab-provider-apps"
-                role="tab"
-                size="lg"
-                aria-selected={section === "providerApps"}
-                selected={section === "providerApps"}
-                label={t("lists.providerApps.heading")}
-                badge={t("label.advanced")}
-                onClick={() => onSectionChange("providerApps")}
+        <div
+          ref={contentRef}
+          className="mx-auto flex max-w-[1280px] flex-col gap-4"
+        >
+          <div className="flex items-center gap-4">
+            <div className="flex h-11 w-11 flex-none items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.16)] text-[var(--scry-accent-text)]">
+              <ListPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="flex flex-wrap items-center gap-2.5 font-display text-[25px] font-bold leading-tight text-[var(--scry-ink)]">
+                {t("nav.lists")}
+                <Badge id="lists-beta" tone="warning" className="text-[11px]">
+                  {t("settings.pluginBeta")}
+                </Badge>
+              </h1>
+            </div>
+            {showPlugins ? (
+              <GutterPanelButton
+                panelId="lists-plugins-panel"
+                label={t("settings.plugins")}
+                icon={<Puzzle className="h-4 w-4" />}
+                open={pluginsPanel.open}
+                onOpenChange={pluginsPanel.setOpen}
               />
             ) : null}
           </div>
-        </div>
 
-        {section === "providerApps" && props.canManageProviderApps ? (
-          <ProviderAppsPanel />
-        ) : section === "providerApps" ? (
-          <p role="status" className="py-6 text-sm">{t("status.permissionDenied")}</p>
-        ) : loading ? (
-          <div className="flex items-center gap-2 py-8 text-sm text-[var(--scry-muted)]">
-            <LoadingMark className="h-4 w-4" />
-            {t("label.loading")}
-          </div>
-        ) : loadError ? (
-          <div id="lists-load-error" className="space-y-2 py-6">
-            <p className="text-sm text-[var(--scry-danger-text)]">{loadError}</p>
-            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-              {t("lists.action.retry")}
-            </Button>
-          </div>
-        ) : section === "exclusions" && !canManageLists ? (
-          <p id="lists-exclusions-not-permitted" role="status" className="py-6 text-sm text-muted-foreground">
-            {t("status.permissionDenied")}
-          </p>
-        ) : section === "exclusions" ? (
-          <ExclusionsTable
-            exclusions={props.exclusions}
-            subscriptions={subscriptions}
-            loading={props.exclusionsLoading}
-            busyIds={busyIds}
-            onAdd={props.onAddExclusion}
-            onRemove={props.onRemoveExclusion}
-          />
-        ) : (
-          <div className="space-y-8">
-            <section className="space-y-3">
-              <div className="flex min-h-8 items-center justify-between gap-3">
-                <h2 className={PANEL_HEADING}>{t("lists.followed.heading")}</h2>
-                {canManageSubscriptions && subscriptions.length > 0 ? (
-                  <Button id="lists-sync-all" type="button" variant="primary" size="sm" onClick={props.onSyncAll}>
-                    <RefreshCw className="h-4 w-4" />
-                    {t("lists.action.syncAll")}
-                  </Button>
-                ) : null}
-              </div>
-              {subscriptions.length === 0 ? (
-                <p id="lists-empty" className="text-[13px] text-[var(--scry-muted)]">
-                  {canManageLists ? t("lists.followed.emptyManager") : t("lists.followed.empty")}
-                </p>
-              ) : (
-                <ListTable
-                  subscriptions={subscriptions}
-                  providers={providers}
-                  accounts={section === "personal" ? props.accounts : undefined}
-                  canManageLists={canManageSubscriptions}
-                  busyIds={busyIds}
-                  onOpen={(subscription) => props.onOpenDetail(subscription.id)}
-                  onSetEnabled={props.onSetEnabled}
-                  onSyncNow={props.onSyncNow}
+          <div className="flex flex-wrap items-end gap-3 border-b border-[var(--scry-border3)]">
+            <div
+              role="tablist"
+              aria-label={t("nav.lists")}
+              className="relative top-px flex min-h-12 flex-wrap gap-x-2"
+            >
+              <UnderlineFilterButton
+                id="lists-tab-public"
+                role="tab"
+                size="lg"
+                aria-selected={section === "public"}
+                selected={section === "public"}
+                label={t("lists.tab.public")}
+                count={tabCounts.public}
+                onClick={() => onSectionChange("public")}
+              />
+              <UnderlineFilterButton
+                id="lists-tab-personal"
+                role="tab"
+                size="lg"
+                aria-selected={section === "personal"}
+                selected={section === "personal"}
+                label={t("lists.tab.personal")}
+                count={tabCounts.personal}
+                onClick={() => onSectionChange("personal")}
+              />
+              {canManageLists ? (
+                <UnderlineFilterButton
+                  id="lists-tab-exclusions"
+                  role="tab"
+                  size="lg"
+                  aria-selected={section === "exclusions"}
+                  selected={section === "exclusions"}
+                  label={t("lists.tab.exclusions")}
+                  count={tabCounts.exclusions}
+                  onClick={() => onSectionChange("exclusions")}
                 />
-              )}
-            </section>
+              ) : null}
+              {props.canManageProviderApps ? (
+                <UnderlineFilterButton
+                  id="lists-tab-provider-apps"
+                  role="tab"
+                  size="lg"
+                  aria-selected={section === "providerApps"}
+                  selected={section === "providerApps"}
+                  label={t("lists.providerApps.heading")}
+                  badge={t("label.advanced")}
+                  onClick={() => onSectionChange("providerApps")}
+                />
+              ) : null}
+            </div>
+          </div>
 
-            {section === "personal" ? (
-              <PersonalAccounts providers={providers} accounts={props.accounts} subscriptions={subscriptions} managedAccounts={props.managedAccounts} accountLoading={props.accountLoading} accountReadErrors={props.accountReadErrors} busyIds={busyIds} linkingProvider={props.linkingProvider} checkingKey={props.checkingAccountKey} linkError={props.accountLinkError} onLink={props.onLinkAccount} onCancelLink={props.onCancelLink} onManage={props.onManageAccounts} onUnlink={props.onUnlinkAccount} onPreviewSource={props.onPreviewSource} onFollow={(manifest, item, source, name) => setFollowTarget({ kind: "new", source, manifest, item, name, kinds: item.kinds, preview: null })} />
-            ) : null}
-
-            {canManageLists && section === "public" ? (
+          {section === "providerApps" && props.canManageProviderApps ? (
+            <ProviderAppsPanel />
+          ) : section === "providerApps" ? (
+            <p role="status" className="py-6 text-sm">
+              {t("status.permissionDenied")}
+            </p>
+          ) : loading ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-[var(--scry-muted)]">
+              <LoadingMark className="h-4 w-4" />
+              {t("label.loading")}
+            </div>
+          ) : loadError ? (
+            <div id="lists-load-error" className="space-y-2 py-6">
+              <p className="text-sm text-[var(--scry-danger-text)]">
+                {loadError}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onRetry}
+              >
+                {t("lists.action.retry")}
+              </Button>
+            </div>
+          ) : section === "exclusions" && !canManageLists ? (
+            <p
+              id="lists-exclusions-not-permitted"
+              role="status"
+              className="py-6 text-sm text-muted-foreground"
+            >
+              {t("status.permissionDenied")}
+            </p>
+          ) : section === "exclusions" ? (
+            <ExclusionsTable
+              exclusions={props.exclusions}
+              subscriptions={subscriptions}
+              loading={props.exclusionsLoading}
+              busyIds={busyIds}
+              onAdd={props.onAddExclusion}
+              onRemove={props.onRemoveExclusion}
+            />
+          ) : (
+            <div className="space-y-8">
               <section className="space-y-3">
-                <h2 className={PANEL_HEADING}>{t("lists.catalog.heading")}</h2>
-                <ProviderBrowser
-                  providers={providers}
-                  subscriptions={subscriptions}
-                  onFollow={followFromCatalog}
-                  onPreviewUrl={props.onPreviewUrl}
-                  onFollowUrl={followFromUrl}
-                  onPreviewSource={props.onPreviewSource}
-                  providerSettings={props.providerSettings}
-                  onSaveProviderSettings={props.onSaveProviderSettings}
-                />
+                <div className="flex min-h-8 items-center justify-between gap-3">
+                  <h2 className={PANEL_HEADING}>
+                    {t("lists.followed.heading")}
+                  </h2>
+                  {canManageSubscriptions && subscriptions.length > 0 ? (
+                    <Button
+                      id="lists-sync-all"
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={props.onSyncAll}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {t("lists.action.syncAll")}
+                    </Button>
+                  ) : null}
+                </div>
+                {subscriptions.length === 0 ? (
+                  <p
+                    id="lists-empty"
+                    className="text-[13px] text-[var(--scry-muted)]"
+                  >
+                    {canManageLists
+                      ? t("lists.followed.emptyManager")
+                      : t("lists.followed.empty")}
+                  </p>
+                ) : (
+                  <ListTable
+                    subscriptions={subscriptions}
+                    providers={providers}
+                    accounts={
+                      section === "personal" ? props.accounts : undefined
+                    }
+                    canManageLists={canManageSubscriptions}
+                    busyIds={busyIds}
+                    onOpen={(subscription) =>
+                      props.onOpenDetail(subscription.id)
+                    }
+                    onSetEnabled={props.onSetEnabled}
+                    onSyncNow={props.onSyncNow}
+                  />
+                )}
               </section>
-            ) : null}
-          </div>
-        )}
-      </div>
+
+              {section === "personal" ? (
+                <PersonalAccounts
+                  providers={providers}
+                  accounts={props.accounts}
+                  subscriptions={subscriptions}
+                  managedAccounts={props.managedAccounts}
+                  accountLoading={props.accountLoading}
+                  accountReadErrors={props.accountReadErrors}
+                  busyIds={busyIds}
+                  linkingProvider={props.linkingProvider}
+                  checkingKey={props.checkingAccountKey}
+                  linkError={props.accountLinkError}
+                  onLink={props.onLinkAccount}
+                  onCancelLink={props.onCancelLink}
+                  onManage={props.onManageAccounts}
+                  onUnlink={props.onUnlinkAccount}
+                  onPreviewSource={props.onPreviewSource}
+                  onFollow={(manifest, item, source, name) =>
+                    setFollowTarget({
+                      kind: "new",
+                      source,
+                      manifest,
+                      item,
+                      name,
+                      kinds: item.kinds,
+                      preview: null,
+                    })
+                  }
+                />
+              ) : null}
+
+              {canManageLists && section === "public" ? (
+                <section className="space-y-3">
+                  <h2 className={PANEL_HEADING}>
+                    {t("lists.catalog.heading")}
+                  </h2>
+                  <ProviderBrowser
+                    providers={providers}
+                    subscriptions={subscriptions}
+                    onFollow={followFromCatalog}
+                    onPreviewUrl={props.onPreviewUrl}
+                    onFollowUrl={followFromUrl}
+                    onPreviewSource={props.onPreviewSource}
+                    providerSettings={props.providerSettings}
+                    onSaveProviderSettings={props.onSaveProviderSettings}
+                  />
+                </section>
+              ) : null}
+            </div>
+          )}
+        </div>
       </div>
       {showPlugins ? (
         <GutterPanel
@@ -362,7 +465,11 @@ export function ListsView(props: ListsViewProps) {
       <ListDetailPanel
         detail={detail}
         fallback={detailFallback}
-        provider={detailSubscription ? (providerByType.get(detailSubscription.source.provider) ?? null) : null}
+        provider={
+          detailSubscription
+            ? (providerByType.get(detailSubscription.source.provider) ?? null)
+            : null
+        }
         canManageLists={canManageSubscriptions}
         busy={detail ? busyIds.has(detail.id) : false}
         membershipPageSize={props.membershipPageSize}

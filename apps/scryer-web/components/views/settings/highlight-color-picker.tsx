@@ -35,7 +35,9 @@ function hexToRgb(value: string): RgbColor {
 
 function rgbToHex({ r, g, b }: RgbColor): string {
   const channel = (value: number) =>
-    Math.round(clamp(value, 0, 255)).toString(16).padStart(2, "0");
+    Math.round(clamp(value, 0, 255))
+      .toString(16)
+      .padStart(2, "0");
   return `#${channel(r)}${channel(g)}${channel(b)}`;
 }
 
@@ -52,8 +54,7 @@ function rgbToHsl({ r, g, b }: RgbColor): HslColor {
     return { h: 0, s: 0, l: Math.round(lightness * 100) };
   }
 
-  const saturation =
-    difference / (1 - Math.abs(2 * lightness - 1));
+  const saturation = difference / (1 - Math.abs(2 * lightness - 1));
   let hue: number;
   if (maximum === red) {
     hue = 60 * (((green - blue) / difference) % 6);

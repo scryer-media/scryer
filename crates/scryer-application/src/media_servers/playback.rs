@@ -32,14 +32,20 @@ impl AppUseCase {
     ) -> AppResult<Vec<MediaServerPlaybackLink>> {
         match entity_kind {
             MediaServerPlaybackEntityKind::Title => {
-                self.get_title(actor, entity_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("title {entity_id}")))?;
+                self.get_title(actor, entity_id).await?.ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {entity_id}"),
+                    )
+                })?;
             }
             MediaServerPlaybackEntityKind::Episode => {
-                self.get_episode(actor, entity_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("episode {entity_id}")))?;
+                self.get_episode(actor, entity_id).await?.ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::media_servers::EPISODE_NOT_FOUND,
+                        format!("episode {entity_id}"),
+                    )
+                })?;
             }
         }
 

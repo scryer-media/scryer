@@ -40,7 +40,9 @@ export function useInstallPrompt(): InstallPromptState {
 
     // Detect iOS Safari (no beforeinstallprompt support)
     const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const isSafari = /safari/i.test(navigator.userAgent) && !/chrome|crios|fxios/i.test(navigator.userAgent);
+    const isSafari =
+      /safari/i.test(navigator.userAgent) &&
+      !/chrome|crios|fxios/i.test(navigator.userAgent);
     if (isIos && isSafari) {
       setIsIosSafari(true);
     }

@@ -221,8 +221,8 @@ function useOverviewScrollRestoration({
       const reachedClampedTarget =
         Math.abs(readScrollTop(target, kind) - nextTop) <= 2;
       if (
-        (canFullyRestore && reachedClampedTarget)
-        || restoreAttemptsRef.current >= MAX_RESTORE_ATTEMPTS
+        (canFullyRestore && reachedClampedTarget) ||
+        restoreAttemptsRef.current >= MAX_RESTORE_ATTEMPTS
       ) {
         pendingScrollTopRef.current = null;
         restoreAttemptsRef.current = 0;

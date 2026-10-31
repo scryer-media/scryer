@@ -47,9 +47,26 @@ pub struct DeleteRuleSetPayload {
     pub id: async_graphql::ID,
 }
 
+/// Structured rule diagnostic. Coordinates refer to the compiled Rego source.
+#[derive(SimpleObject, Clone)]
+pub struct RuleValidationDiagnosticPayload {
+    /// Stable condition code.
+    pub code: String,
+    /// Human-readable diagnostic for unknown-code fallback.
+    pub message: String,
+    /// One-based source line when the compiler supplies it.
+    pub line: Option<i32>,
+    /// One-based source column when the compiler supplies it.
+    pub column: Option<i32>,
+    /// Input path involved in the diagnostic.
+    pub path: Option<String>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Result of validating Rego source.
 pub struct RuleValidationResultPayload {
+    /// Structured conditions and source locations.
+    pub diagnostics: Vec<RuleValidationDiagnosticPayload>,
     /// Whether the source is valid.
     pub valid: bool,
     /// Validation errors; empty when valid.
@@ -109,6 +126,8 @@ pub struct TestRuleSetInput {
 /// Indexer listing facts a tested release name is scored with. The tester
 /// treats the release as a fresh, never-grabbed search result.
 pub struct RuleSetTestListingInput {
+    /// Download protocol: usenet, torrent, or http. Other values are unknown.
+    pub protocol: Option<String>,
     /// Publish time as an RFC 2822 (newznab `pubDate`) or RFC 3339
     /// timestamp, kept as written; `input.release.age_days` is measured from
     /// it to now.
@@ -262,6 +281,8 @@ pub struct RuleSetTestErrorPayload {
 #[derive(SimpleObject, Clone)]
 /// Indexer listing facts a scoring preview read, as rules saw them.
 pub struct RuleSetTestListingPayload {
+    /// Frozen download protocol: usenet, torrent, http, or null when unknown.
+    pub protocol: Option<String>,
     /// Publish time the listing reported, or null when unknown.
     pub published_at: Option<String>,
     /// `input.release.age_days`: whole days from publish to `capturedAt`, or

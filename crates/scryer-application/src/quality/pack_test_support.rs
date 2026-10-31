@@ -51,6 +51,7 @@ pub(super) fn pack_entries(
         profile,
         decision,
         ReleaseRuntimeInfo {
+            protocol: None,
             size_bytes: size,
             age_days: None,
             thumbs_up: None,

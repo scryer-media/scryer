@@ -2237,6 +2237,7 @@ fn a_stream_pointer_is_not_rejected_for_the_size_of_its_url() {
 /// can move `now` around it.
 fn frozen_listing() -> crate::quality::release_listing::ReleaseListingSnapshot {
     crate::quality::release_listing::ReleaseListingSnapshot {
+        protocol: Some(scryer_rules::ReleaseProtocol::Torrent),
         grab_scoring: None,
         published_at: Some("2024-01-02T00:00:00Z".into()),
         thumbs_up: Some(7),
@@ -2262,6 +2263,7 @@ score_entry["listing_thumbs"] := 11 if { input.release.thumbs_up >= 5 }
 score_entry["listing_unlocked"] := 13 if { input.release.is_password_protected == false }
 score_entry["listing_freeleech"] := 17 if { input.release.extra.freeleech == true }
 score_entry["listing_french"] := 19 if { "fra" in input.release.languages_audio }
+score_entry["listing_protocol"] := 23 if { input.release.protocol == "torrent" }
 "#,
     )
 }
@@ -2303,7 +2305,7 @@ fn listing_fact_rules_score_the_same_at_grab_import_and_as_a_bar() {
     let grab_entries = listing_entries(&at_grab.announced_decision);
     assert_eq!(
         grab_entries.len(),
-        5,
+        6,
         "every listing rule must fire: {grab_entries:?}"
     );
     assert!(

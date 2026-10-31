@@ -806,21 +806,34 @@ pub fn maintenance_action_spec_from_input(input: MaintenanceActionInput) -> AppA
 pub fn maintenance_action_definition_from_inputs(
     action: Option<MaintenanceActionInput>,
     action_sequence: Option<MaintenanceActionSequenceInput>,
-) -> Result<AppActionDefinition, String> {
+) -> Result<AppActionDefinition, scryer_application::AppError> {
     match (action, action_sequence) {
-        (Some(_), Some(_)) => Err("supply either 'action' or 'actionSequence', not both".into()),
-        (None, None) => Err("a maintenance rule requires 'action' or 'actionSequence'".into()),
+        (Some(_), Some(_)) => Err(scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_CONFLICT,
+            "supply either 'action' or 'actionSequence', not both",
+        )),
+        (None, None) => Err(scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_REQUIRED,
+            "a maintenance rule requires 'action' or 'actionSequence'",
+        )),
         (Some(action), None) => {
             if action.kind == MaintenanceActionKind::ActionSequence {
-                return Err("ACTION_SEQUENCE is output-only; use 'actionSequence'".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_SEQUENCE_INPUT_REQUIRED,
+                    "ACTION_SEQUENCE is output-only; use 'actionSequence'",
+                ));
             }
             Ok(AppActionDefinition::Legacy(
                 maintenance_action_spec_from_input(action),
             ))
         }
         (None, Some(sequence)) => {
-            let schema_version = u32::try_from(sequence.schema_version)
-                .map_err(|_| "actionSequence.schemaVersion must be zero or greater".to_string())?;
+            let schema_version = u32::try_from(sequence.schema_version).map_err(|_| {
+                scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_SCHEMA_VERSION_INVALID,
+                    "actionSequence.schemaVersion must be zero or greater",
+                )
+            })?;
             let steps = sequence
                 .steps
                 .into_iter()
@@ -836,7 +849,7 @@ pub fn maintenance_action_definition_from_inputs(
 
 fn maintenance_action_step_from_input(
     input: MaintenanceActionStepInput,
-) -> Result<AppActionStep, String> {
+) -> Result<AppActionStep, scryer_application::AppError> {
     let kind = maintenance_action_step_kind_into_application(input.kind);
     let parameters = maintenance_action_step_parameters_from_input(kind, input.parameters)?;
     Ok(AppActionStep {
@@ -849,7 +862,7 @@ fn maintenance_action_step_from_input(
 fn maintenance_action_step_parameters_from_input(
     kind: AppActionStepKind,
     input: MaintenanceActionStepParametersInput,
-) -> Result<AppActionStepParameters, String> {
+) -> Result<AppActionStepParameters, scryer_application::AppError> {
     let MaintenanceActionStepParametersInput {
         include_descendants,
         target_quality_profile_id,
@@ -866,45 +879,68 @@ fn maintenance_action_step_parameters_from_input(
     match kind {
         AppActionStepKind::Unmonitor => {
             if !allows_only(true, false, false, false) {
-                return Err("unmonitor accepts only includeDescendants".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_PARAMETERS_INVALID,
+                    "unmonitor accepts only includeDescendants",
+                ));
             }
             Ok(AppActionStepParameters::Unmonitor {
                 include_descendants: include_descendants
-                    .ok_or_else(|| "unmonitor requires includeDescendants".to_string())?,
+                    .ok_or_else(|| scryer_application::AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_DESCENDANTS_REQUIRED, "unmonitor requires includeDescendants"))?,
             })
         }
         AppActionStepKind::ChangeQualityProfile => {
             if !allows_only(false, true, false, false) {
-                return Err("change-quality-profile accepts only targetQualityProfileId".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_QUALITY_PARAMETERS_INVALID,
+                    "change-quality-profile accepts only targetQualityProfileId",
+                ));
             }
             Ok(AppActionStepParameters::ChangeQualityProfile {
                 target_quality_profile_id: target_quality_profile_id.ok_or_else(|| {
-                    "change-quality-profile requires targetQualityProfileId".to_string()
+                    scryer_application::AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_ACTION_QUALITY_PROFILE_REQUIRED,
+                        "change-quality-profile requires targetQualityProfileId",
+                    )
                 })?,
             })
         }
         AppActionStepKind::Search => {
             if !allows_only(false, false, true, false) {
-                return Err("search accepts only searchCondition".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_SEARCH_PARAMETERS_INVALID,
+                    "search accepts only searchCondition",
+                ));
             }
             Ok(AppActionStepParameters::Search {
                 condition: maintenance_search_condition_into_application(
                     search_condition
-                        .ok_or_else(|| "search requires searchCondition".to_string())?,
+                        .ok_or_else(|| scryer_application::AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_ACTION_SEARCH_CONDITION_REQUIRED, "search requires searchCondition"))?,
                 ),
             })
         }
         AppActionStepKind::AddTags | AppActionStepKind::RemoveTags => {
             if !allows_only(false, false, false, true) {
-                return Err("a tag step accepts only tags".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_TAG_PARAMETERS_INVALID,
+                    "a tag step accepts only tags",
+                ));
             }
             Ok(AppActionStepParameters::Tags {
-                tags: tags.ok_or_else(|| "a tag step requires tags".to_string())?,
+                tags: tags.ok_or_else(|| {
+                    scryer_application::AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_ACTION_TAGS_REQUIRED,
+                        "a tag step requires tags",
+                    )
+                })?,
             })
         }
         AppActionStepKind::DeleteFiles | AppActionStepKind::DeleteTitleAndFiles => {
             if !allows_only(false, false, false, false) {
-                return Err("this step does not accept parameters".into());
+                return Err(scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_PARAMETERS_UNEXPECTED,
+                    "this step does not accept parameters",
+                ));
             }
             Ok(AppActionStepParameters::None)
         }
@@ -1106,12 +1142,14 @@ mod tests {
         assert!(
             maintenance_action_definition_from_inputs(None, None)
                 .expect_err("missing action definition must fail")
-                .contains("requires")
+                .validation_reason()
+                == Some(scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_REQUIRED)
         );
         assert!(
             maintenance_action_definition_from_inputs(Some(action), Some(sequence))
                 .expect_err("both action shapes must fail")
-                .contains("either")
+                .validation_reason()
+                == Some(scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_CONFLICT)
         );
     }
 
@@ -1173,7 +1211,10 @@ mod tests {
                 }),
             )
             .expect_err("a step must reject fields from another parameter schema")
-            .contains("only")
+            .validation_reason()
+                == Some(
+                    scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_PARAMETERS_INVALID
+                )
         );
     }
 

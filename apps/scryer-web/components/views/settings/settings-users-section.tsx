@@ -1,5 +1,15 @@
 import * as React from "react";
-import { Check, ChevronRight, KeyRound, Plus, Power, PowerOff, ShieldOff, Trash2, X } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  KeyRound,
+  Plus,
+  Power,
+  PowerOff,
+  ShieldOff,
+  Trash2,
+  X,
+} from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { InfoHelp } from "@/components/common/info-help";
@@ -37,8 +47,7 @@ const USERS_TABLE_SHELL_CLASS =
   "overflow-hidden rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const USERS_TABLE_HEADER_ROW_CLASS =
   "border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]";
-const USERS_TABLE_HEADER_CELL_CLASS =
-  "font-semibold text-[var(--scry-muted2)]";
+const USERS_TABLE_HEADER_CELL_CLASS = "font-semibold text-[var(--scry-muted2)]";
 type SettingsUsersSectionProps = {
   settingsUsers: UserRecord[];
   libraries: LibraryRecord[];
@@ -72,7 +81,10 @@ type SettingsUsersSectionProps = {
     userId: string,
     passwordMinLength: number | null,
   ) => Promise<boolean> | boolean;
-  setUserAppPermissions: (userId: string, permissions?: string[]) => Promise<void> | void;
+  setUserAppPermissions: (
+    userId: string,
+    permissions?: string[],
+  ) => Promise<void> | void;
   setUserLibraryPermissions: (
     userId: string,
     changes?: LibraryPermissionDrafts,
@@ -176,7 +188,9 @@ export function SettingsUsersSection({
     React.useState<UserRecord | null>(null);
   const [passwordResetEditorUserId, setPasswordResetEditorUserId] =
     React.useState<string | null>(null);
-  const [passwordMinLength, setPasswordMinLength] = React.useState<number | null>(null);
+  const [passwordMinLength, setPasswordMinLength] = React.useState<
+    number | null
+  >(null);
   const isPasswordTooShort = (password: string) =>
     passwordMinLength !== null &&
     password.length > 0 &&
@@ -192,25 +206,43 @@ export function SettingsUsersSection({
         <div className="p-4 sm:p-5">
           <div className={USERS_TABLE_SHELL_CLASS}>
             <div className="overflow-x-auto">
-              <Table id="settings-users-table" className="min-w-[1180px] table-fixed">
+              <Table
+                id="settings-users-table"
+                className="min-w-[1180px] table-fixed"
+              >
                 <TableHeader>
                   <TableRow className={USERS_TABLE_HEADER_ROW_CLASS}>
-                    <TableHead className={cn("w-44", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn("w-44", USERS_TABLE_HEADER_CELL_CLASS)}
+                    >
                       {t("settings.username")}
                     </TableHead>
-                    <TableHead className={cn("w-[32rem]", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn("w-[32rem]", USERS_TABLE_HEADER_CELL_CLASS)}
+                    >
                       {t("settings.permissions")}
                     </TableHead>
-                    <TableHead className={cn("w-28", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn("w-28", USERS_TABLE_HEADER_CELL_CLASS)}
+                    >
                       {t("settings.mfa")}
                     </TableHead>
-                    <TableHead className={cn("w-28", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn("w-28", USERS_TABLE_HEADER_CELL_CLASS)}
+                    >
                       {t("settings.passkey")}
                     </TableHead>
-                    <TableHead className={cn("w-72", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn("w-72", USERS_TABLE_HEADER_CELL_CLASS)}
+                    >
                       {t("settings.temporaryPassword")}
                     </TableHead>
-                    <TableHead className={cn("w-44 text-right", USERS_TABLE_HEADER_CELL_CLASS)}>
+                    <TableHead
+                      className={cn(
+                        "w-44 text-right",
+                        USERS_TABLE_HEADER_CELL_CLASS,
+                      )}
+                    >
                       {t("label.actions")}
                     </TableHead>
                   </TableRow>
@@ -250,192 +282,255 @@ export function SettingsUsersSection({
                           id={selectorId("settings-user-row", user.username)}
                           data-ui="settings-user-table-row"
                         >
-                    <TableCell className="align-middle">
-                      <div className="text-lg font-semibold text-[var(--scry-ink2)]">
-                        {user.username}
-                      </div>
-                      <div className="mt-1">
-                        <UserLoginStatusBadge enabled={user.loginEnabled} />
-                      </div>
-                      {user.passwordChangeRequired ? (
-                        <div className="mt-1 text-xs text-[var(--scry-warning-text)]">
-                          {t("settings.passwordChangeRequired")}
-                        </div>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className="align-middle">
-                      <CollapsiblePermissionSection
-                        id={selectorId("settings-user-permissions", user.username, "section")}
-                        title="Permissions"
-                      >
-                        <PermissionDropdowns
-                          libraries={libraries}
-                          appPermissions={appPermissions}
-                          libraryPermissions={libraryPermissions}
-                          idPrefix={selectorId("settings-user-permissions", user.username)}
-                          selectedAppPermissions={appSelected}
-                          selectedLibraryPermissions={libraryDrafts}
-                          disabled={permissionControlsDisabled}
-                          showSelectAll
-                          onAppChange={(nextPermissions) => {
-                            if (!canManagePermissions) return;
-                            updateUserAppPermissionDraft(user.id, nextPermissions);
-                            void setUserAppPermissions(user.id, nextPermissions);
-                          }}
-                          onLibraryChange={(changes) => {
-                            if (!canManagePermissions) return;
-                            updateUserLibraryPermissionDrafts(user.id, changes);
-                            void setUserLibraryPermissions(user.id, changes);
-                          }}
-                        />
-                      </CollapsiblePermissionSection>
-                    </TableCell>
-                    <TableCell className="align-middle">
-                      <AuthFactorStatusBadge enabled={user.hasMfa} />
-                    </TableCell>
-                    <TableCell className="align-middle">
-                      <AuthFactorStatusBadge enabled={user.hasPasskey} />
-                    </TableCell>
-                    <TableCell className="align-middle">
-                      {canSetPassword && !isOwnUser ? (
-                        passwordResetEditorUserId === user.id ? (
-                          <div className="flex items-center gap-2">
-                            <label className="sr-only" htmlFor={`new-password-${user.id}`}>
-                              {t("settings.temporaryPassword")}
-                            </label>
-                            <div className="min-w-0 flex-1">
-                              <Input
-                                id={`new-password-${user.id}`}
-                                value={userPasswordDrafts[user.id] ?? ""}
-                                onChange={(event) =>
-                                  updateUserPasswordDraft(user.id, event.target.value)
-                                }
-                                placeholder={t("form.newPasswordPlaceholder")}
-                                type="password"
-                                autoComplete="new-password"
-                                ignorePasswordManagers
-                                minLength={passwordMinLength ?? undefined}
-                                aria-label={t("settings.temporaryPassword")}
-                                aria-invalid={isPasswordTooShort(
-                                  userPasswordDrafts[user.id] ?? "",
-                                )}
-                                aria-describedby={
-                                  isPasswordTooShort(userPasswordDrafts[user.id] ?? "")
-                                    ? `new-password-${user.id}-error`
-                                    : undefined
-                                }
-                                disabled={mutatingUserId === user.id}
+                          <TableCell className="align-middle">
+                            <div className="text-lg font-semibold text-[var(--scry-ink2)]">
+                              {user.username}
+                            </div>
+                            <div className="mt-1">
+                              <UserLoginStatusBadge
+                                enabled={user.loginEnabled}
                               />
-                              {isPasswordTooShort(userPasswordDrafts[user.id] ?? "") ? (
-                                <p
-                                  id={`new-password-${user.id}-error`}
-                                  className="mt-1 text-xs text-[var(--scry-danger-text)]"
+                            </div>
+                            {user.passwordChangeRequired ? (
+                              <div className="mt-1 text-xs text-[var(--scry-warning-text)]">
+                                {t("settings.passwordChangeRequired")}
+                              </div>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="align-middle">
+                            <CollapsiblePermissionSection
+                              id={selectorId(
+                                "settings-user-permissions",
+                                user.username,
+                                "section",
+                              )}
+                              title="Permissions"
+                            >
+                              <PermissionDropdowns
+                                libraries={libraries}
+                                appPermissions={appPermissions}
+                                libraryPermissions={libraryPermissions}
+                                idPrefix={selectorId(
+                                  "settings-user-permissions",
+                                  user.username,
+                                )}
+                                selectedAppPermissions={appSelected}
+                                selectedLibraryPermissions={libraryDrafts}
+                                disabled={permissionControlsDisabled}
+                                showSelectAll
+                                onAppChange={(nextPermissions) => {
+                                  if (!canManagePermissions) return;
+                                  updateUserAppPermissionDraft(
+                                    user.id,
+                                    nextPermissions,
+                                  );
+                                  void setUserAppPermissions(
+                                    user.id,
+                                    nextPermissions,
+                                  );
+                                }}
+                                onLibraryChange={(changes) => {
+                                  if (!canManagePermissions) return;
+                                  updateUserLibraryPermissionDrafts(
+                                    user.id,
+                                    changes,
+                                  );
+                                  void setUserLibraryPermissions(
+                                    user.id,
+                                    changes,
+                                  );
+                                }}
+                              />
+                            </CollapsiblePermissionSection>
+                          </TableCell>
+                          <TableCell className="align-middle">
+                            <AuthFactorStatusBadge enabled={user.hasMfa} />
+                          </TableCell>
+                          <TableCell className="align-middle">
+                            <AuthFactorStatusBadge enabled={user.hasPasskey} />
+                          </TableCell>
+                          <TableCell className="align-middle">
+                            {canSetPassword && !isOwnUser ? (
+                              passwordResetEditorUserId === user.id ? (
+                                <div className="flex items-center gap-2">
+                                  <label
+                                    className="sr-only"
+                                    htmlFor={`new-password-${user.id}`}
+                                  >
+                                    {t("settings.temporaryPassword")}
+                                  </label>
+                                  <div className="min-w-0 flex-1">
+                                    <Input
+                                      id={`new-password-${user.id}`}
+                                      value={userPasswordDrafts[user.id] ?? ""}
+                                      onChange={(event) =>
+                                        updateUserPasswordDraft(
+                                          user.id,
+                                          event.target.value,
+                                        )
+                                      }
+                                      placeholder={t(
+                                        "form.newPasswordPlaceholder",
+                                      )}
+                                      type="password"
+                                      autoComplete="new-password"
+                                      ignorePasswordManagers
+                                      minLength={passwordMinLength ?? undefined}
+                                      aria-label={t(
+                                        "settings.temporaryPassword",
+                                      )}
+                                      aria-invalid={isPasswordTooShort(
+                                        userPasswordDrafts[user.id] ?? "",
+                                      )}
+                                      aria-describedby={
+                                        isPasswordTooShort(
+                                          userPasswordDrafts[user.id] ?? "",
+                                        )
+                                          ? `new-password-${user.id}-error`
+                                          : undefined
+                                      }
+                                      disabled={mutatingUserId === user.id}
+                                    />
+                                    {isPasswordTooShort(
+                                      userPasswordDrafts[user.id] ?? "",
+                                    ) ? (
+                                      <p
+                                        id={`new-password-${user.id}-error`}
+                                        className="mt-1 text-xs text-[var(--scry-danger-text)]"
+                                      >
+                                        {t("settings.passwordMinLengthError", {
+                                          min: passwordMinLength,
+                                        })}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <IconButton
+                                    id={selectorId(
+                                      "settings-user-update-password",
+                                      user.username,
+                                    )}
+                                    label={t("label.save")}
+                                    tone="enabled"
+                                    onClick={() => setPasswordResetUser(user)}
+                                    disabled={
+                                      mutatingUserId === user.id ||
+                                      !userPasswordDrafts[user.id]?.trim() ||
+                                      isPasswordTooShort(
+                                        userPasswordDrafts[user.id] ?? "",
+                                      )
+                                    }
+                                  >
+                                    {mutatingUserId === user.id ? (
+                                      <LoadingMark className="h-4 w-4" />
+                                    ) : (
+                                      <Check className="h-4 w-4" />
+                                    )}
+                                  </IconButton>
+                                  <IconButton
+                                    id={selectorId(
+                                      "settings-user-cancel-password-reset",
+                                      user.username,
+                                    )}
+                                    label={t("label.cancel")}
+                                    tone="delete"
+                                    onClick={() => {
+                                      updateUserPasswordDraft(user.id, "");
+                                      setPasswordResetEditorUserId(null);
+                                    }}
+                                    disabled={mutatingUserId === user.id}
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </IconButton>
+                                </div>
+                              ) : (
+                                <Button
+                                  id={selectorId(
+                                    "settings-user-reset-password",
+                                    user.username,
+                                  )}
+                                  variant="primary"
+                                  size="sm"
+                                  onClick={async () => {
+                                    setPasswordMinLength(
+                                      await loadPasswordMinLength(),
+                                    );
+                                    setPasswordResetEditorUserId(user.id);
+                                  }}
+                                  disabled={mutatingUserId === user.id}
                                 >
-                                  {t("settings.passwordMinLengthError", {
-                                    min: passwordMinLength,
-                                  })}
-                                </p>
+                                  <KeyRound className="h-3.5 w-3.5" />
+                                  {t("settings.resetPassword")}
+                                </Button>
+                              )
+                            ) : (
+                              <span className="text-sm text-[var(--scry-muted3)]">
+                                N/A
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="align-middle text-right">
+                            <div className="flex justify-end gap-2">
+                              {!isOwnUser &&
+                              (user.hasMfa || user.hasPasskey) ? (
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-user-reset-mfa",
+                                    user.username,
+                                  )}
+                                  label={t("settings.resetMfa")}
+                                  tone={
+                                    user.loginEnabled ? "disabled" : "enabled"
+                                  }
+                                  onClick={() => void resetUserMfa(user)}
+                                  disabled={mutatingUserId === user.id}
+                                >
+                                  <ShieldOff className="h-4 w-4" />
+                                </IconButton>
+                              ) : null}
+                              {!isRecoveryManaged ? (
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-user-login-status",
+                                    user.username,
+                                  )}
+                                  label={t(
+                                    user.loginEnabled
+                                      ? "settings.disableLogin"
+                                      : "settings.enableLogin",
+                                  )}
+                                  tone={
+                                    user.loginEnabled ? "disabled" : "enabled"
+                                  }
+                                  onClick={() => void setUserLoginEnabled(user)}
+                                  disabled={
+                                    mutatingUserId === user.id || isOwnUser
+                                  }
+                                >
+                                  {user.loginEnabled ? (
+                                    <PowerOff className="h-4 w-4" />
+                                  ) : (
+                                    <Power className="h-4 w-4" />
+                                  )}
+                                </IconButton>
+                              ) : null}
+                              {!user.isDefaultAdmin ? (
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-user-delete",
+                                    user.username,
+                                  )}
+                                  label={t("label.delete")}
+                                  tone="delete"
+                                  onClick={() => void deleteUser(user)}
+                                  disabled={
+                                    mutatingUserId === user.id || isOwnUser
+                                  }
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </IconButton>
                               ) : null}
                             </div>
-                            <IconButton
-                              id={selectorId("settings-user-update-password", user.username)}
-                              label={t("label.save")}
-                              tone="enabled"
-                              onClick={() => setPasswordResetUser(user)}
-                              disabled={
-                                mutatingUserId === user.id ||
-                                !(userPasswordDrafts[user.id]?.trim()) ||
-                                isPasswordTooShort(userPasswordDrafts[user.id] ?? "")
-                              }
-                            >
-                              {mutatingUserId === user.id ? (
-                                <LoadingMark className="h-4 w-4" />
-                              ) : (
-                                <Check className="h-4 w-4" />
-                              )}
-                            </IconButton>
-                            <IconButton
-                              id={selectorId(
-                                "settings-user-cancel-password-reset",
-                                user.username,
-                              )}
-                              label={t("label.cancel")}
-                              tone="delete"
-                              onClick={() => {
-                                updateUserPasswordDraft(user.id, "");
-                                setPasswordResetEditorUserId(null);
-                              }}
-                              disabled={mutatingUserId === user.id}
-                            >
-                              <X className="h-4 w-4" />
-                            </IconButton>
-                          </div>
-                        ) : (
-                          <Button
-                            id={selectorId("settings-user-reset-password", user.username)}
-                            variant="primary"
-                            size="sm"
-                            onClick={async () => {
-                              setPasswordMinLength(await loadPasswordMinLength());
-                              setPasswordResetEditorUserId(user.id);
-                            }}
-                            disabled={mutatingUserId === user.id}
-                          >
-                            <KeyRound className="h-3.5 w-3.5" />
-                            {t("settings.resetPassword")}
-                          </Button>
-                        )
-                      ) : (
-                        <span className="text-sm text-[var(--scry-muted3)]">
-                          N/A
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="align-middle text-right">
-                      <div className="flex justify-end gap-2">
-                        {!isOwnUser && (user.hasMfa || user.hasPasskey) ? (
-                          <IconButton
-                            id={selectorId("settings-user-reset-mfa", user.username)}
-                            label={t("settings.resetMfa")}
-                            tone={user.loginEnabled ? "disabled" : "enabled"}
-                            onClick={() => void resetUserMfa(user)}
-                            disabled={mutatingUserId === user.id}
-                          >
-                            <ShieldOff className="h-4 w-4" />
-                          </IconButton>
-                        ) : null}
-                        {!isRecoveryManaged ? (
-                          <IconButton
-                            id={selectorId("settings-user-login-status", user.username)}
-                            label={t(
-                              user.loginEnabled
-                                ? "settings.disableLogin"
-                                : "settings.enableLogin",
-                            )}
-                            tone={user.loginEnabled ? "disabled" : "enabled"}
-                            onClick={() => void setUserLoginEnabled(user)}
-                            disabled={mutatingUserId === user.id || isOwnUser}
-                          >
-                            {user.loginEnabled ? (
-                              <PowerOff className="h-4 w-4" />
-                            ) : (
-                              <Power className="h-4 w-4" />
-                            )}
-                          </IconButton>
-                        ) : null}
-                        {!user.isDefaultAdmin ? (
-                          <IconButton
-                            id={selectorId("settings-user-delete", user.username)}
-                            label={t("label.delete")}
-                            tone="delete"
-                            onClick={() => void deleteUser(user)}
-                            disabled={mutatingUserId === user.id || isOwnUser}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </IconButton>
-                        ) : null}
-                      </div>
-                    </TableCell>
+                          </TableCell>
                         </TableRow>
                       );
                     })
@@ -455,7 +550,11 @@ export function SettingsUsersSection({
             </h3>
           </div>
           <div className="p-4 sm:p-5">
-            <form id="settings-user-create-form" className="space-y-4" onSubmit={createUser}>
+            <form
+              id="settings-user-create-form"
+              className="space-y-4"
+              onSubmit={createUser}
+            >
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <Label
@@ -514,10 +613,7 @@ export function SettingsUsersSection({
                 </div>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                <Button
-                  id="settings-user-create"
-                  type="submit"
-                >
+                <Button id="settings-user-create" type="submit">
                   <Plus className="h-4 w-4" />
                   {t("settings.createUser")}
                 </Button>
@@ -558,7 +654,10 @@ export function SettingsUsersSection({
         }
         onConfirm={async () => {
           if (!passwordResetUser) return;
-          const saved = await setUserPassword(passwordResetUser.id, passwordMinLength);
+          const saved = await setUserPassword(
+            passwordResetUser.id,
+            passwordMinLength,
+          );
           if (saved) {
             setPasswordResetEditorUserId(null);
             setPasswordResetUser(null);

@@ -20,7 +20,9 @@ export function flattenDownloadQueuePages(
 ): DownloadQueueItem[] {
   const seen = new Set<string>();
   const items: DownloadQueueItem[] = [];
-  for (const [, page] of [...pages.entries()].sort(([left], [right]) => left - right)) {
+  for (const [, page] of [...pages.entries()].sort(
+    ([left], [right]) => left - right,
+  )) {
     for (const item of page.items) {
       const key = queueIdentity(item);
       if (!seen.has(key)) {
@@ -162,7 +164,10 @@ export function downloadQueueSyncRefreshRanges(
   return ranges;
 }
 
-export function shouldRefreshDownloadQueueSync(enabled: boolean, visibility: string): boolean {
+export function shouldRefreshDownloadQueueSync(
+  enabled: boolean,
+  visibility: string,
+): boolean {
   return enabled && visibility !== "hidden";
 }
 
@@ -182,5 +187,7 @@ export function shouldApplyDownloadQueuePageResponse(
   currentRevision: number,
   minimumRevision: number,
 ): boolean {
-  return responseRevision >= currentRevision && responseRevision >= minimumRevision;
+  return (
+    responseRevision >= currentRevision && responseRevision >= minimumRevision
+  );
 }

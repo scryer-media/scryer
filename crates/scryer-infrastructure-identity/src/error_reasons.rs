@@ -1,0 +1,316 @@
+//! Stable reasons for conditions raised at this infrastructure boundary.
+
+/// external account is already linked to a different provider identity
+pub const EXTERNAL_ACCOUNT_IDENTITY_MISMATCH: &str = "EXTERNAL_ACCOUNT_IDENTITY_MISMATCH";
+
+/// an API key with this lookup ID is not environment-managed
+pub const IDENTITY_API_KEY_NOT_ENVIRONMENT_MANAGED: &str =
+    "IDENTITY_API_KEY_NOT_ENVIRONMENT_MANAGED";
+
+/// authentication session was invalidated
+pub const IDENTITY_AUTHENTICATION_SESSION_INVALIDATED: &str =
+    "IDENTITY_AUTHENTICATION_SESSION_INVALIDATED";
+
+/// default administrator seed changed during bootstrap
+pub const IDENTITY_ADMINISTRATOR_BOOTSTRAP_SEED_STALE: &str =
+    "IDENTITY_ADMINISTRATOR_BOOTSTRAP_SEED_STALE";
+
+/// Emby account is disabled
+pub const IDENTITY_EMBY_ACCOUNT_DISABLED: &str = "IDENTITY_EMBY_ACCOUNT_DISABLED";
+
+/// Emby account must be a local administrator
+pub const IDENTITY_EMBY_LOCAL_ADMINISTRATOR_REQUIRED: &str =
+    "IDENTITY_EMBY_LOCAL_ADMINISTRATOR_REQUIRED";
+
+/// Emby administrator cannot list API keys
+pub const IDENTITY_EMBY_API_KEY_LIST_ACCESS_DENIED: &str =
+    "IDENTITY_EMBY_API_KEY_LIST_ACCESS_DENIED";
+
+/// Emby API key is invalid or cannot list users
+pub const IDENTITY_EMBY_USER_LIST_ACCESS_DENIED: &str = "IDENTITY_EMBY_USER_LIST_ACCESS_DENIED";
+
+/// Emby base URL must be an absolute HTTP(S) URL without credentials, query, or fragment
+pub const IDENTITY_EMBY_BASE_URL_UNSAFE: &str = "IDENTITY_EMBY_BASE_URL_UNSAFE";
+
+/// Emby base URL is invalid
+pub const IDENTITY_EMBY_BASE_URL_INVALID: &str = "IDENTITY_EMBY_BASE_URL_INVALID";
+
+/// Emby base URL cannot contain path segments
+pub const IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN: &str = "IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN";
+
+/// Emby Connect account cannot access the configured server
+pub const IDENTITY_EMBY_CONNECT_SERVER_ACCESS_DENIED: &str =
+    "IDENTITY_EMBY_CONNECT_SERVER_ACCESS_DENIED";
+
+/// Emby Connect sign-in failed
+pub const IDENTITY_EMBY_CONNECT_SIGN_IN_FAILED: &str = "IDENTITY_EMBY_CONNECT_SIGN_IN_FAILED";
+
+/// Emby credential is invalid
+pub const IDENTITY_EMBY_CREDENTIAL_INVALID: &str = "IDENTITY_EMBY_CREDENTIAL_INVALID";
+
+/// Emby endpoint URL is invalid
+pub const IDENTITY_EMBY_ENDPOINT_URL_INVALID: &str = "IDENTITY_EMBY_ENDPOINT_URL_INVALID";
+
+/// Emby server identity does not match the saved connection
+pub const IDENTITY_EMBY_SERVER_IDENTITY_MISMATCH: &str = "IDENTITY_EMBY_SERVER_IDENTITY_MISMATCH";
+
+/// Emby user verification failed
+pub const IDENTITY_EMBY_USER_VERIFICATION_FAILED: &str = "IDENTITY_EMBY_USER_VERIFICATION_FAILED";
+
+/// external account identity must be present when claiming
+pub const IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED: &str =
+    "IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED";
+
+/// external account {id}
+pub const IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND: &str = "IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND";
+
+/// invalid Emby avatar identifier
+pub const IDENTITY_EMBY_AVATAR_ID_INVALID: &str = "IDENTITY_EMBY_AVATAR_ID_INVALID";
+
+/// invalid Emby Connect credentials
+pub const IDENTITY_EMBY_CONNECT_CREDENTIALS_INVALID: &str =
+    "IDENTITY_EMBY_CONNECT_CREDENTIALS_INVALID";
+
+/// invalid Emby credentials
+pub const IDENTITY_EMBY_CREDENTIALS_INVALID: &str = "IDENTITY_EMBY_CREDENTIALS_INVALID";
+
+/// invalid Jellyfin admin credentials
+pub const IDENTITY_JELLYFIN_ADMIN_CREDENTIALS_INVALID: &str =
+    "IDENTITY_JELLYFIN_ADMIN_CREDENTIALS_INVALID";
+
+/// invalid Jellyfin credentials
+pub const IDENTITY_JELLYFIN_CREDENTIALS_INVALID: &str = "IDENTITY_JELLYFIN_CREDENTIALS_INVALID";
+
+/// invalid Plex auth token
+pub const IDENTITY_PLEX_AUTH_TOKEN_INVALID: &str = "IDENTITY_PLEX_AUTH_TOKEN_INVALID";
+
+/// Jellyfin account must be an administrator to create a Scryer API key
+pub const IDENTITY_JELLYFIN_ADMINISTRATOR_REQUIRED: &str =
+    "IDENTITY_JELLYFIN_ADMINISTRATOR_REQUIRED";
+
+/// Jellyfin admin token cannot list API keys
+pub const IDENTITY_JELLYFIN_API_KEY_LIST_ACCESS_DENIED: &str =
+    "IDENTITY_JELLYFIN_API_KEY_LIST_ACCESS_DENIED";
+
+/// Jellyfin API key is invalid or does not have user-list access
+pub const IDENTITY_JELLYFIN_API_KEY_USER_LIST_ACCESS_DENIED: &str =
+    "IDENTITY_JELLYFIN_API_KEY_USER_LIST_ACCESS_DENIED";
+
+/// Jellyfin API key is invalid or cannot list users
+pub const IDENTITY_JELLYFIN_USER_LIST_ACCESS_DENIED: &str =
+    "IDENTITY_JELLYFIN_USER_LIST_ACCESS_DENIED";
+
+/// Jellyfin API key is unavailable
+pub const IDENTITY_JELLYFIN_API_KEY_UNAVAILABLE: &str = "IDENTITY_JELLYFIN_API_KEY_UNAVAILABLE";
+
+/// Jellyfin API key URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_API_KEY_URL_INVALID: &str = "IDENTITY_JELLYFIN_API_KEY_URL_INVALID";
+
+/// Jellyfin authentication URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_AUTHENTICATION_URL_INVALID: &str =
+    "IDENTITY_JELLYFIN_AUTHENTICATION_URL_INVALID";
+
+/// Jellyfin base URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_BASE_URL_INVALID: &str = "IDENTITY_JELLYFIN_BASE_URL_INVALID";
+
+/// Jellyfin connection base URL must not include a query or fragment
+pub const IDENTITY_JELLYFIN_BASE_URL_QUERY_FRAGMENT_FORBIDDEN: &str =
+    "IDENTITY_JELLYFIN_BASE_URL_QUERY_FRAGMENT_FORBIDDEN";
+
+/// Jellyfin system info URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_SYSTEM_INFO_URL_INVALID: &str =
+    "IDENTITY_JELLYFIN_SYSTEM_INFO_URL_INVALID";
+
+/// Jellyfin users URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_USERS_URL_INVALID: &str = "IDENTITY_JELLYFIN_USERS_URL_INVALID";
+
+/// Jellyfin user ID is invalid
+pub const IDENTITY_JELLYFIN_USER_ID_INVALID: &str = "IDENTITY_JELLYFIN_USER_ID_INVALID";
+
+/// Jellyfin user URL is invalid: {error}
+pub const IDENTITY_JELLYFIN_USER_URL_INVALID: &str = "IDENTITY_JELLYFIN_USER_URL_INVALID";
+
+/// Jellyfin user verification failed
+pub const IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED: &str =
+    "IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED";
+
+/// login verification challenge {}
+pub const IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND: &str =
+    "IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND";
+
+/// media server base URL is invalid
+pub const IDENTITY_MEDIA_SERVER_BASE_URL_INVALID: &str = "IDENTITY_MEDIA_SERVER_BASE_URL_INVALID";
+
+/// media server catalog scan requires an API key
+pub const IDENTITY_MEDIA_SERVER_SCAN_API_KEY_REQUIRED: &str =
+    "IDENTITY_MEDIA_SERVER_SCAN_API_KEY_REQUIRED";
+
+/// media server refresh requires an API key
+pub const IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED: &str =
+    "IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED";
+
+/// a media-server signal read needs a provider user id
+pub const IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED: &str =
+    "IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED";
+
+/// OAuth client is disabled or unavailable
+pub const IDENTITY_OAUTH_CLIENT_DISABLED_UNAVAILABLE: &str =
+    "IDENTITY_OAUTH_CLIENT_DISABLED_UNAVAILABLE";
+
+/// OAuth grant {}
+pub const IDENTITY_OAUTH_GRANT_NOT_FOUND: &str = "IDENTITY_OAUTH_GRANT_NOT_FOUND";
+
+/// passkey deletion session is no longer current
+pub const IDENTITY_PASSKEY_DELETION_SESSION_STALE: &str = "IDENTITY_PASSKEY_DELETION_SESSION_STALE";
+
+/// passkey enrollment session is no longer current
+pub const IDENTITY_PASSKEY_ENROLLMENT_SESSION_STALE: &str =
+    "IDENTITY_PASSKEY_ENROLLMENT_SESSION_STALE";
+
+/// password change is no longer required
+pub const IDENTITY_PASSWORD_CHANGE_NOT_REQUIRED: &str = "IDENTITY_PASSWORD_CHANGE_NOT_REQUIRED";
+
+/// Plex account does not have access to the configured server
+pub const IDENTITY_PLEX_SERVER_ACCESS_DENIED: &str = "IDENTITY_PLEX_SERVER_ACCESS_DENIED";
+
+/// Plex auth token is required
+pub const IDENTITY_PLEX_AUTH_TOKEN_REQUIRED: &str = "IDENTITY_PLEX_AUTH_TOKEN_REQUIRED";
+
+/// Plex catalog scan requires a selected server
+pub const IDENTITY_PLEX_SCAN_SERVER_REQUIRED: &str = "IDENTITY_PLEX_SCAN_SERVER_REQUIRED";
+
+/// Plex refresh requires a selected server
+pub const IDENTITY_PLEX_REFRESH_SERVER_REQUIRED: &str = "IDENTITY_PLEX_REFRESH_SERVER_REQUIRED";
+
+/// Plex token is invalid or cannot list users
+pub const IDENTITY_PLEX_USER_LIST_ACCESS_DENIED: &str = "IDENTITY_PLEX_USER_LIST_ACCESS_DENIED";
+
+/// recovery-code replacement session is no longer current
+pub const IDENTITY_RECOVERY_CODE_SESSION_STALE: &str = "IDENTITY_RECOVERY_CODE_SESSION_STALE";
+
+/// the supplied URL did not identify itself as a Jellyfin server
+pub const IDENTITY_JELLYFIN_SERVER_NOT_RECOGNIZED: &str = "IDENTITY_JELLYFIN_SERVER_NOT_RECOGNIZED";
+
+/// the supplied URL is not an Emby server
+pub const IDENTITY_EMBY_SERVER_NOT_RECOGNIZED: &str = "IDENTITY_EMBY_SERVER_NOT_RECOGNIZED";
+
+/// TOTP challenge {}
+pub const IDENTITY_TOTP_CHALLENGE_NOT_FOUND: &str = "IDENTITY_TOTP_CHALLENGE_NOT_FOUND";
+
+/// TOTP credential {}
+pub const IDENTITY_TOTP_CREDENTIAL_NOT_FOUND: &str = "IDENTITY_TOTP_CREDENTIAL_NOT_FOUND";
+
+/// TOTP disablement session is no longer current
+pub const IDENTITY_TOTP_DISABLEMENT_SESSION_STALE: &str = "IDENTITY_TOTP_DISABLEMENT_SESSION_STALE";
+
+/// TOTP enrollment session is no longer current
+pub const IDENTITY_TOTP_ENROLLMENT_SESSION_STALE: &str = "IDENTITY_TOTP_ENROLLMENT_SESSION_STALE";
+
+/// UI settings for user {user_id}
+#[allow(
+    dead_code,
+    reason = "retain the stable reason code for existing clients"
+)]
+pub const IDENTITY_USER_UI_SETTINGS_NOT_FOUND: &str = "IDENTITY_USER_UI_SETTINGS_NOT_FOUND";
+
+/// cannot remove the last available sign-in method
+pub const IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED: &str = "IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED";
+
+/// user {user_id}
+pub const IDENTITY_USER_NOT_FOUND: &str = "IDENTITY_USER_NOT_FOUND";
+
+/// webauthn challenge {}
+pub const IDENTITY_WEBAUTHN_CHALLENGE_NOT_FOUND: &str = "IDENTITY_WEBAUTHN_CHALLENGE_NOT_FOUND";
+
+/// webauthn credential {credential_record_id}
+pub const IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND: &str = "IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND";
+
+#[cfg(test)]
+const ALL: &[&str] = &[
+    EXTERNAL_ACCOUNT_IDENTITY_MISMATCH,
+    IDENTITY_API_KEY_NOT_ENVIRONMENT_MANAGED,
+    IDENTITY_AUTHENTICATION_SESSION_INVALIDATED,
+    IDENTITY_ADMINISTRATOR_BOOTSTRAP_SEED_STALE,
+    IDENTITY_EMBY_ACCOUNT_DISABLED,
+    IDENTITY_EMBY_LOCAL_ADMINISTRATOR_REQUIRED,
+    IDENTITY_EMBY_API_KEY_LIST_ACCESS_DENIED,
+    IDENTITY_EMBY_USER_LIST_ACCESS_DENIED,
+    IDENTITY_EMBY_BASE_URL_UNSAFE,
+    IDENTITY_EMBY_BASE_URL_INVALID,
+    IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN,
+    IDENTITY_EMBY_CONNECT_SERVER_ACCESS_DENIED,
+    IDENTITY_EMBY_CONNECT_SIGN_IN_FAILED,
+    IDENTITY_EMBY_CREDENTIAL_INVALID,
+    IDENTITY_EMBY_ENDPOINT_URL_INVALID,
+    IDENTITY_EMBY_SERVER_IDENTITY_MISMATCH,
+    IDENTITY_EMBY_USER_VERIFICATION_FAILED,
+    IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED,
+    IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+    IDENTITY_EMBY_AVATAR_ID_INVALID,
+    IDENTITY_EMBY_CONNECT_CREDENTIALS_INVALID,
+    IDENTITY_EMBY_CREDENTIALS_INVALID,
+    IDENTITY_JELLYFIN_ADMIN_CREDENTIALS_INVALID,
+    IDENTITY_JELLYFIN_CREDENTIALS_INVALID,
+    IDENTITY_PLEX_AUTH_TOKEN_INVALID,
+    IDENTITY_JELLYFIN_ADMINISTRATOR_REQUIRED,
+    IDENTITY_JELLYFIN_API_KEY_LIST_ACCESS_DENIED,
+    IDENTITY_JELLYFIN_API_KEY_USER_LIST_ACCESS_DENIED,
+    IDENTITY_JELLYFIN_USER_LIST_ACCESS_DENIED,
+    IDENTITY_JELLYFIN_API_KEY_UNAVAILABLE,
+    IDENTITY_JELLYFIN_API_KEY_URL_INVALID,
+    IDENTITY_JELLYFIN_AUTHENTICATION_URL_INVALID,
+    IDENTITY_JELLYFIN_BASE_URL_INVALID,
+    IDENTITY_JELLYFIN_BASE_URL_QUERY_FRAGMENT_FORBIDDEN,
+    IDENTITY_JELLYFIN_SYSTEM_INFO_URL_INVALID,
+    IDENTITY_JELLYFIN_USERS_URL_INVALID,
+    IDENTITY_JELLYFIN_USER_ID_INVALID,
+    IDENTITY_JELLYFIN_USER_URL_INVALID,
+    IDENTITY_JELLYFIN_USER_VERIFICATION_FAILED,
+    IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND,
+    IDENTITY_MEDIA_SERVER_BASE_URL_INVALID,
+    IDENTITY_MEDIA_SERVER_SCAN_API_KEY_REQUIRED,
+    IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED,
+    IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED,
+    IDENTITY_OAUTH_CLIENT_DISABLED_UNAVAILABLE,
+    IDENTITY_OAUTH_GRANT_NOT_FOUND,
+    IDENTITY_PASSKEY_DELETION_SESSION_STALE,
+    IDENTITY_PASSKEY_ENROLLMENT_SESSION_STALE,
+    IDENTITY_PASSWORD_CHANGE_NOT_REQUIRED,
+    IDENTITY_PLEX_SERVER_ACCESS_DENIED,
+    IDENTITY_PLEX_AUTH_TOKEN_REQUIRED,
+    IDENTITY_PLEX_SCAN_SERVER_REQUIRED,
+    IDENTITY_PLEX_REFRESH_SERVER_REQUIRED,
+    IDENTITY_PLEX_USER_LIST_ACCESS_DENIED,
+    IDENTITY_RECOVERY_CODE_SESSION_STALE,
+    IDENTITY_JELLYFIN_SERVER_NOT_RECOGNIZED,
+    IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+    IDENTITY_TOTP_CHALLENGE_NOT_FOUND,
+    IDENTITY_TOTP_CREDENTIAL_NOT_FOUND,
+    IDENTITY_TOTP_DISABLEMENT_SESSION_STALE,
+    IDENTITY_TOTP_ENROLLMENT_SESSION_STALE,
+    IDENTITY_USER_UI_SETTINGS_NOT_FOUND,
+    IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED,
+    IDENTITY_USER_NOT_FOUND,
+    IDENTITY_WEBAUTHN_CHALLENGE_NOT_FOUND,
+    IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND,
+];
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reason_codes_are_distinct_and_stable_format() {
+        let mut seen = std::collections::HashSet::new();
+        for code in super::ALL {
+            assert!(seen.insert(*code), "duplicate reason: {code}");
+            assert!(
+                ["EXTERNAL_", "IDENTITY_"]
+                    .iter()
+                    .any(|prefix| code.starts_with(prefix))
+            );
+            assert!(
+                code.bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            );
+        }
+    }
+}

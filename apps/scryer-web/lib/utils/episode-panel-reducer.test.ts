@@ -36,7 +36,9 @@ test("episode search snapshots update results and progress atomically", () => {
     indexers: [progress("Indexer", "COMPLETED")],
   });
 
-  assert.deepEqual(state.searchResultsByEpisode["episode-1"], [release("release-1")]);
+  assert.deepEqual(state.searchResultsByEpisode["episode-1"], [
+    release("release-1"),
+  ]);
   assert.deepEqual(state.searchIndexerProgressByEpisode["episode-1"], [
     progress("Indexer", "COMPLETED"),
   ]);
@@ -56,11 +58,15 @@ test("episode search snapshots remain isolated by episode id", () => {
     indexers: [progress("Second", "SEARCHING")],
   });
 
-  assert.deepEqual(second.searchResultsByEpisode["episode-1"], [release("release-1")]);
+  assert.deepEqual(second.searchResultsByEpisode["episode-1"], [
+    release("release-1"),
+  ]);
   assert.deepEqual(second.searchIndexerProgressByEpisode["episode-1"], [
     progress("First", "COMPLETED"),
   ]);
-  assert.deepEqual(second.searchResultsByEpisode["episode-2"], [release("release-2")]);
+  assert.deepEqual(second.searchResultsByEpisode["episode-2"], [
+    release("release-2"),
+  ]);
   assert.deepEqual(second.searchIndexerProgressByEpisode["episode-2"], [
     progress("Second", "SEARCHING"),
   ]);

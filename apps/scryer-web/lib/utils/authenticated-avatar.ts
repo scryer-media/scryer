@@ -24,7 +24,9 @@ export async function fetchProtectedMediaServerAvatar(
   fetchImage: typeof fetch,
 ): Promise<Blob> {
   if (!isProtectedMediaServerAvatarUrl(value, origin)) {
-    throw new TypeError("Refusing to send credentials to an untrusted avatar URL");
+    throw new TypeError(
+      "Refusing to send credentials to an untrusted avatar URL",
+    );
   }
 
   const response = await fetchImage(value, {

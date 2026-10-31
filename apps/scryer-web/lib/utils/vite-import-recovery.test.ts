@@ -30,7 +30,10 @@ function memoryStorage() {
 }
 
 test("retries a failed dynamic import when no recent recovery was attempted", () => {
-  assert.equal(shouldRetryStaleViteImport(dynamicImportFailure, new Map(), NOW), true);
+  assert.equal(
+    shouldRetryStaleViteImport(dynamicImportFailure, new Map(), NOW),
+    true,
+  );
 });
 
 test("does not loop when the recovery reload also fails", () => {
@@ -48,16 +51,31 @@ test("does not loop when the recovery reload also fails", () => {
 
 test("allows one recovery for each distinct failed chunk", () => {
   const storage = memoryStorage();
-  assert.equal(claimViteImportRecovery(dynamicImportFailure, storage, NOW), true);
-  assert.equal(claimViteImportRecovery(dynamicImportFailure, storage, NOW), false);
-  assert.equal(claimViteImportRecovery(secondDynamicImportFailure, storage, NOW), true);
-  assert.equal(claimViteImportRecovery(dynamicImportFailure, storage, NOW), false);
+  assert.equal(
+    claimViteImportRecovery(dynamicImportFailure, storage, NOW),
+    true,
+  );
+  assert.equal(
+    claimViteImportRecovery(dynamicImportFailure, storage, NOW),
+    false,
+  );
+  assert.equal(
+    claimViteImportRecovery(secondDynamicImportFailure, storage, NOW),
+    true,
+  );
+  assert.equal(
+    claimViteImportRecovery(dynamicImportFailure, storage, NOW),
+    false,
+  );
   const storedAttempts = JSON.parse(
     storage.getItem(VITE_IMPORT_RECOVERY_STORAGE_KEY) ?? "[]",
   );
   assert.deepEqual(storedAttempts, [
     { key: viteImportRecoveryKey(dynamicImportFailure), attemptedAt: NOW },
-    { key: viteImportRecoveryKey(secondDynamicImportFailure), attemptedAt: NOW },
+    {
+      key: viteImportRecoveryKey(secondDynamicImportFailure),
+      attemptedAt: NOW,
+    },
   ]);
 });
 
@@ -67,18 +85,30 @@ test("allows the same generic recovery claim after the retry window", () => {
 
   assert.equal(claimViteImportRecovery(safariFailure, storage, NOW), true);
   assert.equal(
-    claimViteImportRecovery(safariFailure, storage, NOW + VITE_IMPORT_RECOVERY_WINDOW_MS),
+    claimViteImportRecovery(
+      safariFailure,
+      storage,
+      NOW + VITE_IMPORT_RECOVERY_WINDOW_MS,
+    ),
     false,
   );
   assert.equal(
-    claimViteImportRecovery(safariFailure, storage, NOW + VITE_IMPORT_RECOVERY_WINDOW_MS + 1),
+    claimViteImportRecovery(
+      safariFailure,
+      storage,
+      NOW + VITE_IMPORT_RECOVERY_WINDOW_MS + 1,
+    ),
     true,
   );
 });
 
 test("does not retry unrelated route errors", () => {
   assert.equal(
-    shouldRetryStaleViteImport(new Error("route loader failed"), new Map(), NOW),
+    shouldRetryStaleViteImport(
+      new Error("route loader failed"),
+      new Map(),
+      NOW,
+    ),
     false,
   );
 });

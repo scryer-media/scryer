@@ -68,12 +68,11 @@ async fn globally_known_route_mismatch_requires_manual_import() {
         run_category_admission_check(Some("series"), TitleMatchType::TitleParse, false, false)
             .await;
     assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
-    assert!(
-        tracked
-            .status_messages
-            .iter()
-            .any(|message| message.contains("does not match this title's active route"))
-    );
+    assert!(tracked.status_messages.iter().any(|message| {
+        message
+            .text
+            .contains("does not match this title's active route")
+    }));
 }
 
 #[tokio::test]

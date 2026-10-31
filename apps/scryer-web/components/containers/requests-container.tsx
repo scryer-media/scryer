@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -41,7 +42,10 @@ import {
   requesterFilterOptions,
   type RequesterFilterOption,
 } from "@/lib/utils/media-request-filters";
-import { createTrailingThrottle, type TrailingThrottle } from "@/lib/utils/trailing-throttle";
+import {
+  createTrailingThrottle,
+  type TrailingThrottle,
+} from "@/lib/utils/trailing-throttle";
 
 type RequestsContainerProps = {
   facet?: Facet | null;
@@ -83,14 +87,20 @@ function collapsedRequestIds(request: MediaRequestRecord): string[] {
 }
 
 function sameStringArray(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function externalIdKey(source: string, value: string): string {
   return `${source.trim().toLowerCase()}:${value.trim()}`;
 }
 
-function requestsOverlap(left: MediaRequestRecord, right: MediaRequestRecord): boolean {
+function requestsOverlap(
+  left: MediaRequestRecord,
+  right: MediaRequestRecord,
+): boolean {
   if (left.libraryId !== right.libraryId || left.facet !== right.facet) {
     return false;
   }
@@ -105,13 +115,21 @@ function requestsOverlap(left: MediaRequestRecord, right: MediaRequestRecord): b
   );
 }
 
-function collapseRequestGroup(group: MediaRequestRecord[]): CollapsedMediaRequestRecord {
+function collapseRequestGroup(
+  group: MediaRequestRecord[],
+): CollapsedMediaRequestRecord {
   const sorted = [...group].sort(
     (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
   );
   const base = sorted[0];
-  const externalIds = new Map<string, MediaRequestRecord["externalIds"][number]>();
-  const requesters = new Map<string, MediaRequestRecord["requesters"][number]>();
+  const externalIds = new Map<
+    string,
+    MediaRequestRecord["externalIds"][number]
+  >();
+  const requesters = new Map<
+    string,
+    MediaRequestRecord["requesters"][number]
+  >();
   let updatedAt = base.updatedAt;
 
   for (const request of sorted) {
@@ -119,11 +137,17 @@ function collapseRequestGroup(group: MediaRequestRecord[]): CollapsedMediaReques
       updatedAt = request.updatedAt;
     }
     for (const externalId of request.externalIds) {
-      externalIds.set(externalIdKey(externalId.source, externalId.value), externalId);
+      externalIds.set(
+        externalIdKey(externalId.source, externalId.value),
+        externalId,
+      );
     }
     for (const requester of request.requesters) {
       const existing = requesters.get(requester.userId);
-      if (!existing || Date.parse(requester.requestedAt) < Date.parse(existing.requestedAt)) {
+      if (
+        !existing ||
+        Date.parse(requester.requestedAt) < Date.parse(existing.requestedAt)
+      ) {
         requesters.set(requester.userId, requester);
       }
     }
@@ -132,7 +156,9 @@ function collapseRequestGroup(group: MediaRequestRecord[]): CollapsedMediaReques
   return {
     ...base,
     externalIds: Array.from(externalIds.values()).sort((a, b) =>
-      externalIdKey(a.source, a.value).localeCompare(externalIdKey(b.source, b.value)),
+      externalIdKey(a.source, a.value).localeCompare(
+        externalIdKey(b.source, b.value),
+      ),
     ),
     requesters: Array.from(requesters.values()).sort(
       (a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt),
@@ -142,13 +168,17 @@ function collapseRequestGroup(group: MediaRequestRecord[]): CollapsedMediaReques
   };
 }
 
-function collapseMediaRequests(requests: MediaRequestRecord[]): MediaRequestRecord[] {
+function collapseMediaRequests(
+  requests: MediaRequestRecord[],
+): MediaRequestRecord[] {
   const groups: MediaRequestRecord[][] = [];
 
   for (const request of requests) {
     const matchingIndexes = groups
       .map((group, index) => ({ group, index }))
-      .filter(({ group }) => group.some((candidate) => requestsOverlap(candidate, request)))
+      .filter(({ group }) =>
+        group.some((candidate) => requestsOverlap(candidate, request)),
+      )
       .map(({ index }) => index);
 
     if (matchingIndexes.length === 0) {
@@ -171,8 +201,13 @@ function collapseMediaRequests(requests: MediaRequestRecord[]): MediaRequestReco
 
 /// Overlapping requests only merge within one status: a pending request and an
 /// already-approved one for the same media stay separate rows on their own tabs.
-function collapseMediaRequestsPerStatus(requests: MediaRequestRecord[]): MediaRequestRecord[] {
-  const byStatus = new Map<MediaRequestRecord["status"], MediaRequestRecord[]>();
+function collapseMediaRequestsPerStatus(
+  requests: MediaRequestRecord[],
+): MediaRequestRecord[] {
+  const byStatus = new Map<
+    MediaRequestRecord["status"],
+    MediaRequestRecord[]
+  >();
   for (const request of requests) {
     const group = byStatus.get(request.status);
     if (group) {
@@ -194,27 +229,42 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const { user } = useAuth();
-  const canManageAnyTitle = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles);
+  const canManageAnyTitle = hasAnyLibraryPermission(
+    user,
+    LIBRARY_PERMISSIONS.manageTitles,
+  );
   const [mode, setMode] = React.useState<RequestsMode>(
     canManageAnyTitle ? "admin" : "mine",
   );
   const [statusFilter, setStatusFilter] = React.useState<RequestStatusFilter>(
     canManageAnyTitle ? "PENDING" : "all",
   );
-  const [adminLibraries, setAdminLibraries] = React.useState<LibraryRecord[]>([]);
-  const [requesterLibraries, setRequesterLibraries] = React.useState<LibraryRecord[]>([]);
-  const [selectedLibraryIds, setSelectedLibraryIds] = React.useState<string[]>([]);
+  const [adminLibraries, setAdminLibraries] = React.useState<LibraryRecord[]>(
+    [],
+  );
+  const [requesterLibraries, setRequesterLibraries] = React.useState<
+    LibraryRecord[]
+  >([]);
+  const [selectedLibraryIds, setSelectedLibraryIds] = React.useState<string[]>(
+    [],
+  );
   /// The queue's requester filter. Only the manager queue offers it: that
   /// queue already shows every requester in the libraries the reader manages,
   /// and the server narrows it further rather than widening it.
-  const [selectedRequesterId, setSelectedRequesterId] = React.useState<string | null>(null);
-  const [requesterOptions, setRequesterOptions] = React.useState<RequesterFilterOption[]>([]);
+  const [selectedRequesterId, setSelectedRequesterId] = React.useState<
+    string | null
+  >(null);
+  const [requesterOptions, setRequesterOptions] = React.useState<
+    RequesterFilterOption[]
+  >([]);
   const [requests, setRequests] = React.useState<MediaRequestRecord[]>([]);
   const [qualityProfileOptions, setQualityProfileOptions] = React.useState<
     QualityProfileOption[]
   >([]);
   const [loading, setLoading] = React.useState(false);
-  const [actionRequestId, setActionRequestId] = React.useState<string | null>(null);
+  const [actionRequestId, setActionRequestId] = React.useState<string | null>(
+    null,
+  );
   const [claimsByRequestId, setClaimsByRequestId] = React.useState<
     Record<string, TitleClaimRecord[]>
   >({});
@@ -294,124 +344,176 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     return true;
   }, []);
 
-  const refresh = React.useCallback(async (options?: { includeLibraries?: boolean }) => {
-    const refreshSeq = ++refreshSeqRef.current;
-    const refreshContext = refreshContextKey;
-    const includeLibraries =
-      options?.includeLibraries === true || loadedLibrariesKeyRef.current !== librariesKey;
-    setLoading(true);
-    try {
-      let nextAdminLibraries = adminLibrariesRef.current;
-      let nextRequesterLibraries = requesterLibrariesRef.current;
-      if (includeLibraries) {
-        const [adminLibrariesResult, requesterLibrariesResult] = await Promise.all([
-          client.query(mediaRequestAdminLibrariesQuery, {
+  const refresh = React.useCallback(
+    async (options?: { includeLibraries?: boolean }) => {
+      const refreshSeq = ++refreshSeqRef.current;
+      const refreshContext = refreshContextKey;
+      const includeLibraries =
+        options?.includeLibraries === true ||
+        loadedLibrariesKeyRef.current !== librariesKey;
+      setLoading(true);
+      try {
+        let nextAdminLibraries = adminLibrariesRef.current;
+        let nextRequesterLibraries = requesterLibrariesRef.current;
+        if (includeLibraries) {
+          const [adminLibrariesResult, requesterLibrariesResult] =
+            await Promise.all([
+              client
+                .query(mediaRequestAdminLibrariesQuery, {
+                  facet: requestFacet,
+                })
+                .toPromise(),
+              client
+                .query(mediaRequestRequesterLibrariesQuery, {
+                  facet: requestFacet,
+                })
+                .toPromise(),
+            ]);
+          if (
+            refreshSeq !== refreshSeqRef.current ||
+            refreshContext !== refreshContextRef.current
+          ) {
+            return;
+          }
+
+          if (adminLibrariesResult.error || requesterLibrariesResult.error) {
+            setGlobalStatus(
+              userFacingGraphQlErrorMessage(
+                adminLibrariesResult.error ?? requesterLibrariesResult.error,
+                t("status.apiError"),
+                t,
+              ),
+              { level: "ERROR" },
+            );
+            return;
+          }
+
+          nextAdminLibraries = (adminLibrariesResult.data?.libraries ??
+            []) as LibraryRecord[];
+          // A title manager files held requests without the Request grant, so
+          // their own requests live in the libraries they manage too.
+          const requestLibraries = (requesterLibrariesResult.data?.libraries ??
+            []) as LibraryRecord[];
+          const requestLibraryIds = new Set(
+            requestLibraries.map((library) => library.id),
+          );
+          nextRequesterLibraries = [
+            ...requestLibraries,
+            ...nextAdminLibraries.filter(
+              (library) => !requestLibraryIds.has(library.id),
+            ),
+          ];
+          adminLibrariesRef.current = nextAdminLibraries;
+          requesterLibrariesRef.current = nextRequesterLibraries;
+          loadedLibrariesKeyRef.current = librariesKey;
+          setAdminLibraries(nextAdminLibraries);
+          setRequesterLibraries(nextRequesterLibraries);
+        }
+
+        const nextMode =
+          mode === "admin" &&
+          nextAdminLibraries.length === 0 &&
+          nextRequesterLibraries.length > 0
+            ? "mine"
+            : mode === "mine" &&
+                nextRequesterLibraries.length === 0 &&
+                nextAdminLibraries.length > 0
+              ? "admin"
+              : mode;
+        if (nextMode !== mode) {
+          setMode(nextMode);
+          setSelectedLibraryIds([]);
+          setRequests([]);
+          return;
+        }
+
+        const nextLibraries =
+          nextMode === "admin" ? nextAdminLibraries : nextRequesterLibraries;
+        const normalizedSelectedLibraryIds = normalizeLibraryFilterSelection(
+          selectedLibraryIds,
+          nextLibraries,
+        );
+        if (
+          !sameStringArray(normalizedSelectedLibraryIds, selectedLibraryIds)
+        ) {
+          setSelectedLibraryIds(normalizedSelectedLibraryIds);
+        }
+
+        const requestsQuery =
+          nextMode === "admin" ? mediaRequestsQuery : myMediaRequestsQuery;
+        const requesterUserId =
+          nextMode === "admin" ? selectedRequesterId : null;
+        const requestsResult = await client
+          .query(requestsQuery, {
             facet: requestFacet,
-          }).toPromise(),
-          client.query(mediaRequestRequesterLibrariesQuery, {
-            facet: requestFacet,
-          }).toPromise(),
-        ]);
+            libraryIds:
+              normalizedSelectedLibraryIds.length > 0
+                ? normalizedSelectedLibraryIds
+                : null,
+            status: null,
+            ...(nextMode === "admin" ? { requesterUserId } : {}),
+          })
+          .toPromise();
         if (
           refreshSeq !== refreshSeqRef.current ||
           refreshContext !== refreshContextRef.current
         ) {
           return;
         }
-
-        if (adminLibrariesResult.error || requesterLibrariesResult.error) {
+        if (requestsResult.error) {
           setGlobalStatus(
-            adminLibrariesResult.error?.message ||
-              requesterLibrariesResult.error?.message ||
+            userFacingGraphQlErrorMessage(
+              requestsResult.error,
               t("status.apiError"),
+              t,
+            ),
             { level: "ERROR" },
           );
           return;
         }
-
-        nextAdminLibraries = (adminLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
-        // A title manager files held requests without the Request grant, so
-        // their own requests live in the libraries they manage too.
-        const requestLibraries = (requesterLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
-        const requestLibraryIds = new Set(requestLibraries.map((library) => library.id));
-        nextRequesterLibraries = [
-          ...requestLibraries,
-          ...nextAdminLibraries.filter((library) => !requestLibraryIds.has(library.id)),
-        ];
-        adminLibrariesRef.current = nextAdminLibraries;
-        requesterLibrariesRef.current = nextRequesterLibraries;
-        loadedLibrariesKeyRef.current = librariesKey;
-        setAdminLibraries(nextAdminLibraries);
-        setRequesterLibraries(nextRequesterLibraries);
-      }
-
-      const nextMode =
-        mode === "admin" && nextAdminLibraries.length === 0 && nextRequesterLibraries.length > 0
-          ? "mine"
-          : mode === "mine" && nextRequesterLibraries.length === 0 && nextAdminLibraries.length > 0
-            ? "admin"
-            : mode;
-      if (nextMode !== mode) {
-        setMode(nextMode);
-        setSelectedLibraryIds([]);
-        setRequests([]);
-        return;
-      }
-
-      const nextLibraries = nextMode === "admin" ? nextAdminLibraries : nextRequesterLibraries;
-      const normalizedSelectedLibraryIds = normalizeLibraryFilterSelection(
-        selectedLibraryIds,
-        nextLibraries,
-      );
-      if (!sameStringArray(normalizedSelectedLibraryIds, selectedLibraryIds)) {
-        setSelectedLibraryIds(normalizedSelectedLibraryIds);
-      }
-
-      const requestsQuery = nextMode === "admin" ? mediaRequestsQuery : myMediaRequestsQuery;
-      const requesterUserId = nextMode === "admin" ? selectedRequesterId : null;
-      const requestsResult = await client.query(requestsQuery, {
-        facet: requestFacet,
-        libraryIds:
-          normalizedSelectedLibraryIds.length > 0
-            ? normalizedSelectedLibraryIds
-            : null,
-        status: null,
-        ...(nextMode === "admin" ? { requesterUserId } : {}),
-      }).toPromise();
-      if (
-        refreshSeq !== refreshSeqRef.current ||
-        refreshContext !== refreshContextRef.current
-      ) {
-        return;
-      }
-      if (requestsResult.error) {
-        setGlobalStatus(requestsResult.error.message || t("status.apiError"), { level: "ERROR" });
-        return;
-      }
-      const loadedRequests =
-        nextMode === "admin"
-          ? requestsResult.data?.mediaRequests
-          : requestsResult.data?.myMediaRequests;
-      if (nextMode === "admin") {
-        const adminRequests = (loadedRequests ?? []) as MediaRequestRecord[];
-        setRequesterOptions((previous) =>
-          requesterFilterOptions(adminRequests, previous, requesterUserId !== null),
+        const loadedRequests =
+          nextMode === "admin"
+            ? requestsResult.data?.mediaRequests
+            : requestsResult.data?.myMediaRequests;
+        if (nextMode === "admin") {
+          const adminRequests = (loadedRequests ?? []) as MediaRequestRecord[];
+          setRequesterOptions((previous) =>
+            requesterFilterOptions(
+              adminRequests,
+              previous,
+              requesterUserId !== null,
+            ),
+          );
+          setRequests(collapseMediaRequestsPerStatus(adminRequests));
+        } else {
+          setRequests((loadedRequests ?? []) as MediaRequestRecord[]);
+        }
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
         );
-        setRequests(collapseMediaRequestsPerStatus(adminRequests));
-      } else {
-        setRequests((loadedRequests ?? []) as MediaRequestRecord[]);
+      } finally {
+        if (
+          refreshSeq === refreshSeqRef.current &&
+          refreshContext === refreshContextRef.current
+        ) {
+          setLoading(false);
+        }
       }
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
-    } finally {
-      if (
-        refreshSeq === refreshSeqRef.current &&
-        refreshContext === refreshContextRef.current
-      ) {
-        setLoading(false);
-      }
-    }
-  }, [client, librariesKey, mode, refreshContextKey, requestFacet, selectedLibraryIds, selectedRequesterId, setGlobalStatus, t]);
+    },
+    [
+      client,
+      librariesKey,
+      mode,
+      refreshContextKey,
+      requestFacet,
+      selectedLibraryIds,
+      selectedRequesterId,
+      setGlobalStatus,
+      t,
+    ],
+  );
 
   const refreshQualityProfileOptions = React.useCallback(async () => {
     try {
@@ -428,7 +530,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         })),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
     }
   }, [client, setGlobalStatus, t]);
 
@@ -545,7 +650,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setActionRequestId(null);
       }
@@ -570,7 +678,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setActionRequestId(null);
       }
@@ -604,7 +715,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         if (firstError !== null) throw firstError;
         setGlobalStatus(t("status.requestReopened", { name: request.title }));
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setActionRequestId(null);
       }
@@ -627,16 +741,22 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               requestId: request.id,
               requestedQualityProfileId: values.requestedQualityProfileId,
               requestedMonitorType: values.requestedMonitorType ?? null,
-              requestedMonitorSelection: values.requestedMonitorSelection ?? null,
+              requestedMonitorSelection:
+                values.requestedMonitorSelection ?? null,
             },
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("status.requestUpdated", { name: request.title }), { level: "SUCCESS" });
+        setGlobalStatus(t("status.requestUpdated", { name: request.title }), {
+          level: "SUCCESS",
+        });
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setActionRequestId(null);
       }
@@ -661,7 +781,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         dispatchNavigationBadgesRefresh();
         await refresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setActionRequestId(null);
       }
@@ -682,7 +805,11 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       setClaimsLoadingRequestId(request.id);
       try {
         const { data, error } = await client
-          .query(titleClaimsQuery, { titleId }, { requestPolicy: "network-only" })
+          .query(
+            titleClaimsQuery,
+            { titleId },
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
         if (error) throw error;
         const claims = (data?.titleClaims ?? []) as TitleClaimRecord[];
@@ -693,7 +820,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       } catch (error) {
         setClaimsByRequestId((prev) => ({ ...prev, [request.id]: [] }));
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -731,7 +858,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         await refresh();
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -806,9 +933,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       actionRequestId={actionRequestId}
       onRefresh={() => void refresh({ includeLibraries: true })}
       onLoadQualityProfileOptions={() => void refreshQualityProfileOptions()}
-      onApprove={(request, values) =>
-        void approveRequest(request, values)
-      }
+      onApprove={(request, values) => void approveRequest(request, values)}
       onDismiss={(request) => void dismissRequest(request)}
       onReopen={(request) => void reopenRequest(request)}
       onUpdateRequest={(request, values) => void updateRequest(request, values)}

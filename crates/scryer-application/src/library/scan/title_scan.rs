@@ -103,10 +103,13 @@ async fn discover_episodic_title_files_for_progress(
 async fn episodic_title_directory_present(title_dir: &Path) -> AppResult<bool> {
     match tokio::fs::metadata(title_dir).await {
         Ok(metadata) if metadata.is_dir() => Ok(true),
-        Ok(_) => Err(AppError::Validation(format!(
-            "title directory is not a directory: {}",
-            title_dir.display()
-        ))),
+        Ok(_) => Err(AppError::validation_refused(
+            crate::error_reasons::library::TITLE_DIRECTORY_NOT_DIRECTORY,
+            format!(
+                "title directory is not a directory: {}",
+                title_dir.display()
+            ),
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(AppError::Repository(format!(
             "failed to inspect title directory {}: {error}",
@@ -1815,7 +1818,7 @@ async fn hydrate_enumerate_and_walk_title_work(
                         .into_iter()
                         .find(|(title_id, _)| title_id == &work.title.id)
                     {
-                        return (known_file_count, Err(AppError::Repository(reason)));
+                        return (known_file_count, Err(reason.into_app_error()));
                     }
                     if let Some((_, hydrated)) = outcome
                         .hydrated_titles
@@ -2280,20 +2283,33 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_management_permission(actor, &title.library_id)
             .await?;
         let folder = title
             .folder_path
             .as_deref()
             .filter(|folder| !folder.trim().is_empty())
-            .ok_or_else(|| AppError::Validation("title has no owned folder".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::library::TITLE_NO_OWNED_FOLDER,
+                    "title has no owned folder",
+                )
+            })?;
         // The scoped walk below attaches whatever the folder holds, so a
         // record that is a library root would hand the title every file in
         // the library.
         crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title).await?;
         if !episodic_title_directory_present(&stored_path_to_path_buf(folder)).await? {
-            return Err(AppError::Validation("owned folder is unavailable".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::OWNED_FOLDER_UNAVAILABLE,
+                "owned folder is unavailable",
+            ));
         }
         let files = self
             .services
@@ -2344,7 +2360,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", title_id),
+                )
+            })?;
         self.require_library_management_permission(actor, &title.library_id)
             .await?;
         let folder_was_missing = !title_has_recorded_folder(&title);
@@ -2398,14 +2419,22 @@ impl AppUseCase {
                 .await
             {
                 Ok(folder) => folder,
-                Err(AppError::Validation(_) | AppError::ValidationRefused { .. }) => return Ok(()),
+                Err(
+                    AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. },
+                ) => return Ok(()),
                 Err(error) => return Err(error),
             };
         match crate::folder_ownership::claim_title_folder_for_scan_if_missing(self, title, &folder)
             .await
         {
             Ok(()) => Ok(()),
-            Err(error @ (AppError::Validation(_) | AppError::ValidationRefused { .. })) => {
+            Err(
+                error @ (AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }),
+            ) => {
                 tracing::info!(
                     title_id = %title.id,
                     folder_path = %folder.display(),
@@ -2429,7 +2458,7 @@ impl AppUseCase {
             .await
         {
             match error {
-                AppError::Unauthorized(_) => {
+                AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. } => {
                     self.require_library_permission(
                         actor,
                         &title.library_id,
@@ -2668,11 +2697,15 @@ impl AppUseCase {
         let scan_mode = mode.as_file_finalize_mode();
 
         let handler = self.facet_registry.get(&title.facet).ok_or_else(|| {
-            AppError::Validation("library scan is not supported for this facet".into())
+            AppError::validation_refused(
+                crate::error_reasons::library::SCAN_UNSUPPORTED,
+                "library scan is not supported for this facet",
+            )
         })?;
         if !handler.has_episodes() {
-            return Err(AppError::Validation(
-                "title library scan is only supported for episodic titles".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TITLE_LIBRARY_SCAN_ONLY_SUPPORTED_EPISODIC_TITLES,
+                "title library scan is only supported for episodic titles",
             ));
         }
 

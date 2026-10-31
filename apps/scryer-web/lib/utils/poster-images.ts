@@ -2,13 +2,13 @@ export type LocalPosterVariant = "original" | "w250" | "w70";
 export type LocalBackdropVariant = "original" | "w1280";
 export type LocalEpisodeStillVariant = "original" | "w300";
 export type MediaImageVariant =
-  | LocalPosterVariant
-  | LocalBackdropVariant
-  | LocalEpisodeStillVariant;
+  LocalPosterVariant | LocalBackdropVariant | LocalEpisodeStillVariant;
 
 const PROXIED_MEDIA_IMAGE_PATH_RE = /^(.*\/images\/media\/[^/]+\/)([^/]+)$/;
-const LOCAL_TITLE_POSTER_PATH_RE = /^(.*\/images\/titles\/[^/]+\/poster\/)(original|w500|w250|w70)$/;
-const LOCAL_TITLE_BACKDROP_PATH_RE = /^(.*\/images\/titles\/[^/]+\/fanart\/)(original|w\d+)$/;
+const LOCAL_TITLE_POSTER_PATH_RE =
+  /^(.*\/images\/titles\/[^/]+\/poster\/)(original|w500|w250|w70)$/;
+const LOCAL_TITLE_BACKDROP_PATH_RE =
+  /^(.*\/images\/titles\/[^/]+\/fanart\/)(original|w\d+)$/;
 
 /** Selects a variant on Scryer's opaque media-image route. */
 export function selectMediaImageVariantUrl(

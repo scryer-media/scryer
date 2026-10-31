@@ -180,6 +180,12 @@ export type IndexerRoutingEntry = {
   priority: number;
 };
 
-export type IndexerRoutingSettingsByIndexer = Record<string, IndexerCategoryRoutingSettings>;
+export type IndexerRoutingSettingsByIndexer = Record<
+  string,
+  IndexerCategoryRoutingSettings
+>;
 
-export type IndexerRoutingSettingsByScope = Record<ViewCategoryId, IndexerRoutingSettingsByIndexer>;
+export type IndexerRoutingSettingsByScope = Record<
+  ViewCategoryId,
+  IndexerRoutingSettingsByIndexer
+>;

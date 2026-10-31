@@ -1,53 +1,89 @@
 import type { LocaleDictionary } from "../types";
 
 const de: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "Die Details dieses Releases sind nicht mehr verfügbar. Suche erneut, um es zu holen.",
-  "httpRelease.refusal.live": "Dieses Release ist ein Livestream und kann nicht heruntergeladen werden.",
-  "httpRelease.refusal.upcoming": "Dieses Release wurde noch nicht veröffentlicht.",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "Scryer kann keine Verbindung zum Metadaten-Gateway herstellen, da Ihre Systemuhr um mehr als 5 Minuten abweicht. Synchronisieren Sie Ihre Systemuhr und starten Sie Scryer neu.",
+  "httpRelease.refusal.detailsUnavailable":
+    "Die Details dieses Releases sind nicht mehr verfügbar. Suche erneut, um es zu holen.",
+  "httpRelease.refusal.live":
+    "Dieses Release ist ein Livestream und kann nicht heruntergeladen werden.",
+  "httpRelease.refusal.upcoming":
+    "Dieses Release wurde noch nicht veröffentlicht.",
   "httpRelease.refusal.removed": "Dieses Release wurde vom Anbieter entfernt.",
-  "httpRelease.refusal.unsupportedTransport": "Dieses Release wird nicht in einer Form angeboten, die der HTTP-Downloader abrufen kann.",
-  "httpRelease.refusal.separateTracks": "Dieses Release gibt es nur als getrennte Audio- und Videospuren, die nicht zusammengeführt werden können.",
-  "httpRelease.refusal.noMediaResource": "Dieses Release enthält keine Mediendatei zum Herunterladen.",
-  "httpRelease.refusal.noSubtitleResource": "Für dieses Release werden keine Untertitel in einer gewünschten Sprache angeboten.",
+  "httpRelease.refusal.unsupportedTransport":
+    "Dieses Release wird nicht in einer Form angeboten, die der HTTP-Downloader abrufen kann.",
+  "httpRelease.refusal.separateTracks":
+    "Dieses Release gibt es nur als getrennte Audio- und Videospuren, die nicht zusammengeführt werden können.",
+  "httpRelease.refusal.noMediaResource":
+    "Dieses Release enthält keine Mediendatei zum Herunterladen.",
+  "httpRelease.refusal.noSubtitleResource":
+    "Für dieses Release werden keine Untertitel in einer gewünschten Sprache angeboten.",
   "titleDelete.refusal.selection": "Titel ohne Duplikate auswählen.",
   "titleDelete.refusal.busy": "Ein Löschvorgang läuft bereits.",
   "titleDelete.refusal.preview": "Löschvorschau aktualisieren und bestätigen.",
   "titleDelete.refusal.confirmation": "Zum Bestätigen DELETE eingeben.",
-  "titleDelete.refusal.boundary": "Der Titelordner muss innerhalb eines Bibliotheksordners liegen und darf nicht dieser Ordner selbst sein.",
-  "titleDelete.refusal.ownership": "Die Ordnerzuordnung konnte nicht bestätigt werden. Dateien wurden erhalten.",
-  "titleDelete.refusal.layout": "Der Ordner oder sein Inhalt kann nicht sicher als einzelner Titel gelöscht werden.",
-  "titleDelete.refusal.unavailable": "Ein Bibliotheksordner ist nicht erreichbar. Zugriff wiederherstellen und Vorschau erneuern.",
-  "titleDelete.refusal.outsideRoots": "Der Dateipfad liegt außerhalb aller konfigurierten Bibliotheksordner. Bibliotheksordner oder Titelordner korrigieren und Vorschau erneuern.",
-  "queue.attention.downloadPasswordRetry": "Eine Passwort-Wiederholung für den Download wartet auf Abgleich. Entferne diesen Download, wenn der Client den Auftrag nicht mehr hat.",
-  "titleDelete.refusal.recycle": "Der Titel wurde gelöscht, aber einige Papierkorbeinträge konnten nicht entfernt werden.",
-  "titleDelete.refusal.retry": "Katalogbereinigung fehlgeschlagen. Vor dem erneuten Versuch eine neue Vorschau laden.",
+  "titleDelete.refusal.boundary":
+    "Der Titelordner muss innerhalb eines Bibliotheksordners liegen und darf nicht dieser Ordner selbst sein.",
+  "titleDelete.refusal.ownership":
+    "Die Ordnerzuordnung konnte nicht bestätigt werden. Dateien wurden erhalten.",
+  "titleDelete.refusal.layout":
+    "Der Ordner oder sein Inhalt kann nicht sicher als einzelner Titel gelöscht werden.",
+  "titleDelete.refusal.unavailable":
+    "Ein Bibliotheksordner ist nicht erreichbar. Zugriff wiederherstellen und Vorschau erneuern.",
+  "titleDelete.refusal.outsideRoots":
+    "Der Dateipfad liegt außerhalb aller konfigurierten Bibliotheksordner. Bibliotheksordner oder Titelordner korrigieren und Vorschau erneuern.",
+  "queue.attention.downloadPasswordRetry":
+    "Eine Passwort-Wiederholung für den Download wartet auf Abgleich. Entferne diesen Download, wenn der Client den Auftrag nicht mehr hat.",
+  "titleDelete.refusal.recycle":
+    "Der Titel wurde gelöscht, aber einige Papierkorbeinträge konnten nicht entfernt werden.",
+  "titleDelete.refusal.retry":
+    "Katalogbereinigung fehlgeschlagen. Vor dem erneuten Versuch eine neue Vorschau laden.",
   "settings.downloadClientHttpDownloadDir": "Download-Ordner",
-  "settings.downloadClientHttpDownloadDirHelp": "Hier werden fertige Dateien und Teildownloads abgelegt, so wie Scryer den Pfad sieht. Scryer führt die Warteschlange dieses Downloaders im Unterordner .scryer-http.",
-  "settings.downloadClientHttpMaxConcurrentDownloads": "Gleichzeitige Downloads",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "Wie viele Releases gleichzeitig geladen werden (1 bis 8).",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "Hier werden fertige Dateien und Teildownloads abgelegt, so wie Scryer den Pfad sieht. Scryer führt die Warteschlange dieses Downloaders im Unterordner .scryer-http.",
+  "settings.downloadClientHttpMaxConcurrentDownloads":
+    "Gleichzeitige Downloads",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "Wie viele Releases gleichzeitig geladen werden (1 bis 8).",
   "settings.downloadClientHttpMaxConnectionsPerHost": "Verbindungen pro Host",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "Wie viele Downloads gleichzeitig vom selben Server laden dürfen (1 bis 8).",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "Wie viele Downloads gleichzeitig vom selben Server laden dürfen (1 bis 8).",
   "settings.downloadClientHttpBandwidthLimit": "Bandbreitenlimit (KB/s)",
-  "settings.downloadClientHttpBandwidthLimitHelp": "Gilt gemeinsam für alle Downloads dieses Clients. Leer oder 0 bedeutet unbegrenzt.",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "Gilt gemeinsam für alle Downloads dieses Clients. Leer oder 0 bedeutet unbegrenzt.",
   "settings.publicUrlTitle": "Öffentliche URL",
-  "settings.publicUrlHelp": "Die Adresse, über die Personen und Dienste Scryer erreichen, etwa https://scryer.example.com. Kontoverknüpfung und OAuth übernehmen eine Änderung sofort; Passkeys erst nach einem Neustart von Scryer.",
+  "settings.publicUrlHelp":
+    "Die Adresse, über die Personen und Dienste Scryer erreichen, etwa https://scryer.example.com. Kontoverknüpfung und OAuth übernehmen eine Änderung sofort; Passkeys erst nach einem Neustart von Scryer.",
   "settings.publicUrlLabel": "Öffentliche URL",
-  "settings.publicUrlEnvironmentLocked": "Durch SCRYER_PUBLIC_URL festgelegt. Ändere die Umgebungsvariable, um sie zu bearbeiten.",
-  "settings.publicUrlInvalid": "Die konfigurierte öffentliche URL ist ungültig und wird nicht verwendet: {{error}}",
-  "settings.publicUrlError.invalid_url": "Gib eine absolute http- oder https-URL ein, etwa https://scryer.example.com.",
-  "settings.publicUrlError.wildcard_host": "Die öffentliche URL muss einen einzelnen Host nennen, keinen Platzhalter.",
-  "settings.publicUrlError.credentials": "Die öffentliche URL darf keinen Benutzernamen und kein Passwort enthalten.",
-  "settings.publicUrlError.query_or_fragment": "Die öffentliche URL darf keine Abfrage und kein Fragment enthalten.",
-  "settings.publicUrlError.path_not_allowed": "Scryer wird im Stammverzeichnis bereitgestellt, daher darf die öffentliche URL keinen Pfad enthalten.",
-  "settings.publicUrlError.path_mismatch": "Der Pfad der öffentlichen URL muss leer sein oder dem Basispfad von Scryer entsprechen.",
-  "settings.publicUrlError.environment_locked": "Die öffentliche URL wird durch SCRYER_PUBLIC_URL festgelegt und kann hier nicht geändert werden.",
-  "settings.publicUrlError.save_and_reset": "Speichere eine öffentliche URL oder lösche sie, nicht beides.",
-  "settings.publicUrlError.passkey_acknowledgement_required": "Durch diese Änderung funktionieren registrierte Passkeys nicht mehr. Bestätige sie, um zu speichern.",
-  "settings.publicUrlPasskeyRestart": "Passkeys übernehmen eine geänderte öffentliche URL nach einem Neustart von Scryer.",
+  "settings.publicUrlEnvironmentLocked":
+    "Durch SCRYER_PUBLIC_URL festgelegt. Ändere die Umgebungsvariable, um sie zu bearbeiten.",
+  "settings.publicUrlInvalid":
+    "Die konfigurierte öffentliche URL ist ungültig und wird nicht verwendet: {{error}}",
+  "settings.publicUrlError.invalid_url":
+    "Gib eine absolute http- oder https-URL ein, etwa https://scryer.example.com.",
+  "settings.publicUrlError.wildcard_host":
+    "Die öffentliche URL muss einen einzelnen Host nennen, keinen Platzhalter.",
+  "settings.publicUrlError.credentials":
+    "Die öffentliche URL darf keinen Benutzernamen und kein Passwort enthalten.",
+  "settings.publicUrlError.query_or_fragment":
+    "Die öffentliche URL darf keine Abfrage und kein Fragment enthalten.",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer wird im Stammverzeichnis bereitgestellt, daher darf die öffentliche URL keinen Pfad enthalten.",
+  "settings.publicUrlError.path_mismatch":
+    "Der Pfad der öffentlichen URL muss leer sein oder dem Basispfad von Scryer entsprechen.",
+  "settings.publicUrlError.environment_locked":
+    "Die öffentliche URL wird durch SCRYER_PUBLIC_URL festgelegt und kann hier nicht geändert werden.",
+  "settings.publicUrlError.save_and_reset":
+    "Speichere eine öffentliche URL oder lösche sie, nicht beides.",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "Durch diese Änderung funktionieren registrierte Passkeys nicht mehr. Bestätige sie, um zu speichern.",
+  "settings.publicUrlPasskeyRestart":
+    "Passkeys übernehmen eine geänderte öffentliche URL nach einem Neustart von Scryer.",
   "settings.publicUrlClear": "Öffentliche URL entfernen",
   "settings.publicUrlSaved": "Öffentliche URL gespeichert.",
   "settings.publicUrlLoadError": "Öffentliche URL konnte nicht geladen werden.",
-  "settings.publicUrlSaveError": "Öffentliche URL konnte nicht gespeichert werden.",
+  "settings.publicUrlSaveError":
+    "Öffentliche URL konnte nicht gespeichert werden.",
   "settings.publicUrlEffectiveValues": "Wirksame Werte",
   "settings.publicUrlColumnSetting": "Einstellung",
   "settings.publicUrlColumnValue": "Wert",
@@ -63,17 +99,25 @@ const de: LocaleDictionary = {
   "settings.publicUrlSourceSettings": "Gespeicherte Einstellungen",
   "settings.publicUrlSourceDefault": "Standard",
   "settings.publicUrlSourcePublicUrl": "Öffentliche URL",
-  "settings.publicUrlPasskeyWarningTitle": "Vorhandene Passkeys funktionieren nicht mehr",
-  "settings.publicUrlPasskeyWarningChanged": "Passkeys sind für {{rpId}} registriert. Nach dem nächsten Neustart wechseln Passkeys zu {{nextRpId}}, und kein vorhandener Passkey kann sich mehr anmelden.",
-  "settings.publicUrlPasskeyWarningDisabled": "Passkeys sind für {{rpId}} registriert. Diese öffentliche URL kann keine Passkeys tragen (sie benötigen einen https-Domainnamen oder localhost). Nach dem nächsten Neustart werden Passkeys deaktiviert, und kein vorhandener Passkey kann sich mehr anmelden.",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}} Benutzer haben Passkeys. {{passkeyOnly}} davon haben keine Authenticator-App als zweiten Faktor und werden ausgesperrt: Sie können sich erst wieder anmelden, wenn ihre Faktoren zurückgesetzt werden.",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer konnte die registrierten Passkeys nicht zählen; gehe davon aus, dass einige Benutzer ausgesperrt werden.",
-  "settings.publicUrlPasskeyWarningRecovery": "Um den Zugang wiederherzustellen, kann ein Administrator, der sich noch anmelden kann, {{users}} öffnen und für jeden ausgesperrten Benutzer {{reset}} verwenden; oder setze die öffentliche URL zurück und starte Scryer neu; oder starte Scryer mit SCRYER_RECOVERY_ADMIN_PASSWORD, um dich als Wiederherstellungsadministrator anzumelden.",
+  "settings.publicUrlPasskeyWarningTitle":
+    "Vorhandene Passkeys funktionieren nicht mehr",
+  "settings.publicUrlPasskeyWarningChanged":
+    "Passkeys sind für {{rpId}} registriert. Nach dem nächsten Neustart wechseln Passkeys zu {{nextRpId}}, und kein vorhandener Passkey kann sich mehr anmelden.",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "Passkeys sind für {{rpId}} registriert. Diese öffentliche URL kann keine Passkeys tragen (sie benötigen einen https-Domainnamen oder localhost). Nach dem nächsten Neustart werden Passkeys deaktiviert, und kein vorhandener Passkey kann sich mehr anmelden.",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}} Benutzer haben Passkeys. {{passkeyOnly}} davon haben keine Authenticator-App als zweiten Faktor und werden ausgesperrt: Sie können sich erst wieder anmelden, wenn ihre Faktoren zurückgesetzt werden.",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer konnte die registrierten Passkeys nicht zählen; gehe davon aus, dass einige Benutzer ausgesperrt werden.",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "Um den Zugang wiederherzustellen, kann ein Administrator, der sich noch anmelden kann, {{users}} öffnen und für jeden ausgesperrten Benutzer {{reset}} verwenden; oder setze die öffentliche URL zurück und starte Scryer neu; oder starte Scryer mit SCRYER_RECOVERY_ADMIN_PASSWORD, um dich als Wiederherstellungsadministrator anzumelden.",
   "settings.publicUrlPasskeyWarningConfirm": "Trotzdem speichern",
   "scoring.mandatoryRejection": "Pflichtanforderung nicht erfüllt",
   "scoring.finalScoreRejection": "Endpunktzahl abgelehnt",
-  "settings.refFnBlockScore": "Gibt -10000 als Abzug zurück, den andere Punkte ausgleichen können",
-  "settings.arrImportBlockScoreHelp": "Die Gesamtpunktzahl muss über -9000 liegen und den Profil-Mindestwert erreichen. Pflichtanforderungen gelten weiterhin.",
+  "settings.refFnBlockScore":
+    "Gibt -10000 als Abzug zurück, den andere Punkte ausgleichen können",
+  "settings.arrImportBlockScoreHelp":
+    "Die Gesamtpunktzahl muss über -9000 liegen und den Profil-Mindestwert erreichen. Pflichtanforderungen gelten weiterhin.",
   "label.ready": "Bereit",
   "label.moreInfo": "Weitere Informationen",
   "label.search": "Suchen",
@@ -105,15 +149,57 @@ const de: LocaleDictionary = {
   "label.cancel": "Abbrechen",
   "folderBrowser.selectPath": "Pfad auswählen",
   "folderBrowser.go": "Los",
-  "folderBrowser.descriptionFileOrFolder": "Durchsuche Pfade auf dem Scryer-Host und wähle eine Datei oder einen Ordner aus.",
-  "folderBrowser.descriptionFile": "Durchsuche Pfade auf dem Scryer-Host und wähle eine Datei aus.",
-  "folderBrowser.descriptionFolder": "Durchsuche Pfade auf dem Scryer-Host und wähle einen Ordner aus.",
+  "folderBrowser.descriptionFileOrFolder":
+    "Durchsuche Pfade auf dem Scryer-Host und wähle eine Datei oder einen Ordner aus.",
+  "folderBrowser.descriptionFile":
+    "Durchsuche Pfade auf dem Scryer-Host und wähle eine Datei aus.",
+  "folderBrowser.descriptionFolder":
+    "Durchsuche Pfade auf dem Scryer-Host und wähle einen Ordner aus.",
   "folderBrowser.loading": "Ordner werden geladen",
   "folderBrowser.emptyFilesAndFolders": "Keine Dateien oder Unterverzeichnisse",
   "folderBrowser.emptyFolders": "Keine Unterverzeichnisse",
   "folderBrowser.error": "Pfad kann nicht durchsucht werden.",
   "folderBrowser.browseRoot": "/ durchsuchen",
   "folderBrowser.selectFolder": "Ordner auswählen",
+  "folderBrowser.newFolder": "Neuer Ordner",
+  "folderBrowser.newFolderName": "Ordnername",
+  "folderBrowser.create": "Erstellen",
+  "folderBrowser.newFolderFailed": "Der Ordner konnte nicht erstellt werden.",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED": "Gib einen Ordnernamen ein.",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "Dieser Name ist reserviert und kann nicht für einen Ordner verwendet werden.",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    'Ordnernamen dürfen weder / \\ : * ? " < > | noch Steuerzeichen enthalten.',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT":
+    "Ordnernamen dürfen nicht mit einem Punkt enden.",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "Ordnernamen dürfen nicht mit einem Punkt beginnen, sonst wäre der Ordner versteckt.",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG":
+    "Dieser Name ist für dieses Laufwerk zu lang.",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "Dieses Laufwerk akzeptiert diesen Namen nicht. Versuche einen einfacheren.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE":
+    "Wähle einen absoluten Ordnerpfad.",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING":
+    "Der aktuelle Ordner existiert nicht mehr oder ist nicht erreichbar.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "Der aktuelle Pfad ist eine Datei, kein Ordner.",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "Hier gibt es bereits eine Datei oder einen Ordner mit diesem Namen. Manche Laufwerke unterscheiden nicht zwischen Groß- und Kleinschreibung.",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer darf hier keine Ordner erstellen. Prüfe die Berechtigungen des Ordners für den Benutzer, unter dem Scryer läuft (PUID und PGID in Docker).",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "Dieses Laufwerk ist schreibgeschützt. Läuft Scryer in Docker, prüfe, ob das Volume schreibgeschützt (:ro) eingebunden ist.",
+  "error.reason.FOLDER_CREATE_DISK_FULL":
+    "Das Laufwerk ist voll oder das Speicherkontingent ist aufgebraucht.",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "Dieser Ordner enthält bereits so viele Unterordner, wie sein Laufwerk zulässt.",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED":
+    "An diesem Ort können keine Ordner erstellt werden.",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "Das Laufwerk oder die Netzwerkfreigabe antwortet nicht. Prüfe, ob es verbunden und eingebunden ist.",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer konnte den Ordner nicht erstellen. Details stehen im Serverprotokoll.",
   "label.clear": "Leeren",
   "label.add": "Hinzufügen",
   "label.remove": "Entfernen",
@@ -275,7 +361,6 @@ const de: LocaleDictionary = {
   "settings.users": "Benutzer",
   "settings.indexers": "Indexer",
   "settings.indexerSearch": "Indexer-Suche",
-  "settings.indexerSearchBetaNotice": "Die Indexer-Suche ist in der Beta. Verhalten und Ergebnisse können sich zwischen Versionen noch ändern.",
   "settings.pluginBeta": "Beta",
   "settings.proxies": "Proxys",
   "settings.proxyUsername": "Benutzername",
@@ -290,7 +375,8 @@ const de: LocaleDictionary = {
   "settings.proxyRemoteDns": "DNS am Proxy auflösen",
   "settings.proxyRemoteDnsHelp":
     "DNS am Proxy aufzulösen entspricht dem socks5h-Verhalten: Der Proxy löst die Ziel-Hostnamen auf, nicht dieser Rechner.",
-  "settings.proxiesHelp": "Proxys leiten den Verkehr der Indexer und Download-Clients weiter, denen sie zugewiesen sind. Ein Solver beantwortet Browser-Challenges, ein Standard-Proxy ist ein HTTP- oder SOCKS-Hop, und ein Tunnel baut seinen eigenen Transport auf.",
+  "settings.proxiesHelp":
+    "Proxys leiten den Verkehr der Indexer und Download-Clients weiter, denen sie zugewiesen sind. Ein Solver beantwortet Browser-Challenges, ein Standard-Proxy ist ein HTTP- oder SOCKS-Hop, und ein Tunnel baut seinen eigenen Transport auf.",
   "settings.proxyFamilySolver": "Solver",
   "settings.proxyFamilyStandard": "Standard",
   "settings.proxyFamilyTunnel": "Tunnel",
@@ -308,7 +394,8 @@ const de: LocaleDictionary = {
   "settings.proxyDeleteConfirmDescription": "Proxy {{name}} löschen?",
   "settings.proxyValidation": "Name und Basis-URL sind erforderlich.",
   "settings.proxyEndpoint": "Endpunkt",
-  "settings.proxyEndpointHelp": "ssh://host:port. Ohne Angabe wird Port 22 verwendet.",
+  "settings.proxyEndpointHelp":
+    "ssh://host:port. Ohne Angabe wird Port 22 verwendet.",
   "settings.proxyAssignment": "Proxy",
   "settings.proxyDirect": "Direkt (kein Proxy)",
   "settings.proxyMissing": "Fehlender Proxy",
@@ -316,66 +403,100 @@ const de: LocaleDictionary = {
   "settings.proxyDisabledHelp": "Der zugewiesene Proxy ist deaktiviert.",
   "settings.proxyDisabledSuffix": "(deaktiviert)",
   "settings.proxyClearPassword": "Gespeichertes Passwort entfernen",
-  "settings.proxyTunnelAuthHelp": "SSH erfordert einen Benutzernamen und einen privaten Ed25519-Schlüssel. Passwortauthentifizierung wird nicht unterstützt.",
+  "settings.proxyTunnelAuthHelp":
+    "SSH erfordert einen Benutzernamen und einen privaten Ed25519-Schlüssel. Passwortauthentifizierung wird nicht unterstützt.",
   "settings.proxyPrivateKey": "Privater Schlüssel",
-  "settings.proxyPrivateKeyHelp": "Es werden ausschließlich Ed25519-Schlüssel unterstützt; erzeugen Sie einen mit `ssh-keygen -t ed25519` und fügen Sie den privaten OpenSSH-Schlüssel hier ein.",
+  "settings.proxyPrivateKeyHelp":
+    "Es werden ausschließlich Ed25519-Schlüssel unterstützt; erzeugen Sie einen mit `ssh-keygen -t ed25519` und fügen Sie den privaten OpenSSH-Schlüssel hier ein.",
   "settings.proxyPrivateKeyStored": "Privater Schlüssel gesetzt",
-  "settings.proxyPrivateKeyUnchanged": "Ein privater Schlüssel ist gespeichert. Fügen Sie einen neuen ein, um ihn zu ersetzen.",
+  "settings.proxyPrivateKeyUnchanged":
+    "Ein privater Schlüssel ist gespeichert. Fügen Sie einen neuen ein, um ihn zu ersetzen.",
   "settings.proxyClearPrivateKey": "Gespeicherten privaten Schlüssel entfernen",
   "settings.proxyPrivateKeyPassphrase": "Schlüssel-Passphrase",
-  "settings.proxyPrivateKeyPassphraseHelp": "Nur nötig, wenn der private Schlüssel mit einer Passphrase geschützt ist.",
+  "settings.proxyPrivateKeyPassphraseHelp":
+    "Nur nötig, wenn der private Schlüssel mit einer Passphrase geschützt ist.",
   "settings.proxyHostKey": "Host-Schlüssel",
   "settings.proxyHostKeyPinnedAt": "Angeheftet {{time}}.",
-  "settings.proxyHostKeyUnpinned": "Noch nicht angeheftet. Die erste erfolgreiche Verbindung heftet den Host-Schlüssel des Servers an.",
+  "settings.proxyHostKeyUnpinned":
+    "Noch nicht angeheftet. Die erste erfolgreiche Verbindung heftet den Host-Schlüssel des Servers an.",
   "settings.proxyHostKeyReset": "Host-Schlüssel zurücksetzen",
-  "settings.proxyHostKeyResetDescription": "Den angehefteten Host-Schlüssel verwerfen. Die nächste Verbindung vertraut dem angebotenen Schlüssel und heftet ihn an; tun Sie das nur, wenn sich der Schlüssel des Servers tatsächlich geändert hat.",
-  "settings.proxyValidationTunnelUsername": "Ein Tunnel benötigt einen Benutzernamen.",
-  "settings.proxyValidationTunnelAuth": "Ein SSH-Tunnel benötigt einen privaten Ed25519-Schlüssel.",
-  "settings.downloadClientProxyHelp": "Jede Proxy-Art kann zugewiesen werden. Ein Challenge-Solver hat keine Wirkung auf einen nativen Client, dessen Anfragen nicht von einem Plugin-Gast gestellt werden.",
+  "settings.proxyHostKeyResetDescription":
+    "Den angehefteten Host-Schlüssel verwerfen. Die nächste Verbindung vertraut dem angebotenen Schlüssel und heftet ihn an; tun Sie das nur, wenn sich der Schlüssel des Servers tatsächlich geändert hat.",
+  "settings.proxyValidationTunnelUsername":
+    "Ein Tunnel benötigt einen Benutzernamen.",
+  "settings.proxyValidationTunnelAuth":
+    "Ein SSH-Tunnel benötigt einen privaten Ed25519-Schlüssel.",
+  "settings.downloadClientProxyHelp":
+    "Jede Proxy-Art kann zugewiesen werden. Ein Challenge-Solver hat keine Wirkung auf einen nativen Client, dessen Anfragen nicht von einem Plugin-Gast gestellt werden.",
   "status.proxyCreated": "Proxy erstellt.",
   "status.proxyUpdated": "Proxy aktualisiert.",
   "status.proxyDeleted": "Proxy {{name}} gelöscht.",
   "status.proxyTestPassed": "Proxy-Test erfolgreich.",
   "status.proxyTestFailed": "Proxy-Test fehlgeschlagen.",
   "status.editingProxy": "Proxy {{name}} wird bearbeitet.",
-  "status.proxyHostKeyReset": "Host-Schlüssel für {{name}} zurückgesetzt. Die nächste Verbindung heftet den Server erneut an.",
-  "settings.proxyEndpointHelpWireguard": "wireguard://host:port. Port 51820 wird verwendet, wenn Sie ihn weglassen.",
-  "settings.proxyPrivateKeyHelpWireguard": "WireGuard-Schlüssel sind 32 Bytes Base64, genau so, wie `wg genkey` sie ausgibt (44 Zeichen, die auf `=` enden)",
+  "status.proxyHostKeyReset":
+    "Host-Schlüssel für {{name}} zurückgesetzt. Die nächste Verbindung heftet den Server erneut an.",
+  "settings.proxyEndpointHelpWireguard":
+    "wireguard://host:port. Port 51820 wird verwendet, wenn Sie ihn weglassen.",
+  "settings.proxyPrivateKeyHelpWireguard":
+    "WireGuard-Schlüssel sind 32 Bytes Base64, genau so, wie `wg genkey` sie ausgibt (44 Zeichen, die auf `=` enden)",
   "settings.proxyPeerPublicKey": "Öffentlicher Schlüssel der Gegenstelle",
-  "settings.proxyPeerPublicKeyHelp": "Die `PublicKey`-Zeile aus dem Abschnitt `[Peer]` des Servers. Ein öffentlicher Schlüssel ist öffentlich und wird daher vollständig angezeigt.",
+  "settings.proxyPeerPublicKeyHelp":
+    "Die `PublicKey`-Zeile aus dem Abschnitt `[Peer]` des Servers. Ein öffentlicher Schlüssel ist öffentlich und wird daher vollständig angezeigt.",
   "settings.proxyPresharedKey": "Vorgeteilter Schlüssel",
-  "settings.proxyPresharedKeyHelp": "Optional. Die `PresharedKey`-Zeile, falls der Server einen verwendet.",
+  "settings.proxyPresharedKeyHelp":
+    "Optional. Die `PresharedKey`-Zeile, falls der Server einen verwendet.",
   "settings.proxyPresharedKeyStored": "Vorgeteilter Schlüssel gesetzt",
-  "settings.proxyPresharedKeyUnchanged": "Ein vorgeteilter Schlüssel ist gespeichert. Fügen Sie einen neuen ein, um ihn zu ersetzen.",
-  "settings.proxyClearPresharedKey": "Gespeicherten vorgeteilten Schlüssel löschen",
+  "settings.proxyPresharedKeyUnchanged":
+    "Ein vorgeteilter Schlüssel ist gespeichert. Fügen Sie einen neuen ein, um ihn zu ersetzen.",
+  "settings.proxyClearPresharedKey":
+    "Gespeicherten vorgeteilten Schlüssel löschen",
   "settings.proxyTunnelAddresses": "Adressen",
-  "settings.proxyTunnelAddressesHelp": "Die `Address`-Zeile aus dem Abschnitt `[Interface]`, zum Beispiel 10.6.0.2/32. Eine pro Zeile oder durch Kommas getrennt.",
+  "settings.proxyTunnelAddressesHelp":
+    "Die `Address`-Zeile aus dem Abschnitt `[Interface]`, zum Beispiel 10.6.0.2/32. Eine pro Zeile oder durch Kommas getrennt.",
   "settings.proxyTunnelDnsServers": "DNS-Server",
-  "settings.proxyTunnelDnsServersHelp": "Optionale Resolver, die über den Tunnel erreicht werden, einer pro Zeile oder durch Kommas getrennt. Ohne sie müssen Ziele über IP-Adressen angesprochen werden.",
+  "settings.proxyTunnelDnsServersHelp":
+    "Optionale Resolver, die über den Tunnel erreicht werden, einer pro Zeile oder durch Kommas getrennt. Ohne sie müssen Ziele über IP-Adressen angesprochen werden.",
   "settings.proxyTunnelMtu": "MTU",
-  "settings.proxyTunnelMtuHelp": "Optional, zwischen {{min}} und {{max}}. Leer lassen für den Standardwert {{default}}.",
+  "settings.proxyTunnelMtuHelp":
+    "Optional, zwischen {{min}} und {{max}}. Leer lassen für den Standardwert {{default}}.",
   "settings.proxyTunnelKeepalive": "Keepalive",
-  "settings.proxyTunnelKeepaliveHelp": "Optional, in Sekunden. Leer lassen für den Standardwert {{default}}, oder 0 setzen, um Keepalive abzuschalten.",
+  "settings.proxyTunnelKeepaliveHelp":
+    "Optional, in Sekunden. Leer lassen für den Standardwert {{default}}, oder 0 setzen, um Keepalive abzuschalten.",
   "settings.proxyTunnelPublicKey": "Öffentlicher Schlüssel dieses Tunnels",
-  "settings.proxyTunnelPublicKeyHelp": "Fügen Sie dies als `PublicKey`-Zeile in den Abschnitt `[Peer]` des Servers ein.",
-  "settings.proxyTunnelPublicKeyPending": "Wird gespeichert, sobald der private Schlüssel hinterlegt ist.",
+  "settings.proxyTunnelPublicKeyHelp":
+    "Fügen Sie dies als `PublicKey`-Zeile in den Abschnitt `[Peer]` des Servers ein.",
+  "settings.proxyTunnelPublicKeyPending":
+    "Wird gespeichert, sobald der private Schlüssel hinterlegt ist.",
   "settings.proxyTunnelPublicKeyCopy": "Kopieren",
   "settings.proxyImportConfig": "WireGuard-Konfiguration importieren",
-  "settings.proxyImportConfigHelp": "Fügen Sie die gesamte Konfiguration Ihres VPN-Anbieters ein oder wählen Sie die .conf-Datei aus; die Felder unten werden daraus gefüllt. Jedes Feld nimmt auch eine einzelne eingefügte Zeile an.",
+  "settings.proxyImportConfigHelp":
+    "Fügen Sie die gesamte Konfiguration Ihres VPN-Anbieters ein oder wählen Sie die .conf-Datei aus; die Felder unten werden daraus gefüllt. Jedes Feld nimmt auch eine einzelne eingefügte Zeile an.",
   "settings.proxyImportConfigApply": "Formular füllen",
   "settings.proxyImportConfigFile": "Datei auswählen",
-  "status.proxyImportConfigFilled": "Formular aus der WireGuard-Konfiguration gefüllt.",
-  "status.proxyImportConfigUnreadable": "Das sieht nicht nach einer WireGuard-Konfiguration aus.",
-  "status.proxyImportConfigFirstPeer": "Sie enthält {{count}} Peers; nur der erste wurde importiert.",
-  "status.proxyImportConfigIgnored": "{{keys}} ignoriert, da ein Tunnel-Proxy dies nicht verwendet.",
-  "settings.proxyValidationWireguardPrivateKey": "WireGuard benötigt einen privaten Schlüssel.",
-  "settings.proxyValidationWireguardPeerPublicKey": "WireGuard benötigt den öffentlichen Schlüssel der Gegenstelle.",
-  "settings.proxyValidationWireguardAddresses": "WireGuard benötigt mindestens eine Schnittstellenadresse, zum Beispiel 10.6.0.2/32.",
-  "settings.proxyValidationWireguardKeyShape": "{{field}} sieht nicht wie ein WireGuard-Schlüssel aus: Sie sind 32 Bytes Base64, genau so, wie `wg genkey` sie ausgibt (44 Zeichen, die auf `=` enden).",
-  "settings.proxyValidationWireguardMtu": "Die Tunnel-MTU muss zwischen {{min}} und {{max}} liegen.",
-  "settings.proxyValidationWireguardKeepalive": "Keepalive ist eine ganze Zahl von Sekunden; 0 schaltet es ab.",
+  "status.proxyImportConfigFilled":
+    "Formular aus der WireGuard-Konfiguration gefüllt.",
+  "status.proxyImportConfigUnreadable":
+    "Das sieht nicht nach einer WireGuard-Konfiguration aus.",
+  "status.proxyImportConfigFirstPeer":
+    "Sie enthält {{count}} Peers; nur der erste wurde importiert.",
+  "status.proxyImportConfigIgnored":
+    "{{keys}} ignoriert, da ein Tunnel-Proxy dies nicht verwendet.",
+  "settings.proxyValidationWireguardPrivateKey":
+    "WireGuard benötigt einen privaten Schlüssel.",
+  "settings.proxyValidationWireguardPeerPublicKey":
+    "WireGuard benötigt den öffentlichen Schlüssel der Gegenstelle.",
+  "settings.proxyValidationWireguardAddresses":
+    "WireGuard benötigt mindestens eine Schnittstellenadresse, zum Beispiel 10.6.0.2/32.",
+  "settings.proxyValidationWireguardKeyShape":
+    "{{field}} sieht nicht wie ein WireGuard-Schlüssel aus: Sie sind 32 Bytes Base64, genau so, wie `wg genkey` sie ausgibt (44 Zeichen, die auf `=` enden).",
+  "settings.proxyValidationWireguardMtu":
+    "Die Tunnel-MTU muss zwischen {{min}} und {{max}} liegen.",
+  "settings.proxyValidationWireguardKeepalive":
+    "Keepalive ist eine ganze Zahl von Sekunden; 0 schaltet es ab.",
   "status.proxyTunnelPublicKeyCopied": "Öffentlicher Schlüssel kopiert.",
-  "status.proxyTunnelPublicKeyCopyFailed": "Der öffentliche Schlüssel konnte nicht kopiert werden.",
+  "status.proxyTunnelPublicKeyCopyFailed":
+    "Der öffentliche Schlüssel konnte nicht kopiert werden.",
   "settings.qualityProfiles": "Qualitätsprofile",
   "settings.downloadClients": "Download-Clients",
   "settings.downloadClientRouting": "Download-Client-Routing",
@@ -469,7 +590,8 @@ const de: LocaleDictionary = {
   "jobs.noRunsYet": "Noch keine Ausführungen protokolliert.",
   "jobs.healthCheckIssues": "Probleme bei der Gesundheitsprüfung",
   "jobs.fullHashBackfillFailures": "Dateien, die nicht gehasht werden konnten",
-  "jobs.fullHashBackfillFailuresMore": "…und {{count}} weitere, nicht aufgeführt",
+  "jobs.fullHashBackfillFailuresMore":
+    "…und {{count}} weitere, nicht aufgeführt",
   "jobs.nextRunPrefix": "Nächste Ausführung: {{value}}",
   "jobs.startedAt": "Gestartet {{value}}",
   "jobs.completedAt": "Abgeschlossen {{value}}",
@@ -481,6 +603,10 @@ const de: LocaleDictionary = {
   "jobs.column.status": "Status",
   "jobs.action.run": "Ausführen",
   "jobs.action.runNow": "Jetzt ausführen",
+  "jobs.cancelSearchRequested":
+    "Abbruch angefordert. Der aktuelle Suchschritt wird beendet, bevor die übrigen Schritte gestoppt werden.",
+  "jobs.cancelSearchNotRunning": "Diese Suche läuft nicht mehr.",
+  "jobs.cancelSearchFailed": "Die Suche konnte nicht abgebrochen werden.",
   "jobs.status.idle": "Inaktiv",
   "jobs.status.queued": "In Warteschlange",
   "jobs.status.discovering": "Erkennung läuft",
@@ -494,7 +620,8 @@ const de: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "Systemintern",
   "deletePreview.counting": "Anzahl der zu löschenden Dateien...",
   "deletePreview.error": "Die Löschvorschau kann nicht vorbereitet werden.",
-  "deletePreview.folderUnknown": "Scryer kann nicht erkennen, welcher Ordner die Dateien dieses Titels enthält, und löscht daher nichts von der Festplatte.",
+  "deletePreview.folderUnknown":
+    "Scryer kann nicht erkennen, welcher Ordner die Dateien dieses Titels enthält, und löscht daher nichts von der Festplatte.",
   "deletePreview.removeFromCatalogOnly": "Nur aus dem Katalog entfernen",
   "deletePreview.files": "Dateien",
   "deletePreview.media": "Medien",
@@ -530,21 +657,30 @@ const de: LocaleDictionary = {
   "settings.delayProfiles": "Verzögerungsprofile",
   "settings.acquisition": "Beschaffung",
   "settings.acquisitionSaved": "Beschaffungseinstellungen gespeichert.",
-  "settings.acquisitionIntro": "RSS ist der dauerhafte Beschaffungsweg: Jeder gesuchte Eintrag wird einmal pro Indexer aktiv gesucht und danach über RSS überwacht. Das aktive Nachfüllen ist getaktet und endlich.",
+  "settings.acquisitionIntro":
+    "RSS ist der dauerhafte Beschaffungsweg: Jeder gesuchte Eintrag wird einmal pro Indexer aktiv gesucht und danach über RSS überwacht. Das aktive Nachfüllen ist getaktet und endlich.",
   "settings.acquisitionEnabled": "Automatische Beschaffung aktivieren",
-  "settings.acquisitionEnabledHelp": "Führt die Hintergrund-Beschaffungsschleife aus: Konvergenz-Suchläufe und RSS-Abgleich.",
+  "settings.acquisitionEnabledHelp":
+    "Führt die Hintergrund-Beschaffungsschleife aus: Konvergenz-Suchläufe und RSS-Abgleich.",
   "settings.acquisitionThresholds": "Upgrade-Schwellen",
-  "settings.acquisitionSameTierMinDelta": "Mindest-Punktabstand innerhalb derselben Stufe",
-  "settings.acquisitionSameTierMinDeltaHelp": "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
+  "settings.acquisitionSameTierMinDelta":
+    "Mindest-Punktabstand innerhalb derselben Stufe",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
   "settings.acquisitionConvergence": "Konvergenz & Taktung",
   "settings.acquisitionPollIntervalSeconds": "Abfrageintervall (Sekunden)",
-  "settings.acquisitionPollIntervalSecondsHelp": "Wie oft die Download-Clients auf fehlgeschlagene Downloads geprüft werden.",
-  "settings.acquisitionWalkIntervalSeconds": "Suchdurchlauf-Intervall (Sekunden)",
-  "settings.acquisitionWalkIntervalSecondsHelp": "Wie oft die Bibliothek auf fehlende und verbesserbare Medien geprüft und ein Stapel von Titeln durchsucht wird. Das Hinzufügen eines Titels, das Bearbeiten eines Qualitätsprofils und ähnliche Änderungen starten sofort einen Durchlauf. Ein Durchlauf läuft nie häufiger als das Abfrageintervall.",
+  "settings.acquisitionPollIntervalSecondsHelp":
+    "Wie oft die Download-Clients auf fehlgeschlagene Downloads geprüft werden.",
+  "settings.acquisitionWalkIntervalSeconds":
+    "Suchdurchlauf-Intervall (Sekunden)",
+  "settings.acquisitionWalkIntervalSecondsHelp":
+    "Wie oft die Bibliothek auf fehlende und verbesserbare Medien geprüft und ein Stapel von Titeln durchsucht wird. Das Hinzufügen eines Titels, das Bearbeiten eines Qualitätsprofils und ähnliche Änderungen starten sofort einen Durchlauf. Ein Durchlauf läuft nie häufiger als das Abfrageintervall.",
   "settings.acquisitionMaxScopesPerCycle": "Max. geprüfte Einträge pro Zyklus",
-  "settings.acquisitionMaxScopesPerCycleHelp": "Obergrenze der Auswertung je Nachfüllzyklus. Die tatsächliche Anfragerate bestimmen die Indexer-Limits, nicht dieser Wert.",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "Obergrenze der Auswertung je Nachfüllzyklus. Die tatsächliche Anfragerate bestimmen die Indexer-Limits, nicht dieser Wert.",
   "settings.acquisitionReconvergeDays": "Erneut abgleichen nach (Tagen)",
-  "settings.acquisitionReconvergeDaysHelp": "0 deaktiviert (empfohlen): Konvergierte Einträge werden über RSS überwacht. Nur als Notfall-Nachprüfung aktivieren, wenn ein Feed nachweislich unvollständig ist.",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0 deaktiviert (empfohlen): Konvergierte Einträge werden über RSS überwacht. Nur als Notfall-Nachprüfung aktivieren, wenn ein Feed nachweislich unvollständig ist.",
   "settings.delayProfileExisting": "Vorhandene Verzögerungsprofile",
   "settings.delayProfileNone":
     "Keine Verzögerungsprofile konfiguriert. Releases werden sofort abgerufen.",
@@ -577,14 +713,16 @@ const de: LocaleDictionary = {
   "settings.delayProfileBypassPlaceholder": "Leer lassen, um nie zu umgehen",
   "settings.delayProfileBypassHelp":
     "Wenn ein Release des bevorzugten Protokolls diesen Score erreicht oder überschreitet, wird es sofort abgerufen, unabhängig von der Verzögerung.",
-  "settings.delayProfileBypassHighestQualityLabel": "Verzögerung für höchste Qualität umgehen",
+  "settings.delayProfileBypassHighestQualityLabel":
+    "Verzögerung für höchste Qualität umgehen",
   "settings.delayProfileBypassHighestQualityHelp":
     "Das qualitativ beste berechtigte Release sofort abrufen, wenn es das bevorzugte Protokoll verwendet.",
   "settings.delayProfileFacetsLabel": "Gilt für",
   "settings.delayProfileFacetsHelp":
     "Für welche Inhaltstypen dieses Profil gilt. Alles deaktiviert lassen für alle Typen.",
   "settings.delayProfileLibrariesLabel": "Bibliotheken",
-  "settings.delayProfileLibrariesHelp": "Bibliotheken, für die dieses Profil gilt. Lass alle ausgewählt, damit es für jede Bibliothek gilt. Wird die letzte Bibliothek eines Profils gelöscht, wird das Profil deaktiviert.",
+  "settings.delayProfileLibrariesHelp":
+    "Bibliotheken, für die dieses Profil gilt. Lass alle ausgewählt, damit es für jede Bibliothek gilt. Wird die letzte Bibliothek eines Profils gelöscht, wird das Profil deaktiviert.",
   "settings.delayProfileUnknownLibrary": "Unbekannte Bibliothek",
   "settings.delayProfileAllFacets": "Alle",
   "settings.delayProfileTagsLabel": "Tags",
@@ -673,7 +811,8 @@ const de: LocaleDictionary = {
   "settings.indexerRoutingCategoriesPlaceholder": "Kategorien auswählen",
   "settings.indexerRoutingNoIndexers": "Keine Indexer gefunden.",
   "settings.indexerRoutingCustomCategories": "Eigene Codes",
-  "settings.indexerRoutingCustomCategoryPlaceholder": "Numerische ID aus den Indexer-Caps",
+  "settings.indexerRoutingCustomCategoryPlaceholder":
+    "Numerische ID aus den Indexer-Caps",
   "settings.indexerRoutingCustomCategoryAdd": "Hinzufügen",
   "settings.indexerRoutingIndexerCategories": "Auch auf diesem Indexer",
   "settings.indexerCategorySeries": "Series",
@@ -707,7 +846,8 @@ const de: LocaleDictionary = {
   "settings.renameSectionTitle": "Dateiumbenennnung",
   "settings.renameTokenTitle": "Titelname",
   "settings.renameTokenYear": "Erscheinungsjahr",
-  "settings.renameTokenTitleWithYear": "Titelname gefolgt vom Jahr, das nur angehängt wird, wenn der Name nicht bereits damit endet",
+  "settings.renameTokenTitleWithYear":
+    "Titelname gefolgt vom Jahr, das nur angehängt wird, wenn der Name nicht bereits damit endet",
   "settings.renameTokenTitleWithoutYear": "Titelname ohne ein Jahr am Ende",
   "settings.renameTokenQuality": "Qualität (z.B. 1080p)",
   "settings.renameTokenEdition": "Ausgabe (z.B. Director's Cut)",
@@ -718,6 +858,9 @@ const de: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL-ID",
   "settings.renameTokenAnilistId": "AniList-ID",
   "settings.renameTokenSource": "Quelle (z.B. BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange": "Dynamikumfang (z.B. HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "Release-Revision (Proper/REPACK)",
+  "settings.renameTokenIs3d": "3D-Kennzeichen",
   "settings.renameTokenVideoCodec": "Video-Codec (z.B. x265)",
   "settings.renameTokenAudioCodec": "Audio-Codec (z.B. DTS)",
   "settings.renameTokenAudioChannels": "Audiokanäle (z.B. 5.1)",
@@ -748,13 +891,17 @@ const de: LocaleDictionary = {
   "settings.sectionTitle": "Einstellungen • {{section}}",
   "settings.generalText": "Allgemeine Anwendungseinstellungen.",
   "settings.verificationDepthTitle": "Überprüfung von Importkopien",
-  "settings.verificationDepthHelp": "Wie gründlich Scryer eine kopierte Datei prüft, bevor die Quelle angetastet wird.",
-  "settings.verificationDepthScope": "Gilt nur für Importkopien von Download-Clients. Bibliotheks- und Stammordnerverschiebungen werden unabhängig davon immer vollständig überprüft.",
+  "settings.verificationDepthHelp":
+    "Wie gründlich Scryer eine kopierte Datei prüft, bevor die Quelle angetastet wird.",
+  "settings.verificationDepthScope":
+    "Gilt nur für Importkopien von Download-Clients. Bibliotheks- und Stammordnerverschiebungen werden unabhängig davon immer vollständig überprüft.",
   "settings.verificationDepthLabel": "Prüftiefe",
   "settings.verificationDepthFull": "Vollständiges Zurücklesen",
-  "settings.verificationDepthFullHelp": "Liest die Kopie vollständig zurück und vergleicht sie mit der während des Kopierens erzeugten Prüfsumme.",
+  "settings.verificationDepthFullHelp":
+    "Liest die Kopie vollständig zurück und vergleicht sie mit der während des Kopierens erzeugten Prüfsumme.",
   "settings.verificationDepthQuick": "Schnelle Prüfung (Standard)",
-  "settings.verificationDepthQuickHelp": "Vergleicht die Dateigröße sowie stichprobenartig Anfang und Ende der Datei. Schneller, aber eine schwächere Garantie.",
+  "settings.verificationDepthQuickHelp":
+    "Vergleicht die Dateigröße sowie stichprobenartig Anfang und Ende der Datei. Schneller, aber eine schwächere Garantie.",
   "settings.verificationDepthSaved": "Prüftiefe gespeichert.",
   "settings.generalPlaceholder":
     "Sprache und andere globale Einstellungen konfigurieren.",
@@ -825,7 +972,8 @@ const de: LocaleDictionary = {
   "search.add": "Hinzufügen",
   "search.addToAnotherLibrary": "Zu einer weiteren Bibliothek hinzufügen",
   "search.requestForAnotherLibrary": "Für eine weitere Bibliothek anfragen",
-  "search.chooseLibraryToView": "Bibliothek wählen, in der {{name}} angezeigt wird",
+  "search.chooseLibraryToView":
+    "Bibliothek wählen, in der {{name}} angezeigt wird",
   "search.footerTip":
     "Nicht gefunden? Versuche einen anderen Begriff oder prüfe deine Indexer.",
   "search.searchTips": "Suchtipps",
@@ -957,7 +1105,6 @@ const de: LocaleDictionary = {
   "title.episodeRange": "Folgen {{start}} - {{end}}",
   "title.episodeCountOne": "{{count}} Folge",
   "title.episodeCountOther": "{{count}} Folgen",
-  "title.searchingReleases": "Indexer werden nach Releases durchsucht…",
   "title.noReleasesFound": "Keine Releases für {{name}} gefunden.",
   "title.searchNeedsDownloadClientTitle":
     "Suche erfordert einen Download-Client",
@@ -1137,7 +1284,8 @@ const de: LocaleDictionary = {
   "queue.manualImportQueued": "Manueller Import eingereiht.",
   "queue.manualImportFailed": "Manueller Import fehlgeschlagen.",
   "queue.manualImportMultipleEpisodes": "Mehrere Episoden in dieser Datei",
-  "queue.manualImportMultipleEpisodesLabel": "Dieser Datei mehrere Episoden zuweisen",
+  "queue.manualImportMultipleEpisodesLabel":
+    "Dieser Datei mehrere Episoden zuweisen",
   "queue.manualImportApplySuggestions": "Vorschläge auf alle anwenden",
   "queue.removeFailed": "Entfernen fehlgeschlagen",
   "queue.manualImportTooltip":
@@ -1170,31 +1318,53 @@ const de: LocaleDictionary = {
   "queue.ignoreFailed": "Download konnte nicht ignoriert werden.",
   "queue.releaseHeldSources": "Zurückgehaltene Quellen freigeben",
   "queue.releaseHeldSourcesConfirmTitle": "Zurückgehaltene Quellen freigeben?",
-  "queue.releaseHeldSourcesConfirmDescription": "{{download}} in {{client}} wurde importiert, die Quellen werden aber weiterhin zurückgehalten. Beim Freigeben wird die Sperre für jeden Import dieses Downloads aufgehoben. Temporäre Entpackordner werden nur gelöscht, wenn jedes Video darin importiert wurde und nichts anderes sie verwendet.",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}} entfernt abgeschlossene Downloads. Sobald Scryer den Import bestätigt, werden dieser Download und seine Dateien aus dem Download-Client entfernt.",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}} behält abgeschlossene Downloads, daher bleibt dieser Download im Download-Client.",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{download}} in {{client}} wurde importiert, die Quellen werden aber weiterhin zurückgehalten. Beim Freigeben wird die Sperre für jeden Import dieses Downloads aufgehoben. Temporäre Entpackordner werden nur gelöscht, wenn jedes Video darin importiert wurde und nichts anderes sie verwendet.",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}} entfernt abgeschlossene Downloads. Sobald Scryer den Import bestätigt, werden dieser Download und seine Dateien aus dem Download-Client entfernt.",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}} behält abgeschlossene Downloads, daher bleibt dieser Download im Download-Client.",
   "queue.releaseHeldSourcesSuccess": "Zurückgehaltene Quellen freigegeben.",
-  "queue.releaseHeldSourcesFailed": "Zurückgehaltene Quellen konnten nicht freigegeben werden.",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "Die Quellen werden für Untertitel zurückgehalten, die noch Aufmerksamkeit brauchen. Beim Freigeben wird nicht länger gewartet und die Warnung entfernt.",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "Die Quellen werden zurückgehalten, weil das Entfernen der durch diesen Import ersetzten Dateien nicht abgeschlossen wurde.",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "Das Entpacken der Archive ist für diesen Download fehlgeschlagen, und die nicht entpackten Archive wurden nie importiert. Die Freigabe markiert den Download nur dann als importiert, sodass der Download-Client ihn entfernen kann, wenn nachgewiesen ist, dass jede erwartete Datei importiert wurde; alles, was nie importiert wurde, wird mit ihm entfernt.",
-  "queue.releaseHeldSourcesReasonUnknown": "Scryer hat keinen Eintrag, warum diese Quellen zurückgehalten werden. Die Freigabe markiert den Download nur dann als importiert, sodass der Download-Client ihn entfernen kann, wenn nachgewiesen ist, dass jede erwartete Datei importiert wurde; alles darin, was nie importiert wurde, wird mit ihm entfernt.",
+  "queue.releaseHeldSourcesFailed":
+    "Zurückgehaltene Quellen konnten nicht freigegeben werden.",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "Die Quellen werden für Untertitel zurückgehalten, die noch Aufmerksamkeit brauchen. Beim Freigeben wird nicht länger gewartet und die Warnung entfernt.",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "Die Quellen werden zurückgehalten, weil das Entfernen der durch diesen Import ersetzten Dateien nicht abgeschlossen wurde.",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "Das Entpacken der Archive ist für diesen Download fehlgeschlagen, und die nicht entpackten Archive wurden nie importiert. Die Freigabe markiert den Download nur dann als importiert, sodass der Download-Client ihn entfernen kann, wenn nachgewiesen ist, dass jede erwartete Datei importiert wurde; alles, was nie importiert wurde, wird mit ihm entfernt.",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "Scryer hat keinen Eintrag, warum diese Quellen zurückgehalten werden. Die Freigabe markiert den Download nur dann als importiert, sodass der Download-Client ihn entfernen kann, wenn nachgewiesen ist, dass jede erwartete Datei importiert wurde; alles darin, was nie importiert wurde, wird mit ihm entfernt.",
   "queue.releaseHeldSourcesTitles": "Diese Freigabe umfasst: {{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}} entfernt abgeschlossene Downloads, sobald ihre Seeding-Anforderungen erfüllt sind. Sobald Scryer den Import bestätigt, werden dieser Download und seine Dateien nach dem Seeding entfernt.",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "Scryer konnte nicht ermitteln, was {{client}} nach der Freigabe mit diesem Download macht.",
-  "queue.releaseHeldSourcesAwaitingImport": "Zurückgehaltene Quellen freigegeben. Der Download ist nicht vollständig importiert, daher wurde er erneut zum Import gegeben und nichts entfernt.",
-  "queue.releaseHeldSourcesNotSettled": "Zurückgehaltene Quellen freigegeben, aber der Download konnte nicht aktualisiert werden. Zum Abschließen erneut freigeben.",
-  "queue.releaseHeldSourcesUnproven": "Zurückgehaltene Quellen freigegeben, aber nichts belegt, dass jede Datei des Downloads importiert wurde. Er wurde daher nicht als importiert markiert, und nichts wurde bereinigt. Den Rest importieren oder den Download selbst entfernen.",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "Zurückgehaltene Quellen freigegeben, aber der Download wurde nicht abgeschlossen und nichts wurde bereinigt.",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "Einige temporäre Entpackordner wurden behalten: {{reasons}}.",
-  "queue.releaseHeldSourcesPreservedNotOwned": "Besitz konnte nicht bestätigt werden",
-  "queue.releaseHeldSourcesPreservedUnsafe": "unerwarteter oder unlesbarer Inhalt",
-  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "enthält ein nie importiertes Video",
-  "queue.releaseHeldSourcesPreservedInUse": "wird noch von einem anderen Import benötigt",
-  "queue.releaseHeldSourcesPreservedUnverified": "importierte Dateien konnten nicht bestätigt werden",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}} entfernt abgeschlossene Downloads, sobald ihre Seeding-Anforderungen erfüllt sind. Sobald Scryer den Import bestätigt, werden dieser Download und seine Dateien nach dem Seeding entfernt.",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "Scryer konnte nicht ermitteln, was {{client}} nach der Freigabe mit diesem Download macht.",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "Zurückgehaltene Quellen freigegeben. Der Download ist nicht vollständig importiert, daher wurde er erneut zum Import gegeben und nichts entfernt.",
+  "queue.releaseHeldSourcesNotSettled":
+    "Zurückgehaltene Quellen freigegeben, aber der Download konnte nicht aktualisiert werden. Zum Abschließen erneut freigeben.",
+  "queue.releaseHeldSourcesUnproven":
+    "Zurückgehaltene Quellen freigegeben, aber nichts belegt, dass jede Datei des Downloads importiert wurde. Er wurde daher nicht als importiert markiert, und nichts wurde bereinigt. Den Rest importieren oder den Download selbst entfernen.",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "Zurückgehaltene Quellen freigegeben, aber der Download wurde nicht abgeschlossen und nichts wurde bereinigt.",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "Einige temporäre Entpackordner wurden behalten: {{reasons}}.",
+  "queue.releaseHeldSourcesPreservedNotOwned":
+    "Besitz konnte nicht bestätigt werden",
+  "queue.releaseHeldSourcesPreservedUnsafe":
+    "unerwarteter oder unlesbarer Inhalt",
+  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo":
+    "enthält ein nie importiertes Video",
+  "queue.releaseHeldSourcesPreservedInUse":
+    "wird noch von einem anderen Import benötigt",
+  "queue.releaseHeldSourcesPreservedUnverified":
+    "importierte Dateien konnten nicht bestätigt werden",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "Entfernen fehlgeschlagen",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "der Download wurde nicht als importiert bestätigt",
-  "queue.releaseHeldSourcesPreservedLookupIncomplete": "nicht jeder Ordner konnte geprüft werden",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "der Download wurde nicht als importiert bestätigt",
+  "queue.releaseHeldSourcesPreservedLookupIncomplete":
+    "nicht jeder Ordner konnte geprüft werden",
   "queue.pause": "Pausieren",
   "queue.pauseSuccess": "Download pausiert.",
   "queue.pauseFailed": "Download konnte nicht pausiert werden.",
@@ -1203,7 +1373,8 @@ const de: LocaleDictionary = {
   "queue.resumeFailed": "Download konnte nicht fortgesetzt werden.",
   "queue.deleting": "Wird gelöscht…",
   "queue.deleteQueued": "Entfernung aus dem Downloader eingereiht.",
-  "queue.deleteFailed": "Download konnte nicht aus dem Downloader entfernt werden.",
+  "queue.deleteFailed":
+    "Download konnte nicht aus dem Downloader entfernt werden.",
   "queue.removeFromDownloader": "Aus dem Downloader entfernen",
   "queue.deleteConfirmTitle": "Aus dem Downloader entfernen",
   "queue.deleteConfirmDescription":
@@ -1211,7 +1382,8 @@ const de: LocaleDictionary = {
   "queue.manualUnavailableForResult":
     "Manuelles Queueing ist für dieses Ergebnis nicht verfügbar.",
   "importHistory.retry": "Import erneut versuchen",
-  "importHistory.retryHelp": "Prüft bereits heruntergeladene Dateien erneut anhand der aktuellen Zuordnung und des aktuellen Qualitätsprofils. Startet keinen neuen Download.",
+  "importHistory.retryHelp":
+    "Prüft bereits heruntergeladene Dateien erneut anhand der aktuellen Zuordnung und des aktuellen Qualitätsprofils. Startet keinen neuen Download.",
   "importHistory.retryWithPassword": "Import mit Passwort erneut versuchen",
   "importHistory.passwordRequired": "Passwort erforderlich",
   "importHistory.passwordPlaceholder": "Archiv-Passwort",
@@ -1251,7 +1423,8 @@ const de: LocaleDictionary = {
   "settings.indexerStatus": "Status",
   "settings.indexerDisabledUntil": "Zurückstellung {{time}}",
   "settings.indexerCoolingDownUntil": "Pausiert · Fortsetzung {{time}}",
-  "settings.indexerCoolingDownHelp": "Der Indexer hat Scryer gebeten, langsamer zu werden. Die Suche wird automatisch fortgesetzt.",
+  "settings.indexerCoolingDownHelp":
+    "Der Indexer hat Scryer gebeten, langsamer zu werden. Die Suche wird automatisch fortgesetzt.",
   "settings.indexerLastError": "Fehler {{time}}",
   "settings.indexerLastSearched": "Gesucht {{time}}",
   "settings.indexerNoActivity": "Keine Aktivität",
@@ -1260,22 +1433,31 @@ const de: LocaleDictionary = {
   "settings.indexerFilterPlaceholder": "Nach Anbietertyp filtern",
   "settings.noIndexersFound": "Keine Indexer gefunden.",
   "settings.indexerConfig": "Plugin-Konfiguration",
-  "settings.indexerDynamicFieldsLoading": "Felder für diese Auswahl werden geladen…",
-  "settings.indexerDynamicFieldsError": "Die Felder für diese Auswahl konnten nicht geladen werden: {{error}}",
+  "settings.indexerDynamicFieldsLoading":
+    "Felder für diese Auswahl werden geladen…",
+  "settings.indexerDynamicFieldsError":
+    "Die Felder für diese Auswahl konnten nicht geladen werden: {{error}}",
   "settings.indexerLoginChallengeLoading": "Anmeldebild wird geladen…",
   "settings.indexerLoginChallengeImageAlt": "Anmeldebild",
-  "settings.indexerLoginChallengeError": "Das Anmeldebild konnte nicht geladen werden: {{error}}",
+  "settings.indexerLoginChallengeError":
+    "Das Anmeldebild konnte nicht geladen werden: {{error}}",
   "settings.indexerLoginChallengeRefresh": "Neues Bild",
-  "settings.indexerLoginChallengeRefusal.malformed": "Das Anmeldebild des Plugins konnte nicht gelesen werden.",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "Dieser Indexer verlangt eine Art von Anmeldeprüfung, die Scryer nicht anzeigen kann.",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "Das Anmeldebild hat ein Format, das Scryer nicht anzeigt.",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "Das Anmeldebild ist zu groß zum Anzeigen.",
+  "settings.indexerLoginChallengeRefusal.malformed":
+    "Das Anmeldebild des Plugins konnte nicht gelesen werden.",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "Dieser Indexer verlangt eine Art von Anmeldeprüfung, die Scryer nicht anzeigen kann.",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "Das Anmeldebild hat ein Format, das Scryer nicht anzeigt.",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "Das Anmeldebild ist zu groß zum Anzeigen.",
   "settings.newPassword": "Neues Passwort",
   "settings.rules": "Benutzerdefinierte Regeln",
   "settings.noRulesFound": "Keine benutzerdefinierten Regeln konfiguriert.",
   "settings.trashPacksTitle": "TRaSH-Guides-Locale-Pakete",
-  "settings.trashPacksHelp": "Reine Bewertungspakete aus den TRaSH Guides. Wählen Sie ein Paket aus, um seine vordefinierte Locale-Richtlinie anzuwenden.",
-  "settings.trashPackFrenchConflict": "„{{name}}“ ist bereits aktiviert. Zuerst deaktivieren, bevor ein anderes Französisch-Paket aktiviert wird.",
+  "settings.trashPacksHelp":
+    "Reine Bewertungspakete aus den TRaSH Guides. Wählen Sie ein Paket aus, um seine vordefinierte Locale-Richtlinie anzuwenden.",
+  "settings.trashPackFrenchConflict":
+    "„{{name}}“ ist bereits aktiviert. Zuerst deaktivieren, bevor ein anderes Französisch-Paket aktiviert wird.",
   "settings.ruleCreate": "Regel erstellen",
   "settings.ruleUpdate": "Regel aktualisieren",
   "settings.ruleDescription": "Beschreibung",
@@ -1373,7 +1555,8 @@ const de: LocaleDictionary = {
   "settings.plugins": "Plugins",
   "settings.scripts": "Skripte",
   "settings.pluginsRefresh": "Registry aktualisieren",
-  "settings.pluginAutoUpdateEnabled": "Plugin-Patches automatisch aktualisieren",
+  "settings.pluginAutoUpdateEnabled":
+    "Plugin-Patches automatisch aktualisieren",
   "settings.pluginAutoUpdateEnabledHelp":
     "Wenn aktiviert, aktualisiert der geplante Job „Plugin Catalog Refresh“ (oder dessen manuelle Ausführung) offizielle Plugins auf ihre neueste Patch-Version, z. B. 1.0.1 → 1.0.2, und installiert optimierte Builds der installierten Version, sofern eine verfügbar ist. Minor- und Major-Versionen bleiben in der Hand des Betreibers.",
   "settings.host": "Host",
@@ -1429,7 +1612,8 @@ const de: LocaleDictionary = {
     "Plugin '{{name}}' wurde auf die integrierte Version zurückgesetzt.",
   "status.pluginUninstalled": "Plugin '{{name}}' deinstalliert.",
   "status.pluginUpgraded": "Plugin '{{name}}' auf v{{version}} aktualisiert.",
-  "status.pluginAutoUpdateSettingsSaved": "Einstellung für automatische Plugin-Updates gespeichert.",
+  "status.pluginAutoUpdateSettingsSaved":
+    "Einstellung für automatische Plugin-Updates gespeichert.",
   "status.pluginToggled": "Plugin '{{name}}' {{state}}.",
   "form.indexerNamePlaceholder": "Mein Newznab-Indexer",
   "form.providerTypePlaceholder": "Anbietertyp",
@@ -1640,7 +1824,8 @@ const de: LocaleDictionary = {
   "status.editingIndexer": "Indexer {{name}} bearbeiten",
   "status.editingDownloadClient": "Download-Client {{name}} bearbeiten",
   "status.deletingUser": "Benutzer {{name}} löschen?",
-  "status.deletingUserListsWarning": "Die Listen, denen dieser Benutzer folgt, und ihr Synchronisierungsverlauf werden ebenfalls gelöscht.",
+  "status.deletingUserListsWarning":
+    "Die Listen, denen dieser Benutzer folgt, und ihr Synchronisierungsverlauf werden ebenfalls gelöscht.",
   "status.deletingIndexer": "Indexer {{name}} löschen?",
   "status.userRequired": "Benutzername und Passwort sind erforderlich.",
   "status.passwordRequired": "Passwort ist erforderlich.",
@@ -1657,32 +1842,54 @@ const de: LocaleDictionary = {
   "status.titleMonitoringEnabled": "Titelüberwachung aktiviert.",
   "status.titleMonitoringDisabled": "Titelüberwachung deaktiviert.",
   "status.indexerDeleted": "Indexer {{name}} gelöscht.",
-  "plugins.failure.invalidConfig": "Das Plugin kann diese Einstellungen nicht verwenden. Prüfe sie und versuche es erneut.",
-  "plugins.failure.authFailed": "Der Dienst hat die Anmeldedaten abgelehnt. Prüfe den API-Schlüssel, den Benutzernamen oder das Passwort.",
-  "plugins.failure.rateLimited": "Der Dienst hat Scryer gebeten, langsamer zu werden. Versuche es in Kürze erneut.",
-  "plugins.failure.upstreamUnavailable": "Der Dienst war nicht erreichbar oder hat nicht geantwortet. Prüfe die Adresse und versuche es erneut.",
+  "plugins.failure.invalidConfig":
+    "Das Plugin kann diese Einstellungen nicht verwenden. Prüfe sie und versuche es erneut.",
+  "plugins.failure.authFailed":
+    "Der Dienst hat die Anmeldedaten abgelehnt. Prüfe den API-Schlüssel, den Benutzernamen oder das Passwort.",
+  "plugins.failure.rateLimited":
+    "Der Dienst hat Scryer gebeten, langsamer zu werden. Versuche es in Kürze erneut.",
+  "plugins.failure.upstreamUnavailable":
+    "Der Dienst war nicht erreichbar oder hat nicht geantwortet. Prüfe die Adresse und versuche es erneut.",
   "plugins.failure.unsupported": "Das Plugin unterstützt das nicht.",
-  "plugins.failure.temporary": "Beim Plugin ist ein vorübergehendes Problem aufgetreten. Versuche es in Kürze erneut.",
-  "plugins.failure.permanent": "Das Plugin konnte diese Anfrage nicht ausführen. Ein erneuter Versuch hilft erst, wenn sich etwas ändert.",
-  "plugins.failure.hostFailure": "Das Plugin wurde unerwartet beendet. Details stehen im Scryer-Protokoll.",
-  "plugins.failure.timedOut": "Das Plugin hat zu lange für eine Antwort gebraucht.",
+  "plugins.failure.temporary":
+    "Beim Plugin ist ein vorübergehendes Problem aufgetreten. Versuche es in Kürze erneut.",
+  "plugins.failure.permanent":
+    "Das Plugin konnte diese Anfrage nicht ausführen. Ein erneuter Versuch hilft erst, wenn sich etwas ändert.",
+  "plugins.failure.hostFailure":
+    "Das Plugin wurde unerwartet beendet. Details stehen im Scryer-Protokoll.",
+  "plugins.failure.timedOut":
+    "Das Plugin hat zu lange für eine Antwort gebraucht.",
   "plugins.failure.resourceLimit": "Dem Plugin ist der Speicher ausgegangen.",
   "plugins.failure.withDetail": "{{reason}} Details: {{detail}}",
-  "plugins.failure.invalidUsernamePassword": "Der Dienst hat den Benutzernamen oder das Passwort abgelehnt. Prüfe beides und versuche es erneut.",
-  "plugins.failure.invalidApiKey": "Der Dienst hat den API-Schlüssel abgelehnt. Prüfe den Schlüssel und versuche es erneut.",
-  "plugins.failure.invalidPasskey": "Der Dienst hat den Passkey abgelehnt. Prüfe den Passkey und versuche es erneut.",
-  "plugins.failure.invalidCookie": "Der Dienst hat das Sitzungscookie abgelehnt. Kopiere ein neues Cookie aus deinem Browser und versuche es erneut.",
-  "plugins.failure.captchaRequired": "Der Dienst verlangt ein CAPTCHA. Melde dich einmal auf seiner Website an und versuche es dann erneut.",
-  "plugins.failure.twoFactorRequired": "Der Dienst verlangt für diese Anmeldung einen Zwei-Faktor-Code. Verwende stattdessen einen API-Schlüssel oder ein App-Passwort.",
-  "plugins.failure.accountBanned": "Der Dienst hat dieses Konto gesperrt. Wende dich an den Dienst, um das zu klären.",
-  "plugins.failure.accountDisabled": "Der Dienst hat dieses Konto deaktiviert. Prüfe das Konto auf der Website des Dienstes.",
-  "plugins.failure.endpointNotFound": "Unter dieser Adresse wurde der Dienst nicht gefunden. Prüfe die URL und den Basispfad.",
-  "plugins.failure.tlsError": "Die sichere Verbindung zum Dienst ist fehlgeschlagen. Prüfe die Adresse und ihr Zertifikat.",
-  "plugins.failure.invalidResponse": "Der Dienst hat eine Antwort gesendet, die das Plugin nicht lesen konnte. Prüfe, ob die Adresse auf den richtigen Dienst zeigt.",
-  "plugins.failure.quotaExceeded": "Das Konto hat sein Kontingent beim Dienst aufgebraucht. Warte, bis es zurückgesetzt wird, oder erhöhe das Limit.",
+  "plugins.failure.invalidUsernamePassword":
+    "Der Dienst hat den Benutzernamen oder das Passwort abgelehnt. Prüfe beides und versuche es erneut.",
+  "plugins.failure.invalidApiKey":
+    "Der Dienst hat den API-Schlüssel abgelehnt. Prüfe den Schlüssel und versuche es erneut.",
+  "plugins.failure.invalidPasskey":
+    "Der Dienst hat den Passkey abgelehnt. Prüfe den Passkey und versuche es erneut.",
+  "plugins.failure.invalidCookie":
+    "Der Dienst hat das Sitzungscookie abgelehnt. Kopiere ein neues Cookie aus deinem Browser und versuche es erneut.",
+  "plugins.failure.captchaRequired":
+    "Der Dienst verlangt ein CAPTCHA. Melde dich einmal auf seiner Website an und versuche es dann erneut.",
+  "plugins.failure.twoFactorRequired":
+    "Der Dienst verlangt für diese Anmeldung einen Zwei-Faktor-Code. Verwende stattdessen einen API-Schlüssel oder ein App-Passwort.",
+  "plugins.failure.accountBanned":
+    "Der Dienst hat dieses Konto gesperrt. Wende dich an den Dienst, um das zu klären.",
+  "plugins.failure.accountDisabled":
+    "Der Dienst hat dieses Konto deaktiviert. Prüfe das Konto auf der Website des Dienstes.",
+  "plugins.failure.endpointNotFound":
+    "Unter dieser Adresse wurde der Dienst nicht gefunden. Prüfe die URL und den Basispfad.",
+  "plugins.failure.tlsError":
+    "Die sichere Verbindung zum Dienst ist fehlgeschlagen. Prüfe die Adresse und ihr Zertifikat.",
+  "plugins.failure.invalidResponse":
+    "Der Dienst hat eine Antwort gesendet, die das Plugin nicht lesen konnte. Prüfe, ob die Adresse auf den richtigen Dienst zeigt.",
+  "plugins.failure.quotaExceeded":
+    "Das Konto hat sein Kontingent beim Dienst aufgebraucht. Warte, bis es zurückgesetzt wird, oder erhöhe das Limit.",
   "plugins.failure.itemNotFound": "Der Dienst hat dieses Element nicht mehr.",
-  "plugins.failure.downloadRejected": "Der Download-Client hat diesen Download abgelehnt.",
-  "plugins.failure.pathNotWritable": "Das Plugin konnte nicht in den konfigurierten Ordner schreiben. Prüfe, ob er existiert und beschreibbar ist.",
+  "plugins.failure.downloadRejected":
+    "Der Download-Client hat diesen Download abgelehnt.",
+  "plugins.failure.pathNotWritable":
+    "Das Plugin konnte nicht in den konfigurierten Ordner schreiben. Prüfe, ob er existiert und beschreibbar ist.",
   "plugins.failure.unknown": "Das Plugin hat ein Problem gemeldet: {{code}}.",
   "status.testingIndexerConnection": "Verbindung wird getestet…",
   "status.indexerConnectionTestPassed": "Indexer-Verbindungstest bestanden.",
@@ -1701,8 +1908,10 @@ const de: LocaleDictionary = {
     "{{client}}-Verbindungstest bestanden.",
   "status.downloadClientConnectionTestFailed":
     "{{client}}-Verbindungstest fehlgeschlagen.",
-  "status.autoSearchNoCandidates": "Kein Release für {{name}} gefunden: kein Indexer hat einen Kandidaten geliefert. Prüfe die Indexer-Routing-Kategorien und den Indexer-Status.",
-  "status.autoSearchAllRejected": "Kein Release für {{name}} gefunden: Die automatische Suche hat alle {{count}} Kandidaten abgelehnt. {{reasons}}",
+  "status.autoSearchNoCandidates":
+    "Kein Release für {{name}} gefunden: kein Indexer hat einen Kandidaten geliefert. Prüfe die Indexer-Routing-Kategorien und den Indexer-Status.",
+  "status.autoSearchAllRejected":
+    "Kein Release für {{name}} gefunden: Die automatische Suche hat alle {{count}} Kandidaten abgelehnt. {{reasons}}",
   "status.queueFailed": "Warteschlangen-Operation fehlgeschlagen.",
   "status.apiError": "Anfrage fehlgeschlagen",
   "user.created": "Benutzer {{name}} erstellt.",
@@ -1729,14 +1938,18 @@ const de: LocaleDictionary = {
   "wanted.colIndexers": "Indexer",
   "wanted.convergence.searching": "Suche {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS-Überwachung",
-  "wanted.convergence.convergedHint": "Alle Indexer durchsucht — neue Releases kommen über RSS. Zum erneuten Prüfen eine Suche starten.",
+  "wanted.convergence.convergedHint":
+    "Alle Indexer durchsucht — neue Releases kommen über RSS. Zum erneuten Prüfen eine Suche starten.",
   "wanted.convergence.deferred": "Wartet auf Indexer-Kontingent",
-  "wanted.convergence.deferredHint": "Alle verbleibenden Indexer sind in Abkühlung oder ohne Kontingent; die Suche wird automatisch fortgesetzt.",
+  "wanted.convergence.deferredHint":
+    "Alle verbleibenden Indexer sind in Abkühlung oder ohne Kontingent; die Suche wird automatisch fortgesetzt.",
   "wanted.convergence.queuedHot": "Wartend · aktuell",
   "wanted.convergence.queuedCold": "Wartend · Longtail",
   "wanted.searchJobStarted": "Suche gestartet.",
-  "wanted.searchJobComplete": "Suche abgeschlossen: {{processed}} durchsucht, {{grabbed}} geholt, {{failed}} fehlgeschlagen.",
-  "wanted.searchJobCancelled": "Suche nach {{processed}} Einträgen abgebrochen; {{grabbed}} geholt.",
+  "wanted.searchJobComplete":
+    "Suche abgeschlossen: {{processed}} durchsucht, {{grabbed}} geholt, {{failed}} fehlgeschlagen.",
+  "wanted.searchJobCancelled":
+    "Suche nach {{processed}} Einträgen abgebrochen; {{grabbed}} geholt.",
   "wanted.colPhase": "Phase",
   "wanted.colScore": "Punktzahl",
   "wanted.searchNow": "Jetzt suchen",
@@ -1856,7 +2069,8 @@ const de: LocaleDictionary = {
   "settings.notificationEvent.listRequestSubmitted": "Listenanfrage gestellt",
   "settings.notificationEvent.listItemHeld": "Listeneintrag zurückgehalten",
   "settings.notificationEvent.listTitleLeft": "Titel hat Liste verlassen",
-  "settings.notificationEvent.listSyncFailed": "Listensynchronisierung fehlgeschlagen",
+  "settings.notificationEvent.listSyncFailed":
+    "Listensynchronisierung fehlgeschlagen",
   "settings.notificationEvent.listUnfollowed": "Liste nicht mehr gefolgt",
   "status.notificationChannelCreated": "Benachrichtigungskanal gespeichert.",
   "status.notificationChannelUpdated": "Benachrichtigungskanal aktualisiert.",
@@ -2006,6 +2220,7 @@ const de: LocaleDictionary = {
   "history.seedingStarted": "Seedet",
   "history.seedingCompleted": "Seeding beendet",
   "history.downloadIgnored": "Ignoriert",
+  "history.downloadMissing": "Im Client nicht sichtbar",
   "history.facet": "Kategorie",
   "history.actions": "Aktionen",
   "history.expandDetails": "Ereignisdetails erweitern",
@@ -2038,22 +2253,30 @@ const de: LocaleDictionary = {
   "status.recycleBinEmptied":
     "Papierkorb geleert ({{count}} Elemente entfernt).",
   "status.recycleBinSettingsSaved": "Papierkorbeinstellungen gespeichert.",
-  "settings.recycleBinPathExistingItems": "Beim Ändern des Ordners werden bereits recycelte Elemente in den neuen Ordner verschoben. Ein Element, das nicht verschoben werden kann, bleibt im bisherigen Ordner und wird nach dem Speichern hier aufgeführt.",
-  "settings.recycleBinRelocatedOne": "{{count}} recyceltes Element in den neuen Ordner verschoben.",
-  "settings.recycleBinRelocatedOther": "{{count}} recycelte Elemente in den neuen Ordner verschoben.",
-  "settings.recycleBinRelocationFailedOne": "{{count}} recyceltes Element konnte nicht verschoben werden:",
-  "settings.recycleBinRelocationFailedOther": "{{count}} recycelte Elemente konnten nicht verschoben werden:",
-  "status.recycleBinSettingsSavedWithRelocationFailures": "Papierkorbeinstellungen gespeichert, aber einige recycelte Elemente konnten nicht verschoben werden.",
+  "settings.recycleBinPathExistingItems":
+    "Beim Ändern des Ordners werden bereits recycelte Elemente in den neuen Ordner verschoben. Ein Element, das nicht verschoben werden kann, bleibt im bisherigen Ordner und wird nach dem Speichern hier aufgeführt.",
+  "settings.recycleBinRelocatedOne":
+    "{{count}} recyceltes Element in den neuen Ordner verschoben.",
+  "settings.recycleBinRelocatedOther":
+    "{{count}} recycelte Elemente in den neuen Ordner verschoben.",
+  "settings.recycleBinRelocationFailedOne":
+    "{{count}} recyceltes Element konnte nicht verschoben werden:",
+  "settings.recycleBinRelocationFailedOther":
+    "{{count}} recycelte Elemente konnten nicht verschoben werden:",
+  "status.recycleBinSettingsSavedWithRelocationFailures":
+    "Papierkorbeinstellungen gespeichert, aber einige recycelte Elemente konnten nicht verschoben werden.",
   "appUpgrade.title": "Anwendungsaktualisierung",
   "appUpgrade.subtitle": "Version und Aktualisierungsverwaltung",
   "appUpgrade.upgradeNow": "Jetzt aktualisieren",
   "appUpgrade.confirmTitle": "Anwendung aktualisieren?",
   "appUpgrade.confirmDescription": "Auf {{version}} aktualisieren?",
   "appUpgrade.confirmAction": "Aktualisierung starten",
-  "appUpgrade.restartNotice": "Scryer wird während der Aktualisierung neu gestartet.",
+  "appUpgrade.restartNotice":
+    "Scryer wird während der Aktualisierung neu gestartet.",
   "appUpgrade.uacNotice": "Windows zeigt eine lokale Berechtigungsabfrage an.",
   "appUpgrade.startFailed": "Aktualisierung konnte nicht gestartet werden.",
-  "appUpgrade.targetChanged": "Die verfügbare Aktualisierung hat sich geändert. Prüfen Sie sie und versuchen Sie es erneut.",
+  "appUpgrade.targetChanged":
+    "Die verfügbare Aktualisierung hat sich geändert. Prüfen Sie sie und versuchen Sie es erneut.",
   "appUpgrade.loading": "Aktualisierungsstatus wird geladen…",
   "appUpgrade.currentVersion": "Aktuelle Version",
   "appUpgrade.availableVersion": "Verfügbare Version",
@@ -2063,19 +2286,32 @@ const de: LocaleDictionary = {
   "appUpgrade.owner.inApp": "Scryer",
   "appUpgrade.owner.operator": "Betreiber",
   "appUpgrade.eligibility": "Aktualisierungsberechtigung",
-  "appUpgrade.eligibility.eligible": "Diese Installation kann in der Anwendung aktualisiert werden.",
-  "appUpgrade.eligibility.managed_by_docker": "Diese Installation wird von Docker verwaltet.",
-  "appUpgrade.eligibility.managed_by_homebrew": "Diese Installation wird von Homebrew verwaltet.",
-  "appUpgrade.eligibility.managed_by_winget": "Diese Installation wird von winget verwaltet.",
-  "appUpgrade.eligibility.windows_supervised": "Diese Windows-Installation wird extern verwaltet.",
-  "appUpgrade.eligibility.disabled_by_operator": "In-App-Aktualisierungen wurden vom Betreiber deaktiviert.",
-  "appUpgrade.eligibility.unsupported_layout": "Dieses Installationslayout wird nicht unterstützt.",
-  "appUpgrade.eligibility.install_dir_not_writable": "Das Installationsverzeichnis ist nicht beschreibbar.",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS führt Scryer aus einer temporären Kopie aus. Verschieben Sie Scryer in den Programme-Ordner und öffnen Sie es von dort.",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer läuft von einem schreibgeschützten Volume. Ziehen Sie Scryer in den Programme-Ordner und öffnen Sie es von dort.",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "Diese App wurde nicht von der Scryer-App gestartet und kann nach einer Aktualisierung nicht neu gestartet werden.",
-  "appUpgrade.eligibility.unknown": "Die Aktualisierungsberechtigung ist nicht verfügbar.",
-  "appUpgrade.rebootRequired": "Starten Sie Windows neu, um die Aktualisierung abzuschließen.",
+  "appUpgrade.eligibility.eligible":
+    "Diese Installation kann in der Anwendung aktualisiert werden.",
+  "appUpgrade.eligibility.managed_by_docker":
+    "Diese Installation wird von Docker verwaltet.",
+  "appUpgrade.eligibility.managed_by_homebrew":
+    "Diese Installation wird von Homebrew verwaltet.",
+  "appUpgrade.eligibility.managed_by_winget":
+    "Diese Installation wird von winget verwaltet.",
+  "appUpgrade.eligibility.windows_supervised":
+    "Diese Windows-Installation wird extern verwaltet.",
+  "appUpgrade.eligibility.disabled_by_operator":
+    "In-App-Aktualisierungen wurden vom Betreiber deaktiviert.",
+  "appUpgrade.eligibility.unsupported_layout":
+    "Dieses Installationslayout wird nicht unterstützt.",
+  "appUpgrade.eligibility.install_dir_not_writable":
+    "Das Installationsverzeichnis ist nicht beschreibbar.",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS führt Scryer aus einer temporären Kopie aus. Verschieben Sie Scryer in den Programme-Ordner und öffnen Sie es von dort.",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer läuft von einem schreibgeschützten Volume. Ziehen Sie Scryer in den Programme-Ordner und öffnen Sie es von dort.",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "Diese App wurde nicht von der Scryer-App gestartet und kann nach einer Aktualisierung nicht neu gestartet werden.",
+  "appUpgrade.eligibility.unknown":
+    "Die Aktualisierungsberechtigung ist nicht verfügbar.",
+  "appUpgrade.rebootRequired":
+    "Starten Sie Windows neu, um die Aktualisierung abzuschließen.",
   "appUpgrade.activeRun": "Aktualisierung läuft",
   "appUpgrade.latestRun": "Letzte Aktualisierung",
   "appUpgrade.runStatusLabel": "Status: {{status}}",
@@ -2097,14 +2333,18 @@ const de: LocaleDictionary = {
   "appUpgrade.downloadProgress": "{{downloaded}} von {{total}} heruntergeladen",
   "appUpgrade.downloadedBytes": "{{downloaded}} heruntergeladen",
   "appUpgrade.operatorGuidance": "Vom Betreiber verwaltete Aktualisierung",
-  "appUpgrade.guidance.winget": "Führen Sie diesen Befehl in einem erhöhten Terminal aus.",
+  "appUpgrade.guidance.winget":
+    "Führen Sie diesen Befehl in einem erhöhten Terminal aus.",
   "appUpgrade.guidance.wingetCommand": "winget upgrade ScryerMedia.Scryer",
-  "appUpgrade.guidance.docker": "Ziehen Sie das neue Image und erstellen Sie den Container mit Ihrer Bereitstellungskonfiguration neu.",
+  "appUpgrade.guidance.docker":
+    "Ziehen Sie das neue Image und erstellen Sie den Container mit Ihrer Bereitstellungskonfiguration neu.",
   "appUpgrade.guidance.homebrew": "Führen Sie diesen Befehl im Terminal aus.",
   "appUpgrade.guidance.homebrewCommand": "brew upgrade scryer",
-  "appUpgrade.guidance.disabled": "In-App-Aktualisierungen sind per Umgebungsvariable deaktiviert.",
+  "appUpgrade.guidance.disabled":
+    "In-App-Aktualisierungen sind per Umgebungsvariable deaktiviert.",
   "appUpgrade.guidance.disabledVariable": "SCRYER_DISABLE_SELF_UPGRADE",
-  "appUpgrade.guidance.other": "Verwenden Sie die vom Betreiber bereitgestellte Aktualisierungsmethode.",
+  "appUpgrade.guidance.other":
+    "Verwenden Sie die vom Betreiber bereitgestellte Aktualisierungsmethode.",
   "appUpgrade.installationKind.portable": "Portabel",
   "appUpgrade.installationKind.directMsi": "Direktes MSI",
   "appUpgrade.installationKind.macosAppBundle": "macOS-App",
@@ -2123,24 +2363,32 @@ const de: LocaleDictionary = {
   "settings.maintenanceNavRules": "Regeln",
   "settings.maintenanceNavHistory": "Verlauf",
   "settings.maintenanceRuleAction": "Aktion",
-  "settings.maintenanceRuleActionHelp": "Was diese Regel täte, sobald Wartungsaktionen aktiviert sind.",
+  "settings.maintenanceRuleActionHelp":
+    "Was diese Regel täte, sobald Wartungsaktionen aktiviert sind.",
   "settings.maintenanceRuleActionPlaceholder": "Aktion wählen",
-  "settings.maintenanceRuleNoActions": "Es sind keine titelbezogenen Aktionen verfügbar.",
+  "settings.maintenanceRuleNoActions":
+    "Es sind keine titelbezogenen Aktionen verfügbar.",
   "settings.maintenanceRuleGraceDays": "Karenztage",
-  "settings.maintenanceRuleGraceDaysHelp": "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",
+  "settings.maintenanceRuleGraceDaysHelp":
+    "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",
   "settings.maintenanceRuleTargetProfile": "Ziel-Qualitätsprofil",
-  "settings.maintenanceRuleTargetProfileHelp": "Das Profil, auf das diese Aktion übereinstimmende Titel umstellen würde.",
+  "settings.maintenanceRuleTargetProfileHelp":
+    "Das Profil, auf das diese Aktion übereinstimmende Titel umstellen würde.",
   "settings.maintenanceRuleTargetProfileIdHelp": "ID des Qualitätsprofils.",
   "settings.maintenanceRuleLibraries": "Bibliotheksbereich",
-  "settings.maintenanceRuleLibrariesHelp": "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
+  "settings.maintenanceRuleLibrariesHelp":
+    "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
   "settings.maintenanceRuleLibrariesAll": "Alle Bibliotheken",
   "settings.maintenanceRuleCreate": "Wartungsregel erstellen",
   "settings.maintenanceRuleUpdate": "Wartungsregel aktualisieren",
   "settings.maintenanceRuleCopy": "Als neue Regel kopieren",
   "settings.maintenanceRuleCreateNew": "Neue Wartungsregel erstellen",
-  "settings.maintenanceRuleValidationRequired": "Name, Matcher-Quelltext und eine Aktion sind erforderlich.",
-  "settings.maintenanceRuleConfirmDiscardTitle": "Nicht gespeicherte Änderungen verwerfen?",
-  "settings.maintenanceRuleConfirmDiscardDescription": "Der Wartungsregel-Editor enthält nicht gespeicherte Änderungen, die verloren gehen.",
+  "settings.maintenanceRuleValidationRequired":
+    "Name, Matcher-Quelltext und eine Aktion sind erforderlich.",
+  "settings.maintenanceRuleConfirmDiscardTitle":
+    "Nicht gespeicherte Änderungen verwerfen?",
+  "settings.maintenanceRuleConfirmDiscardDescription":
+    "Der Wartungsregel-Editor enthält nicht gespeicherte Änderungen, die verloren gehen.",
   "settings.maintenanceRuleDeleting": "Wartungsregel {{name}} löschen?",
   "settings.noMaintenanceRulesFound": "Noch keine Wartungsregeln.",
   "settings.maintenanceRuleRevision": "Revision",
@@ -2150,16 +2398,25 @@ const de: LocaleDictionary = {
   "settings.maintenanceRiskMedium": "Mittleres Risiko",
   "settings.maintenanceRiskHigh": "Hohes Risiko",
   "settings.maintenanceActionDoNothing": "Nichts tun",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles": "Bereich nicht mehr überwachen, Dateien behalten",
-  "settings.maintenanceActionDeleteTitleAndFiles": "Titel und zugehörige Dateien löschen",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles": "Titel nicht mehr überwachen, alle Dateien löschen",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles": "Serie nicht mehr überwachen, vorhandene Dateien löschen",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles": "Bereich nicht mehr überwachen, dessen Dateien löschen",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty": "Staffel nicht mehr überwachen, deren Dateien löschen und die Serie löschen, wenn sie leer ist",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty": "Staffel nicht mehr überwachen und die Serie nicht mehr überwachen, wenn sie leer ist",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged": "Qualitätsprofil ändern und suchen, wenn es sich geändert hat",
+  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+    "Bereich nicht mehr überwachen, Dateien behalten",
+  "settings.maintenanceActionDeleteTitleAndFiles":
+    "Titel und zugehörige Dateien löschen",
+  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+    "Titel nicht mehr überwachen, alle Dateien löschen",
+  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+    "Serie nicht mehr überwachen, vorhandene Dateien löschen",
+  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+    "Bereich nicht mehr überwachen, dessen Dateien löschen",
+  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+    "Staffel nicht mehr überwachen, deren Dateien löschen und die Serie löschen, wenn sie leer ist",
+  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+    "Staffel nicht mehr überwachen und die Serie nicht mehr überwachen, wenn sie leer ist",
+  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+    "Qualitätsprofil ändern und suchen, wenn es sich geändert hat",
   "settings.maintenancePreviewTitle": "Vorschau",
-  "settings.maintenancePreviewSubtitle": "Führen Sie den Matcher gegen echte Titel aus. Die Vorschau liest nur: Sie meldet, was übereinstimmen würde, und ändert nichts.",
+  "settings.maintenancePreviewSubtitle":
+    "Führen Sie den Matcher gegen echte Titel aus. Die Vorschau liest nur: Sie meldet, was übereinstimmen würde, und ändert nichts.",
   "settings.maintenancePreviewSource": "Matcher",
   "settings.maintenancePreviewSourceStored": "Gespeicherte Regel",
   "settings.maintenancePreviewSourceDraft": "Editor-Entwurf",
@@ -2169,7 +2426,8 @@ const de: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Bis zu {{max}} Titel pro Durchlauf.",
   "settings.maintenancePreviewRun": "Vorschau ausführen",
   "settings.maintenancePreviewRunning": "Vorschau läuft...",
-  "settings.maintenancePreviewEmpty": "Wählen Sie eine Bibliothek und führen Sie die Vorschau aus.",
+  "settings.maintenancePreviewEmpty":
+    "Wählen Sie eine Bibliothek und führen Sie die Vorschau aus.",
   "settings.maintenancePreviewNoTitles": "Es wurden keine Titel ausgewertet.",
   "settings.maintenancePreviewColOutcome": "Ergebnis",
   "settings.maintenancePreviewColReasons": "Begründungscodes",
@@ -2179,9 +2437,11 @@ const de: LocaleDictionary = {
   "settings.maintenancePreviewOutcomeError": "FEHLER",
   "settings.maintenancePreviewMeta": "Ausgewertet {{time}} · Matcher {{hash}}",
   "settings.maintenancePreviewRuleSelect": "Regel",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "Gespeicherte Regel auswählen",
+  "settings.maintenancePreviewRuleSelectPlaceholder":
+    "Gespeicherte Regel auswählen",
   "settings.maintenanceRuleUpdated": "Wartungsregel aktualisiert.",
-  "settings.maintenanceRuleCreated": "Wartungsregel erstellt und deaktiviert gespeichert.",
+  "settings.maintenanceRuleCreated":
+    "Wartungsregel erstellt und deaktiviert gespeichert.",
   "settings.maintenanceRuleDeleted": "Wartungsregel {{name}} gelöscht.",
 
   // ── Wartungsregeln — Instanzstatus ──
@@ -2192,11 +2452,16 @@ const de: LocaleDictionary = {
   "settings.maintenanceArmingNone": "Keine Wirkungen",
   "settings.maintenanceArmingReversible": "Umkehrbar",
   "settings.maintenanceArmingDestructive": "Destruktiv",
-  "settings.maintenanceArmDestructiveLoading": "Die Kandidaten dieser Regel werden gezählt…",
-  "settings.maintenanceArmDestructiveCount": "Auf {{count}} Kandidaten könnte gewirkt werden.",
-  "settings.maintenanceArmDestructiveNoCandidates": "Diese Regel hält derzeit keine Kandidaten, auf die gewirkt werden könnte.",
-  "settings.maintenanceArmDestructiveCountChanged": "Die Anzahl hat sich beim Lesen geändert: Diese Regel hält jetzt {{count}}. Prüfen Sie die Zahl und bestätigen Sie erneut.",
-  "settings.maintenanceArmDestructiveAcknowledge": "Mir ist bewusst, dass diese Regel Dateien von {{count}} Titeln löschen kann.",
+  "settings.maintenanceArmDestructiveLoading":
+    "Die Kandidaten dieser Regel werden gezählt…",
+  "settings.maintenanceArmDestructiveCount":
+    "Auf {{count}} Kandidaten könnte gewirkt werden.",
+  "settings.maintenanceArmDestructiveNoCandidates":
+    "Diese Regel hält derzeit keine Kandidaten, auf die gewirkt werden könnte.",
+  "settings.maintenanceArmDestructiveCountChanged":
+    "Die Anzahl hat sich beim Lesen geändert: Diese Regel hält jetzt {{count}}. Prüfen Sie die Zahl und bestätigen Sie erneut.",
+  "settings.maintenanceArmDestructiveAcknowledge":
+    "Mir ist bewusst, dass diese Regel Dateien von {{count}} Titeln löschen kann.",
 
   // ── Wartungsregeln — Kandidaten ──
   "settings.maintenanceCandidatesFilterRule": "Regel",
@@ -2210,7 +2475,8 @@ const de: LocaleDictionary = {
   "settings.maintenanceCandidatesColFirstMatched": "Erster Treffer",
   "settings.maintenanceCandidatesColDue": "Fällig",
   "settings.maintenanceCandidatesHeldSince": "Zurückgehalten seit {{time}}",
-  "settings.maintenanceCandidatesEmpty": "Keine Kandidaten passen zu diesen Filtern.",
+  "settings.maintenanceCandidatesEmpty":
+    "Keine Kandidaten passen zu diesen Filtern.",
   "settings.maintenanceCandidateExclude": "Diesen Titel ausschließen",
   "settings.maintenanceCandidateStateObserving": "Beobachtend",
   "settings.maintenanceCandidateStatePendingAction": "Aktion ausstehend",
@@ -2225,13 +2491,15 @@ const de: LocaleDictionary = {
   "settings.maintenanceCountdownInMinutes": "in {{count}} Min.",
   "settings.maintenanceCountdownInHours": "in {{count}} Std.",
   "settings.maintenanceCountdownInDays": "in {{count}} T.",
-  "settings.maintenanceCountdownOverdueMinutes": "seit {{count}} Min. überfällig",
+  "settings.maintenanceCountdownOverdueMinutes":
+    "seit {{count}} Min. überfällig",
   "settings.maintenanceCountdownOverdueHours": "seit {{count}} Std. überfällig",
   "settings.maintenanceCountdownOverdueDays": "seit {{count}} T. überfällig",
 
   // ── Wartungsregeln — Läufe und Verlauf ──
   "settings.maintenanceRunsTitle": "Läufe und Verlauf",
-  "settings.maintenanceRunsSubtitle": "Aktuelle Auswertungsdurchläufe und Aktionsversuche, neueste zuerst.",
+  "settings.maintenanceRunsSubtitle":
+    "Aktuelle Auswertungsdurchläufe und Aktionsversuche, neueste zuerst.",
   "settings.maintenanceRunScope": "Umfang",
   "settings.maintenanceRunScopeAll": "Alle Regeln",
   "settings.maintenanceRunEvaluationNow": "Jetzt auswerten",
@@ -2241,15 +2509,18 @@ const de: LocaleDictionary = {
   "settings.maintenanceRunStarted": "Lauf gestartet.",
   "settings.maintenanceRunNotStarted": "Nichts gestartet: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "Auswertungsläufe",
-  "settings.maintenanceEvaluationRunsEmpty": "Noch keine Auswertungsläufe aufgezeichnet.",
+  "settings.maintenanceEvaluationRunsEmpty":
+    "Noch keine Auswertungsläufe aufgezeichnet.",
   "settings.maintenanceActionRunsTitle": "Aktionsläufe",
-  "settings.maintenanceActionRunsEmpty": "Noch keine Aktionsläufe aufgezeichnet.",
+  "settings.maintenanceActionRunsEmpty":
+    "Noch keine Aktionsläufe aufgezeichnet.",
   "settings.maintenanceRunColStarted": "Gestartet",
   "settings.maintenanceRunColStatus": "Status",
   "settings.maintenanceRunColCounts": "Zählungen",
   "settings.maintenanceRunColDuration": "Dauer",
   "settings.maintenanceRunColError": "Fehler",
-  "settings.maintenanceRunCounts": "{{evaluated}} ausgewertet · {{matched}} getroffen · {{noMatch}} kein Treffer · {{unknown}} unbekannt · {{errors}} Fehler",
+  "settings.maintenanceRunCounts":
+    "{{evaluated}} ausgewertet · {{matched}} getroffen · {{noMatch}} kein Treffer · {{unknown}} unbekannt · {{errors}} Fehler",
   "settings.maintenanceRunDuration": "{{seconds}} s",
   "settings.maintenanceRunRevision": "Rev. {{revision}}",
   "settings.maintenanceRunStatusRunning": "Läuft",
@@ -2263,7 +2534,8 @@ const de: LocaleDictionary = {
 
   // ── Wartungsregeln — Ausschlüsse ──
   "settings.maintenanceExclusionsTitle": "Ausschlüsse",
-  "settings.maintenanceExclusionsSubtitle": "Titel, auf die eine Wartungsregel niemals wirken darf. Ein globaler Ausschluss gilt für jede Regel.",
+  "settings.maintenanceExclusionsSubtitle":
+    "Titel, auf die eine Wartungsregel niemals wirken darf. Ein globaler Ausschluss gilt für jede Regel.",
   "settings.maintenanceExclusionsEmpty": "Keine Ausschlüsse.",
   "settings.maintenanceExclusionColScope": "Umfang",
   "settings.maintenanceExclusionColReason": "Grund",
@@ -2271,17 +2543,21 @@ const de: LocaleDictionary = {
   "settings.maintenanceExclusionScopeGlobal": "Alle Regeln",
   "settings.maintenanceExclusionRemove": "Ausschluss entfernen",
   "settings.maintenanceExclusionRemoved": "Ausschluss für {{title}} entfernt.",
-  "settings.maintenanceExclusionRemoving": "Ausschluss für {{title}} entfernen?",
+  "settings.maintenanceExclusionRemoving":
+    "Ausschluss für {{title}} entfernen?",
   "settings.maintenanceExcludeTitle": "Von der Wartung ausschließen",
-  "settings.maintenanceExcludeBody": "{{title}} wird ab der nächsten Auswertung ausgeschlossen, und der zugehörige Kandidat wechselt auf ausgeschlossen.",
+  "settings.maintenanceExcludeBody":
+    "{{title}} wird ab der nächsten Auswertung ausgeschlossen, und der zugehörige Kandidat wechselt auf ausgeschlossen.",
   "settings.maintenanceExcludeScope": "Umfang",
   "settings.maintenanceExcludeScopeGlobal": "Alle Regeln",
   "settings.maintenanceExcludeReason": "Grund",
-  "settings.maintenanceExcludeReasonPlaceholder": "Warum dieser Titel ausgeschlossen wird (optional)",
+  "settings.maintenanceExcludeReasonPlaceholder":
+    "Warum dieser Titel ausgeschlossen wird (optional)",
   "settings.maintenanceExcludeConfirm": "Ausschließen",
   "settings.maintenanceExcluded": "{{title}} von der Wartung ausgeschlossen.",
   "move.dialogTitle": "Titel verschieben",
-  "move.dialogDescription": "Prüfe den Plan für {{count}} ausgewählte(n) Titel, bevor etwas verschoben wird.",
+  "move.dialogDescription":
+    "Prüfe den Plan für {{count}} ausgewählte(n) Titel, bevor etwas verschoben wird.",
   "move.destinationLibrary": "Zielbibliothek",
   "move.destinationRoot": "Ziel-Stammverzeichnis",
   "move.destinationRootPlaceholder": "Stammverzeichnis wählen",
@@ -2301,9 +2577,11 @@ const de: LocaleDictionary = {
     "Diese Bibliothek hat keinen weiteren Stammordner als Ziel. Füge der Bibliothek einen hinzu oder verschiebe den Titel in eine andere Bibliothek.",
   "move.back": "Zurück",
   "move.next": "Weiter",
-  "move.destinationRootHelp": "Das Ändern des Ziels öffnet den Verschiebe-Ablauf, statt den Titel zu speichern.",
+  "move.destinationRootHelp":
+    "Das Ändern des Ziels öffnet den Verschiebe-Ablauf, statt den Titel zu speichern.",
   "move.destinationNoSelection": "Es sind keine Titel ausgewählt.",
-  "move.destinationMixedSourceLibraries": "Die Auswahl umfasst mehrere Bibliotheken; verschiebe jeweils nur eine Bibliothek.",
+  "move.destinationMixedSourceLibraries":
+    "Die Auswahl umfasst mehrere Bibliotheken; verschiebe jeweils nur eine Bibliothek.",
   "move.destinationCrossLibraryNotice":
     "Diese Titel verlassen ihre aktuelle Bibliothek und gehören danach zu {{library}}.",
   "move.destinationLibraryInMoveWorkflow":
@@ -2338,41 +2616,55 @@ const de: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "Diese Dateien sind hier unter zwei Episoden eingetragen, die am Ziel eine Episode sind. Dort wird jede nur einmal geführt.",
   "move.mergeRoleUnnamedFile": "Datei {{id}}",
-  "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
+  "move.operationTransferNote":
+    "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",
   "move.mode.FILES_ALREADY_THERE": "Dateien sind bereits dort",
-  "move.modeHelp.MOVE_WITH_SCRYER": "Scryer verschiebt oder kopiert die Dateien und prüft jede einzelne, bevor sich der Katalog ändert.",
-  "move.modeHelp.FILES_ALREADY_THERE": "Scryer durchsucht das Ziel und übernimmt die Dateien, die du selbst verschoben hast.",
-  "move.catalogOnlyFastPath": "Diese Titel haben keine Dateien auf der Festplatte, daher ist dies eine reine Katalogzuordnung: nichts wird verschoben und es ist kein Modus nötig.",
-  "move.selectDestinationPrompt": "Wähle ein Ziel-Stammverzeichnis, um den Plan zu sehen.",
+  "move.modeHelp.MOVE_WITH_SCRYER":
+    "Scryer verschiebt oder kopiert die Dateien und prüft jede einzelne, bevor sich der Katalog ändert.",
+  "move.modeHelp.FILES_ALREADY_THERE":
+    "Scryer durchsucht das Ziel und übernimmt die Dateien, die du selbst verschoben hast.",
+  "move.catalogOnlyFastPath":
+    "Diese Titel haben keine Dateien auf der Festplatte, daher ist dies eine reine Katalogzuordnung: nichts wird verschoben und es ist kein Modus nötig.",
+  "move.selectDestinationPrompt":
+    "Wähle ein Ziel-Stammverzeichnis, um den Plan zu sehen.",
   "move.previewLoading": "Plan wird erstellt…",
   "move.previewFailed": "Vorschau des Verschiebens fehlgeschlagen.",
-  "move.planChanged": "Der Plan hat sich seit deiner Vorschau geändert. Prüfe den neuen Plan vor dem Bestätigen.",
+  "move.planChanged":
+    "Der Plan hat sich seit deiner Vorschau geändert. Prüfe den neuen Plan vor dem Bestätigen.",
   "move.rePreview": "Erneut vorschauen",
   "move.summaryTitles": "Titel",
   "move.summaryFiles": "Dateien",
   "move.summarySize": "Gesamtgröße",
   "move.sampledItems": "Stichprobe",
   "move.blockedHeading": "{{count}} Titel können noch nicht verschoben werden",
-  "move.blockedHelp": "Wähle sie ab, um den Rest zu verschieben, oder warte, bis ihre Arbeit fertig ist.",
+  "move.blockedHelp":
+    "Wähle sie ab, um den Rest zu verschieben, oder warte, bis ihre Arbeit fertig ist.",
   "move.deselect": "Abwählen",
   "move.deselectedCount": "{{count}} Titel aus diesem Verschieben entfernt.",
   "move.restoreSelection": "Auswahl wiederherstellen",
   "move.titleFileSummary": "{{files}} Datei(en) · {{size}}",
-  "move.freeSpaceRequired": "Benötigt {{required}} am Ziel; {{available}} frei.",
+  "move.freeSpaceRequired":
+    "Benötigt {{required}} am Ziel; {{available}} frei.",
   "move.freeSpaceUnknown": "unbekannt",
   "move.freeSpaceInsufficient": "Am Ziel ist nicht genug freier Speicher.",
   "move.startRefusedNoSpace":
     "Am Ziel ist nicht genug freier Speicher für diesen Verschiebevorgang. Geben Sie Speicher frei oder verschieben Sie weniger Titel und versuchen Sie es erneut.",
-  "move.freeSpaceNotProbed": "Der Ziel-Datenträger konnte nicht gemessen werden.",
-  "move.freeSpaceRecycleOtherVolume": "Der Papierkorb liegt auf einem anderen Datenträger und benötigt {{required}}.",
-  "move.verificationStatementFull": "Alle {{files}} Datei(en) ({{bytes}}) werden vollständig zurückgelesen und verglichen.",
-  "move.verificationStatementQuick": "Alle {{files}} Datei(en) ({{bytes}}) werden anhand von Anfang, Ende und Größe geprüft.",
-  "move.verificationNotApplicable": "Es werden keine Dateien verschoben, also ist nichts zu prüfen.",
+  "move.freeSpaceNotProbed":
+    "Der Ziel-Datenträger konnte nicht gemessen werden.",
+  "move.freeSpaceRecycleOtherVolume":
+    "Der Papierkorb liegt auf einem anderen Datenträger und benötigt {{required}}.",
+  "move.verificationStatementFull":
+    "Alle {{files}} Datei(en) ({{bytes}}) werden vollständig zurückgelesen und verglichen.",
+  "move.verificationStatementQuick":
+    "Alle {{files}} Datei(en) ({{bytes}}) werden anhand von Anfang, Ende und Größe geprüft.",
+  "move.verificationNotApplicable":
+    "Es werden keine Dateien verschoben, also ist nichts zu prüfen.",
   "move.verificationStampFull": "geprüft (vollständig)",
   "move.verificationStampQuick": "geprüft (schnell)",
-  "move.verificationFallbackCount": "{{count}} Datei(en) fielen auf die Schnellprüfung zurück",
+  "move.verificationFallbackCount":
+    "{{count}} Datei(en) fielen auf die Schnellprüfung zurück",
   "move.typedConfirmationPrompt": "Gib den Satz zum Bestätigen ein",
   "move.confirm": "Verschieben starten",
   "move.startFailed": "Das Verschieben konnte nicht gestartet werden.",
@@ -2388,7 +2680,8 @@ const de: LocaleDictionary = {
   "move.counterUnresolved": "Ungelöst",
   "move.counterBlocked": "Blockiert",
   "move.checkpointsHeading": "Titel",
-  "move.checkpointsPending": "Titel erscheinen hier, sobald sie in den Vorgang eintreten.",
+  "move.checkpointsPending":
+    "Titel erscheinen hier, sobald sie in den Vorgang eintreten.",
   "move.checkpointClass": "Eingestuft als",
   "move.checkpointFrom": "Von",
   "move.checkpointTo": "Nach",
@@ -2404,7 +2697,8 @@ const de: LocaleDictionary = {
   "move.assetStateDone": "Erledigt",
   "move.assetStatePlanned": "Geplant",
   "move.cancelAction": "Vorgang abbrechen",
-  "move.cancelRequested": "Abbruch angefordert; der Vorgang stoppt beim nächsten Titel.",
+  "move.cancelRequested":
+    "Abbruch angefordert; der Vorgang stoppt beim nächsten Titel.",
   "move.cancelNotPossible": "Dieser Vorgang ist bereits abgeschlossen.",
   "move.cancelFailed": "Der Abbruch konnte nicht angefordert werden.",
   "move.cancelDraining": "Stoppt beim nächsten Titel",
@@ -2452,7 +2746,8 @@ const de: LocaleDictionary = {
   "move.operationType.ROOT_MOVE": "Stammverzeichnis-Verschiebung",
   "move.operationType.ROOT_CHANGE": "Stammverzeichnis-Änderung",
   "move.operationType.ROOT_CONSOLIDATION": "Stammverzeichnis-Zusammenführung",
-  "move.operationType.CROSS_LIBRARY_TRANSFER": "Bibliotheksübergreifende Übertragung",
+  "move.operationType.CROSS_LIBRARY_TRANSFER":
+    "Bibliotheksübergreifende Übertragung",
   "move.toastPreparing": "Wird vorbereitet…",
   "move.toastTransferred": "Übertragen",
   "move.toastTitlesProgress": "{{current}} / {{total}} Titel",
@@ -2461,42 +2756,63 @@ const de: LocaleDictionary = {
   "move.toastWarningsChip": "Einige Titel sollten in Aktivität geprüft werden.",
   "move.toastFailedSubtitle": "Verschieben fehlgeschlagen",
   "move.toastCanceledSubtitle": "Verschieben abgebrochen",
-  "move.startedHeading": "Das Verschieben wurde gestartet. Verfolge es unter Aktivität.",
+  "move.startedHeading":
+    "Das Verschieben wurde gestartet. Verfolge es unter Aktivität.",
   "move.viewInActivity": "In Aktivität ansehen",
   "rootChange.rowAction": "Stammordner ändern",
-  "rootChange.unavailableWhileUnsaved": "Speichern oder verwerfen Sie zuerst die offenen Änderungen an den Stammordnern.",
+  "rootChange.unavailableWhileUnsaved":
+    "Speichern oder verwerfen Sie zuerst die offenen Änderungen an den Stammordnern.",
   "rootChange.dialogTitle": "Stammordner ändern",
-  "rootChange.dialogDescription": "Alles auf {path} wird verschoben. Ein Vorgang über den gesamten Stammordner kann keinen Titel zurücklassen.",
+  "rootChange.dialogDescription":
+    "Alles auf {path} wird verschoben. Ein Vorgang über den gesamten Stammordner kann keinen Titel zurücklassen.",
   "rootChange.destinationHeading": "Wohin dieser Stammordner geht",
   "rootChange.destinationNewPath": "Ein neuer Pfad",
-  "rootChange.destinationNewPathHelp": "Der Stammordner behält seine Identität und seine Titelzuordnungen; nur sein Pfad ändert sich.",
-  "rootChange.destinationExistingRoot": "Ein anderer Stammordner dieser Bibliothek",
-  "rootChange.destinationExistingRootHelp": "Dieser Stammordner wird in den gewählten überführt, und seine Konfiguration wird stillgelegt.",
-  "rootChange.destinationNoOtherRoots": "Diese Bibliothek hat keinen weiteren Stammordner, in den überführt werden könnte.",
+  "rootChange.destinationNewPathHelp":
+    "Der Stammordner behält seine Identität und seine Titelzuordnungen; nur sein Pfad ändert sich.",
+  "rootChange.destinationExistingRoot":
+    "Ein anderer Stammordner dieser Bibliothek",
+  "rootChange.destinationExistingRootHelp":
+    "Dieser Stammordner wird in den gewählten überführt, und seine Konfiguration wird stillgelegt.",
+  "rootChange.destinationNoOtherRoots":
+    "Diese Bibliothek hat keinen weiteren Stammordner, in den überführt werden könnte.",
   "rootChange.destinationPathPlaceholder": "/mnt/neue-platte/filme",
-  "rootChange.planChanged": "Der Plan hat sich seit der Vorschau geändert. Bitte erneut in der Vorschau ansehen, bevor Sie bestätigen.",
-  "rootChange.previewFailed": "Vorschau dieser Stammordner-Änderung fehlgeschlagen.",
+  "rootChange.planChanged":
+    "Der Plan hat sich seit der Vorschau geändert. Bitte erneut in der Vorschau ansehen, bevor Sie bestätigen.",
+  "rootChange.previewFailed":
+    "Vorschau dieser Stammordner-Änderung fehlgeschlagen.",
   "rootChange.previewing": "Der gesamte Stammordner wird gelesen.",
   "rootChange.preview": "Vorschau",
   "rootChange.confirm": "Starten",
-  "rootChange.startFailed": "Diese Stammordner-Änderung konnte nicht gestartet werden.",
-  "rootChange.startedHeading": "Die Stammordner-Änderung wurde gestartet. Verfolgen Sie sie unter Aktivität.",
+  "rootChange.startFailed":
+    "Diese Stammordner-Änderung konnte nicht gestartet werden.",
+  "rootChange.startedHeading":
+    "Die Stammordner-Änderung wurde gestartet. Verfolgen Sie sie unter Aktivität.",
   "rootChange.viewInActivity": "In Aktivität ansehen",
-  "rootChange.identityKeepsRoot": "Dieser Stammordner behält seine Identität und alle {titles} Titelzuordnungen.",
-  "rootChange.identityKeepsDefault": "Er bleibt der Standard-Stammordner dieser Bibliothek.",
-  "rootChange.identityLosesDefault": "Er ist nicht mehr der Standard-Stammordner dieser Bibliothek.",
-  "rootChange.consolidationStatement": "Alle {titles} Titel auf diesem Stammordner werden auf den gewählten Stammordner verschoben.",
-  "rootChange.consolidationRetiresConfiguration": "Die Konfiguration des Quell-Stammordners wird stillgelegt, sobald alles angekommen ist und alle Papierkorb-Vorgänge abgeschlossen sind.",
-  "rootChange.defaultTransfers": "Der Ziel-Stammordner wird zum Standard dieser Bibliothek, neue Inhalte landen also dort.",
-  "rootChange.defaultStays": "Der Standard-Stammordner dieser Bibliothek ändert sich nicht.",
+  "rootChange.identityKeepsRoot":
+    "Dieser Stammordner behält seine Identität und alle {titles} Titelzuordnungen.",
+  "rootChange.identityKeepsDefault":
+    "Er bleibt der Standard-Stammordner dieser Bibliothek.",
+  "rootChange.identityLosesDefault":
+    "Er ist nicht mehr der Standard-Stammordner dieser Bibliothek.",
+  "rootChange.consolidationStatement":
+    "Alle {titles} Titel auf diesem Stammordner werden auf den gewählten Stammordner verschoben.",
+  "rootChange.consolidationRetiresConfiguration":
+    "Die Konfiguration des Quell-Stammordners wird stillgelegt, sobald alles angekommen ist und alle Papierkorb-Vorgänge abgeschlossen sind.",
+  "rootChange.defaultTransfers":
+    "Der Ziel-Stammordner wird zum Standard dieser Bibliothek, neue Inhalte landen also dort.",
+  "rootChange.defaultStays":
+    "Der Standard-Stammordner dieser Bibliothek ändert sich nicht.",
   "rootChange.accountingHeading": "Jeder Titel auf diesem Stammordner",
   "rootChange.accountingAssigned": "Zugeordnet",
   "rootChange.accountingRelocating": "Wird verschoben",
   "rootChange.accountingCatalogOnly": "Nur Katalog",
   "rootChange.accountingBlocked": "Blockiert",
-  "rootChange.accountingDoesNotClose": "Die Zahlen ergeben nicht die Gesamtsumme. Bestätigen Sie diesen Plan nicht.",
-  "rootChange.blockedTitlesHeading": "{count} Titel können nicht in diesen Vorgang aufgenommen werden.",
-  "rootChange.blockedTitlesNoExclude": "Beheben Sie das vor dem Start. Ein Vorgang über den gesamten Stammordner kann keinen Titel zurücklassen.",
+  "rootChange.accountingDoesNotClose":
+    "Die Zahlen ergeben nicht die Gesamtsumme. Bestätigen Sie diesen Plan nicht.",
+  "rootChange.blockedTitlesHeading":
+    "{count} Titel können nicht in diesen Vorgang aufgenommen werden.",
+  "rootChange.blockedTitlesNoExclude":
+    "Beheben Sie das vor dem Start. Ein Vorgang über den gesamten Stammordner kann keinen Titel zurücklassen.",
   "rootChange.groupsHeading": "Was diese Zusammenführung bewirkt",
   "rootChange.group.movingIntoUnusedFolders": "In freie Ordner",
   "rootChange.group.mergingWithDestinationTitles": "Zusammenführung",
@@ -2506,54 +2822,95 @@ const de: LocaleDictionary = {
   "rootChange.group.companionCollisions": "Begleitdateiname belegt",
   "rootChange.group.untrackedSourceEntries": "Unverfolgt in der Quelle",
   "rootChange.renamedFoldersHeading": "Ordner, deren Name sich ändert",
-  "rootChange.renamedFoldersSampled": "Hier sind nur die ersten Ordner aufgeführt.",
+  "rootChange.renamedFoldersSampled":
+    "Hier sind nur die ersten Ordner aufgeführt.",
   "rootChange.contentHeading": "Was auf diesem Stammordner liegt",
   "rootChange.contentManaged": "Verfolgte Medien",
   "rootChange.contentCompanions": "Begleitdateien",
   "rootChange.contentUnknown": "Unerklärt",
   "rootChange.contentSampled": "Hier sind nur die ersten Einträge aufgeführt.",
-  "rootChange.unknownContentHelp": "{bytes} an Inhalten, die nichts verfolgt. Sie werden nie verschoben, nie gelöscht, und der alte Ort bleibt deshalb bestehen.",
+  "rootChange.unknownContentHelp":
+    "{bytes} an Inhalten, die nichts verfolgt. Sie werden nie verschoben, nie gelöscht, und der alte Ort bleibt deshalb bestehen.",
   "rootChange.retirementHeading": "Der alte Ort danach",
-  "rootChange.retirementEmptyDirectoriesOnly": "Nur leere Verzeichnisse werden entfernt: {count} davon.",
-  "rootChange.retirementVerificationFirst": "Nichts in der Quelle wird entfernt, bevor die Kopie am Ziel geprüft wurde.",
+  "rootChange.retirementEmptyDirectoriesOnly":
+    "Nur leere Verzeichnisse werden entfernt: {count} davon.",
+  "rootChange.retirementVerificationFirst":
+    "Nichts in der Quelle wird entfernt, bevor die Kopie am Ziel geprüft wurde.",
   "rootChange.retirementRetainedHeading": "Bleiben mit ihrem Inhalt bestehen:",
-  "rootChange.retirementBlockedHeading": "Der alte Ort bleibt bestehen, bis das geklärt ist:",
-  "rootChange.retirementPermitted": "Nichts hindert daran, den alten Ort stillzulegen.",
-  "rootChange.verificationStatement": "{files} Dateien ({bytes}) werden am Ziel vollständig geprüft, bevor eine Quelle in den Papierkorb wandert.",
-  "rootChange.insufficientSpace": "Am Ziel fehlen die dafür nötigen {required}.",
-  "rootChange.typedConfirmationPrompt": "Geben Sie zur Bestätigung den Ausdruck ein",
-  "rootChange.reason.root_identity_retained": "Der Stammordner behält seine Identität; nur sein Pfad ändert sich.",
-  "rootChange.reason.catalog_only_root_change": "Keine verfolgten Dateien, also ist das eine reine Katalogzuordnung.",
-  "rootChange.reason.title_blocked_for_root_change": "Dieser Titel kann noch nicht in die Stammordner-Änderung aufgenommen werden.",
-  "rootChange.reason.unknown_root_content": "Inhalte am Stammordner, die kein Titel erklärt.",
-  "rootChange.reason.source_retirement_blocked": "Der alte Ort kann noch nicht stillgelegt werden.",
-  "rootChange.reason.file_outside_title_folder": "Eine verfolgte Datei außerhalb des Ordners ihres Titels.",
-  "rootChange.reason.hardlinked_source": "Die Quelldatei hat weitere Hardlinks, die der Verschiebung nicht folgen.",
-  "rootChange.reason.roots_consolidated": "Jeder Titel auf diesem Stammordner wird auf den Ziel-Stammordner verschoben.",
-  "rootChange.reason.default_root_transferred": "Der Ziel-Stammordner wird zum Standard dieser Bibliothek.",
-  "rootChange.reason.moves_into_unused_folder": "Wird in einen unbelegten Ordner verschoben.",
-  "rootChange.reason.merges_with_destination_title": "Wird mit einem Zieltitel zusammengeführt, mit dem er eine Identität teilt.",
-  "rootChange.reason.folder_name_uniqued": "Der Ordnername ist am Ziel belegt, daher wird dieser umbenannt.",
-  "rootChange.reason.catalog_only_consolidation": "Keine verfolgten Dateien, also ist das eine reine Katalogzuordnung.",
-  "rootChange.reason.destination_folder_exists": "Der Zielordner existiert bereits.",
-  "rootChange.retirementBlocker.blocked_titles": "Einige Titel können nicht in den Vorgang aufgenommen werden.",
-  "rootChange.retirementBlocker.unexplained_source_content": "Inhalte in der Quelle, die nichts erklärt.",
-  "rootChange.refusal.root_change_path_not_absolute": "Geben Sie einen absoluten Pfad an.",
-  "rootChange.refusal.root_change_paths_overlap": "Der neue Pfad liegt im alten oder umgekehrt.",
-  "rootChange.refusal.root_change_source_root_is_symlink": "Dieser Stammordner ist ein Symlink. Verweisen Sie ihn zuerst auf das echte Verzeichnis.",
-  "rootChange.refusal.root_change_source_root_unavailable": "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
-  "rootChange.refusal.root_change_destination_not_empty": "Der neue Pfad enthält bereits Inhalte. Wählen Sie ein leeres oder ein neues Verzeichnis.",
-  "rootChange.refusal.root_change_destination_parent_missing": "Das übergeordnete Verzeichnis des neuen Pfads existiert nicht.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "Dieser Pfad ist bereits als Stammordner einer anderen Bibliothek konfiguriert.",
-  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin": "Dieser Pfad überschneidet sich mit dem benutzerdefinierten Papierkorb: Er darf den Papierkorb weder enthalten noch darin liegen.",
-  "rootChange.refusal.root_change_mode_not_supported": "Bei einem Stammordnerwechsel werden die Dateien immer verschoben; „Dateien sind bereits dort“ wird hier nicht angeboten.",
-  "rootChange.refusal.root_consolidation_path_not_absolute": "Geben Sie einen absoluten Pfad an.",
-  "rootChange.refusal.root_consolidation_same_root": "Ein Stammordner kann nicht in sich selbst überführt werden.",
-  "rootChange.refusal.root_consolidation_paths_overlap": "Einer dieser Stammordner liegt im anderen.",
-  "rootChange.refusal.root_consolidation_source_root_is_symlink": "Dieser Stammordner ist ein Symlink. Verweisen Sie ihn zuerst auf das echte Verzeichnis.",
-  "rootChange.refusal.root_consolidation_source_root_unavailable": "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
-  "rootChange.refusal.root_consolidation_destination_root_unavailable": "Der Ziel-Stammordner ist gerade nicht lesbar, sein vorhandener Inhalt lässt sich also nicht berücksichtigen.",
-  "rootChange.refusal.root_consolidation_mode_not_supported": "Eine Zusammenführung verschiebt die Dateien immer; „Dateien sind bereits dort“ wird hier nicht angeboten.",
+  "rootChange.retirementBlockedHeading":
+    "Der alte Ort bleibt bestehen, bis das geklärt ist:",
+  "rootChange.retirementPermitted":
+    "Nichts hindert daran, den alten Ort stillzulegen.",
+  "rootChange.verificationStatement":
+    "{files} Dateien ({bytes}) werden am Ziel vollständig geprüft, bevor eine Quelle in den Papierkorb wandert.",
+  "rootChange.insufficientSpace":
+    "Am Ziel fehlen die dafür nötigen {required}.",
+  "rootChange.typedConfirmationPrompt":
+    "Geben Sie zur Bestätigung den Ausdruck ein",
+  "rootChange.reason.root_identity_retained":
+    "Der Stammordner behält seine Identität; nur sein Pfad ändert sich.",
+  "rootChange.reason.catalog_only_root_change":
+    "Keine verfolgten Dateien, also ist das eine reine Katalogzuordnung.",
+  "rootChange.reason.title_blocked_for_root_change":
+    "Dieser Titel kann noch nicht in die Stammordner-Änderung aufgenommen werden.",
+  "rootChange.reason.unknown_root_content":
+    "Inhalte am Stammordner, die kein Titel erklärt.",
+  "rootChange.reason.source_retirement_blocked":
+    "Der alte Ort kann noch nicht stillgelegt werden.",
+  "rootChange.reason.file_outside_title_folder":
+    "Eine verfolgte Datei außerhalb des Ordners ihres Titels.",
+  "rootChange.reason.hardlinked_source":
+    "Die Quelldatei hat weitere Hardlinks, die der Verschiebung nicht folgen.",
+  "rootChange.reason.roots_consolidated":
+    "Jeder Titel auf diesem Stammordner wird auf den Ziel-Stammordner verschoben.",
+  "rootChange.reason.default_root_transferred":
+    "Der Ziel-Stammordner wird zum Standard dieser Bibliothek.",
+  "rootChange.reason.moves_into_unused_folder":
+    "Wird in einen unbelegten Ordner verschoben.",
+  "rootChange.reason.merges_with_destination_title":
+    "Wird mit einem Zieltitel zusammengeführt, mit dem er eine Identität teilt.",
+  "rootChange.reason.folder_name_uniqued":
+    "Der Ordnername ist am Ziel belegt, daher wird dieser umbenannt.",
+  "rootChange.reason.catalog_only_consolidation":
+    "Keine verfolgten Dateien, also ist das eine reine Katalogzuordnung.",
+  "rootChange.reason.destination_folder_exists":
+    "Der Zielordner existiert bereits.",
+  "rootChange.retirementBlocker.blocked_titles":
+    "Einige Titel können nicht in den Vorgang aufgenommen werden.",
+  "rootChange.retirementBlocker.unexplained_source_content":
+    "Inhalte in der Quelle, die nichts erklärt.",
+  "rootChange.refusal.root_change_path_not_absolute":
+    "Geben Sie einen absoluten Pfad an.",
+  "rootChange.refusal.root_change_paths_overlap":
+    "Der neue Pfad liegt im alten oder umgekehrt.",
+  "rootChange.refusal.root_change_source_root_is_symlink":
+    "Dieser Stammordner ist ein Symlink. Verweisen Sie ihn zuerst auf das echte Verzeichnis.",
+  "rootChange.refusal.root_change_source_root_unavailable":
+    "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
+  "rootChange.refusal.root_change_destination_not_empty":
+    "Der neue Pfad enthält bereits Inhalte. Wählen Sie ein leeres oder ein neues Verzeichnis.",
+  "rootChange.refusal.root_change_destination_parent_missing":
+    "Das übergeordnete Verzeichnis des neuen Pfads existiert nicht.",
+  "rootChange.refusal.root_change_destination_is_configured_root":
+    "Dieser Pfad ist bereits als Stammordner einer anderen Bibliothek konfiguriert.",
+  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin":
+    "Dieser Pfad überschneidet sich mit dem benutzerdefinierten Papierkorb: Er darf den Papierkorb weder enthalten noch darin liegen.",
+  "rootChange.refusal.root_change_mode_not_supported":
+    "Bei einem Stammordnerwechsel werden die Dateien immer verschoben; „Dateien sind bereits dort“ wird hier nicht angeboten.",
+  "rootChange.refusal.root_consolidation_path_not_absolute":
+    "Geben Sie einen absoluten Pfad an.",
+  "rootChange.refusal.root_consolidation_same_root":
+    "Ein Stammordner kann nicht in sich selbst überführt werden.",
+  "rootChange.refusal.root_consolidation_paths_overlap":
+    "Einer dieser Stammordner liegt im anderen.",
+  "rootChange.refusal.root_consolidation_source_root_is_symlink":
+    "Dieser Stammordner ist ein Symlink. Verweisen Sie ihn zuerst auf das echte Verzeichnis.",
+  "rootChange.refusal.root_consolidation_source_root_unavailable":
+    "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
+  "rootChange.refusal.root_consolidation_destination_root_unavailable":
+    "Der Ziel-Stammordner ist gerade nicht lesbar, sein vorhandener Inhalt lässt sich also nicht berücksichtigen.",
+  "rootChange.refusal.root_consolidation_mode_not_supported":
+    "Eine Zusammenführung verschiebt die Dateien immer; „Dateien sind bereits dort“ wird hier nicht angeboten.",
   "indexerSearch.searchWithThisIndexer": "Mit diesem Indexer suchen",
   "indexerSearch.queryPlaceholder":
     "Alle Indexer nach einem Release durchsuchen…",
@@ -2591,7 +2948,8 @@ const de: LocaleDictionary = {
   "indexerSearch.health.skipped": "übersprungen",
   "indexerSearch.skipReason.indexerDisabled": "Indexer ist deaktiviert",
   "indexerSearch.skipReason.temporarilyDisabled": "Vorübergehend deaktiviert",
-  "indexerSearch.skipReason.temporarilyDisabledUntil": "Vorübergehend deaktiviert bis {{time}}",
+  "indexerSearch.skipReason.temporarilyDisabledUntil":
+    "Vorübergehend deaktiviert bis {{time}}",
   "indexerSearch.skipReason.backedOff": "Pausiert nach wiederholten Fehlern",
   "indexerSearch.skipReason.backedOffUntil": "Pausiert bis {{time}}",
   "indexerSearch.skipReason.noTextSearch": "Unterstützt keine Textsuche",
@@ -2623,7 +2981,8 @@ const de: LocaleDictionary = {
   "indexerSearch.row.select": "Release auswählen",
   "indexerSearch.row.grab": "Holen",
   "indexerSearch.row.download": "Datei herunterladen",
-  "indexerSearch.download.unavailable": "Diese Veröffentlichung ist ein Magnet-Link und hat keine herunterladbare Datei",
+  "indexerSearch.download.unavailable":
+    "Diese Veröffentlichung ist ein Magnet-Link und hat keine herunterladbare Datei",
   "indexerSearch.row.expand": "Details anzeigen",
   "indexerSearch.row.collapse": "Details ausblenden",
   "indexerSearch.row.grabs": "{{count}} Grabs",
@@ -2701,27 +3060,37 @@ const de: LocaleDictionary = {
   "settings.noRequestRulesFound": "Noch keine Anfrageregeln.",
   "settings.requestRuleLibraries": "Bibliotheken",
   "settings.requestRuleLibrariesAll": "Alle Bibliotheken",
-  "settings.requestRuleLibrariesHelp": "Lassen Sie alle Felder unmarkiert, damit diese Regel für Anfragen in jeder Bibliothek gilt.",
+  "settings.requestRuleLibrariesHelp":
+    "Lassen Sie alle Felder unmarkiert, damit diese Regel für Anfragen in jeder Bibliothek gilt.",
   "settings.requestRuleRevision": "Revision",
   "settings.requestRuleDecisionCount": "Entscheidungen",
   "settings.requestRuleCopy": "Regel kopieren",
   "settings.requestRuleCreate": "Regel erstellen",
   "settings.requestRuleUpdate": "Regel aktualisieren",
   "settings.requestRuleCreateNew": "Neue Anfrageregel",
-  "settings.requestRuleCreated": "Anfrageregel erstellt. Sie ist deaktiviert, bis Sie sie aktivieren.",
+  "settings.requestRuleCreated":
+    "Anfrageregel erstellt. Sie ist deaktiviert, bis Sie sie aktivieren.",
   "settings.requestRuleUpdated": "Anfrageregel aktualisiert.",
   "settings.requestRuleDeleted": "Anfrageregel {{name}} gelöscht.",
-  "settings.requestRuleDeleting": "Die Anfrageregel {{name}} löschen? Ihre festgehaltenen Entscheidungen bleiben erhalten.",
-  "settings.requestRuleValidationRequired": "Eine Anfrageregel braucht einen Namen und einen Matcher.",
-  "settings.requestRuleConfirmDiscardTitle": "Ungespeicherte Änderungen verwerfen?",
-  "settings.requestRuleConfirmDiscardDescription": "Der Matcher im Editor wurde nicht gespeichert. Fortfahren ersetzt ihn.",
+  "settings.requestRuleDeleting":
+    "Die Anfrageregel {{name}} löschen? Ihre festgehaltenen Entscheidungen bleiben erhalten.",
+  "settings.requestRuleValidationRequired":
+    "Eine Anfrageregel braucht einen Namen und einen Matcher.",
+  "settings.requestRuleConfirmDiscardTitle":
+    "Ungespeicherte Änderungen verwerfen?",
+  "settings.requestRuleConfirmDiscardDescription":
+    "Der Matcher im Editor wurde nicht gespeichert. Fortfahren ersetzt ihn.",
   "settings.requestRuleRequesters": "Personen in dieser Regel benennen",
-  "settings.requestRuleRequestersHelp": "Wählen Sie die Konten aus, um die es geht, und übernehmen Sie sie. Der Matcher im Editor wird umgeschrieben, damit Sie ihn vor dem Speichern lesen können.",
+  "settings.requestRuleRequestersHelp":
+    "Wählen Sie die Konten aus, um die es geht, und übernehmen Sie sie. Der Matcher im Editor wird umgeschrieben, damit Sie ihn vor dem Speichern lesen können.",
   "settings.requestRuleRequestersApply": "Diese Namen in den Matcher schreiben",
-  "settings.requestRuleRequestersUnavailable": "Das Auflisten von Konten erfordert Rechte, die diese Seite nicht hat; Namen müssen von Hand in den Matcher eingetragen werden.",
-  "settings.requestRuleRequestersNoTarget": "Dieser Matcher benennt niemanden, daher gibt es keine Stelle für die gewählten Konten. Fügen Sie zuerst ein requesters-Set oder einen Benutzernamensvergleich hinzu.",
+  "settings.requestRuleRequestersUnavailable":
+    "Das Auflisten von Konten erfordert Rechte, die diese Seite nicht hat; Namen müssen von Hand in den Matcher eingetragen werden.",
+  "settings.requestRuleRequestersNoTarget":
+    "Dieser Matcher benennt niemanden, daher gibt es keine Stelle für die gewählten Konten. Fügen Sie zuerst ein requesters-Set oder einen Benutzernamensvergleich hinzu.",
   "settings.requestPreviewTitle": "Diese Regel an einer Anfrage ausprobieren",
-  "settings.requestPreviewSubtitle": "Führt einen Matcher an einer von Ihnen beschriebenen Anfrage aus. Es wird nichts abgeschickt und nichts festgehalten.",
+  "settings.requestPreviewSubtitle":
+    "Führt einen Matcher an einer von Ihnen beschriebenen Anfrage aus. Es wird nichts abgeschickt und nichts festgehalten.",
   "settings.requestPreviewSource": "Matcher",
   "settings.requestPreviewSourceStored": "Eine gespeicherte Regel",
   "settings.requestPreviewSourceDraft": "Der Entwurf im Editor",
@@ -2741,11 +3110,13 @@ const de: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Verwendet {{title}}.",
   "settings.requestPreviewRun": "Vorschau ausführen",
   "settings.requestPreviewRunning": "Wird ausgeführt…",
-  "settings.requestPreviewEmpty": "Beschreiben Sie eine Anfrage und führen Sie die Vorschau aus, um zu sehen, was diese Regel sagen würde.",
+  "settings.requestPreviewEmpty":
+    "Beschreiben Sie eine Anfrage und führen Sie die Vorschau aus, um zu sehen, was diese Regel sagen würde.",
   "settings.requestPreviewMetadataPartial": "Metadaten unvollständig",
   "settings.requestPreviewShowInput": "Eingabe des Matchers anzeigen",
   "settings.requestPreviewHideInput": "Eingabe ausblenden",
-  "settings.requestPreviewInputUnavailable": "Das Eingabedokument konnte nicht gelesen werden.",
+  "settings.requestPreviewInputUnavailable":
+    "Das Eingabedokument konnte nicht gelesen werden.",
   "settings.requestDecisionsTitle": "Jüngste Entscheidungen",
   "settings.requestDecisionsOutcomeFilter": "Ergebnis",
   "settings.requestDecisionsOutcomeAll": "Beliebiges Ergebnis",
@@ -2762,19 +3133,23 @@ const de: LocaleDictionary = {
   "search.keepForDays": "{{count}} Tage",
   "search.keepForCustom": "Eine Anzahl Tage…",
   "search.keepForCustomLabel": "Tage der Aufbewahrung",
-  "search.keepForHelp": "Wie lange Scryer diese Medien für Sie aufbewahrt. Nach Ablauf kann eine Wartungsregel sie entfernen; „für immer“ läuft nie ab.",
+  "search.keepForHelp":
+    "Wie lange Scryer diese Medien für Sie aufbewahrt. Nach Ablauf kann eine Wartungsregel sie entfernen; „für immer“ läuft nie ab.",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "Tags",
   "settings.titleTagsExisting": "Definierte Tags",
-  "settings.titleTagsHelp": "Nur die hier definierten Tags lassen sich überhaupt auf einen Titel anwenden. Wird eines umbenannt, werden alle Titel und Verzögerungsprofile umgeschrieben, die es tragen; wird es gelöscht, verschwindet es von jedem Titel.",
+  "settings.titleTagsHelp":
+    "Nur die hier definierten Tags lassen sich überhaupt auf einen Titel anwenden. Wird eines umbenannt, werden alle Titel und Verzögerungsprofile umgeschrieben, die es tragen; wird es gelöscht, verschwindet es von jedem Titel.",
   "settings.titleTagsNone": "Es sind noch keine Tags definiert.",
   "settings.titleTagsLoadError": "Tags konnten nicht geladen werden.",
   "settings.titleTagLabelLabel": "Bezeichnung",
   "settings.titleTagLabelPlaceholder": "keep",
-  "settings.titleTagLabelHelp": "Wird in Kleinbuchstaben und ohne zusätzliche Leerzeichen gespeichert. Höchstens 64 Zeichen.",
+  "settings.titleTagLabelHelp":
+    "Wird in Kleinbuchstaben und ohne zusätzliche Leerzeichen gespeichert. Höchstens 64 Zeichen.",
   "settings.titleTagDescriptionLabel": "Beschreibung",
-  "settings.titleTagDescriptionPlaceholder": "Wofür dieses Tag da ist (optional)",
+  "settings.titleTagDescriptionPlaceholder":
+    "Wofür dieses Tag da ist (optional)",
   "settings.titleTagTitleCount": "Titel",
   "settings.titleTagCreate": "Tag definieren",
   "settings.titleTagCreateNew": "Neues Tag definieren",
@@ -2784,23 +3159,32 @@ const de: LocaleDictionary = {
   "settings.titleTagDeleteError": "Das Tag konnte nicht gelöscht werden.",
   "settings.titleTagDeleted": "{{label}} von {{count}} Titeln entfernt.",
   "settings.titleTagDeleteConfirmTitle": "Tag löschen",
-  "settings.titleTagDeleteConfirm": "{{label}} ist auf {{count}} Titeln. Beim Löschen wird es von allen entfernt, ebenso aus jedem Verzögerungsprofil, das danach filtert. Regeln, die es nennen, greifen dann nicht mehr.",
+  "settings.titleTagDeleteConfirm":
+    "{{label}} ist auf {{count}} Titeln. Beim Löschen wird es von allen entfernt, ebenso aus jedem Verzögerungsprofil, das danach filtert. Regeln, die es nennen, greifen dann nicht mehr.",
   "settings.titleTagLabelRequired": "Gib eine Bezeichnung für das Tag ein.",
-  "settings.titleTagLabelReserved": "Bezeichnungen dürfen nicht mit scryer: beginnen; dieses Präfix ist für Einstellungen reserviert, die Scryer selbst schreibt.",
-  "settings.titleTagLabelTooLong": "Eine Bezeichnung darf höchstens 64 Zeichen lang sein.",
-  "settings.titleTagLabelInvalid": "Eine Bezeichnung darf keine Steuerzeichen enthalten.",
-  "settings.titleTagRenameSummary": "In {{label}} umbenannt. {{titles}} Titel, {{seriesMovies}} Serienfilme und {{delayProfiles}} Verzögerungsprofile umgeschrieben.",
-  "settings.titleTagRenameWarning": "Regelquellen werden nie umgeschrieben, daher nennen {{count}} Regelverweise weiterhin die alte Bezeichnung {{label}} und greifen nicht mehr: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} Wartungsregelsätze",
+  "settings.titleTagLabelReserved":
+    "Bezeichnungen dürfen nicht mit scryer: beginnen; dieses Präfix ist für Einstellungen reserviert, die Scryer selbst schreibt.",
+  "settings.titleTagLabelTooLong":
+    "Eine Bezeichnung darf höchstens 64 Zeichen lang sein.",
+  "settings.titleTagLabelInvalid":
+    "Eine Bezeichnung darf keine Steuerzeichen enthalten.",
+  "settings.titleTagRenameSummary":
+    "In {{label}} umbenannt. {{titles}} Titel, {{seriesMovies}} Serienfilme und {{delayProfiles}} Verzögerungsprofile umgeschrieben.",
+  "settings.titleTagRenameWarning":
+    "Regelquellen werden nie umgeschrieben, daher nennen {{count}} Regelverweise weiterhin die alte Bezeichnung {{label}} und greifen nicht mehr: {{references}}.",
+  "settings.titleTagReferenceMaintenanceRuleSets":
+    "{{count}} Wartungsregelsätze",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} Release-Regelsätze",
-  "settings.titleTagReferenceManagedTagFilters": "{{count}} verwaltete Tag-Filter",
+  "settings.titleTagReferenceManagedTagFilters":
+    "{{count}} verwaltete Tag-Filter",
   "settings.titleTagReferenceRequestRuleSets": "{{count}} Anfrage-Regelsätze",
   "title.tagsLabel": "Tags",
   "title.tagsNone": "Keine Tags",
   "title.tagsAdd": "Tag hinzufügen…",
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "{{label}} entfernen",
-  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsEmptyRegistry":
+    "No tags are defined yet. An administrator defines them in Settings > Tags.",
   "title.bulkAddTags": "Tags hinzufügen",
   "title.bulkRemoveTags": "Tags entfernen",
   "title.catalogFilters.themes": "Themen",
@@ -2816,13 +3200,16 @@ const de: LocaleDictionary = {
   "settings.maintenanceActionRemoveTags": "Tags entfernen",
   "settings.maintenanceRuleTags": "Tags",
   "settings.maintenanceRuleTagsNone": "Noch keine Tags ausgewählt",
-  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceRuleTagsHelp":
+    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.maintenanceCandidatesTagPatchAdd": "fügt {{tags}} hinzu",
   "settings.maintenanceCandidatesTagPatchRemove": "entfernt {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
-  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateTaggedForRemovalDescription":
+    'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.maintenanceTemplateFlagForReviewTitle": "Zur Prüfung markieren",
-  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+  "settings.maintenanceTemplateFlagForReviewDescription":
+    "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
@@ -2891,7 +3278,8 @@ const de: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "Aus dem Spurnamen abgeleitet, da die Spur kein Sprachfeld hat.",
+  "mediaInfo.inferredLanguageFootnote":
+    "Aus dem Spurnamen abgeleitet, da die Spur kein Sprachfeld hat.",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -2903,10 +3291,12 @@ const de: LocaleDictionary = {
   "mediaInfo.roleForced": "Forced",
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Listen",
-  "lists.commandDescription": "Öffentlichen Listen und Charts folgen und ihre Titel automatisch hinzufügen.",
+  "lists.commandDescription":
+    "Öffentlichen Listen und Charts folgen und ihre Titel automatisch hinzufügen.",
   "lists.tab.public": "Öffentliche Listen",
   "lists.tab.exclusions": "Ausschlüsse",
-  "lists.exclusions.commandDescription": "Titel, die keine Liste hinzufügen darf.",
+  "lists.exclusions.commandDescription":
+    "Titel, die keine Liste hinzufügen darf.",
   "lists.action.enabled": "{{name}} folgen",
   "lists.action.retry": "Erneut versuchen",
   "lists.action.syncAll": "Alle synchronisieren",
@@ -2915,12 +3305,15 @@ const de: LocaleDictionary = {
   "lists.url.label": "Einer Liste per URL folgen",
   "lists.url.placeholder": "URL einer Liste oder eines Charts einfügen",
   "lists.url.submit": "Liste prüfen",
-  "lists.url.help": "Füge die Adresse einer Liste eines unterstützten Anbieters ein.",
+  "lists.url.help":
+    "Füge die Adresse einer Liste eines unterstützten Anbieters ein.",
   "lists.url.recognized": "{{provider}} · {{list}}",
-  "lists.url.unrecognized": "Dieser Adresse kann Scryer nicht folgen. Unterstützte Listen findest du im Anbieterkatalog unten.",
+  "lists.url.unrecognized":
+    "Dieser Adresse kann Scryer nicht folgen. Unterstützte Listen findest du im Anbieterkatalog unten.",
   "lists.followed.heading": "Gefolgte Listen",
   "lists.followed.empty": "Noch werden keine öffentlichen Listen verfolgt.",
-  "lists.followed.emptyManager": "Noch keine öffentlichen Listen. Füge oben eine Listen-URL ein oder wähle eine aus dem Katalog unten.",
+  "lists.followed.emptyManager":
+    "Noch keine öffentlichen Listen. Füge oben eine Listen-URL ein oder wähle eine aus dem Katalog unten.",
   "lists.table.list": "Liste",
   "lists.table.coverage": "Abdeckung",
   "lists.table.mode": "Modus",
@@ -2943,11 +3336,15 @@ const de: LocaleDictionary = {
   "lists.mode.hold": "Zur Freigabe zurückhalten",
   "lists.mode.request": "Anfragen",
   "lists.mode.discover": "Nur in Entdecken anzeigen",
-  "lists.modeHelp.add": "Fügt neue Titel mit der je Art gewählten Überwachung hinzu. Überwachte Titel werden gesucht, nicht überwachte nicht.",
-  "lists.modeHelp.hold": "Erstellt für jeden neuen Titel eine offene Anfrage, die jemand freigeben kann.",
+  "lists.modeHelp.add":
+    "Fügt neue Titel mit der je Art gewählten Überwachung hinzu. Überwachte Titel werden gesucht, nicht überwachte nicht.",
+  "lists.modeHelp.hold":
+    "Erstellt für jeden neuen Titel eine offene Anfrage, die jemand freigeben kann.",
   "lists.modeHelp.request": "Fragt neue Titel für ein Mitglied an.",
-  "lists.modeHelp.discover": "Erfasst die Titel der Liste, ohne etwas hinzuzufügen.",
-  "lists.mode.discoverUnavailable": "Verfügbar, sobald Listen in Entdecken erscheinen.",
+  "lists.modeHelp.discover":
+    "Erfasst die Titel der Liste, ohne etwas hinzuzufügen.",
+  "lists.mode.discoverUnavailable":
+    "Verfügbar, sobald Listen in Entdecken erscheinen.",
   "lists.onLeave.keep": "Titel behalten",
   "lists.onLeave.log": "Protokollieren",
   "lists.onLeave.unmonitor": "Titel nicht mehr überwachen",
@@ -2983,7 +3380,8 @@ const de: LocaleDictionary = {
   "lists.follow.submit": "Liste folgen",
   "lists.follow.sourceHeading": "Listendetails",
   "lists.follow.order": "Reihenfolge der Liste",
-  "lists.follow.orderHint": "Die Titel werden in dieser Reihenfolge aus der Liste gelesen.",
+  "lists.follow.orderHint":
+    "Die Titel werden in dieser Reihenfolge aus der Liste gelesen.",
   "lists.follow.orderUnset": "Standardreihenfolge",
   "lists.follow.order.rank": "Eigene Rangfolge der Liste",
   "lists.follow.order.added": "Hinzugefügt am",
@@ -2992,19 +3390,24 @@ const de: LocaleDictionary = {
   "lists.follow.kinds": "Einbeziehen",
   "lists.follow.modeHeading": "Wenn ein neuer Titel erscheint",
   "lists.follow.routesHeading": "Wohin Titel gehen",
-  "lists.follow.routesHelp": "Jede Titelart braucht eine Bibliothek. Arten ohne Bibliothek werden nie hinzugefügt.",
+  "lists.follow.routesHelp":
+    "Jede Titelart braucht eine Bibliothek. Arten ohne Bibliothek werden nie hinzugefügt.",
   "lists.follow.filtersHeading": "Filter",
   "lists.follow.syncHeading": "Synchronisierung",
   "lists.follow.maxPerSync": "Höchstens Titel pro Synchronisierung",
   "lists.follow.maxPerSyncPlaceholder": "Kein Limit",
-  "lists.follow.maxPerSyncHelp": "Titel über dem Limit warten auf die nächste Synchronisierung.",
+  "lists.follow.maxPerSyncHelp":
+    "Titel über dem Limit warten auf die nächste Synchronisierung.",
   "lists.follow.onLeave": "Wenn ein Titel die Liste verlässt",
-  "lists.follow.onLeaveHelp": "Gilt nur für Titel, die diese Liste hinzugefügt hat und die keine andere Liste mehr enthält. Listen löschen nie Titel.",
-  "lists.follow.interval": "Der Anbieter bestimmt den Zeitplan: alle {{interval}}.",
+  "lists.follow.onLeaveHelp":
+    "Gilt nur für Titel, die diese Liste hinzugefügt hat und die keine andere Liste mehr enthält. Listen löschen nie Titel.",
+  "lists.follow.interval":
+    "Der Anbieter bestimmt den Zeitplan: alle {{interval}}.",
   "lists.follow.problem.name": "Gib der Liste einen Namen.",
   "lists.follow.problem.kinds": "Beziehe mindestens eine Titelart ein.",
   "lists.follow.problem.mode": "Wähle, was mit neuen Titeln passiert.",
-  "lists.follow.problem.route": "Wähle für jede einbezogene Art eine Bibliothek.",
+  "lists.follow.problem.route":
+    "Wähle für jede einbezogene Art eine Bibliothek.",
   "lists.follow.problem.maxPerSync": "Das Limit muss mindestens 1 sein.",
   "lists.follow.problem.params": "Fülle die erforderlichen Listendetails aus.",
   "lists.route.heading": "{{kind}}",
@@ -3022,20 +3425,26 @@ const de: LocaleDictionary = {
   "lists.filter.languages": "Originalsprachen",
   "lists.filter.languagesPlaceholder": "en, ja",
   "lists.filter.releasedOnly": "Nur erschienene Titel",
-  "lists.filter.releasedOnlyHelp": "Überspringt noch nicht erschienene Titel. Sie werden bei jeder Synchronisierung erneut geprüft.",
+  "lists.filter.releasedOnlyHelp":
+    "Überspringt noch nicht erschienene Titel. Sie werden bei jeder Synchronisierung erneut geprüft.",
   "lists.preview.heading": "Vorschau",
-  "lists.preview.nextSyncHeading": "Die nächste Synchronisierung würde hinzufügen",
+  "lists.preview.nextSyncHeading":
+    "Die nächste Synchronisierung würde hinzufügen",
   "lists.preview.run": "Vorschau",
-  "lists.preview.notRun": "Zeige eine Vorschau, um zu sehen, was die erste Synchronisierung hinzufügen würde.",
-  "lists.preview.failed": "Für diese Liste konnte keine Vorschau erstellt werden.",
+  "lists.preview.notRun":
+    "Zeige eine Vorschau, um zu sehen, was die erste Synchronisierung hinzufügen würde.",
+  "lists.preview.failed":
+    "Für diese Liste konnte keine Vorschau erstellt werden.",
   "lists.preview.total": "Auf der Liste",
   "lists.preview.inLibrary": "In der Bibliothek",
   "lists.preview.wouldAdd": "Würde hinzufügen",
   "lists.preview.filtered": "Gefiltert",
   "lists.preview.excluded": "Ausgeschlossen",
   "lists.preview.unresolved": "Keine Zuordnung",
-  "lists.preview.unresolvedHelp": "{{count}} Titel konnten noch nicht zugeordnet werden. Sie werden bei jeder Synchronisierung erneut versucht.",
-  "lists.preview.wouldAddHeading": "Titel, die die nächste Synchronisierung hinzufügen würde",
+  "lists.preview.unresolvedHelp":
+    "{{count}} Titel konnten noch nicht zugeordnet werden. Sie werden bei jeder Synchronisierung erneut versucht.",
+  "lists.preview.wouldAddHeading":
+    "Titel, die die nächste Synchronisierung hinzufügen würde",
   "lists.preview.nothingToAdd": "Im Moment gibt es nichts Neues hinzuzufügen.",
   "lists.detail.coverage": "Abdeckung",
   "lists.detail.settings": "Einstellungen",
@@ -3043,7 +3452,8 @@ const de: LocaleDictionary = {
   "lists.detail.nextSync": "Nächste Synchronisierung",
   "lists.detail.noCap": "Kein Limit",
   "lists.detail.openAtProvider": "Beim Anbieter öffnen",
-  "lists.detail.pausedUntil": "Der Anbieter hat Scryer gebeten, langsamer zu werden. Die Synchronisierung wird nach {{time}} fortgesetzt.",
+  "lists.detail.pausedUntil":
+    "Der Anbieter hat Scryer gebeten, langsamer zu werden. Die Synchronisierung wird nach {{time}} fortgesetzt.",
   "lists.detail.titles": "Titel ({{count}})",
   "lists.detail.title": "Titel",
   "lists.detail.state": "Status",
@@ -3054,9 +3464,11 @@ const de: LocaleDictionary = {
   "lists.detail.nextPage": "Weiter",
   "lists.detail.history": "Synchronisierungsverlauf",
   "lists.detail.noRuns": "Noch keine Synchronisierungen.",
-  "lists.detail.runCounts": "{{total}} auf der Liste · {{added}} hinzugefügt · {{held}} zurückgehalten",
+  "lists.detail.runCounts":
+    "{{total}} auf der Liste · {{added}} hinzugefügt · {{held}} zurückgehalten",
   "lists.unfollow.title": "{{name}} nicht mehr folgen?",
-  "lists.unfollow.description": "Scryer synchronisiert diese Liste nicht mehr. Titel bleiben in deiner Bibliothek, offene Anfragen bleiben unter Anfragen.",
+  "lists.unfollow.description":
+    "Scryer synchronisiert diese Liste nicht mehr. Titel bleiben in deiner Bibliothek, offene Anfragen bleiben unter Anfragen.",
   "lists.status.followed": "Du folgst jetzt {{name}}.",
   "lists.status.updated": "{{name}} gespeichert.",
   "lists.status.unfollowed": "Du folgst {{name}} nicht mehr.",
@@ -3073,17 +3485,22 @@ const de: LocaleDictionary = {
   "lists.exclusions.scopeList": "Nur {{name}}",
   "lists.exclusions.add": "Ausschließen",
   "lists.exclusions.added": "{{name}} ist von Listen ausgeschlossen.",
-  "lists.exclusions.removed": "{{name}} kann wieder von Listen hinzugefügt werden.",
+  "lists.exclusions.removed":
+    "{{name}} kann wieder von Listen hinzugefügt werden.",
   "lists.exclusions.empty": "Keine Titel ausgeschlossen.",
   "lists.exclusions.created": "Hinzugefügt",
   "lists.exclusions.remove": "Ausschluss für {{name}} entfernen",
   "lists.exclusions.removeTitle": "Ausschluss für {{name}} entfernen?",
-  "lists.exclusions.removeDescription": "Listen können diesen Titel bei ihrer nächsten Synchronisierung wieder hinzufügen.",
+  "lists.exclusions.removeDescription":
+    "Listen können diesen Titel bei ihrer nächsten Synchronisierung wieder hinzufügen.",
   "lists.exclusions.deleteCheckbox": "Auch von Listen ausschließen",
-  "lists.exclusions.deleteNoIds": "{{name}} wurde entfernt, hat aber keine externen IDs zum Ausschließen von Listen.",
-  "lists.exclusions.deleteFailed": "{{name}} wurde entfernt, aber der Ausschluss von Listen ist fehlgeschlagen. Füge den Ausschluss auf der Seite Listen hinzu.",
+  "lists.exclusions.deleteNoIds":
+    "{{name}} wurde entfernt, hat aber keine externen IDs zum Ausschließen von Listen.",
+  "lists.exclusions.deleteFailed":
+    "{{name}} wurde entfernt, aber der Ausschluss von Listen ist fehlgeschlagen. Füge den Ausschluss auf der Seite Listen hinzu.",
   "lists.policy.heading": "Listenrichtlinie für Mitglieder",
-  "lists.policy.help": "Legt fest, wie persönliche Listen von Mitgliedern zu Anfragen werden.",
+  "lists.policy.help":
+    "Legt fest, wie persönliche Listen von Mitgliedern zu Anfragen werden.",
   "lists.policy.empty": "Keine Mitglieder vorhanden.",
   "lists.policy.member": "Mitglied",
   "lists.policy.requests30d": "Listenanfragen (30 Tage)",
@@ -3092,24 +3509,38 @@ const de: LocaleDictionary = {
   "lists.policy.value.auto": "Automatisch freigeben",
   "lists.policy.value.approval": "Freigabe erforderlich",
   "lists.policy.value.none": "Listen nicht erlaubt",
-  "settings.refMaintFactsListsAddedByList": "Ob eine Liste und nicht eine Person das Objekt zur Bibliothek hinzugefügt hat",
-  "settings.refMaintFactsListsOnEnabledList": "Ob eine aktivierte Liste, öffentlich oder persönlich, das Objekt noch enthält",
-  "settings.refMaintFactsListsNames": "Namen der aktivierten öffentlichen Listen, die das Objekt noch enthalten",
-  "settings.refMaintFactsListsLeftAll": "Ob jede Liste, die das Objekt je enthielt, es entfernt hat",
-  "settings.refMaintFactsListsLeftAt": "Wann die letzte Liste das Objekt entfernt hat",
-  "settings.refMaintFactsListsLastListName": "Die öffentliche Liste, aus der das Objekt zuletzt entfernt wurde",
-  "settings.refMaintFactsListsAddedByListValue": "Wahr, wenn eine Listensynchronisierung den Titel angelegt hat; unbekannt mit Grund list_store_unreadable, wenn der Listenspeicher nicht lesbar war",
-  "settings.refMaintFactsListsOnEnabledListValue": "Wahr, solange mindestens eine aktivierte Liste das Objekt enthält",
-  "settings.refMaintFactsListsNamesValue": "Nur Namen öffentlicher Listen, sortiert; die persönliche Liste eines Mitglieds wird nie genannt",
-  "settings.refMaintFactsListsLeftAllValue": "Wahr, sobald jede Liste, die das Objekt enthielt, es entfernt hat; falsch, solange eine es noch enthält oder wenn es nie auf einer Liste war",
-  "settings.refMaintFactsListsLeftAtValue": "RFC3339-Zeitstempel; fehlt mit Grund not_left_every_list, solange eine Liste das Objekt noch enthält",
-  "settings.refMaintFactsListsLastListNameValue": "Name dieser öffentlichen Liste; fehlt mit Grund no_public_list_left, wenn das Objekt nie eine öffentliche Liste verlassen hat",
+  "settings.refMaintFactsListsAddedByList":
+    "Ob eine Liste und nicht eine Person das Objekt zur Bibliothek hinzugefügt hat",
+  "settings.refMaintFactsListsOnEnabledList":
+    "Ob eine aktivierte Liste, öffentlich oder persönlich, das Objekt noch enthält",
+  "settings.refMaintFactsListsNames":
+    "Namen der aktivierten öffentlichen Listen, die das Objekt noch enthalten",
+  "settings.refMaintFactsListsLeftAll":
+    "Ob jede Liste, die das Objekt je enthielt, es entfernt hat",
+  "settings.refMaintFactsListsLeftAt":
+    "Wann die letzte Liste das Objekt entfernt hat",
+  "settings.refMaintFactsListsLastListName":
+    "Die öffentliche Liste, aus der das Objekt zuletzt entfernt wurde",
+  "settings.refMaintFactsListsAddedByListValue":
+    "Wahr, wenn eine Listensynchronisierung den Titel angelegt hat; unbekannt mit Grund list_store_unreadable, wenn der Listenspeicher nicht lesbar war",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "Wahr, solange mindestens eine aktivierte Liste das Objekt enthält",
+  "settings.refMaintFactsListsNamesValue":
+    "Nur Namen öffentlicher Listen, sortiert; die persönliche Liste eines Mitglieds wird nie genannt",
+  "settings.refMaintFactsListsLeftAllValue":
+    "Wahr, sobald jede Liste, die das Objekt enthielt, es entfernt hat; falsch, solange eine es noch enthält oder wenn es nie auf einer Liste war",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339-Zeitstempel; fehlt mit Grund not_left_every_list, solange eine Liste das Objekt noch enthält",
+  "settings.refMaintFactsListsLastListNameValue":
+    "Name dieser öffentlichen Liste; fehlt mit Grund no_public_list_left, wenn das Objekt nie eine öffentliche Liste verlassen hat",
   "lists.providerSettings.heading": "Anbietereinstellungen",
-  "lists.providerSettings.copy": "Gilt für alle Listen dieses Anbieters auf diesem Server.",
+  "lists.providerSettings.copy":
+    "Gilt für alle Listen dieses Anbieters auf diesem Server.",
   "lists.providerSettings.required": "Erforderlich",
   "lists.providerSettings.secretStored": "Gespeichert",
   "lists.providerSettings.secretEmpty": "Nicht gesetzt",
-  "lists.providerSettings.secretPlaceholder": "Leer lassen, um den gespeicherten Wert zu behalten",
+  "lists.providerSettings.secretPlaceholder":
+    "Leer lassen, um den gespeicherten Wert zu behalten",
   "lists.providerSettings.clearSecret": "Löschen",
   "lists.providerSettings.keepSecret": "Behalten",
   "lists.providerSettings.save": "Einstellungen speichern",
@@ -3118,44 +3549,60 @@ const de: LocaleDictionary = {
   "title.listProvenance.left": "Nicht mehr auf der Liste {{name}}",
   "lists.tab.personal": "Persönlich",
   "lists.accounts.heading": "Deine Konten",
-  "lists.accounts.copy": "Verbinde ein Konto, um deinen privaten Listen und Merkliste zu folgen. Nur du kannst deine Konten und persönlichen Listen sehen.",
+  "lists.accounts.copy":
+    "Verbinde ein Konto, um deinen privaten Listen und Merkliste zu folgen. Nur du kannst deine Konten und persönlichen Listen sehen.",
   "lists.accounts.connect": "Verbinden",
   "lists.accounts.connected": "Verbunden",
   "lists.accounts.reconnect": "Erneut verbinden",
   "lists.accounts.manage": "Verwalten",
   "lists.accounts.manageTitle": "{{provider}}-Konto verwalten",
-  "lists.accounts.private": "Diese Listen und Kontodaten sind nur für dich sichtbar.",
-  "lists.accounts.waiting": "Schließe die Autorisierung im Anbieterfenster ab. Die Bestätigung wird automatisch geprüft.",
-  "lists.accounts.linkFailed": "Das Konto konnte nicht verbunden werden. Starte die Verbindung erneut.",
-  "lists.accounts.pollRetrying": "Die Freigabe konnte gerade nicht geprüft werden. Es wird weiter versucht, bis die Sitzung abläuft.",
-  "lists.accounts.originNotAllowed": "Unter dieser Adresse können keine Konten verbunden werden. Wenn Scryer über einen veröffentlichten Container-Port, einen Reverse-Proxy oder einen Hostnamen erreicht wird, bitte einen Administrator, die öffentliche URL von Scryer festzulegen; andernfalls öffne Scryer über localhost oder die Adresse, auf der es lauscht.",
-  "lists.accounts.linkExpired": "Diese Sitzung ist abgelaufen. Starte unter Listen eine neue Verbindung.",
-  "lists.accounts.popupBlocked": "Erlaube Pop-ups, um dieses Konto zu bestätigen, und verbinde es erneut.",
+  "lists.accounts.private":
+    "Diese Listen und Kontodaten sind nur für dich sichtbar.",
+  "lists.accounts.waiting":
+    "Schließe die Autorisierung im Anbieterfenster ab. Die Bestätigung wird automatisch geprüft.",
+  "lists.accounts.linkFailed":
+    "Das Konto konnte nicht verbunden werden. Starte die Verbindung erneut.",
+  "lists.accounts.pollRetrying":
+    "Die Freigabe konnte gerade nicht geprüft werden. Es wird weiter versucht, bis die Sitzung abläuft.",
+  "lists.accounts.originNotAllowed":
+    "Unter dieser Adresse können keine Konten verbunden werden. Wenn Scryer über einen veröffentlichten Container-Port, einen Reverse-Proxy oder einen Hostnamen erreicht wird, bitte einen Administrator, die öffentliche URL von Scryer festzulegen; andernfalls öffne Scryer über localhost oder die Adresse, auf der es lauscht.",
+  "lists.accounts.linkExpired":
+    "Diese Sitzung ist abgelaufen. Starte unter Listen eine neue Verbindung.",
+  "lists.accounts.popupBlocked":
+    "Erlaube Pop-ups, um dieses Konto zu bestätigen, und verbinde es erneut.",
   "lists.accounts.finishing": "Kontoverbindung wird abgeschlossen…",
   "lists.accounts.linked": "Konto verbunden.",
   "lists.accounts.returnToLists": "Zurück zu deinen persönlichen Listen",
-  "lists.accounts.noProviders": "Keine Anbieter für persönliche Listen installiert.",
+  "lists.accounts.noProviders":
+    "Keine Anbieter für persönliche Listen installiert.",
   "lists.accounts.ownedLists": "Deine Listen",
   "lists.accounts.statuses": "Verfügbare Status: {{statuses}}",
   "lists.accounts.unlink": "Kontoverknüpfung aufheben",
   "lists.accounts.confirmUnlink": "Aufheben bestätigen",
-  "lists.accounts.unlinkHelp": "Das Aufheben entfernt Abonnements dieses Kontos. Deine Bibliotheksdateien bleiben erhalten.",
+  "lists.accounts.unlinkHelp":
+    "Das Aufheben entfernt Abonnements dieses Kontos. Deine Bibliotheksdateien bleiben erhalten.",
   "lists.accounts.unlinked": "Kontoverknüpfung aufgehoben.",
-  "lists.accounts.personalRouting": "Persönliche Listen gehören dir. Hinzufügen und Suchen erfordern die Berechtigung zur Titelverwaltung in jeder gewählten Bibliothek. Anfragen folgen deiner Listenrichtlinie und den Anfrageregeln.",
+  "lists.accounts.personalRouting":
+    "Persönliche Listen gehören dir. Hinzufügen und Suchen erfordern die Berechtigung zur Titelverwaltung in jeder gewählten Bibliothek. Anfragen folgen deiner Listenrichtlinie und den Anfrageregeln.",
   "lists.providerApps.heading": "Eigenes OAuth",
   "lists.providerApps.settingsLabel": "Listen · Eigenes OAuth",
-  "lists.providerApps.copy": "Die Projekt-Apps funktionieren ohne Registrierung. Optional kannst du eine eigene Trakt-, AniList- oder MyAnimeList-App für die direkte Verbindung dieser Instanz registrieren.",
+  "lists.providerApps.copy":
+    "Die Projekt-Apps funktionieren ohne Registrierung. Optional kannst du eine eigene Trakt-, AniList- oder MyAnimeList-App für die direkte Verbindung dieser Instanz registrieren.",
   "lists.providerApps.simklDefault": "Simkl verwendet die Projekt-App.",
   "lists.providerApps.useOwn": "Eigene Anbieter-App verwenden",
   "lists.providerApps.clientId": "Client-ID",
   "lists.providerApps.clientSecret": "Client-Geheimnis",
-  "lists.providerApps.traktSecretHint": "Für Trakt optional. Trakt meldet Mitglieder per PKCE an; nur ältere Trakt-Apps benötigen ein Geheimnis.",
+  "lists.providerApps.traktSecretHint":
+    "Für Trakt optional. Trakt meldet Mitglieder per PKCE an; nur ältere Trakt-Apps benötigen ein Geheimnis.",
   "lists.providerApps.redirectUri": "Weiterleitungs-URI",
-  "lists.providerApps.redirectHelp": "Registriere die URL /lists/oauth/callback dieser Instanz beim Anbieter. Lasse das Geheimnis leer, um den gespeicherten Wert zu behalten.",
+  "lists.providerApps.redirectHelp":
+    "Registriere die URL /lists/oauth/callback dieser Instanz beim Anbieter. Lasse das Geheimnis leer, um den gespeicherten Wert zu behalten.",
   "episodeAssign.action": "Neu zuweisen",
   "episodeAssign.dialogTitle": "Episode zuweisen",
-  "episodeAssign.dialogDescription": "Wähle die Episode, zu der {{name}} gehört. Scryer benennt die Datei für diese Episode um und verschiebt sie an ihren Platz.",
-  "episodeAssign.pendingDescription": "Scryer konnte nicht erkennen, welche Episode {{name}} ist. Wähle die Episode, und Scryer importiert die Datei dorthin.",
+  "episodeAssign.dialogDescription":
+    "Wähle die Episode, zu der {{name}} gehört. Scryer benennt die Datei für diese Episode um und verschiebt sie an ihren Platz.",
+  "episodeAssign.pendingDescription":
+    "Scryer konnte nicht erkennen, welche Episode {{name}} ist. Wähle die Episode, und Scryer importiert die Datei dorthin.",
   "episodeAssign.unnamed": "diese Datei",
   "episodeAssign.targetLabel": "Episode",
   "episodeAssign.loadingEpisodes": "Episoden werden geladen…",
@@ -3165,7 +3612,8 @@ const de: LocaleDictionary = {
   "episodeAssign.originalReleaseName": "Ursprünglicher Release-Name",
   "episodeAssign.applying": "Wird zugewiesen…",
   "episodeAssign.replaceTitle": "Diese Episode hat bereits eine Datei",
-  "episodeAssign.replaceDescription": "Durch die Zuweisung wird diese Datei zur primären Datei der Episode. Die bisherige Datei bleibt als zusätzliche Datei auf dem Datenträger.",
+  "episodeAssign.replaceDescription":
+    "Durch die Zuweisung wird diese Datei zur primären Datei der Episode. Die bisherige Datei bleibt als zusätzliche Datei auf dem Datenträger.",
   "episodeAssign.replaceApply": "Ersetzen und zuweisen",
   "episodeAssign.success": "Datei zugewiesen und umbenannt.",
   "episodeAssign.failed": "Die Datei konnte nicht zugewiesen werden.",
@@ -3176,14 +3624,22 @@ const de: LocaleDictionary = {
   "episodeAssign.noMatches": "Keine passenden Episoden.",
   "episodeAssign.selectPlaceholder": "Episode auswählen…",
   "episodeAssign.refusal.noEpisodes": "Wähle mindestens eine Episode.",
-  "episodeAssign.refusal.outsideTitle": "Diese Episode gehört zu einem anderen Titel.",
-  "episodeAssign.refusal.primaryConflict": "Diese Episode hat bereits eine primäre Datei.",
-  "episodeAssign.refusal.notEpisodic": "Nur Serien- und Anime-Dateien können Episoden zugewiesen werden.",
-  "episodeAssign.refusal.unsupportedFile": "Diese Datei kann nicht zwischen Episoden verschoben werden. Serienfilm-Dateien und Disc-Images bleiben an ihrem Platz.",
-  "episodeAssign.refusal.destinationOccupied": "Eine andere Datei trägt bereits den Namen, den diese Episode ergibt. Verschiebe oder entferne sie und versuche es erneut.",
-  "episodeAssign.refusal.renameRefused": "Scryer konnte die Datei für diese Episode nicht benennen. Prüfe den Bibliotheksordner und die Benennungsvorlage des Titels.",
-  "episodeAssign.refusal.renameFailed": "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
-  "pendingImports.reason.anime_numbering_ambiguous": "Episodennummerierung ist mehrdeutig",
+  "episodeAssign.refusal.outsideTitle":
+    "Diese Episode gehört zu einem anderen Titel.",
+  "episodeAssign.refusal.primaryConflict":
+    "Diese Episode hat bereits eine primäre Datei.",
+  "episodeAssign.refusal.notEpisodic":
+    "Nur Serien- und Anime-Dateien können Episoden zugewiesen werden.",
+  "episodeAssign.refusal.unsupportedFile":
+    "Diese Datei kann nicht zwischen Episoden verschoben werden. Serienfilm-Dateien und Disc-Images bleiben an ihrem Platz.",
+  "episodeAssign.refusal.destinationOccupied":
+    "Eine andere Datei trägt bereits den Namen, den diese Episode ergibt. Verschiebe oder entferne sie und versuche es erneut.",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer konnte die Datei für diese Episode nicht benennen. Prüfe den Bibliotheksordner und die Benennungsvorlage des Titels.",
+  "episodeAssign.refusal.renameFailed":
+    "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
+  "pendingImports.reason.anime_numbering_ambiguous":
+    "Episodennummerierung ist mehrdeutig",
 };
 
 export default de;

@@ -21,19 +21,22 @@ export function ConvergenceBadge({
   let hint: string | undefined;
   switch (state) {
     case "SEARCHING":
-      className = "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]";
+      className =
+        "bg-[rgba(var(--scry-accent-rgb),0.2)] text-[var(--scry-accent-text)]";
       label = t("wanted.convergence.searching", {
         covered: indexersCovered,
         routed: indexersRouted,
       });
       break;
     case "CONVERGED":
-      className = "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]";
+      className =
+        "bg-[var(--scry-success-bg-strong)] text-[var(--scry-success-text)]";
       label = t("wanted.convergence.converged");
       hint = t("wanted.convergence.convergedHint");
       break;
     case "DEFERRED":
-      className = "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]";
+      className =
+        "bg-[var(--scry-warning-bg-strong)] text-[var(--scry-warning-text)]";
       label = t("wanted.convergence.deferred");
       hint = t("wanted.convergence.deferredHint");
       break;

@@ -18,7 +18,14 @@ function videoStream(hdr: Partial<Hdr>, id = "0"): Stream {
       id,
       profile: "Main 10",
       channelLayout: null,
-      hdr: { dolbyVision: null, hdr10plus: null, hdr10: null, hlg: null, pq: null, ...hdr },
+      hdr: {
+        dolbyVision: null,
+        hdr10plus: null,
+        hdr10: null,
+        hlg: null,
+        pq: null,
+        ...hdr,
+      },
     },
   };
 }
@@ -34,12 +41,17 @@ function audioStream(
       id: null,
       profile: options.profile ?? null,
       channelLayout: options.layout ?? null,
-      disposition: { commentary: options.commentary ?? false, visualImpaired: false },
+      disposition: {
+        commentary: options.commentary ?? false,
+        visualImpaired: false,
+      },
     },
   };
 }
 
-function source(overrides: Partial<MediaFormatPillSource>): MediaFormatPillSource {
+function source(
+  overrides: Partial<MediaFormatPillSource>,
+): MediaFormatPillSource {
   return {
     analysis: null,
     videoHdrFormat: null,
@@ -88,31 +100,54 @@ test("dolby vision without an HDR fallback layer shows DV alone", () => {
 });
 
 test("HDR10+ replaces the plain HDR pill", () => {
-  const file = source({ analysis: analysis([videoStream({ hdr10plus: true, hdr10: true, pq: true })]) });
+  const file = source({
+    analysis: analysis([
+      videoStream({ hdr10plus: true, hdr10: true, pq: true }),
+    ]),
+  });
   assert.deepEqual(hdrFormatPills(file), ["HDR10+"]);
 });
 
 test("HLG and bare PQ streams are labelled", () => {
-  assert.deepEqual(hdrFormatPills(source({ analysis: analysis([videoStream({ hlg: true })]) })), ["HLG"]);
-  assert.deepEqual(hdrFormatPills(source({ analysis: analysis([videoStream({ pq: true })]) })), ["HDR"]);
+  assert.deepEqual(
+    hdrFormatPills(
+      source({ analysis: analysis([videoStream({ hlg: true })]) }),
+    ),
+    ["HLG"],
+  );
+  assert.deepEqual(
+    hdrFormatPills(source({ analysis: analysis([videoStream({ pq: true })]) })),
+    ["HDR"],
+  );
 });
 
 test("SDR video has no HDR pills", () => {
-  const file = source({ analysis: analysis([videoStream({ hdr10: false, hlg: false, pq: false })]) });
+  const file = source({
+    analysis: analysis([videoStream({ hdr10: false, hlg: false, pq: false })]),
+  });
   assert.deepEqual(hdrFormatPills(file), []);
 });
 
 test("the selected video stream decides the HDR pills", () => {
   const file = source({
-    analysis: analysis([videoStream({ pq: false }, "0"), videoStream({ hdr10: true }, "1")], "1"),
+    analysis: analysis(
+      [videoStream({ pq: false }, "0"), videoStream({ hdr10: true }, "1")],
+      "1",
+    ),
   });
   assert.deepEqual(hdrFormatPills(file), ["HDR"]);
 });
 
 test("files scanned before stream analysis fall back to the stored HDR format", () => {
-  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "Dolby Vision" })), ["DV"]);
-  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "HDR10+" })), ["HDR10+"]);
-  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "HDR10" })), ["HDR"]);
+  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "Dolby Vision" })), [
+    "DV",
+  ]);
+  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "HDR10+" })), [
+    "HDR10+",
+  ]);
+  assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "HDR10" })), [
+    "HDR",
+  ]);
   assert.deepEqual(hdrFormatPills(source({ videoHdrFormat: "HLG" })), ["HLG"]);
 });
 
@@ -140,21 +175,28 @@ test("commentary tracks do not set the surround pill", () => {
 
 test("DTS:X is flagged as object audio", () => {
   const file = source({
-    analysis: analysis([audioStream(8, { layout: "7.1", profile: "DTS-HD MA + DTS:X" })]),
+    analysis: analysis([
+      audioStream(8, { layout: "7.1", profile: "DTS-HD MA + DTS:X" }),
+    ]),
   });
   assert.deepEqual(audioFormatPills(file), ["7.1", "DTS:X"]);
 });
 
 test("stereo and mono audio have no surround pill", () => {
   const file = source({
-    analysis: analysis([audioStream(2, { layout: "stereo" }), audioStream(1, { layout: "mono" })]),
+    analysis: analysis([
+      audioStream(2, { layout: "stereo" }),
+      audioStream(1, { layout: "mono" }),
+    ]),
   });
   assert.deepEqual(audioFormatPills(file), []);
 });
 
 test("channel count names the layout when the scan has none", () => {
   const file = source({
-    audioStreams: [{ channels: 6, profile: "Dolby Digital Plus + Dolby Atmos" }],
+    audioStreams: [
+      { channels: 6, profile: "Dolby Digital Plus + Dolby Atmos" },
+    ],
   });
   assert.deepEqual(audioFormatPills(file), ["5.1", "Atmos"]);
   assert.deepEqual(audioFormatPills(source({ audioChannels: 8 })), ["7.1"]);

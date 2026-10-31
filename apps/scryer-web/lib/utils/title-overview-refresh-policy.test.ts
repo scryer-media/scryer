@@ -34,10 +34,13 @@ test("title overview refresh kinds include policy-managed activity", () => {
 });
 
 test("file analyzed activity is a debounced refresh", () => {
-  assert.deepEqual(titleOverviewReactiveRefreshPlan("file_analyzed", importKinds), {
-    type: "refresh",
-    mode: "bulk",
-  });
+  assert.deepEqual(
+    titleOverviewReactiveRefreshPlan("file_analyzed", importKinds),
+    {
+      type: "refresh",
+      mode: "bulk",
+    },
+  );
 });
 
 test("subtitle activity is an immediate refresh", () => {
@@ -66,10 +69,7 @@ test("import lifecycle activity is an immediate refresh", () => {
 
 test("hydration activity reports UI-only transitions except completed", () => {
   assert.deepEqual(
-    titleOverviewReactiveRefreshPlan(
-      "metadata_hydration_started",
-      importKinds,
-    ),
+    titleOverviewReactiveRefreshPlan("metadata_hydration_started", importKinds),
     { type: "hydrationStarted" },
   );
   assert.deepEqual(

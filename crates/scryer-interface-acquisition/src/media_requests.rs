@@ -24,9 +24,12 @@ fn lease_override(
     lease_forever: Option<bool>,
 ) -> GqlResult<Option<Option<i64>>> {
     match (lease_days, lease_forever.unwrap_or(false)) {
-        (Some(_), true) => Err(to_gql_error(scryer_application::AppError::Validation(
-            "approve accepts either 'leaseDays' or 'leaseForever', not both".to_string(),
-        ))),
+        (Some(_), true) => Err(to_gql_error(
+            scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_REQUEST_LEASE_CONFLICT,
+                "approve accepts either 'leaseDays' or 'leaseForever', not both",
+            ),
+        )),
         (Some(days), false) => Ok(Some(Some(i64::from(days)))),
         (None, true) => Ok(Some(None)),
         (None, false) => Ok(None),

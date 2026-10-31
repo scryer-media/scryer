@@ -166,7 +166,11 @@ function TitleCardImpl({
   // Exactly one action available → the whole card triggers it.
   const actionCount = requested ? 0 : Number(addable) + Number(requestable);
   const wholeCardActs = actionCount === 1;
-  const wholeCardHandler = wholeCardActs ? (addable ? onAdd : onRequest) : onOpen;
+  const wholeCardHandler = wholeCardActs
+    ? addable
+      ? onAdd
+      : onRequest
+    : onOpen;
   const wholeCardLabel = wholeCardActs
     ? `${addable ? t("discovery.add") : t("discovery.request")}: ${title}`
     : title;
@@ -290,7 +294,9 @@ function TitleCardImpl({
               title={cornerBadge.title}
               className={cn(
                 "pointer-events-none inline-flex max-w-[110px] items-center gap-1 truncate rounded-[8px] font-semibold uppercase tracking-[0.03em] shadow-[0_6px_14px_rgba(0,0,0,0.28)] backdrop-blur",
-                compact ? "px-1.5 py-0.5 text-[9.5px]" : "px-2 py-0.5 text-[10px]",
+                compact
+                  ? "px-1.5 py-0.5 text-[9.5px]"
+                  : "px-2 py-0.5 text-[10px]",
                 cornerBadge.tone === "neutral"
                   ? "border border-white/15 bg-[rgba(4,6,12,0.78)] text-[var(--scry-text2)]"
                   : "border border-[rgba(var(--scry-accent-rgb),0.42)] bg-[rgba(var(--scry-accent-rgb),0.24)] text-[#dfe3ff]",
@@ -307,7 +313,9 @@ function TitleCardImpl({
             </span>
           ) : null}
           {onDismiss ? (
-            <ActionTooltip content={dismissLabel ?? t("discovery.notInterested")}>
+            <ActionTooltip
+              content={dismissLabel ?? t("discovery.notInterested")}
+            >
               <button
                 type="button"
                 aria-label={dismissLabel ?? t("discovery.notInterested")}

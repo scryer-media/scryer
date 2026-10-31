@@ -119,6 +119,19 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
                 })
                 .unwrap_or_else(|| "Blocklisted a release.".to_string()),
         ),
+        DomainEventPayload::DownloadMissing(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Warning,
+            data.title
+                .as_ref()
+                .map(|title| {
+                    format!(
+                        "Download for '{}' is not visible in its client.",
+                        title.title_name
+                    )
+                })
+                .unwrap_or_else(|| "Download is not visible in its client.".to_string()),
+        ),
         DomainEventPayload::DownloadIgnored(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,
@@ -562,10 +575,11 @@ pub(crate) fn title_history_record_from_domain_event(
             None,
             None,
             data.canonical_download_id.is_some()
-                && data.reason.as_deref().is_some_and(|reason| {
-                    reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:")
-                        || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:")
-                }),
+                && scryer_domain::DownloadPasswordFailure::from_stored_reason(
+                    data.reason_code.as_deref(),
+                    data.reason.as_deref(),
+                )
+                .is_some(),
             data.reason.clone(),
             None,
             None,
@@ -661,6 +675,27 @@ pub(crate) fn title_history_record_from_domain_event(
             None,
             data.source_path.clone(),
             data.dest_path.clone(),
+        ),
+        DomainEventPayload::DownloadMissing(data) => (
+            data.title.as_ref().map(|title| title.title_name.clone()),
+            data.title.as_ref().map(|title| title.facet.clone()),
+            TitleHistoryEventType::DownloadMissing,
+            data.source_title.clone(),
+            data.source_title.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some(data.download_client_item_id.clone()),
+            data.client_id.clone(),
+            data.client_type.clone(),
+            None,
+            None,
+            false,
+            Some(data.reason.clone()),
+            None,
+            None,
+            None,
         ),
         DomainEventPayload::DownloadIgnored(data) => (
             data.title.as_ref().map(|title| title.title_name.clone()),
@@ -988,6 +1023,16 @@ pub(crate) fn title_history_record_from_domain_event(
         skip_reason,
         retry_requires_password,
         failure_reason,
+        failure_reason_code: match &event.payload {
+            DomainEventPayload::DownloadFailed(data) => data.reason_code.clone().or_else(|| {
+                scryer_domain::DownloadPasswordFailure::from_stored_reason(
+                    None,
+                    data.reason.as_deref(),
+                )
+                .map(|failure| failure.reason_code().to_string())
+            }),
+            _ => None,
+        },
         blocklist_reason,
         source_path,
         dest_path,
@@ -1606,6 +1651,7 @@ mod tests {
                     client_name: Some("Fixture Client".to_string()),
                     client_type: Some("nzbget".to_string()),
                     quality: Some("1080p".to_string()),
+                    reason_code: None,
                     reason: Some("archive corrupt".to_string()),
                     episode_ids: vec!["episode-1".to_string()],
                     collection_id: Some("collection-1".to_string()),
@@ -1834,6 +1880,7 @@ mod tests {
                 client_name: None,
                 client_type: None,
                 quality: Some("1080p".to_string()),
+                reason_code: None,
                 reason: Some(failure_reason),
                 episode_ids: vec!["ep-1".to_string()],
                 collection_id: None,
@@ -1960,6 +2007,7 @@ mod tests {
             queued_at: Some(queued_at.to_string()),
             last_updated_at: Some(last_updated_at.to_string()),
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: id.to_string(),
             download_id: None,

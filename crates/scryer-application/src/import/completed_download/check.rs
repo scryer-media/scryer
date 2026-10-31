@@ -52,7 +52,9 @@ pub(crate) async fn check_with_lookup(
                     app,
                     td,
                     crate::tracked_downloads::ImportBlockedReason::AfterImport,
-                    td.status_messages.first().map(String::as_str),
+                    td.status_messages
+                        .first()
+                        .map(|message| message.text.as_str()),
                 )
                 .await;
             }
@@ -77,10 +79,6 @@ pub(crate) async fn check_with_lookup(
     if td.state == TrackedDownloadState::ImportBlocked
         && td.match_type == TitleMatchType::Submission
     {
-        return;
-    }
-
-    if td.state == TrackedDownloadState::ImportBlocked && td.path_missing_since.is_some() {
         return;
     }
 
@@ -195,13 +193,27 @@ pub(crate) async fn check_with_lookup(
         CompletedDownloadPathState::Retry => {
             return;
         }
+        CompletedDownloadPathState::RetryAfterGrace => {
+            // The row keeps retrying on its own, but a path still missing
+            // after the grace window usually means a wrong remote path
+            // mapping, mount or rclone `--links` setting, so tell the
+            // operator once.
+            if notify_manual_interaction_once(app, td).await {
+                tracing::warn!(
+                    id = %td.id,
+                    dest_dir = %completed.dest_dir,
+                    empty_dest_dir = completed.dest_dir.trim().is_empty(),
+                    grace_minutes = COMPLETED_PATH_GRACE_PERIOD_MINUTES,
+                    "completed download path remained unavailable after grace window; retrying automatically"
+                );
+            }
+            return;
+        }
         CompletedDownloadPathState::Blocked => {
             tracing::warn!(
                 id = %td.id,
                 dest_dir = %completed.dest_dir,
-                empty_dest_dir = completed.dest_dir.trim().is_empty(),
-                grace_minutes = COMPLETED_PATH_GRACE_PERIOD_MINUTES,
-                "completed download path remained unavailable after grace window; blocking import until manual retry"
+                "completed download path is a URL, not a local path; blocking import until manual retry"
             );
             set_state_to_import_blocked(app, td).await;
             return;
@@ -258,13 +270,11 @@ pub(crate) async fn check_with_lookup(
     // Auto-import safety gating.
     match td.match_type {
         TitleMatchType::Unmatched => {
-            if !td
-                .status_messages
-                .iter()
-                .any(|m| m.contains("couldn't be matched"))
-            {
+            if !td.status_messages.iter().any(|m| {
+                m.kind == crate::tracked_downloads::TrackedStatusMessageKind::TitleUnmatched
+            }) {
                 td.status_messages.clear();
-                td.warn("Download couldn't be matched to a library title. Assign a title manually or check the download name.");
+                td.warn_kind(crate::tracked_downloads::TrackedStatusMessageKind::TitleUnmatched, "Download couldn't be matched to a library title. Assign a title manually or check the download name.");
             }
             set_state_to_import_blocked(app, td).await;
             return;
@@ -272,10 +282,14 @@ pub(crate) async fn check_with_lookup(
         TitleMatchType::IdOnly => {
             if has_id_only_conflict(td) {
                 if !td.status_messages.iter().any(|m| {
-                    m.contains("matched by ID only") || m.contains(ID_ONLY_CONFLICT_MESSAGE)
+                    matches!(
+                        m.kind,
+                        crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConfirmation
+                            | crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict
+                    )
                 }) {
                     td.status_messages.clear();
-                    td.warn(
+                    td.warn_kind(crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConfirmation,
                         "Download was matched to a title by ID only. Manual confirmation required to import.",
                     );
                 }
@@ -400,10 +414,10 @@ fn mark_waiting_for_completed_history(
     td.state = TrackedDownloadState::ImportPending;
     td.waiting_for_completed_history = true;
     td.status = TrackedDownloadStatus::Warning;
-    td.status_messages = vec![
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
         "Completed download is waiting for client history to expose a matching item; retrying."
             .to_string(),
-    ];
+    )];
 }
 
 fn missing_completed_history_is_retryable(
@@ -718,10 +732,10 @@ pub(super) async fn completed_download_proves_assigned_title(
     AssignedTitleProof::Disproven
 }
 
-pub(super) fn has_id_only_conflict(td: &TrackedDownload) -> bool {
-    td.status_messages
-        .iter()
-        .any(|message| message == ID_ONLY_CONFLICT_MESSAGE)
+pub(crate) fn has_id_only_conflict(td: &TrackedDownload) -> bool {
+    td.status_messages.iter().any(|message| {
+        message.kind == crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict
+    })
 }
 
 async fn set_state_to_import_blocked(app: &AppUseCase, td: &mut TrackedDownload) {
@@ -746,88 +760,70 @@ async fn set_state_to_import_blocked_with_reason(
         app,
         td,
         reason,
-        td.status_messages.first().map(String::as_str),
+        td.status_messages
+            .first()
+            .map(|message| message.text.as_str()),
     )
     .await;
 
+    notify_manual_interaction_once(app, td).await;
+}
+
+/// Raises the one `ImportRejected` notification that tells the operator this
+/// download needs their attention, carrying its first status message. Guarded
+/// by `notified_manual_interaction`, so repeated ticks stay quiet; returns
+/// whether this call raised it. It never changes the download's state.
+async fn notify_manual_interaction_once(app: &AppUseCase, td: &mut TrackedDownload) -> bool {
     if td.notified_manual_interaction {
-        return;
+        return false;
     }
 
     td.notified_manual_interaction = true;
     let message = td
         .status_messages
         .first()
-        .cloned()
+        .map(|message| message.text.clone())
         .unwrap_or_else(|| "Manual interaction required for this download.".to_string());
 
-    let event = match td.title_id.as_ref() {
-        Some(title_id) => match app.services.catalog.titles.get_by_id(title_id).await {
-            Ok(Some(title)) => new_title_domain_event(
-                None,
-                &title,
-                scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
-                    title: Some(title_context_snapshot(&title)),
-                    status: ImportStatus::Skipped,
-                    import_id: None,
-                    source_system: Some(td.client_type.clone()),
-                    source_ref: Some(td.client_item.download_client_item_id.clone()),
-                    source_title: td
-                        .source_title
-                        .clone()
-                        .or_else(|| Some(td.client_item.title_name.clone())),
-                    source_path: None,
-                    dest_path: None,
-                    quality: None,
-                    reason: Some(message.clone()),
-                    skip_reason: None,
-                    episode_ids: Vec::new(),
-                }),
-            ),
-            _ => new_global_domain_event(
-                None,
-                scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
-                    title: None,
-                    status: ImportStatus::Skipped,
-                    import_id: None,
-                    source_system: Some(td.client_type.clone()),
-                    source_ref: Some(td.client_item.download_client_item_id.clone()),
-                    source_title: td
-                        .source_title
-                        .clone()
-                        .or_else(|| Some(td.client_item.title_name.clone())),
-                    source_path: None,
-                    dest_path: None,
-                    quality: None,
-                    reason: Some(message.clone()),
-                    skip_reason: None,
-                    episode_ids: Vec::new(),
-                }),
-            ),
-        },
-        None => new_global_domain_event(
-            None,
-            scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
-                title: None,
-                status: ImportStatus::Skipped,
-                import_id: None,
-                source_system: Some(td.client_type.clone()),
-                source_ref: Some(td.client_item.download_client_item_id.clone()),
-                source_title: td
-                    .source_title
-                    .clone()
-                    .or_else(|| Some(td.client_item.title_name.clone())),
-                source_path: None,
-                dest_path: None,
-                quality: None,
-                reason: Some(message),
-                skip_reason: None,
-                episode_ids: Vec::new(),
-            }),
-        ),
+    let title = match td.title_id.as_ref() {
+        Some(title_id) => app
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let payload = |title_snapshot| {
+        scryer_domain::DomainEventPayload::ImportRejected(ImportRejectedEventData {
+            title: title_snapshot,
+            status: ImportStatus::Skipped,
+            import_id: None,
+            source_system: Some(td.client_type.clone()),
+            source_ref: Some(td.client_item.download_client_item_id.clone()),
+            source_title: td
+                .source_title
+                .clone()
+                .or_else(|| Some(td.client_item.title_name.clone())),
+            source_path: None,
+            dest_path: None,
+            quality: None,
+            reason: Some(message.clone()),
+            skip_reason: None,
+            episode_ids: Vec::new(),
+        })
+    };
+    let event = match title.as_ref() {
+        Some(title) => {
+            new_title_domain_event(None, title, payload(Some(title_context_snapshot(title))))
+        }
+        None => new_global_domain_event(None, payload(None)),
     };
 
     let _ = app.append_domain_event(event).await;
+    true
 }
 
 async fn block_tracked_download_identity_for_manual_review(
@@ -840,9 +836,15 @@ async fn block_tracked_download_identity_for_manual_review(
     if crate::download_submission_identity_is_empty(&observed_identity) {
         return;
     }
-    if !td.status_messages.iter().any(|message| message == detail) {
+    if !td.status_messages.iter().any(|message| {
+        message.kind == crate::tracked_downloads::TrackedStatusMessageKind::ManualReview
+    }) {
         td.status_messages.clear();
-        td.status_messages.push(detail.to_string());
+        td.status_messages
+            .push(crate::tracked_downloads::TrackedStatusMessage::new(
+                crate::tracked_downloads::TrackedStatusMessageKind::ManualReview,
+                detail,
+            ));
     }
     set_state_to_import_blocked_with_reason(app, td, reason).await;
 }

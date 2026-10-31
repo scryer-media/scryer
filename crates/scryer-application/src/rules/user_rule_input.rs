@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::{ParsedReleaseMetadata, QualityProfile, QualityProfileDecision};
 
 pub(crate) struct ReleaseRuntimeInfo<'a> {
+    pub protocol: Option<scryer_rules::ReleaseProtocol>,
     pub size_bytes: Option<i64>,
     /// Whole days from publish to the lane's anchor. The caller computes it
     /// from the frozen listing snapshot; rule input never reads the clock.
@@ -26,6 +27,7 @@ impl<'a> ReleaseRuntimeInfo<'a> {
         Self {
             size_bytes,
             age_days: listing.and_then(|facts| facts.snapshot.age_days(facts.anchor)),
+            protocol: snapshot.and_then(|snapshot| snapshot.protocol),
             thumbs_up: snapshot.and_then(|snapshot| snapshot.thumbs_up),
             thumbs_down: snapshot.and_then(|snapshot| snapshot.thumbs_down),
             is_password_protected: snapshot.and_then(|snapshot| snapshot.is_password_protected),
@@ -128,6 +130,7 @@ pub(crate) fn build_rule_input(
 
     UserRuleInput {
         release: ReleaseDoc {
+            protocol: release_runtime.protocol,
             stereoscopy_tokens,
             stereoscopy: parsed.stereoscopy.map(|stereo| StereoscopyDoc {
                 presentation: stereo.presentation.as_str().into(),
@@ -536,6 +539,7 @@ mod tests {
                 &test_profile(),
                 &test_decision(),
                 ReleaseRuntimeInfo {
+                    protocol: None,
                     size_bytes: None,
                     age_days: None,
                     thumbs_up: None,
@@ -643,6 +647,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: Some(1234),
                 age_days: None,
                 thumbs_up: None,
@@ -698,6 +703,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -745,6 +751,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -788,6 +795,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -830,6 +838,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -874,6 +883,7 @@ mod tests {
             &profile,
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -915,6 +925,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -959,6 +970,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,
@@ -1009,6 +1021,7 @@ mod tests {
             &test_profile(),
             &test_decision(),
             ReleaseRuntimeInfo {
+                protocol: None,
                 size_bytes: None,
                 age_days: None,
                 thumbs_up: None,

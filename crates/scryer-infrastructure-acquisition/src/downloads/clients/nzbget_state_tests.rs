@@ -236,7 +236,23 @@ async fn native_history_matrix_agrees_across_all_reads_and_cleanup_admission() {
         assert_eq!(!completed.unwrap().is_empty(), importable, "{label}");
         let password = entry["UnpackStatus"] == "PASSWORD";
         if password {
-            assert!(rows[0].password_failure().is_some(), "{label}");
+            for row in [&rows[0], &recent[0]] {
+                assert_eq!(
+                    row.password_failure(),
+                    Some(scryer_domain::DownloadPasswordFailure::Required),
+                    "{label}"
+                );
+                assert_eq!(
+                    row.attention_reason_code.as_deref(),
+                    Some("ARCHIVE_PASSWORD_REQUIRED"),
+                    "{label}"
+                );
+                assert_eq!(
+                    row.attention_reason.as_deref(),
+                    Some(scryer_domain::DownloadPasswordFailure::Required.message()),
+                    "{label}"
+                );
+            }
         }
         let cleanup = client
             .get_cleanup_payload_for_source("client", "nzbget", "42")

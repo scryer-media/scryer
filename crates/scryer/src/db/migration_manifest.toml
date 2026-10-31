@@ -3510,6 +3510,108 @@ file = "postgres/migrations/0311_papyrus_palette.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 312
+description = "error reason codes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0312_error_reason_codes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0312_error_reason_codes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 313
+description = "indexer facet learning"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0313_indexer_facet_learning.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0313_indexer_facet_learning.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 314
+description = "indexer search listings"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0314_indexer_search_listings.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0314_indexer_search_listings.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 315
+description = "indexer api clients"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0315_indexer_api_clients.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0315_indexer_api_clients.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 316
+description = "user dashboard layouts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0316_user_dashboard_layouts.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0316_user_dashboard_layouts.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 317
+description = "user ui drop glow"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0317_user_ui_drop_glow.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0317_user_ui_drop_glow.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

@@ -195,6 +195,16 @@ impl AppUseCase {
     pub async fn smg_version_compatibility_notice(
         &self,
     ) -> AppResult<Option<crate::SmgVersionCompatibilityNotice>> {
+        if self
+            .read_setting_json_value::<bool>("smg.clock_skew_notice", None)
+            .await?
+            .unwrap_or(false)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::metadata_gateway::CLOCK_SKEW,
+                "The system clock differs from the metadata gateway by more than five minutes. Synchronize the system clock and restart Scryer.",
+            ));
+        }
         self.read_setting_json_value(SMG_VERSION_COMPATIBILITY_NOTICE_KEY, None)
             .await
     }
@@ -614,14 +624,18 @@ impl AppUseCase {
             .await?;
 
         if limit <= 0 {
-            return Err(AppError::Validation(
-                "limit is required and must be greater than zero".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::settings::LIMIT_REQUIRED_OUT_OF_RANGE,
+                "limit is required and must be greater than zero",
             ));
         }
 
         let source = source.trim();
         if source.is_empty() {
-            return Err(AppError::Validation("source is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::settings::SOURCE_REQUIRED,
+                "source is required",
+            ));
         }
 
         self.services

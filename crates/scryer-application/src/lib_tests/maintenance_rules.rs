@@ -818,7 +818,15 @@ async fn deleting_a_rule_that_has_executed_is_refused() {
         .await
         .expect_err("a rule with an execution history must not be deletable");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error.to_string().contains("Set it to Disabled"),
         "the refusal must name the way out: {error}"
@@ -861,7 +869,15 @@ async fn a_disabled_rule_with_a_history_is_still_refused() {
         .delete_maintenance_rule_set(&user, &created.rule_set.id)
         .await
         .expect_err("disabling a rule does not make its history disposable");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 }
 
 /// Live candidates are membership an operator can currently see; the cascade
@@ -889,7 +905,15 @@ async fn deleting_a_rule_with_live_candidates_is_refused() {
         .await
         .expect_err("a rule still tracking subjects must not be deletable");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(error.to_string().contains("tracking 1"), "{error}");
     assert_eq!(rules.list_rule_sets().await.unwrap().len(), 1);
 }
@@ -931,7 +955,15 @@ async fn a_matcher_that_does_not_compile_is_rejected() {
         .await
         .expect_err("invalid rego must be rejected");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(rules.list_rule_sets().await.unwrap().is_empty());
 }
 
@@ -949,7 +981,15 @@ async fn a_matcher_reading_an_undocumented_fact_is_rejected() {
         .await
         .expect_err("unknown input paths must be rejected");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(rules.list_rule_sets().await.unwrap().is_empty());
 }
 
@@ -971,7 +1011,15 @@ async fn an_action_that_supports_neither_movies_nor_shows_is_rejected() {
         .await
         .expect_err("subject mismatch must be rejected");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error.to_string().contains("title-scoped"),
         "the message should name the scope: {error}"
@@ -1001,7 +1049,15 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
         .await
         .expect_err("an action the executor refuses must not be savable");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error
             .to_string()
@@ -1031,7 +1087,15 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
         )
         .await
         .expect_err("a revision cannot smuggle in an unrunnable action either");
-    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]
@@ -1049,7 +1113,15 @@ async fn a_negative_grace_period_is_rejected() {
         .await
         .expect_err("negative grace must be rejected");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 }
 
 /// The grace period is materialized into `due_at` as a date addition, and
@@ -1081,7 +1153,15 @@ async fn the_grace_period_is_bounded_at_ten_years() {
         )
         .await
         .expect_err("one day past the bound must be rejected");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(
         error.to_string().contains("ten years"),
         "the refusal should say what the limit is: {error}"
@@ -1103,7 +1183,15 @@ async fn the_grace_period_is_bounded_at_ten_years() {
         )
         .await
         .expect_err("the bound applies to matcher replacements too");
-    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]
@@ -1121,7 +1209,10 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
         .await
         .expect_err("create must require ManageCatalogSettings");
     assert!(
-        matches!(create_error, AppError::Unauthorized(_)),
+        matches!(
+            create_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "{create_error:?}"
     );
 
@@ -1130,7 +1221,10 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
         .await
         .expect_err("list must require ManageCatalogSettings");
     assert!(
-        matches!(list_error, AppError::Unauthorized(_)),
+        matches!(
+            list_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "{list_error:?}"
     );
 
@@ -1157,7 +1251,10 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
         .await
         .expect_err("preview must require ManageCatalogSettings");
     assert!(
-        matches!(preview_error, AppError::Unauthorized(_)),
+        matches!(
+            preview_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "{preview_error:?}"
     );
 }
@@ -1362,7 +1459,15 @@ async fn preview_refuses_a_selection_above_the_cap() {
         .await
         .expect_err("over-cap selections must be rejected");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 }
 
 // ── Stateless validation ────────────────────────────────────────────────────

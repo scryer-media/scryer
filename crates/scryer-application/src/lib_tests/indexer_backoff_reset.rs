@@ -22,7 +22,7 @@ async fn editing_indexer_credentials_keeps_omitted_proxy_assignment_for_validati
         .await
         .expect_err("omission must validate through the assigned proxy");
     assert!(
-        matches!(&error, AppError::Validation(message) if message == "Proxy configuration was not found."),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message == "Proxy configuration was not found."),
         "{error}"
     );
     let unchanged = app

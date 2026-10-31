@@ -466,6 +466,42 @@ fn title_folder_contains_stored_path(title: &Title, path: &str) -> bool {
         .is_some_and(|folder| crate::stored_paths::stored_path_is_within_folder(&folder, path))
 }
 
+fn validate_owned_series_import_identity(
+    candidate: &PreparedSeriesLibraryScanCandidate,
+    owner: &Title,
+) -> AppResult<()> {
+    let Some(hint) = candidate
+        .identity_hint
+        .as_ref()
+        .filter(|hint| hint.is_external_import_hint())
+    else {
+        return Ok(());
+    };
+    for (source, expected) in [
+        ("tvdb", hint.tvdb_id.as_deref()),
+        ("imdb", hint.imdb_id.as_deref()),
+        ("tmdb", hint.tmdb_id.as_deref()),
+    ] {
+        // Missing provider IDs are incomplete metadata, not a conflicting identity.
+        if let Some(expected) = expected
+            && owner
+                .external_ids
+                .iter()
+                .any(|id| id.source.eq_ignore_ascii_case(source))
+            && !owner
+                .external_ids
+                .iter()
+                .any(|id| id.source.eq_ignore_ascii_case(source) && id.value == expected)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::FOLDER_OWNERSHIP_CONFLICT,
+                "Imported identity conflicts with the existing folder owner; resolve the title identity before scanning.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn find_existing_series_title_index(
     candidate: &PreparedSeriesLibraryScanCandidate,
     existing_titles: &[Title],
@@ -1199,6 +1235,7 @@ pub(super) async fn process_series_full_scan_candidate(
         .iter()
         .position(|title| crate::folder_ownership::title_owns_folder(title, &candidate_folder))
     {
+        validate_owned_series_import_identity(&candidate, &existing_titles[index])?;
         merge_series_title_work_for_index(
             app,
             library,
@@ -2510,6 +2547,70 @@ mod tests {
                 query.to_string(),
             ]),
             metadata_lookup_attempted: true,
+        }
+    }
+
+    #[test]
+    fn imported_identity_cannot_bypass_a_conflicting_folder_owner() {
+        let mut candidate = series_candidate("Namesake Series", None);
+        candidate.identity_hint = Some(crate::library_scan_metadata::MetadataIdentityHint {
+            source: crate::library_scan_metadata::MetadataIdentitySource::ExternalImportSonarr,
+            tvdb_id: Some("900002".into()),
+            imdb_id: None,
+            tmdb_id: None,
+            title: None,
+            year: None,
+        });
+        let mut owner = build_series_title("existing-owner");
+        owner.folder_path = Some("/library/Namesake Series".into());
+        owner.external_ids = vec![scryer_domain::ExternalId {
+            source: "tvdb".into(),
+            kind: None,
+            value: "900001".into(),
+        }];
+        let original = owner.clone();
+        let error = validate_owned_series_import_identity(&candidate, &owner)
+            .expect_err("different source identity must be refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::FOLDER_OWNERSHIP_CONFLICT)
+        );
+        assert_eq!(owner.folder_path, original.folder_path);
+        assert_eq!(owner.external_ids, original.external_ids);
+        candidate.identity_hint.as_mut().unwrap().tvdb_id = Some("900001".into());
+        validate_owned_series_import_identity(&candidate, &owner)
+            .expect("matching identity keeps ownership");
+        candidate.identity_hint = None;
+        validate_owned_series_import_identity(&candidate, &owner)
+            .expect("ordinary folder scans retain ownership");
+    }
+
+    #[test]
+    fn imported_identity_allows_missing_provider_ids_on_the_folder_owner() {
+        let mut candidate = series_candidate("Namesake Series", None);
+        candidate.identity_hint = Some(crate::library_scan_metadata::MetadataIdentityHint {
+            source: crate::library_scan_metadata::MetadataIdentitySource::ExternalImportSonarr,
+            tvdb_id: Some("900001".into()),
+            imdb_id: Some("tt900001".into()),
+            tmdb_id: Some("800001".into()),
+            title: None,
+            year: None,
+        });
+        let mut owner = build_series_title("existing-owner");
+        owner.external_ids.clear();
+        validate_owned_series_import_identity(&candidate, &owner)
+            .expect("an owner without provider IDs has no known identity conflict");
+        for (source, value) in [("tvdb", "900001"), ("imdb", "tt900001"), ("tmdb", "800001")] {
+            owner.external_ids = vec![scryer_domain::ExternalId::new(source, value)];
+            validate_owned_series_import_identity(&candidate, &owner)
+                .expect("matching known identity permits missing auxiliary provider IDs");
+            owner.external_ids[0].value = "different".into();
+            assert_eq!(
+                validate_owned_series_import_identity(&candidate, &owner)
+                    .expect_err("a known provider disagreement still conflicts")
+                    .validation_reason(),
+                Some(crate::error_reasons::library::FOLDER_OWNERSHIP_CONFLICT)
+            );
         }
     }
 

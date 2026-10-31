@@ -154,7 +154,12 @@ fn compile_windows_resources() {
     println!("cargo:rerun-if-changed=resources/windows/scryer.exe.manifest");
     println!("cargo:rerun-if-changed=resources/windows/scryer.ico");
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+    // Cross-compiled lints never link, and llvm-rc cannot resolve the manifest
+    // from the preprocessed resource script.
+    println!("cargo:rerun-if-env-changed=SCRYER_SKIP_WINDOWS_RESOURCES");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
+        || env::var_os("SCRYER_SKIP_WINDOWS_RESOURCES").is_some()
+    {
         return;
     }
 

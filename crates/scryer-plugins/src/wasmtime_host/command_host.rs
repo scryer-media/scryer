@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::plugin_http_host::{PluginHttpHost, PluginHttpRequest};
+use crate::plugin_http_host::{
+    HostHttpError, HostHttpErrorKind, PluginHttpHost, PluginHttpRequest,
+};
 use crate::process_host::ProcessHost;
 use crate::socket_host::{SocketCallError, SocketHost, socket_plugin_error};
 use scryer_application::{AppError, ArchiveExtractorPluginProvider};
@@ -38,6 +40,20 @@ const MAX_ARCHIVE_RESPONSE_BYTES: usize = 15 * 1024 * 1024;
 /// host through the per-member envelope alone.
 const MAX_ARCHIVE_RESPONSE_FILES: usize = 4096;
 const STAGED_ARCHIVE_OUTPUT_DIR: &str = "output";
+#[derive(Debug)]
+pub(crate) enum CommandHostError {
+    InvalidRequest(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for CommandHostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRequest(message) | Self::Failed(message) => message.fmt(formatter),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct CommandHost {
     services: Option<Arc<CommandHostServices>>,
@@ -261,21 +277,24 @@ impl CommandHost {
     /// guest returns `list<u8>` by value, so `scryer:host/services@1.0.0`'s
     /// `host-call` binds straight to this — there is no response-handle
     /// bookkeeping left, because the raw pointer ABI that needed it is gone.
-    pub(crate) fn call_bytes(&self, encoded_request: &[u8]) -> Result<Vec<u8>, String> {
+    pub(crate) fn call_bytes(&self, encoded_request: &[u8]) -> Result<Vec<u8>, CommandHostError> {
         if encoded_request.len() > MAX_HOST_REQUEST_BYTES {
-            return Err(format!(
+            return Err(CommandHostError::InvalidRequest(format!(
                 "encoded host request exceeds {MAX_HOST_REQUEST_BYTES} bytes"
-            ));
+            )));
         }
-        let request: PluginHostRequest = postcard::from_bytes(encoded_request)
-            .map_err(|error| format!("invalid postcard host request: {error}"))?;
+        let request: PluginHostRequest =
+            postcard::from_bytes(encoded_request).map_err(|error| {
+                CommandHostError::InvalidRequest(format!("invalid postcard host request: {error}"))
+            })?;
         let response = self.service_request(request);
-        let encoded = postcard::to_allocvec(&response)
-            .map_err(|error| format!("failed to encode host response: {error}"))?;
+        let encoded = postcard::to_allocvec(&response).map_err(|error| {
+            CommandHostError::Failed(format!("failed to encode host response: {error}"))
+        })?;
         if encoded.len() > MAX_RESPONSE_BYTES {
-            return Err(format!(
+            return Err(CommandHostError::Failed(format!(
                 "encoded host response exceeds {MAX_RESPONSE_BYTES} bytes"
-            ));
+            )));
         }
         Ok(encoded)
     }
@@ -335,34 +354,10 @@ impl CommandHost {
                     PluginResult::Ok(PluginStateMutationResponse { changed })
                 }))
             }
-            PluginHostRequest::Http(request) => {
-                let response = self
-                    .remaining_http_timeout(services.timeout)
-                    .and_then(|timeout| {
-                        services.http.request(
-                            &services.plugin_id,
-                            PluginHttpRequest {
-                                url: request.url,
-                                method: request.method,
-                                headers: request.headers,
-                            },
-                            (!request.body.is_empty()).then_some(request.body),
-                            timeout,
-                        )
-                    })
-                    .and_then(|body| {
-                        let status = services.http.status_code(&services.plugin_id)?;
-                        Ok(PluginHttpResponse {
-                            status,
-                            headers: services
-                                .http
-                                .headers(&services.plugin_id)?
-                                .unwrap_or_default(),
-                            body,
-                        })
-                    });
-                PluginHostResponse::Http(response.map_or_else(service_error, PluginResult::Ok))
-            }
+            PluginHostRequest::Http(request) => PluginHostResponse::Http(
+                self.http_request(request)
+                    .map_or_else(|error| service_error(error.to_string()), PluginResult::Ok),
+            ),
             PluginHostRequest::ReservedHttpBatch(_) => {
                 PluginHostResponse::ReservedHttpBatch(unsupported())
             }
@@ -403,6 +398,74 @@ impl CommandHost {
                 },
             ),
         }
+    }
+
+    /// The typed and encoded guest doors share this policy and transport path.
+    pub(crate) fn http_request(
+        &self,
+        request: scryer_plugin_sdk::host::PluginHttpRequest,
+    ) -> Result<PluginHttpResponse, HostHttpError> {
+        let services = self.services.as_ref().ok_or_else(|| {
+            HostHttpError::new(
+                HostHttpErrorKind::ForbiddenOrigin,
+                "HTTP service is unavailable",
+            )
+        })?;
+        if request.body.len() > MAX_HOST_REQUEST_BYTES {
+            return Err(HostHttpError::new(
+                HostHttpErrorKind::InvalidRequest,
+                "HTTP request exceeds the host request envelope limit",
+            ));
+        }
+        let encoded_size =
+            postcard::experimental::serialized_size(&PluginHostRequest::Http(request.clone()))
+                .map_err(|error| {
+                    HostHttpError::new(HostHttpErrorKind::InvalidRequest, error.to_string())
+                })?;
+        if encoded_size > MAX_HOST_REQUEST_BYTES {
+            return Err(HostHttpError::new(
+                HostHttpErrorKind::InvalidRequest,
+                "HTTP request exceeds the host request envelope limit",
+            ));
+        }
+        let timeout = self
+            .remaining_http_timeout(services.timeout)
+            .map_err(|message| HostHttpError::new(HostHttpErrorKind::Timeout, message))?;
+        let body = services.http.request(
+            &services.plugin_id,
+            PluginHttpRequest {
+                url: request.url,
+                method: request.method,
+                headers: request.headers,
+            },
+            (!request.body.is_empty()).then_some(request.body),
+            timeout,
+        )?;
+        if body.len() > MAX_RESPONSE_BYTES {
+            return Err(HostHttpError::new(
+                HostHttpErrorKind::ResponseTooLarge,
+                "HTTP response exceeds the host response envelope limit",
+            ));
+        }
+        let response = PluginHttpResponse {
+            status: services.http.status_code(&services.plugin_id)?,
+            headers: services
+                .http
+                .headers(&services.plugin_id)?
+                .unwrap_or_default(),
+            body,
+        };
+        let encoded_size = postcard::experimental::serialized_size(&PluginHostResponse::Http(
+            PluginResult::Ok(response.clone()),
+        ))
+        .map_err(|error| HostHttpError::new(HostHttpErrorKind::Transport, error.to_string()))?;
+        if encoded_size > MAX_RESPONSE_BYTES {
+            return Err(HostHttpError::new(
+                HostHttpErrorKind::ResponseTooLarge,
+                "HTTP response exceeds the host response envelope limit",
+            ));
+        }
+        Ok(response)
     }
 
     /// Atomically compare-and-swap one plugin-state value, returning whether
@@ -587,7 +650,9 @@ impl ArchiveExtractFailure {
     fn from_app_error(error: AppError) -> Self {
         let code = match &error {
             AppError::ArchiveExtractionPluginRequired { .. } => PluginErrorCode::Unsupported,
-            AppError::Validation(_) => PluginErrorCode::Permanent,
+            AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. } => PluginErrorCode::Permanent,
             _ => PluginErrorCode::Temporary,
         };
         Self {
@@ -1133,12 +1198,45 @@ mod tests {
     }
 
     #[test]
+    fn typed_http_reports_deadline_and_request_failures_without_parsing_text() {
+        let host = CommandHost::with_archive_provider(
+            "typed-http".into(),
+            BTreeMap::new(),
+            vec!["allowed.example".into()],
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            Duration::from_secs(5),
+            None,
+            None,
+        )
+        .for_invocation(Duration::ZERO);
+        let mut request = scryer_plugin_sdk::host::PluginHttpRequest {
+            url: "https://allowed.example/path".into(),
+            method: Some("GET".into()),
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+        };
+        assert_eq!(
+            host.http_request(request.clone()).unwrap_err().kind,
+            HostHttpErrorKind::Timeout
+        );
+        request.body = vec![0; MAX_HOST_REQUEST_BYTES + 1];
+        assert_eq!(
+            host.http_request(request).unwrap_err().kind,
+            HostHttpErrorKind::InvalidRequest
+        );
+        assert!(matches!(
+            CommandHost::disabled().call_bytes(&[255]),
+            Err(CommandHostError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
     fn host_rejects_oversized_encoded_request_before_decoding() {
         let request = vec![0; MAX_HOST_REQUEST_BYTES + 1];
         let error = CommandHost::disabled()
             .call_bytes(&request)
             .expect_err("oversized encoded request must be rejected");
-        assert!(error.contains("encoded host request exceeds"), "{error}");
+        assert!(matches!(error, CommandHostError::InvalidRequest(_)));
     }
 
     struct StubArchiveProvider {

@@ -397,10 +397,12 @@ impl AppUseCase {
         root_folders_by_library: &HashMap<String, Result<Vec<RootFolderEntry>, String>>,
         tracked_title_folders: &[TrackedTitleFolder],
     ) -> AppResult<DeletePreview> {
-        let title = titles_by_id
-            .get(title_id)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+        let title = titles_by_id.get(title_id).cloned().ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                format!("title {}", title_id),
+            )
+        })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -445,7 +447,12 @@ impl AppUseCase {
                     .titles
                     .get_by_id(&title.title_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("title {}", title.title_id)))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                            format!("title {}", title.title_id),
+                        )
+                    })?;
                 self.title_delete_folder(
                     &mut catalog_title,
                     &recorded_paths,
@@ -547,8 +554,9 @@ impl AppUseCase {
             .iter()
             .all(|episode_id| episode_id.trim().is_empty())
         {
-            return Err(AppError::Validation(
-                "at least one episode id is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::EPISODE_ID_REQUIRED,
+                "at least one episode id is required",
             ));
         }
         let title = self
@@ -557,7 +565,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -645,7 +658,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })?;
             crate::folder_ownership::claim_title_folder_for_delete(
                 self,
                 &mut title,
@@ -708,8 +726,9 @@ impl AppUseCase {
         let mut paths = Vec::new();
         for entry in &manifest.entries {
             if entry.delete_kind == DeletePathKind::Directory {
-                return Err(AppError::Validation(
-                    "scoped policy deletion cannot remove directories".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES,
+                    "scoped policy deletion cannot remove directories",
                 ));
             }
             paths.push(PolicyDeletePathProof {
@@ -740,21 +759,24 @@ impl AppUseCase {
                 .iter()
                 .find(|expected| expected.path == entry.path)
             else {
-                return Err(AppError::Validation(
-                    "maintenance deletion targets changed; re-evaluation required".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::MAINTENANCE_DELETION_TARGETS_CHANGED,
+                    "maintenance deletion targets changed; re-evaluation required",
                 ));
             };
             if entry.delete_kind == DeletePathKind::Directory
                 || policy_path_proof(&entry.path).await? != expected.proof
             {
-                return Err(AppError::Validation(
-                    "maintenance deletion file changed; re-evaluation required".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::MAINTENANCE_DELETION_FILE_CHANGED,
+                    "maintenance deletion file changed; re-evaluation required",
                 ));
             }
         }
         if manifest.entries.len() == plan.paths.len() && manifest.fingerprint != plan.fingerprint {
-            return Err(AppError::Validation(
-                "maintenance deletion fingerprint changed".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::MAINTENANCE_DELETION_FINGERPRINT_CHANGED,
+                "maintenance deletion fingerprint changed",
             ));
         }
         // Rebuild and validate again through the shared confirmation owner.
@@ -856,7 +878,10 @@ impl AppUseCase {
             .get(external_subtitle_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("external subtitle {}", external_subtitle_id))
+                AppError::not_found_reason(
+                    crate::error_reasons::library::EXTERNAL_SUBTITLE_NOT_FOUND,
+                    format!("external subtitle {}", external_subtitle_id),
+                )
             })?;
 
         if matches!(mode, ExternalSubtitleRemovalMode::DeleteAndBlocklist { .. })
@@ -864,9 +889,7 @@ impl AppUseCase {
                 || subtitle.provider.as_deref().is_none_or(str::is_empty)
                 || subtitle.provider_file_id.is_none())
         {
-            return Err(AppError::Validation(
-                "only provider-backed downloaded subtitles can be blocklisted".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::library::ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED, "only provider-backed downloaded subtitles can be blocklisted"));
         }
 
         let title = self
@@ -875,7 +898,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&subtitle.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", subtitle.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", subtitle.title_id),
+                )
+            })?;
         let root_folders = self
             .root_folders_for_library(&title.library_id, &title.facet)
             .await?;
@@ -900,7 +928,10 @@ impl AppUseCase {
             .delete(external_subtitle_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("external subtitle {}", external_subtitle_id))
+                AppError::not_found_reason(
+                    crate::error_reasons::library::EXTERNAL_SUBTITLE_NOT_FOUND,
+                    format!("external subtitle {}", external_subtitle_id),
+                )
             })?;
 
         if deleted.source_kind == scryer_domain::ExternalSubtitleSourceKind::Discovered {
@@ -1091,7 +1122,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(actor, &title.library_id, permission)
             .await
     }
@@ -1107,7 +1143,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", title_id),
+                )
+            })?;
         let root_folders = self
             .root_folders_for_library(&title.library_id, &title.facet)
             .await?;
@@ -1177,7 +1218,7 @@ impl AppUseCase {
         // A refused claim leaves the folder unknown. Anything else (storage or
         // filesystem trouble) may pass, and is reported as it is.
         claim.map_err(|error| match error {
-            AppError::Validation(_) | AppError::ValidationRefused { .. } => {
+            AppError::Validation(_) | AppError::ValidationRefused { .. } | AppError::ValidationRefusedWithCount { .. } => {
                 AppError::validation_refused(TITLE_FOLDER_UNKNOWN, format!(
                     "title folder ownership is missing and the folder its files are in ({}) cannot be recorded for it: {error}; correct the title's folder before deleting files",
                     folder.display()
@@ -1198,14 +1239,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {}", file_id),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title).await?;
         let owned_folder = required_title_delete_folder(title.folder_path.clone())?;
         let owned_path = crate::folder_ownership::resolved_folder_identity(
@@ -1215,8 +1266,9 @@ impl AppUseCase {
             &stored_path_to_path_buf(&media_file.file_path),
         )?;
         if source_path == owned_path || !source_path.starts_with(&owned_path) {
-            return Err(AppError::Validation(
-                "recorded media path is outside its title's owned folder".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RECORDED_MEDIA_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER,
+                "recorded media path is outside its title's owned folder",
             ));
         }
         for owner in self
@@ -1230,8 +1282,9 @@ impl AppUseCase {
                 && let Some(folder) = owner.folder_path
                 && crate::folder_ownership::title_folders_overlap(&owned_folder, &folder)?
             {
-                return Err(AppError::Validation(
-                    "title folder overlaps another title; refusing media deletion".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::TITLE_FOLDER_OVERLAPS_ANOTHER_TITLE,
+                    "title folder overlaps another title; refusing media deletion",
                 ));
             }
         }
@@ -1250,9 +1303,7 @@ impl AppUseCase {
                 &stored_path_to_path_buf(&subtitle.file_path),
             )?;
             if path == owned_path || !path.starts_with(&owned_path) {
-                return Err(AppError::Validation(
-                    "recorded subtitle path is outside its title's owned folder".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER, "recorded subtitle path is outside its title's owned folder"));
             }
         }
 
@@ -1280,7 +1331,10 @@ impl AppUseCase {
             .get(subtitle_download_id)
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("external subtitle {}", subtitle_download_id))
+                AppError::not_found_reason(
+                    crate::error_reasons::library::EXTERNAL_SUBTITLE_NOT_FOUND,
+                    format!("external subtitle {}", subtitle_download_id),
+                )
             })?;
         let title = self
             .services
@@ -1288,7 +1342,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&subtitle.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", subtitle.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", subtitle.title_id),
+                )
+            })?;
         let root_folders = self
             .root_folders_for_library(&title.library_id, &title.facet)
             .await?;
@@ -1323,7 +1382,9 @@ fn normalize_optional_path_string(path: Option<String>) -> Option<String> {
 /// layout; the message says how to resolve it instead of naming a selection.
 fn title_delete_boundary_error(error: AppError) -> AppError {
     match error {
-        AppError::Validation(_) => AppError::validation_refused(
+        AppError::Validation(_)
+        | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. } => AppError::validation_refused(
             crate::title_delete::MIXED_LAYOUT,
             "title folder also holds other titles or a mixed layout; change this title's folder to the one that directly holds its media, then delete again",
         ),
@@ -1366,10 +1427,12 @@ fn implied_title_folder(
     let mut implied: Option<PathBuf> = None;
     for raw_path in recorded_paths {
         let path = normalize_absolute_path(&stored_path_to_path_buf(raw_path))?;
-        let mut folder = path
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| AppError::Validation("recorded media path has no folder".into()))?;
+        let mut folder = path.parent().map(Path::to_path_buf).ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::library::RECORDED_MEDIA_PATH_NO_FOLDER,
+                "recorded media path has no folder",
+            )
+        })?;
         if *facet == MediaFacet::Movie {
             if let Some(disc_root) = folder.ancestors().find(|ancestor| {
                 ancestor
@@ -1410,7 +1473,12 @@ fn implied_title_folder(
             }
         }
     }
-    implied.ok_or_else(|| AppError::Validation("title has no recorded media".into()))
+    implied.ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::library::TITLE_NO_RECORDED_MEDIA,
+            "title has no recorded media",
+        )
+    })
 }
 
 fn required_title_delete_folder(folder_path: Option<String>) -> AppResult<String> {
@@ -1431,9 +1499,11 @@ async fn ensure_owned_title_delete_boundary(
     let boundary_error =
         match crate::library_discovery::ensure_existing_title_boundary(path, patterns).await {
             Ok(()) => return Ok(()),
-            Err(error @ AppError::Validation(_)) if title.facet == MediaFacet::Movie => {
-                title_delete_boundary_error(error)
-            }
+            Err(
+                error @ (AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }),
+            ) if title.facet == MediaFacet::Movie => title_delete_boundary_error(error),
             Err(error) => return Err(title_delete_boundary_error(error)),
         };
     // Discovery cannot distinguish a movie's disc folders from nested titles.
@@ -1745,16 +1815,22 @@ fn ensure_leaf_paths_within_roots(
     let normalized_roots = normalize_root_folders(root_folders, facet)?;
     for path in paths {
         let Some(parent) = path.parent() else {
-            return Err(AppError::Validation(format!(
-                "refusing to delete {label} {} because it has no parent directory",
-                path.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::DELETE_TARGET_PARENT_REQUIRED,
+                format!(
+                    "refusing to delete {label} {} because it has no parent directory",
+                    path.display()
+                ),
+            ));
         };
         if path.file_name().is_none() || !path_is_under_any_root(parent, &normalized_roots) {
-            return Err(AppError::Validation(format!(
-                "refusing to delete {label} {} because it is outside the configured root folders",
-                path.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::DELETE_TARGET_OUTSIDE_ROOTS,
+                format!(
+                    "refusing to delete {label} {} because it is outside the configured root folders",
+                    path.display()
+                ),
+            ));
         }
     }
     Ok(())
@@ -1776,29 +1852,35 @@ fn normalize_root_folders(
     for entry in root_folders {
         normalized.push(
             normalize_absolute_path(&stored_path_to_path_buf(&entry.path)).map_err(|error| {
-                AppError::Validation(format!(
-                    "configured {} root folder {} is invalid: {error}",
-                    facet.as_str(),
-                    entry.path
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::library::CONFIGURED_ROOT_FOLDER_INVALID,
+                    format!(
+                        "configured {} root folder {} is invalid: {error}",
+                        facet.as_str(),
+                        entry.path
+                    ),
+                )
             })?,
         );
     }
     if normalized.is_empty() {
-        return Err(AppError::Validation(format!(
-            "no configured {} root folders are available for safe deletion",
-            facet.as_str()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::NO_ROOT_FOLDERS_UNAVAILABLE,
+            format!(
+                "no configured {} root folders are available for safe deletion",
+                facet.as_str()
+            ),
+        ));
     }
     Ok(normalized)
 }
 
 fn normalize_absolute_path(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() {
-        return Err(AppError::Validation(format!(
-            "path must be absolute: {}",
-            path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PATH_INVALID,
+            format!("path must be absolute: {}", path.display()),
+        ));
     }
 
     let mut normalized = PathBuf::new();
@@ -1809,10 +1891,10 @@ fn normalize_absolute_path(path: &Path) -> AppResult<PathBuf> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalized.pop() {
-                    return Err(AppError::Validation(format!(
-                        "path cannot escape its root: {}",
-                        path.display()
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::library::PATH_CANNOT_ESCAPE_ROOT,
+                        format!("path cannot escape its root: {}", path.display()),
+                    ));
                 }
             }
             Component::Normal(segment) => normalized.push(segment),
@@ -1913,10 +1995,13 @@ fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<Dele
         };
         let file_type = metadata.file_type();
         if metadata.is_dir() {
-            return Err(AppError::Validation(format!(
-                "refusing to delete directory path {} from a single-file delete flow",
-                path.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::DELETE_TARGET_NOT_FILE,
+                format!(
+                    "refusing to delete directory path {} from a single-file delete flow",
+                    path.display()
+                ),
+            ));
         }
         entries.push(DeleteManifestEntry {
             path: path.clone(),
@@ -2369,7 +2454,12 @@ mod tests {
         let result =
             ensure_paths_within_roots(&paths, root_folders, MediaFacet::Anime, "media file");
         assert!(
-            matches!(result, Err(AppError::Validation(_))),
+            matches!(
+                result,
+                Err(AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. })
+            ),
             "a path outside all configured roots must be refused"
         );
     }
@@ -2387,7 +2477,12 @@ mod tests {
         let result =
             ensure_paths_within_roots(&paths, root_folders, MediaFacet::Anime, "media file");
         assert!(
-            matches!(result, Err(AppError::Validation(_))),
+            matches!(
+                result,
+                Err(AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. })
+            ),
             "component-wise containment must reject sibling-prefix paths"
         );
     }

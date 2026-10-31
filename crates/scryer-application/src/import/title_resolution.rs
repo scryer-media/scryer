@@ -130,6 +130,7 @@ pub(crate) fn title_with_index_names(
             .push(scryer_domain::TaggedAlias {
                 name: name.raw_term,
                 language: name.language_tag.unwrap_or_default(),
+                country: None,
             });
     }
     evidence_title
@@ -1248,10 +1249,12 @@ mod tests {
             scryer_domain::TaggedAlias {
                 name: "Över Atlanten".into(),
                 language: "swe".into(),
+                country: None,
             },
             scryer_domain::TaggedAlias {
                 name: "Över Atlanten".into(),
                 language: "dan".into(),
+                country: None,
             },
         ];
         let names = crate::ports::title_name_candidates(&indexed);
@@ -1425,6 +1428,7 @@ mod tests {
             name: "Hagane no Renkinjutsushi Saigo no Gassho o Utau Toki no Hikari to Kage no Uta"
                 .into(),
             language: "x-jat".into(),
+            country: None,
         }];
         let title_id = title.id.clone();
         let matcher = MonitoredTitleMatcher::over_titles(vec![title]);

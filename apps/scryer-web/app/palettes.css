@@ -12,11 +12,24 @@ html[data-palette="SCRYER_DEFAULT"] {
   --primary-foreground: #000000;
 }
 
-html:is([data-palette="SLATE"], [data-palette="EMBER"], [data-palette="PAPYRUS"]) {
-  --palette-nav-surface: color-mix(in srgb, var(--palette-page) 96%, var(--palette-ink));
+html:is(
+  [data-palette="SLATE"],
+  [data-palette="EMBER"],
+  [data-palette="PAPYRUS"]
+) {
+  --palette-nav-surface: color-mix(
+    in srgb,
+    var(--palette-page) 96%,
+    var(--palette-ink)
+  );
 }
 
-html:is([data-palette="SLATE"], [data-palette="EMBER"], [data-palette="PAPYRUS"]) [data-slot="sidebar"] {
+html:is(
+    [data-palette="SLATE"],
+    [data-palette="EMBER"],
+    [data-palette="PAPYRUS"]
+  )
+  [data-slot="sidebar"] {
   --scry-bg: var(--palette-chrome-surface);
   background: var(--palette-chrome-bg);
 }
@@ -89,7 +102,11 @@ html[data-palette="PAPYRUS"] {
   --scry-muted: color-mix(in srgb, var(--palette-ink) 78%, var(--palette-page));
 }
 
-html[data-palette="PAPYRUS"] :is([data-slot="settings-subnav-scroll"], [data-slot="facet-settings-subnav"]) {
+html[data-palette="PAPYRUS"]
+  :is(
+    [data-slot="settings-subnav-scroll"],
+    [data-slot="facet-settings-subnav"]
+  ) {
   --palette-chrome-bg: #ddd5c8;
 }
 
@@ -97,7 +114,14 @@ html[data-palette="PAPYRUS"] [data-slot="facet-secondary-nav"] {
   --palette-chrome-bg: var(--palette-surface);
 }
 
-html[data-palette="PAPYRUS"] :is([data-slot="sidebar"], [data-slot="root-header"], [data-slot="settings-subnav-scroll"], [data-slot="facet-settings-subnav"], [data-slot="facet-secondary-nav"]) {
+html[data-palette="PAPYRUS"]
+  :is(
+    [data-slot="sidebar"],
+    [data-slot="root-header"],
+    [data-slot="settings-subnav-scroll"],
+    [data-slot="facet-settings-subnav"],
+    [data-slot="facet-secondary-nav"]
+  ) {
   --scry-border3: var(--palette-panel-divider);
   --border-color: var(--palette-panel-divider);
 }
@@ -114,23 +138,51 @@ html[data-palette="GRAPHITE"] {
   --scry-muted: #a09d96;
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  ) {
   --scry-page1: color-mix(in srgb, var(--palette-page) 98%, var(--palette-ink));
   --scry-page2: var(--palette-page);
   --scry-page3: color-mix(in srgb, var(--palette-page) 97%, black);
   --palette-sheen: transparent;
   --palette-chrome-surface: var(--palette-nav-surface, var(--palette-surface));
-  --palette-chrome-bg: linear-gradient(135deg, var(--palette-sheen), transparent 65%),
-    linear-gradient(180deg, color-mix(in srgb, var(--palette-chrome-surface) 95%, var(--palette-ink)), var(--palette-chrome-surface) 38%, color-mix(in srgb, var(--palette-chrome-surface) 75%, var(--palette-page)));
+  --palette-chrome-bg:
+    linear-gradient(135deg, var(--palette-sheen), transparent 65%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--palette-chrome-surface) 95%, var(--palette-ink)),
+      var(--palette-chrome-surface) 38%,
+      color-mix(in srgb, var(--palette-chrome-surface) 75%, var(--palette-page))
+    );
   --scry-bg: var(--palette-page);
   --scry-card2: var(--palette-surface);
   --scry-accent-dark: color-mix(in srgb, var(--scry-accent) 85%, black);
   --scry-accent-ring: var(--scry-accent-text);
-  --scry-accent-grad: linear-gradient(135deg, var(--scry-accent), var(--scry-accent2));
-  --scry-baccent: color-mix(in srgb, var(--scry-accent) 45%, var(--palette-surface));
-  --scry-border: color-mix(in srgb, var(--palette-ink) 18%, var(--palette-surface));
-  --scry-binput: color-mix(in srgb, var(--palette-ink) 40%, var(--palette-surface));
-  --scry-hover: color-mix(in srgb, var(--palette-ink) 8%, var(--palette-surface));
+  --scry-accent-grad: linear-gradient(
+    135deg,
+    var(--scry-accent),
+    var(--scry-accent2)
+  );
+  --scry-baccent: color-mix(
+    in srgb,
+    var(--scry-accent) 45%,
+    var(--palette-surface)
+  );
+  --scry-border: color-mix(
+    in srgb,
+    var(--palette-ink) 18%,
+    var(--palette-surface)
+  );
+  --scry-binput: color-mix(
+    in srgb,
+    var(--palette-ink) 40%,
+    var(--palette-surface)
+  );
+  --scry-hover: color-mix(
+    in srgb,
+    var(--palette-ink) 8%,
+    var(--palette-surface)
+  );
   --scry-inset: var(--palette-page);
   --scry-ink: var(--palette-ink);
   --scry-ink2: var(--palette-ink);
@@ -194,145 +246,300 @@ html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAU
   --sidebar: var(--palette-chrome-surface);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"])[data-glow="on"] {
-  --palette-sheen: rgba(var(--scry-accent-rgb), 0.035);
-  --palette-chrome-bg: linear-gradient(135deg, var(--palette-sheen), transparent 65%),
-    linear-gradient(180deg, color-mix(in srgb, var(--palette-chrome-surface) 95%, var(--palette-ink)), var(--palette-chrome-surface) 38%, color-mix(in srgb, var(--palette-chrome-surface) 75%, var(--palette-page)));
-  --scry-shell-bg: radial-gradient(circle at 14% 10%, rgba(var(--scry-accent-rgb), 0.10), transparent 34rem),
-    radial-gradient(circle at 86% 80%, rgba(var(--scry-accent-rgb), 0.045), transparent 38rem),
-    linear-gradient(180deg, var(--scry-page1), var(--scry-page2) 42%, var(--scry-page3));
-  --scry-shell-side-bg: linear-gradient(180deg, var(--scry-side1), var(--scry-side2));
-  --scry-mobile-search-bg: linear-gradient(180deg, var(--background), var(--card));
-  --dark-atmo-indigo: rgba(var(--scry-accent-rgb), 0.065);
-  --dark-atmo-cyan: rgba(var(--scry-accent-rgb), 0.038);
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="card"]:not(.bg-transparent) {
+  background:
+    linear-gradient(130deg, var(--palette-sheen), transparent 58%),
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--card) 96%, var(--palette-ink)),
+      var(--card) 42%,
+      color-mix(in srgb, var(--card) 82%, var(--palette-page))
+    );
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="card"]:not(.bg-transparent) {
-  background: linear-gradient(130deg, var(--palette-sheen), transparent 58%),
-    linear-gradient(165deg, color-mix(in srgb, var(--card) 96%, var(--palette-ink)), var(--card) 42%, color-mix(in srgb, var(--card) 82%, var(--palette-page)));
-}
-
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="card"]:not(.bg-transparent)::before,
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="sidebar-inner"]::before {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="card"]:not(.bg-transparent)::before {
   background: none;
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) :is([data-slot="sidebar-inner"], [data-slot="settings-subnav-scroll"], [data-slot="facet-settings-subnav"], [data-slot="facet-secondary-nav"]) {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  :is(
+    [data-slot="sidebar-inner"],
+    [data-slot="settings-subnav-scroll"],
+    [data-slot="facet-settings-subnav"],
+    [data-slot="facet-secondary-nav"]
+  ) {
   background: var(--palette-chrome-bg);
   background-attachment: fixed;
 }
 
 /* Keep the header and navigation on one continuous surface around the page. */
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="root-header"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="root-header"] {
   background: var(--palette-chrome-bg);
   background-attachment: fixed;
   box-shadow: none;
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="root-header"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="card"]:not(.bg-transparent),
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="dialog-content"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="sheet-content"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="select-content"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="global-search-panel"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="card-header"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="root-header"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="card"]:not(.bg-transparent),
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="dialog-content"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="sheet-content"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="select-content"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="global-search-panel"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="card-header"] {
   border-color: var(--border-color);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="global-search-overlay"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="global-search-overlay"] {
   background: var(--scry-search-overlay-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) ::selection {
-  background: rgba(var(--scry-accent-rgb), 0.3); color: var(--foreground);
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  ::selection {
+  background: rgba(var(--scry-accent-rgb), 0.3);
+  color: var(--foreground);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="dialog-content"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="sheet-content"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="select-content"] {
-  background: linear-gradient(130deg, var(--palette-sheen), transparent 65%),
-    linear-gradient(165deg, color-mix(in srgb, var(--popover) 97%, var(--palette-ink)), var(--popover) 45%, color-mix(in srgb, var(--popover) 85%, var(--palette-page)));
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="dialog-content"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="sheet-content"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="select-content"] {
+  background:
+    linear-gradient(130deg, var(--palette-sheen), transparent 65%),
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--popover) 97%, var(--palette-ink)),
+      var(--popover) 45%,
+      color-mix(in srgb, var(--popover) 85%, var(--palette-page))
+    );
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="global-search"] {
-  background: var(--field); border-color: var(--input);
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="global-search"] {
+  background: var(--field);
+  border-color: var(--input);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="global-search-panel"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="global-search-panel"] {
   background: var(--scry-search-panel-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="mobile-global-search-overlay"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="mobile-global-search-overlay"] {
   background: var(--scry-mobile-search-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="mobile-global-search-header"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="mobile-global-search-tabs"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="mobile-global-search-header"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="mobile-global-search-tabs"] {
   background: var(--scry-search-sticky-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="table-head"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="table-checkbox-head"],
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="table-actions-head"] {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, var(--palette-ink)), color-mix(in srgb, var(--card) 85%, var(--palette-page)));
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="table-head"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="table-checkbox-head"],
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="table-actions-head"] {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 96%, var(--palette-ink)),
+    color-mix(in srgb, var(--card) 85%, var(--palette-page))
+  );
   border-bottom-color: var(--border-color);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  ) {
   --scry-table-hover-bg: var(--scry-hover);
 }
 
 /* Catalog rows sit on the page ground; the header keeps the raised surface. */
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="title-list-scroll"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="title-list-scroll"] {
   background: var(--palette-page);
-  --scry-table-hover-bg: color-mix(in srgb, var(--scry-accent) 8%, var(--palette-page));
+  --scry-table-hover-bg: color-mix(
+    in srgb,
+    var(--scry-accent) 8%,
+    var(--palette-page)
+  );
   --scry-rowHover: var(--scry-table-hover-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="title-list-scroll"] :is([data-ui="title-table-row"], [data-ui="compact-title-table-row"]):hover {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="title-list-scroll"]
+  :is([data-ui="title-table-row"], [data-ui="compact-title-table-row"]):hover {
   background: var(--scry-table-hover-bg);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="title-list-scroll"] :is([data-ui="title-table-row"], [data-ui="compact-title-table-row"])[data-selected="true"]:hover {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="title-list-scroll"]
+  :is(
+    [data-ui="title-table-row"],
+    [data-ui="compact-title-table-row"]
+  )[data-selected="true"]:hover {
   background: rgba(var(--scry-accent-rgb), 0.12);
 }
 
 /* Overview panels retain the layered grounds of Classic within each palette. */
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-slot="title-context-scroll"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-slot="title-context-scroll"] {
   background: var(--palette-page);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] {
-  --scry-card2: color-mix(in srgb, var(--palette-page) 60%, var(--palette-surface));
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"] {
+  --scry-card2: color-mix(
+    in srgb,
+    var(--palette-page) 60%,
+    var(--palette-surface)
+  );
   --card: var(--scry-card2);
-  --scry-chip: color-mix(in srgb, var(--palette-page) 70%, var(--palette-surface));
+  --scry-chip: color-mix(
+    in srgb,
+    var(--palette-page) 70%,
+    var(--palette-surface)
+  );
   --scry-chip2: var(--scry-chip);
-  --scry-border: color-mix(in srgb, var(--palette-ink) 12%, var(--palette-page));
+  --scry-border: color-mix(
+    in srgb,
+    var(--palette-ink) 12%,
+    var(--palette-page)
+  );
   --scry-border2: var(--scry-border);
   --scry-border3: var(--scry-border);
   --border-color: var(--scry-border);
   --scry-line: var(--scry-border);
   --scry-line2: var(--scry-border);
-  --scry-table-hover-bg: color-mix(in srgb, var(--scry-accent) 8%, var(--palette-page));
+  --scry-table-hover-bg: color-mix(
+    in srgb,
+    var(--scry-accent) 8%,
+    var(--palette-page)
+  );
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] [data-slot="card"]:not([data-ui="title-overview-hero"]) {
-  background: linear-gradient(130deg, var(--palette-sheen), transparent 58%),
-    linear-gradient(165deg, color-mix(in srgb, var(--card) 96%, var(--palette-ink)), var(--card) 38%, color-mix(in srgb, var(--palette-page) 90%, var(--palette-surface)));
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"]
+  [data-slot="card"]:not([data-ui="title-overview-hero"]) {
+  background:
+    linear-gradient(130deg, var(--palette-sheen), transparent 58%),
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--card) 96%, var(--palette-ink)),
+      var(--card) 38%,
+      color-mix(in srgb, var(--palette-page) 90%, var(--palette-surface))
+    );
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] [data-ui="title-overview-hero"][data-full-bleed] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"]
+  [data-ui="title-overview-hero"][data-full-bleed] {
   background: var(--palette-page);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] [data-timeline-kind="collection"] {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"]
+  [data-timeline-kind="collection"] {
   background: var(--palette-page);
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] [data-timeline-kind="collection"] > [role="button"] {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--palette-page) 65%, var(--palette-surface)), color-mix(in srgb, var(--palette-page) 88%, var(--palette-surface)));
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"]
+  [data-timeline-kind="collection"]
+  > [role="button"] {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--palette-page) 65%, var(--palette-surface)),
+    color-mix(in srgb, var(--palette-page) 88%, var(--palette-surface))
+  );
 }
 
-html[data-palette]:not([data-palette="CLASSIC"]):not([data-palette="SCRYER_DEFAULT"]) [data-ui="title-overview"] [data-timeline-kind="collection"] > [role="button"]:hover {
+html[data-palette]:not([data-palette="CLASSIC"]):not(
+    [data-palette="SCRYER_DEFAULT"]
+  )
+  [data-ui="title-overview"]
+  [data-timeline-kind="collection"]
+  > [role="button"]:hover {
   background: var(--scry-hover);
 }

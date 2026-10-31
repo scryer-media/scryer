@@ -34,7 +34,10 @@ test("the parent of a browsed folder is clamped to the root", () => {
     parentWithinRoot("/data/Movies/Arrival/Extras", "/data/Movies"),
     "/data/Movies/Arrival",
   );
-  assert.equal(parentWithinRoot("/data/Movies/Arrival", "/data/Movies"), "/data/Movies");
+  assert.equal(
+    parentWithinRoot("/data/Movies/Arrival", "/data/Movies"),
+    "/data/Movies",
+  );
   // At the root, and outside it, there is nowhere to go up to.
   assert.equal(parentWithinRoot("/data/Movies", "/data/Movies"), null);
   assert.equal(parentWithinRoot("/elsewhere/Arrival", "/data/Movies"), null);
@@ -97,7 +100,11 @@ test("outcome messages name the titles and folders involved", () => {
     folderMatchOutcomeMessage(
       result({
         outcome: "SWAPPED",
-        swappedTitle: { id: "2", name: "Contact", folderPath: "/data/Movies/Contact" },
+        swappedTitle: {
+          id: "2",
+          name: "Contact",
+          folderPath: "/data/Movies/Contact",
+        },
       }),
       translate,
     ),

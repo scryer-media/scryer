@@ -18,17 +18,26 @@ test("an explicit selection is kept while the client list is briefly empty", () 
 
 test("an explicit selection drops clients that are no longer available", () => {
   assert.deepEqual(
-    reconcileActivityClientSelection(["client-a", "client-b"], ["client-b", "client-c"]),
+    reconcileActivityClientSelection(
+      ["client-a", "client-b"],
+      ["client-b", "client-c"],
+    ),
     ["client-b"],
   );
 });
 
 test("an unchanged explicit selection keeps its identity", () => {
   const selection = ["client-a"];
-  assert.equal(reconcileActivityClientSelection(selection, ["client-a", "client-b"]), selection);
+  assert.equal(
+    reconcileActivityClientSelection(selection, ["client-a", "client-b"]),
+    selection,
+  );
 });
 
 test("a selection the user cleared stays cleared", () => {
   const selection: string[] = [];
-  assert.equal(reconcileActivityClientSelection(selection, ["client-a"]), selection);
+  assert.equal(
+    reconcileActivityClientSelection(selection, ["client-a"]),
+    selection,
+  );
 });

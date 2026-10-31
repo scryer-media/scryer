@@ -357,13 +357,15 @@ async fn collect_fingerprint(path: &Path) -> AppResult<ExternalSubtitleFingerpri
 fn validate_regular_subtitle_sidecar(metadata: &std::fs::Metadata) -> AppResult<()> {
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
-        return Err(AppError::Validation(
-            "subtitle sidecar must not be a symlink".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SIDECAR_SYMLINK_FORBIDDEN,
+            "subtitle sidecar must not be a symlink",
         ));
     }
     if !file_type.is_file() {
-        return Err(AppError::Validation(
-            "subtitle sidecar must be a regular file".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_SIDECAR_INVALID,
+            "subtitle sidecar must be a regular file",
         ));
     }
     Ok(())
@@ -425,8 +427,9 @@ async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> 
     validate_regular_subtitle_sidecar(&metadata)?;
     let fingerprint = subtitle_file_fingerprint(&metadata);
     if metadata.len() > MAX_TEXT_PROBE_SIZE_BYTES as u64 {
-        return Err(AppError::Validation(
-            "subtitle sidecar exceeds content probe size limit".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_SIDECAR_EXCEEDS_CONTENT_PROBE_SIZE_LIMIT,
+            "subtitle sidecar exceeds content probe size limit",
         ));
     }
 
@@ -437,13 +440,15 @@ async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> 
         .map_err(|error| AppError::Repository(format!("cannot stat subtitle file: {error}")))?;
     validate_regular_subtitle_sidecar(&opened_metadata)?;
     if subtitle_file_fingerprint(&opened_metadata) != fingerprint {
-        return Err(AppError::Validation(
-            "subtitle sidecar changed during content probe".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_SIDECAR_CHANGED_DURING_CONTENT_PROBE,
+            "subtitle sidecar changed during content probe",
         ));
     }
     if opened_metadata.len() > MAX_TEXT_PROBE_SIZE_BYTES as u64 {
-        return Err(AppError::Validation(
-            "subtitle sidecar exceeds content probe size limit".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_SIDECAR_EXCEEDS_CONTENT_PROBE_SIZE_LIMIT,
+            "subtitle sidecar exceeds content probe size limit",
         ));
     }
 
@@ -454,8 +459,9 @@ async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> 
         .await
         .map_err(|error| AppError::Repository(format!("cannot read subtitle file: {error}")))?;
     if bytes.len() > MAX_TEXT_PROBE_SIZE_BYTES as usize {
-        return Err(AppError::Validation(
-            "subtitle sidecar exceeds content probe size limit".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_SIDECAR_EXCEEDS_CONTENT_PROBE_SIZE_LIMIT,
+            "subtitle sidecar exceeds content probe size limit",
         ));
     }
 

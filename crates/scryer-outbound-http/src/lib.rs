@@ -3305,10 +3305,49 @@ fn bounded_exponential_backoff(base: Duration, max: Duration, retry_index: u32) 
     Duration::from_millis(scaled.min(u64::MAX as u128) as u64)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransportFailureKind {
+    Retryable,
+    Permanent,
+}
+
+/// Reqwest and IO facts take precedence; only opaque TLS/HTTP source
+/// diagnostics reach the single text classifier below.
+fn classify_transport_failure(error: &reqwest::Error) -> TransportFailureKind {
+    if error.is_builder() || error.is_redirect() || error.is_status() || error.is_decode() {
+        return TransportFailureKind::Permanent;
+    }
+    if error.is_timeout() {
+        return TransportFailureKind::Retryable;
+    }
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput => {
+                    return TransportFailureKind::Permanent;
+                }
+                std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::TimedOut => return TransportFailureKind::Retryable,
+                _ => {}
+            }
+        }
+        source = cause.source();
+    }
+    let text = transport_error_chain_text(error);
+    let opaque = classify_transport_error_text(&text);
+    if opaque == TransportFailureKind::Retryable || error.is_connect() {
+        TransportFailureKind::Retryable
+    } else {
+        TransportFailureKind::Permanent
+    }
+}
+
 fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout()
-        || error.is_connect()
-        || retryable_transport_error_text(&transport_error_chain_text(error))
+    classify_transport_failure(error) == TransportFailureKind::Retryable
 }
 
 fn transport_error_chain_text(error: &reqwest::Error) -> String {
@@ -3321,13 +3360,13 @@ fn transport_error_chain_text(error: &reqwest::Error) -> String {
     messages.join(": ")
 }
 
-fn retryable_transport_error_text(message: &str) -> bool {
+fn classify_transport_error_text(message: &str) -> TransportFailureKind {
     let normalized = message.to_ascii_lowercase();
     if normalized.contains("certificate") || normalized.contains("invalid url") {
-        return false;
+        return TransportFailureKind::Permanent;
     }
 
-    [
+    let retryable = [
         "peer closed connection without sending tls close_notify",
         "connection closed before message completed",
         "connection reset",
@@ -3336,7 +3375,17 @@ fn retryable_transport_error_text(message: &str) -> bool {
         "broken pipe",
     ]
     .iter()
-    .any(|needle| normalized.contains(needle))
+    .any(|needle| normalized.contains(needle));
+    if retryable {
+        TransportFailureKind::Retryable
+    } else {
+        TransportFailureKind::Permanent
+    }
+}
+
+#[cfg(test)]
+fn retryable_transport_error_text(message: &str) -> bool {
+    classify_transport_error_text(message) == TransportFailureKind::Retryable
 }
 
 fn retry_after_source_label(source: RetryAfterSource) -> &'static str {

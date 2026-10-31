@@ -183,8 +183,9 @@ impl SceneSubtitlePlan {
             ..Default::default()
         };
         if paths.len() > MAX_SUBTITLE_FILES {
-            return Err(AppError::Validation(
-                "scene subtitle file count limit exceeded; workspace preserved".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_FILE_COUNT_LIMIT_EXCEEDED,
+                "scene subtitle file count limit exceeded; workspace preserved",
             ));
         }
         for path in paths {
@@ -196,8 +197,9 @@ impl SceneSubtitlePlan {
             if size > MAX_SUBTITLE_BYTES
                 || plan.total_bytes.saturating_add(size) > MAX_TOTAL_SUBTITLE_BYTES
             {
-                return Err(AppError::Validation(
-                    "scene subtitle aggregate size limit exceeded; workspace preserved".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED,
+                    "scene subtitle aggregate size limit exceeded; workspace preserved",
                 ));
             }
             plan.total_bytes += size;
@@ -225,8 +227,9 @@ impl SceneSubtitlePlan {
             return Ok(Self::default());
         }
         if paths.len() > MAX_SUBTITLE_FILES {
-            return Err(AppError::Validation(
-                "scene subtitle file count limit exceeded; sources preserved".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_FILE_COUNT_LIMIT_EXCEEDED,
+                "scene subtitle file count limit exceeded; sources preserved",
             ));
         }
         let mut plan = Self {
@@ -247,8 +250,9 @@ impl SceneSubtitlePlan {
             if size > MAX_SUBTITLE_BYTES
                 || plan.total_bytes.saturating_add(size) > MAX_TOTAL_SUBTITLE_BYTES
             {
-                return Err(AppError::Validation(
-                    "scene subtitle aggregate size limit exceeded; sources preserved".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::SCENE_SUBTITLE_AGGREGATE_SIZE_LIMIT_EXCEEDED,
+                    "scene subtitle aggregate size limit exceeded; sources preserved",
                 ));
             }
             plan.total_bytes += size;
@@ -298,7 +302,10 @@ impl SceneSubtitlePlan {
             return Ok(());
         }
         let context = self.context.as_ref().ok_or_else(|| {
-            AppError::Validation("scene subtitle delivery context is unavailable".into())
+            AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_DELIVERY_CONTEXT_UNAVAILABLE,
+                "scene subtitle delivery context is unavailable",
+            )
         })?;
         let stream = app
             .runtime
@@ -361,12 +368,18 @@ impl SceneSubtitlePlan {
         let Some(files) = self.files.get(source) else {
             return Ok(false);
         };
-        let stem = destination
-            .file_stem()
-            .ok_or_else(|| AppError::Validation("imported video has no filename stem".into()))?;
-        let parent = destination
-            .parent()
-            .ok_or_else(|| AppError::Validation("imported video has no parent directory".into()))?;
+        let stem = destination.file_stem().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::import::IMPORTED_VIDEO_NO_FILENAME_STEM,
+                "imported video has no filename stem",
+            )
+        })?;
+        let parent = destination.parent().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::import::IMPORTED_VIDEO_NO_PARENT_DIRECTORY,
+                "imported video has no parent directory",
+            )
+        })?;
         validate_disk_allowance(
             crate::filesystem_space_raw(parent)
                 .map_err(|error| AppError::Repository(error.to_string()))?
@@ -378,9 +391,9 @@ impl SceneSubtitlePlan {
             let mut name = stem.to_os_string();
             name.push(suffix);
             if !targets.insert(parent.join(name)) {
-                return Err(AppError::Validation(
-                    "multiple scene subtitles map to the same destination; sources preserved"
-                        .into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::MULTIPLE_SCENE_SUBTITLES_MAP_SAME_DESTINATION,
+                    "multiple scene subtitles map to the same destination; sources preserved",
                 ));
             }
         }
@@ -392,7 +405,10 @@ impl SceneSubtitlePlan {
                 subtitle,
                 &parent.join(name),
                 self.origin.as_ref().ok_or_else(|| {
-                    AppError::Validation("scene subtitle staging workspace is unavailable".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::import::SCENE_SUBTITLE_STAGING_WORKSPACE_UNAVAILABLE,
+                        "scene subtitle staging workspace is unavailable",
+                    )
                 })?,
                 control,
             )?;
@@ -463,8 +479,9 @@ async fn bounded_blocking<T: Send + 'static>(
 
 fn validate_disk_allowance(available: u64, required: u64) -> AppResult<()> {
     if available < required.saturating_add(SUBTITLE_DISK_RESERVE_BYTES) {
-        return Err(AppError::Validation(
-            "insufficient disk allowance for scene subtitles; workspace preserved".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::INSUFFICIENT_DISK_ALLOWANCE_SCENE_SUBTITLES,
+            "insufficient disk allowance for scene subtitles; workspace preserved",
         ));
     }
     Ok(())
@@ -477,7 +494,10 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
         unix::{ffi::OsStrExt, fs::OpenOptionsExt},
     };
     let relative = source.strip_prefix(workspace).map_err(|_| {
-        AppError::Validation("scene subtitle lies outside its owned workspace".into())
+        AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_LIES_OUTSIDE_OWNED_WORKSPACE,
+            "scene subtitle lies outside its owned workspace",
+        )
     })?;
     let mut directory = std::fs::OpenOptions::new()
         .read(true)
@@ -485,19 +505,25 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
         .open(workspace)
         .map_err(|error| AppError::Repository(error.to_string()))?;
     if !crate::archive_extractor::is_owned_archive_workspace_handle(workspace, &directory) {
-        return Err(AppError::Validation(
-            "scene subtitle workspace identity changed".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_WORKSPACE_IDENTITY_CHANGED,
+            "scene subtitle workspace identity changed",
         ));
     }
     let components = relative.components().collect::<Vec<_>>();
     for (index, component) in components.iter().enumerate() {
         let std::path::Component::Normal(name) = component else {
-            return Err(AppError::Validation(
-                "invalid scene subtitle path component".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_PATH_COMPONENT_INVALID,
+                "invalid scene subtitle path component",
             ));
         };
-        let name = std::ffi::CString::new(name.as_bytes())
-            .map_err(|_| AppError::Validation("invalid scene subtitle path".into()))?;
+        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_PATH_INVALID,
+                "invalid scene subtitle path",
+            )
+        })?;
         let final_component = index + 1 == components.len();
         let flags = libc::O_RDONLY
             | libc::O_NOFOLLOW
@@ -523,16 +549,18 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
                 .map_err(|error| AppError::Repository(error.to_string()))?
                 .is_file()
             {
-                return Err(AppError::Validation(
-                    "scene subtitle is not a regular file".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::import::SCENE_SUBTITLE_NOT_REGULAR_FILE,
+                    "scene subtitle is not a regular file",
                 ));
             }
             return Ok(file);
         }
         directory = file;
     }
-    Err(AppError::Validation(
-        "scene subtitle path has no filename".into(),
+    Err(AppError::validation_refused(
+        crate::error_reasons::import::SCENE_SUBTITLE_PATH_NO_FILENAME,
+        "scene subtitle path has no filename",
     ))
 }
 
@@ -548,8 +576,9 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
         .open(workspace)
         .map_err(|error| AppError::Repository(error.to_string()))?;
     if !crate::archive_extractor::is_owned_archive_workspace_handle(workspace, &directory) {
-        return Err(AppError::Validation(
-            "scene subtitle workspace identity changed".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_WORKSPACE_IDENTITY_CHANGED,
+            "scene subtitle workspace identity changed",
         ));
     }
     let mut file_options = std::fs::OpenOptions::new();
@@ -571,9 +600,7 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
         || metadata.file_attributes() & 0x400 != 0
         || !final_path.starts_with(&format!("{root_path}\\"))
     {
-        return Err(AppError::Validation(
-            "scene subtitle handle lies outside its owned workspace or is a reparse point".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::SCENE_SUBTITLE_HANDLE_LIES_OUTSIDE_OWNED_WORKSPACE_REPARSE_POINT, "scene subtitle handle lies outside its owned workspace or is a reparse point"));
     }
     Ok(file)
 }
@@ -596,25 +623,34 @@ fn final_windows_handle_path(file: &std::fs::File) -> AppResult<String> {
             "unable to resolve scene subtitle handle path".into(),
         ));
     }
-    String::from_utf16(&buffer[..count as usize])
-        .map_err(|_| AppError::Validation("scene subtitle handle path is invalid UTF-16".into()))
+    String::from_utf16(&buffer[..count as usize]).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_HANDLE_PATH_INVALID_UTF_16,
+            "scene subtitle handle path is invalid UTF-16",
+        )
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
 fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::File> {
     let relative = source.strip_prefix(workspace).map_err(|_| {
-        AppError::Validation("scene subtitle lies outside its owned workspace".into())
+        AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_LIES_OUTSIDE_OWNED_WORKSPACE,
+            "scene subtitle lies outside its owned workspace",
+        )
     })?;
     if !crate::archive_extractor::is_owned_archive_workspace(workspace) {
-        return Err(AppError::Validation(
-            "scene subtitle workspace identity changed".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_WORKSPACE_IDENTITY_CHANGED,
+            "scene subtitle workspace identity changed",
         ));
     }
     let mut path = workspace.to_path_buf();
     for component in relative.components() {
         let std::path::Component::Normal(name) = component else {
-            return Err(AppError::Validation(
-                "invalid scene subtitle path component".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_PATH_COMPONENT_INVALID,
+                "invalid scene subtitle path component",
             ));
         };
         path.push(name);
@@ -623,8 +659,9 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
             .file_type()
             .is_symlink()
         {
-            return Err(AppError::Validation(
-                "scene subtitle path contains a symlink".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_PATH_CONTAINS_SYMLINK,
+                "scene subtitle path contains a symlink",
             ));
         }
     }
@@ -643,8 +680,9 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
         .map_err(|error| AppError::Repository(error.to_string()))?
         .is_file()
     {
-        return Err(AppError::Validation(
-            "scene subtitle is not a regular file".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_NOT_REGULAR_FILE,
+            "scene subtitle is not a regular file",
         ));
     }
     Ok(file)
@@ -675,14 +713,16 @@ fn open_client_subtitle(source: &Path) -> AppResult<std::fs::File> {
     {
         use std::os::windows::fs::MetadataExt;
         if metadata.file_attributes() & 0x400 != 0 {
-            return Err(AppError::Validation(
-                "client-reported subtitle is a reparse point".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::CLIENT_REPORTED_SUBTITLE_REPARSE_POINT,
+                "client-reported subtitle is a reparse point",
             ));
         }
     }
     if !metadata.is_file() {
-        return Err(AppError::Validation(
-            "client-reported subtitle is not a regular file".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::CLIENT_REPORTED_SUBTITLE_NOT_REGULAR_FILE,
+            "client-reported subtitle is not a regular file",
         ));
     }
     Ok(file)
@@ -697,8 +737,9 @@ fn collect_subtitles(
 ) -> AppResult<()> {
     control.check()?;
     if depth > MAX_DEPTH {
-        return Err(AppError::Validation(
-            "scene subtitle directory nesting limit exceeded".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_DIRECTORY_NESTING_LIMIT_EXCEEDED,
+            "scene subtitle directory nesting limit exceeded",
         ));
     }
     for entry in std::fs::read_dir(root).map_err(|error| AppError::Repository(error.to_string()))? {
@@ -706,8 +747,9 @@ fn collect_subtitles(
         let entry = entry.map_err(|error| AppError::Repository(error.to_string()))?;
         *count += 1;
         if *count > MAX_ENTRIES {
-            return Err(AppError::Validation(
-                "scene subtitle directory entry limit exceeded".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::import::SCENE_SUBTITLE_DIRECTORY_ENTRY_LIMIT_EXCEEDED,
+                "scene subtitle directory entry limit exceeded",
             ));
         }
         let kind = entry
@@ -833,9 +875,7 @@ fn copy_subtitle_with_writer(
     let (mut source_file, staging_root) = match origin {
         SubtitleOrigin::ArchiveWorkspace(staging_root) => {
             if !crate::archive_extractor::is_owned_archive_workspace(staging_root) {
-                return Err(AppError::Validation(
-                    "scene subtitle staging requires an owned archive workspace".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::SCENE_SUBTITLE_STAGING_REQUIRES_OWNED_ARCHIVE_WORKSPACE, "scene subtitle staging requires an owned archive workspace"));
             }
             (
                 open_owned_subtitle(source, staging_root)?,
@@ -845,7 +885,10 @@ fn copy_subtitle_with_writer(
         SubtitleOrigin::ClientReported => (
             open_client_subtitle(source)?,
             destination.parent().ok_or_else(|| {
-                AppError::Validation("imported video has no parent directory".into())
+                AppError::validation_refused(
+                    crate::error_reasons::import::IMPORTED_VIDEO_NO_PARENT_DIRECTORY,
+                    "imported video has no parent directory",
+                )
             })?,
         ),
     };
@@ -853,8 +896,9 @@ fn copy_subtitle_with_writer(
         .metadata()
         .map_err(|error| AppError::Repository(error.to_string()))?;
     if !metadata.is_file() || metadata.len() > MAX_SUBTITLE_BYTES {
-        return Err(AppError::Validation(
-            "scene subtitle is not a bounded regular file".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_NOT_BOUNDED_REGULAR_FILE,
+            "scene subtitle is not a bounded regular file",
         ));
     }
     let mut bytes = Vec::new();
@@ -873,8 +917,9 @@ fn copy_subtitle_with_writer(
         }
     }
     if bytes.len() as u64 > MAX_SUBTITLE_BYTES {
-        return Err(AppError::Validation(
-            "scene subtitle size limit exceeded".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::SCENE_SUBTITLE_SIZE_LIMIT_EXCEEDED,
+            "scene subtitle size limit exceeded",
         ));
     }
     let mut staging = tempfile::NamedTempFile::new_in(staging_root)
@@ -895,7 +940,7 @@ fn copy_subtitle_with_writer(
             if existing_subtitle_matches(destination, &bytes, control)? {
                 Ok(())
             } else {
-                Err(AppError::Validation("scene subtitle destination already exists with different contents; source preserved".into()))
+                Err(AppError::validation_refused(crate::error_reasons::import::SCENE_SUBTITLE_DESTINATION_ALREADY_EXISTS_DIFFERENT_CONTENTS, "scene subtitle destination already exists with different contents; source preserved"))
             }
         }
         Err(error) => Err(AppError::Repository(format!(

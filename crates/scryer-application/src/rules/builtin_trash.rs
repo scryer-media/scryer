@@ -35,14 +35,21 @@ const fn default_customizable() -> bool {
 
 pub(crate) fn verified_pack() -> AppResult<VerifiedRulePack> {
     let manifest: BuiltinPackManifest = serde_json::from_str(include_str!("builtin_trash.json"))
-        .map_err(|error| AppError::Validation(format!("invalid bundled TRaSH pack: {error}")))?;
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::rules::BUNDLED_TRASH_PACK_INVALID,
+                format!("invalid bundled TRaSH pack: {error}"),
+            )
+        })?;
     if manifest.schema_version != 1 || manifest.id != BUILTIN_TRASH_PACK_ID {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::BUNDLED_TRASH_PACK_UNSUPPORTED_IDENTITY_SCHEMA,
             "bundled TRaSH pack has an unsupported identity or schema".to_string(),
         ));
     }
     if manifest.rules.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::BUNDLED_TRASH_PACK_CONTAINS_NO_TEMPLATES,
             "bundled TRaSH pack contains no templates".to_string(),
         ));
     }
@@ -153,6 +160,7 @@ pub(crate) fn baseline_rule_sets() -> Vec<RuleSet> {
                 priority: 0,
                 evaluation_phase: template.evaluation_phase,
                 exclusive_group: template.exclusive_group.clone(),
+                disabled_reason_code: None,
                 disabled_reason: None,
                 applied_facets: template
                     .applied_facets

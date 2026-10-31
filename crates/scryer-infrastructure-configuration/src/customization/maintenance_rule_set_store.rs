@@ -229,8 +229,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                     || SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                         "SELECT id FROM lifecycle_candidates WHERE rule_set_id = {} AND state NOT IN ('canceled', 'excluded', 'succeeded', 'failed') LIMIT 1", &args).await?.is_some();
                 if used {
-                    return Err(scryer_application::AppError::Validation(
-                        "This maintenance rule has live candidates or action history; disable it instead.".into()));
+                    return Err(scryer_application::AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY, "This maintenance rule has live candidates or action history; disable it instead."));
                 }
                 SqlRuntime::execute(SqlExec::Tx(tx), "DELETE FROM maintenance_rule_sets WHERE id = {}", &args).await?;
                 Ok(())

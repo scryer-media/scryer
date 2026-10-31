@@ -12,9 +12,11 @@ export function sortReleaseSearchResults(
   // always preserves that order, including when an incremental snapshot lands.
   if (key === "recommended") return releases;
   const factor = direction === "asc" ? 1 : -1;
-  const value = (release: Release) => key === "score"
-    ? release.qualityProfileDecision?.releaseScore ?? Number.NEGATIVE_INFINITY
-    : release.sizeBytes ?? 0;
+  const value = (release: Release) =>
+    key === "score"
+      ? (release.qualityProfileDecision?.releaseScore ??
+        Number.NEGATIVE_INFINITY)
+      : (release.sizeBytes ?? 0);
   return [...releases].sort((left, right) => {
     const a = value(left);
     const b = value(right);

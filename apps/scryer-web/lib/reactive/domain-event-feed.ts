@@ -151,7 +151,8 @@ type Scheduler = {
 
 const defaultScheduler: Scheduler = {
   setTimeout: (handler, timeoutMs) => setTimeout(handler, timeoutMs),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  clearTimeout: (handle) =>
+    clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
 export const REACTIVE_REFRESH_DEBOUNCE_MS = 300;

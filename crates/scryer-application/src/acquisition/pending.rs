@@ -89,6 +89,9 @@ pub(crate) struct RefusedSubmission {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingGrabTrigger {
     Automatic,
+    /// An operator search retains automatic eligibility and delay policy,
+    /// but bypasses the missing-download history guard.
+    InteractiveSearch,
     Operator,
 }
 
@@ -324,7 +327,7 @@ impl AppUseCase {
                     &reads,
                 )
                 .await;
-            let queued = self
+            let Ok(queued) = self
                 .pending_queued_releases(
                     &title,
                     &scope,
@@ -333,8 +336,12 @@ impl AppUseCase {
                     &dl_snapshot,
                     &catalog_episodes,
                     &catalog_collections,
+                    true,
                 )
-                .await;
+                .await
+            else {
+                return;
+            };
             let admission = admission.with_queued(queued);
             let candidate = crate::admission::CandidateFacts::new(
                 facts.tier_index,
@@ -377,7 +384,8 @@ impl AppUseCase {
         dl_snapshot: &crate::acquisition_workflow::DownloadClientSnapshot,
         catalog_episodes: &[scryer_domain::Episode],
         catalog_collections: &[scryer_domain::Collection],
-    ) -> Vec<crate::admission::QueuedRelease> {
+        include_recent_missing: bool,
+    ) -> AppResult<Vec<crate::admission::QueuedRelease>> {
         // D18: whatever is already downloading for this scope is a
         // pseudo-incumbent. A parked release has no submission of its own yet,
         // so nothing here can self-block.
@@ -435,8 +443,11 @@ impl AppUseCase {
             title,
             &membership.view(),
             context,
-            catalog_episodes,
-            catalog_collections,
+            crate::quality::canonical_context::ReleaseCoverageCatalog {
+                episodes: catalog_episodes,
+                collections: catalog_collections,
+            },
+            include_recent_missing,
         )
         .await
     }
@@ -807,7 +818,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&release.title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", release.title_id)))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", release.title_id),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -828,7 +844,12 @@ impl AppUseCase {
             .acquisition_scope_states
             .get_acquisition_scope_state_by_id(wanted_item_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("wanted item {wanted_item_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::acquisition::WANTED_ITEM_NOT_FOUND,
+                    format!("wanted item {wanted_item_id}"),
+                )
+            })?;
         let library_id = if let Some(library_id) = wanted.library_id.as_deref() {
             library_id.to_string()
         } else {
@@ -838,7 +859,12 @@ impl AppUseCase {
                 .get_by_id(&wanted.title_id)
                 .await?
                 .map(|title| title.library_id)
-                .ok_or_else(|| AppError::NotFound(format!("title {}", wanted.title_id)))?
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", wanted.title_id),
+                    )
+                })?
         };
         self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
             .await
@@ -908,7 +934,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&pr.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", pr.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", pr.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -962,7 +993,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&pr.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", pr.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", pr.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1137,7 +1173,7 @@ impl AppUseCase {
         // Same shape as Sonarr's RSS sync, which re-runs every specification
         // over the pending list against the release's originally stored seeders;
         // an unknown count stays eligible there and here.
-        if trigger == PendingGrabTrigger::Automatic {
+        if trigger != PendingGrabTrigger::Operator {
             let minimum_seeders = self
                 .minimum_seeders_for_indexer(pr.indexer_id.as_deref())
                 .await;
@@ -1430,7 +1466,7 @@ impl AppUseCase {
                 &reads,
             )
             .await;
-        let queued = self
+        let queued = match self
             .pending_queued_releases(
                 &title,
                 &pending_scope,
@@ -1439,8 +1475,17 @@ impl AppUseCase {
                 &dl_snapshot,
                 &catalog_episodes,
                 &catalog_collections,
+                trigger == PendingGrabTrigger::Automatic,
             )
-            .await;
+            .await
+        {
+            Ok(queued) => queued,
+            Err(error) => {
+                tracing::warn!(error = %error, "pending admission history unavailable; deferring");
+                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
+            }
+        };
+        let has_missing_history = queued.iter().any(|claim| claim.missing_history);
         admission = admission.with_queued(queued);
         let policy = crate::admission::AdmissionPolicy {
             allow_upgrades: upgrade_context.profile.criteria.allow_upgrades,
@@ -1494,6 +1539,11 @@ impl AppUseCase {
 
         let verdict = crate::admission::evaluate_admission(&admission, candidate_facts, &policy);
         if let Some(rejection) = verdict.rejection() {
+            // A missing grab's history is temporary. Keep saved candidates
+            // available for the normal cadence after its protection expires.
+            if has_missing_history {
+                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
+            }
             return Ok(PendingJudgement::Decided(match &rejection.reason {
                 crate::admission::AdmissionRejectionReason::QueuedEqualOrBetter {
                     queued_title,
@@ -1554,7 +1604,7 @@ impl AppUseCase {
         // may lengthen that profile before the promotion or standby walk gets
         // here. Evaluate only after admission/cooldown so a held row is one
         // that would otherwise be grabbed.
-        if trigger == PendingGrabTrigger::Automatic {
+        if trigger != PendingGrabTrigger::Operator {
             let delay_profiles = self.load_delay_profiles().await;
             if let Some(delay_decision) = crate::delay_profile::grab_time_delay_decision(
                 &delay_profiles,
@@ -1676,6 +1726,7 @@ impl AppUseCase {
         );
         let canonical_result = self
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                automatic: trigger == PendingGrabTrigger::Automatic,
                 http_release: pr.http_release.clone(),
                 request: DownloadClientAddRequest {
                     http: None,
@@ -1732,7 +1783,10 @@ impl AppUseCase {
 
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
-            Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
+            Ok(
+                CanonicalDownloadSubmissionOutcome::Conflict(_)
+                | CanonicalDownloadSubmissionOutcome::Deferred,
+            ) => {
                 return Ok(PendingGrabOutcome::Deferred);
             }
             Err(error) => Err(error),
@@ -1769,6 +1823,7 @@ impl AppUseCase {
                     "title": pr.release_title,
                     "score": pr.release_score,
                     "grabbed_at": now.to_rfc3339(),
+                    "download_id": grab.download_id,
                     "source": "pending_release",
                     "source_provider": pr.indexer_source.clone(),
                     "release_listing_json": release_listing_json,

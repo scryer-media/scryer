@@ -10,14 +10,21 @@ import { useClient } from "urql";
 
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
-import { grabSubjects, rankGrabSuggestions, groupGrabRouting, canSubmitGrab, grabClientKey, selectedGrabClientKey, pendingGrabRows, type GrabClient, type GrabGroup, type GrabRoutingRow } from "@/lib/utils/indexer-grab";
+import {
+  grabSubjects,
+  rankGrabSuggestions,
+  groupGrabRouting,
+  canSubmitGrab,
+  grabClientKey,
+  selectedGrabClientKey,
+  pendingGrabRows,
+  type GrabClient,
+  type GrabGroup,
+  type GrabRoutingRow,
+} from "@/lib/utils/indexer-grab";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -111,7 +118,9 @@ export function GrabDialog({
   );
   const [groups, setGroups] = React.useState<GrabGroup[]>([]);
   const [loadingRouting, setLoadingRouting] = React.useState(false);
-  const [frozenAction, setFrozenAction] = React.useState<GrabAction | null>(null);
+  const [frozenAction, setFrozenAction] = React.useState<GrabAction | null>(
+    null,
+  );
   const subjects = React.useMemo(() => grabSubjects(releases), [releases]);
   const [season, setSeason] = React.useState("");
   const [episode, setEpisode] = React.useState("");
@@ -145,7 +154,6 @@ export function GrabDialog({
     setQueuedRowKeys(new Set());
   }, [open]);
 
-
   React.useEffect(() => {
     if (!open) {
       return;
@@ -155,24 +163,32 @@ export function GrabDialog({
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const queries = titleQuery.trim() ? [titleQuery.trim()] : [...new Set(subjects.map((subject) => subject.name))];
+          const queries = titleQuery.trim()
+            ? [titleQuery.trim()]
+            : [...new Set(subjects.map((subject) => subject.name))];
           const found: TitleRecord[] = [];
           for (const query of queries) {
-            const { data, error } = await client.query(catalogSearchTitlesQuery, {
-              query, facet: null, limit: TITLE_CANDIDATE_LIMIT,
-            }).toPromise();
+            const { data, error } = await client
+              .query(catalogSearchTitlesQuery, {
+                query,
+                facet: null,
+                limit: TITLE_CANDIDATE_LIMIT,
+              })
+              .toPromise();
             if (cancelled) return;
             if (error) throw error;
-            found.push(...(data?.titles?.items ?? []) as TitleRecord[]);
+            found.push(...((data?.titles?.items ?? []) as TitleRecord[]));
           }
-          setCandidates(titleQuery.trim() ? found : rankGrabSuggestions(found, subjects));
+          setCandidates(
+            titleQuery.trim() ? found : rankGrabSuggestions(found, subjects),
+          );
         } catch (error) {
           if (cancelled) {
             return;
           }
           setCandidates([]);
           setErrorMessage(
-            userFacingGraphQlErrorMessage(error, t("status.failedToLoad")),
+            userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
           );
         } finally {
           if (!cancelled) {
@@ -199,66 +215,129 @@ export function GrabDialog({
         const load = async (titleId: string | null): Promise<GrabClient[]> => {
           const searchId = searchIdByRowKey.get(rowKey);
           const downloadUrl = release.downloadUrl ?? release.link;
-          if (!searchId || !downloadUrl) throw new Error(t("grabDialog.error.expired"));
-          const { data, error } = await client.query(indexerGrabClientsQuery, { searchId, downloadUrl, titleId }, { requestPolicy: "network-only" }).toPromise();
+          if (!searchId || !downloadUrl)
+            throw new Error(t("grabDialog.error.expired"));
+          const { data, error } = await client
+            .query(
+              indexerGrabClientsQuery,
+              { searchId, downloadUrl, titleId },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
           if (error) throw error;
           return data?.indexerGrabClients ?? [];
         };
-        try { row.plain = await load(null); }
-        catch (error) { row.plainError = userFacingGraphQlErrorMessage(error, t("status.failedToLoad")); }
+        try {
+          row.plain = await load(null);
+        } catch (error) {
+          row.plainError = userFacingGraphQlErrorMessage(
+            error,
+            t("status.failedToLoad"),
+            t,
+          );
+        }
         if (selectedTitle) {
-          try { row.assigned = await load(selectedTitle.id); }
-          catch (error) { row.assignedError = userFacingGraphQlErrorMessage(error, t("status.failedToLoad")); }
+          try {
+            row.assigned = await load(selectedTitle.id);
+          } catch (error) {
+            row.assignedError = userFacingGraphQlErrorMessage(
+              error,
+              t("status.failedToLoad"),
+              t,
+            );
+          }
         }
         if (cancelled) return;
         rows.push(row);
       }
       if (!cancelled && !submissionInFlight.current) {
-        setGroups((current) => groupGrabRouting(rows).map((group) => {
-          const previous = current.find((item) => item.id === group.id);
-          return previous ? { ...group, clientId: previous.clientId, category: previous.category } : group;
-        }));
+        setGroups((current) =>
+          groupGrabRouting(rows).map((group) => {
+            const previous = current.find((item) => item.id === group.id);
+            return previous
+              ? {
+                  ...group,
+                  clientId: previous.clientId,
+                  category: previous.category,
+                }
+              : group;
+          }),
+        );
         setLoadingRouting(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [client, open, releases, searchIdByRowKey, selectedTitle, frozenAction, t]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    open,
+    releases,
+    searchIdByRowKey,
+    selectedTitle,
+    frozenAction,
+    t,
+  ]);
 
   const rejectionCodes = React.useMemo(
     () => releaseRejectionCodes(releases),
     [releases],
   );
-  const visibleCandidates = titleQuery.trim() ? candidates : candidates.slice(0, VISIBLE_TITLE_CANDIDATES);
+  const visibleCandidates = titleQuery.trim()
+    ? candidates
+    : candidates.slice(0, VISIBLE_TITLE_CANDIDATES);
   const episodic = titleIsEpisodic(selectedTitle);
-  const canReplace =
-    selectedTitle != null && titleHoldsFile(selectedTitle);
-  const incompleteSubject = episodic && episodeSubjectIncomplete(season, episode);
+  const canReplace = selectedTitle != null && titleHoldsFile(selectedTitle);
+  const incompleteSubject =
+    episodic && episodeSubjectIncomplete(season, episode);
   const useReplacement = canReplace && replaceExisting;
   const locked = submitting || frozenAction !== null;
   const routingReady = !loadingRouting && groups.length > 0;
-  const grabGate = { groups, rejectionCount: rejectionCodes.length, acknowledged };
-  const canGrab = canSubmitGrab({ ...grabGate, assign: false, ready: !submitting && routingReady && grabActionAllowed("UNLINKED", frozenAction) });
+  const grabGate = {
+    groups,
+    rejectionCount: rejectionCodes.length,
+    acknowledged,
+  };
+  const canGrab = canSubmitGrab({
+    ...grabGate,
+    assign: false,
+    ready:
+      !submitting &&
+      routingReady &&
+      grabActionAllowed("UNLINKED", frozenAction),
+  });
   const canAssign = canSubmitGrab({
     ...grabGate,
     assign: true,
-    ready: !submitting && routingReady && selectedTitle !== null && !incompleteSubject,
+    ready:
+      !submitting &&
+      routingReady &&
+      selectedTitle !== null &&
+      !incompleteSubject,
   });
   const canQueue = canAssign && grabActionAllowed("STANDARD", frozenAction);
-  const canQueueAdditional = canAssign && !useReplacement
-    && grabActionAllowed("ADDITIONAL_FILE", frozenAction);
+  const canQueueAdditional =
+    canAssign &&
+    !useReplacement &&
+    grabActionAllowed("ADDITIONAL_FILE", frozenAction);
 
   const chooseTitle = React.useCallback((title: TitleRecord) => {
-    setSelectedTitle((current) => current?.id === title.id ? null : title);
+    setSelectedTitle((current) => (current?.id === title.id ? null : title));
     setReplaceExisting(false);
     setSeason("");
     setEpisode("");
   }, []);
 
-  const selectionFor = React.useCallback((release: Release) => {
-    const group = groups.find((group) => group.rows.some((row) => row.rowKey === indexerSearchRowKey(release)));
-    if (!group?.clientId) throw new Error(t("grabDialog.client.none"));
-    return { clientId: group.clientId, category: group.category };
-  }, [groups, t]);
+  const selectionFor = React.useCallback(
+    (release: Release) => {
+      const group = groups.find((group) =>
+        group.rows.some((row) => row.rowKey === indexerSearchRowKey(release)),
+      );
+      if (!group?.clientId) throw new Error(t("grabDialog.client.none"));
+      return { clientId: group.clientId, category: group.category };
+    },
+    [groups, t],
+  );
 
   const grabLinked = React.useCallback(
     async (
@@ -280,8 +359,7 @@ export function GrabDialog({
         .toPromise();
       if (error) throw error;
       const tokenized = data?.issueInteractiveReleaseCandidateToken as
-        | Release
-        | undefined;
+        Release | undefined;
       if (!tokenized?.candidateToken) {
         throw new Error(t("status.releaseMissingCandidateToken"));
       }
@@ -290,8 +368,13 @@ export function GrabDialog({
       // the title: a season subject still binds a single-episode release to
       // that episode, while a pack stays a season.
       const scope = releaseQueueScopeInput(tokenized, { title: true });
-      if (purpose === "ADDITIONAL_FILE" && !queueScopeAcceptsAdditionalFile(scope, title.facet)) {
-        throw new Error(t("grabDialog.error.additionalScope", { name: release.title }));
+      if (
+        purpose === "ADDITIONAL_FILE" &&
+        !queueScopeAcceptsAdditionalFile(scope, title.facet)
+      ) {
+        throw new Error(
+          t("grabDialog.error.additionalScope", { name: release.title }),
+        );
       }
       const conflictMessage = t("grabDialog.conflict", { name: release.title });
       const routing = selectionFor(release);
@@ -305,7 +388,11 @@ export function GrabDialog({
         },
         async (input) => {
           const { data: queued, error: queueError } = await client
-            .mutation(queueIndexerSearchAssignmentMutation, { input, routing, replacement: useReplacement })
+            .mutation(queueIndexerSearchAssignmentMutation, {
+              input,
+              routing,
+              replacement: useReplacement,
+            })
             .toPromise();
           if (queueError) throw queueError;
           return queued?.queueIndexerSearchAssignment;
@@ -315,7 +402,9 @@ export function GrabDialog({
       );
       assertNoReplaceConflict(payload, conflictMessage);
       if (!payload?.jobId) throw new Error(t("status.queueFailed"));
-      setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
+      setGlobalStatus(t("status.queueSuccess", { name: release.title }), {
+        level: "SUCCESS",
+      });
     },
     [
       client,
@@ -356,79 +445,102 @@ export function GrabDialog({
     [client, selectionFor, setGlobalStatus, t],
   );
 
-  const handleGrab = React.useCallback(async (action: GrabAction) => {
-    const allowed = action === "UNLINKED" ? canGrab : action === "STANDARD" ? canQueue : canQueueAdditional;
-    if (submissionInFlight.current || !allowed) return;
-    submissionInFlight.current = true;
-    setErrorMessage(null);
-    setSubmitting(true);
-    setFrozenAction(action);
-    let successes = queuedRowKeys.size;
-    let failures = 0;
-    try {
-      // Sequential on purpose: each release reports its own outcome, and a
-      // conflict prompt can only be answered one release at a time.
-      for (const release of pendingGrabRows(releases, queuedRowKeys, indexerSearchRowKey)) {
-        const rowKey = indexerSearchRowKey(release);
-        const searchId = searchIdByRowKey.get(rowKey);
-        // The server locates a release by its download url, falling back to
-        // the indexer link for rows that carry no direct download source.
-        const downloadUrl = release.downloadUrl ?? release.link;
-        if (!searchId || !downloadUrl) {
-          failures += 1;
-          setErrorMessage(t("grabDialog.error.expired"));
-          continue;
-        }
-        try {
-          if (action === "UNLINKED") {
-            await grabUnlinked(release, searchId, downloadUrl);
-          } else if (selectedTitle) {
-            await grabLinked(release, searchId, downloadUrl, selectedTitle, action);
+  const handleGrab = React.useCallback(
+    async (action: GrabAction) => {
+      const allowed =
+        action === "UNLINKED"
+          ? canGrab
+          : action === "STANDARD"
+            ? canQueue
+            : canQueueAdditional;
+      if (submissionInFlight.current || !allowed) return;
+      submissionInFlight.current = true;
+      setErrorMessage(null);
+      setSubmitting(true);
+      setFrozenAction(action);
+      let successes = queuedRowKeys.size;
+      let failures = 0;
+      try {
+        // Sequential on purpose: each release reports its own outcome, and a
+        // conflict prompt can only be answered one release at a time.
+        for (const release of pendingGrabRows(
+          releases,
+          queuedRowKeys,
+          indexerSearchRowKey,
+        )) {
+          const rowKey = indexerSearchRowKey(release);
+          const searchId = searchIdByRowKey.get(rowKey);
+          // The server locates a release by its download url, falling back to
+          // the indexer link for rows that carry no direct download source.
+          const downloadUrl = release.downloadUrl ?? release.link;
+          if (!searchId || !downloadUrl) {
+            failures += 1;
+            setErrorMessage(t("grabDialog.error.expired"));
+            continue;
           }
-          successes += 1;
-          setQueuedRowKeys((current) => new Set(current).add(rowKey));
-        } catch (error) {
-          failures += 1;
-          const reason = grabErrorMessage(error, t, t("status.queueFailed"));
-          setErrorMessage(reason);
-          setGlobalStatus(
-            t("grabDialog.status.failed", { name: release.title, reason }),
-            { level: "ERROR" },
-          );
+          try {
+            if (action === "UNLINKED") {
+              await grabUnlinked(release, searchId, downloadUrl);
+            } else if (selectedTitle) {
+              await grabLinked(
+                release,
+                searchId,
+                downloadUrl,
+                selectedTitle,
+                action,
+              );
+            }
+            successes += 1;
+            setQueuedRowKeys((current) => new Set(current).add(rowKey));
+          } catch (error) {
+            failures += 1;
+            const reason = grabErrorMessage(error, t, t("status.queueFailed"));
+            setErrorMessage(reason);
+            setGlobalStatus(
+              t("grabDialog.status.failed", { name: release.title, reason }),
+              { level: "ERROR" },
+            );
+          }
         }
+      } finally {
+        submissionInFlight.current = false;
+        setSubmitting(false);
+        if (successes === 0) setFrozenAction(null);
       }
-    } finally {
-      submissionInFlight.current = false;
-      setSubmitting(false);
-      if (successes === 0) setFrozenAction(null);
-    }
-    // A search job outlives its results by five minutes; past that the grab
-    // fails and the dialog stays open so the operator can re-run the search.
-    if (failures === 0) {
-      onGrabbed();
-      onOpenChange(false);
-    }
-  }, [
-    grabLinked,
-    grabUnlinked,
-    onGrabbed,
-    onOpenChange,
-    queuedRowKeys,
-    releases,
-    searchIdByRowKey,
-    selectedTitle,
-    setGlobalStatus,
-    t,
-    canGrab,
-    canQueue,
-    canQueueAdditional,
-  ]);
+      // A search job outlives its results by five minutes; past that the grab
+      // fails and the dialog stays open so the operator can re-run the search.
+      if (failures === 0) {
+        onGrabbed();
+        onOpenChange(false);
+      }
+    },
+    [
+      grabLinked,
+      grabUnlinked,
+      onGrabbed,
+      onOpenChange,
+      queuedRowKeys,
+      releases,
+      searchIdByRowKey,
+      selectedTitle,
+      setGlobalStatus,
+      t,
+      canGrab,
+      canQueue,
+      canQueueAdditional,
+    ],
+  );
 
   const multiple = releases.length > 1;
 
   return (
     <>
-      <Dialog open={open} onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!submitting) onOpenChange(next);
+        }}
+      >
         <DialogContent
           id="grab-dialog"
           data-ui="grab-dialog"
@@ -445,36 +557,124 @@ export function GrabDialog({
                   ? t("grabDialog.title.many", { count: releases.length })
                   : t("grabDialog.title.one")}
               </DialogTitle>
-
             </div>
           </div>
 
-          <fieldset disabled={locked} className="max-h-[62vh] min-h-0 min-w-0 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
+          <fieldset
+            disabled={locked}
+            className="max-h-[62vh] min-h-0 min-w-0 space-y-4 overflow-y-auto px-4 py-4 sm:px-5"
+          >
             <ReleaseSummary releases={releases} />
-            {loadingRouting ? <p className="text-xs text-[var(--scry-muted2)]">{t("grabDialog.routing.loading")}</p> : null}
+            {loadingRouting ? (
+              <p className="text-xs text-[var(--scry-muted2)]">
+                {t("grabDialog.routing.loading")}
+              </p>
+            ) : null}
             {groups.map((group, index) => (
-              <section key={group.id} className="space-y-2 rounded-lg border border-[var(--scry-border2)] p-3">
-                {groups.length > 1 ? <p className="text-xs text-[var(--scry-muted2)]">{t(group.rows.length === 1 ? "grabDialog.routing.single" : "grabDialog.routing.group", { count: group.rows.length })}</p> : null}
+              <section
+                key={group.id}
+                className="space-y-2 rounded-lg border border-[var(--scry-border2)] p-3"
+              >
+                {groups.length > 1 ? (
+                  <p className="text-xs text-[var(--scry-muted2)]">
+                    {t(
+                      group.rows.length === 1
+                        ? "grabDialog.routing.single"
+                        : "grabDialog.routing.group",
+                      { count: group.rows.length },
+                    )}
+                  </p>
+                ) : null}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <LabelledField label={t("grabDialog.client")}>
-                    <Select value={selectedGrabClientKey(group)} disabled={locked || loadingRouting || group.clients.some((item) => item.mapped)} onValueChange={(key) => setGroups((current) => current.map((item) => {
-                      const choice = item.clients.find((client) => grabClientKey(client) === key);
-                      return item.id === group.id && choice ? { ...item, clientId: choice.id, category: choice.category ?? "" } : item;
-                    }))}>
-                      <SelectTrigger id={`grab-dialog-client-${index}`} aria-label={t("grabDialog.client")} className="w-full"><SelectValue placeholder={t("grabDialog.client.placeholder")} /></SelectTrigger>
-                      <SelectContent>{group.clients.map((item) => <SelectItem key={grabClientKey(item)} value={grabClientKey(item)}>{group.clients.some((other) => other !== item && other.id === item.id) && item.category ? `${item.name} · ${item.category}` : item.name}</SelectItem>)}</SelectContent>
+                    <Select
+                      value={selectedGrabClientKey(group)}
+                      disabled={
+                        locked ||
+                        loadingRouting ||
+                        group.clients.some((item) => item.mapped)
+                      }
+                      onValueChange={(key) =>
+                        setGroups((current) =>
+                          current.map((item) => {
+                            const choice = item.clients.find(
+                              (client) => grabClientKey(client) === key,
+                            );
+                            return item.id === group.id && choice
+                              ? {
+                                  ...item,
+                                  clientId: choice.id,
+                                  category: choice.category ?? "",
+                                }
+                              : item;
+                          }),
+                        )
+                      }
+                    >
+                      <SelectTrigger
+                        id={`grab-dialog-client-${index}`}
+                        aria-label={t("grabDialog.client")}
+                        className="w-full"
+                      >
+                        <SelectValue
+                          placeholder={t("grabDialog.client.placeholder")}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {group.clients.map((item) => (
+                          <SelectItem
+                            key={grabClientKey(item)}
+                            value={grabClientKey(item)}
+                          >
+                            {group.clients.some(
+                              (other) => other !== item && other.id === item.id,
+                            ) && item.category
+                              ? `${item.name} · ${item.category}`
+                              : item.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                     </Select>
                   </LabelledField>
-                  <CategoryField clientId={group.clientId} category={group.category} disabled={locked} index={index} onChange={(category) => setGroups((current) => current.map((item) => item.id === group.id ? { ...item, category } : item))} />
+                  <CategoryField
+                    clientId={group.clientId}
+                    category={group.category}
+                    disabled={locked}
+                    index={index}
+                    onChange={(category) =>
+                      setGroups((current) =>
+                        current.map((item) =>
+                          item.id === group.id ? { ...item, category } : item,
+                        ),
+                      )
+                    }
+                  />
                 </div>
-                {[...new Set(group.rows.flatMap((row) => [row.plainError, row.assignedError]).filter(Boolean))].map((error) => <p key={error} role="alert" className="text-xs text-[var(--scry-danger-text-soft)]">{error}</p>)}
+                {[
+                  ...new Set(
+                    group.rows
+                      .flatMap((row) => [row.plainError, row.assignedError])
+                      .filter(Boolean),
+                  ),
+                ].map((error) => (
+                  <p
+                    key={error}
+                    role="alert"
+                    className="text-xs text-[var(--scry-danger-text-soft)]"
+                  >
+                    {error}
+                  </p>
+                ))}
               </section>
             ))}
 
-
             <section className="space-y-2">
               <h3 className="text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
-                {t(titleQuery.trim() ? "grabDialog.assign.label" : "grabDialog.assign.suggested")}
+                {t(
+                  titleQuery.trim()
+                    ? "grabDialog.assign.label"
+                    : "grabDialog.assign.suggested",
+                )}
               </h3>
               <div className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3">
                 <Search className="h-3.5 w-3.5 shrink-0 text-[var(--scry-faint)]" />
@@ -512,7 +712,6 @@ export function GrabDialog({
                     : t("grabDialog.assign.empty")}
                 </p>
               ) : null}
-
             </section>
 
             {episodic ? (
@@ -535,7 +734,14 @@ export function GrabDialog({
                     aria-label={t("grabDialog.episode")}
                   />
                 </LabelledField>
-                {incompleteSubject ? <p role="alert" className="col-span-2 text-xs text-[var(--scry-danger-text-soft)]">{t("grabDialog.episodic.incomplete")}</p> : null}
+                {incompleteSubject ? (
+                  <p
+                    role="alert"
+                    className="col-span-2 text-xs text-[var(--scry-danger-text-soft)]"
+                  >
+                    {t("grabDialog.episodic.incomplete")}
+                  </p>
+                ) : null}
               </section>
             ) : null}
 
@@ -559,7 +765,9 @@ export function GrabDialog({
                   id="grab-dialog-acknowledge"
                   size="compact"
                   checked={acknowledged}
-                  onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                  onCheckedChange={(checked) =>
+                    setAcknowledged(checked === true)
+                  }
                 />
                 {t("grabDialog.option.acknowledge", {
                   codes: rejectionCodes.join(", "),
@@ -579,15 +787,58 @@ export function GrabDialog({
           </fieldset>
 
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-[var(--scry-border)] bg-[var(--scry-surfD)] px-5 py-3">
-            {queuedRowKeys.size > 0 ? <span className="text-xs text-[var(--scry-muted2)]">{t("grabDialog.footer.partial", { count: queuedRowKeys.size })}</span> : null}
+            {queuedRowKeys.size > 0 ? (
+              <span className="text-xs text-[var(--scry-muted2)]">
+                {t("grabDialog.footer.partial", { count: queuedRowKeys.size })}
+              </span>
+            ) : null}
             <div className="flex-1" />
-            <Button id="grab-dialog-cancel" type="button" variant="outline" size="sm" disabled={submitting} onClick={() => onOpenChange(false)}>{t("label.cancel")}</Button>
-            <Button id="grab-dialog-grab" type="button" variant="outline" size="sm" disabled={!canGrab} onClick={() => { void handleGrab("UNLINKED"); }}>{t("grabDialog.cta.grab")}</Button>
-            <Button id="grab-dialog-additional" type="button" variant="outline" size="sm" disabled={!canQueueAdditional} onClick={() => { void handleGrab("ADDITIONAL_FILE"); }}>
+            <Button
+              id="grab-dialog-cancel"
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={submitting}
+              onClick={() => onOpenChange(false)}
+            >
+              {t("label.cancel")}
+            </Button>
+            <Button
+              id="grab-dialog-grab"
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!canGrab}
+              onClick={() => {
+                void handleGrab("UNLINKED");
+              }}
+            >
+              {t("grabDialog.cta.grab")}
+            </Button>
+            <Button
+              id="grab-dialog-additional"
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!canQueueAdditional}
+              onClick={() => {
+                void handleGrab("ADDITIONAL_FILE");
+              }}
+            >
               {t("nzb.queueAdditionalFile")}
             </Button>
-            <Button id="grab-dialog-submit" type="button" variant="success" size="sm" disabled={!canQueue} onClick={() => { void handleGrab("STANDARD"); }}>
-              <Download className="h-3.5 w-3.5" />{t("nzb.queue")}
+            <Button
+              id="grab-dialog-submit"
+              type="button"
+              variant="success"
+              size="sm"
+              disabled={!canQueue}
+              onClick={() => {
+                void handleGrab("STANDARD");
+              }}
+            >
+              <Download className="h-3.5 w-3.5" />
+              {t("nzb.queue")}
             </Button>
           </div>
         </DialogContent>
@@ -597,8 +848,18 @@ export function GrabDialog({
   );
 }
 
-function CategoryField({ clientId, category, disabled, index, onChange }: {
-  clientId: string; category: string; disabled: boolean; index: number; onChange: (category: string) => void;
+function CategoryField({
+  clientId,
+  category,
+  disabled,
+  index,
+  onChange,
+}: {
+  clientId: string;
+  category: string;
+  disabled: boolean;
+  index: number;
+  onChange: (category: string) => void;
 }) {
   const client = useClient();
   const t = useTranslate();
@@ -608,18 +869,50 @@ function CategoryField({ clientId, category, disabled, index, onChange }: {
     setChoices([]);
     if (!clientId) return;
     void (async () => {
-      const { data, error } = await client.query(downloadClientCategoriesQuery, { clientId }, { requestPolicy: "network-only" }).toPromise();
+      const { data, error } = await client
+        .query(
+          downloadClientCategoriesQuery,
+          { clientId },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
       if (cancelled) return;
-      if (!error && data?.downloadClientCategories?.supported) setChoices(data.downloadClientCategories.categories);
-    })().catch(() => { if (!cancelled) setChoices([]); });
-    return () => { cancelled = true; };
+      if (!error && data?.downloadClientCategories?.supported)
+        setChoices(data.downloadClientCategories.categories);
+    })().catch(() => {
+      if (!cancelled) setChoices([]);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [client, clientId]);
   const listId = `grab-dialog-categories-${index}`;
-  return <LabelledField label={t("grabDialog.category")}>
-    <Input id={`grab-dialog-category-${index}`} list={listId} value={category} disabled={disabled || !clientId} onChange={(event) => onChange(event.target.value)} placeholder={t("grabDialog.category.default")} aria-label={t("grabDialog.category")} />
-    <datalist id={listId}>{choices.map((choice) => <option key={choice} value={choice} />)}</datalist>
-    <button type="button" disabled={disabled || !clientId} onClick={() => onChange("")} className="mt-1 text-xs text-[var(--scry-accent)]">{t("grabDialog.category.default")}</button>
-  </LabelledField>;
+  return (
+    <LabelledField label={t("grabDialog.category")}>
+      <Input
+        id={`grab-dialog-category-${index}`}
+        list={listId}
+        value={category}
+        disabled={disabled || !clientId}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={t("grabDialog.category.default")}
+        aria-label={t("grabDialog.category")}
+      />
+      <datalist id={listId}>
+        {choices.map((choice) => (
+          <option key={choice} value={choice} />
+        ))}
+      </datalist>
+      <button
+        type="button"
+        disabled={disabled || !clientId}
+        onClick={() => onChange("")}
+        className="mt-1 text-xs text-[var(--scry-accent)]"
+      >
+        {t("grabDialog.category.default")}
+      </button>
+    </LabelledField>
+  );
 }
 
 function LabelledField({
@@ -661,7 +954,10 @@ function ReleaseSummary({ releases }: { releases: Release[] }) {
         {formatReleaseSize(totalReleaseBytes(releases))}
       </span>
       {heldRelease ? (
-        <MovieAvailabilityBadge result={heldRelease} className="col-span-2 row-start-3 justify-self-start" />
+        <MovieAvailabilityBadge
+          result={heldRelease}
+          className="col-span-2 row-start-3 justify-self-start"
+        />
       ) : null}
     </div>
   );
@@ -692,16 +988,21 @@ function TitleCandidateRow({
           : "border-[var(--scry-border2)] hover:bg-[var(--scry-hover)]",
       )}
     >
-      <TitlePosterSlot src={title.posterUrl} alt={title.name} emptyLabel={title.name} fallbackTitle={title.name} fallbackShowText={false} className="h-16 w-11 shrink-0 rounded object-cover" />
+      <TitlePosterSlot
+        src={title.posterUrl}
+        alt={title.name}
+        emptyLabel={title.name}
+        fallbackTitle={title.name}
+        fallbackShowText={false}
+        className="h-16 w-11 shrink-0 rounded object-cover"
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold text-[var(--scry-ink3)]">
           {title.name}
           {title.year ? ` (${title.year})` : ""}
         </span>
         <span className="block truncate text-[11.5px] text-[var(--scry-muted3)]">
-          {[title.facet, title.libraryName]
-            .filter(Boolean)
-            .join(" · ")}
+          {[title.facet, title.libraryName].filter(Boolean).join(" · ")}
         </span>
       </span>
       <span

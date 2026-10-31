@@ -911,7 +911,10 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 .await?
                     == 0
                 {
-                    return Err(AppError::NotFound("download submission not found".into()));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::WORKFLOW_DOWNLOAD_SUBMISSION_NOT_FOUND,
+                        "download submission not found",
+                    ));
                 }
                 Ok(())
             })
@@ -972,8 +975,9 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         let title_id = title_id.trim().to_string();
         let facet = facet.trim().to_string();
         if title_id.is_empty() || facet.is_empty() {
-            return Err(AppError::Validation(
-                "manual cleanup requires title and facet".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::WORKFLOW_CLEANUP_IDENTITY_REQUIRED,
+                "manual cleanup requires title and facet",
             ));
         }
         SqlRuntime::run_in_transaction(&self.datastore, "attribute_download_cleanup", move |tx| {
@@ -1740,6 +1744,67 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         Ok(None)
     }
 
+    async fn transition_client_presence(
+        &self,
+        transition: &scryer_application::ClientPresenceTransition,
+    ) -> AppResult<bool> {
+        let transition = transition.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "transition_client_presence", move |tx| {
+            let transition = transition.clone();
+            Box::pin(async move {
+                let id = transition.download_id.to_string();
+                super::import_store::guard_import_retry_tx(tx, &id).await?;
+                let previous = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT tracked_state FROM download_identity_states WHERE canonical_download_id = {} ORDER BY updated_at DESC, id DESC LIMIT 1",
+                    &[SqlArg::Text(id.clone())]).await?
+                    .map(|row| row.text("tracked_state")).transpose()?;
+                if previous != transition.expected_state
+                    || previous.as_deref().is_some_and(|state| !matches!(state, "missing" | "downloading")) {
+                    return Ok(false);
+                }
+                let submission = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT tracked_state FROM download_submissions WHERE id = {}",
+                    &[SqlArg::Text(id.clone())]).await?;
+                let Some(submission) = submission else { return Ok(false); };
+                if submission.opt_text("tracked_state")?.as_deref()
+                    .is_some_and(|state| !matches!(state, "missing" | "downloading")) {
+                    return Ok(false);
+                }
+                if !matches!(transition.state, TrackedDownloadState::Missing | TrackedDownloadState::Downloading) {
+                    return Err(AppError::Repository("invalid client presence transition".into()));
+                }
+                let now = Utc::now();
+                let state = transition.state.as_str().to_string();
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "INSERT INTO download_identity_states
+                     (id, identity_key, canonical_download_id, download_id, client_id, client_type,
+                      download_client_item_id, tracked_state, reason, detail, created_at, updated_at)
+                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                     ON CONFLICT(identity_key) DO UPDATE SET tracked_state = excluded.tracked_state,
+                     reason = excluded.reason, detail = excluded.detail, updated_at = excluded.updated_at",
+                    &[SqlArg::Text(Id::new().0), SqlArg::Text(canonical_tracked_state_key(&transition.download_id)),
+                      SqlArg::Text(id.clone()), SqlArg::OptText(transition.identity.download_id),
+                      SqlArg::Text(normalize_download_client_id(transition.source.client_id.as_deref())),
+                      SqlArg::Text(transition.source.client_type), SqlArg::Text(transition.source.item_id),
+                      SqlArg::Text(state.clone()), SqlArg::OptText(transition.reason), SqlArg::OptText(transition.detail),
+                      SqlArg::Timestamp(now), SqlArg::Timestamp(now)]).await?;
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "UPDATE download_submissions SET tracked_state = {}, tracked_state_at = {} WHERE id = {}",
+                    &[SqlArg::Text(state), SqlArg::Timestamp(now), SqlArg::Text(id)]).await?;
+                for change in transition.scopes {
+                    SqlRuntime::execute(SqlExec::Tx(tx),
+                        "UPDATE wanted_items SET status = {}, grabbed_release = {}, updated_at = {}
+                         WHERE id = {} AND status = {} AND COALESCE(grabbed_release, '') = {}",
+                        &[SqlArg::Text(change.status.as_str().into()),
+                          SqlArg::Text(change.grabbed_release), SqlArg::Timestamp(now), SqlArg::Text(change.previous.id),
+                          SqlArg::Text(change.previous.status.as_str().into()),
+                          SqlArg::Text(change.previous.grabbed_release.unwrap_or_default())]).await?;
+                }
+                Ok(true)
+            })
+        }).await
+    }
+
     async fn upsert_identity_tracked_state_for_download_returning_previous(
         &self,
         target: IdentityTrackedStateTarget<'_>,
@@ -1871,6 +1936,14 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         }
 
         let mut states = Vec::new();
+        let mut known_identities = std::collections::HashSet::new();
+        let key = |identity: &ClientJobLocator| {
+            (
+                normalize_download_client_id(identity.client_id.as_deref()),
+                identity.client_type.clone(),
+                identity.item_id.clone(),
+            )
+        };
         for chunk in chunks {
             let mut args = Vec::with_capacity(chunk.len() + 2);
             let clauses = client_locator_chunk_predicate(
@@ -1895,6 +1968,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     ),
                     row.text("tracked_state")?,
                 ));
+                known_identities.insert(key(&states.last().expect("just appended state").0));
             }
 
             // Submissions that pre-date identity states (or whose state row
@@ -1903,14 +1977,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             // "never tracked" and freezes its scope while absent.
             let missing: Vec<&ClientJobLocator> = chunk
                 .iter()
-                .filter(|identity| {
-                    !states.iter().any(|(known, _)| {
-                        known.client_type == identity.client_type
-                            && known.item_id == identity.item_id
-                            && normalize_download_client_id(known.client_id.as_deref())
-                                == normalize_download_client_id(identity.client_id.as_deref())
-                    })
-                })
+                .filter(|identity| !known_identities.contains(&key(identity)))
                 .collect();
             if missing.is_empty() {
                 continue;
@@ -1938,6 +2005,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     ),
                     row.text("tracked_state")?,
                 ));
+                known_identities.insert(key(&states.last().expect("just appended state").0));
             }
         }
         Ok(states)
@@ -5484,6 +5552,145 @@ mod seed_goal_tests {
     }
 
     #[tokio::test]
+    async fn client_presence_transition_is_atomic_and_preserves_superseding_outcomes() {
+        use scryer_application::{
+            AcquisitionScopeState, AcquisitionScopeStatus, ClientPresenceScopeUpdate,
+            ClientPresenceTransition,
+        };
+        let store = store().await;
+        let id = DownloadId::new();
+        let submission = submission(id, "presence-job", "title-1");
+        store.record_submission(submission.clone()).await.unwrap();
+        SqlRuntime::execute(store.datastore.read_exec(),
+            "CREATE TABLE wanted_items (id TEXT PRIMARY KEY, status TEXT, grabbed_release TEXT CHECK(grabbed_release != 'reject'), updated_at TEXT)", &[]).await.unwrap();
+        SqlRuntime::execute(store.datastore.read_exec(),
+            "INSERT INTO wanted_items (id, status, grabbed_release) VALUES ('scope-1', 'grabbed', 'original')", &[]).await.unwrap();
+        let previous = AcquisitionScopeState {
+            id: "scope-1".into(),
+            title_id: "title-1".into(),
+            title_name: None,
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".into(),
+            status: AcquisitionScopeStatus::Grabbed,
+            last_search_at: None,
+            grabbed_release: Some("original".into()),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        let mut transition = ClientPresenceTransition {
+            download_id: id,
+            source: ClientJobLocator::from_submission(&submission),
+            identity: DownloadSubmissionIdentity::default(),
+            expected_state: None,
+            state: TrackedDownloadState::Missing,
+            reason: Some("DOWNLOAD_CLIENT_ITEM_MISSING".into()),
+            detail: Some("durable-event-intent".into()),
+            scopes: vec![ClientPresenceScopeUpdate {
+                previous,
+                status: AcquisitionScopeStatus::Wanted,
+                grabbed_release: "reject".into(),
+            }],
+        };
+        // A failed scope write cannot leave the canonical marker or submission half transitioned.
+        assert!(store.transition_client_presence(&transition).await.is_err());
+        assert_eq!(
+            store
+                .get_identity_tracked_state_for_download(
+                    Some(&id),
+                    &transition.identity,
+                    Some(&transition.source)
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store.get_tracked_state(&transition.source).await.unwrap(),
+            None
+        );
+        transition.scopes[0].grabbed_release = "retained".into();
+        assert!(store.transition_client_presence(&transition).await.unwrap());
+        assert_eq!(
+            store
+                .get_tracked_state(&transition.source)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("missing")
+        );
+        let scope = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT status, grabbed_release FROM wanted_items WHERE id = 'scope-1'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(scope.text("status").unwrap(), "wanted");
+        assert_eq!(scope.text("grabbed_release").unwrap(), "retained");
+        transition.expected_state = Some("missing".into());
+        transition.state = TrackedDownloadState::Downloading;
+        transition.scopes[0].previous.status = AcquisitionScopeStatus::Wanted;
+        transition.scopes[0].previous.grabbed_release = Some("retained".into());
+        transition.scopes[0].status = AcquisitionScopeStatus::Grabbed;
+        for protected in [
+            "ignored",
+            "imported",
+            "failed",
+            "import_pending",
+            "importing",
+            "import_blocked",
+            "imported_seeding",
+        ] {
+            // An outcome wins after the observer read Missing, before it writes.
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&id),
+                    &transition.identity,
+                    Some(&transition.source),
+                    protected,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert!(
+                !store.transition_client_presence(&transition).await.unwrap(),
+                "{protected}"
+            );
+            let scope = SqlRuntime::fetch_optional(
+                store.datastore.read_exec(),
+                "SELECT status FROM wanted_items WHERE id = 'scope-1'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(scope.text("status").unwrap(), "wanted");
+            assert_eq!(
+                store
+                    .get_tracked_state(&transition.source)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("missing")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_token_less_identity_state_round_trips_on_the_canonical_download_id() {
         // Plugin download clients omit the legacy wire token entirely. The row
         // is keyed by the canonical download id, so it is written with a NULL
@@ -5716,7 +5923,10 @@ mod seed_goal_tests {
                     )
                     .await?;
                     if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        return Err(AppError::Repository(ACTIVE_LOCATOR_VIOLATION.to_string()));
+                        return Err(AppError::repository_failure(
+                            scryer_application::RepositoryErrorKind::UniqueViolation,
+                            ACTIVE_LOCATOR_VIOLATION.to_string(),
+                        ));
                     }
                     Ok(claimed)
                 })
@@ -5760,7 +5970,10 @@ mod seed_goal_tests {
                     if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
                         // This claimant read the locator as unbound before the
                         // winner committed, so its insert lost the race.
-                        return Err(AppError::Repository(ACTIVE_LOCATOR_VIOLATION.to_string()));
+                        return Err(AppError::repository_failure(
+                            scryer_application::RepositoryErrorKind::UniqueViolation,
+                            ACTIVE_LOCATOR_VIOLATION.to_string(),
+                        ));
                     }
                     claim_or_create_binding_download_id_tx(
                         tx,
@@ -5792,7 +6005,10 @@ mod seed_goal_tests {
                 let attempts = Arc::clone(&attempts);
                 Box::pin(async move {
                     attempts.fetch_add(1, Ordering::SeqCst);
-                    Err(AppError::Repository(ACTIVE_LOCATOR_VIOLATION.to_string()))
+                    Err(AppError::repository_failure(
+                        scryer_application::RepositoryErrorKind::UniqueViolation,
+                        ACTIVE_LOCATOR_VIOLATION.to_string(),
+                    ))
                 })
             },
         )
@@ -5800,7 +6016,8 @@ mod seed_goal_tests {
         .expect_err("a persistent conflict must not be swallowed");
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2, "exactly one retry");
-        let AppError::Repository(message) = error else {
+        let (AppError::Repository(message) | AppError::RepositoryFailure { message, .. }) = error
+        else {
             panic!("the original repository error should surface");
         };
         assert_eq!(message, ACTIVE_LOCATOR_VIOLATION);
@@ -5828,7 +6045,8 @@ mod seed_goal_tests {
         .expect_err("an unrelated failure must propagate");
 
         assert_eq!(attempts.load(Ordering::SeqCst), 1, "no retry");
-        let AppError::Repository(message) = error else {
+        let (AppError::Repository(message) | AppError::RepositoryFailure { message, .. }) = error
+        else {
             panic!("the original repository error should surface");
         };
         assert_eq!(message, FOREIGN_KEY_VIOLATION);
@@ -6333,6 +6551,83 @@ mod seed_goal_tests {
                     .is_empty()
             );
         }
+    }
+
+    // A claim carries the delay a directly preceding retryable failure was
+    // given, so the next failure can back off further; any other outcome in
+    // between starts the ladder again.
+    #[tokio::test]
+    async fn claim_carries_the_previous_failure_retry_delay() {
+        let store = store().await;
+        let id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(id, "job-backoff", "title-1"),
+                submission_identity(id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&identity()),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // Brings the row due again while keeping the delay it was given.
+        async fn make_due(store: &DownloadSubmissionStore, id: DownloadId, delay: i64) {
+            let finished = Utc::now() - chrono::Duration::seconds(delay + 60);
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "test_make_cleanup_due",
+                "UPDATE download_cleanup SET updated_at = {}, next_attempt_at = {} WHERE download_id = {}",
+                vec![
+                    SqlArg::Timestamp(finished),
+                    SqlArg::Timestamp(finished + chrono::Duration::seconds(delay)),
+                    SqlArg::Text(id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+        let DownloadCleanupClaim::Claimed(first) = store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("cleanup must be claimed");
+        };
+        assert_eq!(first.previous_failure_retry_seconds, None);
+        store
+            .finish_download_cleanup(
+                &id,
+                "cleanup_failed",
+                false,
+                3_600,
+                0,
+                Some("client offline"),
+            )
+            .await
+            .unwrap();
+        make_due(&store, id, 3_600).await;
+        let DownloadCleanupClaim::Claimed(retry) = store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("the failed cleanup must be claimable once due");
+        };
+        assert_eq!(retry.previous_failure_retry_seconds, Some(3_600));
+        store
+            .finish_download_cleanup(&id, "seeding_hold", false, 300, 0, None)
+            .await
+            .unwrap();
+        make_due(&store, id, 300).await;
+        let DownloadCleanupClaim::Claimed(after_hold) =
+            store.claim_download_cleanup(&id).await.unwrap()
+        else {
+            panic!("the held cleanup must be claimable once due");
+        };
+        assert_eq!(after_hold.previous_failure_retry_seconds, None);
     }
 
     #[tokio::test]
@@ -6860,6 +7155,70 @@ mod seed_goal_tests {
         let remainder = store.list_due_download_cleanup(100).await.unwrap();
         assert_eq!(remainder.len(), 5);
         assert!(remainder.iter().all(|record| record.download_id != live));
+    }
+
+    #[tokio::test]
+    async fn download_enrichment_chunked_states_match_individual_lookups() {
+        let store = store().await;
+        let mut expected = std::collections::HashMap::new();
+        let mut requested = Vec::new();
+        for (index, client) in [None, Some("primary"), Some("other-client")]
+            .into_iter()
+            .enumerate()
+        {
+            let id = DownloadId::new();
+            let mut row = submission(id, "shared-native-id", "title-1");
+            row.download_client_id = client.map(str::to_string);
+            store.record_submission(row).await.unwrap();
+            let locator = ClientJobLocator::new(client, "qbittorrent", "shared-native-id");
+            if index == 1 {
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "legacy_fixture",
+                    "UPDATE download_submissions SET tracked_state = 'imported' WHERE id = {}",
+                    vec![SqlArg::Text(id.to_string())],
+                )
+                .await
+                .unwrap();
+            } else {
+                store
+                    .record_identity_tracked_state_for_download(
+                        Some(&id),
+                        &submission_identity(id),
+                        Some(&locator),
+                        "downloading",
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            expected.extend(
+                store
+                    .list_identity_tracked_states_for_client_items(std::slice::from_ref(&locator))
+                    .await
+                    .unwrap(),
+            );
+            requested.push(locator);
+            for n in 0..DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE + 1 {
+                requested.push(ClientJobLocator::new(
+                    client,
+                    "qbittorrent",
+                    format!("missing-{index}-{n}"),
+                ));
+            }
+        }
+        let actual = store
+            .list_identity_tracked_states_for_client_items(&requested)
+            .await
+            .unwrap();
+        assert_eq!(actual.len(), 3);
+        assert_eq!(
+            actual
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>(),
+            expected
+        );
     }
 
     #[tokio::test]

@@ -13,7 +13,10 @@ export function queueReauthenticationAction<Action>(
 export function consumeReauthenticatedAction<Action>(
   pending: PendingReauthenticationAction<Action> | null,
   generation: number,
-): { pending: PendingReauthenticationAction<Action> | null; action: Action | null } {
+): {
+  pending: PendingReauthenticationAction<Action> | null;
+  action: Action | null;
+} {
   if (!pending || generation <= pending.queuedAtGeneration) {
     return { pending, action: null };
   }

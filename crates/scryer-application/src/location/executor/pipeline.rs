@@ -422,7 +422,7 @@ impl LocationOperationRunner<'_> {
                                 },
                                 Ok(()) => Err((
                                     LocationReasonCode::VerificationMismatch,
-                                    AppError::Validation(detail.unwrap_or_else(|| "destination verification failed".into())),
+                                    AppError::validation_refused(crate::error_reasons::location::VERIFICATION_MISMATCH, detail.unwrap_or_else(|| "destination verification failed".into())),
                                 )),
                                 Err(error) => { fatal = Some(error); Ok(()) },
                             }

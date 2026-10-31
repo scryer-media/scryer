@@ -529,7 +529,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
         .expect_err("same-library duplicate must be rejected");
     assert!(matches!(
         same_library_error,
-        AppError::Validation(message)
+        AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }
             if message.contains("already assigned")
                 && message.contains(&same_library_conflict.name)
     ));
@@ -2589,7 +2589,13 @@ async fn a_bulk_tag_patch_writes_nothing_when_one_library_is_denied() {
         )
         .await
         .expect_err("a denied library must refuse the whole batch");
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error}"
+    );
 
     // All-or-nothing: the title the editor *could* manage is untouched too.
     assert!(
@@ -2667,7 +2673,15 @@ async fn the_series_movie_tag_patch_gates_on_the_registry_and_patches_the_link()
         )
         .await
         .expect_err("an undefined label must be refused");
-    assert!(matches!(refused, AppError::Validation(_)), "{refused}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{refused}"
+    );
     assert!(stored_series_movie_tags(&app, &link.id).await.is_empty());
 
     let updated = app
@@ -2727,7 +2741,13 @@ async fn a_series_movie_tag_patch_needs_title_rights_on_the_parent_series_librar
         )
         .await
         .expect_err("a viewer must not tag a series movie");
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error}"
+    );
     assert!(stored_series_movie_tags(&app, &link.id).await.is_empty());
 }
 
@@ -2867,6 +2887,7 @@ fn fixture_rule_set(id: &str, rego_source: &str) -> scryer_domain::RuleSet {
         priority: 0,
         evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
         exclusive_group: None,
+        disabled_reason_code: None,
         disabled_reason: None,
         applied_facets: Vec::new(),
         created_at: now,

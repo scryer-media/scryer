@@ -180,6 +180,8 @@ pub struct TitleHistoryEventPayload {
     pub retry_requires_password: bool,
     /// Failure reason, or null when the event did not fail.
     pub failure_reason: Option<String>,
+    /// Stable failure condition separate from the human-readable reason.
+    pub failure_reason_code: Option<String>,
     /// Blocklist reason, or null when the event was not blocklisted.
     pub blocklist_reason: Option<String>,
     /// Source file path, or null when unavailable.
@@ -241,6 +243,8 @@ pub enum TitleHistoryEventTypeValue {
     TitleMoved,
     /// Download was ignored.
     DownloadIgnored,
+    /// A successful client listing omitted an accepted download.
+    DownloadMissing,
     /// Title or file was rematched.
     Rematched,
     /// Torrent was imported and its client entry retained while it seeds.
@@ -268,6 +272,7 @@ impl TitleHistoryEventTypeValue {
             Self::FileRenamed => TitleHistoryEventType::FileRenamed,
             Self::TitleMoved => TitleHistoryEventType::TitleMoved,
             Self::DownloadIgnored => TitleHistoryEventType::DownloadIgnored,
+            Self::DownloadMissing => TitleHistoryEventType::DownloadMissing,
             Self::Rematched => TitleHistoryEventType::Rematched,
             Self::SeedingStarted => TitleHistoryEventType::SeedingStarted,
             Self::SeedingCompleted => TitleHistoryEventType::SeedingCompleted,

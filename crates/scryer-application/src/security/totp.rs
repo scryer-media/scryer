@@ -132,7 +132,10 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation("TOTP is already enabled".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::TOTP_ALREADY_ENABLED,
+                "TOTP is already enabled",
+            ));
         }
 
         let now = Utc::now();
@@ -209,7 +212,12 @@ impl AppUseCase {
             .totp
             .get_enrollment_challenge(challenge_id, &actor.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("TOTP challenge {challenge_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::TOTP_CHALLENGE_NOT_FOUND,
+                    format!("TOTP challenge {challenge_id}"),
+                )
+            })?;
 
         if timestamp_expired(&challenge.expires_at) {
             self.services
@@ -217,8 +225,9 @@ impl AppUseCase {
                 .totp
                 .delete_enrollment_challenge(challenge_id, &actor.id)
                 .await?;
-            return Err(AppError::Validation(
-                "TOTP enrollment challenge has expired".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::TOTP_ENROLLMENT_CHALLENGE_EXPIRED,
+                "TOTP enrollment challenge has expired",
             ));
         }
         let profile = TotpProfile::from_enrollment_challenge(&challenge)?;

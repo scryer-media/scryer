@@ -196,12 +196,18 @@ impl AppUseCase {
         client_id: &str,
         redirect_uri: &str,
     ) -> AppResult<(OAuthClientInfo, String)> {
-        let client = self
-            .oauth_client_info(client_id)
-            .await?
-            .ok_or_else(|| AppError::Validation("unknown OAuth client".into()))?;
-        let url = Url::parse(redirect_uri)
-            .map_err(|_| AppError::Validation("invalid redirect_uri".into()))?;
+        let client = self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::oauth::CLIENT_UNKNOWN,
+                "unknown OAuth client",
+            )
+        })?;
+        let url = Url::parse(redirect_uri).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::oauth::REDIRECT_URI_INVALID,
+                "invalid redirect_uri",
+            )
+        })?;
         reject_redirect_uri_fragment(&url)?;
         let canonical_redirect_uri = url.to_string();
         match client.source {
@@ -212,8 +218,9 @@ impl AppUseCase {
                 OAUTH_E2E_CLIENT_ID if self.oauth_e2e_client_enabled() && is_e2e_redirect(&url) => {
                     Ok((client, canonical_redirect_uri))
                 }
-                _ => Err(AppError::Validation(
-                    "redirect_uri is not allowed for this OAuth client".into(),
+                _ => Err(AppError::validation_refused(
+                    crate::error_reasons::oauth::REDIRECT_URI_NOT_ALLOWED_OAUTH_CLIENT,
+                    "redirect_uri is not allowed for this OAuth client",
                 )),
             },
             OAuthClientSource::Custom => {
@@ -224,8 +231,9 @@ impl AppUseCase {
                 {
                     Ok((client, canonical_redirect_uri))
                 } else {
-                    Err(AppError::Validation(
-                        "redirect_uri is not allowed for this OAuth client".into(),
+                    Err(AppError::validation_refused(
+                        crate::error_reasons::oauth::REDIRECT_URI_NOT_ALLOWED_OAUTH_CLIENT,
+                        "redirect_uri is not allowed for this OAuth client",
                     ))
                 }
             }
@@ -313,7 +321,10 @@ impl AppUseCase {
             .get_client_registration(client_id)
             .await?
         else {
-            return Err(AppError::NotFound(format!("OAuth client {client_id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::oauth::CLIENT_NOT_FOUND,
+                format!("OAuth client {client_id}"),
+            ));
         };
         let (display_name, redirect_uris) =
             validate_custom_client_registration(input.display_name, input.redirect_uris)?;
@@ -333,7 +344,10 @@ impl AppUseCase {
             .update_client_registration(record, Utc::now())
             .await?
         else {
-            return Err(AppError::NotFound(format!("OAuth client {client_id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::oauth::CLIENT_NOT_FOUND,
+                format!("OAuth client {client_id}"),
+            ));
         };
         Ok(OAuthClientInfo {
             client_id: record.client_id,
@@ -365,7 +379,10 @@ impl AppUseCase {
         grant_id: &str,
     ) -> AppResult<()> {
         self.oauth_client_info(client_id).await?.ok_or_else(|| {
-            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::oauth::CLIENT_DISABLED_UNAVAILABLE,
+                "OAuth client is disabled or unavailable",
+            )
         })?;
         if !self
             .services
@@ -374,8 +391,9 @@ impl AppUseCase {
             .is_refresh_grant_active(grant_id, client_id)
             .await?
         {
-            return Err(AppError::Unauthorized(
-                "OAuth grant is revoked or unavailable".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::GRANT_REVOKED_UNAVAILABLE,
+                "OAuth grant is revoked or unavailable",
             ));
         }
         Ok(())
@@ -387,8 +405,9 @@ impl AppUseCase {
         code_challenge_method: &str,
     ) -> AppResult<()> {
         if code_challenge_method != "S256" {
-            return Err(AppError::Validation(
-                "code_challenge_method must be S256".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::CODE_CHALLENGE_METHOD_INVALID,
+                "code_challenge_method must be S256",
             ));
         }
         validate_pkce_code_challenge(code_challenge)
@@ -400,13 +419,19 @@ impl AppUseCase {
             .split_ascii_whitespace()
             .collect::<BTreeSet<_>>();
         if scopes.is_empty() || !scopes.contains(OAUTH_LIBRARY_SCOPE) {
-            return Err(AppError::Validation("invalid OAuth scope".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::INVALID_SCOPE,
+                "invalid OAuth scope",
+            ));
         }
         if scopes
             .iter()
             .any(|scope| *scope != OAUTH_LIBRARY_SCOPE && *scope != OAUTH_JELLYFIN_LINK_SCOPE)
         {
-            return Err(AppError::Validation("invalid OAuth scope".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::INVALID_SCOPE,
+                "invalid OAuth scope",
+            ));
         }
         Ok(if scopes.contains(OAUTH_JELLYFIN_LINK_SCOPE) {
             format!("{OAUTH_LIBRARY_SCOPE} {OAUTH_JELLYFIN_LINK_SCOPE}")
@@ -509,9 +534,10 @@ impl AppUseCase {
             });
         }
         if candidates.len() > 1 {
-            return Err(AppError::Validation(jellyfin_link_ambiguous_message(
-                &candidate_names,
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::JELLYFIN_CONNECTION_AMBIGUOUS,
+                jellyfin_link_ambiguous_message(&candidate_names),
+            ));
         }
         Ok(match candidates.pop() {
             Some(binding) => OAuthJellyfinLinkResolution::Bound(Box::new(binding)),
@@ -612,37 +638,45 @@ impl AppUseCase {
             .get_authorization_code(&code_id)
             .await?
         else {
-            return Err(AppError::Unauthorized(
-                "authorization code is invalid".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHORIZATION_CODE_INVALID,
+                "authorization code is invalid",
             ));
         };
         if record.consumed_at.is_some() || record.expires_at <= Utc::now() {
-            return Err(AppError::Unauthorized(
-                "authorization code is expired or already used".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHORIZATION_CODE_EXPIRED_ALREADY_USED,
+                "authorization code is expired or already used",
             ));
         }
         if record.client_id != client_id || record.redirect_uri != redirect_uri {
-            return Err(AppError::Unauthorized(
-                "authorization code binding mismatch".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHORIZATION_CODE_BINDING_MISMATCH,
+                "authorization code binding mismatch",
             ));
         }
         if record.authorization_source == OAuthAuthorizationSource::Authless
             && !authless_codes_allowed
         {
-            return Err(AppError::Unauthorized(
-                "authless authorization code is no longer allowed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHLESS_AUTHORIZATION_CODE_NO_LONGER_ALLOWED,
+                "authless authorization code is no longer allowed",
             ));
         }
         let expected_hash = self.oauth_token_hash("authorization_code", code);
         if record.code_hash != expected_hash {
-            return Err(AppError::Unauthorized(
-                "authorization code is invalid".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHORIZATION_CODE_INVALID,
+                "authorization code is invalid",
             ));
         }
         if record.code_challenge_method != "S256"
             || pkce_s256_challenge(code_verifier) != record.code_challenge
         {
-            return Err(AppError::Unauthorized("PKCE verification failed".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::PKCE_VERIFICATION_FAILED,
+                "PKCE verification failed",
+            ));
         }
         let user = self
             .services
@@ -650,7 +684,12 @@ impl AppUseCase {
             .users
             .get_by_id(&record.user_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth user no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::oauth::USER_NO_LONGER_EXISTS,
+                    "OAuth user no longer exists",
+                )
+            })?;
         let expected_auth_session_version =
             (!record.auth_session_version.is_empty()).then(|| record.auth_session_version.clone());
         let current_auth_session_version = self
@@ -660,8 +699,9 @@ impl AppUseCase {
             .auth_session_version(&user.id)
             .await?;
         if current_auth_session_version != expected_auth_session_version {
-            return Err(AppError::Unauthorized(
-                "authorization code session is no longer valid".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHORIZATION_CODE_SESSION_UNAVAILABLE,
+                "authorization code session is no longer valid",
             ));
         }
 
@@ -701,7 +741,10 @@ impl AppUseCase {
             )
             .await?
             .ok_or_else(|| {
-                AppError::Unauthorized("authorization code is no longer valid".into())
+                AppError::unauthorized_reason(
+                    crate::error_reasons::oauth::AUTHORIZATION_CODE_UNAVAILABLE,
+                    "authorization code is no longer valid",
+                )
             })?;
         let access_token = match self
             .issue_oauth_access_token_with_source_at_auth_session_version(
@@ -746,7 +789,10 @@ impl AppUseCase {
         authless_grants_allowed: bool,
     ) -> AppResult<OAuthTokenPair> {
         self.oauth_client_info(client_id).await?.ok_or_else(|| {
-            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
+            AppError::unauthorized_reason(
+                crate::error_reasons::oauth::CLIENT_DISABLED_UNAVAILABLE,
+                "OAuth client is disabled or unavailable",
+            )
         })?;
         let token_id = oauth_token_id(refresh_token, REFRESH_PREFIX)?;
         let Some((token, grant)) = self
@@ -756,15 +802,22 @@ impl AppUseCase {
             .get_refresh_token(&token_id)
             .await?
         else {
-            return Err(AppError::Unauthorized("refresh token is invalid".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_INVALID,
+                "refresh token is invalid",
+            ));
         };
         if grant.client_id != client_id {
-            return Err(AppError::Unauthorized(
-                "refresh token client mismatch".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_CLIENT_MISMATCH,
+                "refresh token client mismatch",
             ));
         }
         if grant.revoked_at.is_some() || token.revoked_at.is_some() {
-            return Err(AppError::Unauthorized("refresh token is revoked".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_REVOKED,
+                "refresh token is revoked",
+            ));
         }
         if grant.authorization_source == OAuthAuthorizationSource::Authless
             && !authless_grants_allowed
@@ -774,13 +827,17 @@ impl AppUseCase {
                 .oauth
                 .revoke_refresh_family(&grant.family_id, Utc::now(), "form_login_enabled")
                 .await?;
-            return Err(AppError::Unauthorized(
-                "authless refresh grant is no longer allowed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::AUTHLESS_REFRESH_GRANT_NO_LONGER_ALLOWED,
+                "authless refresh grant is no longer allowed",
             ));
         }
         let expected_hash = self.oauth_token_hash("refresh_token", refresh_token);
         if token.token_hash != expected_hash {
-            return Err(AppError::Unauthorized("refresh token is invalid".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_INVALID,
+                "refresh token is invalid",
+            ));
         }
         if token.consumed_at.is_some() {
             self.services
@@ -788,7 +845,10 @@ impl AppUseCase {
                 .oauth
                 .revoke_refresh_family(&grant.family_id, Utc::now(), "refresh_reuse")
                 .await?;
-            return Err(AppError::Unauthorized("refresh token was reused".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_REUSED,
+                "refresh token was reused",
+            ));
         }
         let user = self
             .services
@@ -796,7 +856,12 @@ impl AppUseCase {
             .users
             .get_by_id(&grant.user_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("OAuth user no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::oauth::USER_NO_LONGER_EXISTS,
+                    "OAuth user no longer exists",
+                )
+            })?;
         let disabled_authless_grant_allowed = !user.login_status().is_enabled()
             && grant.authorization_source == OAuthAuthorizationSource::Authless
             && authless_grants_allowed
@@ -807,7 +872,10 @@ impl AppUseCase {
                 .oauth
                 .revoke_refresh_family(&grant.family_id, Utc::now(), "user_login_disabled")
                 .await?;
-            return Err(AppError::Unauthorized("refresh token is invalid".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_INVALID,
+                "refresh token is invalid",
+            ));
         }
         let current_session_version = self
             .services
@@ -822,8 +890,9 @@ impl AppUseCase {
                 .oauth
                 .revoke_refresh_family(&grant.family_id, Utc::now(), "auth_session_changed")
                 .await?;
-            return Err(AppError::Unauthorized(
-                "refresh token session is no longer valid".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::oauth::REFRESH_TOKEN_SESSION_UNAVAILABLE,
+                "refresh token session is no longer valid",
             ));
         }
         let (next_token, next_record) =
@@ -842,10 +911,16 @@ impl AppUseCase {
                     .oauth
                     .revoke_refresh_family(&grant.family_id, Utc::now(), "refresh_reuse")
                     .await?;
-                return Err(AppError::Unauthorized("refresh token was reused".into()));
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::oauth::REFRESH_TOKEN_REUSED,
+                    "refresh token was reused",
+                ));
             }
             OAuthRefreshRotationOutcome::Unavailable => {
-                return Err(AppError::Unauthorized("refresh token is invalid".into()));
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::oauth::REFRESH_TOKEN_INVALID,
+                    "refresh token is invalid",
+                ));
             }
         };
         let expected_auth_session_version = (!rotation.grant.auth_session_version.is_empty())
@@ -1013,39 +1088,50 @@ fn validate_custom_client_registration(
 ) -> AppResult<(String, Vec<String>)> {
     let display_name = display_name.trim().to_string();
     if display_name.is_empty() {
-        return Err(AppError::Validation(
-            "OAuth client display name is required".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::CLIENT_DISPLAY_NAME_REQUIRED,
+            "OAuth client display name is required",
         ));
     }
     if display_name.len() > OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH {
-        return Err(AppError::Validation(format!(
-            "OAuth client display name must not exceed {OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH} characters"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::CLIENT_DISPLAY_NAME_TOO_LONG,
+            format!(
+                "OAuth client display name must not exceed {OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH} characters"
+            ),
+        ));
     }
     if redirect_uris.is_empty() {
-        return Err(AppError::Validation(
-            "at least one OAuth redirect URI is required".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::REDIRECT_URI_REQUIRED,
+            "at least one OAuth redirect URI is required",
         ));
     }
 
     let mut normalized = BTreeSet::new();
     for redirect_uri in redirect_uris {
-        let url = Url::parse(redirect_uri.trim())
-            .map_err(|_| AppError::Validation("invalid OAuth redirect URI".into()))?;
+        let url = Url::parse(redirect_uri.trim()).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::oauth::REDIRECT_URI_INVALID,
+                "invalid OAuth redirect URI",
+            )
+        })?;
         reject_redirect_uri_fragment(&url)?;
         if url.scheme() != "https"
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
         {
-            return Err(AppError::Validation(
-                "custom OAuth redirect URIs must be absolute HTTPS URLs without credentials".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::CUSTOM_OAUTH_REDIRECT_URIS_INVALID,
+                "custom OAuth redirect URIs must be absolute HTTPS URLs without credentials",
             ));
         }
         let canonical = url.to_string();
         if !normalized.insert(canonical) {
-            return Err(AppError::Validation(
-                "OAuth redirect URIs must be unique".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::oauth::REDIRECT_URIS_INVALID,
+                "OAuth redirect URIs must be unique",
             ));
         }
     }
@@ -1166,22 +1252,34 @@ fn jellyfin_link_ambiguous_message(names: &[String]) -> String {
 
 fn oauth_token_id(token: &str, prefix: &str) -> AppResult<String> {
     let Some((id_part, secret)) = token.split_once('.') else {
-        return Err(AppError::Unauthorized("OAuth token is malformed".into()));
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::oauth::TOKEN_MALFORMED,
+            "OAuth token is malformed",
+        ));
     };
     if secret.is_empty() {
-        return Err(AppError::Unauthorized("OAuth token is malformed".into()));
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::oauth::TOKEN_MALFORMED,
+            "OAuth token is malformed",
+        ));
     }
     id_part
         .strip_prefix(&format!("{prefix}_"))
         .filter(|id| !id.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| AppError::Unauthorized("OAuth token is malformed".into()))
+        .ok_or_else(|| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::oauth::TOKEN_MALFORMED,
+                "OAuth token is malformed",
+            )
+        })
 }
 
 fn validate_pkce_code_challenge(code_challenge: &str) -> AppResult<()> {
     if code_challenge.len() != 43 || !code_challenge.bytes().all(is_base64url_byte) {
-        return Err(AppError::Validation(
-            "code_challenge must be a valid S256 base64url value".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::CODE_CHALLENGE_INVALID,
+            "code_challenge must be a valid S256 base64url value",
         ));
     }
     Ok(())
@@ -1190,8 +1288,9 @@ fn validate_pkce_code_challenge(code_challenge: &str) -> AppResult<()> {
 fn validate_pkce_code_verifier(code_verifier: &str) -> AppResult<()> {
     let len = code_verifier.len();
     if !(43..=128).contains(&len) || !code_verifier.bytes().all(is_pkce_verifier_byte) {
-        return Err(AppError::Validation(
-            "code_verifier must be 43-128 RFC7636 unreserved characters".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::CODE_VERIFIER_INVALID,
+            "code_verifier must be 43-128 RFC7636 unreserved characters",
         ));
     }
     Ok(())
@@ -1207,8 +1306,9 @@ fn is_pkce_verifier_byte(byte: u8) -> bool {
 
 fn reject_redirect_uri_fragment(url: &Url) -> AppResult<()> {
     if url.fragment().is_some() {
-        return Err(AppError::Validation(
-            "redirect_uri must not contain a fragment".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::oauth::REDIRECT_URI_FRAGMENT_FORBIDDEN,
+            "redirect_uri must not contain a fragment",
         ));
     }
     Ok(())

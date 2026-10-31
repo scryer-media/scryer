@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import {
   deleteQualityProfileMutation,
@@ -99,7 +100,9 @@ export type UseQualityProfilesManagerResult = {
   qualityProfileParseError: string;
   qualityProfileDraft: QualityProfileDraft;
   updateQualityProfileDraft: (
-    patch: Partial<QualityProfileDraft> | ((current: QualityProfileDraft) => QualityProfileDraft),
+    patch:
+      | Partial<QualityProfileDraft>
+      | ((current: QualityProfileDraft) => QualityProfileDraft),
   ) => void;
   commitQualityProfileDraftToCatalog: () => CommittedQualityProfileDraft | null;
   availableSourceAllowlist: typeof QUALITY_SOURCE_CHOICES;
@@ -115,7 +118,9 @@ export type UseQualityProfilesManagerResult = {
   activeAudioCodecAllowlist: string[];
   activeAudioCodecBlocklist: string[];
   qualityCategoryLabels: Record<ViewCategoryId, string>;
-  getQualityProfileCriteria: (profileId: string) => QualityProfileCriteriaPayload | undefined;
+  getQualityProfileCriteria: (
+    profileId: string,
+  ) => QualityProfileCriteriaPayload | undefined;
   getQualityProfileBoolean: (
     profileId: string,
     field: keyof QualityProfileCriteriaPayload,
@@ -136,7 +141,9 @@ export type UseQualityProfilesManagerResult = {
   addQualityTier: (qualityTier: string) => void;
   removeQualityTier: (qualityTier: string) => void;
   reorderQualityTier: (qualityTier: string, targetIndex: number) => void;
-  updateQualityProfilesGlobal: (event?: React.FormEvent<HTMLFormElement>) => Promise<boolean> | boolean;
+  updateQualityProfilesGlobal: (
+    event?: React.FormEvent<HTMLFormElement>,
+  ) => Promise<boolean> | boolean;
   saveGlobalQualityProfile: (value: string) => Promise<void> | void;
   saveGlobalScoringPersona: (persona: ScoringPersonaId) => Promise<void> | void;
   globalQualityProfileId: string;
@@ -146,13 +153,19 @@ export type UseQualityProfilesManagerResult = {
   setCategoryQualityProfileOverrides: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
-  categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
+  categoryPersonaSelections: Record<
+    ViewCategoryId,
+    FacetScoringPersonaSelectionRecord
+  >;
   saveCategoryScoringPersona: (
     scopeId: ViewCategoryId,
     persona: ScoringPersonaId | null,
   ) => Promise<void> | void;
   categoryQualityProfileSaving: Record<ViewCategoryId, boolean>;
-  saveCategoryQualityProfile: (scopeId: ViewCategoryId, value: string) => Promise<void> | void;
+  saveCategoryQualityProfile: (
+    scopeId: ViewCategoryId,
+    value: string,
+  ) => Promise<void> | void;
   deleteQualityProfile: (profileId: string) => Promise<void>;
   refreshQualityProfiles: () => Promise<void>;
   downloadClients: DownloadClientRecord[];
@@ -166,32 +179,44 @@ export function useQualityProfilesManager(
   const t = useTranslate();
   const client = useClient();
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
-  const [qualityProfilesSaving, setQualityProfilesSaving] = React.useState(false);
-  const [qualityProfileCatalogEntriesState, setQualityProfileCatalogEntriesState] = React.useState<
-    ParsedQualityProfileEntry[]
+  const [qualityProfilesSaving, setQualityProfilesSaving] =
+    React.useState(false);
+  const [
+    qualityProfileCatalogEntriesState,
+    setQualityProfileCatalogEntriesState,
+  ] = React.useState<ParsedQualityProfileEntry[]>([]);
+  const [qualityProfiles, setQualityProfiles] = React.useState<
+    ParsedQualityProfile[]
   >([]);
-  const [qualityProfiles, setQualityProfiles] = React.useState<ParsedQualityProfile[]>([]);
   // Monotonic counter of applied settings payloads; lets in-flight refetches
   // detect that a newer (mutation-authoritative) payload landed and discard
   // their stale snapshot instead of clobbering it.
   const qualityProfileApplyEpochRef = React.useRef(0);
-  const [qualityProfileParseError, setQualityProfileParseError] = React.useState("");
-  const [qualityProfileDraft, setQualityProfileDraft] = React.useState<QualityProfileDraft>(() =>
-    toQualityProfileDraft(null, "default", "4K"),
-  );
-  const [globalQualityProfileId, setGlobalQualityProfileId] = React.useState("default");
+  const [qualityProfileParseError, setQualityProfileParseError] =
+    React.useState("");
+  const [qualityProfileDraft, setQualityProfileDraft] =
+    React.useState<QualityProfileDraft>(() =>
+      toQualityProfileDraft(null, "default", "4K"),
+    );
+  const [globalQualityProfileId, setGlobalQualityProfileId] =
+    React.useState("default");
   const [globalScoringPersona, setGlobalScoringPersona] =
     React.useState<ScoringPersonaId>("BALANCED");
-  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = React.useState<
-    Record<ViewCategoryId, string>
-  >({ ...DEFAULT_CATEGORY_QUALITY_PROFILES });
-  const [categoryPersonaSelections, setCategoryPersonaSelections] = React.useState<
-    Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>
-  >({ ...buildDefaultCategoryPersonaSelections() });
-  const [categoryQualityProfileSaving, setCategoryQualityProfileSaving] = React.useState<
-    Record<ViewCategoryId, boolean>
-  >({ ...DEFAULT_CATEGORY_QUALITY_SAVING });
-  const [downloadClients, setDownloadClients] = React.useState<DownloadClientRecord[]>([]);
+  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] =
+    React.useState<Record<ViewCategoryId, string>>({
+      ...DEFAULT_CATEGORY_QUALITY_PROFILES,
+    });
+  const [categoryPersonaSelections, setCategoryPersonaSelections] =
+    React.useState<Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>>({
+      ...buildDefaultCategoryPersonaSelections(),
+    });
+  const [categoryQualityProfileSaving, setCategoryQualityProfileSaving] =
+    React.useState<Record<ViewCategoryId, boolean>>({
+      ...DEFAULT_CATEGORY_QUALITY_SAVING,
+    });
+  const [downloadClients, setDownloadClients] = React.useState<
+    DownloadClientRecord[]
+  >([]);
   const [initialLoadComplete, setInitialLoadComplete] = React.useState(false);
 
   const [, setSelectedQualityProfileId] = React.useState("default");
@@ -210,8 +235,9 @@ export function useQualityProfilesManager(
 
   const activeQualityProfileTierOptions = React.useMemo(
     () =>
-      dedupeOrdered(qualityProfileDraft.quality_tiers)
-        .filter((value) => value.length > 0),
+      dedupeOrdered(qualityProfileDraft.quality_tiers).filter(
+        (value) => value.length > 0,
+      ),
     [qualityProfileDraft.quality_tiers],
   );
   const availableQualityTiers = React.useMemo(
@@ -230,33 +256,57 @@ export function useQualityProfilesManager(
   );
   const archivalQualityOptions = React.useMemo(
     () => [
-      { value: "__default__", label: t("qualityProfile.useDefaultQualityFallback") },
-      ...activeQualityProfileTierOptions.map((value) => ({ value, label: value })),
+      {
+        value: "__default__",
+        label: t("qualityProfile.useDefaultQualityFallback"),
+      },
+      ...activeQualityProfileTierOptions.map((value) => ({
+        value,
+        label: value,
+      })),
     ],
     [activeQualityProfileTierOptions, t],
   );
   const activeSourceAllowlist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.source_allowlist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.source_allowlist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.source_allowlist],
   );
   const activeSourceBlocklist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.source_blocklist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.source_blocklist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.source_blocklist],
   );
   const activeVideoCodecAllowlist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.video_codec_allowlist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.video_codec_allowlist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.video_codec_allowlist],
   );
   const activeVideoCodecBlocklist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.video_codec_blocklist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.video_codec_blocklist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.video_codec_blocklist],
   );
   const activeAudioCodecAllowlist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.audio_codec_allowlist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.audio_codec_allowlist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.audio_codec_allowlist],
   );
   const activeAudioCodecBlocklist = React.useMemo(
-    () => dedupeOrdered(qualityProfileDraft.audio_codec_blocklist).filter((v) => v.length > 0),
+    () =>
+      dedupeOrdered(qualityProfileDraft.audio_codec_blocklist).filter(
+        (v) => v.length > 0,
+      ),
     [qualityProfileDraft.audio_codec_blocklist],
   );
   const qualityCategoryLabels = React.useMemo(
@@ -319,20 +369,30 @@ export function useQualityProfilesManager(
 
       const catalogEntries = resolved.entries;
       const defaultDraftSource =
-        catalogEntries.find((entry) => entry.id === "default") ?? catalogEntries[0] ?? null;
+        catalogEntries.find((entry) => entry.id === "default") ??
+        catalogEntries[0] ??
+        null;
       const candidateProfileId = preserveProfileId?.trim() || "";
       const preservedProfileSource = candidateProfileId
-        ? catalogEntries.find((entry) => entry.id === candidateProfileId) ?? null
+        ? (catalogEntries.find((entry) => entry.id === candidateProfileId) ??
+          null)
         : null;
       const nextDraftSource = preservedProfileSource ?? defaultDraftSource;
       const nextDefaultDraft = nextDraftSource
-        ? toQualityProfileDraft(nextDraftSource, nextDraftSource.id, nextDraftSource.name || "4K")
+        ? toQualityProfileDraft(
+            nextDraftSource,
+            nextDraftSource.id,
+            nextDraftSource.name || "4K",
+          )
         : buildQualityProfileTemplate(
             resolvedProfiles[0]?.id ?? "default",
             resolvedProfiles[0]?.name || "default",
           );
       const nextDraftId =
-        nextDraftSource?.id ?? defaultDraftSource?.id ?? resolvedProfiles[0]?.id ?? "default";
+        nextDraftSource?.id ??
+        defaultDraftSource?.id ??
+        resolvedProfiles[0]?.id ??
+        "default";
 
       setQualityProfileCatalogEntriesState(catalogEntries);
       setQualityProfiles(resolvedProfiles);
@@ -345,7 +405,9 @@ export function useQualityProfilesManager(
 
       const nextOverrides = qualityProfileSettingsToCategoryOverrides(payload);
       setCategoryQualityProfileOverrides((previous) =>
-        QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => previous[scopeId] === nextOverrides[scopeId])
+        QUALITY_PROFILE_SCOPE_IDS.every(
+          (scopeId) => previous[scopeId] === nextOverrides[scopeId],
+        )
           ? previous
           : nextOverrides,
       );
@@ -375,10 +437,9 @@ export function useQualityProfilesManager(
 
       setQualityProfilesSaving(true);
       try {
-        const { data, error } = await client.mutation(
-          deleteQualityProfileMutation,
-          { id: trimmed },
-        ).toPromise();
+        const { data, error } = await client
+          .mutation(deleteQualityProfileMutation, { id: trimmed })
+          .toPromise();
         if (error) throw error;
 
         applyQualityProfileSettingsPayload(data.deleteQualityProfile);
@@ -387,7 +448,10 @@ export function useQualityProfilesManager(
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setQualityProfilesSaving(false);
       }
@@ -401,7 +465,11 @@ export function useQualityProfilesManager(
       const epochAtStart = qualityProfileApplyEpochRef.current;
       try {
         const { data, error } = await client
-          .query(qualityProfilesInitQuery, {}, { requestPolicy: "network-only" })
+          .query(
+            qualityProfilesInitQuery,
+            {},
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
         if (error) throw error;
 
@@ -417,7 +485,10 @@ export function useQualityProfilesManager(
           options,
         );
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setMediaSettingsLoading(false);
         setInitialLoadComplete(true);
@@ -454,7 +525,11 @@ export function useQualityProfilesManager(
       );
       if (!selectedEntry) return;
       setSelectedQualityProfileId(profileId);
-      const nextDraft = toQualityProfileDraft(selectedEntry, profileId, profileId);
+      const nextDraft = toQualityProfileDraft(
+        selectedEntry,
+        profileId,
+        profileId,
+      );
       setQualityProfileDraft(nextDraft);
       setQualityProfileParseError("");
     },
@@ -474,7 +549,9 @@ export function useQualityProfilesManager(
 
   const setQualityProfileDraftAndCatalog = React.useCallback(
     (
-      patch: Partial<QualityProfileDraft> | ((current: QualityProfileDraft) => QualityProfileDraft),
+      patch:
+        | Partial<QualityProfileDraft>
+        | ((current: QualityProfileDraft) => QualityProfileDraft),
     ) => {
       setQualityProfileDraft((current) =>
         typeof patch === "function" ? patch(current) : { ...current, ...patch },
@@ -485,53 +562,59 @@ export function useQualityProfilesManager(
 
   const updateQualityProfileDraft = React.useCallback(
     (
-      patch: Partial<QualityProfileDraft> | ((current: QualityProfileDraft) => QualityProfileDraft),
+      patch:
+        | Partial<QualityProfileDraft>
+        | ((current: QualityProfileDraft) => QualityProfileDraft),
     ) => {
       setQualityProfileDraftAndCatalog(patch);
     },
     [setQualityProfileDraftAndCatalog],
   );
 
-  const commitQualityProfileDraftToCatalog = React.useCallback((): CommittedQualityProfileDraft | null => {
-    const sourceEntries = qualityProfileCatalogEntries;
-    const nextName = qualityProfileDraft.name.trim();
-    if (!nextName) {
-      setQualityProfileParseError(t("settings.qualityProfileNameRequired"));
-      setGlobalStatus(t("settings.qualityProfileNameRequired"));
-      return null;
-    }
+  const commitQualityProfileDraftToCatalog =
+    React.useCallback((): CommittedQualityProfileDraft | null => {
+      const sourceEntries = qualityProfileCatalogEntries;
+      const nextName = qualityProfileDraft.name.trim();
+      if (!nextName) {
+        setQualityProfileParseError(t("settings.qualityProfileNameRequired"));
+        setGlobalStatus(t("settings.qualityProfileNameRequired"));
+        return null;
+      }
 
-    if (hasDuplicateQualityProfileName(sourceEntries, nextName, qualityProfileDraft.id)) {
-      setQualityProfileParseError(t("settings.qualityProfileNameDuplicate"));
-      setGlobalStatus(t("settings.qualityProfileNameDuplicate"));
-      return null;
-    }
+      if (
+        hasDuplicateQualityProfileName(
+          sourceEntries,
+          nextName,
+          qualityProfileDraft.id,
+        )
+      ) {
+        setQualityProfileParseError(t("settings.qualityProfileNameDuplicate"));
+        setGlobalStatus(t("settings.qualityProfileNameDuplicate"));
+        return null;
+      }
 
-    const committed = commitQualityProfileDraftToEntries(sourceEntries, {
-      ...qualityProfileDraft,
-      name: nextName,
-    });
-    const normalized = normalizeQualityProfilesForUi(JSON.stringify(committed.catalogEntries));
+      const committed = commitQualityProfileDraftToEntries(sourceEntries, {
+        ...qualityProfileDraft,
+        name: nextName,
+      });
+      const normalized = normalizeQualityProfilesForUi(
+        JSON.stringify(committed.catalogEntries),
+      );
 
-    setQualityProfileCatalogEntriesState(committed.catalogEntries);
-    setQualityProfiles(parseQualityProfileCatalog(normalized));
-    setSelectedQualityProfileId(committed.draftEntry.id);
-    setQualityProfileDraft(
-      toQualityProfileDraft(
-        committed.draftEntry,
-        committed.draftEntry.id,
-        committed.draftEntry.name,
-      ),
-    );
-    setQualityProfileParseError("");
+      setQualityProfileCatalogEntriesState(committed.catalogEntries);
+      setQualityProfiles(parseQualityProfileCatalog(normalized));
+      setSelectedQualityProfileId(committed.draftEntry.id);
+      setQualityProfileDraft(
+        toQualityProfileDraft(
+          committed.draftEntry,
+          committed.draftEntry.id,
+          committed.draftEntry.name,
+        ),
+      );
+      setQualityProfileParseError("");
 
-    return committed;
-  }, [
-    qualityProfileCatalogEntries,
-    qualityProfileDraft,
-    setGlobalStatus,
-    t,
-  ]);
+      return committed;
+    }, [qualityProfileCatalogEntries, qualityProfileDraft, setGlobalStatus, t]);
 
   const addQualityTier = React.useCallback(
     (qualityTier: string) => {
@@ -549,7 +632,11 @@ export function useQualityProfilesManager(
     (qualityTier: string, targetIndex: number) => {
       updateQualityProfileDraft((current) => ({
         ...current,
-        quality_tiers: moveQualityTier(current.quality_tiers, qualityTier, targetIndex),
+        quality_tiers: moveQualityTier(
+          current.quality_tiers,
+          qualityTier,
+          targetIndex,
+        ),
       }));
     },
     [updateQualityProfileDraft],
@@ -559,7 +646,9 @@ export function useQualityProfilesManager(
     (qualityTier: string) => {
       updateQualityProfileDraft((current) => ({
         ...current,
-        quality_tiers: current.quality_tiers.filter((value) => value !== qualityTier),
+        quality_tiers: current.quality_tiers.filter(
+          (value) => value !== qualityTier,
+        ),
       }));
     },
     [updateQualityProfileDraft],
@@ -595,14 +684,20 @@ export function useQualityProfilesManager(
   );
 
   const moveProfileListToAllowed = React.useCallback(
-    (allowedField: QualityProfileListField, deniedField: QualityProfileListField, value: string) =>
-      moveProfileListItem(allowedField, deniedField, "allowed", value),
+    (
+      allowedField: QualityProfileListField,
+      deniedField: QualityProfileListField,
+      value: string,
+    ) => moveProfileListItem(allowedField, deniedField, "allowed", value),
     [moveProfileListItem],
   );
 
   const moveProfileListToDenied = React.useCallback(
-    (allowedField: QualityProfileListField, deniedField: QualityProfileListField, value: string) =>
-      moveProfileListItem(allowedField, deniedField, "denied", value),
+    (
+      allowedField: QualityProfileListField,
+      deniedField: QualityProfileListField,
+      value: string,
+    ) => moveProfileListItem(allowedField, deniedField, "denied", value),
     [moveProfileListItem],
   );
 
@@ -620,12 +715,11 @@ export function useQualityProfilesManager(
       setQualityProfilesSaving(true);
       setQualityProfileParseError("");
       try {
-        const { data: globalData, error: globalError } = await client.mutation(
-          saveQualityProfileSettingsMutation,
-          {
+        const { data: globalData, error: globalError } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
             input: qualityProfileEditorSaveInput(committed.draftEntry),
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (globalError) throw globalError;
 
         applyQualityProfileSettingsPayload(
@@ -638,7 +732,10 @@ export function useQualityProfilesManager(
         });
         return true;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
         return false;
       } finally {
         setQualityProfilesSaving(false);
@@ -670,9 +767,8 @@ export function useQualityProfilesManager(
       setQualityProfilesSaving(true);
 
       try {
-        const { data: profileData, error: profileError } = await client.mutation(
-          saveQualityProfileSettingsMutation,
-          {
+        const { data: profileData, error: profileError } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
             input: {
               profiles: [],
               globalProfileId: normalizedValue,
@@ -681,8 +777,8 @@ export function useQualityProfilesManager(
               categoryPersonaSelections: categoryPersonaSelectionInputs,
               replaceExisting: false,
             },
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (profileError) throw profileError;
 
         const persisted = resolveGlobalQualityProfileId(
@@ -696,7 +792,11 @@ export function useQualityProfilesManager(
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : t("status.failedToUpdate");
+        const message = userFacingGraphQlErrorMessage(
+          error,
+          t("status.failedToUpdate"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setQualityProfilesSaving(false);
@@ -737,7 +837,7 @@ export function useQualityProfilesManager(
         });
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -775,9 +875,8 @@ export function useQualityProfilesManager(
       }));
 
       try {
-        const { data: categoryData, error: categoryError } = await client.mutation(
-          saveQualityProfileSettingsMutation,
-          {
+        const { data: categoryData, error: categoryError } = await client
+          .mutation(saveQualityProfileSettingsMutation, {
             input: {
               profiles: [],
               globalProfileId: null,
@@ -786,21 +885,23 @@ export function useQualityProfilesManager(
                 {
                   scope: normalizedScope,
                   profileId:
-                    normalizedValue === QUALITY_PROFILE_INHERIT_VALUE ? null : normalizedValue,
-                  inheritGlobal: normalizedValue === QUALITY_PROFILE_INHERIT_VALUE,
+                    normalizedValue === QUALITY_PROFILE_INHERIT_VALUE
+                      ? null
+                      : normalizedValue,
+                  inheritGlobal:
+                    normalizedValue === QUALITY_PROFILE_INHERIT_VALUE,
                 },
               ],
               categoryPersonaSelections: categoryPersonaSelectionInputs,
               replaceExisting: false,
             },
-          },
-        ).toPromise();
+          })
+          .toPromise();
         if (categoryError) throw categoryError;
 
-        const persisted =
-          qualityProfileSettingsToCategoryOverrides(categoryData.saveQualityProfileSettings)[
-            normalizedScope
-          ];
+        const persisted = qualityProfileSettingsToCategoryOverrides(
+          categoryData.saveQualityProfileSettings,
+        )[normalizedScope];
         setCategoryQualityProfileOverrides((previous) => ({
           ...previous,
           [normalizedScope]: persisted || QUALITY_PROFILE_INHERIT_VALUE,
@@ -811,7 +912,11 @@ export function useQualityProfilesManager(
           toastId: QUALITY_PROFILES_SAVED_TOAST_ID,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : t("status.failedToUpdate");
+        const message = userFacingGraphQlErrorMessage(
+          error,
+          t("status.failedToUpdate"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setCategoryQualityProfileSaving((previous) => ({
@@ -870,7 +975,7 @@ export function useQualityProfilesManager(
         });
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {

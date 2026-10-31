@@ -384,7 +384,8 @@ fn ensure_owner_only_permissions(_path: &Path) -> AppResult<()> {
 
 fn validate_backup_passphrase(passphrase: &str) -> AppResult<()> {
     if passphrase.trim().is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_PASSWORD_REQUIRED_FULL_BACKUPS,
             "backup password is required for full backups".to_string(),
         ));
     }
@@ -460,9 +461,7 @@ impl AppUseCase {
             .current_encryption_key_base64()
             .await?
             .ok_or_else(|| {
-                AppError::Validation(
-                    "backup export requires a configured encryption master key".into(),
-                )
+                AppError::validation_refused(crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_CONFIGURED_ENCRYPTION_MASTER_KEY, "backup export requires a configured encryption master key")
             })?;
 
         Ok(BackupExportSecrets {
@@ -605,14 +604,16 @@ impl AppUseCase {
             .try_acquire(BackupTrigger::Manual.as_str())
             .await
         else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::MANUAL_BACKUP_ALREADY_RUNNING,
                 "a manual backup is already running".to_string(),
             ));
         };
 
         let backup_dir = self.effective_backup_dir().await?;
         if has_creating_backup_for_trigger(&list_backup_files(&backup_dir), BackupTrigger::Manual) {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::MANUAL_BACKUP_ALREADY_RUNNING,
                 "a manual backup is already running".to_string(),
             ));
         }
@@ -661,29 +662,40 @@ impl AppUseCase {
             .await?;
 
         if !is_supported_backup_filename(filename) {
-            return Err(AppError::Validation("invalid backup filename".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_FILENAME_INVALID,
+                "invalid backup filename",
+            ));
         }
 
         let backup_dir = self.effective_backup_dir().await?;
         let info = list_backup_files(&backup_dir)
             .into_iter()
             .find(|entry| entry.filename == filename)
-            .ok_or_else(|| AppError::NotFound("backup metadata could not be found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::BACKUP_METADATA_NOT_FOUND,
+                    "backup metadata could not be found",
+                )
+            })?;
 
         match info.status {
             BackupStatus::Creating => {
-                return Err(AppError::Validation(
-                    "backup bundle is still being created".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_BUNDLE_STILL_BEING_CREATED,
+                    "backup bundle is still being created",
                 ));
             }
             BackupStatus::Failed => {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_CREATION_FAILED,
                     info.error_message
                         .unwrap_or_else(|| "backup bundle creation failed".to_string()),
                 ));
             }
             BackupStatus::Invalid => {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_BUNDLE_INVALID,
                     info.error_message
                         .unwrap_or_else(|| "backup bundle is invalid".to_string()),
                 ));
@@ -693,8 +705,9 @@ impl AppUseCase {
 
         let bundle = bundle_path(&backup_dir, filename);
         if !bundle.is_file() {
-            return Err(AppError::NotFound(
-                "backup bundle could not be found".into(),
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::security::BACKUP_BUNDLE_NOT_FOUND,
+                "backup bundle could not be found",
             ));
         }
 
@@ -706,7 +719,10 @@ impl AppUseCase {
             .await?;
 
         if !is_supported_backup_filename(filename) {
-            return Err(AppError::Validation("invalid backup filename".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_FILENAME_INVALID,
+                "invalid backup filename",
+            ));
         }
 
         let backup_dir = self.effective_backup_dir().await?;
@@ -834,17 +850,26 @@ pub(crate) fn compute_next_auto_backup_run_at(
     let now_local = now_utc.with_timezone(&chrono::Local);
     let today = now_local.date_naive();
     let today_run = resolve_local_scheduled_time(today, hour, minute).ok_or_else(|| {
-        AppError::Validation("failed to resolve the configured local backup time".to_string())
+        AppError::validation_refused(
+            crate::error_reasons::security::FAILED_RESOLVE_CONFIGURED_LOCAL_BACKUP_TIME,
+            "failed to resolve the configured local backup time".to_string(),
+        )
     })?;
     if today_run >= now_local {
         return Ok(today_run.with_timezone(&chrono::Utc));
     }
 
-    let tomorrow = today
-        .succ_opt()
-        .ok_or_else(|| AppError::Validation("failed to compute next backup day".to_string()))?;
+    let tomorrow = today.succ_opt().ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::security::FAILED_COMPUTE_NEXT_BACKUP_DAY,
+            "failed to compute next backup day".to_string(),
+        )
+    })?;
     let tomorrow_run = resolve_local_scheduled_time(tomorrow, hour, minute).ok_or_else(|| {
-        AppError::Validation("failed to resolve the configured local backup time".to_string())
+        AppError::validation_refused(
+            crate::error_reasons::security::FAILED_RESOLVE_CONFIGURED_LOCAL_BACKUP_TIME,
+            "failed to resolve the configured local backup time".to_string(),
+        )
     })?;
     Ok(tomorrow_run.with_timezone(&chrono::Utc))
 }

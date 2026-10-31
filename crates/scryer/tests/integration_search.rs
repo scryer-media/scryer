@@ -38,6 +38,7 @@ fn new_nzbgeek_client(uri: &str) -> Arc<dyn IndexerClient> {
     let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
         .with_builtin_asset(scryer_plugins::builtins::NEWZNAB);
     let config = scryer_domain::IndexerConfig {
+        last_error_code: None,
         id: "test-newznab".to_string(),
         name: "Test Newznab".to_string(),
         provider_type: "newznab".to_string(),
@@ -593,6 +594,7 @@ async fn nzbgeek_search_no_api_key_fails() {
     let provider = scryer_plugins::WasmIndexerPluginProvider::empty()
         .with_builtin_asset(scryer_plugins::builtins::NEWZNAB);
     let config = scryer_domain::IndexerConfig {
+        last_error_code: None,
         id: "test-no-key".to_string(),
         name: "Test No Key".to_string(),
         provider_type: "newznab".to_string(),

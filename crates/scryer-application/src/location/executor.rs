@@ -520,7 +520,12 @@ impl FileMoveRetry {
 
 /// Whether an error is the transient, I/O-shaped kind a retry can help with.
 pub(super) fn move_error_is_transient(error: &AppError) -> bool {
-    matches!(error, AppError::Repository(_))
+    matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+    )
 }
 
 /// The reason code a run-level stop writes on the operation row.
@@ -557,47 +562,24 @@ pub(super) enum TitleRunPhase {
     CleaningUp,
 }
 
-/// The reason code for a title that failed in `phase` with `error`.
-///
-/// The phase decides. Two causes cut across the phases before cleanup and are
-/// told apart by their message, because [`AppError`] carries none of this
-/// itself: a plan the execution layer found stale (its "stale plan: …
-/// preview again" refusals, FR-089) wants a fresh preview, and a merge whose
-/// destination no longer accepts the title, or that has no engine to run,
-/// wants the destination fixed (FR-066). A "changed before" refusal is not
-/// stale: the file moved under a proof, and every such message says retry.
-/// Cleanup is never reclassified: by then the catalog points at the
-/// destination and only Retry re-runs the removal, so steering it to Plan
-/// again would leave the old copy behind for good. Every message matched here
-/// is raised in `execution.rs`; keep the wording in step with this function
-/// and with `each_execution_refusal_is_classified_by_its_way_out`.
+/// Classify the recovery action from the phase and stable execution refusal.
+/// Cleanup always retries cleanup because the catalog already owns the destination.
 pub(super) fn classify_title_failure(phase: TitleRunPhase, error: &AppError) -> LocationReasonCode {
+    use crate::error_reasons::location;
     if phase == TitleRunPhase::CleaningUp {
         return LocationReasonCode::SourceCleanupFailed;
     }
-    let message = error.to_string();
-    let validation = matches!(error, AppError::Validation(_));
-    if validation && message.contains("stale plan:") {
+    if error.validation_reason() == Some(location::STALE_PLAN) {
         return LocationReasonCode::StalePlan;
     }
     match phase {
         TitleRunPhase::Moving => LocationReasonCode::StorageError,
         TitleRunPhase::Verifying => LocationReasonCode::VerificationMismatch,
-        TitleRunPhase::Reconciling => {
-            if validation
-                && (message.contains("can no longer merge")
-                    || message.contains("no merge engine is configured"))
-            {
-                LocationReasonCode::MergeUnavailable
-            } else if validation && message.contains("changed before the catalog update") {
-                // The proof went stale before anything was written: the copy
-                // is not trusted and the catalog is untouched, so this is a
-                // mismatch to retry, not a half-flipped title to fence off.
-                LocationReasonCode::VerificationMismatch
-            } else {
-                LocationReasonCode::CatalogWriteFailed
-            }
-        }
+        TitleRunPhase::Reconciling => match error.validation_reason() {
+            Some(location::MERGE_UNAVAILABLE) => LocationReasonCode::MergeUnavailable,
+            Some(location::VERIFICATION_MISMATCH) => LocationReasonCode::VerificationMismatch,
+            _ => LocationReasonCode::CatalogWriteFailed,
+        },
         TitleRunPhase::CleaningUp => LocationReasonCode::SourceCleanupFailed,
     }
 }
@@ -815,7 +797,12 @@ impl<'a> LocationOperationRunner<'a> {
             .store
             .get_location_operation(operation_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("location operation {operation_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::OPERATION_NOT_FOUND,
+                    format!("location operation {operation_id}"),
+                )
+            })?;
 
         if operation.state.is_terminal() {
             let checkpoints = self.load_checkpoints(operation_id).await?;
@@ -1229,14 +1216,17 @@ impl<'a> LocationOperationRunner<'a> {
 
             if !outcome.permits_source_removal() {
                 *phase = TitleRunPhase::Verifying;
-                return Err(AppError::Validation(format!(
-                    "verification of {} failed ({}){}",
-                    file.destination_path.display(),
-                    outcome.as_str(),
-                    detail
-                        .map(|detail| format!(": {detail}"))
-                        .unwrap_or_default()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::VERIFICATION_FAILED,
+                    format!(
+                        "verification of {} failed ({}){}",
+                        file.destination_path.display(),
+                        outcome.as_str(),
+                        detail
+                            .map(|detail| format!(": {detail}"))
+                            .unwrap_or_default()
+                    ),
+                ));
             }
 
             progress.note_file_done(&title.title_id, file);
@@ -1295,7 +1285,7 @@ impl<'a> LocationOperationRunner<'a> {
                     || resolution.original_destination != original
                     || !resolution.proof_is_current().await
                 {
-                    return Err(AppError::Validation(format!(
+                    return Err(AppError::validation_refused(crate::error_reasons::location::TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED, format!(
                         "The transferred file {} needs to be verified again before its catalog entry can be updated.",
                         resolution.destination_path
                     )));
@@ -1305,10 +1295,13 @@ impl<'a> LocationOperationRunner<'a> {
                 &original
             };
             if !verified_now.contains(destination) {
-                return Err(AppError::Validation(format!(
-                    "The transferred file {} has not finished verification. Its catalog entry was left unchanged.",
-                    destination
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION,
+                    format!(
+                        "The transferred file {} has not finished verification. Its catalog entry was left unchanged.",
+                        destination
+                    ),
+                ));
             }
         }
 
@@ -2110,9 +2103,7 @@ mod tests {
     use crate::location::ownership_guard::{GuardedAction, OwnershipConflict};
     use crate::ports::LocationOwnershipClaim;
 
-    /// Each refusal `execution.rs` can raise lands on the code whose way out
-    /// actually converges it. The wording is matched, so this is the test
-    /// that breaks when the wording drifts.
+    /// Recovery is independent of the refusal sentence.
     #[test]
     fn each_execution_refusal_is_classified_by_its_way_out() {
         use LocationReasonCode::*;
@@ -2128,7 +2119,10 @@ mod tests {
             ),
             (
                 Moving,
-                validation("stale plan: cannot read /a/b: gone"),
+                AppError::validation_refused(
+                    crate::error_reasons::location::STALE_PLAN,
+                    "translated stale source",
+                ),
                 StalePlan,
             ),
             (
@@ -2145,24 +2139,34 @@ mod tests {
             ),
             (
                 Reconciling,
-                validation("stale plan: /a no longer matches /d; preview again"),
+                AppError::validation_refused(
+                    crate::error_reasons::location::STALE_PLAN,
+                    "translated changed plan",
+                ),
                 StalePlan,
             ),
             (Reconciling, repository(), CatalogWriteFailed),
             (
                 Reconciling,
-                validation("\"t\" can no longer merge into t-2: gone"),
+                AppError::validation_refused(
+                    crate::error_reasons::location::MERGE_UNAVAILABLE,
+                    "translated blocked merge",
+                ),
                 MergeUnavailable,
             ),
             (
                 Reconciling,
-                validation("\"t\" merges into t-2, but no merge engine is configured"),
+                AppError::validation_refused(
+                    crate::error_reasons::location::MERGE_UNAVAILABLE,
+                    "translated missing engine",
+                ),
                 MergeUnavailable,
             ),
             (
                 Reconciling,
-                validation(
-                    "A file changed before the catalog update. Its source was preserved; retry to compare it again.",
+                AppError::validation_refused(
+                    crate::error_reasons::location::VERIFICATION_MISMATCH,
+                    "translated proof mismatch",
                 ),
                 VerificationMismatch,
             ),
@@ -2180,7 +2184,10 @@ mod tests {
             ),
             (
                 CleaningUp,
-                validation("stale plan: /a no longer matches /d; preview again"),
+                AppError::validation_refused(
+                    crate::error_reasons::location::STALE_PLAN,
+                    "translated changed plan",
+                ),
                 SourceCleanupFailed,
             ),
             (CleaningUp, repository(), SourceCleanupFailed),

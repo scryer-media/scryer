@@ -17,7 +17,10 @@ const TV_RANGE: readonly [number, number] = [5000, 6000];
 /** Newznab reserves 1000..8999 for its standard top-level trees. */
 const STANDARD_RANGE: readonly [number, number] = [1000, 9000];
 
-function inRange(value: number, [start, end]: readonly [number, number]): boolean {
+function inRange(
+  value: number,
+  [start, end]: readonly [number, number],
+): boolean {
   return value >= start && value < end;
 }
 
@@ -29,7 +32,9 @@ function inRange(value: number, [start, end]: readonly [number, number]): boolea
  * media scope, and anything outside the standard trees (custom ids, string
  * codes) is offered everywhere because nothing says what it holds.
  */
-export function capsCategoryScopes(category: IndexerCapsCategory): IndexerCapsScope[] {
+export function capsCategoryScopes(
+  category: IndexerCapsCategory,
+): IndexerCapsScope[] {
   const scopes = new Set<IndexerCapsScope>();
   const name = (category.label ?? "").trim().toLowerCase();
   const numeric = /^\d+$/.test(category.code.trim())
@@ -53,7 +58,10 @@ export function capsCategoryScopes(category: IndexerCapsCategory): IndexerCapsSc
     scopes.add("SERIES");
     scopes.add("ANIME");
   }
-  if (scopes.size === 0 && (numeric === null || !inRange(numeric, STANDARD_RANGE))) {
+  if (
+    scopes.size === 0 &&
+    (numeric === null || !inRange(numeric, STANDARD_RANGE))
+  ) {
     return ["MOVIE", "SERIES", "ANIME"];
   }
   return Array.from(scopes);
@@ -85,7 +93,10 @@ export function overlayCapsCategories(
       }
       continue;
     }
-    if (scope === "RAW" || capsCategoryScopes({ code, label }).includes(scope)) {
+    if (
+      scope === "RAW" ||
+      capsCategoryScopes({ code, label }).includes(scope)
+    ) {
       extraCategories.push({ code, label });
     }
   }

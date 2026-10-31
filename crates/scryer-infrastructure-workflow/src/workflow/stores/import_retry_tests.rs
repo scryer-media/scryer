@@ -182,6 +182,61 @@ async fn archive_preservation_hold_survives_completion_and_restart_until_release
     ));
 }
 
+// A held download's claim is deferred inside the claim transaction: its row
+// leaves the due listing until the recheck, so the cleanup tick stops claiming
+// and putting it back every few seconds. A direct claim once the hold clears
+// still proceeds at once.
+#[tokio::test]
+async fn deferred_claim_leaves_the_due_listing_until_its_recheck() {
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    let due = cleanup.list_due_download_cleanup(100).await.unwrap();
+    assert!(due.iter().any(|row| row.download_id == claim.download_id));
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    let deferred_at = Utc::now();
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Deferred
+    ));
+    let row = SqlRuntime::fetch_optional(
+        store.datastore.read_exec(),
+        "SELECT next_attempt_at, outcome, attempts, lease_until FROM download_cleanup",
+        &[],
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(row.timestamp("next_attempt_at").unwrap() >= deferred_at + chrono::Duration::minutes(4));
+    assert_eq!(row.opt_text("outcome").unwrap().as_deref(), Some("claim_deferred"));
+    assert_eq!(row.opt_i64("attempts").unwrap(), Some(0));
+    assert_eq!(row.opt_text("lease_until").unwrap(), None);
+    assert!(
+        cleanup
+            .list_due_download_cleanup(100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the next tick must not claim a deferred row again"
+    );
+
+    store
+        .set_archive_processing_pending(&claim.import_id, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Claimed(record) if record.attempts == 1
+    ));
+}
+
 #[tokio::test]
 async fn archive_preservation_hold_survives_retry_payload_replacement() {
     let (store, cleanup, claim, expected) = retry_fixture().await;
@@ -708,7 +763,7 @@ async fn hold_release_without_a_canonical_download_is_refused_and_changes_nothin
         .await
         .expect_err("nothing serializes the release against the cleanup claim");
 
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(matches!(error, AppError::Validation(_) | AppError::ValidationRefused { .. }), "{error:?}");
     let payload = payload_of(&store, &claim.import_id).await;
     assert_eq!(payload["archive_processing_pending"], true);
     assert_eq!(

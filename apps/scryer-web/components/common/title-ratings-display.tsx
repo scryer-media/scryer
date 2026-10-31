@@ -272,7 +272,9 @@ function renderRottenTomatoesPill(
   ratings: TitleExternalRating[],
   variant: TitleRatingsDisplayVariant,
 ) {
-  const tooltipLabel = ratings.map((rating) => ratingSourceInfo(rating.source).label).join(" / ");
+  const tooltipLabel = ratings
+    .map((rating) => ratingSourceInfo(rating.source).label)
+    .join(" / ");
 
   return (
     <RatingPill
@@ -305,7 +307,9 @@ function renderMetacriticPill(
   variant: TitleRatingsDisplayVariant,
 ) {
   const source = ratingSourceInfo("metacritic");
-  const tooltipLabel = ratings.map((rating) => ratingSourceInfo(rating.source).label).join(" / ");
+  const tooltipLabel = ratings
+    .map((rating) => ratingSourceInfo(rating.source).label)
+    .join(" / ");
 
   return (
     <RatingPill
@@ -318,11 +322,16 @@ function renderMetacriticPill(
       {ratings.map((rating, index) => {
         const ratingSource = ratingSourceInfo(rating.source);
         return (
-          <span key={rating.source} className="inline-flex items-center gap-1.5">
+          <span
+            key={rating.source}
+            className="inline-flex items-center gap-1.5"
+          >
             {index > 0 ? (
               <span
                 aria-hidden="true"
-                className={variant === "hero" ? "text-white/55" : "text-muted-foreground"}
+                className={
+                  variant === "hero" ? "text-white/55" : "text-muted-foreground"
+                }
               >
                 |
               </span>
@@ -369,7 +378,9 @@ export function TitleRatingsDisplay({
   return (
     <TooltipProvider delayDuration={200}>
       <div className={cn("flex flex-wrap gap-2", className)}>
-        {ratingPillEntries.map((entry) => renderRatingPillEntry(entry, variant))}
+        {ratingPillEntries.map((entry) =>
+          renderRatingPillEntry(entry, variant),
+        )}
         {visibleExternalRatings.length === 0 && fallbackRating != null
           ? fallbackTopSource != null
             ? renderStaticRatingPill({

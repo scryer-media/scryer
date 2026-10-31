@@ -1,4 +1,11 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useClient } from "urql";
 
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -27,7 +34,13 @@ import {
   toScriptScheduleInput,
 } from "@/lib/utils/script-schedule";
 
-const LANGUAGES: readonly ScriptLanguageValue[] = ["SHELL", "PYTHON", "POWERSHELL", "BATCH", "GO"];
+const LANGUAGES: readonly ScriptLanguageValue[] = [
+  "SHELL",
+  "PYTHON",
+  "POWERSHELL",
+  "BATCH",
+  "GO",
+];
 
 function initialDraft(trigger: ScriptTriggerValue): PostProcessingScriptDraft {
   return {
@@ -48,17 +61,24 @@ function initialDraft(trigger: ScriptTriggerValue): PostProcessingScriptDraft {
   };
 }
 
-function cloneDraft(draft: PostProcessingScriptDraft): PostProcessingScriptDraft {
+function cloneDraft(
+  draft: PostProcessingScriptDraft,
+): PostProcessingScriptDraft {
   return {
     ...draft,
     appliedFacets: [...draft.appliedFacets],
     schedule: draft.schedule
-      ? { ...draft.schedule, days: draft.schedule.days ? [...draft.schedule.days] : null }
+      ? {
+          ...draft.schedule,
+          days: draft.schedule.days ? [...draft.schedule.days] : null,
+        }
       : null,
   };
 }
 
-function draftFromScript(record: PostProcessingScript): PostProcessingScriptDraft {
+function draftFromScript(
+  record: PostProcessingScript,
+): PostProcessingScriptDraft {
   return cloneDraft({
     name: record.name,
     description: record.description,
@@ -73,36 +93,52 @@ function draftFromScript(record: PostProcessingScript): PostProcessingScriptDraf
     language: record.language,
     trigger: record.trigger,
     schedule:
-      record.trigger === "SCHEDULE" ? (record.schedule ?? defaultScriptSchedule()) : record.schedule,
+      record.trigger === "SCHEDULE"
+        ? (record.schedule ?? defaultScriptSchedule())
+        : record.schedule,
     runOnStartup: record.runOnStartup,
   });
 }
 
 /** Reads a script payload, filling fields an older response may lack. */
-export function normalizePostProcessingScript(value: unknown): PostProcessingScript | null {
+export function normalizePostProcessingScript(
+  value: unknown,
+): PostProcessingScript | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (typeof record.id !== "string") return null;
   return {
     id: record.id,
     name: typeof record.name === "string" ? record.name : "",
-    description: typeof record.description === "string" ? record.description : "",
-    scriptType: typeof record.scriptType === "string" ? record.scriptType : "inline",
-    scriptContent: typeof record.scriptContent === "string" ? record.scriptContent : "",
+    description:
+      typeof record.description === "string" ? record.description : "",
+    scriptType:
+      typeof record.scriptType === "string" ? record.scriptType : "inline",
+    scriptContent:
+      typeof record.scriptContent === "string" ? record.scriptContent : "",
     appliedFacets: Array.isArray(record.appliedFacets)
-      ? record.appliedFacets.filter((facet): facet is string => typeof facet === "string")
+      ? record.appliedFacets.filter(
+          (facet): facet is string => typeof facet === "string",
+        )
       : [],
-    executionMode: typeof record.executionMode === "string" ? record.executionMode : "BLOCKING",
-    timeoutSecs: typeof record.timeoutSecs === "number" ? record.timeoutSecs : 300,
+    executionMode:
+      typeof record.executionMode === "string"
+        ? record.executionMode
+        : "BLOCKING",
+    timeoutSecs:
+      typeof record.timeoutSecs === "number" ? record.timeoutSecs : 300,
     priority: typeof record.priority === "number" ? record.priority : 0,
     enabled: record.enabled === true,
     debug: record.debug === true,
-    language: LANGUAGES.find((language) => language === record.language) ?? "SHELL",
+    language:
+      LANGUAGES.find((language) => language === record.language) ?? "SHELL",
     trigger: record.trigger === "SCHEDULE" ? "SCHEDULE" : "POST_IMPORT",
     schedule: normalizeScriptSchedule(record.schedule),
     runOnStartup: record.runOnStartup === true,
     scheduleDescription:
-      typeof record.scheduleDescription === "string" ? record.scheduleDescription : null,
+      typeof record.scheduleDescription === "string"
+        ? record.scheduleDescription
+        : null,
     createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
   };
@@ -115,16 +151,17 @@ type PendingScriptEditorAction =
   | null;
 
 type PendingInlineShellAction =
-  | { type: "save" }
-  | { type: "toggle"; record: PostProcessingScript }
-  | null;
+  { type: "save" } | { type: "toggle"; record: PostProcessingScript } | null;
 
 /**
  * Lists the user scripts with one trigger and drives their editor: create,
  * edit, enable or disable, and delete, with the inline-shell acknowledgement
  * and the discard-changes confirmation.
  */
-export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChanged?: () => void } = {}) {
+export function useScriptEditor(
+  trigger: ScriptTriggerValue,
+  options: { onChanged?: () => void } = {},
+) {
   const { onChanged } = options;
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
@@ -132,18 +169,21 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
   const [scripts, setScripts] = useState<PostProcessingScript[]>([]);
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [pendingDeleteScript, setPendingDeleteScript] = useState<PostProcessingScript | null>(null);
-  const [pendingEditorAction, setPendingEditorAction] = useState<PendingScriptEditorAction>(null);
+  const [pendingDeleteScript, setPendingDeleteScript] =
+    useState<PostProcessingScript | null>(null);
+  const [pendingEditorAction, setPendingEditorAction] =
+    useState<PendingScriptEditorAction>(null);
   const [pendingInlineShellAction, setPendingInlineShellAction] =
     useState<PendingInlineShellAction>(null);
   const [mutatingScriptId, setMutatingScriptId] = useState<string | null>(null);
-  const [scriptDraft, setScriptDraft] = useState<PostProcessingScriptDraft>(() =>
-    initialDraft(trigger),
+  const [scriptDraft, setScriptDraft] = useState<PostProcessingScriptDraft>(
+    () => initialDraft(trigger),
   );
-  const [scriptDraftBaseline, setScriptDraftBaseline] = useState<PostProcessingScriptDraft>(() =>
-    initialDraft(trigger),
-  );
-  const [scriptRuns, setScriptRuns] = useState<Record<string, PostProcessingScriptRun[]>>({});
+  const [scriptDraftBaseline, setScriptDraftBaseline] =
+    useState<PostProcessingScriptDraft>(() => initialDraft(trigger));
+  const [scriptRuns, setScriptRuns] = useState<
+    Record<string, PostProcessingScriptRun[]>
+  >({});
 
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
@@ -152,7 +192,8 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
     setScriptDraftBaseline(() => initialDraft(trigger));
   }, [trigger]);
 
-  const isDraftDirty = JSON.stringify(scriptDraft) !== JSON.stringify(scriptDraftBaseline);
+  const isDraftDirty =
+    JSON.stringify(scriptDraft) !== JSON.stringify(scriptDraftBaseline);
 
   const scriptDraftRequiresInlineShellAcknowledgement =
     scriptDraft.scriptType === "inline" &&
@@ -160,7 +201,9 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
       scriptDraftBaseline.scriptType !== "inline" ||
       scriptDraft.scriptContent !== scriptDraftBaseline.scriptContent ||
       scriptDraft.language !== scriptDraftBaseline.language ||
-      (trigger === "SCHEDULE" && scriptDraft.enabled && !scriptDraftBaseline.enabled));
+      (trigger === "SCHEDULE" &&
+        scriptDraft.enabled &&
+        !scriptDraftBaseline.enabled));
 
   const openCreateEditor = useCallback(() => {
     const nextDraft = initialDraft(trigger);
@@ -212,18 +255,28 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
 
   const refreshScripts = useCallback(async () => {
     try {
-      const query = trigger === "SCHEDULE" ? scheduledScriptsQuery : postProcessingScriptsQuery;
+      const query =
+        trigger === "SCHEDULE"
+          ? scheduledScriptsQuery
+          : postProcessingScriptsQuery;
       const { data, error } = await client
         .query(query, {}, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
       setScripts(
-        ((Array.isArray(data?.postProcessingScripts) ? data.postProcessingScripts : []) as unknown[])
+        (
+          (Array.isArray(data?.postProcessingScripts)
+            ? data.postProcessingScripts
+            : []) as unknown[]
+        )
           .map(normalizePostProcessingScript)
           .filter((script): script is PostProcessingScript => script !== null),
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     }
   }, [client, setGlobalStatus, t, trigger]);
 
@@ -246,7 +299,11 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
       const isCurrent = () => runRequestSeq.current.get(scriptId) === seq;
       try {
         const { data, error } = await client
-          .query(postProcessingScriptRunsQuery, { scriptId, limit: 20 }, { requestPolicy: "network-only" })
+          .query(
+            postProcessingScriptRunsQuery,
+            { scriptId, limit: 20 },
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
         if (!isCurrent()) return;
         if (error) throw error;
@@ -256,7 +313,10 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         }));
       } catch (error) {
         if (!isCurrent()) return;
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
       }
     },
     [client, setGlobalStatus, t],
@@ -276,7 +336,9 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         language: scriptDraft.language,
         ...(isScheduled
           ? {
-              schedule: toScriptScheduleInput(scriptDraft.schedule ?? defaultScriptSchedule()),
+              schedule: toScriptScheduleInput(
+                scriptDraft.schedule ?? defaultScriptSchedule(),
+              ),
               runOnStartup: scriptDraft.runOnStartup,
             }
           : {
@@ -329,12 +391,24 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         closeEditor();
         await afterChange();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setMutatingScriptId(null);
       }
     },
-    [afterChange, client, closeEditor, editingScriptId, scriptDraft, setGlobalStatus, t, trigger],
+    [
+      afterChange,
+      client,
+      closeEditor,
+      editingScriptId,
+      scriptDraft,
+      setGlobalStatus,
+      t,
+      trigger,
+    ],
   );
 
   const submitScript = (event: FormEvent<HTMLFormElement>) => {
@@ -364,7 +438,9 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         const { error } = await client
           .mutation(togglePostProcessingScriptMutation, {
             id: record.id,
-            ...(inlineShellAcknowledged ? { inlineShellAcknowledged: true } : {}),
+            ...(inlineShellAcknowledged
+              ? { inlineShellAcknowledged: true }
+              : {}),
           })
           .toPromise();
         if (error) throw error;
@@ -375,7 +451,10 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         );
         await afterChange();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setMutatingScriptId(null);
       }
@@ -409,7 +488,10 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
         closeEditor();
       }
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingScriptId(null);
       setPendingDeleteScript(null);
@@ -470,4 +552,6 @@ export function useScriptEditor(trigger: ScriptTriggerValue, options: { onChange
   };
 }
 
-export type ScriptEditorDialogsState = ReturnType<typeof useScriptEditor>["dialogs"];
+export type ScriptEditorDialogsState = ReturnType<
+  typeof useScriptEditor
+>["dialogs"];

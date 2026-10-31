@@ -5,11 +5,17 @@ function getServiceWorkerScope(basePath: string): string {
 }
 
 function getServiceWorkerUrl(basePath: string): string {
-  return basePath === "/" ? "/service-worker.js" : `${basePath}/service-worker.js`;
+  return basePath === "/"
+    ? "/service-worker.js"
+    : `${basePath}/service-worker.js`;
 }
 
 export function registerServiceWorker(): void {
-  if (import.meta.env.DEV || typeof window === "undefined" || !("serviceWorker" in navigator)) {
+  if (
+    import.meta.env.DEV ||
+    typeof window === "undefined" ||
+    !("serviceWorker" in navigator)
+  ) {
     return;
   }
 

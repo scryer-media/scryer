@@ -112,6 +112,34 @@ pub(crate) fn plan_download(
             "the selection holds no direct media file to download",
         ));
     }
+    let media_candidates = media_candidates
+        .into_iter()
+        .filter(|resource| {
+            // Unlabelled candidates have already been evaluated by the host using
+            // release/title evidence. Never override an explicit mismatch.
+            let explicit = resource
+                .audio
+                .as_ref()
+                .and_then(|audio| audio.language.as_deref())
+                .filter(|language| {
+                    !language.trim().is_empty() && !language.eq_ignore_ascii_case("und")
+                });
+            explicit.is_none_or(|language| {
+                source.selected.audio_languages.iter().all(|wanted| {
+                    let actual =
+                        scryer_application::normalize_detected_audio_language_code(language);
+                    let wanted = scryer_application::normalize_detected_audio_language_code(wanted);
+                    actual.is_some() && actual == wanted
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if media_candidates.is_empty() {
+        return Err(AppError::validation_refused(
+            http_release_refusal::NO_AUDIO_RESOURCE,
+            "no media resource satisfies the required audio languages",
+        ));
+    }
     let ranked = rank_media(&media_candidates, source);
     let media = ranked[0];
     // Retrying the same URL under another candidate would only repeat the
@@ -209,9 +237,10 @@ pub(crate) fn validate_output_basename(raw: &str) -> AppResult<&str> {
     if valid {
         Ok(basename)
     } else {
-        Err(AppError::Validation(format!(
-            "the output name {raw:?} is not a plain file name"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_OUTPUT_FILENAME_INVALID,
+            format!("the output name {raw:?} is not a plain file name"),
+        ))
     }
 }
 
@@ -324,18 +353,9 @@ fn choose_subtitles<'a>(
     Ok(chosen)
 }
 
-/// `en` matches `en`, `en-US` and `en_GB`; comparison ignores case.
+/// Match canonical subtitle identities, retaining regional distinctions.
 fn language_matches(offered: &str, wanted: &str) -> bool {
-    let primary = |value: &str| {
-        value
-            .trim()
-            .split(['-', '_'])
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-    };
-    let offered = offered.trim();
-    offered.eq_ignore_ascii_case(wanted.trim()) || primary(offered) == primary(wanted)
+    scryer_application::subtitles::language::same_subtitle_language(offered, wanted)
 }
 
 /// The output extension: the stated format or container, else the URL's

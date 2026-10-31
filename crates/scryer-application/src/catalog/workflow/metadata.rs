@@ -354,7 +354,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         Ok(self.resolve_metadata_language_for_title(&title).await)
     }
 
@@ -365,7 +365,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.resolve_use_season_folders(&title).await
     }
 
@@ -379,7 +379,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         if title.facet != MediaFacet::Anime {
             return Ok(None);
         }
@@ -411,7 +411,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         if title.facet != MediaFacet::Anime {
             return Ok(None);
         }
@@ -445,7 +445,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -463,7 +463,7 @@ impl AppUseCase {
             .filter(|language| !language.trim().is_empty())
             .map(|language| {
                 crate::normalize_metadata_language_code(&language).ok_or_else(|| {
-                    AppError::Validation("metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn".to_string())
+                    AppError::validation_refused(crate::error_reasons::catalog::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn".to_string())
                 })
             })
             .transpose()?;
@@ -580,7 +580,7 @@ impl AppUseCase {
     ) -> AppResult<TitleRatingSummary> {
         self.get_title(actor, title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.services
             .catalog
             .titles
@@ -602,7 +602,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<TitleCredit>> {
         self.get_title(actor, title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         let limit = limit.clamp(0, TITLE_CREDITS_MAX_LIMIT) as usize;
         if limit == 0 {
             return Ok(Vec::new());
@@ -709,9 +709,7 @@ impl AppUseCase {
         root_folder_id: Option<Option<String>>,
     ) -> AppResult<Title> {
         if name.is_none() && facet.is_none() && tags.is_none() && root_folder_id.is_none() {
-            return Err(AppError::Validation(
-                "at least one title field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_FIELD_REQUIRED, "at least one title field must be provided"));
         }
         // Match registry writers' lock order: registry, then title ownership.
         let _registry_guard = if tags.is_some() {
@@ -725,7 +723,7 @@ impl AppUseCase {
             .titles
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -747,10 +745,8 @@ impl AppUseCase {
         if let Some(facet) = facet.as_ref()
             && facet != &title.facet
         {
-            return Err(AppError::Validation(
-                "changing a title facet is not supported because titles cannot move between libraries"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::CHANGING_TITLE_FACET_UNSUPPORTED, "changing a title facet is not supported because titles cannot move between libraries"
+                    ));
         }
         let resolved_root_folder_id = match root_folder_id {
             Some(Some(root_folder_id)) => Some(
@@ -820,7 +816,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -828,16 +824,12 @@ impl AppUseCase {
         )
         .await?;
         if title.facet != MediaFacet::Movie {
-            return Err(AppError::Validation(
-                "minimum availability is only valid for movie titles".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES, "minimum availability is only valid for movie titles"));
         }
         if min_availability.as_deref().is_some_and(|value| {
             !matches!(value, "announced" | "in_cinemas" | "released")
         }) {
-            return Err(AppError::Validation(
-                "minimum availability must be announced, in_cinemas, or released".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::MINIMUM_AVAILABILITY_INVALID, "minimum availability must be announced, in_cinemas, or released"));
         }
         if title.min_availability == min_availability {
             return Ok(title);
@@ -872,7 +864,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -897,7 +889,7 @@ impl AppUseCase {
         let selected_file = media_files
             .iter()
             .find(|file| file.id == file_id)
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND, format!("media file {file_id}")))?;
         if title.facet != MediaFacet::Movie {
             if let Some(episode_id) = selected_file.episode_id.as_deref() {
                 let additional_file_ids = media_files
@@ -923,10 +915,8 @@ impl AppUseCase {
 
             let series_movie_link_id =
                 selected_file.series_movie_link_ids.first().ok_or_else(|| {
-                    AppError::Validation(
-                        "primary movie file can only be set for movie titles, series movie files, or episode files"
-                            .to_string(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::catalog::PRIMARY_MOVIE_FILE_ONLY_SET_MOVIE_TITLES_SERIES_MOVIE_FILES_EPISODE_FILES, "primary movie file can only be set for movie titles, series movie files, or episode files"
+                            .to_string())
                 })?;
             let additional_file_ids = media_files
                 .iter()
@@ -953,14 +943,10 @@ impl AppUseCase {
                 &selected_file.file_path,
             )
             .ok_or_else(|| {
-                AppError::Validation(
-                    "movie title does not have a canonical folder path".to_string(),
-                )
+                AppError::validation_refused(crate::error_reasons::catalog::MOVIE_TITLE_DOES_NOT_CANONICAL_FOLDER_PATH, "movie title does not have a canonical folder path".to_string())
             })?;
         if !movie_scope.file_is_inside_canonical_folder(&selected_file.file_path) {
-            return Err(AppError::Validation(
-                "selected file is outside the title's canonical movie folder".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::SELECTED_FILE_OUTSIDE_TITLE_S_CANONICAL_MOVIE_FOLDER, "selected file is outside the title's canonical movie folder".to_string()));
         }
 
         let additional_file_ids = media_files
@@ -994,7 +980,7 @@ impl AppUseCase {
             .map(|value| {
                 value
                     .parse::<i64>()
-                    .map_err(|_| AppError::Validation("tvdb id must be numeric".into()))
+                    .map_err(|_| AppError::validation_refused(crate::error_reasons::catalog::TVDB_ID_INVALID, "tvdb id must be numeric"))
             })
             .transpose()?;
 
@@ -1004,7 +990,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &existing_title.library_id,
@@ -1021,7 +1007,7 @@ impl AppUseCase {
         let (replacement_identity_ids, requested_movie_ref) = match existing_title.facet {
             MediaFacet::Movie => {
                 if target_smg_id.is_some_and(|id| id <= 0) {
-                    return Err(AppError::Validation("smg id must be positive".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::catalog::SMG_ID_OUT_OF_RANGE, "smg id must be positive"));
                 }
                 let requested_ref = MovieTitleRef {
                     smg_id: target_smg_id,
@@ -1030,7 +1016,7 @@ impl AppUseCase {
                     imdb_id: None,
                 };
                 if requested_ref.smg_id.is_none() && requested_ref.tvdb_id.is_none() {
-                    return Err(AppError::Validation("a title identity is required".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_IDENTITY_REQUIRED, "a title identity is required"));
                 }
 
                 if requested_ref.smg_id.is_none() {
@@ -1060,7 +1046,7 @@ impl AppUseCase {
                         .get(&0)
                         .cloned()
                         .ok_or_else(|| {
-                            AppError::NotFound("movie metadata response missing title".into())
+                            AppError::not_found_reason(crate::error_reasons::catalog::MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND, "movie metadata response missing title")
                         })?;
                     let resolved_ref = MovieTitleRef {
                         smg_id: movie.smg_id.or(requested_ref.smg_id),
@@ -1116,10 +1102,10 @@ impl AppUseCase {
                     None,
                 ),
                 (None, Some(_)) => {
-                    return Err(AppError::Validation("smg id must be positive".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::catalog::SMG_ID_OUT_OF_RANGE, "smg id must be positive"));
                 }
                 (None, None) => {
-                    return Err(AppError::Validation("a title identity is required".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::catalog::TITLE_IDENTITY_REQUIRED, "a title identity is required"));
                 }
             },
         };
@@ -1138,7 +1124,7 @@ impl AppUseCase {
                 .await?
                 .filter(|title| title.id != existing_title.id);
             if let Some(duplicate) = duplicate {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::ID_ALREADY_ASSIGNED_TITLE, format!(
                     "{} id {} is already assigned to title {}",
                     identity_id.source, identity_id.value, duplicate.name
                 )));
@@ -1148,7 +1134,7 @@ impl AppUseCase {
         let handler = self
             .facet_registry
             .get(&existing_title.facet)
-            .ok_or_else(|| AppError::Validation("unsupported title facet".into()))?;
+            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::catalog::TITLE_FACET_UNSUPPORTED, "unsupported title facet"))?;
         let has_episodes = handler.has_episodes();
 
         if has_episodes {
@@ -1226,6 +1212,7 @@ impl AppUseCase {
                 hydration_outcome
                     .failed_titles
                     .remove(&existing_title.id)
+                    .map(|failure| failure.message)
                     .unwrap_or_else(|| {
                         "Matched title metadata could not be fully refreshed.".to_string()
                     }),
@@ -1360,6 +1347,17 @@ mod metadata_language_tests {
             resolve_metadata_language_overrides(None, None, "spa"),
             "spa"
         );
+    }
+
+    #[test]
+    fn czech_metadata_is_preserved_at_every_override_level() {
+        for (title, library, global) in [
+            (Some(" CES "), Some("deu"), "eng"),
+            (None, Some("ces"), "eng"),
+            (None, None, "ces"),
+        ] {
+            assert_eq!(resolve_metadata_language_overrides(title, library, global), "ces");
+        }
     }
 
     #[test]

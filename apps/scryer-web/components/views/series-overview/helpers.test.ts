@@ -87,9 +87,9 @@ function link(
 }
 
 function itemIds(items: ReturnType<typeof buildSeriesTimelineItems>) {
-  return items.map((item) => (
-    item.kind === "collection" ? item.collection.id : item.link.id
-  ));
+  return items.map((item) =>
+    item.kind === "collection" ? item.collection.id : item.link.id,
+  );
 }
 
 test("buildSeriesTimelineItems places narrative movies between seasons", () => {

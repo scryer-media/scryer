@@ -104,7 +104,13 @@ async fn only_a_list_manager_reads_or_changes_provider_values() {
     let harness = harness_with_provider().await;
 
     let read = harness.app.list_provider_settings(&harness.user).await;
-    assert!(matches!(read, Err(AppError::Unauthorized(_))), "{read:?}");
+    assert!(
+        matches!(
+            read,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ),
+        "{read:?}"
+    );
     let write = harness
         .app
         .update_list_provider_settings(
@@ -113,7 +119,13 @@ async fn only_a_list_manager_reads_or_changes_provider_values() {
             BTreeMap::from([("region".to_string(), Some("north".to_string()))]),
         )
         .await;
-    assert!(matches!(write, Err(AppError::Unauthorized(_))), "{write:?}");
+    assert!(
+        matches!(
+            write,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ),
+        "{write:?}"
+    );
     assert!(
         harness
             .app
@@ -131,7 +143,13 @@ async fn an_unknown_provider_is_not_found() {
         .app
         .update_list_provider_settings(&list_manager(), "unknown-provider", BTreeMap::new())
         .await;
-    assert!(matches!(result, Err(AppError::NotFound(_))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
+        ),
+        "{result:?}"
+    );
 }
 
 #[tokio::test]

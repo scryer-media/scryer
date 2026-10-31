@@ -670,7 +670,7 @@ pub(crate) fn pending_context_changes_resolved_key_count(
                         .clone()
                         .or_else(|| change.subject_key.clone())
                         .ok_or_else(|| {
-                            AppError::Validation(format!(
+                            AppError::validation_refused(crate::error_reasons::discovery::PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY, format!(
                                 "pending discovery removal {} is missing subject key",
                                 change.id
                             ))
@@ -680,7 +680,7 @@ pub(crate) fn pending_context_changes_resolved_key_count(
             DiscoveryContextChangeType::Rematched => {
                 keys.insert(required_pending_context_subject_key(change)?);
                 keys.insert(change.previous_subject_key.clone().ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::discovery::PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY, format!(
                         "pending discovery rematch {} is missing previous subject key",
                         change.id
                     ))
@@ -695,10 +695,13 @@ pub(super) fn required_pending_context_subject_key(
     change: &DiscoveryPendingContextChangeRecord,
 ) -> AppResult<String> {
     change.subject_key.clone().ok_or_else(|| {
-        AppError::Validation(format!(
-            "pending discovery change {} is missing subject key",
-            change.id
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::discovery::PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY,
+            format!(
+                "pending discovery change {} is missing subject key",
+                change.id
+            ),
+        )
     })
 }
 
@@ -706,23 +709,29 @@ pub(super) fn changed_subject_from_pending(
     change: &DiscoveryPendingContextChangeRecord,
 ) -> AppResult<DiscoveryContextChangedSubjectInput> {
     let raw_subject = change.raw_subject_json.as_deref().ok_or_else(|| {
-        AppError::Validation(format!(
-            "pending discovery change {} is missing raw subject JSON",
-            change.id
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::discovery::PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON,
+            format!(
+                "pending discovery change {} is missing raw subject JSON",
+                change.id
+            ),
+        )
     })?;
     let subject = serde_json::from_str::<DiscoverySubjectInput>(raw_subject).map_err(|error| {
-        AppError::Validation(format!(
-            "pending discovery change {} has invalid raw subject JSON: {error}",
-            change.id
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::discovery::PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON,
+            format!(
+                "pending discovery change {} has invalid raw subject JSON: {error}",
+                change.id
+            ),
+        )
     })?;
     let previous_subject = change
         .raw_previous_subject_json
         .as_deref()
         .map(|raw| {
             serde_json::from_str::<DiscoverySubjectInput>(raw).map_err(|error| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::discovery::PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON, format!(
                     "pending discovery change {} has invalid previous subject JSON: {error}",
                     change.id
                 ))
@@ -742,9 +751,10 @@ pub(super) fn discovery_change_type_from_str(value: &str) -> AppResult<Discovery
         "updated" | "update" => Ok(DiscoveryContextChangeType::Updated),
         "removed" | "delete" | "deleted" => Ok(DiscoveryContextChangeType::Removed),
         "rematched" | "rematch" => Ok(DiscoveryContextChangeType::Rematched),
-        other => Err(AppError::Validation(format!(
-            "unsupported discovery context change type {other}"
-        ))),
+        other => Err(AppError::validation_refused(
+            crate::error_reasons::discovery::CONTEXT_CHANGE_TYPE_UNSUPPORTED,
+            format!("unsupported discovery context change type {other}"),
+        )),
     }
 }
 

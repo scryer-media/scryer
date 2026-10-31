@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
-import { PageShellFallback } from "@/components/root/page-shell-fallback";
 import { cn } from "@/lib/utils";
 
 const LOGO_SRC = `${import.meta.env.BASE_URL}scryer-logo.svg`;
@@ -11,16 +20,46 @@ const LOGO_SRC = `${import.meta.env.BASE_URL}scryer-logo.svg`;
  */
 const APPEAR_AND_HOLD_MS = 576;
 
-/** When the logo first appeared, shared by every copy of it (see `SetupIntroLogo`). */
-let appearedAt: number | null = null;
+const SetupIntroContext = createContext<
+  ((target: HTMLElement | null) => void) | null
+>(null);
 
-function msSinceAppeared() {
-  appearedAt ??= performance.now();
-  return performance.now() - appearedAt;
+/** One load-in owner above the authentication decision and the wizard routes. */
+export function SetupIntroBoundary({ children }: { children: ReactNode }) {
+  const [intro, setIntro] = useState(setupIntroFlies);
+  const [ready, setReady] = useState(false);
+  const targetRef = useRef<HTMLElement | null>(null);
+  const register = useCallback((target: HTMLElement | null) => {
+    targetRef.current = target;
+    setReady(true);
+  }, []);
+  const finish = useCallback(() => setIntro(false), []);
+  return (
+    <SetupIntroContext.Provider value={register}>
+      <div inert={intro} style={intro ? { visibility: "hidden" } : undefined}>
+        {children}
+      </div>
+      {intro && (
+        <SetupIntroMark targetRef={targetRef} ready={ready} onDone={finish} />
+      )}
+    </SetupIntroContext.Provider>
+  );
+}
+
+/** Screens supply a landing target; they never start or replay the splash. */
+export function useSetupIntroTarget<T extends HTMLElement>(ready = true) {
+  const register = useContext(SetupIntroContext);
+  const target = useRef<T>(null);
+  useEffect(() => {
+    if (ready) register?.(target.current);
+  }, [ready, register]);
+  return target;
 }
 
 export function prefersReducedMotion() {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  return (
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true
+  );
 }
 
 /** Whether this visit to setup gets the welcome: not when reopened from Settings. */
@@ -32,11 +71,8 @@ function setupWelcomes() {
  * The large logo in the middle of the screen that opens setup, the same welcome
  * Weaver's first-run setup plays.
  *
- * It stands in for the loading screens while setup's code and sign-in load, so
- * it is drawn in turn by the route's loading fallback, the setup page and the
- * wizard. Each copy picks the appearing animation up where the last left off,
- * so it reads as one logo. Given a `flight`, it flies from the middle and
- * shrinks onto the wizard's header logo, then calls `onLanded`.
+ * The shared boundary keeps this one logo mounted while it chooses and loads
+ * the first screen, then flies it onto that screen's header.
  */
 function SetupIntroLogo({
   flight,
@@ -47,8 +83,6 @@ function SetupIntroLogo({
   flyingRef?: RefObject<HTMLImageElement | null>;
   onLanded?: () => void;
 }) {
-  const [appearDelay] = useState(() => `${-msSinceAppeared()}ms`);
-
   return createPortal(
     <div
       aria-hidden="true"
@@ -59,7 +93,7 @@ function SetupIntroLogo({
         src={LOGO_SRC}
         alt=""
         draggable={false}
-        style={flight ?? { animationDelay: appearDelay }}
+        style={flight ?? undefined}
         className={cn(
           "size-[min(56vmin,420px)] select-none object-contain",
           flight ? "setup-intro-fly" : "setup-intro-appear",
@@ -73,24 +107,15 @@ function SetupIntroLogo({
   );
 }
 
-/**
- * The page setup shows while its code or sign-in loads: the welcome's logo on
- * setup's background, or the ordinary loading screen when setup is reopened
- * from Settings.
- */
+/** Route loading keeps the background; only the boundary renders a splash. */
 export function SetupIntroLoading() {
-  if (!setupWelcomes()) {
-    return <PageShellFallback />;
-  }
   return (
-    <div className="min-h-screen bg-fixed [background-image:var(--scry-shell-bg)]">
-      <SetupIntroLogo />
-    </div>
+    <div className="min-h-screen bg-fixed [background-image:var(--scry-shell-bg)]" />
   );
 }
 
-/** Whether the wizard plays the welcome's flight when it mounts. */
-export function setupIntroFlies() {
+/** Whether this page load animates the shared welcome. */
+function setupIntroFlies() {
   return setupWelcomes() && !prefersReducedMotion();
 }
 
@@ -111,29 +136,23 @@ function aimAt(flying: HTMLImageElement, target: HTMLElement) {
 }
 
 /**
- * The welcome's logo inside the wizard. It holds in the middle until `ready`
+ * The shared welcome holds in the middle until the chosen screen is `ready`
  * and the artwork has decoded, then flies onto the header logo at `targetRef`.
  *
- * The wizard hides its header logo while this shows (`setup-intro` on its
- * shell) and starts the page's own animations when `onStart` fires with how
- * long the flight waits to begin (`setup-intro-playing`), so both run
- * together. The wizard's page is centred, so the header only settles once the
- * page's content has; that is what `ready` waits for. `onDone` fires when the
- * logo has landed, or at once if there is no header logo to land on. Pass
- * stable callbacks: a new one restarts the wait.
+ * The boundary hides the chosen screen until the logo lands. A null target
+ * dismisses the load-in for routes outside setup.
  */
-export function SetupIntroMark({
+function SetupIntroMark({
   targetRef,
   ready,
-  onStart,
   onDone,
 }: {
   targetRef: RefObject<HTMLElement | null>;
   ready: boolean;
-  onStart: (flightDelayMs: number) => void;
   onDone: () => void;
 }) {
   const flyingRef = useRef<HTMLImageElement>(null);
+  const [appearedAt] = useState(() => performance.now());
   const [flight, setFlight] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
@@ -153,12 +172,14 @@ export function SetupIntroMark({
           onDone();
           return;
         }
-        const delayMs = Math.max(0, APPEAR_AND_HOLD_MS - msSinceAppeared());
+        const delayMs = Math.max(
+          0,
+          APPEAR_AND_HOLD_MS - (performance.now() - appearedAt),
+        );
         setFlight({
           ...aimAt(flying, target),
           animationDelay: `${delayMs}ms`,
         } as CSSProperties);
-        onStart(delayMs);
 
         // The header can still move while the logo flies: a step opened by
         // a refresh fills in as its data loads, and a taller page pushes the
@@ -167,7 +188,9 @@ export function SetupIntroMark({
         const track = () => {
           const current = targetRef.current;
           if (current) {
-            for (const [name, value] of Object.entries(aimAt(flying, current))) {
+            for (const [name, value] of Object.entries(
+              aimAt(flying, current),
+            )) {
               flying.style.setProperty(name, value);
             }
           }
@@ -179,7 +202,9 @@ export function SetupIntroMark({
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [ready, targetRef, onStart, onDone]);
+  }, [ready, targetRef, onDone, appearedAt]);
 
-  return <SetupIntroLogo flight={flight} flyingRef={flyingRef} onLanded={onDone} />;
+  return (
+    <SetupIntroLogo flight={flight} flyingRef={flyingRef} onLanded={onDone} />
+  );
 }

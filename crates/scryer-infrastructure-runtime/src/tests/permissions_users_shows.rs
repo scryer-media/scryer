@@ -740,7 +740,10 @@ async fn sqlite_show_queries_roundtrip() {
         ShowRepository::update_episode(&shows, &episode.id, EpisodeUpdate::default())
             .await
             .expect_err("an update without fields is rejected");
-    assert!(matches!(empty_update, AppError::Validation(_)));
+    assert!(matches!(
+        empty_update,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 
     ShowRepository::delete_episode(&shows, &episode.id)
         .await

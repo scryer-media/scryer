@@ -53,7 +53,7 @@ pub async fn replay_catalog_into_fresh_db(
             ))
         })?;
 
-    apply_postgres_baseline(pool, catalog, payload_bytes, baseline).await?;
+    apply_postgres_baseline(pool, catalog, payload_bytes, baseline, false).await?;
     apply_version_range(
         pool,
         catalog,
@@ -90,10 +90,13 @@ pub async fn run_migrations_with_hook_context(
     }
 
     if matches!(mode, MigrationMode::ValidateOnly) {
-        return Err(AppError::Validation(format!(
-            "database migration check failed; pending PostgreSQL migrations: {}",
-            pending.join(", ")
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_DATABASE_MIGRATION_CHECK_FAILED,
+            format!(
+                "database migration check failed; pending PostgreSQL migrations: {}",
+                pending.join(", ")
+            ),
+        ));
     }
 
     let install_kind = detect_install_kind(pool, &applied).await?;
@@ -108,7 +111,7 @@ pub async fn run_migrations_with_hook_context(
                         "missing PostgreSQL baseline through {target_version:04}"
                     ))
                 })?;
-            apply_postgres_baseline(pool, &catalog, &payload_bytes, baseline).await?;
+            apply_postgres_baseline(pool, &catalog, &payload_bytes, baseline, true).await?;
             apply_version_range(
                 pool,
                 &catalog,
@@ -336,6 +339,7 @@ async fn apply_postgres_baseline(
     catalog: &CompiledMigrationCatalog,
     payload_bytes: &[u8],
     baseline: &CompiledBaseline,
+    initialize_authentication: bool,
 ) -> AppResult<()> {
     let mut tx = pool
         .begin()
@@ -351,6 +355,15 @@ async fn apply_postgres_baseline(
         .execute(&mut *tx)
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
+
+    if initialize_authentication {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(
+            include_str!("../migrations/initial_auth_seed.sql").to_owned(),
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    }
 
     for migration in catalog
         .migrations
@@ -408,71 +421,93 @@ async fn apply_single_migration(
     install_kind: MigrationInstallKind,
     hook_context: &MigrationHookContext,
 ) -> AppResult<()> {
+    scryer_application::check_restore_deadline()?;
     let start = Instant::now();
     let mut tx = pool
         .begin()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;
 
-    if let Some(quarantined) = crate::migrations::known_bad::known_bad_migration(migration.version)
-    {
-        // See `migrations::known_bad`: recorded as applied with its original
-        // checksum, steps never executed; the replacement version does the
-        // safe work.
-        tracing::warn!(
-            version = migration.version,
-            replacement_version = quarantined.replacement_version,
-            reason = quarantined.reason,
-            "skipping quarantined migration; recording it as applied without executing its steps"
-        );
-        insert_applied_migration(&mut tx, migration, 0).await?;
-        tx.commit()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
-        return Ok(());
-    }
-
-    for step in &migration.steps {
-        if !step.engine().applies_to(EngineScope::Postgres)
-            || !step.scope().applies_to(install_kind)
+    let work = async {
+        if let Some(deadline) = scryer_application::current_restore_deadline() {
+            let remaining = deadline.remaining().as_millis().max(1).to_string();
+            sqlx::query("SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $1, true)")
+            .bind(&remaining).execute(&mut *tx).await
+            .map_err(|error| AppError::Repository(format!("failed to set restore migration budget: {error}")))?;
+            sqlx::query("SELECT set_config('transaction_timeout', $1, true) WHERE current_setting('transaction_timeout', true) IS NOT NULL")
+                .bind(&remaining).execute(&mut *tx).await
+                .map_err(|error| AppError::Repository(format!("failed to set restore migration transaction budget: {error}")))?;
+        }
+        if let Some(quarantined) =
+            crate::migrations::known_bad::known_bad_migration(migration.version)
         {
-            continue;
+            // See `migrations::known_bad`: recorded as applied with its original
+            // checksum, steps never executed; the replacement version does the
+            // safe work.
+            tracing::warn!(
+                version = migration.version,
+                replacement_version = quarantined.replacement_version,
+                reason = quarantined.reason,
+                "skipping quarantined migration; recording it as applied without executing its steps"
+            );
+            insert_applied_migration(&mut tx, migration, 0).await?;
+            return Ok(());
         }
 
-        match step {
-            CompiledMigrationStep::Sql { payload, .. } => {
-                let sql = payload
-                    .text(payload_bytes)
-                    .map_err(AppError::Repository)?
-                    .to_owned();
-                if sql.trim().is_empty() {
-                    continue;
+        for step in &migration.steps {
+            if !step.engine().applies_to(EngineScope::Postgres)
+                || !step.scope().applies_to(install_kind)
+            {
+                continue;
+            }
+
+            match step {
+                CompiledMigrationStep::Sql { payload, .. } => {
+                    let sql = payload
+                        .text(payload_bytes)
+                        .map_err(AppError::Repository)?
+                        .to_owned();
+                    if sql.trim().is_empty() {
+                        continue;
+                    }
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "failed to apply PostgreSQL migration {:04}: {error}",
+                                migration.version
+                            ))
+                        })?;
                 }
-                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|error| {
-                        AppError::Repository(format!(
-                            "failed to apply PostgreSQL migration {:04}: {error}",
-                            migration.version
-                        ))
-                    })?;
-            }
-            CompiledMigrationStep::Rust { hook_id, .. } => {
-                run_postgres_rust_hook(
-                    hook_id.clone(),
-                    &mut tx,
-                    migration.version,
-                    install_kind,
-                    hook_context,
-                )
-                .await?;
+                CompiledMigrationStep::Rust { hook_id, .. } => {
+                    run_postgres_rust_hook(
+                        hook_id.clone(),
+                        &mut tx,
+                        migration.version,
+                        install_kind,
+                        hook_context,
+                    )
+                    .await?;
+                }
             }
         }
-    }
 
-    let elapsed_ns = start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
-    insert_applied_migration(&mut tx, migration, elapsed_ns).await?;
+        let elapsed_ns = start.elapsed().as_nanos().min(i64::MAX as u128) as i64;
+        insert_applied_migration(&mut tx, migration, elapsed_ns).await?;
+        scryer_application::check_restore_deadline()?;
+        Ok(())
+    };
+    let result = match scryer_application::current_restore_deadline() {
+        Some(deadline) => deadline.run(work).await,
+        None => work.await,
+    };
+    if let Err(error) = result {
+        tx.rollback().await.map_err(|rollback| {
+            AppError::Repository(format!("failed to roll back migration: {rollback}"))
+        })?;
+        return Err(error);
+    }
     tx.commit()
         .await
         .map_err(|error| AppError::Repository(error.to_string()))?;

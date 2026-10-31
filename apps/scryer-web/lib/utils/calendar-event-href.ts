@@ -10,7 +10,9 @@ export type CalendarEventHrefItem = {
   librarySlug?: string | null;
 };
 
-export function buildCalendarEventHref(item: CalendarEventHrefItem): string | null {
+export function buildCalendarEventHref(
+  item: CalendarEventHrefItem,
+): string | null {
   const facet = facetById(item.titleFacet.toUpperCase());
   const titleId = item.titleId.trim();
   if (!facet || !titleId) return null;
@@ -18,7 +20,11 @@ export function buildCalendarEventHref(item: CalendarEventHrefItem): string | nu
   const librarySlug = item.librarySlug?.trim() || null;
   const titleSlug = item.titleSlug?.trim() || null;
   const hasSlugRoute = Boolean(librarySlug && titleSlug);
-  const path = buildOverviewDetailPath(facet.viewId as ViewId, librarySlug, titleSlug);
+  const path = buildOverviewDetailPath(
+    facet.viewId as ViewId,
+    librarySlug,
+    titleSlug,
+  );
   const params = new URLSearchParams();
 
   if (!hasSlugRoute) {

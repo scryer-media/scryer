@@ -15,7 +15,7 @@ mod tests {
         CompletedImportIdentityPolicy, CompletedImportRequestPayload,
         IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportCandidateMapping, ReleaseEvidence,
         SelectedCompletedImportEvidence, StoredCompletedImportRequestPayload,
-        completed_import_error_message_is_retryable, completed_import_status_for_result,
+        completed_import_status_for_result,
         download_submission_persistence_may_be_in_flight,
         manual_episode_suggestion_for_grabbed_scope, parse_import_release_for_title,
         resolved_episode_ids_are_within_expected, sanitized_title_folder_component,
@@ -70,16 +70,6 @@ mod tests {
             sanitized_title_folder_component("Movie Title (2024)"),
             "Movie Title (2024)"
         );
-    }
-
-    #[test]
-    fn retryable_import_errors_match_locked_as_a_word() {
-        assert!(!completed_import_error_message_is_retryable(
-            "post-download rule(s) blocked import: language policy"
-        ));
-        assert!(completed_import_error_message_is_retryable(
-            "source file is locked by another process"
-        ));
     }
 
     #[test]
@@ -1177,25 +1167,23 @@ mod tests {
             ImportStatus::Skipped
         );
 
-        result.error_message = Some("source changed during copy".to_string());
-        assert_eq!(
-            completed_import_status_for_result(&result, ImportStatus::Failed),
-            ImportStatus::Pending
-        );
-
-        // These execution races lack a structured outcome and remain the only
-        // message-based retry hints. Import-check rejection reasons are typed.
-        for transient in [
-            "source changed during copy",
-            "destination temporarily unavailable",
-        ] {
-            result.error_message = Some(transient.to_string());
+        // Source races retain a retryable kind even when their explanation changes.
+        for transient in [ImportSkipReason::SourceChanged, ImportSkipReason::SourceUnavailable] {
+            result.skip_reason = Some(transient.clone());
+            result.error_message = Some("rewritten execution race explanation".to_string());
             assert_eq!(
                 completed_import_status_for_result(&result, ImportStatus::Failed),
                 ImportStatus::Pending,
-                "{transient}"
+                "{transient:?}"
             );
         }
+        result.skip_reason = Some(ImportSkipReason::PolicyMismatch);
+        result.error_message = Some("source changed during copy".to_string());
+        assert_eq!(
+            completed_import_status_for_result(&result, ImportStatus::Failed),
+            ImportStatus::Failed,
+            "a sentence cannot turn a policy verdict into a source race"
+        );
 
         // Decision-phase skips stay terminal whatever the text — there is no OS
         // error catalogue any more; execution failures are retried by phase.
@@ -1373,10 +1361,6 @@ mod tests {
             "post-download rule failed to evaluate; import held for review: Sample rule (rs-sample): source changed during copy",
             "post-download rules could not be evaluated; import held for review: path not found or inaccessible",
         ] {
-            assert!(
-                completed_import_error_message_is_retryable(message),
-                "fixture must contain allowlisted text: {message}"
-            );
             result.error_message = Some(message.to_string());
             for fallback in [ImportStatus::Skipped, ImportStatus::Failed] {
                 assert_eq!(
@@ -1389,8 +1373,8 @@ mod tests {
 
         // The same text under the source-changed review hold keeps its
         // automatic retry.
-        result.skip_reason = Some(ImportSkipReason::PolicyMismatch);
-        result.error_message = Some("source changed during copy".to_string());
+        result.skip_reason = Some(ImportSkipReason::SourceChanged);
+        result.error_message = Some("translated source race without diagnostic keywords".to_string());
         assert_eq!(
             completed_import_status_for_result(&result, ImportStatus::Skipped),
             ImportStatus::Pending

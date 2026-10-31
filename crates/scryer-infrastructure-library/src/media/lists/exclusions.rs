@@ -155,7 +155,10 @@ impl ListExclusionRepository for ListStore {
         )
         .await?;
         if changed == 0 {
-            return Err(AppError::NotFound(format!("list exclusion {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LIST_EXCLUSION_NOT_FOUND,
+                format!("list exclusion {id}"),
+            ));
         }
         Ok(())
     }

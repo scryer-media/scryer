@@ -73,15 +73,27 @@ test("a blank request interval saves as zero so an update clears it", () => {
 
 test("only whole non-negative numbers are request intervals", () => {
   assert.deepEqual(parseIndexerRateLimitSeconds(""), { valid: true, value: 0 });
-  assert.deepEqual(parseIndexerRateLimitSeconds("0"), { valid: true, value: 0 });
-  assert.deepEqual(parseIndexerRateLimitSeconds("30"), { valid: true, value: 30 });
+  assert.deepEqual(parseIndexerRateLimitSeconds("0"), {
+    valid: true,
+    value: 0,
+  });
+  assert.deepEqual(parseIndexerRateLimitSeconds("30"), {
+    valid: true,
+    value: 30,
+  });
   for (const raw of ["-3", "2.5", "ten", "1e3"]) {
     assert.deepEqual(parseIndexerRateLimitSeconds(raw), { valid: false }, raw);
   }
 });
 
 test("a saved interval seeds the editor and zero or none leaves it blank", () => {
-  assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: 15 }), "15");
+  assert.equal(
+    indexerRateLimitSecondsDraftValue({ rateLimitSeconds: 15 }),
+    "15",
+  );
   assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: 0 }), "");
-  assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: null }), "");
+  assert.equal(
+    indexerRateLimitSecondsDraftValue({ rateLimitSeconds: null }),
+    "",
+  );
 });

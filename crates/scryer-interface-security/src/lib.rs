@@ -28,15 +28,20 @@ fn emby_connection_mode(value: EmbyConnectionModeValue) -> scryer_application::E
 }
 
 fn to_oauth_jellyfin_link_gql_error(error: scryer_application::AppError) -> Error {
-    match error {
-        scryer_application::AppError::Validation(message)
-            if message == "Jellyfin account could not be linked" =>
-        {
-            Error::new("Jellyfin account could not be linked")
-                .extend_with(|_, extensions| extensions.set("code", "REQUEST_CONFLICT"))
-        }
-        other => to_gql_error(other),
+    if matches!(
+        error.validation_reason(),
+        Some(
+            "EXTERNAL_ACCOUNT_LINKED_ELSEWHERE"
+                | "EXTERNAL_ACCOUNT_IDENTITY_MISMATCH"
+                | "EXTERNAL_ACCOUNT_LINK_FAILED"
+        )
+    ) {
+        return Error::new("Jellyfin account could not be linked").extend_with(|_, extensions| {
+            extensions.set("code", "REQUEST_CONFLICT");
+            extensions.set("reason", "EXTERNAL_ACCOUNT_LINK_FAILED");
+        });
     }
+    to_gql_error(error)
 }
 
 #[cfg(test)]
@@ -44,19 +49,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn oauth_jellyfin_link_conflict_uses_request_conflict_code() {
-        let error = to_oauth_jellyfin_link_gql_error(scryer_application::AppError::Validation(
-            "Jellyfin account could not be linked".into(),
-        ));
-
-        assert_eq!(error.message, "Jellyfin account could not be linked");
-        assert!(matches!(
-            error
-                .extensions
-                .as_ref()
-                .and_then(|extensions| extensions.get("code")),
-            Some(async_graphql::Value::String(code)) if code == "REQUEST_CONFLICT"
-        ));
+    fn oauth_jellyfin_link_conflict_masks_both_sentence_and_reason() {
+        for reason in [
+            "EXTERNAL_ACCOUNT_LINKED_ELSEWHERE",
+            "EXTERNAL_ACCOUNT_IDENTITY_MISMATCH",
+            "EXTERNAL_ACCOUNT_LINK_FAILED",
+        ] {
+            let error =
+                to_oauth_jellyfin_link_gql_error(scryer_application::AppError::validation_refused(
+                    reason,
+                    "private account relationship",
+                ));
+            assert_eq!(error.message, "Jellyfin account could not be linked");
+            let extensions = error.extensions.as_ref().expect("public error extensions");
+            assert!(
+                matches!(extensions.get("code"), Some(async_graphql::Value::String(code)) if code == "REQUEST_CONFLICT")
+            );
+            assert!(
+                matches!(extensions.get("reason"), Some(async_graphql::Value::String(code)) if code == "EXTERNAL_ACCOUNT_LINK_FAILED")
+            );
+            assert_eq!(extensions.get("detail"), None);
+        }
     }
 }
 
@@ -471,8 +484,9 @@ impl UserMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let oauth = oauth_actor_session_from_ctx(ctx).ok_or_else(|| {
-            to_gql_error(scryer_application::AppError::Unauthorized(
-                "OAuth authentication is required for this operation".into(),
+            to_gql_error(scryer_application::AppError::unauthorized_reason(
+                scryer_interface_core::refusal::INTERFACE_OAUTH_SESSION_REQUIRED,
+                "OAuth authentication is required for this operation",
             ))
         })?;
         app.link_current_oauth_jellyfin_account(

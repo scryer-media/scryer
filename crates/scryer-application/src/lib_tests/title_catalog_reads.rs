@@ -234,3 +234,83 @@ async fn a_memo_for_another_title_never_answers_for_this_one() {
         "a mismatched memo falls back to a fresh read each call instead of caching"
     );
 }
+
+#[tokio::test]
+async fn numbering_bridge_memo_retries_failed_reads_and_caches_absence() {
+    let series = seed_series().await;
+    let reads = TitleCatalogReads::new(&series.title.id);
+    *series.shows.fail_anime_bridge.lock().await = true;
+    assert!(reads.anime_numbering_bridge(&series.app).await.is_err());
+    *series.shows.fail_anime_bridge.lock().await = false;
+    assert!(
+        reads
+            .anime_numbering_bridge(&series.app)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let after = series.shows.anime_bridge_reads.load(Ordering::SeqCst);
+    assert!(
+        reads
+            .anime_numbering_bridge(&series.app)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        series.shows.anime_bridge_reads.load(Ordering::SeqCst),
+        after
+    );
+}
+
+#[test]
+fn compact_cutoff_facts_preserve_every_scope_decision() {
+    use crate::acquisition::decision_helpers::{CutoffScope, analyzed_cutoff_quality_for_scope};
+    let files = vec![
+        TitleMediaFile {
+            episode_id: Some("e1".into()),
+            quality_label: Some("1080p".into()),
+            created_at: "2026-01-01".into(),
+            ..Default::default()
+        },
+        TitleMediaFile {
+            episode_id: Some("e1".into()),
+            quality_label: Some("2160p".into()),
+            role: crate::MediaFileRole::Additional,
+            ..Default::default()
+        },
+        TitleMediaFile {
+            episode_id: Some("e2".into()),
+            quality_label: Some("720p".into()),
+            ..Default::default()
+        },
+        TitleMediaFile {
+            series_movie_link_ids: vec!["movie-link".into()],
+            quality_label: Some("2160p".into()),
+            ..Default::default()
+        },
+        TitleMediaFile {
+            quality_label: Some("1080p".into()),
+            ..Default::default()
+        },
+    ];
+    let compact: Vec<_> = files
+        .iter()
+        .filter(|file| file.role.is_primary())
+        .map(crate::MediaFileCutoffSummary::from)
+        .collect();
+    for scope in [
+        CutoffScope::Title,
+        CutoffScope::Episode("e1".into()),
+        CutoffScope::Episode("missing".into()),
+        CutoffScope::SeriesMovieLink("movie-link".into()),
+        CutoffScope::Episodes(vec!["e1".into(), "e2".into()]),
+        CutoffScope::Episodes(vec!["e1".into(), "missing".into()]),
+        CutoffScope::Episodes(vec![]),
+    ] {
+        assert_eq!(
+            analyzed_cutoff_quality_for_scope(&files, &scope),
+            analyzed_cutoff_quality_for_scope(&compact, &scope)
+        );
+    }
+}

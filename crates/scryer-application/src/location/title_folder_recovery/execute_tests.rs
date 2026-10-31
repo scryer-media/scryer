@@ -8,13 +8,13 @@ impl PlacedContentPermissions for ConfiguredPermissions {
     async fn apply_to_file(&self, path: &Path) -> AppResult<()> {
         tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
             .await
-            .map_err(|error| fail(error.to_string()))
+            .map_err(|error| relay_failure(error.to_string()))
     }
 
     async fn apply_to_directory(&self, path: &Path) -> AppResult<()> {
         tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))
             .await
-            .map_err(|error| fail(error.to_string()))
+            .map_err(|error| relay_failure(error.to_string()))
     }
 }
 

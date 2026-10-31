@@ -508,7 +508,7 @@ impl JobKey {
             Self::ArtworkEncoding => "Daily 03:00–09:00 host local time",
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
-            Self::FullHashBackfill => "Every 30 minutes, midnight–06:00 host local time",
+            Self::FullHashBackfill => "Every 30 minutes, 02:00–06:00 host local time",
             Self::MaintenanceRuleEvaluation => "Every 8 hours",
             Self::LifecycleActionHandling => "Every 12 hours",
             Self::MediaServerSignalSync => "Every 6 hours",

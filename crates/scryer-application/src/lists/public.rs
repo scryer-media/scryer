@@ -162,7 +162,10 @@ pub struct MemberListPolicy {
 }
 
 fn not_found() -> AppError {
-    AppError::NotFound("list subscription not found".into())
+    AppError::not_found_reason(
+        crate::error_reasons::lists::SUBSCRIPTION_NOT_FOUND,
+        "list subscription not found",
+    )
 }
 
 fn trimmed(value: Option<&str>) -> Option<String> {
@@ -502,7 +505,7 @@ impl AppUseCase {
             .await
         {
             Ok(()) => Ok(true),
-            Err(AppError::Unauthorized(_)) => Ok(false),
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => Ok(false),
             Err(error) => Err(error),
         }
     }
@@ -683,7 +686,7 @@ impl AppUseCase {
                 redact_for_viewer(subscription, can_manage),
                 &viewable,
             ))),
-            Err(AppError::NotFound(_)) => Ok(None),
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -793,14 +796,14 @@ impl AppUseCase {
                     |account| {
                         super::privacy::credential_for(&subscription, Some(account))
                             .map(|_| ())
-                            .map_err(|failure| AppError::Validation(failure.message))
+                            .map_err(|failure| failure.into_app_error())
                     },
                 )
                 .await?;
             _account_guard = Some(guard);
             if account.is_none() {
                 super::privacy::credential_for(&subscription, None)
-                    .map_err(|failure| AppError::Validation(failure.message))?;
+                    .map_err(|failure| failure.into_app_error())?;
             }
             if let Some(id) = account
                 .as_ref()
@@ -810,7 +813,7 @@ impl AppUseCase {
             }
             Some(
                 super::privacy::credential_for(&subscription, account.as_ref())
-                    .map_err(|failure| AppError::Validation(failure.message))?,
+                    .map_err(|failure| failure.into_app_error())?,
             )
         } else {
             None
@@ -839,7 +842,7 @@ impl AppUseCase {
                     account.updated_at = Utc::now();
                     lists.accounts.update(account).await?;
                 }
-                return Err(AppError::Validation(failure.message));
+                return Err(failure.into_app_error());
             }
         };
         fetched.dedupe();
@@ -1172,7 +1175,11 @@ impl AppUseCase {
             Ok(_) => {}
             // No sync was running when the lists were made due, so the one
             // that got in first started after that and takes them.
-            Err(AppError::Validation(message)) => {
+            Err(
+                AppError::Validation(message)
+                | AppError::ValidationRefused { message, .. }
+                | AppError::ValidationRefusedWithCount { message, .. },
+            ) => {
                 tracing::debug!(reason = %message, "list sync not started now");
             }
             Err(error) => return Err(error),
@@ -1302,10 +1309,12 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
         let exclusions = &self.services.lists.exclusions;
-        let exclusion = exclusions
-            .get_by_id(id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("list exclusion not found".into()))?;
+        let exclusion = exclusions.get_by_id(id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::lists::EXCLUSION_NOT_FOUND,
+                "list exclusion not found",
+            )
+        })?;
         // Clearing a fingerprint only costs a full read, so it goes first: a
         // failure leaves the exclusion standing rather than half-removed.
         self.forget_fingerprints_for_exclusion(&exclusion).await?;
@@ -1404,7 +1413,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("user not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::USER_NOT_FOUND,
+                    "user not found",
+                )
+            })?;
         let stored = self
             .services
             .lists

@@ -265,6 +265,37 @@ pub struct TotpVerifyInput {
     pub code: String,
 }
 
+/// Authentication mode explicitly selected during initial setup.
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
+pub enum InitialAuthenticationMode {
+    /// Require a local password login for this instance.
+    Password,
+    /// Allow unauthenticated access after the operator explicitly acknowledges it.
+    NoAuthentication,
+}
+
+/// The operator's explicit first-run authentication decision.
+#[derive(InputObject)]
+pub struct CompleteInitialAuthenticationInput {
+    /// Authentication mode explicitly selected by the operator.
+    pub mode: InitialAuthenticationMode,
+    /// Administrator password; required only when selecting password authentication.
+    pub password: Option<String>,
+    /// Explicit acknowledgement that disabling authentication permits unauthenticated access.
+    pub acknowledge_no_authentication: bool,
+    /// One-time setup code authorizing the initial authentication decision.
+    pub setup_code: Option<String>,
+}
+
+/// Result of the operator's first-run authentication decision.
+#[derive(SimpleObject)]
+pub struct InitialAuthenticationPayload {
+    /// Whether the initial authentication decision is durably complete.
+    pub completed: bool,
+    /// Login tokens for password authentication; null when authentication is disabled.
+    pub login: Option<LoginPayload>,
+}
+
 /// New password selected after signing in with an administrator-provided temporary password.
 #[derive(InputObject)]
 pub struct CompleteRequiredPasswordChangeInput {

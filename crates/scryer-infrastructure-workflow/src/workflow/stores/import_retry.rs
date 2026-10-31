@@ -10,9 +10,7 @@ pub(super) async fn lock_retry_download(tx: &mut SqlTx<'_>, id: &str) -> AppResu
     )
     .await?;
     if rows != 1 {
-        return Err(AppError::NotFound(
-            "canonical download for import retry".into(),
-        ));
+        return Err(AppError::not_found_reason(crate::error_reasons::WORKFLOW_IMPORT_RETRY_DOWNLOAD_NOT_FOUND, "canonical download for import retry"));
     }
     Ok(())
 }
@@ -29,7 +27,7 @@ pub(super) async fn guard_import_retry_tx(tx: &mut SqlTx<'_>, id: &str) -> AppRe
         "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
         &[SqlArg::Text(id.into()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into()),
           SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
-        return Err(AppError::Validation("download is awaiting retry reconciliation".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_DOWNLOAD_AWAITING_RETRY_RECONCILIATION, "download is awaiting retry reconciliation"));
     }
     Ok(())
 }

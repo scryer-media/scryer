@@ -7,6 +7,7 @@ mutation($input: TestRuleSetInput!) {
     releaseName
     mediaFileId
     listing {
+      protocol
       publishedAt
       ageDays
       thumbsUp
@@ -73,6 +74,34 @@ async fn synthetic_movie(ctx: &TestContext) -> Title {
         true,
     )
     .await
+}
+
+#[tokio::test]
+async fn graphql_rule_tester_protocol_reaches_scoring_and_echoes_unknown() {
+    let ctx = TestContext::new().await;
+    let title = synthetic_movie(&ctx).await;
+    let mut rule = draft();
+    rule["regoSource"] = json!(
+        r#"import rego.v1
+score_entry["usenet"] := 10 if { input.release.protocol == "usenet" }
+score_entry["torrent"] := 20 if { input.release.protocol == "torrent" }
+score_entry["http"] := 30 if { input.release.protocol == "http" }
+score_entry["unknown"] := 1 if { input.release.protocol == null }
+"#
+    );
+    for (supplied, expected, score) in [
+        (json!("usenet"), json!("usenet"), 10),
+        (json!("torrent"), json!("torrent"), 20),
+        (json!("http"), json!("http"), 30),
+        (json!(null), json!(null), 1),
+        (json!("ftp"), json!(null), 1),
+    ] {
+        let body = gql(&ctx, TEST_RULE_SET, json!({"input":{"draft":rule,"titleId":title.id,"releaseName":RELEASE_NAME,"listing":{"protocol":supplied}}})).await;
+        assert_no_errors(&body);
+        let result = &body["data"]["testRuleSet"];
+        assert_eq!(result["listing"]["protocol"], expected);
+        assert_eq!(result["draftContribution"]["score"], score);
+    }
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -20,7 +21,9 @@ export function useTitleRefreshAndScan({
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-  const [loadingTitleId, setLoadingTitleId] = React.useState<string | null>(null);
+  const [loadingTitleId, setLoadingTitleId] = React.useState<string | null>(
+    null,
+  );
 
   const refreshAndScan = React.useCallback(async () => {
     if (!titleId) {
@@ -57,7 +60,11 @@ export function useTitleRefreshAndScan({
       await onScanned();
     } catch (error: unknown) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("settings.libraryScanFailed"),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("settings.libraryScanFailed"),
+          t,
+        ),
         { level: "ERROR" },
       );
     } finally {

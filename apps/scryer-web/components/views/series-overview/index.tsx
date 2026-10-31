@@ -17,6 +17,7 @@ import { isAbortError } from "@/lib/graphql/urql-client";
 import {
   runIterativeReleaseSearch,
   titleReleaseSearchInput,
+  type InteractiveSearchIndexerProgress,
 } from "@/lib/graphql/release-search";
 import {
   hasPrimaryMediaFile,
@@ -118,16 +119,22 @@ function compareEpisodeQueueItems(
   right: DownloadQueueItem,
 ): number {
   const leftRank =
-    EPISODE_QUEUE_PRECEDENCE[left.displayState.toLowerCase()] ?? Number.MAX_SAFE_INTEGER;
+    EPISODE_QUEUE_PRECEDENCE[left.displayState.toLowerCase()] ??
+    Number.MAX_SAFE_INTEGER;
   const rightRank =
-    EPISODE_QUEUE_PRECEDENCE[right.displayState.toLowerCase()] ?? Number.MAX_SAFE_INTEGER;
+    EPISODE_QUEUE_PRECEDENCE[right.displayState.toLowerCase()] ??
+    Number.MAX_SAFE_INTEGER;
   if (leftRank !== rightRank) {
     return leftRank - rightRank;
   }
 
   const leftUpdatedAt = Date.parse(left.lastUpdatedAt ?? "");
   const rightUpdatedAt = Date.parse(right.lastUpdatedAt ?? "");
-  if (Number.isFinite(leftUpdatedAt) && Number.isFinite(rightUpdatedAt) && leftUpdatedAt !== rightUpdatedAt) {
+  if (
+    Number.isFinite(leftUpdatedAt) &&
+    Number.isFinite(rightUpdatedAt) &&
+    leftUpdatedAt !== rightUpdatedAt
+  ) {
     return rightUpdatedAt - leftUpdatedAt;
   }
 
@@ -158,9 +165,18 @@ type Props = {
   onClearReleaseBlocklistEntry?: (entryId: string) => Promise<void> | void;
   onTitleChanged?: () => Promise<void>;
   onBackToList?: () => void;
-  onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
-  onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
-  onSetSeriesMovieMonitored?: (seriesMovieLinkId: string, monitored: boolean) => Promise<void>;
+  onSetCollectionMonitored?: (
+    collectionId: string,
+    monitored: boolean,
+  ) => Promise<void>;
+  onSetEpisodeMonitored?: (
+    episodeId: string,
+    monitored: boolean,
+  ) => Promise<void>;
+  onSetSeriesMovieMonitored?: (
+    seriesMovieLinkId: string,
+    monitored: boolean,
+  ) => Promise<void>;
   onSeriesMovieTagsChanged?: () => Promise<void> | void;
   onSetTitleMonitored?: (monitored: boolean) => Promise<void>;
   onSearchMonitored?: () => Promise<void> | void;
@@ -183,9 +199,16 @@ type Props = {
   seasonSearchLoadingByCollection?: Record<string, boolean>;
   onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
   seasonInteractiveSearchLoadingByCollection?: Record<string, boolean>;
+  seasonSearchIndexerProgressByCollection?: Record<
+    string,
+    InteractiveSearchIndexerProgress[]
+  >;
   /** Interactive search of a whole season; its results list under the season header. */
   onRunSeasonInteractiveSearch?: (collection: TitleCollection) => void;
-  onQueueFromSeasonSearch?: (collection: TitleCollection, release: Release) => Promise<void> | void;
+  onQueueFromSeasonSearch?: (
+    collection: TitleCollection,
+    release: Release,
+  ) => Promise<void> | void;
   monitoredUpdating?: boolean;
   searchMonitoredLoading?: boolean;
   hasDownloadClients: boolean;
@@ -260,6 +283,7 @@ function SeriesOverviewViewImpl({
   seasonSearchLoadingByCollection,
   onRunSeasonSearch,
   seasonInteractiveSearchLoadingByCollection,
+  seasonSearchIndexerProgressByCollection,
   onRunSeasonInteractiveSearch,
   onQueueFromSeasonSearch,
   monitoredUpdating = false,
@@ -301,14 +325,15 @@ function SeriesOverviewViewImpl({
   );
 
   const sortedEpisodesByCollection = React.useMemo(
-    () => Object.fromEntries(
-      sortedCollections.map((collection) => [
-        collection.id,
-        [...(episodesByCollection[collection.id] ?? emptyEpisodes)].sort(
-          (left, right) => episodeSortValue(right) - episodeSortValue(left),
-        ),
-      ]),
-    ) as Record<string, CollectionEpisode[]>,
+    () =>
+      Object.fromEntries(
+        sortedCollections.map((collection) => [
+          collection.id,
+          [...(episodesByCollection[collection.id] ?? emptyEpisodes)].sort(
+            (left, right) => episodeSortValue(right) - episodeSortValue(left),
+          ),
+        ]),
+      ) as Record<string, CollectionEpisode[]>,
     [emptyEpisodes, episodesByCollection, sortedCollections],
   );
 
@@ -317,39 +342,72 @@ function SeriesOverviewViewImpl({
     [seriesMovieLinks, sortedCollections],
   );
 
-  const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(new Set());
-  const [selectedEpisodeIds, setSelectedEpisodeIds] = React.useState<Set<string>>(
-    () => new Set(),
+  const [expandedKeys, setExpandedKeys] = React.useState<Set<string>>(
+    new Set(),
   );
-  const selectedSeasons = Object.entries(episodesByCollection).filter(([, episodes]) =>
-    episodes.length > 0 && episodes.every((episode) => selectedEpisodeIds.has(episode.id)),
+  const [selectedEpisodeIds, setSelectedEpisodeIds] = React.useState<
+    Set<string>
+  >(() => new Set());
+  const selectedSeasons = Object.entries(episodesByCollection).filter(
+    ([, episodes]) =>
+      episodes.length > 0 &&
+      episodes.every((episode) => selectedEpisodeIds.has(episode.id)),
   );
-  const selectedSeasonEpisodes = new Set(selectedSeasons.flatMap(([, episodes]) => episodes.map((episode) => episode.id)));
-  const wholeSeasonsSelected = selectedSeasonEpisodes.size === selectedEpisodeIds.size && selectedSeasons.length > 0;
+  const selectedSeasonEpisodes = new Set(
+    selectedSeasons.flatMap(([, episodes]) =>
+      episodes.map((episode) => episode.id),
+    ),
+  );
+  const wholeSeasonsSelected =
+    selectedSeasonEpisodes.size === selectedEpisodeIds.size &&
+    selectedSeasons.length > 0;
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [historyEpisodeScope, setHistoryEpisodeScope] = React.useState<{
     episodeId: string;
     episodeLabel: string;
   } | null>(null);
-  const [historyCollectionScope, setHistoryCollectionScope] = React.useState<{ titleId: string; collectionId: string; collectionLabel: string } | null>(null);
-  const [episodePanel, dispatchEpisodePanel] = React.useReducer(episodePanelReducer, initialEpisodePanelState);
-  const [searchBlockedByEpisode, setSearchBlockedByEpisode] = React.useState<Record<string, boolean>>({});
-  const [searchBlockedByCollection, setSearchBlockedByCollection] = React.useState<Record<string, boolean>>({});
-  const [searchBlockedBySeriesMovie, setSearchBlockedBySeriesMovie] = React.useState<Record<string, boolean>>({});
+  const [historyCollectionScope, setHistoryCollectionScope] = React.useState<{
+    titleId: string;
+    collectionId: string;
+    collectionLabel: string;
+  } | null>(null);
+  const [episodePanel, dispatchEpisodePanel] = React.useReducer(
+    episodePanelReducer,
+    initialEpisodePanelState,
+  );
+  const [searchBlockedByEpisode, setSearchBlockedByEpisode] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [searchBlockedByCollection, setSearchBlockedByCollection] =
+    React.useState<Record<string, boolean>>({});
+  const [searchBlockedBySeriesMovie, setSearchBlockedBySeriesMovie] =
+    React.useState<Record<string, boolean>>({});
   const [seriesMovieSearchResultsByLink, setSeriesMovieSearchResultsByLink] =
     React.useState<Record<string, Release[]>>({});
   const [seriesMovieSearchLoadingByLink, setSeriesMovieSearchLoadingByLink] =
     React.useState<Record<string, boolean>>({});
-  const [seriesMovieSearchAttemptedByLink, setSeriesMovieSearchAttemptedByLink] =
-    React.useState<Record<string, boolean>>({});
-  const [autoSearchSeriesMovieLoadingByLink, setAutoSearchSeriesMovieLoadingByLink] =
-    React.useState<Record<string, boolean>>({});
-  const episodeSearchAbortByIdRef = React.useRef<Record<string, AbortController>>({});
-  const seriesMovieSearchAbortByLinkRef = React.useRef<Record<string, AbortController>>({});
+  const [
+    seriesMovieSearchAttemptedByLink,
+    setSeriesMovieSearchAttemptedByLink,
+  ] = React.useState<Record<string, boolean>>({});
+  const [
+    autoSearchSeriesMovieLoadingByLink,
+    setAutoSearchSeriesMovieLoadingByLink,
+  ] = React.useState<Record<string, boolean>>({});
+  const episodeSearchAbortByIdRef = React.useRef<
+    Record<string, AbortController>
+  >({});
+  const seriesMovieSearchAbortByLinkRef = React.useRef<
+    Record<string, AbortController>
+  >({});
   React.useEffect(() => {
     return () => {
-      Object.values(episodeSearchAbortByIdRef.current).forEach((controller) => controller.abort());
-      Object.values(seriesMovieSearchAbortByLinkRef.current).forEach((controller) => controller.abort());
+      Object.values(episodeSearchAbortByIdRef.current).forEach((controller) =>
+        controller.abort(),
+      );
+      Object.values(seriesMovieSearchAbortByLinkRef.current).forEach(
+        (controller) => controller.abort(),
+      );
       episodeSearchAbortByIdRef.current = {};
       seriesMovieSearchAbortByLinkRef.current = {};
     };
@@ -406,35 +464,41 @@ function SeriesOverviewViewImpl({
     onRequestDeleteEpisodeFiles([...selectedEpisodeIds]);
   }, [onRequestDeleteEpisodeFiles, selectedEpisodeIds]);
 
-  const episodeSelectionEnabled = canManageTitle && Boolean(onRequestDeleteEpisodeFiles);
+  const episodeSelectionEnabled =
+    canManageTitle && Boolean(onRequestDeleteEpisodeFiles);
 
-  const searchPrerequisiteNotice = canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice
-    ? <TitleSearchDownloadClientNotice />
-    : null;
-  const { activeDownloadEpisodeIds, primaryQueueItemByEpisodeId } = React.useMemo(() => {
-    const queueItemsByEpisodeId: Record<string, DownloadQueueItem[]> = {};
+  const searchPrerequisiteNotice =
+    canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice ? (
+      <TitleSearchDownloadClientNotice />
+    ) : null;
+  const { activeDownloadEpisodeIds, primaryQueueItemByEpisodeId } =
+    React.useMemo(() => {
+      const queueItemsByEpisodeId: Record<string, DownloadQueueItem[]> = {};
 
-    for (const item of downloadQueueItems) {
-      for (const episodeId of coveredEpisodeIdsForQueueItem(item, sortedEpisodesByCollection)) {
-        (queueItemsByEpisodeId[episodeId] ??= []).push(item);
+      for (const item of downloadQueueItems) {
+        for (const episodeId of coveredEpisodeIdsForQueueItem(
+          item,
+          sortedEpisodesByCollection,
+        )) {
+          (queueItemsByEpisodeId[episodeId] ??= []).push(item);
+        }
       }
-    }
 
-    const primaryByEpisodeId = Object.fromEntries(
-      Object.entries(queueItemsByEpisodeId).map(([episodeId, items]) => [
-        episodeId,
-        [...items].sort(compareEpisodeQueueItems)[0],
-      ]),
-    ) as Record<string, DownloadQueueItem | undefined>;
+      const primaryByEpisodeId = Object.fromEntries(
+        Object.entries(queueItemsByEpisodeId).map(([episodeId, items]) => [
+          episodeId,
+          [...items].sort(compareEpisodeQueueItems)[0],
+        ]),
+      ) as Record<string, DownloadQueueItem | undefined>;
 
-    return {
-      activeDownloadEpisodeIds: collectActiveDownloadEpisodeIds(
-        downloadQueueItems,
-        sortedEpisodesByCollection,
-      ),
-      primaryQueueItemByEpisodeId: primaryByEpisodeId,
-    };
-  }, [downloadQueueItems, sortedEpisodesByCollection]);
+      return {
+        activeDownloadEpisodeIds: collectActiveDownloadEpisodeIds(
+          downloadQueueItems,
+          sortedEpisodesByCollection,
+        ),
+        primaryQueueItemByEpisodeId: primaryByEpisodeId,
+      };
+    }, [downloadQueueItems, sortedEpisodesByCollection]);
 
   React.useEffect(() => {
     setSearchBlockedByEpisode({});
@@ -459,24 +523,34 @@ function SeriesOverviewViewImpl({
     setHistoryOpen(true);
   }, []);
 
-  const handleOpenEpisodeHistory = React.useCallback((episode: CollectionEpisode) => {
-    setHistoryCollectionScope(null);
-    setHistoryEpisodeScope({
-      episodeId: episode.id,
-      episodeLabel:
-        episode.title?.trim()
-        || episode.episodeLabel?.trim()
-        || episode.episodeNumber
-        || episode.id,
-    });
-    setHistoryOpen(true);
-  }, []);
+  const handleOpenEpisodeHistory = React.useCallback(
+    (episode: CollectionEpisode) => {
+      setHistoryCollectionScope(null);
+      setHistoryEpisodeScope({
+        episodeId: episode.id,
+        episodeLabel:
+          episode.title?.trim() ||
+          episode.episodeLabel?.trim() ||
+          episode.episodeNumber ||
+          episode.id,
+      });
+      setHistoryOpen(true);
+    },
+    [],
+  );
 
-  const handleOpenSeasonHistory = React.useCallback((collection: TitleCollection) => {
-    setHistoryEpisodeScope(null);
-    setHistoryCollectionScope({ titleId: collection.titleId, collectionId: collection.id, collectionLabel: seasonHeading(collection, t) });
-    setHistoryOpen(true);
-  }, [t]);
+  const handleOpenSeasonHistory = React.useCallback(
+    (collection: TitleCollection) => {
+      setHistoryEpisodeScope(null);
+      setHistoryCollectionScope({
+        titleId: collection.titleId,
+        collectionId: collection.id,
+        collectionLabel: seasonHeading(collection, t),
+      });
+      setHistoryOpen(true);
+    },
+    [t],
+  );
 
   const defaultExpandedRef = React.useRef(false);
   const lastDeepLinkedEpisodeIdRef = React.useRef<string | null>(null);
@@ -489,15 +563,20 @@ function SeriesOverviewViewImpl({
   React.useEffect(() => {
     if (!initialSeriesMovieLinkId) return;
     if (lastDeepLinkedMovieRef.current === initialSeriesMovieLinkId) return;
-    const item = timelineItems.find((entry) => entry.kind === "seriesMovie"
-      && entry.link.id === initialSeriesMovieLinkId);
+    const item = timelineItems.find(
+      (entry) =>
+        entry.kind === "seriesMovie" &&
+        entry.link.id === initialSeriesMovieLinkId,
+    );
     if (!item) return;
     if (!expandedKeys.has(item.key)) {
       setExpandedKeys((current) => new Set(current).add(item.key));
       return;
     }
     const frame = requestAnimationFrame(() => {
-      const element = document.getElementById(seriesOverviewSeriesMovieRowId(initialSeriesMovieLinkId));
+      const element = document.getElementById(
+        seriesOverviewSeriesMovieRowId(initialSeriesMovieLinkId),
+      );
       if (!element) return;
       element.scrollIntoView({ behavior: "smooth", block: "center" });
       lastDeepLinkedMovieRef.current = initialSeriesMovieLinkId;
@@ -517,7 +596,9 @@ function SeriesOverviewViewImpl({
     if (!initialEpisodeId) return;
 
     let targetCollectionKey: string | null = null;
-    for (const [collectionId, episodes] of Object.entries(episodesByCollection)) {
+    for (const [collectionId, episodes] of Object.entries(
+      episodesByCollection,
+    )) {
       if (episodes.some((episode) => episode.id === initialEpisodeId)) {
         targetCollectionKey = `s-${collectionId}`;
         break;
@@ -556,7 +637,12 @@ function SeriesOverviewViewImpl({
   }, [expandedKeys, initialEpisodeId, episodesByCollection]);
 
   React.useEffect(() => {
-    if (initialEpisodeId || initialSeriesMovieLinkId || defaultExpandedRef.current || !latestKey) {
+    if (
+      initialEpisodeId ||
+      initialSeriesMovieLinkId ||
+      defaultExpandedRef.current ||
+      !latestKey
+    ) {
       return;
     }
 
@@ -669,7 +755,8 @@ function SeriesOverviewViewImpl({
     [onRunSeasonSearch, seasonActionsByKey],
   );
   const seasonInteractiveSearchActionByKey = React.useMemo(
-    () => seasonActionsByKey(onRunSeasonInteractiveSearch, { expandOnRun: true }),
+    () =>
+      seasonActionsByKey(onRunSeasonInteractiveSearch, { expandOnRun: true }),
     [onRunSeasonInteractiveSearch, seasonActionsByKey],
   );
 
@@ -683,7 +770,11 @@ function SeriesOverviewViewImpl({
         delete episodeSearchAbortByIdRef.current[episodeId];
         setSearchBlockedByEpisode((prev) => ({ ...prev, [episodeId]: true }));
         dispatchEpisodePanel({ type: "RESET_SEARCH", episodeId });
-        dispatchEpisodePanel({ type: "SET_SEARCH_LOADING", episodeId, loading: false });
+        dispatchEpisodePanel({
+          type: "SET_SEARCH_LOADING",
+          episodeId,
+          loading: false,
+        });
         return;
       }
 
@@ -697,38 +788,54 @@ function SeriesOverviewViewImpl({
       const abortController = new AbortController();
       episodeSearchAbortByIdRef.current[episodeId] = abortController;
       dispatchEpisodePanel({ type: "RESET_SEARCH", episodeId });
-      dispatchEpisodePanel({ type: "SET_SEARCH_LOADING", episodeId, loading: true });
+      dispatchEpisodePanel({
+        type: "SET_SEARCH_LOADING",
+        episodeId,
+        loading: true,
+      });
 
       const collection = collections.find((c) => c.id === episode.collectionId);
-      const seasonNum = episode.seasonNumber?.trim().replace(/\D+/g, "")
-        || collection?.collectionIndex?.trim().replace(/\D+/g, "")
-        || "1";
-      const episodeNum = episode.episodeNumber?.trim().replace(/\D+/g, "") || "1";
+      const seasonNum =
+        episode.seasonNumber?.trim().replace(/\D+/g, "") ||
+        collection?.collectionIndex?.trim().replace(/\D+/g, "") ||
+        "1";
+      const episodeNum =
+        episode.episodeNumber?.trim().replace(/\D+/g, "") || "1";
 
-      runIterativeReleaseSearch(client, titleReleaseSearchInput(title.id, {
-        kind: "episode",
-        season: seasonNum,
-        episode: episodeNum,
-      }), {
-        signal: abortController.signal,
-        onUpdate: (snapshot) => {
-          if (abortController.signal.aborted) return;
-          dispatchEpisodePanel({
-            type: "SET_SEARCH_SNAPSHOT",
-            episodeId,
-            results: snapshot.releases,
-            indexers: snapshot.indexers,
-          });
+      runIterativeReleaseSearch(
+        client,
+        titleReleaseSearchInput(title.id, {
+          kind: "episode",
+          season: seasonNum,
+          episode: episodeNum,
+        }),
+        {
+          signal: abortController.signal,
+          onUpdate: (snapshot) => {
+            if (abortController.signal.aborted) return;
+            dispatchEpisodePanel({
+              type: "SET_SEARCH_SNAPSHOT",
+              episodeId,
+              results: snapshot.releases,
+              indexers: snapshot.indexers,
+            });
+          },
         },
-      })
+      )
         .catch((error) => {
           if (isAbortError(error) || abortController.signal.aborted) return;
           dispatchEpisodePanel({ type: "RESET_SEARCH", episodeId });
         })
         .finally(() => {
-          if (episodeSearchAbortByIdRef.current[episodeId] === abortController) {
+          if (
+            episodeSearchAbortByIdRef.current[episodeId] === abortController
+          ) {
             delete episodeSearchAbortByIdRef.current[episodeId];
-            dispatchEpisodePanel({ type: "SET_SEARCH_LOADING", episodeId, loading: false });
+            dispatchEpisodePanel({
+              type: "SET_SEARCH_LOADING",
+              episodeId,
+              loading: false,
+            });
           }
         });
     },
@@ -750,7 +857,9 @@ function SeriesOverviewViewImpl({
         candidateToken: release.candidateToken,
         sizeBytes: release.sizeBytes ?? null,
       };
-      const replacesPrimary = hasPrimaryMediaFile(mediaFilesByEpisode[episode.id]);
+      const replacesPrimary = hasPrimaryMediaFile(
+        mediaFilesByEpisode[episode.id],
+      );
       const mutation = replacesPrimary
         ? queueReplacementMutation
         : queueExistingMutation;
@@ -769,13 +878,18 @@ function SeriesOverviewViewImpl({
         confirmReplaceConflict,
       )
         .then(async (payload) => {
-          assertNoReplaceConflict(payload, "A download is already in progress for this episode.");
+          assertNoReplaceConflict(
+            payload,
+            "A download is already in progress for this episode.",
+          );
           const queuedMessage = t("status.queuedLatest", { name: title.name });
           setGlobalStatus(queuedMessage, { level: "SUCCESS" });
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+            level: "ERROR",
+          });
         });
     },
     [
@@ -799,24 +913,30 @@ function SeriesOverviewViewImpl({
       }
 
       try {
-        const { data, error: mutationError } = await client.mutation(queueExistingMutation, {
-          input: {
-            titleId: title.id,
-            scope: { episode: episode.id },
-            candidateToken: release.candidateToken,
-            sizeBytes: release.sizeBytes ?? null,
-            purpose: "ADDITIONAL_FILE",
-          },
-        }).toPromise();
+        const { data, error: mutationError } = await client
+          .mutation(queueExistingMutation, {
+            input: {
+              titleId: title.id,
+              scope: { episode: episode.id },
+              candidateToken: release.candidateToken,
+              sizeBytes: release.sizeBytes ?? null,
+              purpose: "ADDITIONAL_FILE",
+            },
+          })
+          .toPromise();
         if (mutationError) throw mutationError;
         assertNoReplaceConflict(
           data?.queueExistingTitleDownload,
           "A download is already in progress for this episode.",
         );
-        setGlobalStatus(t("status.queuedLatest", { name: title.name }), { level: "SUCCESS" });
+        setGlobalStatus(t("status.queuedLatest", { name: title.name }), {
+          level: "SUCCESS",
+        });
         await onTitleChanged?.();
       } catch (error: unknown) {
-        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+          level: "ERROR",
+        });
       }
     },
     [onTitleChanged, client, setGlobalStatus, t, title],
@@ -838,13 +958,23 @@ function SeriesOverviewViewImpl({
         delete next[episodeId];
         return next;
       });
-      dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: true });
+      dispatchEpisodePanel({
+        type: "SET_AUTO_SEARCH_LOADING",
+        episodeId,
+        loading: true,
+      });
       Promise.resolve(onAutoSearchEpisode(episode))
         .catch((error: unknown) => {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+            level: "ERROR",
+          });
         })
         .finally(() => {
-          dispatchEpisodePanel({ type: "SET_AUTO_SEARCH_LOADING", episodeId, loading: false });
+          dispatchEpisodePanel({
+            type: "SET_AUTO_SEARCH_LOADING",
+            episodeId,
+            loading: false,
+          });
         });
     },
     [hasDownloadClients, onAutoSearchEpisode, setGlobalStatus, t],
@@ -881,19 +1011,23 @@ function SeriesOverviewViewImpl({
       seriesMovieSearchAbortByLinkRef.current[link.id]?.abort();
       const abortController = new AbortController();
       seriesMovieSearchAbortByLinkRef.current[link.id] = abortController;
-      runIterativeReleaseSearch(client, {
-        titleId: title.id,
-        seriesMovieLinkId: link.id,
-      }, {
-        signal: abortController.signal,
-        onUpdate: (snapshot) => {
-          if (abortController.signal.aborted) return;
-          setSeriesMovieSearchResultsByLink((prev) => ({
-            ...prev,
-            [link.id]: snapshot.releases,
-          }));
+      runIterativeReleaseSearch(
+        client,
+        {
+          titleId: title.id,
+          seriesMovieLinkId: link.id,
         },
-      })
+        {
+          signal: abortController.signal,
+          onUpdate: (snapshot) => {
+            if (abortController.signal.aborted) return;
+            setSeriesMovieSearchResultsByLink((prev) => ({
+              ...prev,
+              [link.id]: snapshot.releases,
+            }));
+          },
+        },
+      )
         .then((results) => {
           if (abortController.signal.aborted) return;
           setSeriesMovieSearchResultsByLink((prev) => ({
@@ -909,7 +1043,9 @@ function SeriesOverviewViewImpl({
           }));
         })
         .finally(() => {
-          if (seriesMovieSearchAbortByLinkRef.current[link.id] === abortController) {
+          if (
+            seriesMovieSearchAbortByLinkRef.current[link.id] === abortController
+          ) {
             delete seriesMovieSearchAbortByLinkRef.current[link.id];
             setSeriesMovieSearchLoadingByLink((prev) => ({
               ...prev,
@@ -968,7 +1104,9 @@ function SeriesOverviewViewImpl({
           await onTitleChanged?.();
         })
         .catch((error: unknown) => {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+            level: "ERROR",
+          });
         });
     },
     [
@@ -1008,10 +1146,14 @@ function SeriesOverviewViewImpl({
           data?.queueExistingTitleDownload,
           "A download is already in progress for this series movie.",
         );
-        setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
+        setGlobalStatus(t("status.queueSuccess", { name: release.title }), {
+          level: "SUCCESS",
+        });
         await onTitleChanged?.();
       } catch (error: unknown) {
-        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+          level: "ERROR",
+        });
       }
     },
     [client, onTitleChanged, setGlobalStatus, t, title],
@@ -1036,7 +1178,9 @@ function SeriesOverviewViewImpl({
       }));
       Promise.resolve(onAutoSearchSeriesMovie(link))
         .catch((error: unknown) => {
-          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+          setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+            level: "ERROR",
+          });
         })
         .finally(() => {
           setAutoSearchSeriesMovieLoadingByLink((prev) => ({
@@ -1076,443 +1220,586 @@ function SeriesOverviewViewImpl({
   }
 
   const overviewBackdropUrl = title.backgroundUrl;
-  const overviewBackdropGround = fullBleedHero ? "var(--scry-bg)" : "var(--card)";
+  const overviewBackdropGround = fullBleedHero
+    ? "var(--scry-bg)"
+    : "var(--card)";
 
   return (
     <>
       <div data-ui="title-overview" className="space-y-4">
-      <Card
-        data-ui="title-overview-hero"
-        data-full-bleed={fullBleedHero || undefined}
-        className={
-          fullBleedHero
-            ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
-            : "relative overflow-hidden p-0"
-        }
-        style={overviewBackdropUrl ? { backdropFilter: "none", WebkitBackdropFilter: "none" } : undefined}
-      >
-        {overviewBackdropUrl ? (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0"
-            style={{ position: "absolute", inset: 0, zIndex: 0 }}
-          >
+        <Card
+          data-ui="title-overview-hero"
+          data-full-bleed={fullBleedHero || undefined}
+          className={
+            fullBleedHero
+              ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
+              : "relative overflow-hidden p-0"
+          }
+          style={
+            overviewBackdropUrl
+              ? { backdropFilter: "none", WebkitBackdropFilter: "none" }
+              : undefined
+          }
+        >
+          {overviewBackdropUrl ? (
             <div
-              className="absolute -inset-1 scale-[1.03] bg-cover bg-no-repeat blur-[2px] brightness-[0.82] saturate-[0.9]"
-              style={{
-                backgroundImage: `url(${overviewBackdropUrl})`,
-                backgroundPosition: "center top",
-              }}
-            />
-            <div
-              className="absolute inset-0"
-              style={{
-                background:
-                  `linear-gradient(to top, ${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent), color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
-              }}
-            />
-            {fullBleedHero ? (
-              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
-            ) : null}
-          </div>
-        ) : null}
-        <CardContent className="relative p-4">
-          <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
-            <div className="mx-auto shrink-0 sm:mx-0">
-              <TitlePosterSlot
-                src={title.posterUrl}
-                metadataFetchedAt={title.metadataFetchedAt}
-                createdAt={title.createdAt}
-                alt={title.name}
-                className="block h-[300px] w-[200px] rounded-lg object-cover shadow-lg"
-                placeholderClassName="flex h-[300px] w-[200px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60"
-                emptyLabel={t("title.noPoster")}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0"
+              style={{ position: "absolute", inset: 0, zIndex: 0 }}
+            >
+              <div
+                className="absolute -inset-1 scale-[1.03] bg-cover bg-no-repeat blur-[2px] brightness-[0.82] saturate-[0.9]"
+                style={{
+                  backgroundImage: `url(${overviewBackdropUrl})`,
+                  backgroundPosition: "center top",
+                }}
               />
-            </div>
-
-            <div className="relative min-w-0 flex-1 flex flex-col pr-12">
-              {onBackToList ? (
-                <IconButton
-                  label={t("label.close")}
-                  tone="neutral"
-                  className="absolute right-0 top-0 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                  onClick={() => onBackToList()}
-                >
-                  <X className="h-5 w-5" />
-                </IconButton>
+              <div
+                className="absolute inset-0"
+                style={{
+                  background: `linear-gradient(to top, ${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent), color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
+                }}
+              />
+              {fullBleedHero ? (
+                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
               ) : null}
-              <h1 className="text-xl font-bold text-foreground sm:text-2xl">
-                {title.name}
-                {title.year ? (
-                  <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
-                    ({title.year})
-                  </span>
-                ) : null}
-              </h1>
-
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span
-                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    title.monitored
-                      ? "bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]"
-                      : "bg-accent text-muted-foreground"
-                  }`}
-                >
-                  {title.monitored
-                    ? t("title.monitored")
-                    : t("search.monitorType.unmonitored")}
-                </span>
-                {localizedTitleStatus(t, title.contentStatus) ? (
-                  <span className="inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
-                    {localizedTitleStatus(t, title.contentStatus)}
-                  </span>
-                ) : null}
-                {title.network ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Clapperboard className="h-3.5 w-3.5" />
-                    {title.network}
-                  </span>
-                ) : null}
-                {typeof title.sizeBytes === "number" && title.sizeBytes >= 0 ? (
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {formatFileSize(title.sizeBytes)}
-                  </span>
-                ) : null}
-              </div>
-
-              {titleGenreLabels(title).length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {titleGenreLabels(title).map((genre) => (
-                    <span
-                      key={genre}
-                      className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                    >
-                      {genre}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-
-              <TitleRatingsStrip ratings={title.ratings} />
-              <TitleListProvenance titleId={title.id} className="mt-2" />
-
-              {title.overview ? (
-                <p className="mt-4 text-sm leading-relaxed text-foreground/70">
-                  {title.overview}
-                </p>
-              ) : null}
-
-              <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
-                {(() => {
-                  const externalIds = title.externalIds ?? [];
-                  return (
-                    <>
-                      <ImdbExternalLink
-                        imdbId={externalIds.find((e) => e.source === "imdb")?.value}
-                        size="compact"
-                      />
-                      <TvdbSeriesExternalLink
-                        tvdbId={externalIds.find((e) => e.source === "tvdb")?.value}
-                        slug={title.slug}
-                        size="compact"
-                      />
-                      <TmdbExternalLink
-                        mediaType="tv"
-                        tmdbId={externalIds.find((e) => e.source === "tmdb")?.value}
-                        size="compact"
-                      />
-                    </>
-                  );
-                })()}
-                {title.facet === "ANIME" ? (
-                  <>
-                    {(() => {
-                      const externalIds = title.externalIds ?? [];
-                      return (
-                        <>
-                          <MalExternalLink
-                            malId={externalIds.find((e) => e.source === "mal")?.value}
-                            size="compact"
-                          />
-                          <AnilistExternalLink
-                            anilistId={externalIds.find((e) => e.source === "anilist")?.value}
-                            size="compact"
-                          />
-                          <AnidbExternalLink
-                            anidbId={externalIds.find((e) => e.source === "anidb")?.value}
-                            size="compact"
-                          />
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : null}
-                <span className="ml-auto text-xs text-muted-foreground/60">
-                  {t("title.addedAt", {
-                    date: formatDate(title.createdAt, dateTimeFormat),
-                  })}
-                </span>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {canManageTitle ? (
-        <div>
-          <TitleOverviewActions
-            key={title.id}
-            monitored={title.monitored}
-            monitoredUpdating={monitoredUpdating}
-            onToggleMonitoring={
-              onSetTitleMonitored
-                ? () => void onSetTitleMonitored(!title.monitored)
-                : undefined
-            }
-            searchLoading={searchMonitoredLoading}
-            onSearch={() => void onSearchMonitored?.()}
-            searchNotice={searchPrerequisiteNotice}
-            refreshLoading={refreshAndScanLoading}
-            onRefresh={() => void onRefreshAndScan?.()}
-            onHistory={handleOpenTitleHistory}
-            settingsPanel={
-              onUpdateTitleOptions ? (
-                <TitleSettingsPanel
-                  id="series-overview-title-settings"
-                  idPrefix="series-overview-settings"
-                  title={title}
-                  libraries={libraries ?? []}
-                  onUpdateTitleOptions={onUpdateTitleOptions}
-                  onTitleChanged={onTitleChanged}
-                  onOpenFixMatch={onOpenFixMatch}
-                  experimentalFeaturesEnabled={experimentalFeaturesEnabled}
-                  footerActions={
-                    rename ? (
-                      <TitleRenamePreviewButton
-                        rename={rename}
-                        id="series-overview-rename-preview"
-                        dataUi="series-overview-rename-preview"
-                      />
-                    ) : null
-                  }
-                  footerContent={
-                    rename?.plan ? (
-                      <TitleRenamePlan
-                        rename={rename}
-                        applyButtonId="series-overview-rename-apply"
-                      />
-                    ) : null
-                  }
-                />
-              ) : undefined
-            }
-            deleteLoading={deleteLoading}
-            onDelete={onRequestDeleteTitle}
-          />
-        </div>
-      ) : null}
-
-      <div>
-        <Card className="relative overflow-hidden max-sm:p-2">
-          <CardHeader className="max-sm:px-1 max-sm:pt-1">
-            {/* min-h matches the small buttons so the header keeps one
-                height whether or not the selection controls are showing. */}
-            <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <FolderOpen className="h-4 w-4" />
-                {t("title.seasonsAndEpisodes")}
-              </CardTitle>
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
-                  <>
-                    {wholeSeasonsSelected ? <RefreshScoresButton selection={{ seasonIds: selectedSeasons.map(([id]) => id) }} /> : null}
-                    <Button
-                      id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleClearEpisodeSelection}
-                    >
-                      {t("seriesOverview.clearEpisodeSelection")}
-                    </Button>
-                    <Button
-                      id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleDeleteSelectedEpisodeFiles}
-                    >
-                      <Trash2 className="mr-1.5 h-4 w-4" />
-                      {t("seriesOverview.deleteSelectedEpisodeFiles", {
-                        count: selectedEpisodeIds.size,
-                      })}
-                    </Button>
-                  </>
-                ) : null}
-                {manualImport ? (
-                  <TitleManualImportButton
-                    launcher={manualImport}
-                    completedDownloads={completedDownloads ?? []}
-                    canManageTitle={canManageTitle}
-                  />
-                ) : null}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {timelineItems.length > 0 ? (
-              <>
-              {timelineItems.map((item) => {
-                if (item.kind === "seriesMovie") {
-                  return (
-                    <SeriesMovieTimelineSection
-                      key={item.key}
-                      link={item.link}
-                      expanded={expandedKeys.has(item.key)}
-                      onToggle={toggleActionByKey.get(item.key)!}
-                      mediaFilesByEpisode={mediaFilesByEpisode}
-                      mediaFilesBySeriesMovieLink={mediaFilesBySeriesMovieLink}
-                      onLoadSeriesMovieDetail={onLoadSeriesMovieDetail}
-                      subtitleDownloads={subtitleDownloads}
-                      libraryId={title?.libraryId ?? null}
-                      onRefreshSubtitles={onRefreshSubtitles}
-                      seriesMovieSearchResultsByLink={seriesMovieSearchResultsByLink}
-                      seriesMovieSearchLoadingByLink={seriesMovieSearchLoadingByLink}
-                      seriesMovieSearchAttemptedByLink={seriesMovieSearchAttemptedByLink}
-                      searchBlockedBySeriesMovie={searchBlockedBySeriesMovie}
-                      onRunSeriesMovieSearch={canManageTitle ? handleRunSeriesMovieSearch : undefined}
-                      onQueueFromSeriesMovieSearch={canManageTitle ? handleQueueFromSeriesMovieSearch : undefined}
-                      onQueueAdditionalFromSeriesMovieSearch={canManageTitle ? handleQueueAdditionalFromSeriesMovieSearch : undefined}
-                      onAutoSearchSeriesMovie={canManageTitle && onAutoSearchSeriesMovie ? handleAutoSearchSeriesMovie : undefined}
-                      onSetSeriesMovieMonitored={canManageTitle ? onSetSeriesMovieMonitored : undefined}
-                      onSeriesMovieTagsChanged={canManageTitle ? onSeriesMovieTagsChanged : undefined}
-                      onDeleteFile={canManageTitle ? onDeleteFile : undefined}
-                      onMakePrimaryFile={canManageTitle ? onMakePrimaryFile : undefined}
-                      primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
-                      autoSearchSeriesMovieLoadingByLink={autoSearchSeriesMovieLoadingByLink}
-                    />
-                  );
-                }
-
-                const { collection } = item;
-                const sortedEpisodes = sortedEpisodesByCollection[collection.id] ?? emptyEpisodes;
-
-                if (
-                  isSpecialsCollection(collection) &&
-                  (collection.episodeRecordsTotal ?? 0) === 0 &&
-                  sortedEpisodes.length === 0
-                ) {
-                  return null;
-                }
-
-                return (
-                  <SeasonSection
-                    key={item.key}
-                    collection={collection}
-                    episodes={sortedEpisodes}
-                    episodesReady={collection.id in episodesByCollection}
-                    facet={title.facet}
-                    expanded={expandedKeys.has(item.key)}
-                    onToggle={toggleActionByKey.get(item.key)!}
-                    initiallyOpenEpisodeId={initialEpisodeId}
-                    mediaFilesByEpisode={mediaFilesByEpisode}
-              onLoadEpisodeDetail={onLoadEpisodeDetail}
-                    activeDownloadEpisodeIds={activeDownloadEpisodeIds}
-                    downloadQueueItemByEpisodeId={primaryQueueItemByEpisodeId}
-                    subtitleDownloads={subtitleDownloads}
-                    libraryId={title?.libraryId ?? null}
-                    onRefreshSubtitles={onRefreshSubtitles}
-                    onMakePrimaryFile={canManageTitle ? onMakePrimaryFile : undefined}
-                    onAssignFileToEpisode={canManageTitle ? onAssignFileToEpisode : undefined}
-                    primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
-                    releaseBlocklistEntries={releaseBlocklistEntries}
-                    clearingReleaseBlocklistEntryId={clearingReleaseBlocklistEntryId}
-                    onClearReleaseBlocklistEntry={
-                      canManageTitle ? onClearReleaseBlocklistEntry : undefined
-                    }
-                    searchResultsByEpisode={episodePanel.searchResultsByEpisode}
-                    searchIndexerProgressByEpisode={episodePanel.searchIndexerProgressByEpisode}
-                    searchLoadingByEpisode={episodePanel.searchLoadingByEpisode}
-                    searchBlockedByEpisode={searchBlockedByEpisode}
-                    autoSearchLoadingByEpisode={episodePanel.autoSearchLoadingByEpisode}
-                    onRunEpisodeSearch={canManageTitle ? handleRunEpisodeSearch : undefined}
-                    onOpenEpisodeHistory={canManageTitle ? handleOpenEpisodeHistory : undefined}
-                    onOpenSeasonHistory={canManageTitle ? handleOpenSeasonHistory : undefined}
-                    onQueueFromEpisodeSearch={canManageTitle ? handleQueueFromEpisodeSearch : undefined}
-                    onQueueAdditionalFromEpisodeSearch={
-                      canManageTitle ? handleQueueAdditionalFromEpisodeSearch : undefined
-                    }
-                    onAutoSearchEpisode={canManageTitle ? handleAutoSearchEpisode : undefined}
-                    onSetCollectionMonitored={canManageTitle ? onSetCollectionMonitored : undefined}
-                    onSetEpisodeMonitored={canManageTitle ? onSetEpisodeMonitored : undefined}
-                    seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
-                    seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
-                    onRunSeasonSearch={seasonSearchActionByKey.get(item.key)}
-                    seasonInteractiveSearchLoading={
-                      seasonInteractiveSearchLoadingByCollection?.[collection.id] === true
-                    }
-                    onRunSeasonInteractiveSearch={seasonInteractiveSearchActionByKey.get(item.key)}
-                    searchBlocked={searchBlockedByCollection[collection.id] === true}
-                    onQueueFromSeasonSearch={canManageTitle ? onQueueFromSeasonSearch : undefined}
-                    onDeleteFile={canManageTitle ? onDeleteFile : undefined}
-                    selectedEpisodeIds={episodeSelectionEnabled ? selectedEpisodeIds : undefined}
-                    pendingEpisodeIds={episodeSelectionEnabled ? pendingEpisodeIds : undefined}
-                    onToggleEpisodeSelected={
-                      episodeSelectionEnabled ? handleToggleEpisodeSelected : undefined
-                    }
-                    onSetSeasonSelected={
-                      episodeSelectionEnabled ? handleSetSeasonSelected : undefined
-                    }
-                  />
-                );
-              })}
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t("title.noTrackedSeasons")}
-              </p>
-            )}
-          </CardContent>
-          {hydrating ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 backdrop-blur-sm">
-              <div className="flex items-center gap-3 rounded-full border border-border bg-card/95 px-4 py-2 text-sm font-medium text-foreground shadow-lg">
-                <LoadingMark className="h-4 w-4" />
-                <span>{t("title.fetchingData")}</span>
-              </div>
             </div>
           ) : null}
+          <CardContent className="relative p-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
+              <div className="mx-auto shrink-0 sm:mx-0">
+                <TitlePosterSlot
+                  src={title.posterUrl}
+                  metadataFetchedAt={title.metadataFetchedAt}
+                  createdAt={title.createdAt}
+                  alt={title.name}
+                  className="block h-[300px] w-[200px] rounded-lg object-cover shadow-lg"
+                  placeholderClassName="flex h-[300px] w-[200px] items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60"
+                  emptyLabel={t("title.noPoster")}
+                />
+              </div>
+
+              <div className="relative min-w-0 flex-1 flex flex-col pr-12">
+                {onBackToList ? (
+                  <IconButton
+                    label={t("label.close")}
+                    tone="neutral"
+                    className="absolute right-0 top-0 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                    onClick={() => onBackToList()}
+                  >
+                    <X className="h-5 w-5" />
+                  </IconButton>
+                ) : null}
+                <h1 className="text-xl font-bold text-foreground sm:text-2xl">
+                  {title.name}
+                  {title.year ? (
+                    <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
+                      ({title.year})
+                    </span>
+                  ) : null}
+                </h1>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      title.monitored
+                        ? "bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]"
+                        : "bg-accent text-muted-foreground"
+                    }`}
+                  >
+                    {title.monitored
+                      ? t("title.monitored")
+                      : t("search.monitorType.unmonitored")}
+                  </span>
+                  {localizedTitleStatus(t, title.contentStatus) ? (
+                    <span className="inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
+                      {localizedTitleStatus(t, title.contentStatus)}
+                    </span>
+                  ) : null}
+                  {title.network ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Clapperboard className="h-3.5 w-3.5" />
+                      {title.network}
+                    </span>
+                  ) : null}
+                  {typeof title.sizeBytes === "number" &&
+                  title.sizeBytes >= 0 ? (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {formatFileSize(title.sizeBytes)}
+                    </span>
+                  ) : null}
+                </div>
+
+                {titleGenreLabels(title).length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {titleGenreLabels(title).map((genre) => (
+                      <span
+                        key={genre}
+                        className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                      >
+                        {genre}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                <TitleRatingsStrip ratings={title.ratings} />
+                <TitleListProvenance titleId={title.id} className="mt-2" />
+
+                {title.overview ? (
+                  <p className="mt-4 text-sm leading-relaxed text-foreground/70">
+                    {title.overview}
+                  </p>
+                ) : null}
+
+                <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
+                  {(() => {
+                    const externalIds = title.externalIds ?? [];
+                    return (
+                      <>
+                        <ImdbExternalLink
+                          imdbId={
+                            externalIds.find((e) => e.source === "imdb")?.value
+                          }
+                          size="compact"
+                        />
+                        <TvdbSeriesExternalLink
+                          tvdbId={
+                            externalIds.find((e) => e.source === "tvdb")?.value
+                          }
+                          slug={title.slug}
+                          size="compact"
+                        />
+                        <TmdbExternalLink
+                          mediaType="tv"
+                          tmdbId={
+                            externalIds.find((e) => e.source === "tmdb")?.value
+                          }
+                          size="compact"
+                        />
+                      </>
+                    );
+                  })()}
+                  {title.facet === "ANIME" ? (
+                    <>
+                      {(() => {
+                        const externalIds = title.externalIds ?? [];
+                        return (
+                          <>
+                            <MalExternalLink
+                              malId={
+                                externalIds.find((e) => e.source === "mal")
+                                  ?.value
+                              }
+                              size="compact"
+                            />
+                            <AnilistExternalLink
+                              anilistId={
+                                externalIds.find((e) => e.source === "anilist")
+                                  ?.value
+                              }
+                              size="compact"
+                            />
+                            <AnidbExternalLink
+                              anidbId={
+                                externalIds.find((e) => e.source === "anidb")
+                                  ?.value
+                              }
+                              size="compact"
+                            />
+                          </>
+                        );
+                      })()}
+                    </>
+                  ) : null}
+                  <span className="ml-auto text-xs text-muted-foreground/60">
+                    {t("title.addedAt", {
+                      date: formatDate(title.createdAt, dateTimeFormat),
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
         </Card>
-      </div>
 
-      <TitleMoreLikeThisStrip
-        items={title.moreLikeThis ?? []}
-        fallbackYearLabel={title.facet === "ANIME" ? t("nav.anime") : t("nav.series")}
-        {...moreLikeThisActions}
-      />
+        {canManageTitle ? (
+          <div>
+            <TitleOverviewActions
+              key={title.id}
+              monitored={title.monitored}
+              monitoredUpdating={monitoredUpdating}
+              onToggleMonitoring={
+                onSetTitleMonitored
+                  ? () => void onSetTitleMonitored(!title.monitored)
+                  : undefined
+              }
+              searchLoading={searchMonitoredLoading}
+              onSearch={() => void onSearchMonitored?.()}
+              searchNotice={searchPrerequisiteNotice}
+              refreshLoading={refreshAndScanLoading}
+              onRefresh={() => void onRefreshAndScan?.()}
+              onHistory={handleOpenTitleHistory}
+              settingsPanel={
+                onUpdateTitleOptions ? (
+                  <TitleSettingsPanel
+                    id="series-overview-title-settings"
+                    idPrefix="series-overview-settings"
+                    title={title}
+                    libraries={libraries ?? []}
+                    onUpdateTitleOptions={onUpdateTitleOptions}
+                    onTitleChanged={onTitleChanged}
+                    onOpenFixMatch={onOpenFixMatch}
+                    experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+                    footerActions={
+                      rename ? (
+                        <TitleRenamePreviewButton
+                          rename={rename}
+                          id="series-overview-rename-preview"
+                          dataUi="series-overview-rename-preview"
+                        />
+                      ) : null
+                    }
+                    footerContent={
+                      rename?.plan ? (
+                        <TitleRenamePlan
+                          rename={rename}
+                          applyButtonId="series-overview-rename-apply"
+                        />
+                      ) : null
+                    }
+                  />
+                ) : undefined
+              }
+              deleteLoading={deleteLoading}
+              onDelete={onRequestDeleteTitle}
+            />
+          </div>
+        ) : null}
 
-      <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
+        <div>
+          <Card className="relative overflow-hidden max-sm:p-2">
+            <CardHeader className="max-sm:px-1 max-sm:pt-1">
+              {/* min-h matches the small buttons so the header keeps one
+                height whether or not the selection controls are showing. */}
+              <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FolderOpen className="h-4 w-4" />
+                  {t("title.seasonsAndEpisodes")}
+                </CardTitle>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
+                    <>
+                      {wholeSeasonsSelected ? (
+                        <RefreshScoresButton
+                          selection={{
+                            seasonIds: selectedSeasons.map(([id]) => id),
+                          }}
+                        />
+                      ) : null}
+                      <Button
+                        id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearEpisodeSelection}
+                      >
+                        {t("seriesOverview.clearEpisodeSelection")}
+                      </Button>
+                      <Button
+                        id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleDeleteSelectedEpisodeFiles}
+                      >
+                        <Trash2 className="mr-1.5 h-4 w-4" />
+                        {t("seriesOverview.deleteSelectedEpisodeFiles", {
+                          count: selectedEpisodeIds.size,
+                        })}
+                      </Button>
+                    </>
+                  ) : null}
+                  {manualImport ? (
+                    <TitleManualImportButton
+                      launcher={manualImport}
+                      completedDownloads={completedDownloads ?? []}
+                      canManageTitle={canManageTitle}
+                    />
+                  ) : null}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {timelineItems.length > 0 ? (
+                <>
+                  {timelineItems.map((item) => {
+                    if (item.kind === "seriesMovie") {
+                      return (
+                        <SeriesMovieTimelineSection
+                          key={item.key}
+                          link={item.link}
+                          expanded={expandedKeys.has(item.key)}
+                          onToggle={toggleActionByKey.get(item.key)!}
+                          mediaFilesByEpisode={mediaFilesByEpisode}
+                          mediaFilesBySeriesMovieLink={
+                            mediaFilesBySeriesMovieLink
+                          }
+                          onLoadSeriesMovieDetail={onLoadSeriesMovieDetail}
+                          subtitleDownloads={subtitleDownloads}
+                          libraryId={title?.libraryId ?? null}
+                          onRefreshSubtitles={onRefreshSubtitles}
+                          seriesMovieSearchResultsByLink={
+                            seriesMovieSearchResultsByLink
+                          }
+                          seriesMovieSearchLoadingByLink={
+                            seriesMovieSearchLoadingByLink
+                          }
+                          seriesMovieSearchAttemptedByLink={
+                            seriesMovieSearchAttemptedByLink
+                          }
+                          searchBlockedBySeriesMovie={
+                            searchBlockedBySeriesMovie
+                          }
+                          onRunSeriesMovieSearch={
+                            canManageTitle
+                              ? handleRunSeriesMovieSearch
+                              : undefined
+                          }
+                          onQueueFromSeriesMovieSearch={
+                            canManageTitle
+                              ? handleQueueFromSeriesMovieSearch
+                              : undefined
+                          }
+                          onQueueAdditionalFromSeriesMovieSearch={
+                            canManageTitle
+                              ? handleQueueAdditionalFromSeriesMovieSearch
+                              : undefined
+                          }
+                          onAutoSearchSeriesMovie={
+                            canManageTitle && onAutoSearchSeriesMovie
+                              ? handleAutoSearchSeriesMovie
+                              : undefined
+                          }
+                          onSetSeriesMovieMonitored={
+                            canManageTitle
+                              ? onSetSeriesMovieMonitored
+                              : undefined
+                          }
+                          onSeriesMovieTagsChanged={
+                            canManageTitle
+                              ? onSeriesMovieTagsChanged
+                              : undefined
+                          }
+                          onDeleteFile={
+                            canManageTitle ? onDeleteFile : undefined
+                          }
+                          onMakePrimaryFile={
+                            canManageTitle ? onMakePrimaryFile : undefined
+                          }
+                          primaryMovieFileUpdatingId={
+                            primaryMovieFileUpdatingId
+                          }
+                          autoSearchSeriesMovieLoadingByLink={
+                            autoSearchSeriesMovieLoadingByLink
+                          }
+                        />
+                      );
+                    }
 
-      <TitleDubCastStrip credits={title.credits} />
+                    const { collection } = item;
+                    const sortedEpisodes =
+                      sortedEpisodesByCollection[collection.id] ??
+                      emptyEpisodes;
 
-      <TitleBlockedReleasesSection
-        key={title.id}
-        entries={releaseBlocklistEntries}
-        canManageTitle={canManageTitle && Boolean(onClearReleaseBlocklistEntry)}
-        clearingEntryId={clearingReleaseBlocklistEntryId ?? null}
-        onClear={(entryId) => onClearReleaseBlocklistEntry?.(entryId)}
-      />
+                    if (
+                      isSpecialsCollection(collection) &&
+                      (collection.episodeRecordsTotal ?? 0) === 0 &&
+                      sortedEpisodes.length === 0
+                    ) {
+                      return null;
+                    }
 
-      {title ? (
-        <TitleHistoryModal
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          titleId={historyCollectionScope?.titleId ?? title.id}
-          titleName={title.name}
-          scopedEpisode={historyEpisodeScope}
-          scopedCollection={historyCollectionScope}
+                    return (
+                      <SeasonSection
+                        key={item.key}
+                        collection={collection}
+                        episodes={sortedEpisodes}
+                        episodesReady={collection.id in episodesByCollection}
+                        facet={title.facet}
+                        expanded={expandedKeys.has(item.key)}
+                        onToggle={toggleActionByKey.get(item.key)!}
+                        initiallyOpenEpisodeId={initialEpisodeId}
+                        mediaFilesByEpisode={mediaFilesByEpisode}
+                        onLoadEpisodeDetail={onLoadEpisodeDetail}
+                        activeDownloadEpisodeIds={activeDownloadEpisodeIds}
+                        downloadQueueItemByEpisodeId={
+                          primaryQueueItemByEpisodeId
+                        }
+                        subtitleDownloads={subtitleDownloads}
+                        libraryId={title?.libraryId ?? null}
+                        onRefreshSubtitles={onRefreshSubtitles}
+                        onMakePrimaryFile={
+                          canManageTitle ? onMakePrimaryFile : undefined
+                        }
+                        onAssignFileToEpisode={
+                          canManageTitle ? onAssignFileToEpisode : undefined
+                        }
+                        primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
+                        releaseBlocklistEntries={releaseBlocklistEntries}
+                        clearingReleaseBlocklistEntryId={
+                          clearingReleaseBlocklistEntryId
+                        }
+                        onClearReleaseBlocklistEntry={
+                          canManageTitle
+                            ? onClearReleaseBlocklistEntry
+                            : undefined
+                        }
+                        searchResultsByEpisode={
+                          episodePanel.searchResultsByEpisode
+                        }
+                        searchIndexerProgressByEpisode={
+                          episodePanel.searchIndexerProgressByEpisode
+                        }
+                        searchLoadingByEpisode={
+                          episodePanel.searchLoadingByEpisode
+                        }
+                        searchBlockedByEpisode={searchBlockedByEpisode}
+                        autoSearchLoadingByEpisode={
+                          episodePanel.autoSearchLoadingByEpisode
+                        }
+                        onRunEpisodeSearch={
+                          canManageTitle ? handleRunEpisodeSearch : undefined
+                        }
+                        onOpenEpisodeHistory={
+                          canManageTitle ? handleOpenEpisodeHistory : undefined
+                        }
+                        onOpenSeasonHistory={
+                          canManageTitle ? handleOpenSeasonHistory : undefined
+                        }
+                        onQueueFromEpisodeSearch={
+                          canManageTitle
+                            ? handleQueueFromEpisodeSearch
+                            : undefined
+                        }
+                        onQueueAdditionalFromEpisodeSearch={
+                          canManageTitle
+                            ? handleQueueAdditionalFromEpisodeSearch
+                            : undefined
+                        }
+                        onAutoSearchEpisode={
+                          canManageTitle ? handleAutoSearchEpisode : undefined
+                        }
+                        onSetCollectionMonitored={
+                          canManageTitle ? onSetCollectionMonitored : undefined
+                        }
+                        onSetEpisodeMonitored={
+                          canManageTitle ? onSetEpisodeMonitored : undefined
+                        }
+                        seasonSearchResults={
+                          seasonSearchResultsByCollection?.[collection.id]
+                        }
+                        seasonSearchLoading={
+                          seasonSearchLoadingByCollection?.[collection.id] ===
+                          true
+                        }
+                        onRunSeasonSearch={seasonSearchActionByKey.get(
+                          item.key,
+                        )}
+                        seasonInteractiveSearchLoading={
+                          seasonInteractiveSearchLoadingByCollection?.[
+                            collection.id
+                          ] === true
+                        }
+                        onRunSeasonInteractiveSearch={seasonInteractiveSearchActionByKey.get(
+                          item.key,
+                        )}
+                        seasonSearchIndexerProgress={
+                          seasonSearchIndexerProgressByCollection?.[
+                            collection.id
+                          ]
+                        }
+                        searchBlocked={
+                          searchBlockedByCollection[collection.id] === true
+                        }
+                        onQueueFromSeasonSearch={
+                          canManageTitle ? onQueueFromSeasonSearch : undefined
+                        }
+                        onDeleteFile={canManageTitle ? onDeleteFile : undefined}
+                        selectedEpisodeIds={
+                          episodeSelectionEnabled
+                            ? selectedEpisodeIds
+                            : undefined
+                        }
+                        pendingEpisodeIds={
+                          episodeSelectionEnabled
+                            ? pendingEpisodeIds
+                            : undefined
+                        }
+                        onToggleEpisodeSelected={
+                          episodeSelectionEnabled
+                            ? handleToggleEpisodeSelected
+                            : undefined
+                        }
+                        onSetSeasonSelected={
+                          episodeSelectionEnabled
+                            ? handleSetSeasonSelected
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t("title.noTrackedSeasons")}
+                </p>
+              )}
+            </CardContent>
+            {hydrating ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 backdrop-blur-sm">
+                <div className="flex items-center gap-3 rounded-full border border-border bg-card/95 px-4 py-2 text-sm font-medium text-foreground shadow-lg">
+                  <LoadingMark className="h-4 w-4" />
+                  <span>{t("title.fetchingData")}</span>
+                </div>
+              </div>
+            ) : null}
+          </Card>
+        </div>
+
+        <TitleMoreLikeThisStrip
+          items={title.moreLikeThis ?? []}
+          fallbackYearLabel={
+            title.facet === "ANIME" ? t("nav.anime") : t("nav.series")
+          }
+          {...moreLikeThisActions}
         />
-      ) : null}
-      {replaceConflictDialog}
+
+        <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
+
+        <TitleDubCastStrip credits={title.credits} />
+
+        <TitleBlockedReleasesSection
+          key={title.id}
+          entries={releaseBlocklistEntries}
+          canManageTitle={
+            canManageTitle && Boolean(onClearReleaseBlocklistEntry)
+          }
+          clearingEntryId={clearingReleaseBlocklistEntryId ?? null}
+          onClear={(entryId) => onClearReleaseBlocklistEntry?.(entryId)}
+        />
+
+        {title ? (
+          <TitleHistoryModal
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            titleId={historyCollectionScope?.titleId ?? title.id}
+            titleName={title.name}
+            scopedEpisode={historyEpisodeScope}
+            scopedCollection={historyCollectionScope}
+          />
+        ) : null}
+        {replaceConflictDialog}
       </div>
     </>
   );

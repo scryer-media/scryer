@@ -57,7 +57,11 @@ export function metadataResultExternalIds(
   const imdbId = result.imdbId?.trim();
   const seen = new Set<string>();
   const ids: KindedExternalIdInput[] = [];
-  const candidates: Array<{ source: string; kind?: string | null; value: string }> = [
+  const candidates: Array<{
+    source: string;
+    kind?: string | null;
+    value: string;
+  }> = [
     ...(result.externalIds ?? []),
     ...(smgId ? [{ source: "smg", value: smgId }] : []),
     ...(tvdbId ? [{ source: "tvdb", value: tvdbId }] : []),

@@ -19,14 +19,20 @@ function harness() {
   const storage = new Map<string, string>();
   let cursor = 0;
   let timerId = 0;
-  const same = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  const same = (a: unknown[], b: unknown[]) =>
+    a.length === b.length &&
+    a.every((value, index) => Object.is(value, b[index]));
   const react = {
     useState(initial: unknown) {
       const index = cursor++;
-      if (!(index in slots)) slots[index] = typeof initial === "function" ? initial() : initial;
-      return [slots[index], (next: unknown) => {
-        slots[index] = typeof next === "function" ? next(slots[index]) : next;
-      }];
+      if (!(index in slots))
+        slots[index] = typeof initial === "function" ? initial() : initial;
+      return [
+        slots[index],
+        (next: unknown) => {
+          slots[index] = typeof next === "function" ? next(slots[index]) : next;
+        },
+      ];
     },
     useRef(initial: unknown) {
       const index = cursor++;
@@ -36,7 +42,8 @@ function harness() {
     useMemo<T>(fn: () => T, deps: unknown[]) {
       const index = cursor++;
       const prior = slots[index] as { deps: unknown[]; value: T } | undefined;
-      if (!prior || !same(prior.deps, deps)) slots[index] = { deps, value: fn() };
+      if (!prior || !same(prior.deps, deps))
+        slots[index] = { deps, value: fn() };
       return (slots[index] as { value: T }).value;
     },
     useCallback<T>(fn: T, deps: unknown[]) {
@@ -44,14 +51,16 @@ function harness() {
     },
     useEffect(fn: () => void | (() => void), deps: unknown[]) {
       const index = cursor++;
-      const prior = slots[index] as { deps: unknown[]; cleanup?: () => void } | undefined;
-      if (!prior || !same(prior.deps, deps)) effects.push(() => {
-        prior?.cleanup?.();
-        const cleanup = fn();
-        slots[index] = { deps, cleanup };
-        if (cleanup) cleanups.set(index, cleanup);
-        else cleanups.delete(index);
-      });
+      const prior = slots[index] as
+        { deps: unknown[]; cleanup?: () => void } | undefined;
+      if (!prior || !same(prior.deps, deps))
+        effects.push(() => {
+          prior?.cleanup?.();
+          const cleanup = fn();
+          slots[index] = { deps, cleanup };
+          if (cleanup) cleanups.set(index, cleanup);
+          else cleanups.delete(index);
+        });
     },
   };
   const browser = {
@@ -69,21 +78,44 @@ function harness() {
     },
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => { storage.set(key, value); },
-      removeItem: (key: string) => { storage.delete(key); },
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
     },
-    setTimeout: (fn: () => void) => { timers.set(++timerId, fn); return timerId; },
-    clearTimeout: (id: number) => { timers.delete(id); },
+    setTimeout: (fn: () => void) => {
+      timers.set(++timerId, fn);
+      return timerId;
+    },
+    clearTimeout: (id: number) => {
+      timers.delete(id);
+    },
   };
-  const code = ts.transpileModule(readFileSync(new URL("./use-catalog-filter-state.ts", import.meta.url), "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  const code = ts.transpileModule(
+    readFileSync(
+      new URL("./use-catalog-filter-state.ts", import.meta.url),
+      "utf8",
+    ),
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+    },
+  ).outputText;
   const module = { exports: {} as { useCatalogFilterState: FiltersHook } };
   new Function("require", "module", "exports", code)(
-    (id: string) => id === "react" ? react : persistence, module, module.exports,
+    (id: string) => (id === "react" ? react : persistence),
+    module,
+    module.exports,
   );
   return {
-    storage, browser, listeners, timers,
+    storage,
+    browser,
+    listeners,
+    timers,
     unmount() {
       for (const cleanup of cleanups.values()) cleanup();
       cleanups.clear();
@@ -102,9 +134,15 @@ function harness() {
   };
 }
 
-function installBrowser(t: test.TestContext, browser: ReturnType<typeof harness>["browser"]) {
+function installBrowser(
+  t: test.TestContext,
+  browser: ReturnType<typeof harness>["browser"],
+) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
-  Object.defineProperty(globalThis, "window", { configurable: true, value: browser });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: browser,
+  });
   t.after(() => {
     if (previous) Object.defineProperty(globalThis, "window", previous);
     else Reflect.deleteProperty(globalThis, "window");
@@ -118,7 +156,11 @@ test("catalog filters remain independent across all facets and restore on remoun
     const state = h.render(facet);
     state.setTitleFilter(facet);
     state.setSelectedLibraryIds([facet + "-library"]);
-    state.setTitleQuickFilters((previous) => ({ ...previous, monitored: true, ended: facet === "SERIES" }));
+    state.setTitleQuickFilters((previous) => ({
+      ...previous,
+      monitored: true,
+      ended: facet === "SERIES",
+    }));
     state.setAdvancedTitleFilters((previous) => ({
       ...previous,
       rootFolderIds: [facet + "-root"],
@@ -146,7 +188,10 @@ test("catalog filters remain independent across all facets and restore on remoun
     const restored = remount.render(facet);
     assert.equal(restored.titleFilter, state.titleFilter);
     assert.deepEqual(restored.titleQuickFilters, state.titleQuickFilters);
-    assert.deepEqual(restored.effectiveAdvancedTitleFilters, state.advancedTitleFilters);
+    assert.deepEqual(
+      restored.effectiveAdvancedTitleFilters,
+      state.advancedTitleFilters,
+    );
     assert.deepEqual(restored.selectedLibraryIds, state.selectedLibraryIds);
   }
 });
@@ -160,14 +205,23 @@ test("Clear All removes only the active facet's saved state and clears pending d
   const movie = h.render("MOVIE");
   movie.setSelectedLibraryIds(["movies"]);
   movie.setTitleQuickFilters((previous) => ({ ...previous, monitored: true }));
-  movie.setAdvancedTitleFilters((previous) => ({ ...previous, minimumYear: 2020 }));
+  movie.setAdvancedTitleFilters((previous) => ({
+    ...previous,
+    minimumYear: 2020,
+  }));
   h.render("MOVIE").clearFilters();
   const cleared = h.render("MOVIE");
   assert.equal(cleared.titleFilter, "");
   assert.equal(cleared.debouncedTitleFilter, "");
   assert.deepEqual(cleared.selectedLibraryIds, []);
-  assert.deepEqual(cleared.titleQuickFilters, persistence.emptyCatalogFilters().quick);
-  assert.deepEqual(cleared.effectiveAdvancedTitleFilters, persistence.emptyCatalogFilters().advanced);
+  assert.deepEqual(
+    cleared.titleQuickFilters,
+    persistence.emptyCatalogFilters().quick,
+  );
+  assert.deepEqual(
+    cleared.effectiveAdvancedTitleFilters,
+    persistence.emptyCatalogFilters().advanced,
+  );
   h.flushTimers();
   assert.equal(h.render("MOVIE").debouncedTitleFilter, "");
   assert.equal(h.storage.size, 2);
@@ -182,25 +236,54 @@ test("pending search and numeric filters never leak into another facet", (t) => 
   installBrowser(t, h.browser);
   const movie = h.render("MOVIE");
   movie.setTitleFilter("new search");
-  movie.setAdvancedTitleFilters((previous) => ({ ...previous, minimumRating: 8 }));
+  movie.setAdvancedTitleFilters((previous) => ({
+    ...previous,
+    minimumRating: 8,
+  }));
   assert.equal(h.render("MOVIE").debouncedTitleFilter, "");
   assert.equal(h.render("SERIES").debouncedTitleFilter, "");
   h.flushTimers();
   assert.equal(h.render("SERIES").debouncedTitleFilter, "");
-  assert.equal(h.render("SERIES").effectiveAdvancedTitleFilters.minimumRating, null);
+  assert.equal(
+    h.render("SERIES").effectiveAdvancedTitleFilters.minimumRating,
+    null,
+  );
   assert.equal(h.render("MOVIE").debouncedTitleFilter, "new search");
-  assert.equal(h.render("MOVIE").effectiveAdvancedTitleFilters.minimumRating, 8);
+  assert.equal(
+    h.render("MOVIE").effectiveAdvancedTitleFilters.minimumRating,
+    8,
+  );
 });
 
 test("malformed and older saved filters safely normalize", (t) => {
   const h = harness();
   installBrowser(t, h.browser);
   h.storage.set("scryer:catalog-filters:v1:MOVIE", "{");
-  h.storage.set("scryer:catalog-filters:v1:SERIES", JSON.stringify({ query: "older", advanced: { genreTagKeys: ["drama"] } }));
-  assert.deepEqual(persistence.readCatalogFilters("MOVIE"), persistence.emptyCatalogFilters());
+  h.storage.set(
+    "scryer:catalog-filters:v1:SERIES",
+    JSON.stringify({ query: "older", advanced: { genreTagKeys: ["drama"] } }),
+  );
+  assert.deepEqual(
+    persistence.readCatalogFilters("MOVIE"),
+    persistence.emptyCatalogFilters(),
+  );
   assert.equal(persistence.readCatalogFilters("SERIES").query, "older");
-  assert.deepEqual(persistence.readCatalogFilters("SERIES").advanced.presences, []);
-  const invalid = persistence.normalizeCatalogFilters({ query: 2, libraryIds: [null, "id", "id"], quick: { monitored: "false" }, advanced: { minimumRating: Infinity, minimumYear: 2.5, maximumYear: -1, presences: ["MISSING", "invalid"], needsAttention: "true" } });
+  assert.deepEqual(
+    persistence.readCatalogFilters("SERIES").advanced.presences,
+    [],
+  );
+  const invalid = persistence.normalizeCatalogFilters({
+    query: 2,
+    libraryIds: [null, "id", "id"],
+    quick: { monitored: "false" },
+    advanced: {
+      minimumRating: Infinity,
+      minimumYear: 2.5,
+      maximumYear: -1,
+      presences: ["MISSING", "invalid"],
+      needsAttention: "true",
+    },
+  });
   assert.equal(invalid.query, "");
   assert.deepEqual(invalid.libraryIds, ["id"]);
   assert.equal(invalid.quick.monitored, false);
@@ -232,7 +315,11 @@ test("pagehide persists pending filters and unmount removes listeners and timers
 
 test("unavailable storage preserves in-memory filtering", (t) => {
   const h = harness();
-  Object.defineProperty(h.browser, "localStorage", { get() { throw new Error("storage disabled"); } });
+  Object.defineProperty(h.browser, "localStorage", {
+    get() {
+      throw new Error("storage disabled");
+    },
+  });
   installBrowser(t, h.browser);
   h.render("ANIME").setTitleFilter("retained");
   assert.equal(h.render("ANIME").titleFilter, "retained");

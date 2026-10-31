@@ -414,6 +414,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(sdl.contains("scalar Date"));
     assert!(sdl.contains("scalar DateTime"));
     assert!(sdl.contains("scalar Long"));
+    assert!(sdl.contains("type TitleAliasPayload"));
+    assert!(sdl.contains("taggedAliases: [TitleAliasPayload!]!"));
 
     let body = gql(
         &ctx,
@@ -781,8 +783,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Value-dependent indexer config fields add `pluginConfigFields`, the read
     // the indexer form repeats as trigger fields change: 194->195.
     assert!(query_field_names.contains(&"pluginConfigFields"));
+    // Background restore adds `restoreStatus`, the read a caller polls while
+    // the restore it started runs on its own: 195->196.
+    assert!(query_field_names.contains(&"restoreStatus"));
+    // Indexer clients add `indexerClients`, the administration list: 196->197.
+    assert!(query_field_names.contains(&"indexerClients"));
     assert_eq!(
-        query_field_count, 195,
+        query_field_count, 197,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -829,8 +836,39 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Episode-level Fix Match adds `reassignEpisodeFile`, which moves one
     // imported file to other episodes of its title: 273->274.
     assert!(mutation_field_names.contains(&"reassignEpisodeFile"));
+    // Background restore adds `startInspectRestoreBundle` and
+    // `startApplyRestoreBundle`, which return as soon as the work is accepted;
+    // the inline operations stay as compatibility wrappers: 274->276.
+    assert!(mutation_field_names.contains(&"startInspectRestoreBundle"));
+    assert!(mutation_field_names.contains(&"startApplyRestoreBundle"));
+    // Indexer clients add create, update, rotate and revoke, and paged query
+    // search adds `continueInteractiveReleaseSearch`: 276->281.
+    for name in [
+        "createIndexerClient",
+        "updateIndexerClient",
+        "rotateIndexerClientKey",
+        "revokeIndexerClientKey",
+        "continueInteractiveReleaseSearch",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    // Dashboard layouts add `setMyDashboardLayout` and
+    // `resetMyDashboardLayout`: 281->283.
+    for name in ["setMyDashboardLayout", "resetMyDashboardLayout"] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    // Folder creation adds one mutation: 283->284.
+    assert!(mutation_field_names.contains(&"createFolder"));
+    // The first-run authentication decision adds one mutation: 284->285.
+    assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
     assert_eq!(
-        mutation_field_count, 274,
+        mutation_field_count, 285,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1184,14 +1222,59 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Structured rule diagnostics share one object across release, request,
+    // and maintenance validation: public types 972->973, OBJECT 526->527.
+    assert!(public_type_names.contains(&"RuleValidationDiagnosticPayload"));
+    // Background restore adds the attempt it reports, `RestoreJobPayload`:
+    // public types 973->974, OBJECT 527->528.
+    assert!(public_type_names.contains(&"RestoreJobPayload"));
+    // Indexer clients add their configuration and grant inputs, the client,
+    // grant and issued-key payloads, and the protocol and request-outcome
+    // enums; raw search adds the capability-source enum: public types
+    // 974->982, OBJECT 528->531, INPUT_OBJECT 238->240, ENUM 196->199.
+    for name in [
+        "IndexerClientConfigurationInput",
+        "IndexerClientGrantInput",
+        "IndexerClientPayload",
+        "IndexerClientGrantPayload",
+        "IssuedIndexerClientKeyPayload",
+        "IndexerClientProtocolValue",
+        "IndexerClientRequestOutcomeValue",
+        "IndexerCapsSourceValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Dashboard layouts add the breakpoint enum, the layout and item objects,
+    // and their two inputs: public types 982->987, OBJECT 531->533,
+    // INPUT_OBJECT 240->242, ENUM 199->200.
+    for name in [
+        "UiDashboardBreakpoint",
+        "UiDashboardLayout",
+        "UiDashboardLayoutItem",
+        "UiDashboardLayoutItemInput",
+        "SetMyDashboardLayoutInput",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Initial authentication adds its choice enum, input, and result payload.
+    for name in [
+        "InitialAuthenticationMode",
+        "CompleteInitialAuthenticationInput",
+        "InitialAuthenticationPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
+    // OBJECT 534->535.
+    assert!(public_type_names.contains(&"TitleAliasPayload"));
     assert_eq!(
         public_types.len(),
-        972,
+        991,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 526);
-    assert_eq!(kind_count("INPUT_OBJECT"), 238);
-    assert_eq!(kind_count("ENUM"), 196);
+    assert_eq!(kind_count("OBJECT"), 535);
+    assert_eq!(kind_count("INPUT_OBJECT"), 243);
+    assert_eq!(kind_count("ENUM"), 201);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

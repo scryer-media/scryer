@@ -60,7 +60,8 @@ export function isMonitorSelectionEmpty(
   }
   const normalized = normalizeMonitorSelection(selection);
   return (
-    normalized.seasonNumbers.length === 0 && normalized.seriesMovies.length === 0
+    normalized.seasonNumbers.length === 0 &&
+    normalized.seriesMovies.length === 0
   );
 }
 
@@ -78,7 +79,9 @@ export function monitorSelectionInput(
   if (isMonitorSelectionEmpty(selection)) {
     return undefined;
   }
-  const normalized = normalizeMonitorSelection(selection as MonitorSelectionDraft);
+  const normalized = normalizeMonitorSelection(
+    selection as MonitorSelectionDraft,
+  );
   return {
     seasonNumbers: normalized.seasonNumbers,
     seriesMovies: normalized.seriesMovies.map((movie) => ({
@@ -132,6 +135,8 @@ export function monitorSelectionSummaryParts(
     seasons: orderedSeasons.map((seasonNumber) =>
       seasonNumber === 0 ? labels.specials : labels.season(seasonNumber),
     ),
-    movies: normalized.seriesMovies.map((movie) => movie.name.trim()).filter(Boolean),
+    movies: normalized.seriesMovies
+      .map((movie) => movie.name.trim())
+      .filter(Boolean),
   };
 }

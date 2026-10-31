@@ -124,7 +124,10 @@ export function useBulkRename({
 
       // One request per facet instead of one per title: the batch resolves the
       // rename settings once rather than re-reading them for every title.
-      const previewFacet = async (facet: string, facetTitles: TitleRecord[]) => {
+      const previewFacet = async (
+        facet: string,
+        facetTitles: TitleRecord[],
+      ) => {
         const result = await client
           .query<{ mediaRenamePreviewBulk: MediaRenamePlan[] }>(
             mediaRenamePreviewBulkQuery,
@@ -275,7 +278,14 @@ export function useBulkRename({
         errors: summary.errors + plan.errors,
         folderRepairs: summary.folderRepairs + (plan.folderRepairs ?? 0),
       }),
-      { total: 0, renamable: 0, noop: 0, conflicts: 0, errors: 0, folderRepairs: 0 },
+      {
+        total: 0,
+        renamable: 0,
+        noop: 0,
+        conflicts: 0,
+        errors: 0,
+        folderRepairs: 0,
+      },
     );
   }, [bulkRenamePlansByTitleId, selectedTitles]);
 

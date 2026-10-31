@@ -19,7 +19,7 @@ fn action_definition(
     action_sequence: Option<MaintenanceActionSequenceInput>,
 ) -> GqlResult<scryer_application::maintenance_rules::MaintenanceActionDefinition> {
     crate::mappers::maintenance_action_definition_from_inputs(action, action_sequence)
-        .map_err(|error| to_gql_error(AppError::Validation(error)))
+        .map_err(to_gql_error)
 }
 
 /// Resolve the matcher a preview should run.
@@ -52,15 +52,19 @@ fn preview_matcher(
                 storage_root_id: input.storage_root_id.take(),
             })
         }
-        (None, None, Some(_), _) | (None, None, _, Some(_)) => Err(to_gql_error(
-            AppError::Validation("previewing an unsaved matcher requires 'regoSource'".to_string()),
-        )),
-        (None, None, None, None) => Err(to_gql_error(AppError::Validation(
-            "preview requires either 'ruleSetId' or 'regoSource' with an action definition"
-                .to_string(),
+        (None, None, Some(_), _) | (None, None, _, Some(_)) => {
+            Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_RULE_SOURCE_REQUIRED,
+                "previewing an unsaved matcher requires 'regoSource'",
+            )))
+        }
+        (None, None, None, None) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_REQUIRED,
+            "preview requires either 'ruleSetId' or 'regoSource' with an action definition",
         ))),
-        (Some(_), _, _, _) => Err(to_gql_error(AppError::Validation(
-            "preview accepts either 'ruleSetId' or an unsaved matcher, not both".to_string(),
+        (Some(_), _, _, _) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_CONFLICT,
+            "preview accepts either 'ruleSetId' or an unsaved matcher, not both",
         ))),
     }
 }
@@ -72,8 +76,9 @@ fn preview_selection(
 ) -> GqlResult<MaintenancePreviewSelection> {
     if let Some(subject_ids) = input.subject_ids.take() {
         if input.library_id.is_some() || input.title_ids.is_none() {
-            return Err(to_gql_error(AppError::Validation(
-                "subjectIds requires titleIds and cannot be combined with libraryId".into(),
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_RULE_SUBJECT_SELECTION_INVALID,
+                "subjectIds requires titleIds and cannot be combined with libraryId",
             )));
         }
         return Ok(MaintenancePreviewSelection::Subjects {
@@ -97,11 +102,13 @@ fn preview_selection(
                 .limit
                 .map(|limit| usize::try_from(limit).unwrap_or_default()),
         }),
-        (Some(_), Some(_)) => Err(to_gql_error(AppError::Validation(
-            "preview accepts either 'titleIds' or 'libraryId', not both".to_string(),
+        (Some(_), Some(_)) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_SCOPE_CONFLICT,
+            "preview accepts either 'titleIds' or 'libraryId', not both",
         ))),
-        (None, None) => Err(to_gql_error(AppError::Validation(
-            "preview requires either 'titleIds' or 'libraryId'".to_string(),
+        (None, None) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_SCOPE_REQUIRED,
+            "preview requires either 'titleIds' or 'libraryId'",
         ))),
     }
 }
@@ -215,10 +222,10 @@ impl MaintenanceRuleMutations {
             .await
             .map_err(to_gql_error)?
             .ok_or_else(|| {
-                to_gql_error(AppError::NotFound(format!(
-                    "maintenance rule set {} not found",
-                    input.id.as_str()
-                )))
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_MAINTENANCE_RULE_NOT_FOUND,
+                    format!("maintenance rule set {} not found", input.id.as_str()),
+                ))
             })?;
 
         Ok(crate::mappers::from_maintenance_rule_set(&detail))
@@ -263,6 +270,17 @@ impl MaintenanceRuleMutations {
             .map_err(to_gql_error)?;
 
         Ok(MaintenanceRuleValidationPayload {
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| RuleValidationDiagnosticPayload {
+                    code: diagnostic.code.into(),
+                    message: diagnostic.message,
+                    line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
+                    column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
+                    path: diagnostic.path,
+                })
+                .collect(),
             valid: result.valid,
             errors: result.errors,
         })
@@ -405,8 +423,9 @@ impl MaintenanceRuleMutations {
                     .then(|| input.title_id.as_str())
             })
             .ok_or_else(|| {
-                to_gql_error(AppError::Validation(
-                    "episode and season exclusions require subjectId".into(),
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_RULE_EXCLUSION_SUBJECT_REQUIRED,
+                    "episode and season exclusions require subjectId",
                 ))
             })?;
         let exclusion = app

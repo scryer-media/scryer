@@ -91,13 +91,17 @@ test("the title overview catches up once the activity subscription starts", () =
     },
   });
 
-  h.render("use-title-overview-reactive-refresh.ts", "useTitleOverviewReactiveRefresh", {
-    titleId: "title-under-test",
-    blocklistLimit: 10,
-    projection: "FULL",
-    applyOverviewSnapshot: () => {},
-    importKinds: new Set(["import_completed"]),
-  });
+  h.render(
+    "use-title-overview-reactive-refresh.ts",
+    "useTitleOverviewReactiveRefresh",
+    {
+      titleId: "title-under-test",
+      blocklistLimit: 10,
+      projection: "FULL",
+      applyOverviewSnapshot: () => {},
+      importKinds: new Set(["import_completed"]),
+    },
+  );
 
   // The page's initial read already happened; nothing has been requested yet.
   assert.equal(refreshed.length, 0);

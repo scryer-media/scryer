@@ -1,13 +1,28 @@
 import * as React from "react";
-import { AlertTriangle, ChevronDown, Rocket, ShieldPlus, Trash2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  Rocket,
+  ShieldPlus,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Link } from "react-router";
 import { InfoHelp } from "@/components/common/info-help";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -77,7 +92,9 @@ export function SettingsOverviewSection({
 }: SettingsOverviewSectionProps) {
   const t = useTranslate();
   const [advancedTrustOpen, setAdvancedTrustOpen] = React.useState(false);
-  const [trustedCertUploadError, setTrustedCertUploadError] = React.useState<string | null>(null);
+  const [trustedCertUploadError, setTrustedCertUploadError] = React.useState<
+    string | null
+  >(null);
   const [trustedCertUploading, setTrustedCertUploading] = React.useState(false);
   const trustedCertInputRef = React.useRef<HTMLInputElement | null>(null);
   const updateGeneralSettings = React.useCallback(
@@ -87,7 +104,8 @@ export function SettingsOverviewSection({
   );
   const applyTrustedCertificateEntries = React.useCallback(
     (entries: TrustedCertificateEntry[]) => {
-      const pluginHttpCaBundlePem = bundlePemFromTrustedCertificateEntries(entries);
+      const pluginHttpCaBundlePem =
+        bundlePemFromTrustedCertificateEntries(entries);
       updateGeneralSettings({
         pluginHttpTrustedCertificates: entries,
         pluginHttpCaBundlePem,
@@ -150,7 +168,10 @@ export function SettingsOverviewSection({
         ),
       );
     },
-    [applyTrustedCertificateEntries, generalSettings.pluginHttpTrustedCertificates],
+    [
+      applyTrustedCertificateEntries,
+      generalSettings.pluginHttpTrustedCertificates,
+    ],
   );
   const handleClearTrustedCertificates = React.useCallback(() => {
     setTrustedCertUploadError(null);
@@ -177,6 +198,7 @@ export function SettingsOverviewSection({
       />
 
       <SingleSelectField
+        id="settings-ui-date-time-format"
         label={t("settings.dateTimeFormatLabel")}
         value={dateTimeFormat}
         disabled={dateTimeFormatLoading || dateTimeFormatSaving}
@@ -203,7 +225,9 @@ export function SettingsOverviewSection({
 
       <div className="space-y-4 border-t border-border pt-6">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">{t("settings.featuresHeader")}</h3>
+          <h3 className="text-sm font-semibold">
+            {t("settings.featuresHeader")}
+          </h3>
         </div>
 
         {generalLoading ? (
@@ -216,6 +240,7 @@ export function SettingsOverviewSection({
             <div className="flex items-center gap-3">
               <Label>{t("settings.experimentalFeaturesLabel")}</Label>
               <SettingsToggleSwitch
+                id="settings-general-experimental-features"
                 checked={generalSettings.experimentalFeaturesEnabled}
                 ariaLabel={t("settings.experimentalFeaturesLabel")}
                 disabled={generalSaving}
@@ -225,7 +250,10 @@ export function SettingsOverviewSection({
 
             <div className="flex items-center gap-3">
               <Label>{t("settings.apiExplorerLabel")}</Label>
-              <InfoHelp text={t("settings.apiExplorerHelp")} ariaLabel={t("settings.apiExplorerLabel")} />
+              <InfoHelp
+                text={t("settings.apiExplorerHelp")}
+                ariaLabel={t("settings.apiExplorerLabel")}
+              />
               <SettingsToggleSwitch
                 checked={generalSettings.apiExplorerEnabled}
                 ariaLabel={t("settings.apiExplorerLabel")}
@@ -250,8 +278,12 @@ export function SettingsOverviewSection({
                 ariaLabel={t("settings.personalizedDiscoveryLabel")}
                 disabled={generalSaving}
                 onChange={(nextValue) => {
-                  updateGeneralSettings({ personalizedDiscoveryEnabled: nextValue });
-                  onGeneralSettingsCommit({ personalizedDiscoveryEnabled: nextValue });
+                  updateGeneralSettings({
+                    personalizedDiscoveryEnabled: nextValue,
+                  });
+                  onGeneralSettingsCommit({
+                    personalizedDiscoveryEnabled: nextValue,
+                  });
                 }}
               />
             </div>
@@ -269,8 +301,12 @@ export function SettingsOverviewSection({
                 ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
                 disabled={generalSaving}
                 onChange={(nextValue) => {
-                  updateGeneralSettings({ srrdbFilenameRecoveryEnabled: nextValue });
-                  onGeneralSettingsCommit({ srrdbFilenameRecoveryEnabled: nextValue });
+                  updateGeneralSettings({
+                    srrdbFilenameRecoveryEnabled: nextValue,
+                  });
+                  onGeneralSettingsCommit({
+                    srrdbFilenameRecoveryEnabled: nextValue,
+                  });
                 }}
               />
             </div>
@@ -280,7 +316,9 @@ export function SettingsOverviewSection({
 
       <div className="space-y-4 border-t border-border pt-6">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">{t("settings.historyRetentionTitle")}</h3>
+          <h3 className="text-sm font-semibold">
+            {t("settings.historyRetentionTitle")}
+          </h3>
           <p className="text-muted-foreground">
             {t("settings.historyRetentionHelp")}
           </p>
@@ -320,13 +358,16 @@ export function SettingsOverviewSection({
                   onChange={(event) => {
                     const nextValue = sanitizeDigits(event.target.value);
                     updateGeneralSettings({
-                      historyRetentionDays: nextValue === "" ? 0 : Number(nextValue),
+                      historyRetentionDays:
+                        nextValue === "" ? 0 : Number(nextValue),
                     });
                   }}
                   onBlur={() =>
                     onGeneralSettingsCommit({
-                      historyRetentionDays: generalSettings.historyRetentionDays,
-                    })}
+                      historyRetentionDays:
+                        generalSettings.historyRetentionDays,
+                    })
+                  }
                 />
                 <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
                   {t("settings.historyRetentionDaysSuffix")}
@@ -335,7 +376,9 @@ export function SettingsOverviewSection({
             </div>
 
             <div className="space-y-3 border-t border-border/60 pt-4">
-              <h3 className="text-sm font-semibold">{t("settings.imageCacheTitle")}</h3>
+              <h3 className="text-sm font-semibold">
+                {t("settings.imageCacheTitle")}
+              </h3>
               <div className="space-y-1">
                 <Label>{t("settings.imageCacheMaxSizeLabel")}</Label>
                 <div className="flex items-center gap-2">
@@ -348,13 +391,16 @@ export function SettingsOverviewSection({
                       onChange={(event) => {
                         const nextValue = sanitizeDigits(event.target.value);
                         updateGeneralSettings({
-                          imageCacheMaxSizeMb: nextValue === "" ? 0 : Number(nextValue),
+                          imageCacheMaxSizeMb:
+                            nextValue === "" ? 0 : Number(nextValue),
                         });
                       }}
                       onBlur={() =>
                         onGeneralSettingsCommit({
-                          imageCacheMaxSizeMb: generalSettings.imageCacheMaxSizeMb,
-                        })}
+                          imageCacheMaxSizeMb:
+                            generalSettings.imageCacheMaxSizeMb,
+                        })
+                      }
                     />
                     <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
                       {t("settings.imageCacheMbSuffix")}
@@ -385,7 +431,6 @@ export function SettingsOverviewSection({
                 </div>
               ) : null}
             </div>
-
           </>
         )}
       </div>
@@ -395,9 +440,15 @@ export function SettingsOverviewSection({
         className="space-y-4 border-t border-border pt-6"
       >
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">{t("settings.verificationDepthTitle")}</h3>
-          <p className="text-muted-foreground">{t("settings.verificationDepthHelp")}</p>
-          <p className="text-muted-foreground">{t("settings.verificationDepthScope")}</p>
+          <h3 className="text-sm font-semibold">
+            {t("settings.verificationDepthTitle")}
+          </h3>
+          <p className="text-muted-foreground">
+            {t("settings.verificationDepthHelp")}
+          </p>
+          <p className="text-muted-foreground">
+            {t("settings.verificationDepthScope")}
+          </p>
         </div>
         <SingleSelectField
           id="settings-general-verification-depth"
@@ -434,7 +485,10 @@ export function SettingsOverviewSection({
         id="settings-general-plugin-http-trust-section"
         className="space-y-4 border-t border-border pt-6"
       >
-        <Collapsible open={advancedTrustOpen} onOpenChange={setAdvancedTrustOpen}>
+        <Collapsible
+          open={advancedTrustOpen}
+          onOpenChange={setAdvancedTrustOpen}
+        >
           <CollapsibleTrigger asChild>
             <Button
               id="settings-general-plugin-http-trust-toggle"
@@ -447,7 +501,10 @@ export function SettingsOverviewSection({
                 <span className="text-left">
                   {t("settings.pluginHttpTrustTitle")}
                 </span>
-                <Badge tone="warning" className="rounded-full text-[10px] font-semibold uppercase tracking-wide">
+                <Badge
+                  tone="warning"
+                  className="rounded-full text-[10px] font-semibold uppercase tracking-wide"
+                >
                   {t("settings.pluginHttpTrustAdvancedLabel")}
                 </Badge>
               </span>
@@ -455,7 +512,8 @@ export function SettingsOverviewSection({
                 <span>
                   {generalSettings.pluginHttpTrustedCertificates.length > 0
                     ? t("settings.pluginHttpTrustStoredCount", {
-                        count: generalSettings.pluginHttpTrustedCertificates.length,
+                        count:
+                          generalSettings.pluginHttpTrustedCertificates.length,
                       })
                     : t("settings.pluginHttpTrustEmpty")}
                 </span>
@@ -470,7 +528,9 @@ export function SettingsOverviewSection({
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--scry-warning-text)]" />
                 <div className="space-y-1">
-                  <p className="font-medium">{t("settings.pluginHttpTrustWarningTitle")}</p>
+                  <p className="font-medium">
+                    {t("settings.pluginHttpTrustWarningTitle")}
+                  </p>
                   <p className="text-muted-foreground">
                     {t("settings.pluginHttpTrustWarningBody")}
                   </p>
@@ -525,7 +585,9 @@ export function SettingsOverviewSection({
                 </Button>
               </div>
               {trustedCertUploadError ? (
-                <p className="text-sm text-destructive">{trustedCertUploadError}</p>
+                <p className="text-sm text-destructive">
+                  {trustedCertUploadError}
+                </p>
               ) : null}
             </div>
 
@@ -554,7 +616,9 @@ export function SettingsOverviewSection({
                       label={t("label.remove")}
                       appearance="ghost"
                       disabled={generalSaving}
-                      onClick={() => handleRemoveTrustedCertificate(entry.fingerprintSha256)}
+                      onClick={() =>
+                        handleRemoveTrustedCertificate(entry.fingerprintSha256)
+                      }
                     >
                       <Trash2 className="h-4 w-4" />
                     </IconButton>

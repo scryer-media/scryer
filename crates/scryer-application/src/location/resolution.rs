@@ -140,10 +140,8 @@ enum MediaUnplaced {
 impl MediaUnplaced {
     fn into_error(self) -> AppError {
         match self {
-            Self::NotTransferred => AppError::Validation(
-                "The related media file could not be transferred. Its companion files were preserved."
-                    .into(),
-            ),
+            Self::NotTransferred => AppError::validation_refused(crate::error_reasons::location::RELATED_MEDIA_FILE_COULD_NOT_TRANSFERRED, "The related media file could not be transferred. Its companion files were preserved."
+                    ),
             Self::Canceled => AppError::Canceled(
                 "The related media file's transfer was canceled. Its companion files were preserved."
                     .into(),
@@ -297,9 +295,9 @@ impl ConflictResolver {
                         break result.map_err(MediaUnplaced::into_error)?;
                     }
                     updates.changed().await.map_err(|_| {
-                        AppError::Validation(
-                            "The related media transfer was interrupted. The source was preserved."
-                                .into(),
+                        AppError::validation_refused(
+                            crate::error_reasons::location::RELATED_MEDIA_TRANSFER_INTERRUPTED,
+                            "The related media transfer was interrupted. The source was preserved.",
                         )
                     })?;
                 }
@@ -318,8 +316,9 @@ impl ConflictResolver {
         let source = &request.file.source_path;
         let original = &request.file.destination_path;
         if source == original {
-            return Err(AppError::Validation(
-                "The source and destination are the same path.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+                "The source and destination are the same path.",
             ));
         }
         let saved = self
@@ -466,7 +465,10 @@ impl ConflictResolver {
             if record.destination_version.is_some()
                 && record.destination_version != Some(file_version(&destination).await?)
             {
-                return Err(AppError::Validation("The destination changed during comparison. The source was preserved; try again when the files are no longer changing.".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::DESTINATION_CHANGED_DURING_COMPARISON,
+                    "The destination changed during comparison. The source was preserved; try again when the files are no longer changing.",
+                ));
             }
             if verified.hashes.is_none() {
                 record.disposition = if tokio::fs::symlink_metadata(source)
@@ -480,7 +482,10 @@ impl ConflictResolver {
                     ResolutionDisposition::Hardlink
                 };
             } else if record.source_version != Some(file_version(source).await?) {
-                return Err(AppError::Validation("The source changed during transfer. It was preserved; try again when the file is no longer changing.".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SOURCE_CHANGED_DURING_TRANSFER,
+                    "The source changed during transfer. It was preserved; try again when the file is no longer changing.",
+                ));
             }
             record.source_version = Some(file_version(source).await?);
             record.destination_version = Some(file_version(&destination).await?);
@@ -530,10 +535,13 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
         .map(|metadata| metadata.len())
         .unwrap_or_default();
     if !metadata.is_file() || metadata.len() > source_len {
-        return Err(AppError::Validation(format!(
-            "The destination staging path {} is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
-            partial.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_OCCUPIED,
+            format!(
+                "The destination staging path {} is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+                partial.display()
+            ),
+        ));
     }
     tokio::fs::remove_file(&partial).await.map_err(|error| {
         AppError::Repository(format!(
@@ -567,10 +575,13 @@ fn numbered_name(base: &str, number: u32) -> String {
 
 fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
     tracing::warn!(path = %path.display(), error = %error, "file comparison failed");
-    AppError::Validation(format!(
-        "Could not compare {}. Check that it is readable and try again; the source was preserved.",
-        path.display()
-    ))
+    AppError::validation_refused(
+        crate::error_reasons::location::COULD_NOT_COMPARE,
+        format!(
+            "Could not compare {}. Check that it is readable and try again; the source was preserved.",
+            path.display()
+        ),
+    )
 }
 
 pub async fn file_version(path: &Path) -> AppResult<String> {
@@ -632,14 +643,18 @@ pub async fn compare_existing(
         .await
         .map_err(|error| file_error(destination, error))?;
     if !source_metadata.is_file() || !destination_metadata.is_file() {
-        return Err(AppError::Validation("An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::EXISTING_PATH_NOT_REGULAR_FILE,
+            "An existing path is not a regular file. Resolve the conflicting path and try again; the source was preserved.",
+        ));
     }
     if super::execution::same_regular_file(&source_metadata, &destination_metadata) {
         if tokio::fs::canonicalize(source).await.ok()
             == tokio::fs::canonicalize(destination).await.ok()
         {
-            return Err(AppError::Validation(
-                "The source and destination are the same path.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+                "The source and destination are the same path.",
             ));
         }
         return Ok(VerifiedFile::same_filesystem_rename(
@@ -673,7 +688,10 @@ pub async fn compare_existing(
         if source_before != file_version(source).await?
             || destination_before != file_version(destination).await?
         {
-            return Err(AppError::Validation("A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
+                "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
+            ));
         }
         let identical = destination_hashes.full_blake3 == known.full_blake3
             && destination_hashes.size_bytes == known.size_bytes;
@@ -708,7 +726,10 @@ pub async fn compare_existing(
     if source_before != file_version(source).await?
         || destination_before != file_version(destination).await?
     {
-        return Err(AppError::Validation("A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::FILE_CHANGED_WHILE_BEING_COMPARED,
+            "A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.",
+        ));
     }
     let identical = source_hashes.full_blake3 == destination_hashes.full_blake3
         && source_hashes.size_bytes == destination_hashes.size_bytes;

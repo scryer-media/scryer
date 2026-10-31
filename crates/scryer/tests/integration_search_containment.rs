@@ -99,6 +99,7 @@ fn indexer_config(server: &MockServer) -> IndexerConfig {
     let now = chrono::Utc::now();
     let base_url = format!("{}/api", server.uri());
     IndexerConfig {
+        last_error_code: None,
         id: INDEXER_ID.into(),
         name: "Synthetic Ceiling Indexer".into(),
         provider_type: "newznab".into(),

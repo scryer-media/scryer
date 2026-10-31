@@ -38,7 +38,9 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .create_seeding_profile(&admin, blank)
         .await
         .expect_err("blank names are rejected");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("name is required")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("name is required"))
+    );
 
     let mut zero_ratio = new_seeding_profile("Zero ratio");
     zero_ratio.ratio = Some(0.0);
@@ -46,7 +48,9 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .create_seeding_profile(&admin, zero_ratio)
         .await
         .expect_err("non-positive ratios are rejected");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("greater than 0")),);
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("greater than 0")),
+    );
 
     let mut zero_time = new_seeding_profile("Zero time");
     zero_time.seed_time_minutes = Some(0);
@@ -54,7 +58,9 @@ async fn seeding_profile_create_validation_rejects_bad_goals() {
         .create_seeding_profile(&admin, zero_time)
         .await
         .expect_err("non-positive seed times are rejected");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("greater than 0")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("greater than 0"))
+    );
 
     // Inherit mode normalizes stray season-pack goals instead of rejecting them.
     let mut stray = new_seeding_profile("Stray season pack");
@@ -81,7 +87,7 @@ async fn indexer_seeding_profile_assignment_requires_torrent_support() {
         .await
         .expect_err("unknown profiles are rejected");
     assert!(
-        matches!(unknown_profile, AppError::NotFound(message) if message.contains("missing-profile"))
+        matches!(unknown_profile, AppError::NotFound(message) | AppError::NotFoundReason { message, .. } if message.contains("missing-profile"))
     );
 
     let usenet = app
@@ -89,7 +95,7 @@ async fn indexer_seeding_profile_assignment_requires_torrent_support() {
         .await
         .expect_err("Usenet indexers cannot carry seeding profiles");
     assert!(
-        matches!(usenet, AppError::Validation(message) if message.contains("does not support torrents")),
+        matches!(usenet, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("does not support torrents")),
     );
 
     let unknown_protocol = app
@@ -97,7 +103,7 @@ async fn indexer_seeding_profile_assignment_requires_torrent_support() {
         .await
         .expect_err("indexers without a declared protocol are rejected");
     assert!(
-        matches!(unknown_protocol, AppError::Validation(message) if message.contains("does not declare")),
+        matches!(unknown_protocol, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("does not declare")),
     );
 
     let assigned = app
@@ -138,7 +144,9 @@ async fn referenced_seeding_profiles_cannot_be_deleted() {
         .delete_seeding_profile(&admin, &profile.id)
         .await
         .expect_err("indexer assignment blocks deletion");
-    assert!(matches!(blocked, AppError::Validation(message) if message.contains("indexer")));
+    assert!(
+        matches!(blocked, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("indexer"))
+    );
 
     app.set_indexer_seeding_profile(&admin, "idx-torrent", None)
         .await
@@ -163,7 +171,9 @@ async fn referenced_seeding_profiles_cannot_be_deleted() {
         .delete_seeding_profile(&admin, &profile.id)
         .await
         .expect_err("routing assignment blocks deletion");
-    assert!(matches!(blocked, AppError::Validation(message) if message.contains("routing entry")));
+    assert!(
+        matches!(blocked, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("routing entry"))
+    );
     assert_eq!(
         app.routing_seeding_profile_id("movie", "client-1")
             .await
@@ -182,7 +192,9 @@ async fn referenced_seeding_profiles_cannot_be_deleted() {
         .delete_seeding_profile(&admin, &profile.id)
         .await
         .expect_err("global default blocks deletion");
-    assert!(matches!(blocked, AppError::Validation(message) if message.contains("global default")));
+    assert!(
+        matches!(blocked, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("global default"))
+    );
 
     app.set_default_seeding_profile(&admin, None)
         .await
@@ -252,5 +264,7 @@ async fn seeding_profile_update_clears_and_preserves_goals() {
         )
         .await
         .expect_err("empty patches are rejected");
-    assert!(matches!(empty, AppError::Validation(message) if message.contains("at least one")));
+    assert!(
+        matches!(empty, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("at least one"))
+    );
 }

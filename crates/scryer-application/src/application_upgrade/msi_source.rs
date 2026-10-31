@@ -15,8 +15,9 @@ pub fn retain_installer(
     // The hash is both an identity and a path component. Check it even when
     // callers already validated the signed manifest.
     if artifact.blake3.len() != 64 || !artifact.blake3.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(crate::AppError::Validation(
-            "invalid installer digest".into(),
+        return Err(crate::AppError::validation_refused(
+            crate::error_reasons::application_upgrade::INSTALLER_DIGEST_INVALID,
+            "invalid installer digest",
         ));
     }
     let directory = cache.join(&artifact.blake3);

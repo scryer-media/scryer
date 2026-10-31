@@ -397,10 +397,10 @@ impl AppUseCase {
                 || scryer_rules::strip_editor_source(&prepared.rego_source)
                     != scryer_rules::strip_editor_source(&current_revision.rego_source))
         {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_SHIPS_SCRYER,
                 "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace \
-                 period, libraries and state can."
-                    .into(),
+                 period, libraries and state can.",
             ));
         }
         self.require_registered_action_tags(&draft.action_definition)
@@ -477,8 +477,9 @@ impl AppUseCase {
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let name = require_non_empty(&name, "name")?;
         if rule_set.system_owned && name != rule_set.name {
-            return Err(AppError::Validation(
-                "This rule ships with Scryer and cannot be renamed.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_SHIPS_SCRYER_CANNOT_RENAMED,
+                "This rule ships with Scryer and cannot be renamed.",
             ));
         }
         let now = Utc::now();
@@ -532,9 +533,9 @@ impl AppUseCase {
             .await?;
         let rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         if rule_set.system_owned {
-            return Err(AppError::Validation(
-                "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead."
-                    .into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_SHIPS_SCRYER_CANNOT_DELETED,
+                "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
             ));
         }
 
@@ -547,7 +548,7 @@ impl AppUseCase {
             .await?
             .is_empty();
         if has_history {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::maintenance::ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID, format!(
                 "\"{}\" has already run actions on your library, and deleting it would erase the \
                  record of what it did. Set it to Disabled instead: the rule stops \
                  immediately and its history is kept.",
@@ -559,7 +560,7 @@ impl AppUseCase {
             .count_active_maintenance_candidates(&rule_set.id)
             .await?;
         if active_candidates > 0 {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::maintenance::CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE, format!(
                 "\"{}\" is currently tracking {active_candidates} title(s), and deleting it would \
                  drop them without a trace. Set it to Disabled instead, or clear the \
                  candidates first.",
@@ -697,8 +698,12 @@ impl AppUseCase {
 
         let scratch_id = Id::new_rego_safe().0;
         let rewritten = rewrite_package_declaration(rego_source, &scratch_id);
-        validate_maintenance_rule(&rewritten, &scratch_id)
-            .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))
+        validate_maintenance_rule(&rewritten, &scratch_id).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
+                format!("rule validation failed: {e}"),
+            )
+        })
     }
 
     /// Evaluate one matcher against a bounded title selection. Nothing is
@@ -732,9 +737,7 @@ impl AppUseCase {
             ),
             MaintenancePreviewSelection::Subjects { subject_ids, .. } => {
                 if subject_ids.is_empty() || subject_ids.len() > MAINTENANCE_PREVIEW_MAX_TITLES {
-                    return Err(AppError::Validation(
-                        "preview requires between one and fifty subjects".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::maintenance::PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS, "preview requires between one and fifty subjects"));
                 }
                 (MAINTENANCE_PREVIEW_MAX_TITLES, Some(subject_ids))
             }
@@ -809,8 +812,12 @@ impl AppUseCase {
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
-        let engine = MaintenanceRulesEngine::build(std::slice::from_ref(&policy))
-            .map_err(|e| AppError::Validation(format!("rule failed to compile: {e}")))?;
+        let engine = MaintenanceRulesEngine::build(std::slice::from_ref(&policy)).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_FAILED_COMPILE,
+                format!("rule failed to compile: {e}"),
+            )
+        })?;
         let mut evaluator = engine.evaluator();
         let mut storage_facts = MaintenanceStorageFactCache::new();
 
@@ -918,9 +925,12 @@ impl AppUseCase {
                 )
                 .await?;
 
-                let evaluation = evaluator
-                    .evaluate(&input)
-                    .map_err(|e| AppError::Validation(format!("rule evaluation failed: {e}")))?;
+                let evaluation = evaluator.evaluate(&input).map_err(|e| {
+                    AppError::validation_refused(
+                        crate::error_reasons::maintenance::RULE_EVALUATION_FAILED,
+                        format!("rule evaluation failed: {e}"),
+                    )
+                })?;
 
                 let (outcome, reason_codes, error) = if storage_root_membership_unknown {
                     (
@@ -990,7 +1000,10 @@ impl AppUseCase {
             ids.iter()
                 .any(|id| !results.iter().any(|result| &result.subject_id == id))
         }) {
-            return Err(AppError::Validation("preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::PREVIEW_SUBJECT_OUTSIDE_SCOPE,
+                "preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope",
+            ));
         }
         Ok(MaintenancePreviewResult {
             rule_set_id,
@@ -1023,8 +1036,12 @@ impl AppUseCase {
         rego_source: &str,
         rule_set_id: &str,
     ) -> AppResult<()> {
-        let referenced = maintenance_referenced_facts(rego_source, rule_set_id)
-            .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+        let referenced = maintenance_referenced_facts(rego_source, rule_set_id).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
+                format!("rule validation failed: {e}"),
+            )
+        })?;
         let person_facts: Vec<&str> = PERSON_TARGETED_MAINTENANCE_FACTS
             .into_iter()
             .filter(|fact| referenced.contains(*fact))
@@ -1040,10 +1057,13 @@ impl AppUseCase {
             return Ok(());
         }
 
-        Err(AppError::Unauthorized(format!(
-            "This rule reads facts about specific people ({}), so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-            person_facts.join(", ")
-        )))
+        Err(AppError::unauthorized_reason(
+            crate::error_reasons::maintenance::PERSON_TARGETING_PERMISSION_REQUIRED,
+            format!(
+                "This rule reads facts about specific people ({}), so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
+                person_facts.join(", ")
+            ),
+        ))
     }
 
     /// Resolve a selected root by its durable ID and reject a storage matcher
@@ -1058,15 +1078,18 @@ impl AppUseCase {
         subject_kind: MaintenanceRuleSubjectKind,
         action_definition: &MaintenanceActionDefinition,
     ) -> AppResult<()> {
-        let referenced = maintenance_referenced_facts(rego_source, rule_set_id)
-            .map_err(|error| AppError::Validation(format!("rule validation failed: {error}")))?;
+        let referenced =
+            maintenance_referenced_facts(rego_source, rule_set_id).map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
+                    format!("rule validation failed: {error}"),
+                )
+            })?;
         let reads_storage = STORAGE_MAINTENANCE_FACTS
             .iter()
             .any(|fact| referenced.contains(*fact));
         if reads_storage && storage_root_id.is_none() {
-            return Err(AppError::Validation(
-                "a matcher that reads storage facts must select a configured library root".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::maintenance::MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT, "a matcher that reads storage facts must select a configured library root"));
         }
         let Some(storage_root_id) = storage_root_id else {
             return Ok(());
@@ -1080,9 +1103,10 @@ impl AppUseCase {
         {
             Ok(())
         } else {
-            Err(AppError::Validation(format!(
-                "storage root '{storage_root_id}' is not configured"
-            )))
+            Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::STORAGE_ROOT_NOT_CONFIGURED,
+                format!("storage root '{storage_root_id}' is not configured"),
+            ))
         }
     }
 
@@ -1095,7 +1119,12 @@ impl AppUseCase {
             .maintenance_rule_sets
             .get_rule_set(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("maintenance rule set {id} not found")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::maintenance::RULE_SET_NOT_FOUND,
+                    format!("maintenance rule set {id} not found"),
+                )
+            })
     }
 
     pub(crate) async fn load_maintenance_rule_detail(
@@ -1203,10 +1232,13 @@ impl AppUseCase {
             MaintenancePreviewSelection::Titles(title_ids)
             | MaintenancePreviewSelection::Subjects { title_ids, .. } => {
                 if title_ids.len() > MAINTENANCE_PREVIEW_MAX_TITLES {
-                    return Err(AppError::Validation(format!(
-                        "preview accepts at most {MAINTENANCE_PREVIEW_MAX_TITLES} titles, {} were requested",
-                        title_ids.len()
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::maintenance::PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED,
+                        format!(
+                            "preview accepts at most {MAINTENANCE_PREVIEW_MAX_TITLES} titles, {} were requested",
+                            title_ids.len()
+                        ),
+                    ));
                 }
                 self.services.catalog.titles.get_by_ids(title_ids).await
             }
@@ -1312,29 +1344,40 @@ fn prepare_matcher(
     grace_days: i64,
 ) -> AppResult<PreparedMatcher> {
     if grace_days < 0 {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::GRACE_PERIOD_INVALID,
             "grace period must be zero or more days".to_string(),
         ));
     }
     if grace_days > MAINTENANCE_MAX_GRACE_DAYS {
-        return Err(AppError::Validation(format!(
-            "grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::GRACE_PERIOD_OUT_OF_RANGE,
+            format!("grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"),
+        ));
     }
     validate_action_definition_for_scope(subject_kind, action_definition, false)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
-    let validation = validate_maintenance_rule(&rewritten, rule_id)
-        .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+    let validation = validate_maintenance_rule(&rewritten, rule_id).map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
+            format!("rule validation failed: {e}"),
+        )
+    })?;
     if !validation.valid {
-        return Err(AppError::Validation(format_maintenance_validation_errors(
-            &validation,
-        )));
+        return Err(AppError::validation_refused_with_diagnostics(
+            crate::error_reasons::maintenance::RULE_SOURCE_INVALID,
+            format_maintenance_validation_errors(&validation),
+            validation.diagnostics,
+        ));
     }
 
-    let action_spec_json = action_definition
-        .to_persisted_json()
-        .map_err(|e| AppError::Validation(format!("maintenance action is not storable: {e}")))?;
+    let action_spec_json = action_definition.to_persisted_json().map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::maintenance::ACTION_NOT_STORABLE,
+            format!("maintenance action is not storable: {e}"),
+        )
+    })?;
 
     Ok(PreparedMatcher {
         content_hash: content_hash(&rewritten),
@@ -1356,9 +1399,9 @@ fn validate_action_definition_for_scope(
             validate_scope_action(scope, spec)?;
             if storage_root_selected && !super::action_execution::supports_storage_scope(spec.kind)
             {
-                return Err(AppError::Validation(
-                    "this action is not supported for a storage-root-scoped maintenance rule"
-                        .into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
+                    "this action is not supported for a storage-root-scoped maintenance rule",
                 ));
             }
             Ok(())
@@ -1370,7 +1413,12 @@ fn validate_action_definition_for_scope(
                 } else {
                     sequence.validate(subject)
                 }
-                .map_err(|error| AppError::Validation(error.to_string()))
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::maintenance::ACTION_CONFIGURATION_INVALID,
+                        error.to_string(),
+                    )
+                })
             };
             match scope {
                 MaintenanceRuleSubjectKind::Title => {
@@ -1408,8 +1456,9 @@ pub(super) fn validate_scope_action(
         return validate_title_scope_action(spec);
     }
     if !super::action_execution::supported_scope_actions(scope).contains(&spec.kind) {
-        return Err(AppError::Validation(
-            "action is not supported for this maintenance scope".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
+            "action is not supported for this maintenance scope",
         ));
     }
     let subject = match scope {
@@ -1417,15 +1466,20 @@ pub(super) fn validate_scope_action(
         MaintenanceRuleSubjectKind::Episode => ActionSubjectKind::Episode,
         _ => unreachable!(),
     };
-    spec.validate(subject)
-        .map_err(|error| AppError::Validation(error.to_string()))
+    spec.validate(subject).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::maintenance::ACTION_CONFIGURATION_INVALID,
+            error.to_string(),
+        )
+    })
 }
 
 pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
     if !EXECUTABLE_TITLE_RULE_ACTIONS.contains(&spec.kind) {
-        return Err(AppError::Validation(title_rule_action_not_executable(
-            spec.kind,
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
+            title_rule_action_not_executable(spec.kind),
+        ));
     }
 
     if spec.validate(ActionSubjectKind::Movie).is_ok()
@@ -1439,9 +1493,10 @@ pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppRe
     let error = spec
         .validate(ActionSubjectKind::Movie)
         .expect_err("action rejected for both movie and show subjects");
-    Err(AppError::Validation(format!(
-        "maintenance action is not valid for a title-scoped rule: {error}"
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::maintenance::ACTION_INVALID,
+        format!("maintenance action is not valid for a title-scoped rule: {error}"),
+    ))
 }
 
 /// Whether two library scopes describe different sets of libraries.
@@ -1459,7 +1514,10 @@ fn library_scope_changed(stored: &[String], replacement: &[String]) -> bool {
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(format!("{field} must not be empty")));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::FIELD_REQUIRED,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(trimmed.to_string())
 }

@@ -1028,7 +1028,11 @@ impl Mp4ChapterMetadata {
 }
 
 fn parse_chap_track_ids(data: &[u8]) -> Vec<u32> {
-    data.chunks_exact(4).filter_map(read_be_u32).collect()
+    data.as_chunks::<4>()
+        .0
+        .iter()
+        .filter_map(|chunk| read_be_u32(chunk))
+        .collect()
 }
 
 fn mp4_track_sample_count(track: &mp4parse::Track) -> Option<i32> {

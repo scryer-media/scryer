@@ -35,7 +35,11 @@ import { UnderlineFilterButton } from "@/components/common/underline-filter-butt
 import { TitlePoster } from "@/components/title-poster";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -204,11 +208,17 @@ type RequestsViewProps = {
   actionRequestId: string | null;
   onRefresh: () => void;
   onLoadQualityProfileOptions: () => void;
-  onApprove: (request: MediaRequestRecord, values: ApproveRequestValues) => void;
+  onApprove: (
+    request: MediaRequestRecord,
+    values: ApproveRequestValues,
+  ) => void;
   onDismiss: (request: MediaRequestRecord) => void;
   /// Put a dismissed request back into the pending queue.
   onReopen: (request: MediaRequestRecord) => void;
-  onUpdateRequest: (request: MediaRequestRecord, values: UpdateRequestValues) => void;
+  onUpdateRequest: (
+    request: MediaRequestRecord,
+    values: UpdateRequestValues,
+  ) => void;
   onCancelRequest: (request: MediaRequestRecord) => void;
   /// Retention claims for the titles requests created, keyed by request id and
   /// loaded only when the operator opens a row's claims panel. A row whose id
@@ -280,12 +290,15 @@ function profileLabel(
     return null;
   }
   return (
-    qualityProfileOptions.find((profile) => profile.id === normalizedId)?.name ??
-    normalizedId
+    qualityProfileOptions.find((profile) => profile.id === normalizedId)
+      ?.name ?? normalizedId
   );
 }
 
-function monitorTypeLabel(t: ReturnType<typeof useTranslate>, value: string | null | undefined): string | null {
+function monitorTypeLabel(
+  t: ReturnType<typeof useTranslate>,
+  value: string | null | undefined,
+): string | null {
   const normalized = value?.replace(/[-_\s]/g, "").toLowerCase();
   switch (normalized) {
     case "monitored":
@@ -331,7 +344,9 @@ function monitorTypeSelectValue(
   }
 }
 
-function monitorOptions(t: ReturnType<typeof useTranslate>): Array<{ value: RequestMonitorType; label: string }> {
+function monitorOptions(
+  t: ReturnType<typeof useTranslate>,
+): Array<{ value: RequestMonitorType; label: string }> {
   return [
     { value: "FUTURE_EPISODES", label: t("search.monitorType.futureEpisodes") },
     {
@@ -356,7 +371,9 @@ function requestProfileOptionsForLibrary(
       ? [library.requestQualityProfileDefaultId]
       : [];
   return requestProfileIds.map((profileId) => {
-    const profile = qualityProfileOptions.find((option) => option.id === profileId);
+    const profile = qualityProfileOptions.find(
+      (option) => option.id === profileId,
+    );
     return {
       id: profileId,
       name: profile?.name ?? profileId,
@@ -364,7 +381,10 @@ function requestProfileOptionsForLibrary(
   });
 }
 
-function requestStatusLabel(t: ReturnType<typeof useTranslate>, status: MediaRequestRecord["status"]): string {
+function requestStatusLabel(
+  t: ReturnType<typeof useTranslate>,
+  status: MediaRequestRecord["status"],
+): string {
   switch (status) {
     case "PENDING":
       return t("requests.status.pending");
@@ -388,19 +408,22 @@ function requestStatusTone(
       return {
         label: requestStatusLabel(t, status),
         Icon: Clock,
-        className: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+        className:
+          "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
       };
     case "APPROVED":
       return {
         label: requestStatusLabel(t, status),
         Icon: Check,
-        className: "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
+        className:
+          "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
       };
     case "REJECTED":
       return {
         label: requestStatusLabel(t, status),
         Icon: X,
-        className: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+        className:
+          "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
       };
     case "CANCELED":
     default:
@@ -432,8 +455,6 @@ function statusFilterOptions(mode: RequestsMode): Array<{
     { value: "CANCELED", label: "Canceled" },
   ];
 }
-
-
 
 /// How long the media is held for, in one badge. "Requested" is a window nobody
 /// has granted yet; "dormant" is a granted one still waiting for the title's
@@ -804,7 +825,8 @@ export function RequestsView({
 
   React.useEffect(() => {
     if (!approvalRequest) return;
-    const requestedProfileId = approvalRequest.requestedQualityProfileId?.trim() ?? "";
+    const requestedProfileId =
+      approvalRequest.requestedQualityProfileId?.trim() ?? "";
     const requestedStillValid = qualityProfileOptions.some(
       (profile) => profile.id === requestedProfileId,
     );
@@ -823,7 +845,7 @@ export function RequestsView({
         ? requestedProfileId
         : libraryDefaultStillValid
           ? libraryDefaultProfileId
-          : qualityProfileOptions[0]?.id ?? "",
+          : (qualityProfileOptions[0]?.id ?? ""),
     );
     setApprovalMonitorType(
       monitorTypeSelectValue(
@@ -849,17 +871,21 @@ export function RequestsView({
 
   React.useEffect(() => {
     if (!editRequest) return;
-    const requestedProfileId = editRequest.requestedQualityProfileId?.trim() ?? "";
+    const requestedProfileId =
+      editRequest.requestedQualityProfileId?.trim() ?? "";
     const requestedStillAllowed = editProfileOptions.some(
       (profile) => profile.id === requestedProfileId,
     );
     setEditProfileId(
       requestedStillAllowed
         ? requestedProfileId
-        : editProfileOptions[0]?.id ?? "",
+        : (editProfileOptions[0]?.id ?? ""),
     );
     setEditMonitorType(
-      monitorTypeSelectValue(editRequest.facet, editRequest.requestedMonitorType),
+      monitorTypeSelectValue(
+        editRequest.facet,
+        editRequest.requestedMonitorType,
+      ),
     );
     setEditMonitorSelection(
       monitorSelectionFromRecord(editRequest.requestedMonitorSelection) ??
@@ -876,7 +902,7 @@ export function RequestsView({
     approvalRequest.facet !== "MOVIE" &&
     approvalMonitorType === "ADVANCED";
   const approvalTvdbId = approvalRequest
-    ? requestExternalIdValue(approvalRequest, "tvdb")?.trim() ?? ""
+    ? (requestExternalIdValue(approvalRequest, "tvdb")?.trim() ?? "")
     : "";
   const approvalSmgId = approvalRequest ? requestSmgId(approvalRequest) : null;
   // The tag vocabulary is only needed while the approve dialog is open, and
@@ -895,7 +921,7 @@ export function RequestsView({
     editRequest.facet !== "MOVIE" &&
     editMonitorType === "ADVANCED";
   const editTvdbId = editRequest
-    ? requestExternalIdValue(editRequest, "tvdb")?.trim() ?? ""
+    ? (requestExternalIdValue(editRequest, "tvdb")?.trim() ?? "")
     : "";
   const editSmgId = editRequest ? requestSmgId(editRequest) : null;
   const editBlocksConfirm =
@@ -972,7 +998,8 @@ export function RequestsView({
     if (!editRequest || !editProfileId) return;
     onUpdateRequest(editRequest, {
       requestedQualityProfileId: editProfileId,
-      requestedMonitorType: editRequest.facet === "MOVIE" ? undefined : editMonitorType,
+      requestedMonitorType:
+        editRequest.facet === "MOVIE" ? undefined : editMonitorType,
       requestedMonitorSelection: editAdvancedSelected
         ? monitorSelectionInput(editMonitorSelection)
         : undefined,
@@ -994,7 +1021,9 @@ export function RequestsView({
     const malId = requestExternalIdValue(request, "mal");
     const anilistId = requestExternalIdValue(request, "anilist");
     const anidbId = requestExternalIdValue(request, "anidb");
-    const externalRatings = request.externalRatings.map(normalizeTitleExternalRating);
+    const externalRatings = request.externalRatings.map(
+      normalizeTitleExternalRating,
+    );
     const hasExternalLink =
       Boolean(imdbId) ||
       Boolean(tvdbId) ||
@@ -1337,7 +1366,9 @@ export function RequestsView({
                   <SlidersVertical className="h-3.5 w-3.5" />
                   {t("requests.requestedQualityProfile")}
                 </div>
-                <div className="text-[var(--scry-ink2)]">{requestedProfile}</div>
+                <div className="text-[var(--scry-ink2)]">
+                  {requestedProfile}
+                </div>
               </div>
               <div className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2">
                 <div className="mb-1 flex items-center gap-1.5 text-[var(--scry-faint)]">
@@ -1354,7 +1385,9 @@ export function RequestsView({
                     <CircleCheck className="h-3.5 w-3.5" />
                     {t("requests.requestedMonitorType")}
                   </div>
-                  <div className="text-[var(--scry-ink2)]">{requestedMonitorType}</div>
+                  <div className="text-[var(--scry-ink2)]">
+                    {requestedMonitorType}
+                  </div>
                   {requestedSelectionSummary ? (
                     <div
                       id={mediaRequestMonitorSelectionId(request.id)}
@@ -1448,7 +1481,11 @@ export function RequestsView({
               disabled={loading}
               aria-label="Refresh requests"
             >
-              {loading ? <LoadingMark className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+              {loading ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
             </Button>
           ) : null}
         </div>
@@ -1476,11 +1513,13 @@ export function RequestsView({
               </>
             ) : null}
             {mode === "admin"
-              ? ([
-                  ["MOVIE", "Movie"],
-                  ["SERIES", t("search.facetSeries")],
-                  ["ANIME", t("search.facetAnime")],
-                ] as Array<[RequestFacetFilter, string]>).map(([facet, label]) => (
+              ? (
+                  [
+                    ["MOVIE", "Movie"],
+                    ["SERIES", t("search.facetSeries")],
+                    ["ANIME", t("search.facetAnime")],
+                  ] as Array<[RequestFacetFilter, string]>
+                ).map(([facet, label]) => (
                   <UnderlineFilterButton
                     key={facet}
                     selected={adminFacetFilters[facet]}
@@ -1511,7 +1550,11 @@ export function RequestsView({
         <div className="grid gap-4">
           {displayedRequests.length === 0 && !loading ? (
             <div
-              id={mode === "admin" ? "requests-empty-admin" : "requests-empty-mine"}
+              id={
+                mode === "admin"
+                  ? "requests-empty-admin"
+                  : "requests-empty-mine"
+              }
               className="rounded-[14px] border border-dashed border-[var(--scry-border2)] bg-[var(--scry-surf)] px-4 py-8 text-center text-sm text-[var(--scry-muted3)]"
             >
               {mode === "admin" ? t("requests.empty") : t("requests.emptyMine")}
@@ -1521,7 +1564,12 @@ export function RequestsView({
           {displayedRequests.map(renderRequestCard)}
         </div>
       </div>
-      <Dialog open={approvalRequest !== null} onOpenChange={(open) => { if (!open) closeApprovalDialog(); }}>
+      <Dialog
+        open={approvalRequest !== null}
+        onOpenChange={(open) => {
+          if (!open) closeApprovalDialog();
+        }}
+      >
         <DialogContent
           id="approve-media-request-dialog"
           className="max-h-[85vh] overflow-y-auto sm:max-w-md"
@@ -1696,7 +1744,12 @@ export function RequestsView({
             </div>
           ) : null}
           <DialogFooter>
-            <Button id="approve-media-request-cancel" type="button" variant="outline" onClick={closeApprovalDialog}>
+            <Button
+              id="approve-media-request-cancel"
+              type="button"
+              variant="outline"
+              onClick={closeApprovalDialog}
+            >
               {t("label.cancel")}
             </Button>
             <Button
@@ -1715,7 +1768,12 @@ export function RequestsView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={editRequest !== null} onOpenChange={(open) => { if (!open) closeEditDialog(); }}>
+      <Dialog
+        open={editRequest !== null}
+        onOpenChange={(open) => {
+          if (!open) closeEditDialog();
+        }}
+      >
         <DialogContent id="edit-media-request-dialog" className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t("requests.modifyTitle")}</DialogTitle>
@@ -1727,7 +1785,9 @@ export function RequestsView({
             <Select
               value={editProfileId}
               onValueChange={setEditProfileId}
-              disabled={actionRequestId !== null || editProfileOptions.length === 0}
+              disabled={
+                actionRequestId !== null || editProfileOptions.length === 0
+              }
             >
               <SelectTrigger id="edit-media-request-quality-profile">
                 <SelectValue />
@@ -1791,7 +1851,12 @@ export function RequestsView({
             />
           ) : null}
           <DialogFooter>
-            <Button id="edit-media-request-cancel" type="button" variant="outline" onClick={closeEditDialog}>
+            <Button
+              id="edit-media-request-cancel"
+              type="button"
+              variant="outline"
+              onClick={closeEditDialog}
+            >
               {t("label.cancel")}
             </Button>
             <Button
@@ -1799,9 +1864,7 @@ export function RequestsView({
               type="button"
               onClick={confirmUpdate}
               disabled={
-                !editProfileId ||
-                actionRequestId !== null ||
-                editBlocksConfirm
+                !editProfileId || actionRequestId !== null || editBlocksConfirm
               }
             >
               <Check className="h-4 w-4" />

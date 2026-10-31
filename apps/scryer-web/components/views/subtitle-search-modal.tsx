@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 import { Search, ArrowDownToLine, Hash, CircleAlert } from "lucide-react";
@@ -36,7 +37,10 @@ import type {
   ExternalSubtitleBlocklistEntryRecord,
   ExternalSubtitleRecord,
 } from "@/lib/types/subtitles";
-import { SUBTITLE_LANGUAGES, type SubtitleLanguage } from "@/lib/constants/subtitle-languages";
+import {
+  SUBTITLE_LANGUAGES,
+  type SubtitleLanguage,
+} from "@/lib/constants/subtitle-languages";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import { formatUiDateTime } from "@/lib/utils/date-format";
@@ -68,7 +72,9 @@ export function SubtitleSearchModal({
   const client = useClient();
   const { user } = useAuth();
   const [language, setLanguage] = React.useState("");
-  const [availableLanguages, setAvailableLanguages] = React.useState<string[]>([]);
+  const [availableLanguages, setAvailableLanguages] = React.useState<string[]>(
+    [],
+  );
   const [status, setStatus] = React.useState<SubtitleSearchStatus | null>(null);
   const [results, setResults] = React.useState<SubtitleSearchResult[]>([]);
   const [hasSearched, setHasSearched] = React.useState(false);
@@ -96,7 +102,8 @@ export function SubtitleSearchModal({
       throw error;
     }
     setBlacklistEntries(
-      (data?.externalSubtitleBlocklistEntries ?? []) as ExternalSubtitleBlocklistEntryRecord[],
+      (data?.externalSubtitleBlocklistEntries ??
+        []) as ExternalSubtitleBlocklistEntryRecord[],
     );
   }, [client, mediaFileId]);
 
@@ -121,7 +128,8 @@ export function SubtitleSearchModal({
           })
           .toPromise();
         if (error) throw error;
-        const payload = data?.searchSubtitles as SubtitleSearchPayload | undefined;
+        const payload = data?.searchSubtitles as
+          SubtitleSearchPayload | undefined;
         if (!payload) {
           throw new Error(t("status.apiError"));
         }
@@ -131,7 +139,8 @@ export function SubtitleSearchModal({
         setLanguage(payload.language);
         setAvailableLanguages(payload.availableLanguages);
         const sorted = [...payload.results].sort(
-          (a: SubtitleSearchResult, b: SubtitleSearchResult) => b.score - a.score,
+          (a: SubtitleSearchResult, b: SubtitleSearchResult) =>
+            b.score - a.score,
         );
         setResults(sorted);
         if (
@@ -148,9 +157,11 @@ export function SubtitleSearchModal({
         // considered this file searchable, so treat it as READY and make sure
         // the picker holds something to search with.
         setStatus((current) => current ?? "READY");
-        setLanguage((current) => current || availableLanguagesRef.current[0] || "eng");
+        setLanguage(
+          (current) => current || availableLanguagesRef.current[0] || "eng",
+        );
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -176,7 +187,7 @@ export function SubtitleSearchModal({
     void loadBlocklistEntries().catch((error: unknown) => {
       if (!cancelled) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       }
@@ -217,7 +228,7 @@ export function SubtitleSearchModal({
         await onChanged();
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -240,7 +251,9 @@ export function SubtitleSearchModal({
     if (availableLanguages.length === 0) {
       return SUBTITLE_LANGUAGES;
     }
-    const rank = new Map(availableLanguages.map((code, index) => [code, index]));
+    const rank = new Map(
+      availableLanguages.map((code, index) => [code, index]),
+    );
     return [...SUBTITLE_LANGUAGES].sort((a, b) => {
       const left = rank.get(a.code) ?? Number.MAX_SAFE_INTEGER;
       const right = rank.get(b.code) ?? Number.MAX_SAFE_INTEGER;
@@ -315,7 +328,10 @@ export function SubtitleSearchModal({
               </div>
             ) : null}
             <div className="flex items-center gap-2">
-              <div id="subtitle-search-language-picker" className="min-w-0 flex-1">
+              <div
+                id="subtitle-search-language-picker"
+                className="min-w-0 flex-1"
+              >
                 <SubtitleLanguagePicker
                   value={language ? [language] : []}
                   languageOptions={languageOptions}
@@ -368,7 +384,10 @@ export function SubtitleSearchModal({
                         className="rounded-lg border border-border/60 bg-background/50 px-3 py-2"
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <Badge tone="info" className="px-1.5 text-[10px] uppercase tracking-wide">
+                          <Badge
+                            tone="info"
+                            className="px-1.5 text-[10px] uppercase tracking-wide"
+                          >
                             {entry.language}
                           </Badge>
                           <span className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -418,7 +437,10 @@ export function SubtitleSearchModal({
                   {results.map((r) => (
                     <TableRow
                       key={r.providerFileId}
-                      id={selectorId("subtitle-search-result-row", r.providerFileId)}
+                      id={selectorId(
+                        "subtitle-search-result-row",
+                        r.providerFileId,
+                      )}
                       data-ui="subtitle-search-result-row"
                       data-subtitle-release-info={r.releaseInfo}
                     >
@@ -443,7 +465,10 @@ export function SubtitleSearchModal({
                       <TableCell className="text-center">
                         <div className="flex justify-center gap-1">
                           {r.hearingImpaired ? (
-                            <Badge tone="warning" className="px-1.5 text-[10px]">
+                            <Badge
+                              tone="warning"
+                              className="px-1.5 text-[10px]"
+                            >
                               {t("subtitle.hearingImpaired")}
                             </Badge>
                           ) : null}
@@ -453,12 +478,18 @@ export function SubtitleSearchModal({
                             </Badge>
                           ) : null}
                           {r.aiTranslated ? (
-                            <Badge tone="negative" className="px-1.5 text-[10px]">
+                            <Badge
+                              tone="negative"
+                              className="px-1.5 text-[10px]"
+                            >
                               {t("subtitle.aiTranslated")}
                             </Badge>
                           ) : null}
                           {r.machineTranslated ? (
-                            <Badge tone="negative" className="px-1.5 text-[10px]">
+                            <Badge
+                              tone="negative"
+                              className="px-1.5 text-[10px]"
+                            >
                               {t("subtitle.machineTranslated")}
                             </Badge>
                           ) : null}
@@ -469,8 +500,15 @@ export function SubtitleSearchModal({
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-right">
                         <IconButton
-                          id={selectorId("subtitle-search-download", r.providerFileId)}
-                          label={downloadingId === r.providerFileId ? t("subtitle.downloading") : t("subtitle.download")}
+                          id={selectorId(
+                            "subtitle-search-download",
+                            r.providerFileId,
+                          )}
+                          label={
+                            downloadingId === r.providerFileId
+                              ? t("subtitle.downloading")
+                              : t("subtitle.download")
+                          }
                           tone="install"
                           disabled={downloadingId === r.providerFileId}
                           onClick={() => void handleDownload(r)}

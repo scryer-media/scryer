@@ -117,13 +117,22 @@ async fn artwork_jpegs_obey_schedule_admission_shutdown_and_failure_bounds() {
                 .unwrap()
         });
         cache.wait_started(workers).await;
-        // Every worker is parked on the gate, so no further item can start;
-        // the `workers + 8` total below proves none did.
+        // Every worker is parked on the gate; cancellation must drain exactly
+        // these images and leave the rest for the next invocation.
         assert_eq!(cache.started.load(Ordering::SeqCst), workers);
         stop.cancel();
+        assert!(
+            app.runtime
+                .jobs
+                .background_disk_maintenance
+                .try_lock()
+                .is_err()
+        );
+        cache.gate.add_permits(workers);
         let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
-        assert_eq!(summary.processed, 0);
-        assert_eq!(cache.pending.lock().await.len(), 8);
+        assert_eq!((summary.processed, summary.failed), (workers - 1, 1));
+        assert_eq!(cache.pending.lock().await.len(), 9 - workers);
+        assert_eq!(cache.started.load(Ordering::SeqCst), workers);
 
         cache.gate.add_permits(8);
         let summary = app
@@ -135,8 +144,8 @@ async fn artwork_jpegs_obey_schedule_admission_shutdown_and_failure_bounds() {
             )
             .await
             .unwrap();
-        assert_eq!((summary.processed, summary.failed), (7, 1));
-        assert_eq!(cache.started.load(Ordering::SeqCst), workers + 8);
+        assert_eq!((summary.processed, summary.failed), (8 - workers, 1));
+        assert_eq!(cache.started.load(Ordering::SeqCst), 9);
         assert_eq!(cache.pending.lock().await.len(), 1);
     }
 }
@@ -250,7 +259,9 @@ async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scan
     assert!(
         matches!(
             app.run_title_image_cache_refresh().await,
-            Err(AppError::Validation(_))
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
         ),
         "a reset requested while one runs must collapse into it"
     );
@@ -331,7 +342,7 @@ impl TitleImageRepository for ChunkedTitleImageRepo {
         self.list_calls.fetch_add(1, Ordering::SeqCst);
         if self
             .list_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
@@ -442,7 +453,7 @@ async fn wait_for_image_processor_starts(
 ) {
     timeout(TEST_WAIT_DEADLINE, async {
         while processor.started.load(Ordering::SeqCst) < expected {
-            sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
     })
     .await
@@ -526,6 +537,48 @@ async fn artwork_job_yields_maintenance_lock_between_bounded_groups() {
         .expect("image loop should stop after cancellation")
         .expect("image loop task should not panic")
         .expect("artwork job should succeed");
+}
+
+#[tokio::test]
+async fn dropping_artwork_caller_keeps_admission_until_encoding_finishes() {
+    let (app, _) = bootstrap();
+    let images = Arc::new(ChunkedTitleImageRepo::new(2));
+    let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_title_images(images.clone())
+            .with_title_image_processor(processor.clone())
+            .with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+    });
+    let running = app.clone();
+    let caller = tokio::spawn(async move {
+        running
+            .run_artwork_encoding(&artwork_test_run(JobTriggerSource::Manual))
+            .await
+    });
+    wait_for_image_processor_starts(&processor, 2).await;
+    caller.abort();
+    assert!(
+        within_deadline("dropped artwork caller", caller)
+            .await
+            .is_err_and(|error| error.is_cancelled())
+    );
+    assert!(
+        app.runtime
+            .jobs
+            .background_disk_maintenance
+            .try_lock()
+            .is_err()
+    );
+    processor.first_chunk_gate.add_permits(2);
+    let token = tokio_util::sync::CancellationToken::new();
+    let _next = within_deadline(
+        "artwork I/O to drain",
+        app.acquire_image_maintenance(&token),
+    )
+    .await
+    .unwrap();
+    assert_eq!(images.pending_count().await, 0);
 }
 
 fn artwork_test_run(trigger_source: JobTriggerSource) -> JobRunRecord {
@@ -764,6 +817,12 @@ async fn artwork_scheduler_retries_transient_errors_without_bypassing_cutoff() {
             );
         }
         token.cancel();
+        within_deadline(
+            "artwork scheduler shutdown",
+            app.runtime.catalog.artwork_shutdown.cancelled(),
+        )
+        .await;
+        processor.first_chunk_gate.add_permits(4);
         timeout(TEST_WAIT_DEADLINE, worker).await.unwrap().unwrap();
     }
 }
@@ -812,7 +871,7 @@ async fn artwork_scheduler_bounds_retries_of_persistent_repository_errors() {
 // Paused clock: a sleep returns only once every task is idle, so a job that
 // would admit more work during the scan pause has done so before the check.
 #[tokio::test(start_paused = true)]
-async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images() {
+async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_drains_active_images() {
     for shutdown in [false, true] {
         let (app, _) = bootstrap();
         let images = Arc::new(ChunkedTitleImageRepo::new(8));
@@ -856,6 +915,7 @@ async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images(
             .unwrap();
         if shutdown {
             token.cancel();
+            processor.first_chunk_gate.add_permits(2);
         } else {
             processor.first_chunk_gate.add_permits(4);
             sleep(Duration::from_millis(50)).await;
@@ -871,8 +931,8 @@ async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images(
             .await
             .unwrap();
         let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
-        assert_eq!(summary.processed, if shutdown { 0 } else { 2 });
-        assert_eq!(images.pending_count().await, if shutdown { 8 } else { 6 });
+        assert_eq!(summary.processed, 2);
+        assert_eq!(images.pending_count().await, 6);
         assert_eq!(processor.started.load(Ordering::SeqCst), 2);
     }
 }
@@ -918,15 +978,20 @@ async fn artwork_scheduler_starts_inside_window_and_after_a_sleep_or_clock_jump(
         let admitted = processor.started.load(Ordering::SeqCst);
         assert!(matches!(admitted, 2 | 4));
         token.cancel();
-        app.runtime.catalog.artwork_shutdown.cancelled().await;
+        within_deadline(
+            "artwork scheduler shutdown",
+            app.runtime.catalog.artwork_shutdown.cancelled(),
+        )
+        .await;
+        processor.first_chunk_gate.add_permits(admitted);
         timeout(TEST_WAIT_DEADLINE, worker).await.unwrap().unwrap();
         assert_eq!(processor.started.load(Ordering::SeqCst), admitted);
-        assert_eq!(images.pending_count().await, 8);
+        assert_eq!(images.pending_count().await, 8 - admitted);
     }
 }
 
 #[tokio::test]
-async fn artwork_shutdown_abandons_in_flight_images_and_closes_future_admission() {
+async fn artwork_shutdown_drains_in_flight_images_and_closes_future_admission() {
     let (app, admin) = bootstrap();
     let images = Arc::new(ChunkedTitleImageRepo::new(8));
     let processor = Arc::new(ChunkGatedTitleImageProcessor::new());
@@ -942,6 +1007,14 @@ async fn artwork_shutdown_abandons_in_flight_images_and_closes_future_admission(
     wait_for_image_processor_starts(&processor, 2).await;
     app.runtime.catalog.artwork_shutdown.cancel();
     let admitted = processor.started.load(Ordering::SeqCst);
+    assert!(
+        app.runtime
+            .jobs
+            .background_disk_maintenance
+            .try_lock()
+            .is_err()
+    );
+    processor.first_chunk_gate.add_permits(admitted);
     timeout(TEST_WAIT_DEADLINE, async {
         while app
             .runtime
@@ -950,13 +1023,19 @@ async fn artwork_shutdown_abandons_in_flight_images_and_closes_future_admission(
             .has_active_job(JobKey::ArtworkEncoding)
             .await
         {
-            sleep(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    // The processor gates stay closed: shutdown must not wait for encoding.
-    assert_eq!(images.pending_count().await, 8);
+    assert_eq!(images.pending_count().await, 8 - admitted);
+    assert!(
+        app.runtime
+            .jobs
+            .background_disk_maintenance
+            .try_lock()
+            .is_ok()
+    );
     assert!(
         app.trigger_job(&admin, JobKey::ArtworkEncoding)
             .await

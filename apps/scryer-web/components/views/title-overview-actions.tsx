@@ -17,7 +17,8 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 
 export const TITLE_OVERVIEW_CONTROL_PANEL_ID = "title-overview-control-panel";
-export const TITLE_OVERVIEW_SEARCH_MONITORED_ID = "title-overview-search-monitored";
+export const TITLE_OVERVIEW_SEARCH_MONITORED_ID =
+  "title-overview-search-monitored";
 export const TITLE_OVERVIEW_SETTINGS_PANEL_ID = "title-overview-settings-panel";
 
 export type TitleOverviewInteractiveSearchAction = {
@@ -83,7 +84,9 @@ export function TitleOverviewActions({
         <TitleWorkspaceActionButton
           id="title-overview-toggle-monitoring"
           icon={monitored ? EyeOff : Eye}
-          label={monitored ? t("title.unmonitorAction") : t("title.monitorAction")}
+          label={
+            monitored ? t("title.unmonitorAction") : t("title.monitorAction")
+          }
           active={monitored}
           pressed={monitored}
           loading={monitoredUpdating}

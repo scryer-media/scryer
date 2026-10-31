@@ -185,10 +185,10 @@ fn push_positive_imdb_external_id(
 ///
 /// Shared by the single-title facet handler path and the bulk hydration loop.
 pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> HydrationResult {
-    // Every id here belongs to a movie payload, so the entity kind is known:
+    // Preserve gateway identities, then supplement the typed movie fields:
     // SMG's own id names a title, the provider ids name a movie, and the AniDB
     // id names an anime entry.
-    let mut extra_external_ids = Vec::new();
+    let mut extra_external_ids = movie.external_ids;
     if let Some(smg_id) = movie.smg_id {
         extra_external_ids.push(scryer_domain::ExternalId::with_kind(
             "smg",
@@ -287,11 +287,8 @@ pub(crate) async fn hydrate_referenced_movie_metadata(
 
 /// The identity a series fetched through SMG's title surface adds to the title.
 ///
-/// SMG's title id is always kept: it is how the next hydration (and a
-/// redirect) addresses the series. A TMDB-primary series has no TVDB id, so
-/// its TMDB id is the only provider id it can be matched and searched by. A
-/// TVDB-backed series gains nothing else, so its persisted identity stays
-/// what the TVDB-keyed documents produced.
+/// Keep both provider identities regardless of which provider is primary.
+/// SMG's title id addresses subsequent hydration and redirects.
 fn series_title_extra_external_ids(
     series: &SeriesMetadata,
     existing: &[ExternalId],
@@ -300,9 +297,8 @@ fn series_title_extra_external_ids(
     if let Some(smg_id) = series.smg_id.filter(|id| *id > 0) {
         external_ids.push(ExternalId::with_kind("smg", "title", smg_id.to_string()));
     }
-    if series.tvdb_id <= 0
-        && let Some(tmdb_id) = series.tmdb_id.filter(|id| *id > 0)
-    {
+    push_positive_kinded_external_id(&mut external_ids, "tvdb", "series", Some(series.tvdb_id));
+    if let Some(tmdb_id) = series.tmdb_id.filter(|id| *id > 0) {
         let value = tmdb_id.to_string();
         // Only an id that can stand for the series counts: an anime mapping
         // for a film carries `tmdb:movie:N`, which TMDB numbers apart from
@@ -322,13 +318,16 @@ fn series_title_extra_external_ids(
 /// Build a [`HydrationResult`] from an already-fetched [`SeriesMetadata`].
 pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> HydrationResult {
     let mut extra_external_ids = primary_anime_mapping_extra_external_ids(&series.anime_mappings);
-    extra_external_ids.extend(series_title_extra_external_ids(
-        &series,
-        &extra_external_ids,
-    ));
+    extra_external_ids.extend(series.external_ids.iter().cloned());
+    for external_id in series_title_extra_external_ids(&series, &extra_external_ids) {
+        if !extra_external_ids.contains(&external_id) {
+            extra_external_ids.push(external_id);
+        }
+    }
     // Carry the series-level facts `TitleMetadataUpdate` has no home for. Only the cheap fields
     // are copied; see `HydrationResult::raw_series`.
     let raw_series = SeriesMetadata {
+        external_ids: series.external_ids.clone(),
         target_key: series.target_key.clone(),
         smg_id: series.smg_id,
         primary_source: series.primary_source.clone(),
@@ -448,10 +447,10 @@ pub trait FacetHandler: Send + Sync {
         language: &str,
     ) -> AppResult<HydrationResult> {
         let _ = (gateway, series_ref, language);
-        Err(crate::AppError::Validation(format!(
-            "{} titles have no series metadata",
-            self.facet_id()
-        )))
+        Err(crate::AppError::validation_refused(
+            crate::error_reasons::catalog::TITLES_NO_SERIES_METADATA,
+            format!("{} titles have no series metadata", self.facet_id()),
+        ))
     }
 }
 
@@ -667,6 +666,52 @@ mod tests {
             .filter(|external_id| external_id.source == "tmdb")
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn hydration_preserves_all_gateway_external_ids() {
+        let external_ids = vec![
+            ExternalId::with_kind("imdb", "series", "tt1234567"),
+            ExternalId::with_kind("tmdb", "series", "136315"),
+            ExternalId::with_kind("tmdb", "movie", "9001"),
+            ExternalId::with_kind("trakt", "series", "123"),
+            ExternalId::new("custom-provider", "opaque-id"),
+        ];
+        let mut series = test_series(vec![]);
+        series.external_ids = external_ids.clone();
+        let result = series_to_hydration_result(series, "eng");
+        for id in &external_ids {
+            assert!(
+                result.metadata_update.extra_external_ids.contains(id),
+                "{id:?}"
+            );
+        }
+        assert_eq!(result.raw_series.unwrap().external_ids, external_ids);
+
+        let movie = MovieMetadata {
+            external_ids: external_ids.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            movie_to_hydration_result(movie, "eng")
+                .metadata_update
+                .extra_external_ids,
+            external_ids
+        );
+    }
+
+    #[test]
+    fn tvdb_backed_series_hydration_preserves_tmdb_id() {
+        let mut series = test_series(vec![]);
+        assert!(series.tvdb_id > 0);
+        series.tmdb_id = Some(136315);
+
+        let result = series_to_hydration_result(series, "eng");
+
+        assert_eq!(
+            tmdb_ids(&result),
+            vec![ExternalId::with_kind("tmdb", "series", "136315")]
+        );
     }
 
     #[test]

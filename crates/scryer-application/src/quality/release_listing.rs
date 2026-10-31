@@ -46,6 +46,9 @@ const MAX_INDEXER_LANGUAGE_BYTES: usize = 64;
 pub(crate) struct ReleaseListingSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grab_scoring: Option<scryer_domain::GrabScoringSnapshot>,
+    /// Normalized download protocol at capture; never inferred from a media file.
+    #[serde(default)]
+    pub protocol: Option<scryer_rules::ReleaseProtocol>,
     /// Publish time as the indexer gave it (trimmed). Only kept when it parses.
     #[serde(default)]
     pub published_at: Option<String>,
@@ -97,6 +100,9 @@ impl ReleaseListingSnapshot {
             .or_else(|| password_protection_hint(result.password_hint.as_deref()));
         Self {
             published_at: parseable_published_at(result.published_at.as_deref()),
+            protocol: result
+                .source_kind
+                .and_then(|kind| scryer_rules::ReleaseProtocol::parse(kind.protocol_family())),
             grab_scoring: None,
             thumbs_up: result.thumbs_up,
             thumbs_down: result.thumbs_down,
@@ -182,6 +188,9 @@ impl ReleaseListingSnapshot {
     ) -> Self {
         Self {
             published_at: parseable_published_at(release.published_at.as_deref()),
+            protocol: release
+                .source_kind
+                .and_then(|kind| scryer_rules::ReleaseProtocol::parse(kind.protocol_family())),
             grab_scoring: None,
             thumbs_up: None,
             thumbs_down: None,
@@ -226,6 +235,14 @@ impl ReleaseListingSnapshot {
             Some(version) if version.as_u64() == Some(SNAPSHOT_FORMAT_VERSION) => {}
             Some(_) => return None,
         }
+        // Only snapshots without the dedicated field may use retained metadata.
+        // An explicit null is a frozen unknown, even if extras disagree.
+        let protocol = object
+            .get("protocol")
+            .or_else(|| object.get("extra").and_then(|extra| extra.get("protocol")))
+            .and_then(Value::as_str)
+            .and_then(scryer_rules::ReleaseProtocol::parse);
+        object.insert("protocol".into(), serde_json::to_value(protocol).ok()?);
         let mut snapshot: Self = serde_json::from_value(Value::Object(object)).ok()?;
         let stored = std::mem::take(&mut snapshot.extra);
         snapshot.extra = bound_extra_entries(stored);
@@ -552,6 +569,7 @@ mod tests {
         extra.insert("list".to_string(), json!([1, "two", null, true]));
         ReleaseListingSnapshot {
             published_at: Some("2024-01-02T03:04:05Z".to_string()),
+            protocol: None,
             grab_scoring: None,
             thumbs_up: Some(7),
             thumbs_down: Some(-2),
@@ -891,7 +909,7 @@ mod tests {
         assert_eq!(
             encoded,
             concat!(
-                r#"{"v":1,"published_at":"2024-01-02T03:04:05Z","thumbs_up":7,"#,
+                r#"{"v":1,"protocol":null,"published_at":"2024-01-02T03:04:05Z","thumbs_up":7,"#,
                 r#""thumbs_down":-2,"is_password_protected":false,"#,
                 r#""indexer_languages":["en","fr"],"#,
                 r#""extra":{"alpha":"x","list":[1,"two",null,true],"zeta":3},"#,
@@ -923,6 +941,7 @@ mod tests {
             parsed,
             ReleaseListingSnapshot {
                 published_at: None,
+                protocol: None,
                 grab_scoring: None,
                 thumbs_up: None,
                 thumbs_down: None,
@@ -979,6 +998,98 @@ mod tests {
             ..full_snapshot()
         };
         assert_eq!(snapshot.age_days(at(2025, 1, 1)), None);
+    }
+
+    #[test]
+    fn protocol_is_frozen_from_every_normalized_source_kind() {
+        use crate::DownloadSourceKind::*;
+        use scryer_rules::ReleaseProtocol::*;
+        for (kind, expected) in [
+            (Some(NzbFile), Some(Usenet)),
+            (Some(NzbUrl), Some(Usenet)),
+            (Some(TorrentFile), Some(Torrent)),
+            (Some(MagnetUri), Some(Torrent)),
+            (Some(HttpResource), Some(Http)),
+            (None, None),
+        ] {
+            let mut result = search_result();
+            result.source_kind = kind;
+            result
+                .extra
+                .insert("protocol".into(), json!("conflicting-plugin-value"));
+            let snapshot = ReleaseListingSnapshot::for_scoring(&result, at(2024, 3, 1));
+            assert_eq!(snapshot.protocol, expected);
+            let raw = snapshot.to_json_string();
+            assert_eq!(ReleaseListingSnapshot::from_json_str(&raw), Some(snapshot));
+            result.release_listing_json = Some(raw);
+            result.source_kind = Some(HttpResource);
+            let frozen = ReleaseListingSnapshot::for_scoring(&result, at(2025, 3, 1));
+            assert_eq!(
+                frozen.protocol, expected,
+                "rescoring must not infer a new protocol"
+            );
+            let facts = crate::canonical_scoring::ListingFacts {
+                anchor: frozen.captured_at,
+                snapshot: frozen,
+            };
+            assert_eq!(
+                crate::user_rule_input::ReleaseRuntimeInfo::from_listing(None, Some(&facts))
+                    .protocol,
+                expected
+            );
+
+            let mut pending = pending_release(None);
+            pending.source_kind = kind;
+            assert_eq!(
+                ReleaseListingSnapshot::capture_from_pending_release(&pending, at(2024, 3, 1))
+                    .protocol,
+                expected
+            );
+        }
+        assert_eq!(
+            crate::user_rule_input::ReleaseRuntimeInfo::from_listing(None, None).protocol,
+            None
+        );
+    }
+
+    #[test]
+    fn historical_protocol_fallback_uses_only_retained_metadata() {
+        for (extra, expected) in [
+            (json!("usenet"), Some(scryer_rules::ReleaseProtocol::Usenet)),
+            (
+                json!(" TORRENT "),
+                Some(scryer_rules::ReleaseProtocol::Torrent),
+            ),
+            (json!("http"), Some(scryer_rules::ReleaseProtocol::Http)),
+            (json!("ftp"), None),
+            (json!(null), None),
+            (json!(42), None),
+        ] {
+            let mut raw =
+                json!({"v":1,"captured_at":"2024-02-01T12:00:00Z","extra":{"protocol":extra}});
+            let snapshot = ReleaseListingSnapshot::from_json_str(&raw.to_string()).unwrap();
+            assert_eq!(snapshot.protocol, expected);
+            assert_eq!(
+                ReleaseListingSnapshot::from_json_str(&snapshot.to_json_string()),
+                Some(snapshot)
+            );
+            for explicit in [json!(null), json!("unknown"), json!(false)] {
+                raw["protocol"] = explicit;
+                assert_eq!(
+                    ReleaseListingSnapshot::from_json_str(&raw.to_string())
+                        .unwrap()
+                        .protocol,
+                    None
+                );
+            }
+            raw["protocol"] = json!("http");
+            assert_eq!(
+                ReleaseListingSnapshot::from_json_str(&raw.to_string())
+                    .unwrap()
+                    .protocol,
+                Some(scryer_rules::ReleaseProtocol::Http)
+            );
+        }
     }
 
     #[test]
@@ -1197,6 +1308,7 @@ mod tests {
             snapshot,
             ReleaseListingSnapshot {
                 published_at: Some("2023-12-22T12:00:00Z".to_string()),
+                protocol: None,
                 grab_scoring: None,
                 thumbs_up: None,
                 thumbs_down: None,
@@ -1288,6 +1400,7 @@ mod tests {
     fn release_listing_view_maps_every_field_and_ages_to_the_capture() {
         let snapshot = ReleaseListingSnapshot {
             published_at: Some("2024-03-01T12:00:00Z".to_string()),
+            protocol: None,
             grab_scoring: None,
             thumbs_up: Some(7),
             thumbs_down: Some(2),

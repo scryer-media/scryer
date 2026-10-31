@@ -65,7 +65,10 @@ export function SeriesMoviePanel({
           <h3 className="text-xl font-bold leading-tight text-card-foreground">
             {movie.title}
             {movie.year ? (
-              <span className="font-medium text-muted-foreground"> ({movie.year})</span>
+              <span className="font-medium text-muted-foreground">
+                {" "}
+                ({movie.year})
+              </span>
             ) : null}
           </h3>
           {badges.length > 0 ? (
@@ -86,19 +89,31 @@ export function SeriesMoviePanel({
           </div>
           <TitleRatingsStrip ratings={movie.ratings} />
           {movie.overview ? (
-            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{movie.overview}</p>
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+              {movie.overview}
+            </p>
           ) : (
             <p className="mt-3 text-sm italic text-muted-foreground/60">
               {t("title.descriptionUnavailable")}
             </p>
           )}
           {link.signalSummary ? (
-            <p className="mt-2 text-xs text-muted-foreground/80">{link.signalSummary}</p>
+            <p className="mt-2 text-xs text-muted-foreground/80">
+              {link.signalSummary}
+            </p>
           ) : null}
           <div className="mt-3 flex flex-wrap gap-2 text-sm">
             <ImdbExternalLink imdbId={movie.imdbId} size="compact" />
-            <TvdbMovieExternalLink tvdbId={movie.tvdbId} slug={movie.slug} size="compact" />
-            <TmdbExternalLink mediaType="movie" tmdbId={movie.tmdbId} size="compact" />
+            <TvdbMovieExternalLink
+              tvdbId={movie.tvdbId}
+              slug={movie.slug}
+              size="compact"
+            />
+            <TmdbExternalLink
+              mediaType="movie"
+              tmdbId={movie.tmdbId}
+              size="compact"
+            />
             <MalExternalLink malId={movie.malId} size="compact" />
             <AnidbExternalLink anidbId={movie.anidbId} size="compact" />
           </div>
@@ -124,9 +139,15 @@ export function SeriesMoviePanel({
 function buildMovieBadges(
   link: SeriesMovieLink,
   hasFile: boolean | undefined,
-  t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string,
+  t: (
+    key: string,
+    values?: Record<string, string | number | boolean | null | undefined>,
+  ) => string,
 ): Array<{ label: string; tone: "emerald" | "amber" | "slate" | "red" }> {
-  const badges: Array<{ label: string; tone: "emerald" | "amber" | "slate" | "red" }> = [];
+  const badges: Array<{
+    label: string;
+    tone: "emerald" | "amber" | "slate" | "red";
+  }> = [];
 
   if (hasFile === true) {
     badges.push({ label: t("history.downloadCompleted"), tone: "emerald" });

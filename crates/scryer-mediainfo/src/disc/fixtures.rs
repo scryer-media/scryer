@@ -421,7 +421,7 @@ fn intact_bluray_uses_authored_trims_and_persists_manual_choice() {
 fn encrypted_longest_title_falls_back_only_for_automatic_selection() {
     let clip = video_clip();
     let mut scrambled = clip.clone();
-    for packet in scrambled.chunks_exact_mut(192) {
+    for packet in scrambled.as_chunks_mut::<192>().0 {
         if packet[4] == 0x47 {
             packet[7] |= 0x80;
         }
@@ -484,7 +484,7 @@ fn bluray_cuts_in_one_clip_probe_only_their_own_packet_ranges() {
     let clear = video_clip();
     let packets = (clear.len() / 192) as u32;
     let mut joined = clear.clone();
-    for packet in joined.chunks_exact_mut(192) {
+    for packet in joined.as_chunks_mut::<192>().0 {
         if packet[4] == 0x47 {
             packet[7] |= 0x80;
         }

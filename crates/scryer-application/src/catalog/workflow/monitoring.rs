@@ -23,7 +23,7 @@ fn parse_external_import_monitor_snapshot_line<T: serde::de::DeserializeOwned>(
     line: &str,
 ) -> AppResult<T> {
     serde_json::from_str(line).map_err(|err| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::catalog::SNAPSHOT_JSON_COLUMN_INVALID, format!(
             "invalid snapshot JSON ({:?}, column {})",
             err.classify(),
             err.column()
@@ -218,7 +218,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", title_id)))?;
         if current_title.monitored == monitored {
             return Ok(current_title);
         }
@@ -441,7 +441,7 @@ impl AppUseCase {
                         };
                         operation = "match_title";
                         let matched = matched.ok_or_else(|| {
-                            AppError::Validation("snapshot title is missing or ambiguous".into())
+                            AppError::validation_refused(crate::error_reasons::catalog::SNAPSHOT_TITLE_MISSING_AMBIGUOUS, "snapshot title is missing or ambiguous")
                         })?;
                         // Re-read monitoring so repeated entries see earlier successful writes.
                         operation = "read_title";
@@ -452,7 +452,7 @@ impl AppUseCase {
                             .get_by_id(&matched.id)
                             .await?
                             .ok_or_else(|| {
-                                AppError::Validation("snapshot title no longer exists".into())
+                                AppError::validation_refused(crate::error_reasons::catalog::SNAPSHOT_TITLE_NO_LONGER_EXISTS, "snapshot title no longer exists")
                             })?;
                         let title = applied_title.insert(title);
                         operation = "apply_children";
@@ -628,6 +628,31 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    pub(crate) async fn has_pending_external_import_monitor_snapshot_for_library(
+        &self,
+        facet: &MediaFacet,
+        library_id: &str,
+    ) -> AppResult<bool> {
+        let entry_kind = if *facet == MediaFacet::Movie {
+            ExternalImportMonitorSnapshotEntryKind::Movie
+        } else {
+            ExternalImportMonitorSnapshotEntryKind::Series
+        };
+        let chunks = self
+            .services
+            .workflow
+            .external_import_monitor_snapshots
+            .list_external_import_monitor_snapshot_chunk_batch(
+                &crate::external_import_monitor_apply_session_id_for_library(library_id),
+                facet.clone(),
+                entry_kind,
+                None,
+                1,
+            )
+            .await?;
+        Ok(!chunks.is_empty())
+    }
+
     pub(crate) async fn apply_pending_external_import_monitor_snapshot_for_library(
         &self,
         facet: &MediaFacet,
@@ -716,7 +741,7 @@ impl AppUseCase {
             .shows
             .get_collection_by_id(collection_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::COLLECTION_NOT_FOUND, format!("collection {}", collection_id)))?;
         let collection_changed = current_collection.monitored != monitored;
         let episode_propagation_changed = if propagate_to_episodes {
             self.services
@@ -746,7 +771,7 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&collection.title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", collection.title_id)))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", collection.title_id)))?;
 
             if !title.monitored {
                 final_title = Some(self.persist_title_monitoring(&title.id, true).await?);
@@ -797,7 +822,7 @@ impl AppUseCase {
             .shows
             .get_episode_by_id(episode_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("episode {}", episode_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::EPISODE_NOT_FOUND, format!("episode {}", episode_id)))?;
         let episode_changed = current_episode.monitored != monitored;
         let episode = if episode_changed {
             self.persist_episode_monitoring(episode_id, monitored)
@@ -817,7 +842,7 @@ impl AppUseCase {
                     .shows
                     .get_collection_by_id(collection_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::COLLECTION_NOT_FOUND, format!("collection {}", collection_id)))?;
 
                 if !collection.monitored {
                     self.persist_collection_monitoring(collection_id, true, false)
@@ -836,7 +861,7 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&episode.title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", episode.title_id)))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", episode.title_id)))?;
 
             if !title.monitored {
                 final_title = Some(self.persist_title_monitoring(&title.id, true).await?);
@@ -883,14 +908,14 @@ impl AppUseCase {
             .shows
             .get_series_movie_link_by_id(series_movie_link_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("series movie {}", series_movie_link_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::SERIES_MOVIE_NOT_FOUND, format!("series movie {}", series_movie_link_id)))?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&link.series_title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", link.series_title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", link.series_title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -960,7 +985,7 @@ impl AppUseCase {
             .libraries
             .title_library_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {id}")))?;
         self.require_library_permission(
             actor,
             &library_id,
@@ -991,14 +1016,14 @@ impl AppUseCase {
             .shows
             .get_collection_by_id(collection_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("collection {}", collection_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::COLLECTION_NOT_FOUND, format!("collection {}", collection_id)))?;
         let library_id = self
             .services
             .catalog
             .libraries
             .title_library_id(&collection.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", collection.title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", collection.title_id)))?;
         self.require_library_permission(
             actor,
             &library_id,
@@ -1031,14 +1056,14 @@ impl AppUseCase {
             .shows
             .get_episode_by_id(episode_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("episode {}", episode_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::EPISODE_NOT_FOUND, format!("episode {}", episode_id)))?;
         let library_id = self
             .services
             .catalog
             .libraries
             .title_library_id(&episode.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", episode.title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", episode.title_id)))?;
         self.require_library_permission(
             actor,
             &library_id,
@@ -1088,7 +1113,7 @@ impl AppUseCase {
             .shows
             .get_collection_by_id(&collection_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("collection {collection_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::COLLECTION_NOT_FOUND, format!("collection {collection_id}")))?;
         let _location_guard = self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::COLLECTION_EDIT_ENTRY,
@@ -1098,14 +1123,12 @@ impl AppUseCase {
         if let Some(raw) = &collection_type
             && raw.trim().is_empty()
         {
-            return Err(AppError::Validation(
-                "collection type cannot be empty".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_TYPE_REQUIRED, "collection type cannot be empty"));
         }
         let parsed_type = collection_type
             .map(|raw| {
                 CollectionType::parse(raw.trim().to_lowercase().as_str()).ok_or_else(|| {
-                    AppError::Validation(format!("unknown collection type: {}", raw))
+                    AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_TYPE_UNKNOWN, format!("unknown collection type: {}", raw))
                 })
             })
             .transpose()?;
@@ -1113,9 +1136,7 @@ impl AppUseCase {
         if let Some(raw) = &collection_index
             && raw.trim().is_empty()
         {
-            return Err(AppError::Validation(
-                "collection index cannot be empty".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_INDEX_REQUIRED, "collection index cannot be empty"));
         }
 
         let update = CollectionUpdate {
@@ -1129,9 +1150,7 @@ impl AppUseCase {
             monitored,
         };
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one collection field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_FIELD_REQUIRED, "at least one collection field must be provided"));
         }
 
         let has_non_monitor_updates = update.has_non_monitor_changes();
@@ -1165,7 +1184,7 @@ impl AppUseCase {
         }
 
         let collection = collection.ok_or_else(|| {
-            AppError::Validation("at least one collection field must be provided".into())
+            AppError::validation_refused(crate::error_reasons::catalog::COLLECTION_FIELD_REQUIRED, "at least one collection field must be provided")
         })?;
 
         Ok(collection)
@@ -1206,7 +1225,7 @@ impl AppUseCase {
             .shows
             .get_episode_by_id(&episode_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::EPISODE_NOT_FOUND, format!("episode {episode_id}")))?;
         let _location_guard = self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::EPISODE_EDIT_ENTRY,
@@ -1216,13 +1235,13 @@ impl AppUseCase {
         if let Some(raw) = &episode_type
             && raw.trim().is_empty()
         {
-            return Err(AppError::Validation("episode type cannot be empty".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::EPISODE_TYPE_REQUIRED, "episode type cannot be empty"));
         }
 
         let parsed_episode_type = episode_type
             .map(|value| {
                 scryer_domain::EpisodeType::parse(value.trim().to_lowercase().as_str())
-                    .ok_or_else(|| AppError::Validation(format!("unknown episode type: {}", value)))
+                    .ok_or_else(|| AppError::validation_refused(crate::error_reasons::catalog::EPISODE_TYPE_UNKNOWN, format!("unknown episode type: {}", value)))
             })
             .transpose()?;
 
@@ -1242,9 +1261,7 @@ impl AppUseCase {
             ..Default::default()
         };
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one episode field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::EPISODE_FIELD_REQUIRED, "at least one episode field must be provided"));
         }
 
         let has_non_monitor_updates = update.has_non_monitor_changes();
@@ -1272,7 +1289,7 @@ impl AppUseCase {
         }
 
         let episode = episode.ok_or_else(|| {
-            AppError::Validation("at least one episode field must be provided".into())
+            AppError::validation_refused(crate::error_reasons::catalog::EPISODE_FIELD_REQUIRED, "at least one episode field must be provided")
         })?;
 
         Ok(episode)
@@ -1391,7 +1408,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,

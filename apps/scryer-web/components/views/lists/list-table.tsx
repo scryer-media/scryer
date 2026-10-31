@@ -15,7 +15,11 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import type { ListAccount, ListProviderManifest, ListSubscription } from "@/lib/types/lists";
+import type {
+  ListAccount,
+  ListProviderManifest,
+  ListSubscription,
+} from "@/lib/types/lists";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   type ListSort,
@@ -56,17 +60,30 @@ export function ListTable({
 }: ListTableProps) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const providerByType = new Map(providers.map((provider) => [provider.providerType, provider]));
+  const providerByType = new Map(
+    providers.map((provider) => [provider.providerType, provider]),
+  );
   // Until a column is picked the lists keep the order they were loaded in.
   const [sort, setSort] = React.useState<ListSort | null>(null);
   const accountLabels = React.useMemo(
-    () => new Map((accounts ?? []).map((account) => [account.id, listAccountLabel(account)])),
+    () =>
+      new Map(
+        (accounts ?? []).map((account) => [
+          account.id,
+          listAccountLabel(account),
+        ]),
+      ),
     [accounts],
   );
   const sorted = React.useMemo(
     () =>
-      sortListSubscriptions(subscriptions, sort, (subscription) =>
-        (subscription.accountId ? accountLabels.get(subscription.accountId) : null) ?? "",
+      sortListSubscriptions(
+        subscriptions,
+        sort,
+        (subscription) =>
+          (subscription.accountId
+            ? accountLabels.get(subscription.accountId)
+            : null) ?? "",
       ),
     [subscriptions, sort, accountLabels],
   );
@@ -78,27 +95,45 @@ export function ListTable({
         label={label}
         active={active}
         descending={active && sort.descending}
-        onSort={() => setSort({ key, descending: active ? !sort.descending : false })}
+        onSort={() =>
+          setSort({ key, descending: active ? !sort.descending : false })
+        }
       />
     );
   };
 
   return (
-    <Table id="lists-table" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
+    <Table
+      id="lists-table"
+      wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]"
+    >
       <TableHeader>
         <TableRow>
           {sortableHead("name", t("lists.table.list"))}
           {accounts ? sortableHead("account", t("label.account")) : null}
-          <TableHead className="hidden md:table-cell">{t("lists.table.coverage")}</TableHead>
-          <TableHead className="hidden sm:table-cell">{t("lists.table.mode")}</TableHead>
-          {canManageLists ? <TableHead className="w-[1%] text-center">{t("label.enabled")}</TableHead> : null}
+          <TableHead className="hidden md:table-cell">
+            {t("lists.table.coverage")}
+          </TableHead>
+          <TableHead className="hidden sm:table-cell">
+            {t("lists.table.mode")}
+          </TableHead>
+          {canManageLists ? (
+            <TableHead className="w-[1%] text-center">
+              {t("label.enabled")}
+            </TableHead>
+          ) : null}
           {sortableHead("sync", t("lists.table.lastSync"))}
-          {canManageLists ? <TableHead className="w-[1%] text-right">{t("label.actions")}</TableHead> : null}
+          {canManageLists ? (
+            <TableHead className="w-[1%] text-right">
+              {t("label.actions")}
+            </TableHead>
+          ) : null}
         </TableRow>
       </TableHeader>
       <TableBody>
         {sorted.map((subscription) => {
-          const provider = providerByType.get(subscription.source.provider) ?? null;
+          const provider =
+            providerByType.get(subscription.source.provider) ?? null;
           const busy = busyIds.has(subscription.id);
           const state = shownListSyncState(subscription);
           return (
@@ -106,6 +141,7 @@ export function ListTable({
               key={subscription.id}
               id={`list-row-${subscription.id}`}
               data-ui="list-subscription-row"
+              data-list-name={subscription.name}
               className="cursor-pointer hover:bg-[var(--scry-hover)]"
               onClick={() => onOpen(subscription)}
             >
@@ -114,6 +150,7 @@ export function ListTable({
                   <ProviderTile provider={provider} size="sm" />
                   <div className="min-w-0">
                     <button
+                      id={`list-open-${subscription.id}`}
                       type="button"
                       className="block max-w-full truncate text-left text-[14px] font-semibold text-[var(--scry-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
                       onClick={(event) => {
@@ -125,41 +162,65 @@ export function ListTable({
                     </button>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--scry-muted)]">
                       {/* The logo names the provider on screen; this names it to a screen reader. */}
-                      <span className="sr-only">{provider?.name ?? subscription.source.provider}</span>
-                      {subscription.kinds.length > 0 ? <FacetTags values={subscription.kinds} emptyLabel={null} /> : null}
+                      <span className="sr-only">
+                        {provider?.name ?? subscription.source.provider}
+                      </span>
+                      {subscription.kinds.length > 0 ? (
+                        <FacetTags
+                          values={subscription.kinds}
+                          emptyLabel={null}
+                        />
+                      ) : null}
                     </div>
                   </div>
                 </div>
               </TableCell>
               {accounts ? (
-                <TableCell data-ui="list-subscription-account" className="text-[13px] text-[var(--scry-ink2)]">
-                  {(subscription.accountId ? accountLabels.get(subscription.accountId) : null) ?? null}
+                <TableCell
+                  data-ui="list-subscription-account"
+                  className="text-[13px] text-[var(--scry-ink2)]"
+                >
+                  {(subscription.accountId
+                    ? accountLabels.get(subscription.accountId)
+                    : null) ?? null}
                 </TableCell>
               ) : null}
               <TableCell className="hidden w-36 md:table-cell">
                 <ListCoverageBar counts={subscription.counts} legend="hover" />
               </TableCell>
               <TableCell className="hidden sm:table-cell">
-                <span className="text-[13px] text-[var(--scry-ink2)]">{t(listModeLabelKey(subscription.mode))}</span>
+                <span className="text-[13px] text-[var(--scry-ink2)]">
+                  {t(listModeLabelKey(subscription.mode))}
+                </span>
               </TableCell>
               {canManageLists ? (
-                <TableCell className="text-center" onClick={(event) => event.stopPropagation()}>
+                <TableCell
+                  className="text-center"
+                  onClick={(event) => event.stopPropagation()}
+                >
                   <Checkbox
                     id={`list-enabled-${subscription.id}`}
                     size="large"
                     checked={subscription.enabled}
                     disabled={busy}
                     aria-label={`${t("label.enabled")}: ${subscription.name}`}
-                    onCheckedChange={(checked) => onSetEnabled(subscription, checked === true)}
+                    onCheckedChange={(checked) =>
+                      onSetEnabled(subscription, checked === true)
+                    }
                   />
                 </TableCell>
               ) : null}
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
-                  <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state, subscription.sync.lastAt))}</Badge>
+                  <Badge tone={listSyncStateTone(state)}>
+                    {t(listSyncStateLabelKey(state, subscription.sync.lastAt))}
+                  </Badge>
                   <span className="text-[11.5px] text-[var(--scry-muted)]">
                     {subscription.sync.lastAt
-                      ? formatUiDateTime(subscription.sync.lastAt, dateTimeFormat)
+                      ? formatUiDateTime(
+                          subscription.sync.lastAt,
+                          dateTimeFormat,
+                        )
                       : t("lists.table.neverSynced")}
                   </span>
                   {state === "FAIL" && subscription.sync.errorMessage ? (
@@ -170,7 +231,10 @@ export function ListTable({
                 </div>
               </TableCell>
               {canManageLists ? (
-                <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                <TableCell
+                  className="text-right"
+                  onClick={(event) => event.stopPropagation()}
+                >
                   <div className="flex items-center justify-end gap-2">
                     <IconButton
                       id={`list-sync-${subscription.id}`}

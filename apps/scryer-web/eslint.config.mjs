@@ -15,20 +15,23 @@ export default tseslint.config(
       "react-hooks/exhaustive-deps": "warn",
 
       // React Compiler rules — keep the ones that catch real bugs
-      "react-hooks/refs": "error",    // no ref.current mutation during render
-      "react-hooks/purity": "error",  // no Math.random/Date.now in useMemo
+      "react-hooks/refs": "error", // no ref.current mutation during render
+      "react-hooks/purity": "error", // no Math.random/Date.now in useMemo
 
       // Allow _-prefixed variables as intentional unused (e.g. destructure-to-omit)
-      "@typescript-eslint/no-unused-vars": ["error", {
-        "varsIgnorePattern": "^_",
-        "argsIgnorePattern": "^_",
-        "ignoreRestSiblings": true,
-      }],
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          varsIgnorePattern: "^_",
+          argsIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+        },
+      ],
 
       // React Compiler rules — too strict for this codebase
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/incompatible-library": "off",
     },
-  }
+  },
 );

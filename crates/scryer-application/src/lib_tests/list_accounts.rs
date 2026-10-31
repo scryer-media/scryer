@@ -211,7 +211,7 @@ impl ListProviderClient for Client {
         self.account_reads.fetch_add(1, Ordering::SeqCst);
         if self
             .account_outages
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
@@ -501,7 +501,7 @@ async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() 
             .app
             .poll_list_account_link(&harness.manager, &session)
             .await,
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
     let view = harness
         .app
@@ -549,7 +549,7 @@ async fn private_account_poll_ends_on_a_definitive_provider_refusal() {
                 .app
                 .poll_list_account_link(&harness.user, &session)
                 .await,
-            Err(AppError::NotFound(_))
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
         ));
         assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
         assert!(
@@ -612,12 +612,17 @@ async fn private_account_poll_ends_when_the_approved_link_can_never_be_recorded(
     // The member's lists are turned off while the provider is approving the link.
     set_member_list_policy(&harness, ListPolicy::None).await;
     auth.poll_release.notify_one();
-    let Err(AppError::Unauthorized(message)) = timeout(Duration::from_secs(30), first)
-        .await
-        .expect("first poll finished")
+    let Err(AppError::UnauthorizedReason { message, reason }) =
+        timeout(Duration::from_secs(30), first)
+            .await
+            .expect("first poll finished")
     else {
         panic!("a write that cannot succeed must end the link with its reason");
     };
+    assert_eq!(
+        reason,
+        crate::error_reasons::lists::PERSONAL_LISTS_NOT_ALLOWED_MEMBER
+    );
     assert!(message.contains("not allowed"), "{message}");
     set_member_list_policy(&harness, ListPolicy::Approval).await;
     assert!(matches!(
@@ -625,7 +630,7 @@ async fn private_account_poll_ends_when_the_approved_link_can_never_be_recorded(
             .app
             .poll_list_account_link(&harness.user, &session)
             .await,
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
     assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
     assert!(
@@ -658,7 +663,10 @@ async fn private_account_linked_replays_are_bounded_per_member_and_do_not_block_
             .await;
         if index < sessions.len() - 4 {
             assert!(
-                matches!(replay, Err(AppError::NotFound(_))),
+                matches!(
+                    replay,
+                    Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
+                ),
                 "older linked record {index} is evicted"
             );
         } else {
@@ -988,7 +996,7 @@ impl FailRotatedWrite {
         if account.status == UserListAccountStatus::Active
             && self
                 .failing_active_writes
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                     left.checked_sub(1)
                 })
                 .is_ok()
@@ -1510,6 +1518,8 @@ fn every_auth_failure_code_names_its_own_reason() {
     assert!(matches!(
         auth_failure("not_a_code"),
         AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
     ));
 
     // The rate-limited failure is not a validation refusal; its reason is
@@ -2483,7 +2493,7 @@ async fn private_account_simkl_issuer_is_required_before_single_use_exchange() {
                     Some("https://simkl.com")
                 )
                 .await,
-            Err(AppError::NotFound(_))
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
         ));
         assert_eq!(auth.exchanges.load(Ordering::SeqCst), 0);
     }
@@ -2519,7 +2529,7 @@ async fn private_account_simkl_issuer_is_required_before_single_use_exchange() {
                 Some("https://simkl.com")
             )
             .await,
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
     assert_eq!(auth.exchanges.load(Ordering::SeqCst), 1);
 }

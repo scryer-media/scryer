@@ -129,9 +129,7 @@ impl AppUseCase {
             .get_manual_import_selection(&selection_id, &actor.id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(
-                    "manual import selection is unavailable; reopen the import dialog".to_string(),
-                )
+                AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_SELECTION_UNAVAILABLE, "manual import selection is unavailable; reopen the import dialog".to_string())
             })?;
         // Validate AFTER loading the selection: whether a mapping needs an
         // explicit target depends on the title's facet (a movie has no
@@ -144,7 +142,7 @@ impl AppUseCase {
             .get_by_id(&selection.title_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation("manual import selection title is unavailable".to_string())
+                AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_SELECTION_TITLE_UNAVAILABLE, "manual import selection title is unavailable".to_string())
             })?;
         crate::import_workflow::validate_manual_import_candidate_mapping_targets(
             &mappings,
@@ -163,9 +161,7 @@ impl AppUseCase {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                AppError::Validation(
-                    "download is no longer available for manual import".to_string(),
-                )
+                AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_UNAVAILABLE, "download is no longer available for manual import".to_string())
             })?;
         let completed = crate::import_workflow::resolve_current_manual_import_source(
             self,
@@ -177,7 +173,7 @@ impl AppUseCase {
         )
         .await
         .map_err(|_| {
-            AppError::Validation("download is no longer available for manual import".to_string())
+            AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_UNAVAILABLE, "download is no longer available for manual import".to_string())
         })?;
         let release_evidence = match selection.release_evidence_json.as_deref() {
             Some(snapshot) => serde_json::from_str(snapshot).map_err(|error| {
@@ -195,10 +191,8 @@ impl AppUseCase {
         if let Some(submission_title_id) = release_evidence.title_id()
             && submission_title_id != selection.title_id
         {
-            return Err(AppError::Validation(
-                "manual import title does not match the Scryer submission that grabbed this download"
-                    .to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
+                    .to_string()));
         }
         let trusted_root = if selection.trusted_source_root.trim().is_empty() {
             tokio::fs::canonicalize(&completed.dest_dir).await
@@ -209,7 +203,7 @@ impl AppUseCase {
             .await
         }
         .map_err(|_| {
-            AppError::Validation("manual import files are no longer available".to_string())
+            AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_FILES_UNAVAILABLE, "manual import files are no longer available".to_string())
         })?;
         let download_root = tokio::fs::canonicalize(&completed.dest_dir).await.ok();
         for candidate in selection.candidates.iter().filter(|candidate| {
@@ -233,14 +227,10 @@ impl AppUseCase {
             )
             .await
             .map_err(|_| {
-                AppError::Validation(
-                    "download is no longer available for manual import".to_string(),
-                )
+                AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_UNAVAILABLE, "download is no longer available for manual import".to_string())
             })?;
             if qualified.is_none() {
-                return Err(AppError::Validation(
-                    "download is no longer available for manual import".to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_UNAVAILABLE, "download is no longer available for manual import".to_string()));
             }
         }
 
@@ -282,9 +272,7 @@ impl AppUseCase {
             .consume_manual_import_selection(&selection_id, &actor.id, &candidate_ids)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(
-                    "manual import selection changed; reopen the import dialog".to_string(),
-                )
+                AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_SELECTION_CHANGED, "manual import selection changed; reopen the import dialog".to_string())
             })?;
         let candidates = selection
             .candidates
@@ -297,7 +285,7 @@ impl AppUseCase {
                 let candidate = candidates
                     .get(mapping.candidate_id.as_str())
                     .ok_or_else(|| {
-                        AppError::Validation("manual import candidate is unavailable".to_string())
+                        AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_CANDIDATE_UNAVAILABLE, "manual import candidate is unavailable".to_string())
                     })?;
                 Ok(crate::ManualImportFileMapping {
                     file_path: candidate.canonical_path.clone(),

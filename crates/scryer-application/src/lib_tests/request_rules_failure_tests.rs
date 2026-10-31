@@ -522,7 +522,12 @@ async fn failed_mode_refresh_holds_requests_instead_of_using_the_stale_engine() 
         .set_request_rule_enabled(&harness.manager, &detail.rule_set.id, false)
         .await
         .expect_err("the refresh read should fail after persisting the disarm");
-    assert!(matches!(error, AppError::Repository(_)));
+    assert!(matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+    ));
     assert!(harness.app.request_rules_engine_snapshot().unavailable);
 
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
@@ -573,7 +578,12 @@ async fn an_older_rebuild_cannot_replace_a_failed_newer_disarm_refresh() {
         .set_request_rule_enabled(&harness.manager, &detail.rule_set.id, false)
         .await
         .expect_err("the newer disarm refresh should fail after persisting the mode");
-    assert!(matches!(error, AppError::Repository(_)));
+    assert!(matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+    ));
     assert!(harness.app.request_rules_engine_snapshot().unavailable);
 
     rules.release_first_list.notify_one();

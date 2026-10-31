@@ -360,14 +360,14 @@ const UDF_CRC_TABLE: [[u16; 256]; 4] = {
 
 fn udf_crc(body: &[u8]) -> u16 {
     let mut crc = 0_u16;
-    let mut chunks = body.chunks_exact(4);
-    for bytes in &mut chunks {
+    let (chunks, remainder) = body.as_chunks::<4>();
+    for bytes in chunks {
         crc = UDF_CRC_TABLE[3][usize::from((crc >> 8) as u8 ^ bytes[0])]
             ^ UDF_CRC_TABLE[2][usize::from(crc as u8 ^ bytes[1])]
             ^ UDF_CRC_TABLE[1][usize::from(bytes[2])]
             ^ UDF_CRC_TABLE[0][usize::from(bytes[3])];
     }
-    for &byte in chunks.remainder() {
+    for &byte in remainder {
         crc = (crc << 8) ^ UDF_CRC_TABLE[0][usize::from((crc >> 8) as u8 ^ byte)];
     }
     crc
@@ -957,7 +957,9 @@ fn udf_directory(
                 .collect::<String>(),
             Some(16) if (encoded.len() - 1) % 2 == 0 => String::from_utf16(
                 &encoded[1..]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                     .collect::<Vec<_>>(),
             )

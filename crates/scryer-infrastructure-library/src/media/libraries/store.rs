@@ -142,7 +142,8 @@ impl LibraryRepository for LibraryStore {
         let root_id = root_id.to_string();
         let path = path.trim().to_string();
         if path.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_ROOT_PATH_EMPTY,
                 "a library root path cannot be empty".to_string(),
             ));
         }
@@ -347,7 +348,10 @@ async fn update_library_tx(
         )
         .await?;
     if rows == 0 {
-        return Err(AppError::NotFound(format!("library {library_id}")));
+        return Err(AppError::not_found_reason(
+            crate::error_reasons::MEDIA_LIBRARY_NOT_FOUND,
+            format!("library {library_id}"),
+        ));
     }
 
     // The stored ids have to be read before the rows are deleted: a root's
@@ -381,7 +385,12 @@ async fn set_root_path_tx(tx: &mut SqlTx<'_>, root_id: &str, path: String) -> Ap
     .await?
     .map(|row| row.text("library_id"))
     .transpose()?
-    .ok_or_else(|| AppError::NotFound(format!("library root {root_id}")))?;
+    .ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::MEDIA_LIBRARY_ROOT_NOT_FOUND,
+            format!("library root {root_id}"),
+        )
+    })?;
 
     let normalized_path = normalize_library_root_path(&path);
     // `library_roots.normalized_path` is uniquely indexed, so a destination that
@@ -400,9 +409,10 @@ async fn set_root_path_tx(tx: &mut SqlTx<'_>, root_id: &str, path: String) -> Ap
     .map(|row| row.text("id"))
     .transpose()?;
     if let Some(conflicting) = conflicting {
-        return Err(AppError::Validation(format!(
-            "library root '{path}' is already configured as root {conflicting}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_LIBRARY_ROOT_ALREADY_CONFIGURED,
+            format!("library root '{path}' is already configured as root {conflicting}"),
+        ));
     }
 
     tx.execute(
@@ -511,8 +521,9 @@ async fn reject_referenced_root_removals_tx(
         .transpose()?
         .unwrap_or(0);
         if referenced_count > 0 {
-            return Err(AppError::Validation(
-                "library root cannot be removed while titles reference it".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_LIBRARY_ROOT_REFERENCED,
+                "library root cannot be removed while titles reference it",
             ));
         }
     }
@@ -942,7 +953,13 @@ mod tests {
             )
             .await
             .expect_err("dropping a referenced root must be refused");
-        assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+        assert!(
+            matches!(
+                refused,
+                AppError::Validation(_) | AppError::ValidationRefused { .. }
+            ),
+            "{refused:?}"
+        );
 
         let updated = store
             .update(
@@ -1085,7 +1102,10 @@ mod tests {
             .await
             .expect_err("a configured root is not a root-change destination");
         assert!(
-            matches!(error, AppError::Validation(_)),
+            matches!(
+                error,
+                AppError::Validation(_) | AppError::ValidationRefused { .. }
+            ),
             "expected a validation refusal, got {error:?}"
         );
 
@@ -1095,7 +1115,10 @@ mod tests {
             .await
             .expect_err("an unknown root cannot be relocated");
         assert!(
-            matches!(missing, AppError::NotFound(_)),
+            matches!(
+                missing,
+                AppError::NotFound(_) | AppError::NotFoundReason { .. }
+            ),
             "expected a not-found refusal, got {missing:?}"
         );
     }

@@ -65,17 +65,29 @@ import {
   Users,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { Link, useLocation } from "react-router";
+import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
+import {
+  buildIndexerSettingsPath,
+  indexerSettingsTabFromPath,
+  INDEXER_SETTINGS_TABS,
+} from "@/lib/utils/routing";
 import { PalettePicker } from "@/components/views/settings/palette-picker";
 import { QuickHighlightColorPicker } from "@/components/views/settings/quick-highlight-color-picker";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
-import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import {
-  useUiSettings,
-} from "@/lib/context/ui-settings-context";
+  useExperimentalFeaturesEnabled,
+  useInstanceFeatures,
+} from "@/lib/context/instance-features-context";
+import { useUiSettings } from "@/lib/context/ui-settings-context";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
   APP_PERMISSIONS,
@@ -213,7 +225,12 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "settings", id: "subtitles", icon: Captions },
       // Scoring, maintenance and request rules share this entry; the Rules
       // page's own gutter picks the kind, so the sidebar names the subject once.
-      { kind: "settings", id: "rules", labelKey: "nav.rules", icon: SlidersHorizontal },
+      {
+        kind: "settings",
+        id: "rules",
+        labelKey: "nav.rules",
+        icon: SlidersHorizontal,
+      },
       { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
   },
@@ -257,7 +274,12 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
     labelKey: "nav.logs",
     items: [
       { kind: "logs", id: "logs", labelKey: "nav.serviceLogs", icon: FileText },
-      { kind: "logs", id: "audit", labelKey: "nav.auditLogs", icon: TextSearch },
+      {
+        kind: "logs",
+        id: "audit",
+        labelKey: "nav.auditLogs",
+        icon: TextSearch,
+      },
     ],
   },
 ];
@@ -503,7 +525,11 @@ const ACTIVITY_SUB_PAGES: Array<{ id: ActivitySection; labelKey: string }> = [
   { id: "history", labelKey: "activity.history" },
 ];
 
-const WANTED_SUB_PAGES: Array<{ id: WantedSection; labelKey: string; icon: LucideIcon }> = [
+const WANTED_SUB_PAGES: Array<{
+  id: WantedSection;
+  labelKey: string;
+  icon: LucideIcon;
+}> = [
   { id: "wanted", labelKey: "wanted.tabWanted", icon: ListChecks },
   { id: "cutoff", labelKey: "wanted.tabCutoff", icon: Gauge },
   { id: "pending", labelKey: "wanted.tabPending", icon: Clock },
@@ -523,7 +549,9 @@ function readCollapsedTopNavGroups(): ReadonlySet<string> {
     const parsedValue: unknown = storedValue ? JSON.parse(storedValue) : [];
     return new Set(
       Array.isArray(parsedValue)
-        ? parsedValue.filter((value): value is string => typeof value === "string")
+        ? parsedValue.filter(
+            (value): value is string => typeof value === "string",
+          )
         : [],
     );
   } catch {
@@ -550,7 +578,7 @@ const LEAF_NAV_BADGE_BASE_CLASS =
   "ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md px-1 text-[10px] font-medium leading-none tabular-nums";
 
 const TOP_NAV_BUTTON_CLASS =
-  "h-9 rounded-[10px] px-2.5 text-[13px] font-medium transition-colors hover:!bg-[var(--scry-hover)] hover:text-sidebar-accent-foreground data-[active=true]:bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.30),rgba(var(--scry-accent-rgb),0.10))] data-[active=true]:font-semibold data-[active=true]:text-foreground data-[active=true]:shadow-[inset_2px_0_0_rgb(var(--scry-accent-rgb)),0_8px_18px_rgba(var(--scry-accent-rgb),calc(0.16*var(--scry-glow)))] data-[active=true]:hover:!bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.30),rgba(var(--scry-accent-rgb),0.10))] data-[active=true]:[&>svg]:text-primary";
+  "h-9 rounded-[10px] px-2.5 text-[13px] font-medium transition-colors hover:!bg-[var(--scry-hover)] hover:text-sidebar-accent-foreground data-[active=true]:bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.30),rgba(var(--scry-accent-rgb),0.10))] data-[active=true]:font-semibold data-[active=true]:text-foreground data-[active=true]:shadow-[inset_2px_0_0_rgb(var(--scry-accent-rgb))] data-[active=true]:hover:!bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.30),rgba(var(--scry-accent-rgb),0.10))] data-[active=true]:[&>svg]:text-primary";
 
 const SUB_NAV_BUTTON_CLASS =
   "min-h-[30px] rounded-[8px] px-[11px] text-[12.5px] font-medium !text-[var(--scry-muted)] transition-colors hover:!bg-[var(--scry-hover)] hover:!text-[var(--scry-body)] data-[active=true]:!bg-[var(--scry-hover)] data-[active=true]:!bg-none data-[active=true]:font-semibold data-[active=true]:!text-[var(--scry-text2)]";
@@ -608,9 +636,7 @@ function FacetNavBadges({ importCount }: { importCount: number }) {
     return null;
   }
 
-  return (
-    <TopNavBadge>{importCount}</TopNavBadge>
-  );
+  return <TopNavBadge>{importCount}</TopNavBadge>;
 }
 
 function LeafNavBadge({
@@ -679,8 +705,12 @@ function RootSidebarContent({
   const socialOpenedByPointerRef = React.useRef(false);
   const handleSocialPointerLeave = (event: React.PointerEvent) => {
     const next = event.relatedTarget;
-    if (next instanceof Node &&
-        (socialTriggerRef.current?.contains(next) || socialContentRef.current?.contains(next))) return;
+    if (
+      next instanceof Node &&
+      (socialTriggerRef.current?.contains(next) ||
+        socialContentRef.current?.contains(next))
+    )
+      return;
     setSocialMenuOpen(false);
   };
   const brandLogoUrl =
@@ -717,7 +747,9 @@ function RootSidebarContent({
     user,
     LIBRARY_PERMISSIONS.view,
   );
-  const canManageLists = hasAnyAppPermission(user, [APP_PERMISSIONS.manageLists]);
+  const canManageLists = hasAnyAppPermission(user, [
+    APP_PERMISSIONS.manageLists,
+  ]);
   const canManageTitle = hasAnyLibraryPermission(
     user,
     LIBRARY_PERMISSIONS.manageTitles,
@@ -787,9 +819,15 @@ function RootSidebarContent({
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
           (item.id !== "lists" ||
-            canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || canManageTitle, canManageLists || canManageSystemSettings)) &&
+            canAccessListsPage(
+              canViewCatalog ||
+                hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) ||
+                canManageTitle,
+              canManageLists || canManageSystemSettings,
+            )) &&
           (item.id !== "wanted" || canViewCatalog) &&
-          (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
+          (item.id !== "dashboard" ||
+            canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
           (item.id !== "activity" || canResolveImports || canManageTitle),
       ),
@@ -829,7 +867,9 @@ function RootSidebarContent({
           ];
         }
         if (definition.kind === "apiExplorer") {
-          if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+          if (
+            !canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)
+          ) {
             return [];
           }
           return [
@@ -940,11 +980,18 @@ function RootSidebarContent({
   );
   const isRequestsSection = view === "requests";
   const activityImportBadgeCount = Math.max(0, manualImportRequiredCount);
-  const hasActivityImportBadge = !manualImportCountKnown || manualImportCountStale || activityImportBadgeCount > 0;
+  const hasActivityImportBadge =
+    !manualImportCountKnown ||
+    manualImportCountStale ||
+    activityImportBadgeCount > 0;
   const activityImportBadgeLabel = !manualImportCountKnown
     ? t("activity.countUnknown")
-    : manualImportCountStale ? t("activity.countStale") : undefined;
-  const activityImportBadgeText = !manualImportCountKnown ? "…" : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
+    : manualImportCountStale
+      ? t("activity.countStale")
+      : undefined;
+  const activityImportBadgeText = !manualImportCountKnown
+    ? "…"
+    : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
   const visibleActivitySubPages = ACTIVITY_SUB_PAGES;
   const hasVisibleActivitySubnav = React.useMemo(
     () => visibleActivitySubPages.some((entry) => entry.id !== "activity"),
@@ -952,6 +999,8 @@ function RootSidebarContent({
   );
   const visibleWantedSubPages = WANTED_SUB_PAGES;
 
+  const { pathname } = useLocation();
+  const activeIndexerSettingsTab = indexerSettingsTabFromPath(pathname);
   const handleNavigate = React.useCallback(
     (
       event: React.MouseEvent,
@@ -1112,7 +1161,7 @@ function RootSidebarContent({
             <img
               src={brandLogoUrl}
               alt="Scryer"
-              className="h-auto w-[220px] object-contain dark:drop-shadow-[0_12px_22px_rgba(var(--scry-accent-rgb),calc(0.32*var(--scry-glow)))]"
+              className="h-auto w-[220px] object-contain"
             />
           </div>
         </SidebarHeader>
@@ -1122,535 +1171,623 @@ function RootSidebarContent({
             const groupContentId = selectorId("root-sidebar-group", group.id);
 
             return (
-            <SidebarGroup
-              key={group.id}
-              className="px-0 py-1 first:pt-0"
-            >
-              <SidebarGroupLabel asChild className="h-auto p-0">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-controls={groupContentId}
-                  aria-expanded={!isCollapsed}
-                  onClick={() => toggleTopNavGroup(group.id)}
-                >
-                  {group.label}
-                  <ChevronDown
-                    className={cn(
-                      "h-4 w-4 transition-transform",
-                      isCollapsed && "-rotate-90",
-                    )}
-                  />
-                </button>
-              </SidebarGroupLabel>
-              {isCollapsed ? null : (
-              <SidebarMenu id={groupContentId} className="space-y-0.5">
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  if (item.kind === "apiExplorer") {
-                    return (
-                      <React.Fragment key="api-explorer">
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id="root-sidebar-api-explorer"
-                            tooltip="API"
-                            isActive={view === "api-explorer"}
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(event, "api-explorer");
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
-                  if (item.kind === "requests") {
-                    return (
-                      <React.Fragment key="requests">
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id={selectorId("root-sidebar-nav", "requests")}
-                            isActive={isRequestsSection}
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(event, "requests");
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            <span className="min-w-0 flex-1 truncate">
-                              {item.label}
-                            </span>
-                            {pendingMediaRequestCount > 0 ? (
-                              <TopNavBadge tone="request">
-                                {pendingMediaRequestCount}
-                              </TopNavBadge>
+              <SidebarGroup key={group.id} className="px-0 py-1 first:pt-0">
+                <SidebarGroupLabel asChild className="h-auto p-0">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-controls={groupContentId}
+                    aria-expanded={!isCollapsed}
+                    onClick={() => toggleTopNavGroup(group.id)}
+                  >
+                    {group.label}
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 transition-transform",
+                        isCollapsed && "-rotate-90",
+                      )}
+                    />
+                  </button>
+                </SidebarGroupLabel>
+                {isCollapsed ? null : (
+                  <SidebarMenu id={groupContentId} className="space-y-0.5">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      if (item.kind === "apiExplorer") {
+                        return (
+                          <React.Fragment key="api-explorer">
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id="root-sidebar-api-explorer"
+                                tooltip="API"
+                                isActive={view === "api-explorer"}
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(event, "api-explorer");
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                {item.label}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          </React.Fragment>
+                        );
+                      }
+                      if (item.kind === "requests") {
+                        return (
+                          <React.Fragment key="requests">
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id={selectorId("root-sidebar-nav", "requests")}
+                                isActive={isRequestsSection}
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(event, "requests");
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                <span className="min-w-0 flex-1 truncate">
+                                  {item.label}
+                                </span>
+                                {pendingMediaRequestCount > 0 ? (
+                                  <TopNavBadge tone="request">
+                                    {pendingMediaRequestCount}
+                                  </TopNavBadge>
+                                ) : null}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          </React.Fragment>
+                        );
+                      }
+                      if (item.kind === "settings") {
+                        return (
+                          <React.Fragment key={`settings-${item.id}`}>
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id={selectorId(
+                                  "root-sidebar-settings-shortcut",
+                                  item.id,
+                                )}
+                                isActive={
+                                  view === "settings" &&
+                                  isSettingsNavEntryActive(
+                                    item.id,
+                                    settingsSection,
+                                  )
+                                }
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(event, "settings", item.id);
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                {item.label}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                            {item.id === "indexers" &&
+                            view === "settings" &&
+                            settingsSection === "indexers" ? (
+                              <SidebarGroupContent>
+                                <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
+                                  {INDEXER_SETTINGS_TABS.map((tab) => {
+                                    const tabItem =
+                                      INDEXER_SETTINGS_TAB_ITEMS[tab];
+                                    return (
+                                      <SidebarMenuSubItem key={tab}>
+                                        <SidebarMenuSubButton
+                                          asChild
+                                          isActive={
+                                            activeIndexerSettingsTab === tab
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                        >
+                                          <Link
+                                            id={selectorId(
+                                              "root-sidebar-indexers",
+                                              tab,
+                                            )}
+                                            to={buildIndexerSettingsPath(tab)}
+                                            onClick={() => {
+                                              if (isMobile)
+                                                setOpenMobile(false);
+                                            }}
+                                          >
+                                            <tabItem.icon className="h-3.5 w-3.5 shrink-0" />
+                                            <span>{t(tabItem.labelKey)}</span>
+                                          </Link>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    );
+                                  })}
+                                </SidebarMenuSub>
+                              </SidebarGroupContent>
                             ) : null}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
-                  if (item.kind === "settings") {
-                    return (
-                      <React.Fragment key={`settings-${item.id}`}>
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id={selectorId(
-                              "root-sidebar-settings-shortcut",
-                              item.id,
-                            )}
-                            isActive={
-                              view === "settings" &&
-                              isSettingsNavEntryActive(item.id, settingsSection)
-                            }
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(event, "settings", item.id);
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
-                  if (item.kind === "system") {
-                    return (
-                      <React.Fragment key={`system-${item.id}`}>
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id={selectorId(
-                              "root-sidebar-system-shortcut",
-                              item.id,
-                            )}
-                            isActive={
-                              view === "system" && systemSection === item.id
-                            }
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(
-                                event,
-                                "system",
-                                undefined,
-                                undefined,
-                                item.id,
-                              );
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
-                  if (item.kind === "logs") {
-                    return (
-                      <React.Fragment key={`logs-${item.id}`}>
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id={selectorId(
-                              "root-sidebar-logs-shortcut",
-                              item.id,
-                            )}
-                            isActive={view === "logs" && logsSection === item.id}
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(
-                                event,
-                                "logs",
-                                undefined,
-                                undefined,
-                                undefined,
-                                undefined,
-                                undefined,
-                                item.id,
-                              );
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
+                          </React.Fragment>
+                        );
+                      }
+                      if (item.kind === "system") {
+                        return (
+                          <React.Fragment key={`system-${item.id}`}>
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id={selectorId(
+                                  "root-sidebar-system-shortcut",
+                                  item.id,
+                                )}
+                                isActive={
+                                  view === "system" && systemSection === item.id
+                                }
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(
+                                    event,
+                                    "system",
+                                    undefined,
+                                    undefined,
+                                    item.id,
+                                  );
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                {item.label}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          </React.Fragment>
+                        );
+                      }
+                      if (item.kind === "logs") {
+                        return (
+                          <React.Fragment key={`logs-${item.id}`}>
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id={selectorId(
+                                  "root-sidebar-logs-shortcut",
+                                  item.id,
+                                )}
+                                isActive={
+                                  view === "logs" && logsSection === item.id
+                                }
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(
+                                    event,
+                                    "logs",
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    item.id,
+                                  );
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                {item.label}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          </React.Fragment>
+                        );
+                      }
 
-                  const isMediaSection = ["movies", "series", "anime"].includes(
-                    item.id,
-                  );
-                  const isSettingsTop = item.id === "settings";
-                  const isWantedTop = item.id === "wanted";
-                  const isSystemTop = item.id === "system";
-                  const isActivityTop = item.id === "activity";
-                  const isActiveMediaSection =
-                    isMediaSection && view === item.id && !isRequestsSection;
-                  const isActiveSettingsSection =
-                    isSettingsTop &&
-                    view === "settings" &&
-                    !isPromotedSettingsSection(settingsSection);
-                  const isActiveSystemSection =
-                    isSystemTop &&
-                    view === "system" &&
-                    systemSection === "overview";
-                  const mediaFacetImportBadgeCount = isMediaSection
-                    ? pendingImportCountForNavView(item.id)
-                    : 0;
-                  const hasVisibleSystemSubnav = SYSTEM_SUB_PAGES.length > 1;
-                  const hasExpandableChildren =
-                    isMediaSection ||
-                    isSettingsTop ||
-                    isWantedTop ||
-                    (isSystemTop && hasVisibleSystemSubnav) ||
-                    (isActivityTop && hasVisibleActivitySubnav);
-                  const shouldShowChildren = hasExpandableChildren && view === item.id;
-                  if (
-                    !isMediaSection &&
-                    !isSettingsTop &&
-                    !isWantedTop &&
-                    !isSystemTop &&
-                    !isActivityTop
-                  ) {
-                    return (
-                      <React.Fragment key={item.id}>
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            id={selectorId("root-sidebar-nav", item.id)}
-                            isActive={view === item.id}
-                            className={TOP_NAV_BUTTON_CLASS}
-                            onClick={(event) => {
-                              handleNavigate(event, item.id);
-                            }}
-                          >
-                            <Icon className="h-4 w-4" />
-                            <span className="min-w-0 flex-1 truncate">
-                              {item.label}
-                            </span>
-                            {item.id === "activity" && hasActivityImportBadge ? (
-                              <TopNavBadge label={activityImportBadgeLabel}>
-                                {activityImportBadgeText}
-                              </TopNavBadge>
-                            ) : null}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      </React.Fragment>
-                    );
-                  }
+                      const isMediaSection = [
+                        "movies",
+                        "series",
+                        "anime",
+                      ].includes(item.id);
+                      const isSettingsTop = item.id === "settings";
+                      const isWantedTop = item.id === "wanted";
+                      const isSystemTop = item.id === "system";
+                      const isActivityTop = item.id === "activity";
+                      const isActiveMediaSection =
+                        isMediaSection &&
+                        view === item.id &&
+                        !isRequestsSection;
+                      const isActiveSettingsSection =
+                        isSettingsTop &&
+                        view === "settings" &&
+                        !isPromotedSettingsSection(settingsSection);
+                      const isActiveSystemSection =
+                        isSystemTop &&
+                        view === "system" &&
+                        systemSection === "overview";
+                      const mediaFacetImportBadgeCount = isMediaSection
+                        ? pendingImportCountForNavView(item.id)
+                        : 0;
+                      const hasVisibleSystemSubnav =
+                        SYSTEM_SUB_PAGES.length > 1;
+                      const hasExpandableChildren =
+                        isMediaSection ||
+                        isSettingsTop ||
+                        isWantedTop ||
+                        (isSystemTop && hasVisibleSystemSubnav) ||
+                        (isActivityTop && hasVisibleActivitySubnav);
+                      // Promoted shortcuts (Recycle Bin, Backups) are settings
+                      // sections with their own top-level entry, so opening one
+                      // leaves the Settings subnav closed.
+                      const shouldShowChildren =
+                        hasExpandableChildren &&
+                        (isSettingsTop
+                          ? isActiveSettingsSection
+                          : view === item.id);
+                      if (
+                        !isMediaSection &&
+                        !isSettingsTop &&
+                        !isWantedTop &&
+                        !isSystemTop &&
+                        !isActivityTop
+                      ) {
+                        return (
+                          <React.Fragment key={item.id}>
+                            <SidebarMenuItem>
+                              <SidebarMenuButton
+                                id={selectorId("root-sidebar-nav", item.id)}
+                                isActive={view === item.id}
+                                className={TOP_NAV_BUTTON_CLASS}
+                                onClick={(event) => {
+                                  handleNavigate(event, item.id);
+                                }}
+                              >
+                                <Icon className="h-4 w-4" />
+                                <span className="min-w-0 flex-1 truncate">
+                                  {item.label}
+                                </span>
+                                {item.id === "activity" &&
+                                hasActivityImportBadge ? (
+                                  <TopNavBadge label={activityImportBadgeLabel}>
+                                    {activityImportBadgeText}
+                                  </TopNavBadge>
+                                ) : null}
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          </React.Fragment>
+                        );
+                      }
 
-                  return (
-                    <React.Fragment key={item.id}>
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          id={selectorId("root-sidebar-nav", item.id)}
-                          isActive={
-                            isSettingsTop
-                              ? isActiveSettingsSection
-                              : isSystemTop
-                                ? isActiveSystemSection
-                                : isMediaSection
-                                  ? isActiveMediaSection
-                                  : view === item.id
-                          }
-                          className={TOP_NAV_BUTTON_CLASS}
-                          aria-expanded={
-                            hasExpandableChildren
-                              ? shouldShowChildren
-                              : undefined
-                          }
-                          onClick={(event) => {
-                            event.preventDefault();
-                            if (isMobile && !hasExpandableChildren) setOpenMobile(false);
-                            if (isSettingsTop) {
-                              onNavigate(
-                                "settings",
-                                defaultSettingsSectionForTopNav,
-                              );
-                              return;
-                            }
-                            if (isWantedTop) {
-                              onNavigate("wanted");
-                              return;
-                            }
-                            if (isSystemTop) {
-                              onNavigate(
-                                "system",
-                                undefined,
-                                undefined,
-                                "overview",
-                              );
-                              return;
-                            }
-                            if (isActivityTop) {
-                              onNavigate(
-                                "activity",
-                                undefined,
-                                undefined,
-                                undefined,
-                                undefined,
-                                visibleActivitySubPages.some(
-                                  (entry) => entry.id === activitySection,
-                                )
-                                  ? activitySection
-                                  : "activity",
-                              );
-                              return;
-                            }
-                            onNavigate(
-                              item.id,
-                              undefined,
-                              defaultMediaContentSection,
-                            );
-                          }}
-                        >
-                          <Icon className="h-4 w-4" />
-                          <span className="min-w-0 flex-1 truncate">
-                            {item.label}
-                          </span>
-                          {item.id === "activity" && hasActivityImportBadge ? (
-                            <TopNavBadge label={activityImportBadgeLabel}>
-                              {activityImportBadgeText}
-                            </TopNavBadge>
-                          ) : null}
-                          {isSettingsTop && pluginBlockedCount > 0 ? (
-                            // Only one badge fits the collapsed row; a plugin
-                            // that is not running outranks one with an update.
-                            <TopNavBadge tone="danger">
-                              {pluginBlockedCount}
-                            </TopNavBadge>
-                          ) : isSettingsTop && pluginUpdateCount > 0 ? (
-                            <TopNavBadge tone="warning">
-                              {pluginUpdateCount}
-                            </TopNavBadge>
-                          ) : null}
-                          {isMediaSection ? (
-                            <FacetNavBadges
-                              importCount={mediaFacetImportBadgeCount}
-                            />
-                          ) : null}
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
+                      return (
+                        <React.Fragment key={item.id}>
+                          <SidebarMenuItem>
+                            <SidebarMenuButton
+                              id={selectorId("root-sidebar-nav", item.id)}
+                              isActive={
+                                isSettingsTop
+                                  ? isActiveSettingsSection
+                                  : isSystemTop
+                                    ? isActiveSystemSection
+                                    : isMediaSection
+                                      ? isActiveMediaSection
+                                      : view === item.id
+                              }
+                              className={TOP_NAV_BUTTON_CLASS}
+                              aria-expanded={
+                                hasExpandableChildren
+                                  ? shouldShowChildren
+                                  : undefined
+                              }
+                              onClick={(event) => {
+                                event.preventDefault();
+                                if (isMobile && !hasExpandableChildren)
+                                  setOpenMobile(false);
+                                if (isSettingsTop) {
+                                  onNavigate(
+                                    "settings",
+                                    defaultSettingsSectionForTopNav,
+                                  );
+                                  return;
+                                }
+                                if (isWantedTop) {
+                                  onNavigate("wanted");
+                                  return;
+                                }
+                                if (isSystemTop) {
+                                  onNavigate(
+                                    "system",
+                                    undefined,
+                                    undefined,
+                                    "overview",
+                                  );
+                                  return;
+                                }
+                                if (isActivityTop) {
+                                  onNavigate(
+                                    "activity",
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    visibleActivitySubPages.some(
+                                      (entry) => entry.id === activitySection,
+                                    )
+                                      ? activitySection
+                                      : "activity",
+                                  );
+                                  return;
+                                }
+                                onNavigate(
+                                  item.id,
+                                  undefined,
+                                  defaultMediaContentSection,
+                                );
+                              }}
+                            >
+                              <Icon className="h-4 w-4" />
+                              <span className="min-w-0 flex-1 truncate">
+                                {item.label}
+                              </span>
+                              {item.id === "activity" &&
+                              hasActivityImportBadge ? (
+                                <TopNavBadge label={activityImportBadgeLabel}>
+                                  {activityImportBadgeText}
+                                </TopNavBadge>
+                              ) : null}
+                              {isSettingsTop && pluginBlockedCount > 0 ? (
+                                // Only one badge fits the collapsed row; a plugin
+                                // that is not running outranks one with an update.
+                                <TopNavBadge tone="danger">
+                                  {pluginBlockedCount}
+                                </TopNavBadge>
+                              ) : isSettingsTop && pluginUpdateCount > 0 ? (
+                                <TopNavBadge tone="warning">
+                                  {pluginUpdateCount}
+                                </TopNavBadge>
+                              ) : null}
+                              {isMediaSection ? (
+                                <FacetNavBadges
+                                  importCount={mediaFacetImportBadgeCount}
+                                />
+                              ) : null}
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
 
-                      {shouldShowChildren ? (
-                        <SidebarGroupContent>
-                          <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
-                            {isSettingsTop ? (
-                              groupedSettingsEntries.map((group) => (
-                                <React.Fragment key={group.id}>
-                                  {groupedSettingsEntries.length > 1 ? (
-                                    <SidebarMenuSubItem>
-                                      <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.13em] text-sidebar-foreground/40">
-                                        {t(group.labelKey)}
-                                      </div>
-                                    </SidebarMenuSubItem>
-                                  ) : null}
-                                  {group.entries.map((entry) => (
+                          {shouldShowChildren ? (
+                            <SidebarGroupContent>
+                              <SidebarMenuSub className={SUB_NAV_MENU_CLASS}>
+                                {isSettingsTop ? (
+                                  groupedSettingsEntries.map((group) => (
+                                    <React.Fragment key={group.id}>
+                                      {groupedSettingsEntries.length > 1 ? (
+                                        <SidebarMenuSubItem>
+                                          <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.13em] text-sidebar-foreground/40">
+                                            {t(group.labelKey)}
+                                          </div>
+                                        </SidebarMenuSubItem>
+                                      ) : null}
+                                      {group.entries.map((entry) => (
+                                        <SidebarMenuSubItem key={entry.id}>
+                                          <SidebarMenuSubButton
+                                            id={selectorId(
+                                              "root-sidebar-settings",
+                                              entry.id,
+                                            )}
+                                            isActive={
+                                              view === "settings" &&
+                                              settingsSection === entry.id
+                                            }
+                                            className={SUB_NAV_BUTTON_CLASS}
+                                            onClick={(event) => {
+                                              handleNavigate(
+                                                event,
+                                                "settings",
+                                                entry.id,
+                                              );
+                                            }}
+                                          >
+                                            {entry.icon ? (
+                                              <entry.icon className="h-3.5 w-3.5 shrink-0" />
+                                            ) : null}
+                                            <span className="min-w-0 flex-1 truncate">
+                                              {entry.label(t)}
+                                            </span>
+                                            {entry.id === "plugins" &&
+                                            pluginBlockedCount > 0 ? (
+                                              <LeafNavBadge
+                                                count={pluginBlockedCount}
+                                                tone="danger"
+                                              />
+                                            ) : null}
+                                            {entry.id === "plugins" &&
+                                            pluginUpdateCount > 0 ? (
+                                              <LeafNavBadge
+                                                count={pluginUpdateCount}
+                                                tone="warning"
+                                              />
+                                            ) : null}
+                                          </SidebarMenuSubButton>
+                                        </SidebarMenuSubItem>
+                                      ))}
+                                    </React.Fragment>
+                                  ))
+                                ) : isWantedTop ? (
+                                  visibleWantedSubPages.map((entry) => (
                                     <SidebarMenuSubItem key={entry.id}>
                                       <SidebarMenuSubButton
                                         id={selectorId(
-                                          "root-sidebar-settings",
+                                          "root-sidebar-wanted",
                                           entry.id,
                                         )}
-                                        isActive={view === "settings" && settingsSection === entry.id}
+                                        isActive={
+                                          view === "wanted" &&
+                                          wantedSection === entry.id
+                                        }
+                                        className={SUB_NAV_BUTTON_CLASS}
+                                        onClick={(event) =>
+                                          handleNavigate(
+                                            event,
+                                            "wanted",
+                                            undefined,
+                                            undefined,
+                                            undefined,
+                                            entry.id,
+                                          )
+                                        }
+                                      >
+                                        <entry.icon className="h-3.5 w-3.5 shrink-0" />
+                                        <span>{t(entry.labelKey)}</span>
+                                      </SidebarMenuSubButton>
+                                    </SidebarMenuSubItem>
+                                  ))
+                                ) : isSystemTop ? (
+                                  SYSTEM_SUB_PAGES.map((entry) => (
+                                    <SidebarMenuSubItem key={entry.id}>
+                                      <SidebarMenuSubButton
+                                        id={selectorId(
+                                          "root-sidebar-system",
+                                          entry.id,
+                                        )}
+                                        isActive={systemSection === entry.id}
                                         className={SUB_NAV_BUTTON_CLASS}
                                         onClick={(event) => {
                                           handleNavigate(
                                             event,
-                                            "settings",
+                                            "system",
+                                            undefined,
+                                            undefined,
                                             entry.id,
                                           );
                                         }}
                                       >
-                                        {entry.icon ? (
-                                          <entry.icon className="h-3.5 w-3.5 shrink-0" />
-                                        ) : null}
-                                        <span className="min-w-0 flex-1 truncate">
-                                          {entry.label(t)}
-                                        </span>
-                                        {entry.id === "plugins" &&
-                                        pluginBlockedCount > 0 ? (
-                                          <LeafNavBadge
-                                            count={pluginBlockedCount}
-                                            tone="danger"
-                                          />
-                                        ) : null}
-                                        {entry.id === "plugins" &&
-                                        pluginUpdateCount > 0 ? (
-                                          <LeafNavBadge
-                                            count={pluginUpdateCount}
-                                            tone="warning"
-                                          />
+                                        {t(entry.labelKey)}
+                                      </SidebarMenuSubButton>
+                                    </SidebarMenuSubItem>
+                                  ))
+                                ) : isActivityTop ? (
+                                  visibleActivitySubPages.map((entry) => (
+                                    <SidebarMenuSubItem key={entry.id}>
+                                      <SidebarMenuSubButton
+                                        id={selectorId(
+                                          "root-sidebar-activity",
+                                          entry.id,
+                                        )}
+                                        isActive={
+                                          view === "activity" &&
+                                          activitySection === entry.id
+                                        }
+                                        className={SUB_NAV_BUTTON_CLASS}
+                                        onClick={(event) => {
+                                          handleNavigate(
+                                            event,
+                                            "activity",
+                                            undefined,
+                                            undefined,
+                                            undefined,
+                                            undefined,
+                                            entry.id,
+                                          );
+                                        }}
+                                      >
+                                        {t(entry.labelKey)}
+                                        {entry.id === "import" &&
+                                        hasActivityImportBadge ? (
+                                          <span
+                                            className="ml-auto rounded-full bg-primary px-2 text-xs text-primary-foreground"
+                                            title={activityImportBadgeLabel}
+                                            aria-label={
+                                              activityImportBadgeLabel
+                                            }
+                                          >
+                                            {activityImportBadgeText}
+                                          </span>
                                         ) : null}
                                       </SidebarMenuSubButton>
                                     </SidebarMenuSubItem>
-                                  ))}
-                                </React.Fragment>
-                              ))
-                            ) : isWantedTop ? (
-                              visibleWantedSubPages.map((entry) => (
-                                <SidebarMenuSubItem key={entry.id}>
-                                  <SidebarMenuSubButton
-                                    id={selectorId("root-sidebar-wanted", entry.id)}
-                                    isActive={view === "wanted" && wantedSection === entry.id}
-                                    className={SUB_NAV_BUTTON_CLASS}
-                                    onClick={(event) => handleNavigate(event, "wanted", undefined, undefined, undefined, entry.id)}
-                                  >
-                                    <entry.icon className="h-3.5 w-3.5 shrink-0" />
-                                    <span>{t(entry.labelKey)}</span>
-                                  </SidebarMenuSubButton>
-                                </SidebarMenuSubItem>
-                              ))
-                            ) : isSystemTop ? (
-                              SYSTEM_SUB_PAGES.map((entry) => (
-                                <SidebarMenuSubItem key={entry.id}>
-                                  <SidebarMenuSubButton
-                                    id={selectorId(
-                                      "root-sidebar-system",
-                                      entry.id,
-                                    )}
-                                    isActive={systemSection === entry.id}
-                                    className={SUB_NAV_BUTTON_CLASS}
-                                    onClick={(event) => {
-                                      handleNavigate(
-                                        event,
-                                        "system",
-                                        undefined,
-                                        undefined,
-                                        entry.id,
-                                      );
-                                    }}
-                                  >
-                                    {t(entry.labelKey)}
-                                  </SidebarMenuSubButton>
-                                </SidebarMenuSubItem>
-                              ))
-                            ) : isActivityTop ? (
-                              visibleActivitySubPages.map((entry) => (
-                                <SidebarMenuSubItem key={entry.id}>
-                                  <SidebarMenuSubButton
-                                    id={selectorId(
-                                      "root-sidebar-activity",
-                                      entry.id,
-                                    )}
-                                    isActive={view === "activity" && activitySection === entry.id}
-                                    className={SUB_NAV_BUTTON_CLASS}
-                                    onClick={(event) => {
-                                      handleNavigate(
-                                        event,
-                                        "activity",
-                                        undefined,
-                                        undefined,
-                                        undefined,
-                                        undefined,
-                                        entry.id,
-                                      );
-                                    }}
-                                  >
-                                    {t(entry.labelKey)}
-                                    {entry.id === "import" &&
-                                    hasActivityImportBadge ? (
-                                      <span className="ml-auto rounded-full bg-primary px-2 text-xs text-primary-foreground" title={activityImportBadgeLabel} aria-label={activityImportBadgeLabel}>
-                                        {activityImportBadgeText}
-                                      </span>
+                                  ))
+                                ) : (
+                                  <>
+                                    {canViewCatalog ? (
+                                      <SidebarMenuSubItem>
+                                        <SidebarMenuSubButton
+                                          id={selectorId(
+                                            "root-sidebar-media",
+                                            item.id,
+                                            "overview",
+                                          )}
+                                          isActive={
+                                            view === item.id &&
+                                            contentSettingsSection ===
+                                              "overview"
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                          onClick={(event) => {
+                                            handleNavigate(
+                                              event,
+                                              item.id,
+                                              undefined,
+                                              "overview",
+                                            );
+                                          }}
+                                        >
+                                          {getMediaOverviewLabel(item.id, t)}
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
                                     ) : null}
-                                  </SidebarMenuSubButton>
-                                </SidebarMenuSubItem>
-                              ))
-                            ) : (
-                              <>
-                                {canViewCatalog ? (
-                                  <SidebarMenuSubItem>
-                                    <SidebarMenuSubButton
-                                      id={selectorId(
-                                        "root-sidebar-media",
-                                        item.id,
-                                        "overview",
-                                      )}
-                                      isActive={
-                                        view === item.id && contentSettingsSection === "overview"
-                                      }
-                                      className={SUB_NAV_BUTTON_CLASS}
-                                      onClick={(event) => {
-                                        handleNavigate(
-                                          event,
-                                          item.id,
-                                          undefined,
-                                          "overview",
-                                        );
-                                      }}
-                                    >
-                                      {getMediaOverviewLabel(item.id, t)}
-                                    </SidebarMenuSubButton>
-                                  </SidebarMenuSubItem>
-                                ) : null}
-                                {canAccessFacetImport &&
-                                mediaFacetImportBadgeCount > 0 ? (
-                                  <SidebarMenuSubItem>
-                                    <SidebarMenuSubButton
-                                      id={selectorId(
-                                        "root-sidebar-media",
-                                        item.id,
-                                        "import",
-                                      )}
-                                      isActive={
-                                        view === item.id && contentSettingsSection === "import"
-                                      }
-                                      className={SUB_NAV_BUTTON_CLASS}
-                                      onClick={(event) => {
-                                        handleNavigate(
-                                          event,
-                                          item.id,
-                                          undefined,
-                                          "import",
-                                        );
-                                      }}
-                                    >
-                                      {t("nav.import")}
-                                      <LeafNavBadge
-                                        count={mediaFacetImportBadgeCount}
-                                      />
-                                    </SidebarMenuSubButton>
-                                  </SidebarMenuSubItem>
-                                ) : null}
-                                {canAccessMediaSettings ? (
-                                  <SidebarMenuSubItem>
-                                    <SidebarMenuSubButton
-                                      id={selectorId(
-                                        "root-sidebar-media",
-                                        item.id,
-                                        "settings",
-                                      )}
-                                      isActive={view === item.id && isSettingsSubPage(
-                                        contentSettingsSection,
-                                      )}
-                                      className={SUB_NAV_BUTTON_CLASS}
-                                      onClick={(event) => {
-                                        handleNavigate(
-                                          event,
-                                          item.id,
-                                          undefined,
-                                          "library",
-                                        );
-                                      }}
-                                    >
-                                      {getMediaSettingsLabel(item.id, t)}
-                                    </SidebarMenuSubButton>
-                                  </SidebarMenuSubItem>
-                                ) : null}
-                              </>
-                            )}
-                          </SidebarMenuSub>
-                        </SidebarGroupContent>
-                      ) : null}
-                    </React.Fragment>
-                  );
-                })}
-              </SidebarMenu>
-              )}
-            </SidebarGroup>
+                                    {canAccessFacetImport &&
+                                    mediaFacetImportBadgeCount > 0 ? (
+                                      <SidebarMenuSubItem>
+                                        <SidebarMenuSubButton
+                                          id={selectorId(
+                                            "root-sidebar-media",
+                                            item.id,
+                                            "import",
+                                          )}
+                                          isActive={
+                                            view === item.id &&
+                                            contentSettingsSection === "import"
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                          onClick={(event) => {
+                                            handleNavigate(
+                                              event,
+                                              item.id,
+                                              undefined,
+                                              "import",
+                                            );
+                                          }}
+                                        >
+                                          {t("nav.import")}
+                                          <LeafNavBadge
+                                            count={mediaFacetImportBadgeCount}
+                                          />
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    ) : null}
+                                    {canAccessMediaSettings ? (
+                                      <SidebarMenuSubItem>
+                                        <SidebarMenuSubButton
+                                          id={selectorId(
+                                            "root-sidebar-media",
+                                            item.id,
+                                            "settings",
+                                          )}
+                                          isActive={
+                                            view === item.id &&
+                                            isSettingsSubPage(
+                                              contentSettingsSection,
+                                            )
+                                          }
+                                          className={SUB_NAV_BUTTON_CLASS}
+                                          onClick={(event) => {
+                                            handleNavigate(
+                                              event,
+                                              item.id,
+                                              undefined,
+                                              "library",
+                                            );
+                                          }}
+                                        >
+                                          {getMediaSettingsLabel(item.id, t)}
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    ) : null}
+                                  </>
+                                )}
+                              </SidebarMenuSub>
+                            </SidebarGroupContent>
+                          ) : null}
+                        </React.Fragment>
+                      );
+                    })}
+                  </SidebarMenu>
+                )}
+              </SidebarGroup>
             );
           })}
         </SidebarContent>
@@ -1677,13 +1814,21 @@ function RootSidebarContent({
             {themeMounted ? (
               <Popover>
                 <PopoverTrigger asChild>
-                  <button id="root-sidebar-theme-toggle" type="button" aria-label={t("palette.choose")}
-                    className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <button
+                    id="root-sidebar-theme-toggle"
+                    type="button"
+                    aria-label={t("palette.choose")}
+                    className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
                     <Palette className="size-4 shrink-0" />
                     <span className="truncate">{t("theme.label")}</span>
                   </button>
                 </PopoverTrigger>
-                <PopoverContent side="top" align="start" className="max-h-[80dvh] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto shadow-[0_12px_32px_rgba(0,0,0,0.18),0_2px_8px_rgba(0,0,0,0.10)] dark:shadow-[0_18px_50px_rgba(0,0,0,0.45),0_4px_14px_rgba(0,0,0,0.3)]">
+                <PopoverContent
+                  side="top"
+                  align="start"
+                  className="max-h-[80dvh] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto shadow-[0_12px_32px_rgba(0,0,0,0.18),0_2px_8px_rgba(0,0,0,0.10)] dark:shadow-[0_18px_50px_rgba(0,0,0,0.45),0_4px_14px_rgba(0,0,0,0.3)]"
+                >
                   <PalettePicker idPrefix="palette" />
                   <QuickHighlightColorPicker />
                 </PopoverContent>
@@ -1706,73 +1851,89 @@ function RootSidebarContent({
               )}
             >
               <Popover open={socialMenuOpen} onOpenChange={setSocialMenuOpen}>
-              <PopoverTrigger asChild>
-              <button
-                id="root-sidebar-social-links"
-                ref={socialTriggerRef}
-                type="button"
-                aria-haspopup="menu"
-                onPointerEnter={(event) => {
-                  if (event.pointerType !== "mouse") return;
-                  socialOpenedByPointerRef.current = true;
-                  setSocialMenuOpen(true);
-                }}
-                onPointerLeave={handleSocialPointerLeave}
-                onPointerDown={() => { socialOpenedByPointerRef.current = false; }}
-                onKeyDown={() => { socialOpenedByPointerRef.current = false; }}
-                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
-              >
-                <MessagesSquare className="h-4 w-4" />
-                <span className="truncate">Social</span>
-              </button>
-              </PopoverTrigger>
-              <PopoverContent ref={socialContentRef} side="right" align="end" sideOffset={0} collisionPadding={8} avoidCollisions={false}
-                onPointerLeave={handleSocialPointerLeave}
-                onOpenAutoFocus={(event) => {
-                  event.preventDefault();
-                  if (!socialOpenedByPointerRef.current) {
-                    socialContentRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-                  }
-                }}
-                onCloseAutoFocus={(event) => { if (socialOpenedByPointerRef.current) event.preventDefault(); }}
-                className="z-[90] w-40 max-w-[var(--radix-popover-content-available-width)] border-0 bg-transparent p-0 pl-1.5 shadow-none">
-                <div
-                  role="menu"
-                  aria-label="Social links"
-                  className="space-y-0.5 rounded-lg border border-[var(--scry-border2)] bg-[var(--scry-bg)] p-1 shadow-xl"
+                <PopoverTrigger asChild>
+                  <button
+                    id="root-sidebar-social-links"
+                    ref={socialTriggerRef}
+                    type="button"
+                    aria-haspopup="menu"
+                    onPointerEnter={(event) => {
+                      if (event.pointerType !== "mouse") return;
+                      socialOpenedByPointerRef.current = true;
+                      setSocialMenuOpen(true);
+                    }}
+                    onPointerLeave={handleSocialPointerLeave}
+                    onPointerDown={() => {
+                      socialOpenedByPointerRef.current = false;
+                    }}
+                    onKeyDown={() => {
+                      socialOpenedByPointerRef.current = false;
+                    }}
+                    className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
+                  >
+                    <MessagesSquare className="h-4 w-4" />
+                    <span className="truncate">Social</span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  ref={socialContentRef}
+                  side="right"
+                  align="end"
+                  sideOffset={0}
+                  collisionPadding={8}
+                  avoidCollisions={false}
+                  onPointerLeave={handleSocialPointerLeave}
+                  onOpenAutoFocus={(event) => {
+                    event.preventDefault();
+                    if (!socialOpenedByPointerRef.current) {
+                      socialContentRef.current
+                        ?.querySelector<HTMLElement>('[role="menuitem"]')
+                        ?.focus();
+                    }
+                  }}
+                  onCloseAutoFocus={(event) => {
+                    if (socialOpenedByPointerRef.current)
+                      event.preventDefault();
+                  }}
+                  className="z-[90] w-40 max-w-[var(--radix-popover-content-available-width)] border-0 bg-transparent p-0 pl-1.5 shadow-none"
                 >
-                  <a
-                    href="https://www.reddit.com/r/scryer_media/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    role="menuitem"
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
+                  <div
+                    role="menu"
+                    aria-label="Social links"
+                    className="space-y-0.5 rounded-lg border border-[var(--scry-border2)] bg-[var(--scry-bg)] p-1 shadow-xl"
                   >
-                    <img
-                      src={sidebarPublicAssetUrl("social/reddit.svg")}
-                      alt=""
-                      aria-hidden="true"
-                      className="h-4 w-4 shrink-0"
-                    />
-                    <span>Reddit</span>
-                  </a>
-                  <a
-                    href="https://discord.gg/SQmtZTanqm"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    role="menuitem"
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
-                  >
-                    <img
-                      src={sidebarPublicAssetUrl("social/discord.svg")}
-                      alt=""
-                      aria-hidden="true"
-                      className="h-4 w-4 shrink-0"
-                    />
-                    <span>Discord</span>
-                  </a>
-                </div>
-              </PopoverContent>
+                    <a
+                      href="https://www.reddit.com/r/scryer_media/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      role="menuitem"
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
+                    >
+                      <img
+                        src={sidebarPublicAssetUrl("social/reddit.svg")}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-4 w-4 shrink-0"
+                      />
+                      <span>Reddit</span>
+                    </a>
+                    <a
+                      href="https://discord.gg/SQmtZTanqm"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      role="menuitem"
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
+                    >
+                      <img
+                        src={sidebarPublicAssetUrl("social/discord.svg")}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-4 w-4 shrink-0"
+                      />
+                      <span>Discord</span>
+                    </a>
+                  </div>
+                </PopoverContent>
               </Popover>
             </div>
           </div>

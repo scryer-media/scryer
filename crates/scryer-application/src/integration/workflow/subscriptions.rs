@@ -28,9 +28,7 @@ impl AppUseCase {
             .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
             .await?
         {
-            return Err(AppError::Unauthorized(
-                "You do not have access to this library".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
 
         let (tx, rx) = broadcast::channel(32);
@@ -69,9 +67,7 @@ impl AppUseCase {
             .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
             .await?
         {
-            return Err(AppError::Unauthorized(
-                "You do not have access to this library".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
         Ok(self.runtime.acquisition.download_queue_snapshot.subscribe())
     }

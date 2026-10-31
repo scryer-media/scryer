@@ -7,14 +7,18 @@ export function normalizeFillerPolicy(value: string | null | undefined) {
     : "DOWNLOAD_ALL";
 }
 
-export function normalizeRenameCollisionPolicy(value: string | null | undefined) {
+export function normalizeRenameCollisionPolicy(
+  value: string | null | undefined,
+) {
   const normalized = value?.trim().toUpperCase();
   return normalized === "ERROR" || normalized === "REPLACE_IF_BETTER"
     ? normalized
     : "SKIP";
 }
 
-export function normalizeRenameMissingMetadataPolicy(value: string | null | undefined) {
+export function normalizeRenameMissingMetadataPolicy(
+  value: string | null | undefined,
+) {
   return value?.trim().toUpperCase() === "SKIP" ? "SKIP" : "FALLBACK_TITLE";
 }
 
@@ -25,10 +29,16 @@ export function normalizeRecapPolicy(value: string | null | undefined) {
 }
 
 export function normalizeAnimeMediaSettings(
-  settings: Partial<Pick<MediaSettings,
-    "fillerPolicy" | "recapPolicy" | "monitorSpecials" |
-    "interSeasonMovies" | "monitorFillerMovies"
-  >>,
+  settings: Partial<
+    Pick<
+      MediaSettings,
+      | "fillerPolicy"
+      | "recapPolicy"
+      | "monitorSpecials"
+      | "interSeasonMovies"
+      | "monitorFillerMovies"
+    >
+  >,
 ) {
   return {
     fillerPolicy: normalizeFillerPolicy(settings.fillerPolicy),

@@ -12,21 +12,34 @@ import {
 } from "@/lib/utils/download-queue";
 
 const queueStateClasses: Record<string, string> = {
-  QUEUED: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  DOWNLOADING: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  POST_PROCESSING: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  PAUSED: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  COMPLETED: "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
+  QUEUED:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  DOWNLOADING:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  POST_PROCESSING:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  PAUSED:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  COMPLETED:
+    "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
   IMPORTED_SEEDING:
     "border-[var(--scry-success-border-strong)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
-  IMPORTING: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  REMOVING: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  IMPORT_PENDING: "border-[rgba(var(--scry-accent-rgb),0.4)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)]",
-  IMPORT_BLOCKED: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  IMPORT_FAILED: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
-  REMOVE_FAILED: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
-  WARNING: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  FAILED: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  IMPORTING:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  REMOVING:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  IMPORT_PENDING:
+    "border-[rgba(var(--scry-accent-rgb),0.4)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)]",
+  IMPORT_BLOCKED:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  IMPORT_FAILED:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  REMOVE_FAILED:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  WARNING:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  FAILED:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
 };
 
 const queueStateLabels: Record<string, string> = {
@@ -63,7 +76,8 @@ function parseByteCount(sizeBytes: number | string | null): number | null {
   if (sizeBytes === null || sizeBytes === "") {
     return null;
   }
-  const bytes = typeof sizeBytes === "number" ? sizeBytes : Number.parseFloat(sizeBytes);
+  const bytes =
+    typeof sizeBytes === "number" ? sizeBytes : Number.parseFloat(sizeBytes);
   if (!Number.isFinite(bytes) || bytes < 0) {
     return null;
   }
@@ -111,7 +125,9 @@ function queueItemProgress(item: DownloadQueueItem): {
   };
 }
 
-function formatRemainingDuration(remainingSeconds: number | null): string | null {
+function formatRemainingDuration(
+  remainingSeconds: number | null,
+): string | null {
   if (remainingSeconds === null || !Number.isFinite(remainingSeconds)) {
     return null;
   }
@@ -240,7 +256,9 @@ export function MovieOverviewDownloadList({
                     {detail ? (
                       <p className="flex items-start gap-1 text-xs text-muted-foreground">
                         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span className="line-clamp-2 whitespace-pre-wrap">{detail}</span>
+                        <span className="line-clamp-2 whitespace-pre-wrap">
+                          {detail}
+                        </span>
                       </p>
                     ) : null}
                   </div>

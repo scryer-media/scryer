@@ -2,7 +2,11 @@ import * as React from "react";
 import { ChevronDown } from "lucide-react";
 
 import { CheckboxField } from "@/components/ui/checkbox";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   type SelectChrome,
   type SelectSize,
@@ -56,14 +60,23 @@ const MultiSelectOptionRow = React.memo(function MultiSelectOptionRow({
   return (
     <div title={option.title}>
       <CheckboxField
-        id={option.id ?? (optionIdPrefix ? `${optionIdPrefix}-${option.value}` : fallbackId)}
+        id={
+          option.id ??
+          (optionIdPrefix ? `${optionIdPrefix}-${option.value}` : fallbackId)
+        }
         checked={checked}
         disabled={optionDisabled}
         size="compact"
         onCheckedChange={() => onToggle(option.value)}
-        className={cn("w-full items-center gap-2 rounded-[8px] px-2 py-1.5 hover:bg-[var(--scry-hover)]", optionClassName)}
+        className={cn(
+          "w-full items-center gap-2 rounded-[8px] px-2 py-1.5 hover:bg-[var(--scry-hover)]",
+          optionClassName,
+        )}
         checkboxClassName="mt-0"
-        labelClassName={cn("block truncate font-normal text-[var(--scry-ink2)]", optionLabelClassName)}
+        labelClassName={cn(
+          "block truncate font-normal text-[var(--scry-ink2)]",
+          optionLabelClassName,
+        )}
         label={option.label}
       />
     </div>
@@ -118,26 +131,29 @@ function MultiSelectOptionList({
     onSelectedValuesChangeRef.current = onSelectedValuesChange;
   }, [allOptions, onSelectedValuesChange, selectedValues]);
 
-  const toggleOption = React.useCallback(
-    (value: string) => {
-      const nextSet = new Set(selectedValuesRef.current);
-      if (nextSet.has(value)) {
-        nextSet.delete(value);
-      } else {
-        nextSet.add(value);
-      }
+  const toggleOption = React.useCallback((value: string) => {
+    const nextSet = new Set(selectedValuesRef.current);
+    if (nextSet.has(value)) {
+      nextSet.delete(value);
+    } else {
+      nextSet.add(value);
+    }
 
-      onSelectedValuesChangeRef.current(
-        allOptionsRef.current
-          .map((option) => option.value)
-          .filter((optionValue) => nextSet.has(optionValue)),
-      );
-    },
-    [],
-  );
+    onSelectedValuesChangeRef.current(
+      allOptionsRef.current
+        .map((option) => option.value)
+        .filter((optionValue) => nextSet.has(optionValue)),
+    );
+  }, []);
 
   return (
-    <div className={cn("flex flex-col gap-1 overflow-y-auto", maxHeightClassName, className)}>
+    <div
+      className={cn(
+        "flex flex-col gap-1 overflow-y-auto",
+        maxHeightClassName,
+        className,
+      )}
+    >
       {allOption ? (
         <CheckboxField
           id={allOption.id ?? allOptionId}
@@ -146,7 +162,10 @@ function MultiSelectOptionList({
           checked={allOption.selected}
           size="compact"
           checkboxClassName="mt-0"
-          labelClassName={cn("block truncate font-normal text-[var(--scry-ink2)]", optionLabelClassName)}
+          labelClassName={cn(
+            "block truncate font-normal text-[var(--scry-ink2)]",
+            optionLabelClassName,
+          )}
           label={allOption.label}
           className={cn(
             "w-full items-center gap-2 rounded-[8px] px-2 py-1.5 hover:bg-[var(--scry-hover)]",
@@ -251,7 +270,7 @@ function MultiSelectDropdown({
               !hasSelection && "text-[var(--scry-faint)]",
             )}
           >
-            {hasSelection ? triggerLabel : placeholder ?? triggerLabel}
+            {hasSelection ? triggerLabel : (placeholder ?? triggerLabel)}
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
         </button>

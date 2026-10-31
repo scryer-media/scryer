@@ -23,7 +23,10 @@ export type RatingSourceInfo = {
 };
 
 export function normalizedRatingSource(source: string): string {
-  const normalized = source.trim().toLowerCase().replace(/[\s_.-]+/g, "");
+  const normalized = source
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_.-]+/g, "");
   return normalized === "myanimelist" || normalized === "myanimelistnet"
     ? "mal"
     : normalized;
@@ -98,7 +101,11 @@ export function ratingSourceInfo(source: string): RatingSourceInfo {
   const normalized = normalizedRatingSource(source);
   switch (normalized) {
     case "imdb":
-      return { label: "IMDb", logoSrc: "/rating-sources/imdb.svg", format: "default" };
+      return {
+        label: "IMDb",
+        logoSrc: "/rating-sources/imdb.svg",
+        format: "default",
+      };
     case "rottentomatoes":
     case "tomatoes":
       return {
@@ -133,12 +140,24 @@ export function ratingSourceInfo(source: string): RatingSourceInfo {
         format: "hundred",
       };
     case "tmdb":
-      return { label: "TMDb", logoSrc: "/rating-sources/tmdb.svg", format: "default" };
+      return {
+        label: "TMDb",
+        logoSrc: "/rating-sources/tmdb.svg",
+        format: "default",
+      };
     case "tvdb":
     case "thetvdb":
-      return { label: "TVDB", logoSrc: "/media-sites/tvdb.svg", format: "default" };
+      return {
+        label: "TVDB",
+        logoSrc: "/media-sites/tvdb.svg",
+        format: "default",
+      };
     case "trakt":
-      return { label: "Trakt", logoSrc: "/rating-sources/trakt.svg", format: "default" };
+      return {
+        label: "Trakt",
+        logoSrc: "/rating-sources/trakt.svg",
+        format: "default",
+      };
     case "letterboxd":
       return {
         label: "Letterboxd",
@@ -146,17 +165,37 @@ export function ratingSourceInfo(source: string): RatingSourceInfo {
         format: "default",
       };
     case "mdblist":
-      return { label: "MDBList", logoSrc: "/rating-sources/mdblist.avif", format: "default" };
+      return {
+        label: "MDBList",
+        logoSrc: "/rating-sources/mdblist.avif",
+        format: "default",
+      };
     case "mal":
     case "myanimelist":
     case "myanimelistnet":
-      return { label: "MyAnimeList", logoSrc: "/media-sites/mal.svg", format: "default" };
+      return {
+        label: "MyAnimeList",
+        logoSrc: "/media-sites/mal.svg",
+        format: "default",
+      };
     case "anilist":
-      return { label: "AniList", logoSrc: "/media-sites/anilist.svg", format: "default" };
+      return {
+        label: "AniList",
+        logoSrc: "/media-sites/anilist.svg",
+        format: "default",
+      };
     case "anidb":
-      return { label: "AniDB", logoSrc: "/media-sites/anidb.png", format: "default" };
+      return {
+        label: "AniDB",
+        logoSrc: "/media-sites/anidb.png",
+        format: "default",
+      };
     default:
-      return { label: fallbackSourceLabel(source), logoSrc: null, format: "default" };
+      return {
+        label: fallbackSourceLabel(source),
+        logoSrc: null,
+        format: "default",
+      };
   }
 }
 
@@ -190,9 +229,13 @@ export function visibleTitleExternalRatings(
       if (orderDelta !== 0) {
         return orderDelta;
       }
-      const labelDelta = a.source.label.localeCompare(b.source.label, undefined, {
-        sensitivity: "base",
-      });
+      const labelDelta = a.source.label.localeCompare(
+        b.source.label,
+        undefined,
+        {
+          sensitivity: "base",
+        },
+      );
       return labelDelta || a.index - b.index;
     })
     .filter(({ normalized }) => {

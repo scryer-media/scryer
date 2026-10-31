@@ -19,7 +19,7 @@ where
     let (queued_batches_tx, queued_batches_rx) =
         tokio::sync::mpsc::channel(LIBRARY_SCAN_DISCOVERY_WORK_QUEUE_CAPACITY);
 
-    tokio::spawn(async move {
+    app.restore_coordinator().clone().spawn_task(async move {
         let coordinator = LibraryScanCoordinator::new(app.clone(), session_id.clone());
         while let Some(batch_result) =
             await_cancellable(cancel_token.as_ref(), discovered_batches.recv())
@@ -67,9 +67,10 @@ where
 pub(crate) fn require_directory_library_path(library_path: &str) -> AppResult<&Path> {
     let root = Path::new(library_path);
     if !root.is_dir() {
-        return Err(AppError::Validation(format!(
-            "library path is not a directory: {library_path}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PATH_NOT_DIRECTORY,
+            format!("library path is not a directory: {library_path}"),
+        ));
     }
 
     Ok(root)
@@ -103,7 +104,7 @@ impl Drop for LibraryScanSessionDropGuard {
 
         let app = self.app.clone();
         let session_id = self.session_id.clone();
-        tokio::spawn(async move {
+        app.restore_coordinator().clone().spawn_task(async move {
             LibraryScanCoordinator::new(app, session_id).fail().await;
         });
     }

@@ -131,8 +131,9 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
         }
 
         if assignments.len() == 1 {
-            return Err(AppError::Validation(
-                "at least one download client config field must be provided".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_UPDATE_EMPTY,
+                "at least one download client config field must be provided",
             ));
         }
 
@@ -153,7 +154,10 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                 Box::pin(async move {
                     let rows = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("download client config {id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                            format!("download client config {id}"),
+                        ));
                     }
                     fetch_optional_download_client(
                         SqlExec::Tx(tx),
@@ -164,7 +168,12 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                         encryption_key.as_ref(),
                     )
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("download client config {id}")))
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                            format!("download client config {id}"),
+                        )
+                    })
                 })
             },
         )
@@ -256,7 +265,10 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("download client config {id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND,
+                            format!("download client config {id}"),
+                        ));
                     }
                     Ok(cleared)
                 })

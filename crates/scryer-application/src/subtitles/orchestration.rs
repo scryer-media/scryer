@@ -380,9 +380,12 @@ async fn resolve_runtime_subtitle_providers(
         .collect::<Vec<_>>();
 
     if enabled_configs.is_empty() {
-        return Ok(RuntimeSubtitleProviders::NoProviders(AppError::Validation(
-            "no enabled subtitle providers are configured".to_string(),
-        )));
+        return Ok(RuntimeSubtitleProviders::NoProviders(
+            AppError::validation_refused(
+                crate::error_reasons::subtitles::NO_ENABLED_SUBTITLE_PROVIDERS_NOT_CONFIGURED,
+                "no enabled subtitle providers are configured".to_string(),
+            ),
+        ));
     }
 
     let mut providers = Vec::new();
@@ -486,9 +489,10 @@ async fn runtime_subtitle_provider_for_download(
         };
     }
 
-    Err(AppError::NotFound(format!(
-        "subtitle provider '{provider_name}' is not configured"
-    )))
+    Err(AppError::not_found_reason(
+        crate::error_reasons::subtitles::SUBTITLE_PROVIDER_NOT_NOT_FOUND,
+        format!("subtitle provider '{provider_name}' is not configured"),
+    ))
 }
 
 /// Consecutive failed searches after which a provider sits out the rest of a
@@ -500,13 +504,19 @@ const SUBTITLE_PROVIDER_CIRCUIT_THRESHOLD: usize = 3;
 
 /// A per-cycle circuit breaker over subtitle providers, keyed by config id.
 ///
-/// Any failed search counts; a successful one, results or not, resets the
-/// count. A provider whose circuit opens is not called again this cycle. One
+/// Searches and downloads keep separate runs of failures, so a provider whose
+/// searches answer but whose downloads keep failing (a download that runs into
+/// the plugin deadline, say) still trips: a successful search does not excuse
+/// a failing download. Any failed search counts, and so does any failure of
+/// the provider's own download call except a not-found, which says the file is
+/// gone rather than that the provider is unwell. A success resets that kind's
+/// run. A provider whose circuit opens is not called again this cycle. One
 /// that opened last cycle starts on probation: its first failure opens it
 /// again at once, and its first success clears it.
 #[derive(Debug, Default)]
 struct SubtitleProviderCircuit {
     consecutive_failures: HashMap<String, usize>,
+    consecutive_download_failures: HashMap<String, usize>,
     open: HashSet<String>,
     on_probation: HashSet<String>,
 }
@@ -528,16 +538,32 @@ impl SubtitleProviderCircuit {
         self.on_probation.remove(config_id);
     }
 
+    fn record_download_success(&mut self, config_id: &str) {
+        self.consecutive_download_failures.remove(config_id);
+        self.on_probation.remove(config_id);
+    }
+
     /// Count one failed search. Returns the run of failures when this one
     /// opened the circuit.
     fn record_failure(&mut self, config_id: &str) -> Option<usize> {
+        self.count_failure(config_id, SubtitleProviderCall::Search)
+    }
+
+    /// Count one failed provider download. Returns the run of failures when
+    /// this one opened the circuit.
+    fn record_download_failure(&mut self, config_id: &str) -> Option<usize> {
+        self.count_failure(config_id, SubtitleProviderCall::Download)
+    }
+
+    fn count_failure(&mut self, config_id: &str, call: SubtitleProviderCall) -> Option<usize> {
         if self.open.contains(config_id) {
             return None;
         }
-        let failures = self
-            .consecutive_failures
-            .entry(config_id.to_string())
-            .or_default();
+        let runs = match call {
+            SubtitleProviderCall::Search => &mut self.consecutive_failures,
+            SubtitleProviderCall::Download => &mut self.consecutive_download_failures,
+        };
+        let failures = runs.entry(config_id.to_string()).or_default();
         *failures += 1;
         let threshold = if self.on_probation.contains(config_id) {
             1
@@ -559,6 +585,65 @@ impl SubtitleProviderCircuit {
         probation.extend(self.open);
         probation
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SubtitleProviderCall {
+    Search,
+    Download,
+}
+
+/// What a failed download in the search cycle says about the file it fetched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CycleDownloadFailure {
+    /// The file is gone or cannot be used: the cycle skips it from here on.
+    /// The provider itself is not blamed.
+    FileUnusable,
+    /// The provider's download call failed: it counts toward the provider's
+    /// circuit.
+    Provider,
+    /// Anything else, such as writing next to the video: neither the file nor
+    /// the provider is blamed.
+    Other,
+}
+
+fn classify_cycle_download_failure(
+    failure: &crate::subtitles::download::SubtitleDownloadFailure,
+) -> CycleDownloadFailure {
+    use crate::subtitles::download::SubtitleDownloadStage;
+    match failure.stage {
+        SubtitleDownloadStage::Provider if subtitle_file_not_found(&failure.error) => {
+            CycleDownloadFailure::FileUnusable
+        }
+        SubtitleDownloadStage::Provider => CycleDownloadFailure::Provider,
+        SubtitleDownloadStage::Extraction => match &failure.error {
+            // The extractor read these bytes and could not use them (a missing
+            // or unreadable archive member, a malformed archive, a password
+            // none of the candidates opens). The same bytes fail the same way
+            // for every episode that picks them again this cycle.
+            AppError::ArchiveExtractionFailed { .. } | AppError::ArchivePasswordRequired { .. } => {
+                CycleDownloadFailure::FileUnusable
+            }
+            _ => CycleDownloadFailure::Other,
+        },
+        SubtitleDownloadStage::Save => CycleDownloadFailure::Other,
+    }
+}
+
+/// Whether a provider's download said the file no longer exists.
+fn subtitle_file_not_found(error: &AppError) -> bool {
+    if matches!(
+        error,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. }
+    ) {
+        return true;
+    }
+    error.plugin_failure().is_some_and(|failure| {
+        failure.reason
+            == crate::PluginFailureReason::from_code(&scryer_plugin_sdk::PluginErrorCode::from(
+                crate::plugin_codes::ITEM_NOT_FOUND,
+            ))
+    })
 }
 
 /// The stable reason a failed subtitle search is reported under.
@@ -826,7 +911,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -862,14 +952,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(media_file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media file not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+                    "media file not found".to_string(),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -902,14 +1002,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(media_file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media file not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+                    "media file not found".to_string(),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1030,14 +1140,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(&media_file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media file not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+                    "media file not found".to_string(),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("title not found".to_string()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::subtitles::TITLE_NOT_FOUND,
+                    "title not found".to_string(),
+                )
+            })?;
         // Downloading a subtitle is a library action, not an instance-settings
         // action: catalog administrators still pass through the app-permission
         // override in `effective_library_permission`.
@@ -1251,7 +1371,7 @@ pub async fn start_background_subtitle_poller(
 /// Spawn a fire-and-forget subtitle search for a newly imported file.
 /// Called from import code when `subtitles.auto_download_on_import` is true.
 pub fn spawn_subtitle_search_for_file(app: AppUseCase, title_id: String, media_file_id: String) {
-    tokio::spawn(async move {
+    app.restore_coordinator().clone().spawn_task(async move {
         let permit = match Arc::clone(&ON_IMPORT_SUBTITLE_SEARCH_LIMIT)
             .acquire_owned()
             .await
@@ -2072,14 +2192,24 @@ async fn run_subtitle_search_for_file(
         .titles
         .get_by_id(title_id)
         .await?
-        .ok_or_else(|| crate::AppError::NotFound("title not found".into()))?;
+        .ok_or_else(|| {
+            crate::AppError::not_found_reason(
+                crate::error_reasons::subtitles::TITLE_NOT_FOUND,
+                "title not found",
+            )
+        })?;
     let mf = app
         .services
         .library
         .media_files
         .get_media_file_by_id(media_file_id)
         .await?
-        .ok_or_else(|| crate::AppError::NotFound("media file not found".into()))?;
+        .ok_or_else(|| {
+            crate::AppError::not_found_reason(
+                crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,
+                "media file not found",
+            )
+        })?;
 
     let is_series = is_series_title(&title);
     let media_kind = if is_series {
@@ -2346,6 +2476,10 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     ));
+    // Provider files this cycle found gone or unusable, by (provider, file id).
+    // An archive pack is offered once per episode, so without this the cycle
+    // would fetch the same dead file again for every episode it covers.
+    let mut unusable_files = HashSet::<(String, String)>::new();
 
     'titles: for title in &titles {
         if !title.monitored {
@@ -2438,7 +2572,9 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                         .is_blocklisted(&mf.id, &r.provider, &r.provider_file_id)
                         .await
                         .unwrap_or(false);
-                    if !blocklisted {
+                    let unusable =
+                        unusable_files.contains(&(r.provider.clone(), r.provider_file_id.clone()));
+                    if !blocklisted && !unusable {
                         filtered_results.push(r);
                     }
                 }
@@ -2481,6 +2617,9 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                             continue;
                         }
                     };
+                if circuit.is_open(&download_provider.config_id) {
+                    continue;
+                }
                 let Some(scheduler_lease) = admit_subtitle_provider(
                     app,
                     &download_provider,
@@ -2493,7 +2632,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                     continue;
                 };
 
-                let download_result = crate::subtitles::download::download_and_save_with_selection(
+                let download_result = crate::subtitles::download::download_and_save_staged(
                     &download_provider,
                     &best.provider_file_id,
                     file_path.as_path(),
@@ -2516,6 +2655,29 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                     },
                 )
                 .await;
+                match &download_result {
+                    Ok(_) => circuit.record_download_success(&download_provider.config_id),
+                    Err(failure) => match classify_cycle_download_failure(failure) {
+                        CycleDownloadFailure::FileUnusable => {
+                            unusable_files
+                                .insert((best.provider.clone(), best.provider_file_id.clone()));
+                        }
+                        CycleDownloadFailure::Provider => {
+                            if let Some(failures) =
+                                circuit.record_download_failure(&download_provider.config_id)
+                            {
+                                warn!(
+                                    subtitle_provider = download_provider.name(),
+                                    failures,
+                                    reason = subtitle_failure_reason_code(&failure.error),
+                                    "subtitle provider downloads keep failing; skipping it for the rest of this cycle"
+                                );
+                            }
+                        }
+                        CycleDownloadFailure::Other => {}
+                    },
+                }
+                let download_result = download_result.map_err(|failure| failure.error);
                 let scheduler_outcome = match &download_result {
                     Ok(_) => SchedulerFeedbackOutcome::Success,
                     Err(error) => subtitle_scheduler_outcome_for_error(error),
@@ -2698,6 +2860,103 @@ mod tests {
             subtitle_cooldown_action_from_error(&error),
             RateLimitCooldownAction::RecordFallback
         );
+    }
+
+    fn staged_failure(
+        stage: crate::subtitles::download::SubtitleDownloadStage,
+        error: AppError,
+    ) -> crate::subtitles::download::SubtitleDownloadFailure {
+        crate::subtitles::download::SubtitleDownloadFailure { stage, error }
+    }
+
+    #[test]
+    fn an_archive_the_extractor_cannot_use_is_unusable_for_the_cycle() {
+        use crate::subtitles::download::SubtitleDownloadStage;
+        // The extractor's own failure travels typed, whatever it says.
+        for error in [
+            AppError::ArchiveExtractionFailed {
+                message: "failed to read ZIP archive".to_string(),
+            },
+            AppError::ArchivePasswordRequired {
+                message: "subtitle archive requires a password".to_string(),
+            },
+        ] {
+            assert_eq!(
+                classify_cycle_download_failure(&staged_failure(
+                    SubtitleDownloadStage::Extraction,
+                    error
+                )),
+                CycleDownloadFailure::FileUnusable
+            );
+        }
+        // Not finding this episode inside a season pack is about the episode,
+        // not the archive: another episode may still use it.
+        assert_eq!(
+            classify_cycle_download_failure(&staged_failure(
+                SubtitleDownloadStage::Extraction,
+                AppError::validation_refused(
+                    crate::error_reasons::subtitles::ARCHIVE_SUBTITLE_NOT_FOUND,
+                    "subtitle archive did not contain a supported subtitle file",
+                ),
+            )),
+            CycleDownloadFailure::Other
+        );
+    }
+
+    #[test]
+    fn a_provider_not_found_blames_the_file_and_other_provider_errors_blame_the_provider() {
+        use crate::subtitles::download::SubtitleDownloadStage;
+        let gone = AppError::plugin_failed(
+            &scryer_plugin_sdk::PluginError {
+                code: scryer_plugin_sdk::PluginErrorCode::from(crate::plugin_codes::ITEM_NOT_FOUND),
+                public_message: "synthetic file is gone".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+                details: None,
+            },
+            "subtitle_download",
+        );
+        assert_eq!(
+            classify_cycle_download_failure(&staged_failure(SubtitleDownloadStage::Provider, gone)),
+            CycleDownloadFailure::FileUnusable
+        );
+        assert_eq!(
+            classify_cycle_download_failure(&staged_failure(
+                SubtitleDownloadStage::Provider,
+                AppError::NotFound("synthetic file".to_string()),
+            )),
+            CycleDownloadFailure::FileUnusable
+        );
+        assert_eq!(
+            classify_cycle_download_failure(&staged_failure(
+                SubtitleDownloadStage::Provider,
+                AppError::Repository("synthetic deadline".to_string()),
+            )),
+            CycleDownloadFailure::Provider
+        );
+        // An extraction failure never counts against the provider.
+        assert_eq!(
+            classify_cycle_download_failure(&staged_failure(
+                SubtitleDownloadStage::Extraction,
+                AppError::Repository("synthetic scratch failure".to_string()),
+            )),
+            CycleDownloadFailure::Other
+        );
+    }
+
+    #[test]
+    fn a_successful_search_does_not_reset_a_run_of_failed_downloads() {
+        let mut circuit = SubtitleProviderCircuit::default();
+        for _ in 0..SUBTITLE_PROVIDER_CIRCUIT_THRESHOLD - 1 {
+            circuit.record_success("lagging-config");
+            assert_eq!(circuit.record_download_failure("lagging-config"), None);
+        }
+        circuit.record_success("lagging-config");
+        assert_eq!(
+            circuit.record_download_failure("lagging-config"),
+            Some(SUBTITLE_PROVIDER_CIRCUIT_THRESHOLD)
+        );
+        assert!(circuit.is_open("lagging-config"));
     }
 
     fn sample_title(facet: MediaFacet, year: Option<i32>) -> Title {

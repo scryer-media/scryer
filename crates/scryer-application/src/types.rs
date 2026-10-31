@@ -901,6 +901,38 @@ pub struct MediaFileAssociations {
     pub series_movie_link_ids: Vec<String>,
 }
 
+/// A live primary file's ownership, cutoff and release identity facts, without
+/// analysis or listing payloads.
+/// One row per primary file-episode link, or one row for an unlinked primary file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaFileCutoffSummary {
+    pub id: String,
+    pub file_path: String,
+    pub original_file_path: Option<String>,
+    pub scene_name: Option<String>,
+    pub grabbed_release_title: Option<String>,
+    pub episode_id: Option<String>,
+    pub series_movie_link_ids: Vec<String>,
+    pub quality_label: Option<String>,
+    pub created_at: String,
+}
+
+impl From<&TitleMediaFile> for MediaFileCutoffSummary {
+    fn from(file: &TitleMediaFile) -> Self {
+        Self {
+            id: file.id.clone(),
+            file_path: file.file_path.clone(),
+            original_file_path: file.original_file_path.clone(),
+            scene_name: file.scene_name.clone(),
+            grabbed_release_title: file.grabbed_release_title.clone(),
+            episode_id: file.episode_id.clone(),
+            series_movie_link_ids: file.series_movie_link_ids.clone(),
+            quality_label: file.quality_label.clone(),
+            created_at: file.created_at.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleMediaFile {
     pub analysis_details: scryer_media_types::AnalysisDetails,
@@ -2235,6 +2267,10 @@ pub struct ReleaseCandidateProvenance {
 /// indexer asserted nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IndexerResponseAttributes {
+    /// Host-resolved credential query name for public feed redaction; never a plugin claim.
+    pub credential_parameter: Option<String>,
+    /// Lossless source metadata in feed order, alongside the normalized claims.
+    pub original: Vec<scryer_plugin_sdk::PluginReleaseAttribute>,
     pub tvdb_id: Option<String>,
     pub tmdb_id: Option<String>,
     pub imdb_id: Option<String>,
@@ -2335,6 +2371,19 @@ impl IndexerSearchResult {
             + optional(&self.guid)
             + optional(&self.info_url)
             + optional(&self.release_listing_json)
+            + self.response_attributes.original.capacity()
+                * std::mem::size_of::<scryer_plugin_sdk::PluginReleaseAttribute>()
+            + self
+                .response_attributes
+                .original
+                .iter()
+                .map(|attribute| {
+                    attribute.name.capacity()
+                        + attribute.value.capacity()
+                        + attribute.namespace.as_ref().map_or(0, String::capacity)
+                        + attribute.namespace_uri.as_ref().map_or(0, String::capacity)
+                })
+                .sum::<usize>()
             + extra
     }
 }
@@ -2609,9 +2658,6 @@ mod canonical_download_source_tests {
     }
 }
 
-/// Prefix shared by caps-health persistence and automatic-search suppression.
-pub const INDEXER_CAPS_REFRESH_ERROR_PREFIX: &str = "caps refresh failed:";
-
 /// Project an indexer's caps snapshot down to fields that can change search
 /// dispatch or the returned corpus. Health and display-only metadata must not
 /// reopen convergence.
@@ -2626,9 +2672,13 @@ fn project_search_relevant_caps(value: Option<&serde_json::Value>) -> serde_json
     };
     let mut projected = serde_json::Map::new();
     for key in [
+        "searching_present",
         "search",
         "tv_search",
         "movie_search",
+        "music_search",
+        "audio_search",
+        "book_search",
         "categories",
         "limits_default",
         "limits_max",
@@ -2651,10 +2701,8 @@ pub fn search_relevant_managed_indexer_metadata(raw: Option<&str>) -> serde_json
         return serde_json::Value::Null;
     };
     let mut projected = serde_json::Map::new();
-    for key in ["enable_automatic_search"] {
-        if let Some(value) = object.get(key) {
-            projected.insert(key.to_string(), value.clone());
-        }
+    if let Some(value) = object.get("enable_automatic_search") {
+        projected.insert("enable_automatic_search".to_string(), value.clone());
     }
     serde_json::Value::Object(projected)
 }
@@ -2776,6 +2824,22 @@ impl IndexerSearchOutcome {
 pub struct IndexerQueryOutcome {
     pub indexer_id: String,
     pub outcome: IndexerSearchOutcome,
+    /// The source's original page state, when this read exposes it. Absent
+    /// for an unasked source or a path that does not return page metadata.
+    pub page: Option<IndexerSearchPageMetadata>,
+}
+
+/// Source-local continuation and quota observations. These cannot be merged
+/// into one cursor or quota when a response contains more than one indexer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerSearchPageMetadata {
+    pub caps: Option<crate::IndexerCapsDiagnostic>,
+    pub completion: IndexerSearchCompletion,
+    pub next_cursor: Option<String>,
+    pub api_current: Option<u32>,
+    pub api_max: Option<u32>,
+    pub grab_current: Option<u32>,
+    pub grab_max: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -2796,17 +2860,88 @@ pub struct IndexerSearchResponse {
     pub next_cursor: Option<String>,
 }
 
-/// An operator's raw text search (Prowlarr's manual search): the query as
-/// typed with no facet, ids or structured coordinates, the operator's own
-/// categories (empty sends none) and results left unfiltered by title.
+impl IndexerSearchResponse {
+    pub fn page_metadata(&self) -> IndexerSearchPageMetadata {
+        IndexerSearchPageMetadata {
+            caps: None,
+            completion: self.completion,
+            next_cursor: self.next_cursor.clone(),
+            api_current: self.api_current,
+            api_max: self.api_max,
+            grab_current: self.grab_current,
+            grab_max: self.grab_max,
+        }
+    }
+}
+
+/// A raw provider search: caller-supplied text, exact Nab parameters and
+/// categories, with no acquisition matching or metadata fallback.
 #[derive(Clone, Debug, Default)]
 pub struct RawTextSearchRequest {
     pub query: String,
+    pub nab: Option<scryer_plugin_sdk::PluginNabSearch>,
+    /// Explicit recent-feed paging; an empty background RSS query never opts in.
+    pub recent_paging: bool,
     pub categories: Vec<String>,
     /// Only these enabled indexers; `None` asks every enabled one.
     pub indexer_ids: Option<std::collections::HashSet<String>>,
     /// Page size each indexer is asked for.
     pub limit: Option<u32>,
+    /// Read one provider page from one explicitly selected indexer. Absent
+    /// retains the existing raw-search behavior.
+    pub page: Option<RawTextSearchPage>,
+}
+
+/// Existing provider cursor safety bound, shared by accumulating and coordinated reads.
+pub const INDEXER_PAGE_CURSOR_MAX_BYTES: usize = 4096;
+
+/// A coordinator-owned single-page read. The provider cursor is opaque and
+/// belongs to the selected indexer; `None` requests its first page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RawTextSearchPage {
+    pub cursor: Option<String>,
+}
+
+/// The host's answer, once a paged read from the first page has that page in
+/// hand, to whether reading on is worth it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexerFirstPageVerdict {
+    /// Read on as the page budget allows.
+    ReadOn,
+    /// Another strategy's chain already reads this listing: end the read at
+    /// the first page. `listing_open` while that chain still has pages to
+    /// read, which leaves this answer partial with no reason; otherwise the
+    /// answer is complete.
+    Stop { listing_open: bool },
+}
+
+type IndexerFirstPageFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = IndexerFirstPageVerdict> + Send>>;
+
+/// Asked with the first page's content fingerprint (see
+/// `indexer_listing_page_fingerprint`).
+#[derive(Clone)]
+pub struct IndexerFirstPageGate(Arc<dyn Fn(String) -> IndexerFirstPageFuture + Send + Sync>);
+
+impl IndexerFirstPageGate {
+    pub fn new<F, Fut>(gate: F) -> Self
+    where
+        F: Fn(String) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = IndexerFirstPageVerdict> + Send + 'static,
+    {
+        Self(Arc::new(move |fingerprint| Box::pin(gate(fingerprint))))
+    }
+
+    /// The verdict on the first page with this fingerprint.
+    pub async fn verdict(&self, first_page_fingerprint: String) -> IndexerFirstPageVerdict {
+        (self.0)(first_page_fingerprint).await
+    }
+}
+
+impl std::fmt::Debug for IndexerFirstPageGate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("IndexerFirstPageGate")
+    }
 }
 
 /// One complete effective search strategy submitted to a plan-capable indexer.
@@ -2841,6 +2976,9 @@ pub struct IndexerSearchStrategyRequest {
     /// The most results the indexer is asked for. `None` leaves the adapter's
     /// default request limit in force.
     pub result_limit: Option<usize>,
+    /// Asked after the first page of a paged read that starts from the
+    /// beginning. `None` reads on as the page budget allows.
+    pub first_page_gate: Option<IndexerFirstPageGate>,
 }
 
 /// The newest release the scheduler recorded on an indexer's previous
@@ -2887,8 +3025,14 @@ impl IndexerSearchStrategyEventSink {
         Self { sender }
     }
 
-    pub async fn send(&self, event: IndexerSearchStrategyEvent) -> Result<(), ()> {
-        self.sender.send(event).await.map_err(|_| ())
+    pub async fn send(
+        &self,
+        event: IndexerSearchStrategyEvent,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<()>> {
+        self.sender
+            .send(event)
+            .await
+            .map_err(|_| tokio::sync::mpsc::error::SendError(()))
     }
 }
 
@@ -2942,23 +3086,29 @@ impl IndexerSearchPageSink {
         })
     }
 
-    pub async fn send(&self, results: Vec<IndexerSearchResult>) -> Result<(), ()> {
+    pub async fn send(
+        &self,
+        results: Vec<IndexerSearchResult>,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<()>> {
         let Some(reservation) = self.reserve().await else {
-            return Err(());
+            return Err(tokio::sync::mpsc::error::SendError(()));
         };
         reservation.send(results).await
     }
 }
 
 impl IndexerSearchPageReservation {
-    pub async fn send(mut self, results: Vec<IndexerSearchResult>) -> Result<(), ()> {
+    pub async fn send(
+        mut self,
+        results: Vec<IndexerSearchResult>,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<()>> {
         self.sender
             .send(IndexerSearchPage {
                 results,
                 _reservation: self.permit.take(),
             })
             .await
-            .map_err(|_| ())
+            .map_err(|_| tokio::sync::mpsc::error::SendError(()))
     }
 }
 
@@ -4519,6 +4669,55 @@ pub struct UiCatalogViewUpdate {
     pub columns: Option<Vec<UiTableColumnSetting>>,
 }
 
+/// Responsive breakpoint a dashboard layout was arranged for; each keeps its own layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiDashboardBreakpoint {
+    Xs,
+    Sm,
+    Md,
+    Lg,
+}
+
+impl UiDashboardBreakpoint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xs => "xs",
+            Self::Sm => "sm",
+            Self::Md => "md",
+            Self::Lg => "lg",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "xs" => Some(Self::Xs),
+            "sm" => Some(Self::Sm),
+            "md" => Some(Self::Md),
+            "lg" => Some(Self::Lg),
+            _ => None,
+        }
+    }
+}
+
+/// One panel's place on a dashboard grid. The panel id is opaque to the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiDashboardLayoutItem {
+    pub panel_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// The dashboard layout a user saved for one breakpoint. An empty item list is
+/// a saved layout with every panel removed, not a missing one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiDashboardLayout {
+    pub breakpoint: UiDashboardBreakpoint,
+    pub columns: i32,
+    pub items: Vec<UiDashboardLayoutItem>,
+}
+
 /// Curated appearance saved on the user profile.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UiPalette {
@@ -4576,8 +4775,6 @@ pub struct UiSettings {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
-    /// Turns off the decorative accent glow in the interface.
-    pub no_glow: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4585,6 +4782,8 @@ pub struct UiSettings {
     pub language: Option<String>,
     pub table_columns: Vec<UiTableColumnSetting>,
     pub catalog_views: Vec<UiCatalogViewSetting>,
+    /// Saved dashboard layouts, one per breakpoint that has one.
+    pub dashboard_layouts: Vec<UiDashboardLayout>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -4599,8 +4798,6 @@ pub struct UiSettingsUpdate {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
-    /// Turns off the decorative accent glow in the interface.
-    pub no_glow: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4622,15 +4819,13 @@ impl UiSettings {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
-            // New users start without the glow; migration 0306 kept it for
-            // users of instances that were already in use.
-            no_glow: true,
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),
             language: None,
             table_columns: Vec::new(),
             catalog_views: Vec::new(),
+            dashboard_layouts: Vec::new(),
             created_at: None,
             updated_at: None,
         }
@@ -5046,6 +5241,7 @@ mod indexer_search_identity_tests {
                 .to_string(),
             ),
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(serde_json::json!({"api_path": "/api"}).to_string()),

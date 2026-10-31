@@ -45,11 +45,16 @@ test("non-customizable packs hide Copy as custom while omitted metadata preserve
   });
   try {
     const [module, uiSettingsModule] = await Promise.all([
-      server.ssrLoadModule("/components/views/settings/tracked-rule-packs-section.tsx"),
+      server.ssrLoadModule(
+        "/components/views/settings/tracked-rule-packs-section.tsx",
+      ),
       server.ssrLoadModule("/lib/context/ui-settings-context.tsx"),
     ]);
-    const Component = module.TrackedRulePacksSection as ComponentType<Record<string, unknown>>;
-    const UiSettingsContext = uiSettingsModule.UiSettingsContext as React.Context<unknown>;
+    const Component = module.TrackedRulePacksSection as ComponentType<
+      Record<string, unknown>
+    >;
+    const UiSettingsContext =
+      uiSettingsModule.UiSettingsContext as React.Context<unknown>;
     const uiSettingsValue = {
       uiSettings: uiSettingsModule.DEFAULT_UI_SETTINGS,
       uiSettingsLoading: false,

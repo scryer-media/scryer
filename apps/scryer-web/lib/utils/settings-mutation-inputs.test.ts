@@ -39,7 +39,15 @@ const proxyDraft = {
 };
 
 test("HTTP/3 sends optional credentials without SSH or WireGuard settings", () => {
-  const draft = { ...proxyDraft, providerType: "http3" as const, baseUrl: "proxy.example:443", username: "user", password: "secret", privateKey: "stale", remoteDns: true };
+  const draft = {
+    ...proxyDraft,
+    providerType: "http3" as const,
+    baseUrl: "proxy.example:443",
+    username: "user",
+    password: "secret",
+    privateKey: "stale",
+    remoteDns: true,
+  };
   const input = buildCreateProxyInput(draft);
   assert.equal(input.providerType, "http3");
   assert.equal(input.baseUrl, "https://proxy.example:443");
@@ -47,7 +55,11 @@ test("HTTP/3 sends optional credentials without SSH or WireGuard settings", () =
   assert.equal(input.password, "secret");
   assert.equal(input.privateKey, undefined);
   assert.equal(input.remoteDns, undefined);
-  const cleared = buildUpdateProxyInput("http3-proxy", { ...draft, hasStoredCredentials: true, clearCredentials: true });
+  const cleared = buildUpdateProxyInput("http3-proxy", {
+    ...draft,
+    hasStoredCredentials: true,
+    clearCredentials: true,
+  });
   assert.equal(cleared.username, null);
   assert.equal(cleared.password, null);
 });
@@ -234,7 +246,8 @@ test("tunnels send SSH username and key material without passwords", () => {
     ...tunnelProxyDraft,
     username: "  operator  ",
     password: "  hunter2  ",
-    privateKey: "  -----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----  ",
+    privateKey:
+      "  -----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----  ",
   });
 
   assert.equal(input.username, "operator");

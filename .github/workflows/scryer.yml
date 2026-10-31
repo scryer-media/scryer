@@ -130,6 +130,11 @@ jobs:
         working-directory: apps/scryer-web
         run: npm run lint
 
+      - name: Check formatting
+        if: steps.scope.outputs.run == 'true'
+        working-directory: apps/scryer-web
+        run: npm run format:check
+
       - name: Run web unit tests
         if: steps.scope.outputs.run == 'true'
         working-directory: apps/scryer-web
@@ -246,7 +251,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
 
       - name: Install sccache
         if: steps.scope.outputs.run == 'true'
@@ -261,7 +266,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-release/v1/rust-1.97.1/x86_64-unknown-linux-gnu/
+          key-prefix: scryer/trusted-release/v1/rust-1.99.1/x86_64-unknown-linux-gnu/
 
       - name: Prime sccache server
         if: steps.scope.outputs.run == 'true'
@@ -353,7 +358,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
           components: clippy
 
       - name: Install sccache
@@ -369,7 +374,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-musl/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-musl/
 
       - name: Configure fork PR sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) }}
@@ -498,7 +503,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_TERM_COLOR: always
-      RUST_MIN_STACK: "4194304"
+      RUST_MIN_STACK: "16777216"
       AWS_LC_SYS_USE_SYSTEM: "0"
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
@@ -537,7 +542,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1-x86_64-pc-windows-msvc"
+          toolchain: "1.99.1-x86_64-pc-windows-msvc"
           components: clippy
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         if: steps.scope.outputs.run == 'true'
@@ -550,7 +555,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-pc-windows-msvc/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-pc-windows-msvc/
       - name: Configure compiler and linker
         if: steps.scope.outputs.run == 'true'
         shell: pwsh
@@ -619,7 +624,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
       - name: Validate and generate target matrix
         id: matrix
         run: |
@@ -672,7 +677,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
 
       - name: Install sccache
         uses: ./.github/actions/install-ci-sccache
@@ -684,7 +689,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-gnu/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/x86_64-unknown-linux-gnu/
 
       - name: Configure fork PR sccache
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
@@ -735,12 +740,8 @@ jobs:
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
-          export RUST_MIN_STACK="4194304"
-          if [ "$NEXTEST_LANE" = "scryer-graphql" ] || [ "$NEXTEST_LANE" = "scryer-binaries" ]; then
-            # Unoptimized generated GraphQL dispatch plus nested scans exceeds 4 MiB.
-            # The binary's Arr-compat tests run the same GraphQL mutations for parity.
-            export RUST_MIN_STACK="16777216"
-          fi
+          # Unoptimized generated GraphQL dispatch plus nested scans exceeds 4 MiB.
+          export RUST_MIN_STACK="16777216"
           python3 .github/scripts/nextest_matrix.py run "$NEXTEST_LANE" 2>&1 | tee rust-nextest.log
 
       # Saved whether or not tests passed: compiled components stay valid.
@@ -889,7 +890,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
 
       - name: Install system dependencies
         if: steps.scope.outputs.run == 'true'
@@ -953,7 +954,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v')) }}
@@ -962,7 +963,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-release/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-release/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Prime sccache server
         if: steps.scope.outputs.run == 'true'
@@ -1141,7 +1142,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
 
       - name: Install system dependencies
         if: steps.scope.outputs.run == 'true'
@@ -1191,7 +1192,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v')) }}
@@ -1200,7 +1201,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-release/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-release/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Download embedded web artifact
         if: steps.scope.outputs.run == 'true'
@@ -1462,7 +1463,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         if: steps.scope.outputs.run == 'true'
         with:
-          toolchain: "1.97.1"
+          toolchain: "1.99.1"
           targets: ${{ matrix.target }}
 
       - name: Restore sccache directory
@@ -1498,7 +1499,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v')) }}
@@ -1507,7 +1508,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-release/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-release/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Download embedded web artifact
         if: steps.scope.outputs.run == 'true'
@@ -1900,7 +1901,7 @@ jobs:
             msi_arch: x64
             runner: windows-2025
             release_runner: windows-2025
-            toolchain: 1.97.1-x86_64-pc-windows-msvc
+            toolchain: 1.99.1-x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
             sccache_lane: scryer-windows-x86_64-msvc
             sccache_writer_id: scryer-windows-x86_64
@@ -1913,7 +1914,7 @@ jobs:
             msi_arch: arm64
             runner: windows-11-vs2026-arm
             release_runner: windows-11-vs2026-arm
-            toolchain: 1.97.1-aarch64-pc-windows-msvc
+            toolchain: 1.99.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc
             sccache_writer_id: scryer-windows-arm64
@@ -2010,7 +2011,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-pr/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ steps.scope.outputs.run == 'true' && (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v')) }}
@@ -2019,7 +2020,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-release/v1/rust-1.97.1/${{ matrix.target }}/
+          key-prefix: scryer/trusted-release/v1/rust-1.99.1/${{ matrix.target }}/
 
       - name: Download embedded web artifact
         if: steps.scope.outputs.run == 'true'
@@ -2433,6 +2434,7 @@ jobs:
         if: steps.scope.outputs.run == 'true'
         shell: pwsh
         run: |
+          .\.github\scripts\test-windows-startup-auth.ps1
           .\.github\scripts\validate-windows-package.ps1 `
             -Architecture ${{ matrix.arch }} `
             -ZipPath "${{ matrix.artifact_name }}.zip" `

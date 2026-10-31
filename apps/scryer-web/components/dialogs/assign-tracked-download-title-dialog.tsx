@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { CheckCircle2, Search } from "lucide-react";
 import { useClient } from "urql";
@@ -106,7 +107,7 @@ export function AssignTrackedDownloadTitleDialog({
           if (cancelled) return;
           setResults([]);
           setError(
-            err instanceof Error ? err.message : t("status.failedToLoad"),
+            userFacingGraphQlErrorMessage(err, t("status.failedToLoad"), t),
           );
         } finally {
           if (!cancelled) {
@@ -148,78 +149,81 @@ export function AssignTrackedDownloadTitleDialog({
       shouldFilter={false}
     >
       <div id="activity-assign-title-dialog">
-      <CommandInput
-        id="activity-assign-title-search"
-        value={query}
-        onValueChange={setQuery}
-        placeholder={t("queue.assignTitlePlaceholder")}
-      />
-      <CommandList id="activity-assign-title-list">
-        {error ? (
-          <div id="activity-assign-title-error" className="px-4 py-3 text-sm text-[var(--scry-danger-text-soft)]">
-            {error}
-          </div>
-        ) : null}
-        {loading ? (
-          <div
-            id="activity-assign-title-loading"
-            className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"
-          >
-            <LoadingMark className="h-4 w-4" />
-            <span>{t("label.loading")}</span>
-          </div>
-        ) : null}
-        {query.trim() ? (
-          <CommandEmpty>{t("queue.assignTitleEmpty")}</CommandEmpty>
-        ) : (
-          <div
-            id="activity-assign-title-empty"
-            className="px-4 py-3 text-sm text-muted-foreground"
-          >
-            {t("queue.assignTitleSearchHint")}
-          </div>
-        )}
-        <CommandGroup heading={t("queue.assignTitleResults") }>
-          {results.map((title) => {
-            const assigning = assigningId === title.id;
-            const optionId = selectorId(
-              "activity-assign-title-item",
-              title.name,
-              title.year ?? "",
-              title.facet,
-            );
-            return (
-              <CommandItem
-                key={title.id}
-                value={`${title.name} ${title.year ?? ""} ${title.facet}`}
-                onSelect={() => {
-                  void handleSelect(title.id);
-                }}
-                disabled={assigningId !== null}
-              >
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <div
-                  id={optionId}
-                  className="flex min-w-0 flex-1 flex-col gap-0.5"
+        <CommandInput
+          id="activity-assign-title-search"
+          value={query}
+          onValueChange={setQuery}
+          placeholder={t("queue.assignTitlePlaceholder")}
+        />
+        <CommandList id="activity-assign-title-list">
+          {error ? (
+            <div
+              id="activity-assign-title-error"
+              className="px-4 py-3 text-sm text-[var(--scry-danger-text-soft)]"
+            >
+              {error}
+            </div>
+          ) : null}
+          {loading ? (
+            <div
+              id="activity-assign-title-loading"
+              className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"
+            >
+              <LoadingMark className="h-4 w-4" />
+              <span>{t("label.loading")}</span>
+            </div>
+          ) : null}
+          {query.trim() ? (
+            <CommandEmpty>{t("queue.assignTitleEmpty")}</CommandEmpty>
+          ) : (
+            <div
+              id="activity-assign-title-empty"
+              className="px-4 py-3 text-sm text-muted-foreground"
+            >
+              {t("queue.assignTitleSearchHint")}
+            </div>
+          )}
+          <CommandGroup heading={t("queue.assignTitleResults")}>
+            {results.map((title) => {
+              const assigning = assigningId === title.id;
+              const optionId = selectorId(
+                "activity-assign-title-item",
+                title.name,
+                title.year ?? "",
+                title.facet,
+              );
+              return (
+                <CommandItem
+                  key={title.id}
+                  value={`${title.name} ${title.year ?? ""} ${title.facet}`}
+                  onSelect={() => {
+                    void handleSelect(title.id);
+                  }}
+                  disabled={assigningId !== null}
                 >
-                  <span className="truncate font-medium text-foreground">
-                    {title.name}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {facetLabel(title.facet)}
-                    {title.year ? ` • ${title.year}` : ""}
-                  </span>
-                </div>
-                {assigning ? (
-                  <LoadingMark className="ml-auto h-4 w-4" />
-                ) : (
-                  <CheckCircle2 className="ml-auto h-4 w-4 text-muted-foreground/50" />
-                )}
-              </CommandItem>
-            );
-          })}
-        </CommandGroup>
-      </CommandList>
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <div
+                    id={optionId}
+                    className="flex min-w-0 flex-1 flex-col gap-0.5"
+                  >
+                    <span className="truncate font-medium text-foreground">
+                      {title.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {facetLabel(title.facet)}
+                      {title.year ? ` • ${title.year}` : ""}
+                    </span>
+                  </div>
+                  {assigning ? (
+                    <LoadingMark className="ml-auto h-4 w-4" />
+                  ) : (
+                    <CheckCircle2 className="ml-auto h-4 w-4 text-muted-foreground/50" />
+                  )}
+                </CommandItem>
+              );
+            })}
+          </CommandGroup>
+        </CommandList>
       </div>
     </CommandDialog>
   );

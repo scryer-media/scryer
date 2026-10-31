@@ -15,6 +15,12 @@ use crate::quality_profile::CoverageSizeBasis;
 use crate::{AppUseCase, QualityProfile};
 use scryer_domain::Title;
 
+/// Catalog rows used to resolve and score a release's coverage.
+pub(crate) struct ReleaseCoverageCatalog<'a> {
+    pub episodes: &'a [scryer_domain::Episode],
+    pub collections: &'a [scryer_domain::Collection],
+}
+
 /// Owned scoring inputs for one title. Borrow a [`ScoringContext`] from it with
 /// [`ResolvedScoringContext::view`].
 pub(crate) struct ResolvedScoringContext {
@@ -807,6 +813,8 @@ impl AppUseCase {
                     context,
                 );
                 Some(crate::admission::QueuedRelease {
+                    missing_history: false,
+                    history_cutoff_reached: false,
                     release_group: facts.release_group.clone(),
                     release_key: crate::admission::release_key(&release_title),
                     title: release_title,
@@ -839,9 +847,8 @@ impl AppUseCase {
     /// closes the same gap from its grab history; here the scope row is that
     /// history. The claim lasts exactly as long as the row stays `grabbed`:
     /// an import, a failure, a blocklist, or an operator remove/ignore moves
-    /// it out, and nothing else does. A job the client lost without a trace
-    /// is failed by absence reconciliation, which is the release valve; the
-    /// claim itself never expires on a clock.
+    /// it out. Missing jobs retain their grab facts for twelve hours in automatic
+    /// admission, following Sonarr's recent-history guard without declaring failure.
     pub(crate) async fn grabbed_release_claims_for_scope(
         &self,
         title: &Title,
@@ -849,34 +856,37 @@ impl AppUseCase {
         context: &ResolvedScoringContext,
         catalog_episodes: &[scryer_domain::Episode],
         catalog_collections: &[scryer_domain::Collection],
-    ) -> Vec<crate::admission::QueuedRelease> {
-        let states = match self
+        include_recent_missing: bool,
+    ) -> crate::AppResult<Vec<crate::admission::QueuedRelease>> {
+        let states = self
             .services
             .workflow
             .acquisition_scope_states
             .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
-            .await
-        {
-            Ok(states) => states,
-            Err(error) => {
-                tracing::warn!(
-                    title_id = %title.id,
-                    error = %error,
-                    "grab guard: failed to read acquisition scope states; recorded grabs are not claiming this pass"
-                );
-                return Vec::new();
+            .await?;
+        let now = chrono::Utc::now();
+        let mut claims = Vec::new();
+        for state in &states {
+            if !crate::acquisition::acquisition::submission_scope_intersects(
+                &submission_scope_for_acquisition_scope_state(state),
+                membership,
+            ) {
+                continue;
             }
-        };
-        states
-            .iter()
-            .filter(|state| {
-                crate::acquisition::acquisition::submission_scope_intersects(
-                    &submission_scope_for_acquisition_scope_state(state),
-                    membership,
-                )
-            })
-            .filter_map(|state| {
-                let record = grabbed_release_record(state)?;
+            let record = if let Some(record) = grabbed_release_record(state) {
+                Some(record)
+            } else if include_recent_missing {
+                recent_missing_grab_record(state, now)?
+            } else {
+                None
+            };
+            if let Some(record) = record {
+                claims.push((state, record));
+            }
+        }
+        Ok(claims
+            .into_iter()
+            .map(|(state, record)| {
                 // The claim scores with the facts its grab froze, as the
                 // candidate beside it does; a record written before grabs kept
                 // their snapshot scores with every listing fact unknown.
@@ -892,7 +902,26 @@ impl AppUseCase {
                     catalog_collections,
                     context,
                 );
-                Some(crate::admission::QueuedRelease {
+                let criteria = &context.profile.criteria;
+                let history_cutoff_reached = state.status == crate::AcquisitionScopeStatus::Wanted
+                    && criteria.cutoff_tier.as_deref().is_some_and(|cutoff| {
+                        facts
+                            .tier_index
+                            .and_then(|index| criteria.quality_tiers.get(index))
+                            .is_some_and(|quality| {
+                                crate::quality_profile::quality_meets_or_exceeds_cutoff(
+                                    quality,
+                                    cutoff,
+                                    &criteria.quality_tiers,
+                                )
+                            })
+                    })
+                    && criteria
+                        .cutoff_score
+                        .is_none_or(|cutoff| facts.score >= cutoff);
+                crate::admission::QueuedRelease {
+                    missing_history: state.status == crate::AcquisitionScopeStatus::Wanted,
+                    history_cutoff_reached,
                     release_group: facts.release_group.clone(),
                     covers: match submission_scope_for_acquisition_scope_state(state) {
                         crate::SubmissionScope::Episode { episode_id } => vec![episode_id],
@@ -913,9 +942,9 @@ impl AppUseCase {
                     },
                     release_key: crate::admission::release_key(&record.title),
                     title: record.title,
-                })
+                }
             })
-            .collect()
+            .collect())
     }
 
     /// The client's live view plus the ledger's recorded grabs, one entry per
@@ -927,18 +956,19 @@ impl AppUseCase {
         title: &Title,
         membership: &crate::acquisition::acquisition::ScopeMembership<'_>,
         context: &ResolvedScoringContext,
-        catalog_episodes: &[scryer_domain::Episode],
-        catalog_collections: &[scryer_domain::Collection],
-    ) -> Vec<crate::admission::QueuedRelease> {
+        catalog: ReleaseCoverageCatalog<'_>,
+        include_recent_missing: bool,
+    ) -> crate::AppResult<Vec<crate::admission::QueuedRelease>> {
         let recorded = self
             .grabbed_release_claims_for_scope(
                 title,
                 membership,
                 context,
-                catalog_episodes,
-                catalog_collections,
+                catalog.episodes,
+                catalog.collections,
+                include_recent_missing,
             )
-            .await;
+            .await?;
         for claim in recorded {
             if let Some(existing) = claim.release_key.and_then(|release_key| {
                 queued
@@ -952,7 +982,135 @@ impl AppUseCase {
                 queued.push(claim);
             }
         }
-        queued
+        Ok(queued)
+    }
+
+    /// Final automatic admission, called while the submission title lock is held.
+    pub(crate) async fn require_recent_missing_grab_admission(
+        &self,
+        intent: &crate::acquisition::submission::CanonicalDownloadSubmissionIntent,
+    ) -> crate::AppResult<()> {
+        let title = &intent.request.title;
+        let states = self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .await?;
+        let now = chrono::Utc::now();
+        let mut recent_states = Vec::new();
+        for state in &states {
+            if recent_missing_grab_record(state, now)?.is_some() {
+                recent_states.push(state);
+            }
+        }
+        if recent_states.is_empty() {
+            return Ok(());
+        }
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        // Membership must not silently collapse when a catalog read fails.
+        let episodes = reads.episodes(self).await?;
+        let collections = reads.collections(self).await?;
+        let membership = self
+            .scope_membership_for_with_reads(title, &intent.scope, &reads)
+            .await;
+        let mut has_recent_missing = false;
+        for state in recent_states {
+            if crate::acquisition::acquisition::submission_scope_intersects(
+                &submission_scope_for_acquisition_scope_state(state),
+                &membership.view(),
+            ) {
+                has_recent_missing = true;
+            }
+        }
+        if !has_recent_missing {
+            return Ok(());
+        }
+        let upgrade = self
+            .resolve_upgrade_context_for_title_with_category_and_quality(
+                title,
+                intent.request.category.as_deref(),
+                None,
+            )
+            .await?;
+        let context = self
+            .resolve_canonical_scoring_context(title, &upgrade.profile)
+            .await;
+        let queued = self
+            .grabbed_release_claims_for_scope(
+                title,
+                &membership.view(),
+                &context,
+                &episodes,
+                &collections,
+                true,
+            )
+            .await?;
+        let release_title = intent.request.release_title.as_deref()
+            .or(intent.request.source_title.as_deref())
+            .ok_or_else(|| crate::AppError::validation_refused(
+                scryer_domain::download_reason::CLIENT_ITEM_MISSING,
+                "A recent download is missing and this candidate has no comparable release title"))?;
+        let facts = score_parked_release_title(
+            title,
+            release_title,
+            intent.release_size_bytes,
+            crate::canonical_scoring::ListingFacts::grabbed_from_json(
+                intent.release_listing_json.as_deref(),
+            ),
+            &episodes,
+            &collections,
+            &context,
+        );
+        let admission = self
+            .admission_subject_for_scope_with_reads(
+                title,
+                &intent.scope,
+                &context,
+                facts.size_basis.total_runtime_minutes,
+                SubjectIntent::Grab,
+                &reads,
+            )
+            .await
+            .with_queued(queued);
+        let candidate =
+            crate::admission::CandidateFacts::new(facts.tier_index, facts.revision, facts.score)
+                .with_release_title(release_title)
+                .with_revision_policy(
+                    facts.release_group.as_deref(),
+                    upgrade.profile.criteria.ignore_proper_repack,
+                );
+        let policy = crate::admission::AdmissionPolicy {
+            allow_upgrades: upgrade.profile.criteria.allow_upgrades,
+            min_delta: upgrade.thresholds.same_tier_min_delta,
+            cutoff_score: upgrade.profile.criteria.cutoff_score,
+            manual_override: false,
+            applies_to_queue: true,
+        };
+        if crate::acquisition_release_search::cutoff_refusal(
+            candidate,
+            &admission,
+            crate::acquisition_release_search::incumbent_at_cutoff(
+                upgrade.cutoff_reached,
+                &admission,
+                upgrade.profile.criteria.cutoff_score,
+            ),
+            // Lane-specific old-file rules were already checked by the
+            // caller. This final history guard must not impose RSS policy on searches.
+            false,
+            &now,
+        )
+        .is_some()
+            || crate::admission::evaluate_admission(&admission, candidate, &policy)
+                .rejection()
+                .is_some()
+        {
+            return Err(crate::AppError::validation_refused(
+                scryer_domain::download_reason::CLIENT_ITEM_MISSING,
+                "A recent download is missing from its client; automatic replacement is deferred",
+            ));
+        }
+        Ok(())
     }
 
     /// The best bar among the primary files occupying an import scope, scored
@@ -1118,6 +1276,39 @@ pub(crate) fn grabbed_release_record(
     })
 }
 
+pub(crate) fn recent_missing_grab_record(
+    state: &crate::AcquisitionScopeState,
+    now: chrono::DateTime<chrono::Utc>,
+) -> crate::AppResult<Option<GrabbedReleaseRecord>> {
+    if state.status != crate::AcquisitionScopeStatus::Wanted {
+        return Ok(None);
+    }
+    let Some(raw) = state.grabbed_release.as_deref() else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| crate::AppError::Repository(error.to_string()))?;
+    if value.get("missing_download_id").is_none() {
+        return Ok(None);
+    }
+    if value
+        .get("grabbed_at")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::quality_profile::parse_published_at)
+        .is_none()
+    {
+        return Err(crate::AppError::Repository(
+            "missing download has no original grab time".into(),
+        ));
+    }
+    let mut grabbed = state.clone();
+    grabbed.status = crate::AcquisitionScopeStatus::Grabbed;
+    let record = grabbed_release_record(&grabbed).ok_or_else(|| {
+        crate::AppError::Repository("missing download has invalid grab history".into())
+    })?;
+    Ok((now < record.grabbed_at + chrono::Duration::hours(12)).then_some(record))
+}
+
 #[cfg(test)]
 mod grabbed_release_claim_tests {
     use super::*;
@@ -1158,6 +1349,46 @@ mod grabbed_release_claim_tests {
     }
 
     const REMUX: &str = "Desert.Warrior.2025.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GRP";
+
+    #[test]
+    fn missing_grab_history_expires_at_twelve_hours_without_refreshing() {
+        let grabbed_at = at("2026-08-29T14:42:00Z");
+        let mut row = state(
+            AcquisitionScopeStatus::Wanted,
+            Some(&format!(
+                r#"{{"title":"{REMUX}","score":497,"grabbed_at":"2026-08-29T14:42:00Z","missing_download_id":"attempt-1"}}"#
+            )),
+        );
+        row.updated_at = "2026-08-30T02:41:59Z".into();
+        assert!(
+            recent_missing_grab_record(
+                &row,
+                grabbed_at + chrono::Duration::hours(12) - chrono::Duration::milliseconds(1)
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            recent_missing_grab_record(&row, grabbed_at + chrono::Duration::hours(12))
+                .unwrap()
+                .is_none()
+        );
+        row.status = AcquisitionScopeStatus::Paused;
+        assert!(
+            recent_missing_grab_record(&row, grabbed_at)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_missing_history_defers_instead_of_removing_the_guard() {
+        let row = state(
+            AcquisitionScopeStatus::Wanted,
+            Some(r#"{"missing_download_id":"attempt-1"}"#),
+        );
+        assert!(recent_missing_grab_record(&row, at("2026-08-29T14:42:00Z")).is_err());
+    }
 
     /// The Desert Warrior window: the Remux was grabbed at 14:42, SABnzbd was
     /// post-processing it at 16:49 with nothing in the queue leg, and the scope

@@ -11,6 +11,7 @@ use scryer_domain::{AppPermission, Id, LibraryPermission, User};
 use tokio::sync::{broadcast, watch};
 
 pub mod loaders;
+pub mod refusal;
 
 const AUTHENTICATION_REQUIRED_MESSAGE: &str = "authentication required";
 const AUTHENTICATION_REQUIRED_CODE: &str = "AUTHENTICATION_REQUIRED";
@@ -60,6 +61,10 @@ pub struct AuthRuntimeStateSnapshot {
 
 #[derive(Clone)]
 pub struct AuthRuntimeStateHandle {
+    pub initial_authentication: Arc<scryer_application::initial_auth::SetupChallenge>,
+    // Outer None means unread; inner None identifies an existing installation.
+    initial_authentication_cache:
+        Arc<RwLock<Option<Option<scryer_application::initial_auth::SetupState>>>>,
     snapshot: Arc<RwLock<AuthRuntimeStateSnapshot>>,
     epoch_tx: watch::Sender<u64>,
     local_login_bypass_disabled: bool,
@@ -78,9 +83,53 @@ impl AuthRuntimeStateHandle {
         let (epoch_tx, _) = watch::channel(snapshot.epoch);
         Self {
             snapshot: Arc::new(RwLock::new(snapshot)),
+            initial_authentication: Arc::new(Default::default()),
+            initial_authentication_cache: Arc::new(RwLock::new(None)),
             epoch_tx,
             local_login_bypass_disabled,
         }
+    }
+
+    pub async fn initial_authentication_state(
+        &self,
+        app: &AppUseCase,
+    ) -> scryer_application::AppResult<Option<scryer_application::initial_auth::SetupState>> {
+        use scryer_application::initial_auth::SetupState;
+        if app.restore_coordinator().blocks_application() {
+            // Restore can replace this state. Never carry the destination's
+            // terminal decision into the restored database or a failed restore.
+            *self
+                .initial_authentication_cache
+                .write()
+                .expect("initial auth cache lock poisoned") = None;
+        } else if let Some(state) = self
+            .initial_authentication_cache
+            .read()
+            .expect("initial auth cache lock poisoned")
+            .clone()
+        {
+            return Ok(state);
+        }
+        let setup = app.initial_authentication_state().await?;
+        // Publish the saved security policy before caching completed admission.
+        if matches!(setup, Some(SetupState::Complete)) && self.initial_authentication.is_available()
+        {
+            let settings = app.refresh_initial_authentication_settings().await?;
+            self.apply_saved_security_settings(
+                settings.form_login_enabled,
+                settings.skip_login_for_local_ips,
+            );
+            self.initial_authentication.consume();
+        }
+        if !setup.as_ref().is_some_and(SetupState::is_pending)
+            && !app.restore_coordinator().blocks_application()
+        {
+            *self
+                .initial_authentication_cache
+                .write()
+                .expect("initial auth cache lock poisoned") = Some(setup.clone());
+        }
+        Ok(setup)
     }
 
     pub fn snapshot(&self) -> AuthRuntimeStateSnapshot {
@@ -148,6 +197,14 @@ impl AuthRuntimeStateHandle {
 
 #[derive(Clone, Copy)]
 pub struct ConnectionAuthEpoch(pub u64);
+
+/// Attached to every HTTP GraphQL request with its resolved client address.
+/// This identifies the transport; callers must still verify setup state and proof.
+#[derive(Clone, Copy)]
+pub struct InitialAuthenticationRequest {
+    /// Client address resolved through the configured rate-limit proxy trust policy.
+    pub client_ip: std::net::IpAddr,
+}
 
 #[derive(Clone, Default)]
 pub struct MfaVerification {
@@ -506,8 +563,9 @@ impl RestoreDatastoreHandle {
 
     pub fn unavailable() -> Self {
         Self::new(|_| {
-            Err(AppError::Validation(
-                "restore datastore operations are not configured".into(),
+            Err(AppError::validation_refused(
+                crate::refusal::INTERFACE_RESTORE_UNAVAILABLE,
+                "restore datastore operations are not configured",
             ))
         })
     }
@@ -545,16 +603,37 @@ pub fn restore_context_from_ctx(ctx: &Context<'_>) -> GqlResult<RestoreContext> 
     ctx.data_unchecked::<ApiContext>()
         .restore
         .clone()
-        .ok_or_else(|| to_gql_error(AppError::Validation("restore is not configured".into())))
+        .ok_or_else(|| {
+            to_gql_error(AppError::validation_refused(
+                crate::refusal::INTERFACE_RESTORE_UNAVAILABLE,
+                "restore is not configured",
+            ))
+        })
 }
 
 pub fn to_gql_error(err: AppError) -> Error {
-    let temporary_reason =
-        scryer_application::lists::account_transport::temporary_failure_reason(&err);
     match err {
         AppError::Unauthorized(message) => {
             coded_gql_error(format!("unauthorized: {message}"), "UNAUTHORIZED")
         }
+        AppError::UnauthorizedReason { message, reason } => {
+            coded_gql_error(format!("unauthorized: {message}"), "UNAUTHORIZED")
+                .extend_with(|_, extensions| extensions.set("reason", reason))
+        }
+        AppError::NotFoundReason { message, reason } => {
+            coded_gql_error(format!("not found: {message}"), "NOT_FOUND")
+                .extend_with(|_, extensions| extensions.set("reason", reason))
+        }
+        AppError::ValidationRefusedWithCount {
+            message,
+            reason,
+            current_count,
+        } => coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR").extend_with(
+            |_, extensions| {
+                extensions.set("reason", reason);
+                extensions.set("currentCount", current_count);
+            },
+        ),
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
@@ -565,9 +644,27 @@ pub fn to_gql_error(err: AppError) -> Error {
             message,
             reason,
             facts,
+            diagnostics,
         } => Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
             extensions.set("code", "VALIDATION_ERROR");
             extensions.set("reason", reason);
+            if !diagnostics.is_empty() {
+                extensions.set(
+                    "diagnostics",
+                    diagnostics
+                        .iter()
+                        .map(|diagnostic| {
+                            value!({
+                                "code": diagnostic.code,
+                                "message": diagnostic.message.clone(),
+                                "line": diagnostic.line,
+                                "column": diagnostic.column,
+                                "path": diagnostic.path.clone(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
             for fact in &facts {
                 extensions.set(fact.key, fact.value.as_str());
             }
@@ -677,6 +774,7 @@ pub fn to_gql_error(err: AppError) -> Error {
         }
         AppError::TemporaryUnavailable {
             message,
+            reason,
             retry_after,
             ..
         } => Error::new(message).extend_with(|_, extensions| {
@@ -686,7 +784,7 @@ pub fn to_gql_error(err: AppError) -> Error {
             }
             // A rate-limited list account request names its condition the way
             // a lists refusal does, beside this code and its pause.
-            if let Some(reason) = temporary_reason {
+            if let Some(reason) = reason {
                 extensions.set("reason", reason);
             }
         }),
@@ -752,7 +850,9 @@ pub fn to_gql_error(err: AppError) -> Error {
         | error @ AppError::DiscoveryPresentationSuperseded { .. } => {
             repository_gql_error(error.to_string())
         }
-        AppError::Repository(message) => repository_gql_error(message),
+        AppError::Repository(message) | AppError::RepositoryFailure { message, .. } => {
+            repository_gql_error(message)
+        }
         AppError::RepositoryFailed { message, reason } => repository_gql_error(message)
             .extend_with(|_, extensions| {
                 extensions.set("reason", reason);
@@ -792,7 +892,9 @@ pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
         LoginErrorClassification::Progression
     } else if matches!(
         err,
-        AppError::Repository(_) | AppError::RepositoryFailed { .. }
+        AppError::Repository(_)
+            | AppError::RepositoryFailed { .. }
+            | AppError::RepositoryFailure { .. }
     ) {
         LoginErrorClassification::InfrastructureFailure
     } else {
@@ -814,9 +916,11 @@ fn login_progression_error(err: &AppError) -> bool {
 
 fn app_error_kind(err: &AppError) -> &'static str {
     match err {
-        AppError::Unauthorized(_) => "Unauthorized",
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. } => "Unauthorized",
         // Named or not, it is the same kind of failure to logs and metrics.
-        AppError::Validation(_) | AppError::ValidationRefused { .. } => "Validation",
+        AppError::Validation(_)
+        | AppError::ValidationRefused { .. }
+        | AppError::ValidationRefusedWithCount { .. } => "Validation",
         AppError::LocationOperationBusy(_) => "LocationOperationBusy",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::LocationRootRefused { .. } => "LocationRootRefused",
@@ -824,7 +928,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
-        AppError::NotFound(_) => "NotFound",
+        AppError::NotFound(_) | AppError::NotFoundReason { .. } => "NotFound",
         AppError::DownloadFeedbackTimeout(_) => "DownloadFeedbackTimeout",
         AppError::DownloadSubmitAmbiguous(_) => "DownloadSubmitAmbiguous",
         AppError::DownloadSubmitAmbiguousWithClient { .. } => "DownloadSubmitAmbiguous",
@@ -853,7 +957,9 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::ImportSourceChanged { .. } => "ImportSourceChanged",
         AppError::DiscoveryPresentationSuperseded { .. } => "DiscoveryPresentationSuperseded",
         AppError::PluginFailed { .. } => "PluginFailed",
-        AppError::Repository(_) | AppError::RepositoryFailed { .. } => "Repository",
+        AppError::Repository(_)
+        | AppError::RepositoryFailed { .. }
+        | AppError::RepositoryFailure { .. } => "Repository",
     }
 }
 
@@ -863,9 +969,9 @@ pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
         LoginErrorClassification::Progression => to_gql_error(err),
         LoginErrorClassification::InfrastructureFailure => {
             let message = match err {
-                AppError::Repository(message) | AppError::RepositoryFailed { message, .. } => {
-                    message
-                }
+                AppError::Repository(message)
+                | AppError::RepositoryFailed { message, .. }
+                | AppError::RepositoryFailure { message, .. } => message,
                 other => return to_gql_error(other),
             };
             repository_gql_error(message)
@@ -949,8 +1055,9 @@ pub struct ApiKeyManagementSession;
 /// Returns the actor only when the request may manage its own API keys.
 pub fn api_key_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
     if ctx.data_opt::<ApiKeyManagementSession>().is_none() {
-        return Err(to_gql_error(AppError::Unauthorized(
-            "an interactive session is required for this operation".into(),
+        return Err(to_gql_error(AppError::unauthorized_reason(
+            crate::refusal::INTERFACE_INTERACTIVE_SESSION_REQUIRED,
+            "an interactive session is required for this operation",
         )));
     }
     actor_from_ctx(ctx)
@@ -959,8 +1066,9 @@ pub fn api_key_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
 /// Returns the actor only when the request was authenticated by an interactive session.
 pub fn interactive_session_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
     if ctx.data_opt::<InteractiveSession>().is_none() {
-        return Err(to_gql_error(AppError::Unauthorized(
-            "an interactive session is required for this operation".into(),
+        return Err(to_gql_error(AppError::unauthorized_reason(
+            crate::refusal::INTERFACE_INTERACTIVE_SESSION_REQUIRED,
+            "an interactive session is required for this operation",
         )));
     }
     actor_from_ctx(ctx)
@@ -974,8 +1082,9 @@ pub fn totp_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
     if ctx.data_opt::<InteractiveSession>().is_none()
         && ctx.data_opt::<AuthlessDefaultSession>().is_none()
     {
-        return Err(to_gql_error(AppError::Unauthorized(
-            "an interactive session is required for this operation".into(),
+        return Err(to_gql_error(AppError::unauthorized_reason(
+            crate::refusal::INTERFACE_INTERACTIVE_SESSION_REQUIRED,
+            "an interactive session is required for this operation",
         )));
     }
     actor_from_ctx(ctx)
@@ -994,8 +1103,9 @@ pub fn totp_enrollment_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
 pub fn account_security_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
     let actor = actor_from_ctx(ctx)?;
     if ctx.data_opt::<InteractiveSession>().is_none() {
-        return Err(to_gql_error(AppError::Unauthorized(
-            "interactive session authentication is required".into(),
+        return Err(to_gql_error(AppError::unauthorized_reason(
+            crate::refusal::INTERFACE_INTERACTIVE_SESSION_REQUIRED,
+            "interactive session authentication is required",
         )));
     }
     if mfa_verification_from_ctx(ctx)
@@ -1125,6 +1235,86 @@ pub fn mfa_verification_from_ctx(ctx: &Context<'_>) -> MfaVerification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_validation_refusal_carries_structured_diagnostics() {
+        let mut diagnostic = scryer_application::RuleValidationDiagnostic::new(
+            "RULE_UNKNOWN_INPUT_PATH",
+            "reworded diagnostic",
+        );
+        diagnostic.line = Some(4);
+        diagnostic.column = Some(7);
+        diagnostic.path = Some("input.subject.unknown".into());
+        let error = to_gql_error(AppError::validation_refused_with_diagnostics(
+            "RULE_VALIDATION_FAILED",
+            "reworded save refusal",
+            vec![diagnostic],
+        ));
+        assert_eq!(graphql_error_code(&error), Some("VALIDATION_ERROR"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("RULE_VALIDATION_FAILED")
+        );
+        let diagnostics = error
+            .extensions
+            .as_ref()
+            .and_then(|e| e.get("diagnostics"))
+            .expect("diagnostics extension");
+        let async_graphql::Value::List(items) = diagnostics else {
+            panic!("structured list expected")
+        };
+        let async_graphql::Value::Object(fields) = &items[0] else {
+            panic!("structured diagnostic expected")
+        };
+        assert_eq!(fields.get("line"), Some(&value!(4)));
+        assert_eq!(fields.get("column"), Some(&value!(7)));
+        assert_eq!(fields.get("path"), Some(&value!("input.subject.unknown")));
+    }
+
+    #[test]
+    fn public_reason_and_numeric_facts_survive_rewording() {
+        for (error, code, reason) in [
+            (
+                AppError::not_found_reason("TITLE_NOT_FOUND", "new words"),
+                "NOT_FOUND",
+                "TITLE_NOT_FOUND",
+            ),
+            (
+                AppError::unauthorized_reason("RELEASE_TOKEN_EXPIRED", "new words"),
+                "UNAUTHORIZED",
+                "RELEASE_TOKEN_EXPIRED",
+            ),
+            (
+                AppError::validation_refused_with_count(
+                    "MAINTENANCE_ARM_COUNT_MISMATCH",
+                    "new words",
+                    17,
+                ),
+                "VALIDATION_ERROR",
+                "MAINTENANCE_ARM_COUNT_MISMATCH",
+            ),
+        ] {
+            assert_eq!(error.reason(), Some(reason));
+            let gql = to_gql_error(error);
+            assert_eq!(graphql_error_code(&gql), Some(code));
+            assert_eq!(graphql_error_extension_string(&gql, "reason"), Some(reason));
+            if reason == "MAINTENANCE_ARM_COUNT_MISMATCH" {
+                assert!(
+                    matches!(gql.extensions.as_ref().and_then(|e| e.get("currentCount")), Some(async_graphql::Value::Number(value)) if value.as_i64() == Some(17))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn classified_repository_failures_remain_masked() {
+        let error = to_gql_error(AppError::repository_failure(
+            scryer_application::RepositoryErrorKind::UniqueViolation,
+            "private driver details",
+        ));
+        assert_eq!(graphql_error_code(&error), Some(INTERNAL_ERROR_CODE));
+        assert_eq!(error.message, INTERNAL_SERVER_ERROR_MESSAGE);
+    }
 
     #[test]
     fn bootstrap_login_bypass_policy_survives_settings_refresh() {

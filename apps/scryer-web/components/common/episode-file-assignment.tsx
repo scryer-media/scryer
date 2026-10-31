@@ -36,15 +36,19 @@ export type EpisodeFileReassignment = {
 
 type TitleEpisodeTargetsData = {
   title?: {
-    collections?: {
-      episodes?: {
-        id: string;
-        seasonNumber: string | null;
-        episodeNumber: string | null;
-        absoluteNumber: string | null;
-        title: string | null;
-      }[] | null;
-    }[] | null;
+    collections?:
+      | {
+          episodes?:
+            | {
+                id: string;
+                seasonNumber: string | null;
+                episodeNumber: string | null;
+                absoluteNumber: string | null;
+                title: string | null;
+              }[]
+            | null;
+        }[]
+      | null;
   } | null;
 };
 
@@ -73,8 +77,11 @@ export function useEpisodeFileAssignment({
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-  const [target, setTarget] = React.useState<EpisodeFileAssignmentTarget | null>(null);
-  const [episodes, setEpisodes] = React.useState<EpisodeTargetEpisode[] | null>(null);
+  const [target, setTarget] =
+    React.useState<EpisodeFileAssignmentTarget | null>(null);
+  const [episodes, setEpisodes] = React.useState<EpisodeTargetEpisode[] | null>(
+    null,
+  );
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const requestRef = React.useRef(0);
 
@@ -109,7 +116,13 @@ export function useEpisodeFileAssignment({
         })
         .catch((error: unknown) => {
           if (requestRef.current !== request) return;
-          setLoadError(userFacingGraphQlErrorMessage(error, t("episodeAssign.loadFailed")));
+          setLoadError(
+            userFacingGraphQlErrorMessage(
+              error,
+              t("episodeAssign.loadFailed"),
+              t,
+            ),
+          );
         });
     },
     [client, t, titleId],
@@ -122,7 +135,10 @@ export function useEpisodeFileAssignment({
   }, []);
 
   const handleConfirm = React.useCallback(
-    async (episodeIds: string[], replace: boolean): Promise<AssignEpisodeFileOutcome> => {
+    async (
+      episodeIds: string[],
+      replace: boolean,
+    ): Promise<AssignEpisodeFileOutcome> => {
       if (!target) return { kind: "error", message: t("episodeAssign.failed") };
       const { data, error } = await client
         .mutation<ReassignEpisodeFileData>(reassignEpisodeFileMutation, {
@@ -130,12 +146,20 @@ export function useEpisodeFileAssignment({
         })
         .toPromise();
       if (error) {
-        if (!replace && episodeFileReassignRefusalReason(error) === EPISODE_FILE_REASSIGN_PRIMARY_CONFLICT) {
+        if (
+          !replace &&
+          episodeFileReassignRefusalReason(error) ===
+            EPISODE_FILE_REASSIGN_PRIMARY_CONFLICT
+        ) {
           return { kind: "conflict" };
         }
         return {
           kind: "error",
-          message: episodeFileReassignErrorMessage(error, t, t("episodeAssign.failed")),
+          message: episodeFileReassignErrorMessage(
+            error,
+            t,
+            t("episodeAssign.failed"),
+          ),
         };
       }
       const result = data?.reassignEpisodeFile;

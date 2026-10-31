@@ -92,6 +92,7 @@ impl ScriptedIndexerClient {
             grab_max: None,
             indexer_outcomes: outcome
                 .map(|outcome| crate::IndexerQueryOutcome {
+                    page: None,
                     indexer_id,
                     outcome,
                 })
@@ -234,13 +235,24 @@ fn bootstrap_search(
     bootstrap_with_search_settings_indexer_and_configs(settings, Arc::new(client), configs)
 }
 
-/// Poll until the job leaves `Running`, then return the final snapshot.
-async fn await_completion(
-    app: &AppUseCase,
-    user: &User,
-    job_id: &str,
-) -> InteractiveReleaseSearchSnapshot {
-    wait_for(
+/// A test consumer reads both scored title rows and shared raw-page rows via
+/// the application's iterator, just as the GraphQL projection does.
+#[derive(Debug)]
+struct CompletedSearch {
+    snapshot: InteractiveReleaseSearchSnapshot,
+    results: Vec<IndexerSearchResult>,
+}
+
+impl std::ops::Deref for CompletedSearch {
+    type Target = InteractiveReleaseSearchSnapshot;
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
+/// Poll until the job leaves `Running`, then read the completed page.
+async fn await_completion(app: &AppUseCase, user: &User, job_id: &str) -> CompletedSearch {
+    let snapshot = wait_for(
         "the interactive release search to reach a terminal state",
         || async {
             let snapshot = app
@@ -251,7 +263,9 @@ async fn await_completion(
             (snapshot.state != InteractiveReleaseSearchState::Running).then_some(snapshot)
         },
     )
-    .await
+    .await;
+    let results = snapshot.result_iter().cloned().collect();
+    CompletedSearch { snapshot, results }
 }
 
 fn indexer_view<'a>(
@@ -371,6 +385,34 @@ async fn a_query_asks_indexers_left_out_of_title_interactive_searches() {
     let done = await_completion(&app, &user, &start.id).await;
     assert_eq!(done.results.len(), 1, "{done:?}");
     assert_eq!(client.calls().await.len(), 1);
+}
+
+#[tokio::test]
+async fn raw_query_preserves_the_all_limited_reason_in_the_ui_snapshot() {
+    let client = ScriptedIndexerClient::default()
+        .with_outcome(
+            "limited",
+            crate::IndexerSearchOutcome::Deferred {
+                retry_after: Some(Duration::from_secs(30)),
+            },
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("limited", "newznab")],
+    );
+    let start = app
+        .start_interactive_release_search(&user, query_request("example"))
+        .await
+        .unwrap();
+    let done = await_completion(&app, &user, &start.id).await;
+    assert_eq!(
+        done.raw_failure_reason,
+        Some(crate::error_reasons::raw_search::ALL_SOURCES_LIMITED)
+    );
+    assert!(done.results.is_empty());
+    assert!(indexer_view(&done, "limited").rate_limited);
 }
 
 #[tokio::test]
@@ -672,6 +714,94 @@ async fn equivalent_indexer_sets_replace_the_running_query_search() {
     drop(releases);
     let second = await_completion(&app, &user, &second.id).await;
     assert_eq!(second.indexers.len(), 2);
+}
+
+#[tokio::test]
+async fn a_raw_query_stays_running_until_its_page_task_resolves() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases("idx-a", vec![nzb_release("Synthetic.Gate.Pack.2024", "g1")])
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client.clone(),
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    // Holding the scripted releases blocks the source call inside the page task.
+    let gate = client.releases.lock().await;
+    let job = app
+        .start_interactive_release_search(&user, query_request("synthetic gate"))
+        .await
+        .expect("start");
+    assert_eq!(job.state, InteractiveReleaseSearchState::Running);
+    // The source call is in flight once it has been recorded.
+    wait_for("the raw source call to start", || async {
+        (!client.calls().await.is_empty()).then_some(())
+    })
+    .await;
+    let pending = app
+        .interactive_release_search(&user, &job.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.state, InteractiveReleaseSearchState::Running);
+    assert!(pending.completed_at.is_none());
+
+    drop(gate);
+    let done = await_completion(&app, &user, &job.id).await;
+    assert_eq!(done.state, InteractiveReleaseSearchState::Completed);
+    assert!(done.completed_at.is_some());
+    assert_eq!(done.raw_failure_reason, None);
+    assert_eq!(done.results.len(), 1);
+}
+
+#[tokio::test]
+async fn in_flight_raw_queries_count_toward_the_per_actor_running_cap() {
+    let client = ScriptedIndexerClient::default();
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client.clone(),
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let gate = client.releases.lock().await;
+    let cap = crate::catalog::interactive_release_search::MAX_RUNNING_JOBS_PER_ACTOR;
+    let mut jobs = Vec::new();
+    for index in 0..cap {
+        // Distinct texts are distinct replace keys, so none replaces another.
+        let job = app
+            .start_interactive_release_search(&user, query_request(&format!("synthetic {index}")))
+            .await
+            .expect("start within the cap");
+        jobs.push(job.id);
+    }
+    let refused = app
+        .start_interactive_release_search(&user, query_request("synthetic over cap"))
+        .await
+        .expect_err("a raw query over the cap is refused while the others are in flight");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::catalog::TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES)
+    );
+    for id in &jobs {
+        let snapshot = app
+            .interactive_release_search(&user, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.state, InteractiveReleaseSearchState::Running);
+    }
+
+    drop(gate);
+    for id in &jobs {
+        assert_eq!(
+            await_completion(&app, &user, id).await.state,
+            InteractiveReleaseSearchState::Completed
+        );
+    }
+    let after = app
+        .start_interactive_release_search(&user, query_request("synthetic after cap"))
+        .await
+        .expect("completed raw pages free the cap");
+    await_completion(&app, &user, &after.id).await;
 }
 
 #[tokio::test]
@@ -989,7 +1119,12 @@ async fn exactly_one_subject_is_required() {
             .await
             .expect_err(label);
         assert!(
-            matches!(error, AppError::Validation(_)),
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
             "{label} should be a validation error, got {error:?}"
         );
     }
@@ -1010,7 +1145,13 @@ async fn a_query_subject_search_requires_manage_system_settings() {
         .start_interactive_release_search(&viewer, query_request("q"))
         .await
         .expect_err("permission gate");
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
 }
 
 // ── Candidate tokens at grab time ──────────────────────────────────────
@@ -1145,7 +1286,15 @@ async fn a_season_only_token_binds_a_series_season_and_is_refused_for_a_movie() 
         )
         .await
         .expect_err("season-only token for a movie");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]
@@ -1277,7 +1426,12 @@ async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
         )
         .await
         .expect_err("stale selection must be rejected before submission");
-    assert!(matches!(denied, AppError::Validation(_)));
+    assert!(matches!(
+        denied,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
     assert!(requests.lock().await.is_empty());
     let conflicting = app
         .queue_indexer_search_assignment(
@@ -1295,7 +1449,12 @@ async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
         )
         .await
         .expect_err("additional imports must not replace primary files");
-    assert!(matches!(conflicting, AppError::Validation(_)));
+    assert!(matches!(
+        conflicting,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
     assert!(requests.lock().await.is_empty());
     let outcome = app
         .queue_indexer_search_assignment(
@@ -1343,7 +1502,13 @@ async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
         )
         .await
         .expect_err("unknown release");
-    assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
+    assert!(
+        matches!(
+            missing,
+            AppError::NotFound(_) | AppError::NotFoundReason { .. }
+        ),
+        "{missing:?}"
+    );
 }
 
 // ── Unlinked grab ──────────────────────────────────────────────────────
@@ -1931,7 +2096,13 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
         )
         .await
         .expect_err("unknown release");
-    assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
+    assert!(
+        matches!(
+            missing,
+            AppError::NotFound(_) | AppError::NotFoundReason { .. }
+        ),
+        "{missing:?}"
+    );
 
     for (label, client_id) in [("disabled", disabled.id.as_str()), ("unknown", "dc-nope")] {
         let error = app
@@ -1939,7 +2110,12 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
             .await
             .expect_err(label);
         assert!(
-            matches!(error, AppError::Validation(_)),
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
             "{label} client should be a validation error, got {error:?}"
         );
     }
@@ -1949,7 +2125,13 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
         .queue_unlinked_release(&viewer, &start.id, &download_url, &enabled.id)
         .await
         .expect_err("permission gate");
-    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+    assert!(
+        matches!(
+            denied,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{denied:?}"
+    );
 }
 
 /// An assigned grab is gated like any other grab for the title: a title
@@ -2041,10 +2223,12 @@ async fn an_assigned_grab_needs_only_title_management() {
         inner: app.services.integrations.download_client.clone(),
         requests: requests.clone(),
     });
+    let scope_states = in_memory_acquisition_scope_states();
     let app = app.with_test_overrides(|services| {
         services
             .with_download_client(listed)
             .with_download_submissions(Arc::new(TrackingDownloadSubmissionRepo::default()))
+            .with_acquisition_scope_states(scope_states.clone())
     });
 
     let clients = app
@@ -2057,7 +2241,13 @@ async fn an_assigned_grab_needs_only_title_management() {
         .indexer_grab_clients(&manager, &start.id, &download_url, None)
         .await
         .expect_err("title-less grab clients need ManageSystemSettings");
-    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+    assert!(
+        matches!(
+            denied,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{denied:?}"
+    );
 
     // The grab the listing led to completes under the same gate.
     let outcome = app
@@ -2081,6 +2271,20 @@ async fn an_assigned_grab_needs_only_title_management() {
         .expect("an assigned grab needs only ManageTitles");
     assert!(matches!(outcome, QueueDownloadOutcome::Queued(_)));
     assert_eq!(requests.lock().await.len(), 1);
+    let grabbed = scope_states
+        .get_acquisition_scope_state_for_title(&title.id, None)
+        .await
+        .expect("read assigned grab")
+        .expect("assigned submission records its scope");
+    assert_eq!(grabbed.status, AcquisitionScopeStatus::Grabbed);
+    let record: serde_json::Value = serde_json::from_str(
+        grabbed
+            .grabbed_release
+            .as_deref()
+            .expect("recorded release"),
+    )
+    .expect("parse recorded release");
+    assert_eq!(record["title"].as_str(), Some(release.title.as_str()));
 }
 
 // ── Download to browser ───────────────────────────────────────
@@ -2105,9 +2309,9 @@ impl DownloadClient for ArtifactDownloadClient {
 
     async fn fetch_release_artifact(
         &self,
-        request: &DownloadClientAddRequest,
+        request: &IndexerArtifactResolutionRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {
-        let url = request.source_hint.clone().unwrap_or_default();
+        let url = request.source_url.clone();
         self.artifacts
             .get(&url)
             .cloned()
@@ -2289,7 +2493,15 @@ async fn browser_downloads_count_against_the_indexer_even_when_a_later_member_fa
         .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
         .await
         .expect_err("the second fetch fails the batch");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 
     // The indexer served the first file, so that grab happened and is counted
     // under the configured indexer name, exactly as the unlinked-queue path
@@ -2329,7 +2541,9 @@ async fn browser_download_rejects_an_oversized_aggregate_without_grab_history() 
         .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
         .await
         .expect_err("aggregate payload is bounded");
-    assert!(matches!(error, AppError::Validation(message) if message.contains("64 MiB")));
+    assert!(
+        matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("64 MiB"))
+    );
     assert!(grabbed_release_titles(&app).await.is_empty());
 }
 
@@ -2471,7 +2685,15 @@ async fn browser_downloads_refuse_empty_oversized_and_unprivileged_requests() {
         .download_interactive_search_artifacts(&user, &[])
         .await
         .expect_err("nothing selected");
-    assert!(matches!(empty, AppError::Validation(_)), "{empty:?}");
+    assert!(
+        matches!(
+            empty,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{empty:?}"
+    );
 
     let too_many = vec![urls[0].clone(); 51];
     let oversized = app
@@ -2479,7 +2701,12 @@ async fn browser_downloads_refuse_empty_oversized_and_unprivileged_requests() {
         .await
         .expect_err("over the per-request cap");
     assert!(
-        matches!(oversized, AppError::Validation(_)),
+        matches!(
+            oversized,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "{oversized:?}"
     );
 
@@ -2488,7 +2715,13 @@ async fn browser_downloads_refuse_empty_oversized_and_unprivileged_requests() {
         .download_interactive_search_artifacts(&viewer, &targets(&search_id, &urls[..1]))
         .await
         .expect_err("permission gate");
-    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+    assert!(
+        matches!(
+            denied,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{denied:?}"
+    );
 }
 
 #[tokio::test]
@@ -2610,10 +2843,12 @@ async fn localized_search_languages_inherit_override_and_ignore_metadata_languag
                     TaggedAlias {
                         name: "Störst av allt".into(),
                         language: "swe".into(),
+                        country: None,
                     },
                     TaggedAlias {
                         name: "Other Translation".into(),
                         language: "deu".into(),
+                        country: None,
                     },
                 ],
                 ..Default::default()
@@ -2738,4 +2973,73 @@ async fn localized_search_failure_retains_primary_results() {
             .iter()
             .any(|call| call.query.starts_with("Svensk Titel"))
     );
+}
+
+#[tokio::test]
+async fn download_enrichment_unlinked_grab_invalidates_before_filename_persistence() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![nzb_release("Example.2012.1080p.WEB-DL", "g1")],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *submissions.grabbed_names_gate.lock().await = Some((entered.clone(), release.clone()));
+    let client = Arc::new(StubDownloadClient {
+        grabbed_file_names: vec![crate::GrabbedFileName {
+            name: "example.mkv".into(),
+            exact_size_bytes: None,
+            posted_size_bytes: None,
+        }],
+        ..Default::default()
+    });
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_download_submissions(submissions.clone())
+            .with_download_client(client)
+    });
+    let config = create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+    let start = app
+        .start_interactive_release_search(&user, query_request("example"))
+        .await
+        .unwrap();
+    let done = await_completion(&app, &user, &start.id).await;
+    let url = done.results[0].download_url.clone().unwrap();
+    let generation = app.runtime.acquisition.download_registry_generation();
+    let writer_app = app.clone();
+    let writer = tokio::spawn(async move {
+        writer_app
+            .queue_unlinked_release_with_category(
+                &user,
+                &start.id,
+                &url,
+                &config.id,
+                Some("custom".into()),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
+        .await
+        .unwrap();
+    assert!(
+        !submissions.store.lock().await.is_empty(),
+        "submission committed before gate"
+    );
+    assert!(
+        app.runtime.acquisition.download_registry_generation() > generation,
+        "accepted ownership must invalidate before the downstream write"
+    );
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(30), writer)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }

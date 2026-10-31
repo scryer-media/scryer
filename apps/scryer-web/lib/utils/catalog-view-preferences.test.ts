@@ -12,11 +12,16 @@ import {
 
 type Key = "alpha" | "beta" | "gamma";
 const KEYS: readonly Key[] = ["alpha", "beta", "gamma"];
-const DEFAULTS: Record<Key, boolean> = { alpha: true, beta: false, gamma: true };
+const DEFAULTS: Record<Key, boolean> = {
+  alpha: true,
+  beta: false,
+  gamma: true,
+};
 const ALL_SUPPORTED = () => true;
 
 function column(
-  overrides: Partial<UiTableColumnSetting> & Pick<UiTableColumnSetting, "columnId" | "visible">,
+  overrides: Partial<UiTableColumnSetting> &
+    Pick<UiTableColumnSetting, "columnId" | "visible">,
 ): UiTableColumnSetting {
   return {
     deviceClass: "DESKTOP",
@@ -27,7 +32,9 @@ function column(
   };
 }
 
-function columnsFor(tableColumns: UiTableColumnSetting[]): Pick<UiSettings, "tableColumns"> {
+function columnsFor(
+  tableColumns: UiTableColumnSetting[],
+): Pick<UiSettings, "tableColumns"> {
   return { tableColumns };
 }
 
@@ -41,7 +48,10 @@ test("view modes are kept per device class and facet", () => {
   };
   assert.equal(savedCatalogViewMode(settings, "DESKTOP", "SERIES"), "compact");
   assert.equal(savedCatalogViewMode(settings, "MOBILE", "SERIES"), "poster");
-  assert.equal(savedCatalogViewMode(settings, "DESKTOP", "MOVIES"), "poster-table");
+  assert.equal(
+    savedCatalogViewMode(settings, "DESKTOP", "MOVIES"),
+    "poster-table",
+  );
   // Nothing saved: the caller falls back to the browser's stored view mode.
   assert.equal(savedCatalogViewMode(settings, "MOBILE", "ANIME"), null);
 });
@@ -55,7 +65,11 @@ test("view mode and facet mappings round trip", () => {
     const saved = savedCatalogViewMode(
       {
         catalogViews: [
-          { deviceClass: "DESKTOP", facet: "MOVIES", viewMode: catalogViewModeToProfile(mode) },
+          {
+            deviceClass: "DESKTOP",
+            facet: "MOVIES",
+            viewMode: catalogViewModeToProfile(mode),
+          },
         ],
       },
       "DESKTOP",
@@ -97,11 +111,19 @@ test("columns come from the matching device class and facet only", () => {
     viewMode: "compact" as const,
   };
   assert.equal(
-    savedCatalogVisibleColumns(settings, { ...options, deviceClass: "DESKTOP", facet: "SERIES" }),
+    savedCatalogVisibleColumns(settings, {
+      ...options,
+      deviceClass: "DESKTOP",
+      facet: "SERIES",
+    }),
     null,
   );
   assert.deepEqual(
-    savedCatalogVisibleColumns(settings, { ...options, deviceClass: "MOBILE", facet: "SERIES" }),
+    savedCatalogVisibleColumns(settings, {
+      ...options,
+      deviceClass: "MOBILE",
+      facet: "SERIES",
+    }),
     { alpha: false, beta: false, gamma: true },
   );
 });
@@ -118,14 +140,22 @@ test("the active table layout wins, and the other layout fills in when it alone 
     defaults: DEFAULTS,
     isSupported: ALL_SUPPORTED,
   };
-  assert.equal(savedCatalogVisibleColumns(settings, { ...options, viewMode: "compact" })?.beta, true);
   assert.equal(
-    savedCatalogVisibleColumns(settings, { ...options, viewMode: "poster-table" })?.beta,
+    savedCatalogVisibleColumns(settings, { ...options, viewMode: "compact" })
+      ?.beta,
+    true,
+  );
+  assert.equal(
+    savedCatalogVisibleColumns(settings, {
+      ...options,
+      viewMode: "poster-table",
+    })?.beta,
     false,
   );
   const compactOnly = columnsFor([column({ columnId: "beta", visible: true })]);
   assert.equal(
-    savedCatalogVisibleColumns(compactOnly, { ...options, viewMode: "poster" })?.beta,
+    savedCatalogVisibleColumns(compactOnly, { ...options, viewMode: "poster" })
+      ?.beta,
     true,
   );
 });
@@ -137,9 +167,29 @@ test("the saved slice lists every supported column for both table layouts", () =
     (key) => key !== "beta",
   );
   assert.deepEqual(input, [
-    { tableViewMode: "COMPACT", columnId: "alpha", columnOrder: 0, visible: true },
-    { tableViewMode: "COMPACT", columnId: "gamma", columnOrder: 1, visible: true },
-    { tableViewMode: "POSTER_TABLE", columnId: "alpha", columnOrder: 0, visible: true },
-    { tableViewMode: "POSTER_TABLE", columnId: "gamma", columnOrder: 1, visible: true },
+    {
+      tableViewMode: "COMPACT",
+      columnId: "alpha",
+      columnOrder: 0,
+      visible: true,
+    },
+    {
+      tableViewMode: "COMPACT",
+      columnId: "gamma",
+      columnOrder: 1,
+      visible: true,
+    },
+    {
+      tableViewMode: "POSTER_TABLE",
+      columnId: "alpha",
+      columnOrder: 0,
+      visible: true,
+    },
+    {
+      tableViewMode: "POSTER_TABLE",
+      columnId: "gamma",
+      columnOrder: 1,
+      visible: true,
+    },
   ]);
 });

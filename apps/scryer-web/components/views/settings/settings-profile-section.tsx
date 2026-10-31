@@ -28,12 +28,22 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Check, Palette } from "lucide-react";
-import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useUiDateTimeFormat, useUiSettings } from "@/lib/context/ui-settings-context";
+import {
+  useUiDateTimeFormat,
+  useUiSettings,
+} from "@/lib/context/ui-settings-context";
 import type {
   ExternalAccountProvider,
   ExternalAuthRuntimeConnection,
@@ -69,9 +79,6 @@ type Props = {
   hideSponsorButton: boolean;
   savingSponsorPreference: boolean;
   onHideSponsorButtonChange: (value: boolean) => void;
-  noGlow: boolean;
-  savingGlowPreference: boolean;
-  onNoGlowChange: (value: boolean) => void;
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
@@ -178,7 +185,12 @@ const PROFILE_MUTED_TEXT_CLASS = "text-sm text-[var(--scry-muted3)]";
 const PROFILE_ROW_CARD_CLASS =
   "flex flex-col gap-3 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4 md:flex-row md:items-center md:justify-between";
 
-export function SettingsProfileCard({ id, title, action, children }: {
+export function SettingsProfileCard({
+  id,
+  title,
+  action,
+  children,
+}: {
   id?: string;
   title: string;
   action?: ReactNode;
@@ -203,9 +215,6 @@ export function SettingsProfileSection({
   hideSponsorButton,
   savingSponsorPreference,
   onHideSponsorButtonChange,
-  noGlow,
-  savingGlowPreference,
-  onNoGlowChange,
   currentPassword,
   newPassword,
   confirmPassword,
@@ -273,8 +282,9 @@ export function SettingsProfileSection({
   const [pendingTotpAction, setPendingTotpAction] =
     useState<TotpProfileAction>(null);
   const [submittedTotpAction, setSubmittedTotpAction] = useState(false);
-  const [pendingPasskeyDeletionId, setPendingPasskeyDeletionId] =
-    useState<string | null>(null);
+  const [pendingPasskeyDeletionId, setPendingPasskeyDeletionId] = useState<
+    string | null
+  >(null);
   const [customColorPickerOpen, setCustomColorPickerOpen] = useState(false);
   const [previewHighlightColor, setPreviewHighlightColor] = useState<
     string | null
@@ -283,8 +293,7 @@ export function SettingsProfileSection({
   const darkThemeActive = isDarkTheme(resolvedTheme ?? theme);
   const savedHighlightColor =
     highlightColor ?? getPalette(uiSettings.palette).accent;
-  const selectedHighlightColor =
-    previewHighlightColor ?? savedHighlightColor;
+  const selectedHighlightColor = previewHighlightColor ?? savedHighlightColor;
 
   useEffect(() => {
     if (previewHighlightColor === null || typeof document === "undefined") {
@@ -323,8 +332,8 @@ export function SettingsProfileSection({
       : linkingProvider === "EMBY"
         ? linkableEmbyConnections
         : isVisibleExternalAccountProvider("PLEX")
-        ? linkablePlexConnections
-        : [];
+          ? linkablePlexConnections
+          : [];
   const selectedLinkConnection = selectedLinkConnections.find(
     (connection) => connection.id === linkAccountConnectionId,
   );
@@ -393,7 +402,9 @@ export function SettingsProfileSection({
 
       <div className={PROFILE_CARD_CLASS}>
         <div className="space-y-1">
-          <h3 className={PROFILE_CARD_TITLE_CLASS}>{t("profile.appearance")}</h3>
+          <h3 className={PROFILE_CARD_TITLE_CLASS}>
+            {t("profile.appearance")}
+          </h3>
           <p className={PROFILE_MUTED_TEXT_CLASS}>
             {t("profile.appearanceDescription")}
           </p>
@@ -418,9 +429,19 @@ export function SettingsProfileSection({
             aria-label={t("profile.highlightColor")}
             className="flex flex-wrap items-center gap-2.5"
           >
-            <Button type="button" variant="outline" size="sm"
-              disabled={savingHighlightColor !== null || appearanceSaving || highlightColor === null}
-              onClick={() => onSelectHighlightColor(null)}>{t("label.default")}</Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={
+                savingHighlightColor !== null ||
+                appearanceSaving ||
+                highlightColor === null
+              }
+              onClick={() => onSelectHighlightColor(null)}
+            >
+              {t("label.default")}
+            </Button>
             {HIGHLIGHT_COLOR_PRESETS.map((preset) => {
               const selected = selectedHighlightColor === preset.value;
               const savingThis = savingHighlightColor === preset.value;
@@ -531,28 +552,6 @@ export function SettingsProfileSection({
             />
           </div>
         </div>
-        <div className={PROFILE_ROW_CARD_CLASS}>
-          <div className="space-y-1">
-            <div className="font-medium text-[var(--scry-ink2)]">
-              {t("profile.glow")}
-            </div>
-            <p className={`${PROFILE_MUTED_TEXT_CLASS} max-w-xs`}>
-              {t("profile.glowDescription")}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {savingGlowPreference ? (
-              <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" />
-            ) : null}
-            <SettingsToggleSwitch
-              id="settings-profile-glow"
-              checked={!noGlow}
-              disabled={savingGlowPreference}
-              onChange={(glow) => onNoGlowChange(!glow)}
-              ariaLabel={t("profile.glowToggle")}
-            />
-          </div>
-        </div>
       </div>
 
       {canChangePassword ? (
@@ -612,9 +611,7 @@ export function SettingsProfileSection({
                 disabled={!canSubmit}
                 className="w-fit"
               >
-                {saving ? (
-                  <LoadingMark className="mr-2 h-4 w-4" />
-                ) : null}
+                {saving ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                 {t("profile.changePassword")}
               </Button>
             </div>
@@ -625,290 +622,287 @@ export function SettingsProfileSection({
       <div className={cn("grid gap-4", showPasskeys && "xl:grid-cols-2")}>
         {showPasskeys ? (
           <div className={PROFILE_CARD_CLASS}>
-          <div className="space-y-4">
-            <div className="flex items-center gap-1.5">
-              <h3 className={PROFILE_CARD_TITLE_CLASS}>
-                {t("profile.passkeys")}
-              </h3>
-              <InfoHelp
-                ariaLabel={t("profile.passkeys")}
-                text={t("profile.passkeysDescription")}
-              />
-            </div>
-
-            {canAddPasskey ? (
-              <Button
-                id={selectorId("settings-profile-add-passkey")}
-                onClick={onAddPasskey}
-                disabled={addingPasskey}
-                className="w-fit"
-              >
-                {addingPasskey ? (
-                  <LoadingMark className="mr-2 h-4 w-4" />
-                ) : null}
-                {addingPasskey
-                  ? t("profile.passkeyAdding")
-                  : t("profile.passkeyAdd")}
-              </Button>
-            ) : null}
-
-            {loadingPasskeys ? (
-              <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-                <LoadingMark className="h-4 w-4" />
-                <span>{t("label.loading")}</span>
+            <div className="space-y-4">
+              <div className="flex items-center gap-1.5">
+                <h3 className={PROFILE_CARD_TITLE_CLASS}>
+                  {t("profile.passkeys")}
+                </h3>
+                <InfoHelp
+                  ariaLabel={t("profile.passkeys")}
+                  text={t("profile.passkeysDescription")}
+                />
               </div>
-            ) : passkeys.length > 0 ? (
-              <div className="space-y-3">
-                {passkeys.map((passkey) => (
-                  <div key={passkey.id} className={PROFILE_ROW_CARD_CLASS}>
-                    <div className="space-y-1">
-                      <div className="font-medium text-[var(--scry-ink2)]">
-                        {passkey.friendlyName || t("profile.passkeyLabel")}
+
+              {canAddPasskey ? (
+                <Button
+                  id={selectorId("settings-profile-add-passkey")}
+                  onClick={onAddPasskey}
+                  disabled={addingPasskey}
+                  className="w-fit"
+                >
+                  {addingPasskey ? (
+                    <LoadingMark className="mr-2 h-4 w-4" />
+                  ) : null}
+                  {addingPasskey
+                    ? t("profile.passkeyAdding")
+                    : t("profile.passkeyAdd")}
+                </Button>
+              ) : null}
+
+              {loadingPasskeys ? (
+                <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
+                  <LoadingMark className="h-4 w-4" />
+                  <span>{t("label.loading")}</span>
+                </div>
+              ) : passkeys.length > 0 ? (
+                <div className="space-y-3">
+                  {passkeys.map((passkey) => (
+                    <div key={passkey.id} className={PROFILE_ROW_CARD_CLASS}>
+                      <div className="space-y-1">
+                        <div className="font-medium text-[var(--scry-ink2)]">
+                          {passkey.friendlyName || t("profile.passkeyLabel")}
+                        </div>
+                        <div className={PROFILE_MUTED_TEXT_CLASS}>
+                          {t("profile.passkeyCreatedAt")}:{" "}
+                          {formatTimestamp(passkey.createdAt, dateTimeFormat)}
+                        </div>
+                        <div className={PROFILE_MUTED_TEXT_CLASS}>
+                          {t("profile.passkeyLastUsedAt")}:{" "}
+                          {passkey.lastUsedAt
+                            ? formatTimestamp(
+                                passkey.lastUsedAt,
+                                dateTimeFormat,
+                              )
+                            : t("profile.passkeyNeverUsed")}
+                        </div>
                       </div>
-                      <div className={PROFILE_MUTED_TEXT_CLASS}>
-                        {t("profile.passkeyCreatedAt")}:{" "}
-                        {formatTimestamp(passkey.createdAt, dateTimeFormat)}
-                      </div>
-                      <div className={PROFILE_MUTED_TEXT_CLASS}>
-                        {t("profile.passkeyLastUsedAt")}:{" "}
-                        {passkey.lastUsedAt
-                          ? formatTimestamp(passkey.lastUsedAt, dateTimeFormat)
-                          : t("profile.passkeyNeverUsed")}
-                      </div>
+                      <Button
+                        id={selectorId(
+                          `settings-profile-delete-passkey-${passkey.id}`,
+                        )}
+                        variant="destructive"
+                        onClick={() => setPendingPasskeyDeletionId(passkey.id)}
+                        disabled={deletingPasskeyId === passkey.id}
+                        className="w-fit"
+                      >
+                        {deletingPasskeyId === passkey.id ? (
+                          <LoadingMark className="mr-2 h-4 w-4" />
+                        ) : null}
+                        {t("label.delete")}
+                      </Button>
                     </div>
-                    <Button
-                      id={selectorId(
-                        `settings-profile-delete-passkey-${passkey.id}`,
-                      )}
-                      variant="destructive"
-                      onClick={() => setPendingPasskeyDeletionId(passkey.id)}
-                      disabled={deletingPasskeyId === passkey.id}
-                      className="w-fit"
-                    >
-                      {deletingPasskeyId === passkey.id ? (
-                        <LoadingMark className="mr-2 h-4 w-4" />
-                      ) : null}
-                      {t("label.delete")}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
         ) : null}
 
         <div className={PROFILE_CARD_CLASS}>
-        <div className="flex items-center gap-1.5">
-          <h3 className={PROFILE_CARD_TITLE_CLASS}>{t("profile.totp")}</h3>
-          <InfoHelp
-            ariaLabel={t("profile.totp")}
-            text={t("profile.totpDescription")}
-          />
-        </div>
-
-        {loadingTotp ? (
-          <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-            <LoadingMark className="h-4 w-4" />
-            <span>{t("label.loading")}</span>
+          <div className="flex items-center gap-1.5">
+            <h3 className={PROFILE_CARD_TITLE_CLASS}>{t("profile.totp")}</h3>
+            <InfoHelp
+              ariaLabel={t("profile.totp")}
+              text={t("profile.totpDescription")}
+            />
           </div>
-        ) : totpStatus?.enabled ? (
-          <div className="space-y-3 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4">
-            <div className="grid gap-2 text-sm text-[var(--scry-muted3)] sm:grid-cols-3">
-              <div>
-                <span className="text-[var(--scry-ink2)]">
-                  {t("profile.totpEnabledAt")}:{" "}
-                </span>
-                {formatTimestamp(totpStatus.createdAt, dateTimeFormat)}
-              </div>
-              <div>
-                <span className="text-[var(--scry-ink2)]">
-                  {t("profile.totpLastUsedAt")}:{" "}
-                </span>
-                {formatTimestamp(totpStatus.lastUsedAt, dateTimeFormat)}
-              </div>
-              <div>
-                <span className="text-[var(--scry-ink2)]">
-                  {t("profile.totpRecoveryRemaining")}:{" "}
-                </span>
-                {totpStatus.recoveryCodesRemaining}
-              </div>
-            </div>
 
-            {totpRecoveryCodes.length > 0 ? (
-              <div className="rounded-md border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3">
-                <div className="mb-2 text-sm font-medium">
-                  {t("profile.totpRecoveryCodes")}
+          {loadingTotp ? (
+            <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
+              <LoadingMark className="h-4 w-4" />
+              <span>{t("label.loading")}</span>
+            </div>
+          ) : totpStatus?.enabled ? (
+            <div className="space-y-3 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4">
+              <div className="grid gap-2 text-sm text-[var(--scry-muted3)] sm:grid-cols-3">
+                <div>
+                  <span className="text-[var(--scry-ink2)]">
+                    {t("profile.totpEnabledAt")}:{" "}
+                  </span>
+                  {formatTimestamp(totpStatus.createdAt, dateTimeFormat)}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {totpRecoveryCodes.map((code) => (
-                    <code
-                      id={selectorId(
-                        "settings-profile-totp-recovery-code",
-                        code,
-                      )}
-                      key={code}
-                      className="rounded bg-background/70 px-2 py-1 font-[var(--font-code)] text-xs"
-                    >
-                      {code}
-                    </code>
-                  ))}
+                <div>
+                  <span className="text-[var(--scry-ink2)]">
+                    {t("profile.totpLastUsedAt")}:{" "}
+                  </span>
+                  {formatTimestamp(totpStatus.lastUsedAt, dateTimeFormat)}
+                </div>
+                <div>
+                  <span className="text-[var(--scry-ink2)]">
+                    {t("profile.totpRecoveryRemaining")}:{" "}
+                  </span>
+                  {totpStatus.recoveryCodesRemaining}
                 </div>
               </div>
-            ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                id={selectorId(
-                  "settings-profile-totp-regenerate-recovery-codes",
-                )}
-                type="button"
-                variant="outline"
-                disabled={totpBusy}
-                onClick={() => openTotpActionDialog("regenerateRecoveryCodes")}
-              >
-                {totpBusy ? (
-                  <LoadingMark className="mr-2 h-4 w-4" />
-                ) : null}
-                {t("profile.totpRegenerateRecoveryCodes")}
-              </Button>
-              <Button
-                id={selectorId("settings-profile-totp-disable")}
-                type="button"
-                variant="destructive"
-                disabled={totpBusy}
-                onClick={() => openTotpActionDialog("disable")}
-              >
-                {totpBusy ? (
-                  <LoadingMark className="mr-2 h-4 w-4" />
-                ) : null}
-                {t("profile.totpDisable")}
-              </Button>
-            </div>
-
-            <Dialog
-              open={pendingTotpAction !== null}
-              onOpenChange={(open) => {
-                if (!open) {
-                  closeTotpActionDialog();
-                }
-              }}
-            >
-              <DialogContent
-                id="settings-profile-totp-action-dialog"
-                className="sm:max-w-md"
-                onInteractOutside={(event) => event.preventDefault()}
-              >
-                <DialogHeader>
-                  <DialogTitle>
-                    {pendingTotpAction === "regenerateRecoveryCodes"
-                      ? t("profile.totpRegenerateRecoveryCodes")
-                      : t("profile.totpDisable")}
-                  </DialogTitle>
-                  <DialogDescription>
-                    {t("profile.totpActionDescription")}
-                  </DialogDescription>
-                </DialogHeader>
-                <TotpCodeForm
-                  inputId="totp-action-code"
-                  submitId={
-                    pendingTotpAction === "regenerateRecoveryCodes"
-                      ? selectorId(
-                          "settings-profile-totp-regenerate-recovery-codes-confirm",
-                        )
-                      : selectorId("settings-profile-totp-disable-confirm")
-                  }
-                  cancelId={selectorId("settings-profile-totp-action-cancel")}
-                  code={totpActionCode}
-                  title={t("profile.totpCode")}
-                  description={t("profile.totpActionDescription")}
-                  submitLabel={
-                    pendingTotpAction === "regenerateRecoveryCodes"
-                      ? t("profile.totpRegenerateRecoveryCodes")
-                      : t("profile.totpDisable")
-                  }
-                  cancelLabel={t("label.cancel")}
-                  busy={totpBusy}
-                  onCodeChange={onTotpActionCodeChange}
-                  onSubmit={handleSubmitTotpAction}
-                  onCancel={closeTotpActionDialog}
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-        ) : totpEnrollment ? (
-          <div className="space-y-4 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4">
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <TotpQrCode
-                id={selectorId("settings-profile-totp-qr-code")}
-                value={totpEnrollment.otpauthUrl}
-              />
-              <div className="min-w-0 space-y-3">
-                <a
-                  id={selectorId("settings-profile-totp-setup-link")}
-                  className="break-all text-sm font-medium text-primary underline-offset-4 hover:underline"
-                  href={totpEnrollment.otpauthUrl}
-                >
-                  {t("profile.totpOpenSetupLink")}
-                </a>
-                <div className="space-y-1">
-                  <div className="text-xs text-muted-foreground">
-                    {t("profile.totpSecret")}
+              {totpRecoveryCodes.length > 0 ? (
+                <div className="rounded-md border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3">
+                  <div className="mb-2 text-sm font-medium">
+                    {t("profile.totpRecoveryCodes")}
                   </div>
-                  <code
-                    id={selectorId("settings-profile-totp-secret")}
-                    className="block break-all rounded bg-background/70 px-2 py-1 font-[var(--font-code)] text-xs"
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {totpRecoveryCodes.map((code) => (
+                      <code
+                        id={selectorId(
+                          "settings-profile-totp-recovery-code",
+                          code,
+                        )}
+                        key={code}
+                        className="rounded bg-background/70 px-2 py-1 font-[var(--font-code)] text-xs"
+                      >
+                        {code}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  id={selectorId(
+                    "settings-profile-totp-regenerate-recovery-codes",
+                  )}
+                  type="button"
+                  variant="outline"
+                  disabled={totpBusy}
+                  onClick={() =>
+                    openTotpActionDialog("regenerateRecoveryCodes")
+                  }
+                >
+                  {totpBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+                  {t("profile.totpRegenerateRecoveryCodes")}
+                </Button>
+                <Button
+                  id={selectorId("settings-profile-totp-disable")}
+                  type="button"
+                  variant="destructive"
+                  disabled={totpBusy}
+                  onClick={() => openTotpActionDialog("disable")}
+                >
+                  {totpBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+                  {t("profile.totpDisable")}
+                </Button>
+              </div>
+
+              <Dialog
+                open={pendingTotpAction !== null}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    closeTotpActionDialog();
+                  }
+                }}
+              >
+                <DialogContent
+                  id="settings-profile-totp-action-dialog"
+                  className="sm:max-w-md"
+                  onInteractOutside={(event) => event.preventDefault()}
+                >
+                  <DialogHeader>
+                    <DialogTitle>
+                      {pendingTotpAction === "regenerateRecoveryCodes"
+                        ? t("profile.totpRegenerateRecoveryCodes")
+                        : t("profile.totpDisable")}
+                    </DialogTitle>
+                    <DialogDescription>
+                      {t("profile.totpActionDescription")}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <TotpCodeForm
+                    inputId="totp-action-code"
+                    submitId={
+                      pendingTotpAction === "regenerateRecoveryCodes"
+                        ? selectorId(
+                            "settings-profile-totp-regenerate-recovery-codes-confirm",
+                          )
+                        : selectorId("settings-profile-totp-disable-confirm")
+                    }
+                    cancelId={selectorId("settings-profile-totp-action-cancel")}
+                    code={totpActionCode}
+                    title={t("profile.totpCode")}
+                    description={t("profile.totpActionDescription")}
+                    submitLabel={
+                      pendingTotpAction === "regenerateRecoveryCodes"
+                        ? t("profile.totpRegenerateRecoveryCodes")
+                        : t("profile.totpDisable")
+                    }
+                    cancelLabel={t("label.cancel")}
+                    busy={totpBusy}
+                    onCodeChange={onTotpActionCodeChange}
+                    onSubmit={handleSubmitTotpAction}
+                    onCancel={closeTotpActionDialog}
+                  />
+                </DialogContent>
+              </Dialog>
+            </div>
+          ) : totpEnrollment ? (
+            <div className="space-y-4 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4">
+              <div className="flex flex-col gap-4 sm:flex-row">
+                <TotpQrCode
+                  id={selectorId("settings-profile-totp-qr-code")}
+                  value={totpEnrollment.otpauthUrl}
+                />
+                <div className="min-w-0 space-y-3">
+                  <a
+                    id={selectorId("settings-profile-totp-setup-link")}
+                    className="break-all text-sm font-medium text-primary underline-offset-4 hover:underline"
+                    href={totpEnrollment.otpauthUrl}
                   >
-                    {totpEnrollment.secretBase32}
-                  </code>
+                    {t("profile.totpOpenSetupLink")}
+                  </a>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">
+                      {t("profile.totpSecret")}
+                    </div>
+                    <code
+                      id={selectorId("settings-profile-totp-secret")}
+                      className="block break-all rounded bg-background/70 px-2 py-1 font-[var(--font-code)] text-xs"
+                    >
+                      {totpEnrollment.secretBase32}
+                    </code>
+                  </div>
                 </div>
               </div>
+              <div className="grid max-w-sm gap-2">
+                <Label htmlFor="totp-enrollment-code">
+                  {t("profile.totpCode")}
+                </Label>
+                <Input
+                  id="totp-enrollment-code"
+                  {...integerInputProps}
+                  inputMode="numeric"
+                  maxLength={TOTP_CODE_LENGTH}
+                  autoComplete="one-time-code"
+                  value={totpEnrollmentCode}
+                  onChange={(event) =>
+                    onTotpEnrollmentCodeChange(event.target.value)
+                  }
+                />
+                <Button
+                  id={selectorId("settings-profile-totp-verify-enable")}
+                  type="button"
+                  disabled={
+                    totpBusy || totpEnrollmentCode.length !== TOTP_CODE_LENGTH
+                  }
+                  onClick={onCompleteTotpEnrollment}
+                  className="w-fit"
+                >
+                  {totpBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+                  {t("profile.totpVerifyAndEnable")}
+                </Button>
+              </div>
             </div>
-            <div className="grid max-w-sm gap-2">
-              <Label htmlFor="totp-enrollment-code">
-                {t("profile.totpCode")}
-              </Label>
-              <Input
-                id="totp-enrollment-code"
-                {...integerInputProps}
-                inputMode="numeric"
-                maxLength={TOTP_CODE_LENGTH}
-                autoComplete="one-time-code"
-                value={totpEnrollmentCode}
-                onChange={(event) =>
-                  onTotpEnrollmentCodeChange(event.target.value)
-                }
-              />
-              <Button
-                id={selectorId("settings-profile-totp-verify-enable")}
-                type="button"
-                disabled={
-                  totpBusy || totpEnrollmentCode.length !== TOTP_CODE_LENGTH
-                }
-                onClick={onCompleteTotpEnrollment}
-                className="w-fit"
-              >
-                {totpBusy ? (
-                  <LoadingMark className="mr-2 h-4 w-4" />
-                ) : null}
-                {t("profile.totpVerifyAndEnable")}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            id={selectorId("settings-profile-start-totp")}
-            type="button"
-            onClick={onStartTotpEnrollment}
-            disabled={totpBusy}
-            className="w-fit"
-          >
-            {totpBusy ? (
-              <LoadingMark className="mr-2 h-4 w-4" />
-            ) : null}
-            {t("profile.totpStartEnrollment")}
-          </Button>
-        )}
+          ) : (
+            <Button
+              id={selectorId("settings-profile-start-totp")}
+              type="button"
+              onClick={onStartTotpEnrollment}
+              disabled={totpBusy}
+              className="w-fit"
+            >
+              {totpBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+              {t("profile.totpStartEnrollment")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -951,7 +945,8 @@ export function SettingsProfileSection({
                     )}
                     className={PROFILE_MUTED_TEXT_CLASS}
                   >
-                    Authorized: {formatTimestamp(app.authorizedAt, dateTimeFormat)}
+                    Authorized:{" "}
+                    {formatTimestamp(app.authorizedAt, dateTimeFormat)}
                   </div>
                   <div
                     id={selectorId(
@@ -1167,13 +1162,19 @@ export function SettingsProfileSection({
                 onValueChange={onLinkAccountConnectionChange}
                 disabled={linkAccountBusy}
               >
-                <SelectTrigger id="profile-link-emby-connection" className="w-full">
+                <SelectTrigger
+                  id="profile-link-emby-connection"
+                  className="w-full"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {selectedLinkConnections.map((connection) => (
                     <SelectItem
-                      id={selectorId("profile-link-emby-connection-option", connection.id)}
+                      id={selectorId(
+                        "profile-link-emby-connection-option",
+                        connection.id,
+                      )}
                       key={connection.id}
                       value={connection.id}
                     >
@@ -1188,7 +1189,9 @@ export function SettingsProfileSection({
                 <Button
                   id="profile-link-emby-mode-local"
                   type="button"
-                  variant={linkAccountEmbyMode === "LOCAL" ? "secondary" : "outline"}
+                  variant={
+                    linkAccountEmbyMode === "LOCAL" ? "secondary" : "outline"
+                  }
                   onClick={() => onLinkAccountEmbyModeChange("LOCAL")}
                 >
                   Local
@@ -1196,7 +1199,9 @@ export function SettingsProfileSection({
                 <Button
                   id="profile-link-emby-mode-connect"
                   type="button"
-                  variant={linkAccountEmbyMode === "CONNECT" ? "secondary" : "outline"}
+                  variant={
+                    linkAccountEmbyMode === "CONNECT" ? "secondary" : "outline"
+                  }
                   onClick={() => onLinkAccountEmbyModeChange("CONNECT")}
                 >
                   Connect
@@ -1213,7 +1218,9 @@ export function SettingsProfileSection({
                 <Input
                   id="profile-link-emby-username"
                   value={linkAccountUsername}
-                  onChange={(event) => onLinkAccountUsernameChange(event.target.value)}
+                  onChange={(event) =>
+                    onLinkAccountUsernameChange(event.target.value)
+                  }
                   disabled={linkAccountBusy}
                 />
               </div>
@@ -1226,13 +1233,18 @@ export function SettingsProfileSection({
                   type="password"
                   ignorePasswordManagers
                   value={linkAccountPassword}
-                  onChange={(event) => onLinkAccountPasswordChange(event.target.value)}
+                  onChange={(event) =>
+                    onLinkAccountPasswordChange(event.target.value)
+                  }
                   disabled={linkAccountBusy}
                 />
               </div>
             </div>
             {linkAccountError ? (
-              <p id="profile-link-emby-error" className="text-sm text-destructive">
+              <p
+                id="profile-link-emby-error"
+                className="text-sm text-destructive"
+              >
                 {linkAccountError}
               </p>
             ) : null}
@@ -1240,9 +1252,15 @@ export function SettingsProfileSection({
               <Button
                 id="profile-link-emby-submit"
                 type="submit"
-                disabled={linkAccountBusy || !linkAccountConnectionId || !linkAccountUsername.trim()}
+                disabled={
+                  linkAccountBusy ||
+                  !linkAccountConnectionId ||
+                  !linkAccountUsername.trim()
+                }
               >
-                {linkAccountBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
+                {linkAccountBusy ? (
+                  <LoadingMark className="mr-2 h-4 w-4" />
+                ) : null}
                 {t("profile.linkAccountSubmit")}
               </Button>
               <Button

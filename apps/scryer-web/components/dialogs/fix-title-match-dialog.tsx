@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { Search } from "lucide-react";
 import { useClient } from "urql";
@@ -42,8 +43,9 @@ type Props = {
 
 function currentTvdbId(title: FixableTitle | null): string | null {
   return (
-    title?.externalIds.find((entry) => entry.source.toLowerCase() === "tvdb")?.value?.trim() ||
-    null
+    title?.externalIds
+      .find((entry) => entry.source.toLowerCase() === "tvdb")
+      ?.value?.trim() || null
   );
 }
 
@@ -65,7 +67,9 @@ export function FixTitleMatchDialog({
   const t = useTranslate();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<MetadataTvdbSearchItem[]>([]);
-  const [selectedResultKey, setSelectedResultKey] = React.useState<string | null>(null);
+  const [selectedResultKey, setSelectedResultKey] = React.useState<
+    string | null
+  >(null);
   const [searching, setSearching] = React.useState(false);
   const [applying, setApplying] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -117,7 +121,8 @@ export function FixTitleMatchDialog({
         .then(({ data, error: queryError }) => {
           if (queryError) throw queryError;
           if (!active) return;
-          const items = (data?.searchMetadata ?? []) as MetadataTvdbSearchItem[];
+          const items = (data?.searchMetadata ??
+            []) as MetadataTvdbSearchItem[];
           setResults(items);
           setSelectedResultKey((current) =>
             current && items.some((item) => metadataResultKey(item) === current)
@@ -133,7 +138,13 @@ export function FixTitleMatchDialog({
           }
           setResults([]);
           setSelectedResultKey(null);
-          setError(err instanceof Error ? err.message : t("title.fixMatchSearchFailed"));
+          setError(
+            userFacingGraphQlErrorMessage(
+              err,
+              t("title.fixMatchSearchFailed"),
+              t,
+            ),
+          );
         })
         .finally(() => {
           if (active) {
@@ -167,7 +178,9 @@ export function FixTitleMatchDialog({
       await onFixed?.(warnings);
       onOpenChange(false);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("title.fixMatchApplyFailed"));
+      setError(
+        userFacingGraphQlErrorMessage(err, t("title.fixMatchApplyFailed"), t),
+      );
     } finally {
       setApplying(false);
     }
@@ -175,7 +188,9 @@ export function FixTitleMatchDialog({
 
   const existingTvdbId = currentTvdbId(title);
   const canApply =
-    fixTitleMatchTarget(results.find((item) => metadataResultKey(item) === selectedResultKey)) !== null;
+    fixTitleMatchTarget(
+      results.find((item) => metadataResultKey(item) === selectedResultKey),
+    ) !== null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -199,7 +214,9 @@ export function FixTitleMatchDialog({
             />
             <div className="text-xs text-muted-foreground sm:min-w-[180px]">
               {t("title.fixMatchCurrentTvdbId")}:{" "}
-              <span className="font-[var(--font-code)]">{existingTvdbId ?? t("title.fixMatchCurrentTvdbNone")}</span>
+              <span className="font-[var(--font-code)]">
+                {existingTvdbId ?? t("title.fixMatchCurrentTvdbNone")}
+              </span>
             </div>
           </div>
 
@@ -252,16 +269,24 @@ export function FixTitleMatchDialog({
                   </div>
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-foreground">{result.name}</span>
+                      <span className="font-medium text-foreground">
+                        {result.name}
+                      </span>
                       {result.year ? (
-                        <span className="text-xs text-muted-foreground">{result.year}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {result.year}
+                        </span>
                       ) : null}
                       <span className="text-xs text-muted-foreground">
-                        {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
+                        {result.smgId != null
+                          ? `SMG ${result.smgId}`
+                          : `TVDB ${result.tvdbId}`}
                       </span>
                     </div>
                     {result.status ? (
-                      <div className="text-xs text-muted-foreground">{result.status}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {result.status}
+                      </div>
                     ) : null}
                     {result.overview ? (
                       <p className="line-clamp-3 text-sm text-muted-foreground">
@@ -279,7 +304,9 @@ export function FixTitleMatchDialog({
                       disabled={applying}
                     >
                       <Search className="h-4 w-4" />
-                      {selected ? t("title.fixMatchSelected") : t("title.fixMatchChoose")}
+                      {selected
+                        ? t("title.fixMatchSelected")
+                        : t("title.fixMatchChoose")}
                     </Button>
                   </div>
                 </button>

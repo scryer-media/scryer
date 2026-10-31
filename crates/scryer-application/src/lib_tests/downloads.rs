@@ -461,10 +461,14 @@ async fn queued_grab_claims_merge_same_release_episode_coverage() {
             &title,
             &membership.view(),
             &context,
-            &[],
-            &[],
+            crate::quality::canonical_context::ReleaseCoverageCatalog {
+                episodes: &[],
+                collections: &[],
+            },
+            true,
         )
-        .await;
+        .await
+        .expect("load recorded claims");
 
     assert_eq!(queued.len(), 1, "one release should have one queue entry");
     assert_eq!(
@@ -509,6 +513,7 @@ async fn a_ledger_claim_scores_with_the_listing_its_grab_froze() {
         .await;
     let release = "Claimed.Movie.2024.1080p.WEB-DL-GRP";
     let snapshot = crate::quality::release_listing::ReleaseListingSnapshot {
+        protocol: None,
         grab_scoring: None,
         published_at: None,
         thumbs_up: None,
@@ -566,8 +571,16 @@ async fn a_ledger_claim_scores_with_the_listing_its_grab_froze() {
                 .await
                 .expect("seed grabbed scope");
             let claims = app
-                .grabbed_release_claims_for_scope(title, &membership.view(), context, &[], &[])
-                .await;
+                .grabbed_release_claims_for_scope(
+                    title,
+                    &membership.view(),
+                    context,
+                    &[],
+                    &[],
+                    true,
+                )
+                .await
+                .expect("grab claims load");
             assert_eq!(claims.len(), 1, "{claims:?}");
             assert!(claims[0].tier_index.is_some(), "the claim is re-derived");
             claims[0].score
@@ -884,6 +897,7 @@ async fn list_download_queue_reads_cached_observed_items_without_client_calls() 
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "observed-stub".to_string(),
         download_id: None,
@@ -970,6 +984,7 @@ async fn list_download_queue_uses_live_queue_only_for_all_activity() {
         queued_at: None,
         last_updated_at: Some("100".to_string()),
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "history-1".to_string(),
         download_id: None,
@@ -1082,6 +1097,7 @@ async fn list_download_queue_for_title_filters_the_shared_cache() {
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "job-1".to_string(),
         download_id: None,
@@ -2635,7 +2651,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         completed_source: None,
         state: TrackedDownloadState::ImportBlocked,
         status: scryer_domain::TrackedDownloadStatus::Warning,
-        status_messages: vec!["title required".to_string()],
+        status_messages: vec!["title required".to_string().into()],
         title_id: None,
         facet: None,
         source_title: Some("Observed.Download".to_string()),
@@ -2736,6 +2752,44 @@ async fn assign_tracked_download_title_serializes_submission_and_runtime_assignm
     // The operator's manual-import action remains the transition out of the
     // blocked state.
     assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
+}
+
+#[tokio::test]
+async fn download_enrichment_manual_assignment_invalidates_warmed_submission() {
+    use crate::integration::download_enrichment::DownloadEnrichmentPass;
+    let mut fixture = tracked_title_assignment_fixture().await;
+    let key = ClientJobLocator::from_submission(&fixture.submission);
+    let mut previous = fixture.submission.clone();
+    previous.title_id = "previous-title".into();
+    fixture
+        .submissions
+        .record_submission(previous)
+        .await
+        .unwrap();
+    let mut pass = DownloadEnrichmentPass::default();
+    pass.load(&fixture.app, std::slice::from_ref(&key)).await;
+    assert_eq!(
+        pass.submissions[&key].as_ref().unwrap().title_id,
+        "previous-title"
+    );
+    let actor = crate::domain_events::DomainEventActor::from(&fixture.user)
+        .into_download_submission_actor_snapshot();
+    crate::integration::workflow::assign_tracked_download_title_command(
+        &fixture.app,
+        &mut fixture.tracker,
+        &HashSet::new(),
+        fixture.tracked_id.clone(),
+        fixture.title.clone(),
+        fixture.submission.clone(),
+        actor,
+    )
+    .await
+    .unwrap();
+    pass.load(&fixture.app, std::slice::from_ref(&key)).await;
+    assert_eq!(
+        pass.submissions[&key].as_ref().unwrap().title_id,
+        fixture.title.id
+    );
 }
 
 const GRAB_TIME_LISTING: &str = r#"{"v":1,"thumbs_up":4,"captured_at":"2026-08-01T00:00:00Z"}"#;
@@ -2913,7 +2967,12 @@ async fn assign_tracked_download_title_busy_rejection_persists_nothing() {
     .await
     .expect_err("busy assignment should fail");
 
-    assert!(matches!(error, AppError::Validation(_)));
+    assert!(matches!(
+        error,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
     assert!(fixture.submissions.store.lock().await.is_empty());
     assert!(
         fixture
@@ -2942,7 +3001,10 @@ async fn assign_tracked_download_title_missing_rejection_persists_nothing() {
     .await
     .expect_err("missing assignment should fail");
 
-    assert!(matches!(error, AppError::NotFound(_)));
+    assert!(matches!(
+        error,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. }
+    ));
     assert!(fixture.submissions.store.lock().await.is_empty());
 }
 
@@ -2966,7 +3028,12 @@ async fn assign_tracked_download_title_persistence_failure_keeps_runtime_unchang
     .await
     .expect_err("persistence failure should fail assignment");
 
-    assert!(matches!(error, AppError::Repository(_)));
+    assert!(matches!(
+        error,
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+    ));
     assert!(fixture.submissions.store.lock().await.is_empty());
     let tracked = fixture
         .tracker
@@ -3286,7 +3353,8 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
         .expect("create monitored movie title");
 
     let item_id = "imported-cleanup-1";
-    let download_id = "download-id-imported-cleanup-1";
+    let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+    let download_id = canonical_download_id.to_wire();
     let output = tempfile::tempdir().unwrap();
     app.update_download_client_config(&user, crate::DownloadClientConfigUpdate {
         id: config.id.clone(),
@@ -3313,7 +3381,7 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
             client_type: "nzbget".into(),
             client_id: config.id.clone(),
             download_client_item_id: item_id.into(),
-            download_id: Some(download_id.into()),
+            download_id: Some(download_id.clone()),
             name: "Imported Cleanup Retry".into(),
             release_name: None,
             dest_dir: payload.display().to_string(),
@@ -3341,7 +3409,7 @@ async fn download_queue_poller_retries_imported_cleanup_from_facet_routing_until
     download_submissions
         .record_submission_with_identity(
             DownloadSubmission {
-                download_id: scryer_domain::download_identity::DownloadId::new(),
+                download_id: canonical_download_id,
                 title_id: title.id.clone(),
                 purpose: crate::DownloadSubmissionPurpose::Standard,
                 facet: "movie".to_string(),
@@ -5844,6 +5912,134 @@ fn series_pack_completed_download(
     completed
 }
 
+#[tokio::test]
+async fn regrab_import_records_a_visible_result_for_each_attempt() {
+    let (fixture, _) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        ..Default::default()
+    })
+    .await;
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        library_dir: _library_dir,
+        import_artifacts,
+        ..
+    } = fixture;
+    let source = tempfile::tempdir().unwrap();
+    let filename = "Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv";
+    let payload = write_pack_video(source.path(), filename);
+    let unrelated = source.path().join("unrelated.txt");
+    std::fs::write(&unrelated, b"preserve me").unwrap();
+    let mut completed = series_pack_completed_download(
+        "shared-regrab-hash",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+        source.path(),
+    );
+    let mut import_ids: Vec<String> = Vec::new();
+    for attempt in 0..3 {
+        let download_id = scryer_domain::download_identity::DownloadId::new();
+        completed.download_id = Some(download_id.to_wire());
+        let result = {
+            let _probe = probe_agrees_with_the_name(1920, 1080);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                crate::import::import::import_completed_download(&app, &user, &completed),
+            )
+            .await
+            .expect("import completes")
+            .expect("import returns an outcome")
+        };
+        assert_eq!(
+            result.decision,
+            if attempt == 1 {
+                scryer_domain::ImportDecision::Skipped
+            } else {
+                scryer_domain::ImportDecision::Imported
+            },
+            "attempt {attempt}: {result:?}"
+        );
+        if attempt == 1 {
+            assert_eq!(result.skip_reason, Some(ImportSkipReason::AlreadyImported));
+        }
+        let events = app
+            .services
+            .events
+            .domain_events
+            .list(&DomainEventFilter {
+                title_id: Some(title.id.clone()),
+                limit: 100,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let import_id = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                DomainEventPayload::ImportCompleted(data) if attempt != 1 => data
+                    .import_id
+                    .as_ref()
+                    .filter(|id| !import_ids.contains(*id))
+                    .cloned(),
+                DomainEventPayload::ImportRejected(data) if attempt == 1 => {
+                    assert_eq!(data.skip_reason, Some(ImportSkipReason::AlreadyImported));
+                    data.import_id.clone()
+                }
+                _ => None,
+            })
+            .expect("each attempt has its own visible import outcome");
+        let record = app
+            .services
+            .workflow
+            .imports
+            .get_import_by_id(&import_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record
+                .download_id
+                .as_deref()
+                .and_then(scryer_domain::download_identity::DownloadId::from_wire),
+            Some(download_id)
+        );
+        assert!(!import_ids.contains(&import_id));
+        import_ids.push(import_id);
+        assert!(payload.exists());
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserve me");
+        if attempt == 1 {
+            // Model a missing library file already reconciled out of the
+            // catalog; the retained completed payload is available to restore.
+            for file in app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .unwrap()
+            {
+                std::fs::remove_file(&file.file_path).unwrap();
+                app.services
+                    .library
+                    .media_files
+                    .delete_media_file(&file.id)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+    let artifacts = import_artifacts
+        .artifacts_for_file(&filename.to_ascii_lowercase())
+        .await;
+    assert_eq!(
+        artifacts.len(),
+        3,
+        "each attempt keeps its artifact: {artifacts:?}"
+    );
+}
+
 /// A verified better library copy satisfies a foreign episode download without
 /// burning its release. A later accepted upgrade still replaces that copy.
 #[tokio::test]
@@ -5870,6 +6066,7 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
                 tagged_aliases: vec![TaggedAlias {
                     name: "Över Atlanten".into(),
                     language: "swe".into(),
+                    country: None,
                 }],
                 ..Default::default()
             },
@@ -6658,7 +6855,7 @@ async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
         },
     );
     assert!(
-        matches!(catalog, Err(AppError::Validation(message)) if message.contains("source changed"))
+        matches!(catalog, Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. }) if message.contains("source changed"))
     );
     let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = imported else {
         panic!("a changed source must not become an accepted metadata failure");
@@ -6864,7 +7061,7 @@ async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
         )
         .unwrap();
         if kind == "encrypted" {
-            for packet in clip.chunks_exact_mut(192) {
+            for packet in clip.as_chunks_mut::<192>().0 {
                 if packet[4] == 0x47 {
                     packet[7] |= 0x80;
                 }
@@ -9258,7 +9455,10 @@ async fn automatic_import_parks_obfuscated_multi_file_episode_download_for_manua
         tracked.status,
         scryer_domain::TrackedDownloadStatus::Warning
     );
-    assert_eq!(tracked.status_messages, vec![expected_message.to_string()]);
+    assert_eq!(
+        crate::tracked_downloads::status_texts(&tracked.status_messages),
+        vec![expected_message.to_string()]
+    );
 
     // The import itself ended skipped as unparseable — not rejected, so the
     // release is not burned and the operator can map the files.
@@ -12658,6 +12858,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: "queue-1".to_string(),
         download_id: None,
@@ -14563,10 +14764,9 @@ score_entry["operator_refuses_this_file"] := -10000 if {
     );
     assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
     assert!(
-        tracked
-            .status_messages
-            .iter()
-            .any(|message| message.starts_with("held for manual import because the file failed")),
+        tracked.status_messages.iter().any(|message| message
+            .text
+            .starts_with("held for manual import because the file failed")),
         "{tracked:?}"
     );
     assert!(
@@ -14808,7 +15008,11 @@ async fn manual_blocklist_missing_key_holds_sources_without_automatic_retry() {
         assert!(tracked.blocklist_confirmation_failed);
         assert!(!tracked.manual_failure_cleanup);
         assert!(tracked.import_attempted);
-        assert!(tracked.status_messages[0].contains("Automatic retries stopped"));
+        assert!(
+            tracked.status_messages[0]
+                .text
+                .contains("Automatic retries stopped")
+        );
         crate::failed_download_handler::check(&mut tracked);
         crate::failed_download_handler::process_failed(&fixture.app, &mut tracked).await;
         assert_eq!(tracked.state, TrackedDownloadState::ImportBlocked);
@@ -18513,13 +18717,23 @@ async fn automatic_import_maps_a_double_episode_through_an_alternate_order_bridg
     );
 }
 
-/// Sonarr's `UpdateTrackable` drops a job the client stopped listing and never
-/// fails it (`TrackedDownloadService.cs:225-233`). The only durable trace is a
-/// `DownloadIgnored` history row. Absence must therefore end the binding, settle
-/// the submission on `ignored`, and leave nothing for blocklisting or retry to
-/// act on — and the released identity must be reusable at once.
+/// Absence is not an operator ignore or failure. The same attempt must be
+/// recoverable when the client lists the job again.
 #[tokio::test]
-async fn a_job_absent_from_an_authoritative_listing_is_dropped_not_failed() {
+async fn a_missing_download_keeps_its_identity_without_ignore_or_failure() {
+    exercise_missing_download_recovery(false).await;
+}
+
+#[tokio::test]
+async fn a_missing_download_delivers_failed_event_intent_before_recovery() {
+    exercise_missing_download_recovery(true).await;
+}
+
+async fn exercise_missing_download_recovery(fail_event_append: bool) {
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    domain_events
+        .fail_append
+        .store(fail_event_append, Ordering::SeqCst);
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -18529,8 +18743,14 @@ async fn a_job_absent_from_an_authoritative_listing_is_dropped_not_failed() {
         pending_releases,
     );
     let registry = Arc::new(RecordingDownloadRegistry::default());
-    let app =
-        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let scopes = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    *download_submissions.presence_scopes.lock().await = Some(scopes.clone());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_domain_events(domain_events.clone())
+            .with_download_registry(registry.clone())
+            .with_acquisition_scope_states(scopes.clone())
+    });
     let config =
         create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
     download_client
@@ -18563,38 +18783,251 @@ async fn a_job_absent_from_an_authoritative_listing_is_dropped_not_failed() {
         .await
         .expect("seed download submission");
 
+    let grabbed_at = Utc::now() - chrono::Duration::hours(1);
+    let grab_record = serde_json::json!({
+        "title": "Fixture.Vanished.2026.1080p.WEB-DL", "score": 100,
+        "grabbed_at": grabbed_at, "download_id": download_id,
+    });
+    let row = AcquisitionScopeState {
+        id: "missing-movie-scope".into(),
+        title_id: "title-vanished".into(),
+        title_name: None,
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".into(),
+        last_search_at: Some(grabbed_at.to_rfc3339()),
+        status: AcquisitionScopeStatus::Grabbed,
+        grabbed_release: Some(grab_record.to_string()),
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: grabbed_at.to_rfc3339(),
+        updated_at: grabbed_at.to_rfc3339(),
+    };
+    scopes.upsert_acquisition_scope_state(&row).await.unwrap();
+
     crate::app_usecase_integration::drop_source_removed_from_client(&app, &source_identity).await;
 
     assert!(
-        registry.ended.lock().await.contains(&download_id),
-        "absence from an authoritative listing must end the binding"
+        !registry.ended.lock().await.contains(&download_id),
+        "absence must preserve the binding"
     );
     assert_eq!(
         download_submissions
             .get_tracked_state(&source_identity)
             .await
             .expect("tracked state should load"),
-        Some(TrackedDownloadState::Ignored.as_str().to_string()),
-        "a job removed from its client is ignored, never failed"
+        Some(TrackedDownloadState::Missing.as_str().to_string()),
+        "absence is a recoverable observation"
     );
+
+    // Repeated successful empty polls heal partial work but emit once.
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &source_identity).await;
+    let events = app
+        .services
+        .events
+        .domain_events
+        .list(&scryer_domain::DomainEventFilter::default())
+        .await
+        .expect("events load");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::DownloadMissing(_)
+            ))
+            .count(),
+        usize::from(!fail_event_append)
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event.payload,
+        scryer_domain::DomainEventPayload::DownloadIgnored(_)
+            | scryer_domain::DomainEventPayload::DownloadFailed(_)
+    )));
+
+    let reopened = scopes
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&row.title_id))
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(reopened.status, AcquisitionScopeStatus::Wanted);
+    assert_eq!(
+        reopened.last_search_at, row.last_search_at,
+        "absence retains coverage facts"
+    );
+    let retained: serde_json::Value =
+        serde_json::from_str(reopened.grabbed_release.as_deref().unwrap()).unwrap();
+    assert_eq!(retained["grabbed_at"], grab_record["grabbed_at"]);
+    assert_eq!(retained["download_id"], grab_record["download_id"]);
+    let title = make_due_hydration_title("title-vanished", MediaFacet::Movie, 1);
+    let context = app
+        .resolve_canonical_scoring_context(&title, &crate::builtin_default_quality_profile())
+        .await;
+    let membership = app
+        .scope_membership_for(&title, &SubmissionScope::Title)
+        .await;
+    let automatic_claims = app
+        .grabbed_release_claims_for_scope(&title, &membership.view(), &context, &[], &[], true)
+        .await
+        .unwrap();
+    assert_eq!(automatic_claims.len(), 1);
+    assert!(
+        app.grabbed_release_claims_for_scope(&title, &membership.view(), &context, &[], &[], false)
+            .await
+            .unwrap()
+            .is_empty(),
+        "explicit search bypasses only the missing history"
+    );
+
+    let mut intent = crate::acquisition::submission::CanonicalDownloadSubmissionIntent {
+        automatic: true,
+        request: DownloadClientAddRequest {
+            title: title.clone(),
+            search_facet: None,
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            download_id: Some(scryer_domain::download_identity::DownloadId::new()),
+            source_hint: None,
+            staged_nzb: None,
+            resolved_download_artifact: None,
+            source_kind: None,
+            source_title: Some("Fixture.Vanished.2026.1080p.WEB-DL".into()),
+            source_password: None,
+            category: None,
+            queue_priority: None,
+            download_directory: None,
+            release_title: Some("Fixture.Vanished.2026.1080p.WEB-DL".into()),
+            indexer_name: None,
+            indexer_id: None,
+            info_hash_hint: None,
+            seed_goal_ratio: None,
+            seed_goal_seconds: None,
+            tracker_min_seed_ratio: None,
+            tracker_min_seed_time_minutes: None,
+            season_pack_seed_ratio: None,
+            season_pack_seed_time_minutes: None,
+            is_recent: None,
+            season_pack: None,
+            pinned_download_client_id: None,
+            http: None,
+        },
+        scope: SubmissionScope::Title,
+        conflict_policy: SubmissionConflictPolicy::Abort,
+        request_signature: None,
+        source_provider_name: None,
+        release_size_bytes: None,
+        release_listing_json: None,
+        http_release: None,
+    };
+    for release in [
+        "Fixture.Vanished.2026.1080p.WEB-DL",
+        "Fixture.Vanished.2026.720p.WEB-DL",
+    ] {
+        intent.request.release_title = Some(release.into());
+        assert!(
+            matches!(
+                app.submit_canonical_download(intent.clone()).await.unwrap(),
+                crate::acquisition::submission::CanonicalDownloadSubmissionOutcome::Deferred
+            ),
+            "final admission must reject equal or worse candidates even if earlier evaluation admitted them"
+        );
+    }
 
     let reobserved = registry
         .resolve_observation(&ObservedClientJob {
-            locator: source_identity,
+            locator: source_identity.clone(),
             wire_token: None,
             observed_name: Some("Fixture.Vanished.2026.1080p.WEB-DL".to_string()),
             observed_at: Utc::now(),
         })
         .await
-        .expect("re-observation should resolve after the binding was ended");
+        .expect("re-observation should reuse the binding");
     let ObservationResolution::Resolved {
         download_id: reobserved_download_id,
         ..
     } = reobserved
     else {
-        panic!("re-observation should resolve to a fresh identity");
+        panic!("re-observation should resolve to the same identity");
     };
-    assert_ne!(reobserved_download_id, download_id);
+    assert_eq!(reobserved_download_id, download_id);
+    // A fresh tracker models restart: no in-memory state may be needed to
+    // restore the same attempt or its scope claims.
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    let mut item = foreign_client_history_item("vanished-job-1");
+    item.client_id = config.id.clone();
+    item.client_type = "nzbget".into();
+    item.title_name = "Fixture.Vanished.2026.1080p.WEB-DL".into();
+    item.state = DownloadQueueState::Downloading;
+    domain_events.fail_append.store(false, Ordering::SeqCst);
+    let recovered = tracker
+        .track(&app, item)
+        .await
+        .expect("missing attempt recovers");
+    assert_eq!(recovered.download_id, download_id);
+    assert_eq!(
+        domain_events
+            .events
+            .lock()
+            .await
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::DownloadMissing(_)
+            ))
+            .count(),
+        1,
+        "recovery must deliver the durable missing event exactly once"
+    );
+    assert_eq!(
+        download_submissions
+            .get_tracked_state(&source_identity)
+            .await
+            .unwrap(),
+        Some("downloading".into())
+    );
+    let restored = scopes
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&row.title_id))
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(restored.status, AcquisitionScopeStatus::Grabbed);
+    assert_eq!(restored.grabbed_release, reopened.grabbed_release);
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &source_identity).await;
+    let events = app
+        .services
+        .events
+        .domain_events
+        .list(&scryer_domain::DomainEventFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                scryer_domain::DomainEventPayload::DownloadMissing(_)
+            ))
+            .count(),
+        2,
+        "reappearance followed by absence starts a new event episode"
+    );
+    let missing_again = scopes
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&row.title_id))
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        missing_again.grabbed_release, reopened.grabbed_release,
+        "a new missing episode never refreshes the original protection deadline"
+    );
 }
 
 /// A download that already reached a terminal outcome keeps it: the client
@@ -18726,6 +19159,10 @@ impl crate::ports::DownloadClientStatusRepository for RecordingDownloadClientSta
             .lock()
             .expect("successes mutex")
             .push(client_config_id.to_string());
+        self.blocked
+            .lock()
+            .expect("blocked mutex")
+            .remove(client_config_id);
         Ok(())
     }
 
@@ -18734,8 +19171,202 @@ impl crate::ports::DownloadClientStatusRepository for RecordingDownloadClientSta
             .lock()
             .expect("cleared mutex")
             .push(client_config_id.to_string());
+        self.blocked
+            .lock()
+            .expect("blocked mutex")
+            .remove(client_config_id);
         Ok(())
     }
+}
+
+impl RecordingDownloadClientStatusRepo {
+    fn block(&self, client_id: &str) {
+        self.blocked.lock().expect("blocked mutex").insert(
+            client_id.to_string(),
+            Utc::now() + chrono::Duration::hours(1),
+        );
+    }
+
+    async fn is_blocked(&self, client_id: &str) -> bool {
+        use crate::ports::DownloadClientStatusRepository as _;
+        self.list()
+            .await
+            .expect("list download client statuses")
+            .get(client_id)
+            .is_some_and(|status| status.is_blocked(Utc::now()))
+    }
+}
+
+/// A native-client probe that answers with a fixed outcome.
+struct FixedOutcomeConnectionTester {
+    answers: bool,
+}
+
+#[async_trait::async_trait]
+impl crate::BuiltinDownloadClientConnectionTester for FixedOutcomeConnectionTester {
+    async fn test_connection(
+        &self,
+        _client_type: &str,
+        _config_json: &str,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> crate::AppResult<()> {
+        if self.answers {
+            Ok(())
+        } else {
+            Err(crate::AppError::Repository(
+                "synthetic client did not answer".to_string(),
+            ))
+        }
+    }
+}
+
+async fn app_with_blocked_download_client(
+    tester_answers: bool,
+) -> (
+    AppUseCase,
+    User,
+    Arc<RecordingDownloadClientStatusRepo>,
+    DownloadClientConfig,
+) {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) =
+        bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
+    let status = Arc::new(RecordingDownloadClientStatusRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_client_status(status.clone())
+            .with_builtin_download_client_connection_tester(Arc::new(
+                FixedOutcomeConnectionTester {
+                    answers: tester_answers,
+                },
+            ))
+    });
+    let config =
+        create_enabled_download_client_config(&app, &user, "Fixture Backoff", "nzbget").await;
+    status.block(&config.id);
+    assert!(status.is_blocked(&config.id).await);
+    (app, user, status, config)
+}
+
+/// A stored client the operator tests and that answers is routed again at
+/// once, the way an answering refresh would end its failure run.
+#[tokio::test]
+async fn a_successful_connection_test_ends_the_clients_failure_backoff() {
+    let (app, user, status, config) = app_with_blocked_download_client(true).await;
+
+    app.test_download_client_connection(
+        &user,
+        Some(&config.id),
+        &config.client_type,
+        &config.config_json,
+        None,
+    )
+    .await
+    .expect("connection test answers");
+
+    assert!(
+        !status.is_blocked(&config.id).await,
+        "an answering test ends the failure backoff"
+    );
+    assert_eq!(
+        status.successes.lock().expect("successes mutex").as_slice(),
+        std::slice::from_ref(&config.id),
+        "the test records the same success an answering refresh does"
+    );
+}
+
+/// A test that fails is no new evidence the client is back.
+#[tokio::test]
+async fn a_failed_connection_test_keeps_the_clients_failure_backoff() {
+    let (app, user, status, config) = app_with_blocked_download_client(false).await;
+
+    app.test_download_client_connection(
+        &user,
+        Some(&config.id),
+        &config.client_type,
+        &config.config_json,
+        None,
+    )
+    .await
+    .expect_err("connection test fails");
+
+    assert!(
+        status.is_blocked(&config.id).await,
+        "a failed test leaves the failure backoff in place"
+    );
+    assert!(status.successes.lock().expect("successes mutex").is_empty());
+    assert!(status.failures.lock().expect("failures mutex").is_empty());
+}
+
+/// Saving an enabled client is the operator's correction; the next refresh
+/// judges the saved configuration instead of the backoff refusing grabs.
+#[tokio::test]
+async fn saving_an_enabled_download_client_ends_its_failure_backoff() {
+    let (app, user, status, config) = app_with_blocked_download_client(false).await;
+
+    app.update_download_client_config(
+        &user,
+        crate::DownloadClientConfigUpdate {
+            id: config.id.clone(),
+            config_json: Some(r#"{"host":"synthetic-client.invalid"}"#.to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("save download client config");
+
+    assert!(
+        !status.is_blocked(&config.id).await,
+        "saving an enabled client ends its failure backoff"
+    );
+}
+
+#[tokio::test]
+async fn saving_client_configuration_retires_failed_and_inflight_snapshots() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let config =
+        create_enabled_download_client_config(&app, &user, "Repair Fixture", "nzbget").await;
+    *client.queue_error.lock().await = Some("synthetic credential failure".into());
+    let failed = Arc::new(crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await);
+    assert!(failed.queue_listing_failed());
+    let guards = &app.runtime.acquisition.download_submission_guards;
+    let old_generation = guards.client_snapshot_generation();
+    assert!(guards.store_client_snapshot(old_generation, Default::default()));
+    let reads_before = *client.queue_calls.lock().await;
+    *client.queue_error.lock().await = None;
+    app.update_download_client_config(
+        &user,
+        crate::DownloadClientConfigUpdate {
+            id: config.id,
+            config_json: Some(r#"{"host":"repaired-client.invalid"}"#.into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("save corrected configuration");
+    assert!(guards.cached_client_snapshot().is_none());
+    assert!(guards.cached_acquisition_snapshot().is_none());
+    assert!(
+        !guards.store_client_snapshot(old_generation, Default::default()),
+        "an older read cannot republish the client cache"
+    );
+    assert!(
+        !guards.store_acquisition_snapshot(old_generation, failed),
+        "an older read cannot republish the acquisition cache"
+    );
+    let recovered = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+    assert!(!recovered.queue_listing_failed());
+    assert!(
+        *client.queue_calls.lock().await > reads_before,
+        "repair must force a new queue read without waiting for cache expiry"
+    );
 }
 
 /// Sonarr records one refresh outcome per client per tick. A client that
@@ -19239,6 +19870,7 @@ fn foreign_client_history_item(item_id: &str) -> DownloadQueueItem {
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: item_id.to_string(),
         download_id: None,
@@ -20022,7 +20654,13 @@ mod held_sources {
             .await
             .expect_err("view is not enough");
 
-        assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.holds_sources().await);
         assert!(
             held.record()
@@ -20061,7 +20699,15 @@ mod held_sources {
         let error = release(&held, &held.fixture.user)
             .await
             .expect_err("an import that holds nothing has nothing to release");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
 
         held.fixture
             .import_repo
@@ -20076,7 +20722,15 @@ mod held_sources {
         let error = release(&held, &held.fixture.user)
             .await
             .expect_err("only a completed import may release its sources");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.holds_sources().await);
         assert!(held.video_source().exists());
     }
@@ -20098,7 +20752,15 @@ mod held_sources {
             .await
             .expect_err("an unfinished import of the same download blocks release");
 
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.holds_sources().await);
     }
 
@@ -20149,7 +20811,15 @@ mod held_sources {
         let error = release(&held, &held.fixture.user)
             .await
             .expect_err("a released import holds nothing more");
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]
@@ -20232,7 +20902,13 @@ mod held_sources {
             .await
             .expect_err("every released title must be resolvable by the actor");
 
-        assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.import_holds(&held.import_id).await);
         assert!(held.import_holds("held-import-other-library").await);
         assert!(held.offer(&actor).await.is_none());
@@ -20312,7 +20988,15 @@ mod held_sources {
             .await
             .expect_err("the hold release failed");
 
-        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Repository(_)
+                    | AppError::RepositoryFailure { .. }
+                    | AppError::RepositoryFailed { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.import_holds(&held.import_id).await);
         assert!(held.import_holds("held-import-second").await);
         assert!(
@@ -20387,7 +21071,15 @@ mod held_sources {
             .await
             .expect_err("nothing serializes the release against the cleanup");
 
-        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
+            ),
+            "{error:?}"
+        );
         assert!(held.holds_sources().await);
         assert!(
             held.record()

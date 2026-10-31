@@ -61,8 +61,14 @@ function requestedBy(
 test("requester options come only from requesters on visible requests", () => {
   const options = requesterFilterOptions(
     [
-      requestedBy("request-a", [["user-b", "bravo"], ["user-a", "alpha"]]),
-      requestedBy("request-b", [["user-a", "alpha"], ["user-c", ""]]),
+      requestedBy("request-a", [
+        ["user-b", "bravo"],
+        ["user-a", "alpha"],
+      ]),
+      requestedBy("request-b", [
+        ["user-a", "alpha"],
+        ["user-c", ""],
+      ]),
     ],
     [{ userId: "user-z", username: "zulu" }],
     false,
@@ -76,7 +82,10 @@ test("requester options come only from requesters on visible requests", () => {
 
 test("a selected requester keeps the options seen before the selection", () => {
   const before = requesterFilterOptions(
-    [requestedBy("request-a", [["user-a", "alpha"]]), requestedBy("request-b", [["user-b", "bravo"]])],
+    [
+      requestedBy("request-a", [["user-a", "alpha"]]),
+      requestedBy("request-b", [["user-b", "bravo"]]),
+    ],
     [],
     false,
   );

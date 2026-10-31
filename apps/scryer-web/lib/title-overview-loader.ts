@@ -12,7 +12,13 @@ import {
 } from "@/lib/graphql/queries";
 import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
 
-export type TitleSidePanelOverviewSnapshot<TTitle, TDiagnostics, TEvent, TBlocklist, TSubtitle> = {
+export type TitleSidePanelOverviewSnapshot<
+  TTitle,
+  TDiagnostics,
+  TEvent,
+  TBlocklist,
+  TSubtitle,
+> = {
   title: TTitle | null;
   acquisitionDiagnostics: TDiagnostics | null;
   titleHistory: TEvent[];
@@ -27,9 +33,20 @@ export type TitleOverviewDownloadFeedbackSnapshot = {
   downloadFeedbackWarning: string | null;
 };
 
-export type TitleOverviewSnapshot<TTitle, TDiagnostics, TEvent, TBlocklist, TSubtitle> =
-  TitleSidePanelOverviewSnapshot<TTitle, TDiagnostics, TEvent, TBlocklist, TSubtitle>
-  & TitleOverviewDownloadFeedbackSnapshot;
+export type TitleOverviewSnapshot<
+  TTitle,
+  TDiagnostics,
+  TEvent,
+  TBlocklist,
+  TSubtitle,
+> = TitleSidePanelOverviewSnapshot<
+  TTitle,
+  TDiagnostics,
+  TEvent,
+  TBlocklist,
+  TSubtitle
+> &
+  TitleOverviewDownloadFeedbackSnapshot;
 
 export type ResolvedTitleOverviewTarget = {
   id: string;
@@ -66,12 +83,10 @@ function isTitleOverviewPartialOverviewError(
     return false;
   }
 
-  return error.graphQLErrors.every(
-    (graphQlError) => {
-      const alias = graphQlErrorAlias(graphQlError);
-      return alias === "titleHistory" || alias === "setupStatus";
-    },
-  );
+  return error.graphQLErrors.every((graphQlError) => {
+    const alias = graphQlErrorAlias(graphQlError);
+    return alias === "titleHistory" || alias === "setupStatus";
+  });
 }
 
 export async function fetchTitleSidePanelOverviewSnapshot<
@@ -85,7 +100,15 @@ export async function fetchTitleSidePanelOverviewSnapshot<
   titleId: string,
   blocklistLimit: number,
   queryDocument: string,
-) : Promise<TitleSidePanelOverviewSnapshot<TTitle, TDiagnostics, TEvent, TBlocklist, TSubtitle>> {
+): Promise<
+  TitleSidePanelOverviewSnapshot<
+    TTitle,
+    TDiagnostics,
+    TEvent,
+    TBlocklist,
+    TSubtitle
+  >
+> {
   const { data, error } = await client
     .query(
       queryDocument,
@@ -100,7 +123,8 @@ export async function fetchTitleSidePanelOverviewSnapshot<
 
   return {
     title: (data?.title ?? null) as TTitle | null,
-    acquisitionDiagnostics: (data?.titleAcquisitionDiagnostics ?? null) as TDiagnostics | null,
+    acquisitionDiagnostics: (data?.titleAcquisitionDiagnostics ??
+      null) as TDiagnostics | null,
     titleHistory: (data?.titleHistory?.items ?? []) as TEvent[],
     titleReleaseBlocklist: (data?.titleReleaseBlocklist ?? []) as TBlocklist[],
     externalSubtitles: (data?.externalSubtitles ?? []) as TSubtitle[],
@@ -154,10 +178,10 @@ export async function fetchTitleOverviewDownloadFeedbackSnapshot(
       throw error;
     }
 
-    downloadFeedbackWarning = extractDownloadFeedbackWarning(error.graphQLErrors, [
-      "downloadQueueItems",
-      "completedDownloadQueueItems",
-    ]);
+    downloadFeedbackWarning = extractDownloadFeedbackWarning(
+      error.graphQLErrors,
+      ["downloadQueueItems", "completedDownloadQueueItems"],
+    );
     if (!downloadFeedbackWarning) {
       throw error;
     }
@@ -165,7 +189,8 @@ export async function fetchTitleOverviewDownloadFeedbackSnapshot(
 
   return {
     downloadQueueItems: (data?.downloadQueueItems ?? []) as DownloadQueueItem[],
-    completedDownloadQueueItems: (data?.completedDownloadQueueItems ?? []) as DownloadQueueItem[],
+    completedDownloadQueueItems: (data?.completedDownloadQueueItems ??
+      []) as DownloadQueueItem[],
     downloadFeedbackWarning,
   };
 }
@@ -201,15 +226,19 @@ export async function resolveTitleOverviewTargetBySlug(
 
   return {
     id: String(title.id),
-    slug: typeof title.slug === "string" && title.slug.trim().length > 0
-      ? title.slug.trim()
-      : null,
-    libraryId: typeof title.libraryId === "string" && title.libraryId.trim().length > 0
-      ? title.libraryId.trim()
-      : null,
-    librarySlug: typeof title.librarySlug === "string" && title.librarySlug.trim().length > 0
-      ? title.librarySlug.trim()
-      : null,
+    slug:
+      typeof title.slug === "string" && title.slug.trim().length > 0
+        ? title.slug.trim()
+        : null,
+    libraryId:
+      typeof title.libraryId === "string" && title.libraryId.trim().length > 0
+        ? title.libraryId.trim()
+        : null,
+    librarySlug:
+      typeof title.librarySlug === "string" &&
+      title.librarySlug.trim().length > 0
+        ? title.librarySlug.trim()
+        : null,
   };
 }
 
@@ -242,14 +271,18 @@ export async function resolveTitleOverviewTargetById(
   return {
     id: String(title.id),
     facet: title.facet,
-    slug: typeof title.slug === "string" && title.slug.trim().length > 0
-      ? title.slug.trim()
-      : null,
-    libraryId: typeof title.libraryId === "string" && title.libraryId.trim().length > 0
-      ? title.libraryId.trim()
-      : null,
-    librarySlug: typeof title.librarySlug === "string" && title.librarySlug.trim().length > 0
-      ? title.librarySlug.trim()
-      : null,
+    slug:
+      typeof title.slug === "string" && title.slug.trim().length > 0
+        ? title.slug.trim()
+        : null,
+    libraryId:
+      typeof title.libraryId === "string" && title.libraryId.trim().length > 0
+        ? title.libraryId.trim()
+        : null,
+    librarySlug:
+      typeof title.librarySlug === "string" &&
+      title.librarySlug.trim().length > 0
+        ? title.librarySlug.trim()
+        : null,
   };
 }

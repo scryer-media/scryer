@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 
@@ -6,7 +7,10 @@ import {
   downloadQueueSubscription,
 } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types";
-import { GlobalStatusContext, type SetGlobalStatus } from "@/lib/context/global-status-context";
+import {
+  GlobalStatusContext,
+  type SetGlobalStatus,
+} from "@/lib/context/global-status-context";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import {
   mergeAuthoritativeQueueItems,
@@ -76,41 +80,43 @@ export function useDownloadQueue({
   // The subscription is gated on `initialFetchDone` so the first broadcast
   // (which may carry stale/un-enriched data) cannot overwrite the HTTP query
   // result that the user is already looking at.
-  useDeferredWsSubscription<{ data?: { downloadQueue?: DownloadQueueItem[] } }>({
-    enabled: enabled && !includeHistoryOnly && initialFetchDone,
-    requestKey: `downloadQueue:${scopeKey}`,
-    request: {
-      query: downloadQueueSubscription,
-      variables: {
-        includeAllActivity,
-        includeHistoryOnly,
-        includeImportActivity,
-        titleId,
-        activityFilter,
+  useDeferredWsSubscription<{ data?: { downloadQueue?: DownloadQueueItem[] } }>(
+    {
+      enabled: enabled && !includeHistoryOnly && initialFetchDone,
+      requestKey: `downloadQueue:${scopeKey}`,
+      request: {
+        query: downloadQueueSubscription,
+        variables: {
+          includeAllActivity,
+          includeHistoryOnly,
+          includeImportActivity,
+          titleId,
+          activityFilter,
+        },
+      },
+      onNext(result) {
+        const items = result.data?.downloadQueue;
+        if (!items) {
+          return;
+        }
+
+        // The subscription payload is a full filtered snapshot. Merge same-key
+        // items to retain enrichment-only fields, but let absence in the latest
+        // snapshot remove stale rows immediately.
+        setQueueItems((prev) => mergeLiveQueueItems(items, prev));
+        setQueueError(null);
+        lastReportedErrorRef.current = null;
+        setLastRefreshedAt(new Date());
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      },
+      onError(err) {
+        console.error("[download-queue] subscription error:", err);
       },
     },
-    onNext(result) {
-      const items = result.data?.downloadQueue;
-      if (!items) {
-        return;
-      }
-
-      // The subscription payload is a full filtered snapshot. Merge same-key
-      // items to retain enrichment-only fields, but let absence in the latest
-      // snapshot remove stale rows immediately.
-      setQueueItems((prev) => mergeLiveQueueItems(items, prev));
-      setQueueError(null);
-      lastReportedErrorRef.current = null;
-      setLastRefreshedAt(new Date());
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    },
-    onError(err) {
-      console.error("[download-queue] subscription error:", err);
-    },
-  });
+  );
 
   // --- Query fetch (initial load + manual refresh) ---
   // The query is authoritative for enrichment fields and history/import overlays.
@@ -151,8 +157,10 @@ export function useDownloadQueue({
       if (activeScopeKeyRef.current !== requestScopeKey) {
         return;
       }
-      const message =
-        error instanceof Error ? error.message : "Failed to load queue.";
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        "Failed to load queue.",
+      );
       setQueueError(message);
       if (lastReportedErrorRef.current !== message) {
         lastReportedErrorRef.current = message;

@@ -33,7 +33,10 @@ import {
 } from "@/lib/utils/title-edit-dialog";
 import { TitleTagsPicker } from "@/components/common/title-tags-picker";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
-import type { BulkTitleTagsDraft, TitleTagsDelta } from "@/lib/types/title-tags";
+import type {
+  BulkTitleTagsDraft,
+  TitleTagsDelta,
+} from "@/lib/types/title-tags";
 import {
   buildBulkTitleTagsDelta,
   emptyBulkTitleTagsDraft,
@@ -91,10 +94,7 @@ export function BulkTitleEditDialog({
   onRequestMove,
 }: BulkTitleEditDialogProps) {
   const t = useTranslate();
-  const initialDraft = React.useMemo(
-    () => initialDraftState(),
-    [],
-  );
+  const initialDraft = React.useMemo(() => initialDraftState(), []);
   const [draft, setDraft] = React.useState<TitleEditDraft>(initialDraft);
   const [tagDraft, setTagDraft] = React.useState<BulkTitleTagsDraft>(
     emptyBulkTitleTagsDraft,
@@ -107,7 +107,8 @@ export function BulkTitleEditDialog({
   const isMovieView = view === "movies";
   const isAnimeView = view === "anime";
   const hasPendingChange =
-    hasTitleEditChanges(draft, initialDraft) || hasBulkTitleTagsChanges(tagDraft);
+    hasTitleEditChanges(draft, initialDraft) ||
+    hasBulkTitleTagsChanges(tagDraft);
   const folderLabel = React.useCallback(
     (path: string) => path.split("/").filter(Boolean).pop() ?? path,
     [],
@@ -197,7 +198,10 @@ export function BulkTitleEditDialog({
             <Select
               value={draft.qualityProfileId}
               onValueChange={(value) =>
-                setDraft((previous) => ({ ...previous, qualityProfileId: value }))
+                setDraft((previous) => ({
+                  ...previous,
+                  qualityProfileId: value,
+                }))
               }
               disabled={busy}
             >
@@ -267,12 +271,17 @@ export function BulkTitleEditDialog({
                 }
                 setDraft((previous) => ({ ...previous, rootFolderId: value }));
               }}
-              disabled={busy || (Boolean(onRequestMove) && sortedRootFolders.length === 0)}
+              disabled={
+                busy ||
+                (Boolean(onRequestMove) && sortedRootFolders.length === 0)
+              }
             >
               <SelectTrigger
                 id="bulk-title-edit-destination-root"
                 aria-label={
-                  onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+                  onRequestMove
+                    ? t("move.destinationRoot")
+                    : t("title.rootFolder")
                 }
                 className="h-9 w-full font-[var(--font-code)] text-sm"
               >
@@ -328,7 +337,10 @@ export function BulkTitleEditDialog({
             <Select
               value={draft.metadataLanguage}
               onValueChange={(value) =>
-                setDraft((previous) => ({ ...previous, metadataLanguage: value }))
+                setDraft((previous) => ({
+                  ...previous,
+                  metadataLanguage: value,
+                }))
               }
               disabled={busy}
             >
@@ -397,8 +409,12 @@ export function BulkTitleEditDialog({
                   <SelectItem value={UNCHANGED_VALUE}>
                     {t("label.unchanged")}
                   </SelectItem>
-                  <SelectItem value={ENABLED_VALUE}>{t("label.enabled")}</SelectItem>
-                  <SelectItem value={DISABLED_VALUE}>{t("label.disabled")}</SelectItem>
+                  <SelectItem value={ENABLED_VALUE}>
+                    {t("label.enabled")}
+                  </SelectItem>
+                  <SelectItem value={DISABLED_VALUE}>
+                    {t("label.disabled")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </EditableField>
@@ -423,8 +439,12 @@ export function BulkTitleEditDialog({
                   <SelectItem value={UNCHANGED_VALUE}>
                     {t("label.unchanged")}
                   </SelectItem>
-                  <SelectItem value={ENABLED_VALUE}>{t("label.enabled")}</SelectItem>
-                  <SelectItem value={DISABLED_VALUE}>{t("label.disabled")}</SelectItem>
+                  <SelectItem value={ENABLED_VALUE}>
+                    {t("label.enabled")}
+                  </SelectItem>
+                  <SelectItem value={DISABLED_VALUE}>
+                    {t("label.disabled")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </EditableField>

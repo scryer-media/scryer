@@ -279,9 +279,9 @@ impl SubtitleMutations {
         let external_subtitle_id = input.external_subtitle_id;
         let external_subtitle_id_string = external_subtitle_id.to_string();
         let preview_fingerprint = input.preview_fingerprint.as_deref().ok_or_else(|| {
-            to_gql_error(AppError::Validation(
-                "delete preview confirmation is required before deleting subtitle files on disk"
-                    .to_string(),
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_SUBTITLE_DELETE_CONFIRMATION_REQUIRED,
+                "delete preview confirmation is required before deleting subtitle files on disk",
             ))
         })?;
 
@@ -314,9 +314,9 @@ impl SubtitleMutations {
         let external_subtitle_id = input.external_subtitle_id;
         let external_subtitle_id_string = external_subtitle_id.to_string();
         let preview_fingerprint = input.preview_fingerprint.as_deref().ok_or_else(|| {
-            to_gql_error(AppError::Validation(
-                "delete preview confirmation is required before deleting subtitle files on disk"
-                    .to_string(),
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_SUBTITLE_DELETE_CONFIRMATION_REQUIRED,
+                "delete preview confirmation is required before deleting subtitle files on disk",
             ))
         })?;
 

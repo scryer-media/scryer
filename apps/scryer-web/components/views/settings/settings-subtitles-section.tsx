@@ -1,6 +1,10 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Download } from "lucide-react";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
@@ -86,7 +90,9 @@ function BlurIntegerInput({
   max?: number;
 }) {
   const [local, setLocal] = React.useState(String(value));
-  React.useEffect(() => { setLocal(String(value)); }, [value]);
+  React.useEffect(() => {
+    setLocal(String(value));
+  }, [value]);
   return (
     <Input
       id={id}
@@ -126,11 +132,14 @@ export function SettingsSubtitlesSection({
       settings.languages.map((language) => [language.code, language]),
     );
     update({
-      languages: codes.map((code) => existingByCode.get(code) ?? {
-        code,
-        hearingImpaired: false,
-        forced: false,
-      }),
+      languages: codes.map(
+        (code) =>
+          existingByCode.get(code) ?? {
+            code,
+            hearingImpaired: false,
+            forced: false,
+          },
+      ),
     });
   };
 
@@ -141,12 +150,16 @@ export function SettingsSubtitlesSection({
     (syncPluginLoading
       ? t("settings.sub.syncPluginLoadingCatalog")
       : syncPluginAvailable
-        ? t("settings.sub.syncPluginRequiredDescription", { plugin: syncPluginName })
+        ? t("settings.sub.syncPluginRequiredDescription", {
+            plugin: syncPluginName,
+          })
         : t("settings.sub.syncPluginUnavailable"));
 
   if (loading) {
     return (
-      <div className={`flex items-center gap-2 text-sm ${SUBTITLES_MUTED_CLASS}`}>
+      <div
+        className={`flex items-center gap-2 text-sm ${SUBTITLES_MUTED_CLASS}`}
+      >
         <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
@@ -155,10 +168,14 @@ export function SettingsSubtitlesSection({
 
   return (
     <div className="space-y-4 text-sm">
-      <div className={`space-y-4 ${disabled ? "pointer-events-none select-none opacity-40" : ""}`}>
+      <div
+        className={`space-y-4 ${disabled ? "pointer-events-none select-none opacity-40" : ""}`}
+      >
         {/* Languages */}
         <div className={`${SUBTITLES_INSET_CLASS} space-y-3`}>
-          <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.languages")}</Label>
+          <Label className={SUBTITLES_LABEL_CLASS}>
+            {t("settings.sub.languages")}
+          </Label>
           <div id="settings-subtitles-languages">
             <SubtitleLanguagePicker
               value={settings.languages.map((language) => language.code)}
@@ -170,21 +187,23 @@ export function SettingsSubtitlesSection({
               {settings.languages.map((language) => {
                 const subtitleLanguage = getSubtitleLanguage(language.code);
                 return (
-                  <div
-                    key={language.code}
-                    className={SUBTITLES_ROW_CLASS}
-                  >
+                  <div key={language.code} className={SUBTITLES_ROW_CLASS}>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-[var(--scry-ink2)]">
                         {subtitleLanguage?.name ?? language.code}
                       </p>
                       <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
-                        {subtitleLanguage?.nativeName ?? language.code} · {language.code}
+                        {subtitleLanguage?.nativeName ?? language.code} ·{" "}
+                        {language.code}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-3">
                       <Toggle
-                        id={selectorId("settings-subtitles-language", language.code, "hearing-impaired")}
+                        id={selectorId(
+                          "settings-subtitles-language",
+                          language.code,
+                          "hearing-impaired",
+                        )}
                         checked={language.hearingImpaired}
                         onChange={(value) =>
                           update({
@@ -199,7 +218,11 @@ export function SettingsSubtitlesSection({
                         disabled={disabled}
                       />
                       <Toggle
-                        id={selectorId("settings-subtitles-language", language.code, "forced")}
+                        id={selectorId(
+                          "settings-subtitles-language",
+                          language.code,
+                          "forced",
+                        )}
                         checked={language.forced}
                         onChange={(value) =>
                           update({
@@ -225,7 +248,9 @@ export function SettingsSubtitlesSection({
         <div className={`${SUBTITLES_INSET_CLASS} space-y-3`}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.minScoreSeries")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.minScoreSeries")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-min-score-series"
                 value={settings.minimumScoreSeries}
@@ -235,7 +260,9 @@ export function SettingsSubtitlesSection({
               />
             </div>
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.minScoreMovie")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.minScoreMovie")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-min-score-movie"
                 value={settings.minimumScoreMovie}
@@ -245,7 +272,9 @@ export function SettingsSubtitlesSection({
               />
             </div>
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.searchInterval")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.searchInterval")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-search-interval-hours"
                 value={settings.searchIntervalHours}
@@ -254,25 +283,57 @@ export function SettingsSubtitlesSection({
               />
             </div>
           </div>
-          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>{t("settings.sub.minScoreHelp")}</p>
+          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
+            {t("settings.sub.minScoreHelp")}
+          </p>
         </div>
 
         {/* Toggles */}
         <div className={`${SUBTITLES_INSET_CLASS} space-y-3`}>
-          <Toggle id="settings-subtitles-auto-download-on-import" checked={settings.autoDownloadOnImport} onChange={(v) => update({ autoDownloadOnImport: v })} label={t("settings.sub.autoDownload")} disabled={disabled} />
-          <Toggle id="settings-subtitles-exclude-ai-translated" checked={!settings.includeAiTranslated} onChange={(v) => update({ includeAiTranslated: !v })} label={t("settings.sub.excludeAi")} disabled={disabled} />
-          <Toggle id="settings-subtitles-exclude-machine-translated" checked={!settings.includeMachineTranslated} onChange={(v) => update({ includeMachineTranslated: !v })} label={t("settings.sub.excludeMachine")} disabled={disabled} />
+          <Toggle
+            id="settings-subtitles-auto-download-on-import"
+            checked={settings.autoDownloadOnImport}
+            onChange={(v) => update({ autoDownloadOnImport: v })}
+            label={t("settings.sub.autoDownload")}
+            disabled={disabled}
+          />
+          <Toggle
+            id="settings-subtitles-exclude-ai-translated"
+            checked={!settings.includeAiTranslated}
+            onChange={(v) => update({ includeAiTranslated: !v })}
+            label={t("settings.sub.excludeAi")}
+            disabled={disabled}
+          />
+          <Toggle
+            id="settings-subtitles-exclude-machine-translated"
+            checked={!settings.includeMachineTranslated}
+            onChange={(v) => update({ includeMachineTranslated: !v })}
+            label={t("settings.sub.excludeMachine")}
+            disabled={disabled}
+          />
         </div>
       </div>
 
       {/* Sync */}
       {syncPluginActive ? (
-        <div className={`${SUBTITLES_INSET_CLASS} space-y-3 ${disabled ? "pointer-events-none select-none opacity-40" : ""}`}>
-          <Toggle id="settings-subtitles-sync-enabled" checked={settings.syncEnabled} onChange={(v) => update({ syncEnabled: v })} label={t("settings.sub.syncEnabled")} disabled={disabled} />
-          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>{t("settings.sub.syncEnabledHelp")}</p>
+        <div
+          className={`${SUBTITLES_INSET_CLASS} space-y-3 ${disabled ? "pointer-events-none select-none opacity-40" : ""}`}
+        >
+          <Toggle
+            id="settings-subtitles-sync-enabled"
+            checked={settings.syncEnabled}
+            onChange={(v) => update({ syncEnabled: v })}
+            label={t("settings.sub.syncEnabled")}
+            disabled={disabled}
+          />
+          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
+            {t("settings.sub.syncEnabledHelp")}
+          </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.syncThresholdSeries")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.syncThresholdSeries")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-sync-threshold-series"
                 value={settings.syncThresholdSeries}
@@ -282,7 +343,9 @@ export function SettingsSubtitlesSection({
               />
             </div>
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.syncThresholdMovie")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.syncThresholdMovie")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-sync-threshold-movie"
                 value={settings.syncThresholdMovie}
@@ -292,7 +355,9 @@ export function SettingsSubtitlesSection({
               />
             </div>
             <div className="space-y-1">
-              <Label className={SUBTITLES_LABEL_CLASS}>{t("settings.sub.syncMaxOffset")}</Label>
+              <Label className={SUBTITLES_LABEL_CLASS}>
+                {t("settings.sub.syncMaxOffset")}
+              </Label>
               <BlurIntegerInput
                 id="settings-subtitles-sync-max-offset-seconds"
                 value={settings.syncMaxOffsetSeconds}
@@ -301,19 +366,31 @@ export function SettingsSubtitlesSection({
               />
             </div>
           </div>
-          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>{t("settings.sub.syncThresholdHelp")}</p>
-          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>{t("settings.sub.syncMaxOffsetHelp")}</p>
+          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
+            {t("settings.sub.syncThresholdHelp")}
+          </p>
+          <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
+            {t("settings.sub.syncMaxOffsetHelp")}
+          </p>
         </div>
       ) : (
-        <div id="settings-subtitles-sync-plugin-required" className={SUBTITLES_INSET_CLASS}>
+        <div
+          id="settings-subtitles-sync-plugin-required"
+          className={SUBTITLES_INSET_CLASS}
+        >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
-              <p className="text-sm font-medium text-[var(--scry-ink2)]">{t("settings.sub.syncPluginRequiredTitle")}</p>
+              <p className="text-sm font-medium text-[var(--scry-ink2)]">
+                {t("settings.sub.syncPluginRequiredTitle")}
+              </p>
               <p className={`text-xs ${SUBTITLES_MUTED_CLASS}`}>
                 {syncPluginDescription}
               </p>
               {syncPluginError ? (
-                <p id="settings-subtitles-sync-plugin-error" className="text-xs text-destructive">
+                <p
+                  id="settings-subtitles-sync-plugin-error"
+                  className="text-xs text-destructive"
+                >
                   {syncPluginError}
                 </p>
               ) : null}

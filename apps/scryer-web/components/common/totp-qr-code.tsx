@@ -28,17 +28,17 @@ export function TotpQrCode({
 
     return {
       pixelSize,
-      src: code.createDataURL(
-        TOTP_QR_CELL_SIZE,
-        TOTP_QR_QUIET_ZONE_MODULES,
-      ),
+      src: code.createDataURL(TOTP_QR_CELL_SIZE, TOTP_QR_QUIET_ZONE_MODULES),
     };
   }, [value]);
 
   return (
     <div
       id={id}
-      className={cn("inline-flex max-w-full rounded-md bg-white shadow-sm", className)}
+      className={cn(
+        "inline-flex max-w-full rounded-md bg-white shadow-sm",
+        className,
+      )}
     >
       <img
         alt={ariaLabel}

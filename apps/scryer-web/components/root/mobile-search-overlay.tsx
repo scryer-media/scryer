@@ -1,9 +1,5 @@
 import * as React from "react";
-import {
-  Eraser,
-  Search,
-  X,
-} from "lucide-react";
+import { Eraser, Search, X } from "lucide-react";
 import type { OverviewTitleTarget, ViewId } from "@/components/root/types";
 import {
   groupRouteCommandItems,
@@ -63,10 +59,7 @@ import {
 } from "@/lib/facets/helpers";
 import { useSearchContext } from "@/lib/context/search-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import {
-  globalSearchMetadataResultId,
-  selectorId,
-} from "@/lib/utils/dom-ids";
+import { globalSearchMetadataResultId, selectorId } from "@/lib/utils/dom-ids";
 import {
   AddToCatalogDialog,
   EMPTY_SEARCH_RESULT,
@@ -226,7 +219,12 @@ export function MobileSearchOverlay({
       visibleCatalogFacets,
       allLimit: GLOBAL_SEARCH_ALL_CATALOG_RESULT_LIMIT,
     });
-  }, [activeFilters, canViewCatalog, catalogSearchSections, visibleCatalogFacets]);
+  }, [
+    activeFilters,
+    canViewCatalog,
+    catalogSearchSections,
+    visibleCatalogFacets,
+  ]);
   const visibleCatalogResultCount = canViewCatalog
     ? catalogSearchResults.length
     : 0;
@@ -964,11 +962,12 @@ export function MobileSearchOverlay({
     canViewCatalog && (catalogSearchLoading || visibleCatalogCount > 0);
   const showMetadataSection = metadataSectionFacets.length > 0;
   const showRouteCommandSection = visibleRouteCommandResults.length > 0;
-  const hiddenRouteCommandResultCount = countHiddenRouteCommandResultsForFilters(
-    activeFilters,
-    routeCommandResults,
-    visibleRouteCommandResults,
-  );
+  const hiddenRouteCommandResultCount =
+    countHiddenRouteCommandResultsForFilters(
+      activeFilters,
+      routeCommandResults,
+      visibleRouteCommandResults,
+    );
   const showSectionResults =
     showCatalogSection || showMetadataSection || showRouteCommandSection;
 
@@ -1117,8 +1116,7 @@ export function MobileSearchOverlay({
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
-                      {!catalogSearchLoading &&
-                      hiddenCatalogResultCount > 0 ? (
+                      {!catalogSearchLoading && hiddenCatalogResultCount > 0 ? (
                         <button
                           type="button"
                           className="text-xs font-medium text-[var(--scry-accent-ring)]"
@@ -1183,7 +1181,7 @@ export function MobileSearchOverlay({
                           ? t("search.resultCountOne")
                           : t("search.resultCountOther", {
                               count: String(routeCommandResults.length),
-                        })}
+                            })}
                       </p>
                     </div>
                     {hiddenRouteCommandResultCount > 0 ? (

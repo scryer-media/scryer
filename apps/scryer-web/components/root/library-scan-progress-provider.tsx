@@ -24,7 +24,9 @@ const MAX_VISIBLE_GENERAL_TOASTS = 3;
 
 // Strip the default sonner container chrome so the toast's own glass card is the
 // only visible surface, and widen the stack to the design's 392px card.
-const LIBRARY_SCAN_TOASTER_STYLE = { "--width": "392px" } as React.CSSProperties;
+const LIBRARY_SCAN_TOASTER_STYLE = {
+  "--width": "392px",
+} as React.CSSProperties;
 const LIBRARY_SCAN_TOAST_OPTIONS = {
   className: "",
   classNames: { toast: "!bg-transparent !border-0 !p-0 !shadow-none" },
@@ -92,7 +94,9 @@ export function LibraryScanProgressProvider({
   >({});
   const shownToastIdsRef = React.useRef<Set<string>>(new Set());
   const backgroundedSessionIdsRef = React.useRef<Set<string>>(new Set());
-  const refreshedPendingImportSessionsRef = React.useRef<Set<string>>(new Set());
+  const refreshedPendingImportSessionsRef = React.useRef<Set<string>>(
+    new Set(),
+  );
 
   const getSessionById = React.useCallback(
     (sessionId: string) =>
@@ -171,9 +175,12 @@ export function LibraryScanProgressProvider({
           !backgroundedSessionIdsRef.current.has(session.sessionId)
         ) {
           if (!mobileDismissTimersRef.current[session.sessionId]) {
-            mobileDismissTimersRef.current[session.sessionId] = setTimeout(() => {
-              hideSessionToast(session.sessionId);
-            }, MOBILE_HIDE_RUNNING_MS);
+            mobileDismissTimersRef.current[session.sessionId] = setTimeout(
+              () => {
+                hideSessionToast(session.sessionId);
+              },
+              MOBILE_HIDE_RUNNING_MS,
+            );
           }
         } else if (!isMobile) {
           const mobileTimer = mobileDismissTimersRef.current[session.sessionId];
@@ -223,13 +230,7 @@ export function LibraryScanProgressProvider({
         shownToastIdsRef.current.add(sessionId);
       }
     }
-  }, [
-    dismissSessionToast,
-    hideSessionToast,
-    isMobile,
-    navigate,
-    sessions,
-  ]);
+  }, [dismissSessionToast, hideSessionToast, isMobile, navigate, sessions]);
 
   React.useEffect(
     () => () => {

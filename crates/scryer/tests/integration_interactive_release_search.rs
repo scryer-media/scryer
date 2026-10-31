@@ -102,6 +102,7 @@ fn indexer_config(
     now: chrono::DateTime<chrono::Utc>,
 ) -> IndexerConfig {
     IndexerConfig {
+        last_error_code: None,
         id: id.into(),
         name: id.into(),
         provider_type: "newznab".into(),
@@ -1054,9 +1055,10 @@ async fn raw_query_subject_issues_a_text_search_and_completes_with_the_release()
         "{done:?}"
     );
     assert!(
-        done.results
+        done.raw_page.as_ref().is_some_and(|page| page
+            .rows
             .iter()
-            .any(|result| result.title.contains("Paperman")),
+            .any(|row| row.result().title.contains("Paperman"))),
         "the raw query returns the indexer's release: {done:?}"
     );
     let view = indexer_status(&done, "raw-a");

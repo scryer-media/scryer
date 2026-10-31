@@ -32,10 +32,14 @@ export function intervalToSeconds(amount: number, unit: IntervalUnit): number {
 }
 
 /** The largest unit that expresses a stored interval as a whole amount. */
-export function splitIntervalSeconds(
-  seconds: number | null | undefined,
-): { amount: number; unit: IntervalUnit } {
-  const value = Math.max(MIN_INTERVAL_SECONDS, seconds ?? DEFAULT_INTERVAL_SECONDS);
+export function splitIntervalSeconds(seconds: number | null | undefined): {
+  amount: number;
+  unit: IntervalUnit;
+} {
+  const value = Math.max(
+    MIN_INTERVAL_SECONDS,
+    seconds ?? DEFAULT_INTERVAL_SECONDS,
+  );
   for (const unit of ["days", "hours"] as const) {
     if (value % INTERVAL_UNIT_SECONDS[unit] === 0) {
       return { amount: value / INTERVAL_UNIT_SECONDS[unit], unit };
@@ -48,7 +52,9 @@ export function splitIntervalSeconds(
 }
 
 /** Days in Monday-first week order without repeats. */
-export function orderWeekdays(days: readonly ScheduleWeekdayValue[]): ScheduleWeekdayValue[] {
+export function orderWeekdays(
+  days: readonly ScheduleWeekdayValue[],
+): ScheduleWeekdayValue[] {
   return SCHEDULE_WEEKDAYS.filter((day) => days.includes(day));
 }
 
@@ -84,17 +90,25 @@ export function scheduleForKind(
     case "MANUAL":
       return empty;
     case "INTERVAL":
-      return { ...empty, everySeconds: previous?.everySeconds ?? DEFAULT_INTERVAL_SECONDS };
+      return {
+        ...empty,
+        everySeconds: previous?.everySeconds ?? DEFAULT_INTERVAL_SECONDS,
+      };
     case "DAILY":
       return { ...empty, timeLocal: previous?.timeLocal ?? DEFAULT_TIME };
     case "WEEKLY":
       return {
         ...empty,
         timeLocal: previous?.timeLocal ?? DEFAULT_TIME,
-        days: previous?.days?.length ? orderWeekdays(previous.days) : ["MONDAY"],
+        days: previous?.days?.length
+          ? orderWeekdays(previous.days)
+          : ["MONDAY"],
       };
     case "CRON":
-      return { ...empty, expression: previous?.expression ?? DEFAULT_CRON_EXPRESSION };
+      return {
+        ...empty,
+        expression: previous?.expression ?? DEFAULT_CRON_EXPRESSION,
+      };
   }
 }
 
@@ -106,7 +120,9 @@ export function defaultScriptSchedule(): ScriptSchedule {
  * The `ScriptScheduleInput` sent to the server: only the fields the kind
  * reads, with a cron expression trimmed of surrounding whitespace.
  */
-export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule {
+export function toScriptScheduleInput(
+  schedule: ScriptSchedule,
+): ScriptSchedule {
   const normalized = scheduleForKind(schedule.kind, null);
   switch (schedule.kind) {
     case "MANUAL":
@@ -114,7 +130,10 @@ export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule 
     case "INTERVAL":
       return {
         ...normalized,
-        everySeconds: Math.max(MIN_INTERVAL_SECONDS, schedule.everySeconds ?? DEFAULT_INTERVAL_SECONDS),
+        everySeconds: Math.max(
+          MIN_INTERVAL_SECONDS,
+          schedule.everySeconds ?? DEFAULT_INTERVAL_SECONDS,
+        ),
       };
     case "DAILY":
       return { ...normalized, timeLocal: schedule.timeLocal ?? DEFAULT_TIME };
@@ -129,7 +148,13 @@ export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule 
   }
 }
 
-const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
+const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = [
+  "MANUAL",
+  "INTERVAL",
+  "DAILY",
+  "WEEKLY",
+  "CRON",
+];
 
 /** Reads a schedule payload, or null when the value is not one. */
 export function normalizeScriptSchedule(value: unknown): ScriptSchedule | null {
@@ -143,13 +168,17 @@ export function normalizeScriptSchedule(value: unknown): ScriptSchedule | null {
   }
   return {
     kind,
-    everySeconds: typeof record.everySeconds === "number" ? record.everySeconds : null,
+    everySeconds:
+      typeof record.everySeconds === "number" ? record.everySeconds : null,
     timeLocal: typeof record.timeLocal === "string" ? record.timeLocal : null,
     days: Array.isArray(record.days)
-      ? orderWeekdays(record.days.filter((day): day is ScheduleWeekdayValue =>
-          SCHEDULE_WEEKDAYS.includes(day as ScheduleWeekdayValue),
-        ))
+      ? orderWeekdays(
+          record.days.filter((day): day is ScheduleWeekdayValue =>
+            SCHEDULE_WEEKDAYS.includes(day as ScheduleWeekdayValue),
+          ),
+        )
       : null,
-    expression: typeof record.expression === "string" ? record.expression : null,
+    expression:
+      typeof record.expression === "string" ? record.expression : null,
   };
 }

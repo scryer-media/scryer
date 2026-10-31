@@ -49,8 +49,9 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
             .components()
             .any(|part| matches!(part, std::path::Component::ParentDir))
     {
-        return Err(AppError::Validation(
-            "title folder must be an absolute path without parent traversal".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::TITLE_FOLDER_INVALID,
+            "title folder must be an absolute path without parent traversal",
         ));
     }
     let mut ancestor = path;
@@ -59,10 +60,13 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
         match std::fs::symlink_metadata(ancestor) {
             Ok(_) => {
                 let mut resolved = std::fs::canonicalize(ancestor).map_err(|error| {
-                    AppError::Validation(format!(
-                        "cannot resolve title folder {}: {error}",
-                        ancestor.display(),
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::folder_ownership::CANNOT_RESOLVE_TITLE_FOLDER,
+                        format!(
+                            "cannot resolve title folder {}: {error}",
+                            ancestor.display(),
+                        ),
+                    )
                 })?;
                 for component in missing.into_iter().rev() {
                     resolved.push(component);
@@ -71,18 +75,27 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let component = ancestor.file_name().ok_or_else(|| {
-                    AppError::Validation("title folder has no existing ancestor".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
+                        "title folder has no existing ancestor",
+                    )
                 })?;
                 missing.push(component.to_os_string());
                 ancestor = ancestor.parent().ok_or_else(|| {
-                    AppError::Validation("title folder has no existing ancestor".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
+                        "title folder has no existing ancestor",
+                    )
                 })?;
             }
             Err(error) => {
-                return Err(AppError::Validation(format!(
-                    "cannot inspect title folder {}: {error}",
-                    ancestor.display()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::folder_ownership::CANNOT_INSPECT_TITLE_FOLDER,
+                    format!(
+                        "cannot inspect title folder {}: {error}",
+                        ancestor.display()
+                    ),
+                ));
             }
         }
     }
@@ -329,21 +342,27 @@ pub(crate) async fn ensure_title_folder_is_not_a_library_root(
     if let Some(folder) = non_empty_folder_path(title.folder_path.as_deref())
         && title_folder_is_outside_its_library(app, title, folder).await?
     {
-        return Err(AppError::Validation(format!(
-            "the recorded folder for \"{}\" is outside its library roots; correct the title's folder first",
-            title.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::PATH_OUTSIDE_LIBRARY_ROOT,
+            format!(
+                "the recorded folder for \"{}\" is outside its library roots; correct the title's folder first",
+                title.name
+            ),
+        ));
     }
     if !title_folder_spans_a_library_root(app, title).await? {
         return Ok(());
     }
-    Err(AppError::Validation(format!(
-        "the recorded folder for \"{}\" ({}) is a library root, not a title folder; correct the title's folder first",
-        title.name,
-        crate::stored_paths::stored_path_to_display_string(
-            title.folder_path.as_deref().unwrap_or_default()
-        )
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::folder_ownership::FOLDER_NOT_TITLE_BOUNDARY,
+        format!(
+            "the recorded folder for \"{}\" ({}) is a library root, not a title folder; correct the title's folder first",
+            title.name,
+            crate::stored_paths::stored_path_to_display_string(
+                title.folder_path.as_deref().unwrap_or_default()
+            )
+        ),
+    ))
 }
 
 pub(crate) async fn title_folder_is_invalid(app: &AppUseCase, title: &Title) -> AppResult<bool> {
@@ -532,7 +551,7 @@ impl FolderOverlapKeys {
                         Ok(metadata) => metadata.file_type().is_symlink(),
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                         Err(error) => {
-                            return Err(AppError::Validation(format!(
+                            return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE, format!(
                                 "cannot inspect folder {owned_path} owned by another title: {error}"
                             )));
                         }
@@ -555,7 +574,10 @@ pub(crate) async fn ensure_folder_move_available_to_title(
     folder_path: &Path,
 ) -> AppResult<()> {
     if folder_path.as_os_str().is_empty() {
-        return Err(AppError::Validation("title folder path is required".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::TITLE_FOLDER_PATH_REQUIRED,
+            "title folder path is required",
+        ));
     }
     let folder_path = path_to_stored_string(folder_path);
     let mut keys = None;
@@ -583,16 +605,19 @@ pub(crate) async fn ensure_folder_move_available_to_title(
             continue;
         }
         let overlaps = title_folders_overlap(&folder_path, owned_path).map_err(|error| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE, format!(
                 "cannot compare folder {folder_path} with folder {owned_path} owned by title {}: {error}",
                 owner.title_id
             ))
         })?;
         if overlaps && !folder_spans_a_library_root(app, owned_path).await? {
-            return Err(AppError::Validation(format!(
-                "folder {folder_path} overlaps the folder owned by title {}",
-                owner.title_id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE,
+                format!(
+                    "folder {folder_path} overlaps the folder owned by title {}",
+                    owner.title_id
+                ),
+            ));
         }
     }
     Ok(())
@@ -625,7 +650,7 @@ pub(crate) async fn ensure_restore_ownership(
             || resolved_destination == resolved_folder
             || !resolved_destination.starts_with(&resolved_folder)
         {
-            return Err(AppError::Validation("recycle restore path is outside the title's current owned folder; resolve the folder change before restoring".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER, "recycle restore path is outside the title's current owned folder; resolve the folder change before restoring"));
         }
     }
     for owner in &owners {
@@ -638,7 +663,7 @@ pub(crate) async fn ensure_restore_ownership(
             .filter(|folder| !folder.is_empty())
             && title_folders_overlap(current_folder.unwrap_or(&destination), folder)?
         {
-            return Err(AppError::Validation("recycle restore destination overlaps another title's owned folder; recycled files were preserved".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER, "recycle restore destination overlaps another title's owned folder; recycled files were preserved"));
         }
     }
     Ok(())
@@ -650,7 +675,10 @@ pub(crate) async fn ensure_folder_available_to_title(
     folder_path: &Path,
 ) -> AppResult<()> {
     if folder_path.as_os_str().is_empty() {
-        return Err(AppError::Validation("title folder path is required".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::TITLE_FOLDER_PATH_REQUIRED,
+            "title folder path is required",
+        ));
     }
     let folder_path = path_to_stored_string(folder_path);
 
@@ -662,17 +690,23 @@ pub(crate) async fn ensure_folder_available_to_title(
 
     if let Some(owner) = find_other_folder_owner(app, title, &folder_path).await? {
         let owned_path = owner.folder_path.as_deref().unwrap_or_default();
-        return Err(AppError::Validation(format!(
-            "folder {owned_path} is already owned by title {}",
-            owner.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::FOLDER_ALREADY_OWNED_TITLE,
+            format!(
+                "folder {owned_path} is already owned by title {}",
+                owner.name
+            ),
+        ));
     }
 
     if let Some(owned_path) = non_empty_folder_path(title.folder_path.as_deref()) {
-        return Err(AppError::Validation(format!(
-            "title {} already owns another folder: {owned_path}",
-            title.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
+            format!(
+                "title {} already owns another folder: {owned_path}",
+                title.name
+            ),
+        ));
     }
 
     Ok(())
@@ -837,8 +871,9 @@ async fn ensure_unowned_folder_claimable(
             folder_path = %folder_path,
             "not recording a library root as a title's folder"
         );
-        return Err(AppError::Validation(
-            "cannot claim a library root as a title folder".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+            "cannot claim a library root as a title folder",
         ));
     }
     if title_folder_is_outside_its_library(app, title, &folder_path).await? {
@@ -848,8 +883,9 @@ async fn ensure_unowned_folder_claimable(
             folder_path = %folder_path,
             "not recording a folder outside the title's library roots as its folder"
         );
-        return Err(AppError::Validation(
-            "cannot claim a title folder outside its library roots".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::folder_ownership::PATH_OUTSIDE_LIBRARY_ROOT,
+            "cannot claim a title folder outside its library roots",
         ));
     }
     Ok(())

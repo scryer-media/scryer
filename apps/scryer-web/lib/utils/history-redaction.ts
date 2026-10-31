@@ -20,10 +20,12 @@ function sanitizeHistoryValue(value: unknown, key?: string): unknown {
 
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
-        entryKey,
-        sanitizeHistoryValue(entryValue, entryKey),
-      ]),
+      Object.entries(value as Record<string, unknown>).map(
+        ([entryKey, entryValue]) => [
+          entryKey,
+          sanitizeHistoryValue(entryValue, entryKey),
+        ],
+      ),
     );
   }
 
@@ -37,7 +39,10 @@ export function redactHistoryApiKeys(value: string): string {
   );
 }
 
-export function formatSanitizedHistoryValue(value: unknown, key?: string): string {
+export function formatSanitizedHistoryValue(
+  value: unknown,
+  key?: string,
+): string {
   if (value === null || value === undefined) return "\u2014";
   if (typeof value === "string") {
     return key && looksLikeHistorySecretKey(key)

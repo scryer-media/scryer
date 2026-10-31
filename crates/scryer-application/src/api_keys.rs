@@ -126,9 +126,7 @@ impl AppUseCase {
         if keys.iter().any(|key| {
             key.id == id && key.provisioning_source == ApiKeyProvisioningSource::Environment
         }) {
-            return Err(AppError::Validation(
-                "environment-seeded API keys are managed by SCRYER_DEV_API_KEYS".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::api_keys::ENVIRONMENT_SEEDED_API_KEYS_MANAGED_SCRYER_DEV_API_KEYS, "environment-seeded API keys are managed by SCRYER_DEV_API_KEYS"));
         }
         self.services
             .identity
@@ -138,40 +136,45 @@ impl AppUseCase {
     }
 
     pub async fn authenticate_api_key(&self, raw_key: &str) -> AppResult<ApiKeyAuthentication> {
-        let (lookup_id, secret) = parse_api_key(raw_key)
-            .ok_or_else(|| AppError::Unauthorized("invalid API key".into()))?;
+        let (lookup_id, secret) = parse_api_key(raw_key).ok_or_else(|| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::api_keys::VALUE_INVALID,
+                "invalid API key",
+            )
+        })?;
         let record = self
             .services
             .identity
             .oauth
             .get_api_key_by_lookup_id(&lookup_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("invalid API key".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::api_keys::VALUE_INVALID,
+                    "invalid API key",
+                )
+            })?;
         if record.revoked_at.is_some()
             || record
                 .expires_at
                 .is_some_and(|expires_at| expires_at <= Utc::now())
         {
-            return Err(AppError::Unauthorized(
-                "API key is expired or revoked".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::api_keys::EXPIRED_REVOKED,
+                "API key is expired or revoked",
             ));
         }
-        let expected_hash = self.api_key_hash(&lookup_id, &secret);
-        let expected_tag = URL_SAFE_NO_PAD
-            .decode(expected_hash)
-            .map_err(|_| AppError::Unauthorized("invalid API key".into()))?;
-        let actual_tag = URL_SAFE_NO_PAD
-            .decode(&record.secret_hash)
-            .map_err(|_| AppError::Unauthorized("invalid API key".into()))?;
-        if expected_tag.len() != actual_tag.len()
-            || hmac::verify(
-                &hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes()),
-                format!("api-key:{lookup_id}:{secret}").as_bytes(),
-                &actual_tag,
-            )
-            .is_err()
-        {
-            return Err(AppError::Unauthorized("invalid API key".into()));
+        if !verify_key_material(
+            &self.auth.jwt_signing_salt,
+            "api-key",
+            &lookup_id,
+            &secret,
+            &record.secret_hash,
+        ) {
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::api_keys::VALUE_INVALID,
+                "invalid API key",
+            ));
         }
         let user = self
             .services
@@ -179,9 +182,17 @@ impl AppUseCase {
             .users
             .get_by_id(&record.user_id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("API key owner no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::api_keys::OWNER_NO_LONGER_EXISTS,
+                    "API key owner no longer exists",
+                )
+            })?;
         if !user.login_status().is_enabled() {
-            return Err(AppError::Unauthorized("API key owner is disabled".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::api_keys::OWNER_DISABLED,
+                "API key owner is disabled",
+            ));
         }
         let user = self.attach_user_authorization(user).await?;
         self.ensure_api_key_owner_is_eligible(&user).await?;
@@ -192,8 +203,9 @@ impl AppUseCase {
             .touch_api_key_last_used(&record.id, Utc::now())
             .await?;
         if !still_active {
-            return Err(AppError::Unauthorized(
-                "API key is expired or revoked".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::api_keys::EXPIRED_REVOKED,
+                "API key is expired or revoked",
             ));
         }
         Ok(ApiKeyAuthentication {
@@ -213,11 +225,15 @@ impl AppUseCase {
 
         for seed in seeds {
             let (lookup_id, secret) = parse_api_key(&seed.raw_key).ok_or_else(|| {
-                AppError::Validation("invalid development API key declaration".into())
+                AppError::validation_refused(
+                    crate::error_reasons::api_keys::DEVELOPMENT_API_KEY_DECLARATION_INVALID,
+                    "invalid development API key declaration",
+                )
             })?;
             if !declared_lookup_ids.insert(lookup_id.clone()) {
-                return Err(AppError::Validation(
-                    "development API key declarations must have unique lookup IDs".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::api_keys::DEVELOPMENT_API_KEY_DECLARATIONS_INVALID,
+                    "development API key declarations must have unique lookup IDs",
                 ));
             }
             let label = validate_api_key_label(seed.label)?;
@@ -228,7 +244,10 @@ impl AppUseCase {
                 .get_by_username(&seed.username)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation("development API key owner does not exist".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::api_keys::DEVELOPMENT_API_KEY_OWNER_DOES_NOT_EXIST,
+                        "development API key owner does not exist",
+                    )
                 })?;
             let secret_hash = self.api_key_hash(&lookup_id, &secret);
             let record = match self
@@ -241,14 +260,10 @@ impl AppUseCase {
                 Some(existing)
                     if existing.provisioning_source != ApiKeyProvisioningSource::Environment =>
                 {
-                    return Err(AppError::Validation(
-                        "development API key lookup ID collides with a user-managed key".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::api_keys::DEVELOPMENT_API_KEY_LOOKUP_ID_COLLIDES_USER_MANAGED_KEY, "development API key lookup ID collides with a user-managed key"));
                 }
                 Some(existing) if existing.secret_hash != secret_hash => {
-                    return Err(AppError::Validation(
-                        "development API key lookup ID has a different secret".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::api_keys::DEVELOPMENT_API_KEY_LOOKUP_ID_DIFFERENT_SECRET, "development API key lookup ID has a different secret"));
                 }
                 Some(existing) => ApiKeyRecord {
                     id: existing.id,
@@ -313,9 +328,7 @@ impl AppUseCase {
                 .app
                 .contains(AppPermissionMask::MANAGE_SYSTEM_SETTINGS)
         {
-            return Err(AppError::Unauthorized(
-                "API keys are restricted to users who manage system settings".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::api_keys::API_KEYS_RESTRICTED_USERS_WHO_MANAGE_SYSTEM_SETTINGS, "API keys are restricted to users who manage system settings"));
         }
         Ok(())
     }
@@ -332,9 +345,7 @@ impl AppUseCase {
     }
 
     fn api_key_hash(&self, lookup_id: &str, secret: &str) -> String {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
-        URL_SAFE_NO_PAD
-            .encode(hmac::sign(&key, format!("api-key:{lookup_id}:{secret}").as_bytes()).as_ref())
+        hash_key_material(&self.auth.jwt_signing_salt, "api-key", lookup_id, secret)
     }
 }
 
@@ -351,7 +362,11 @@ fn api_key_summary(record: ApiKeyRecord) -> AppResult<ApiKeySummary> {
 }
 
 pub fn parse_api_key(raw_key: &str) -> Option<(String, String)> {
-    let value = raw_key.strip_prefix(&format!("{API_KEY_PREFIX}_"))?;
+    parse_key_material(raw_key, API_KEY_PREFIX)
+}
+
+pub(crate) fn parse_key_material(raw_key: &str, prefix: &str) -> Option<(String, String)> {
+    let value = raw_key.strip_prefix(&format!("{prefix}_"))?;
     let (lookup_id, secret) = value.split_once('.')?;
     if lookup_id.is_empty() || secret.is_empty() || secret.contains('.') {
         return None;
@@ -362,7 +377,31 @@ pub fn parse_api_key(raw_key: &str) -> Option<(String, String)> {
         .then(|| (lookup_id.to_string(), secret.to_string()))
 }
 
-fn generate_api_key_material() -> AppResult<(String, String)> {
+pub(crate) fn hash_key_material(salt: &str, domain: &str, lookup_id: &str, secret: &str) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes());
+    URL_SAFE_NO_PAD
+        .encode(hmac::sign(&key, format!("{domain}:{lookup_id}:{secret}").as_bytes()).as_ref())
+}
+
+pub(crate) fn verify_key_material(
+    salt: &str,
+    domain: &str,
+    lookup_id: &str,
+    secret: &str,
+    stored: &str,
+) -> bool {
+    let Ok(tag) = URL_SAFE_NO_PAD.decode(stored) else {
+        return false;
+    };
+    hmac::verify(
+        &hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes()),
+        format!("{domain}:{lookup_id}:{secret}").as_bytes(),
+        &tag,
+    )
+    .is_ok()
+}
+
+pub(crate) fn generate_api_key_material() -> AppResult<(String, String)> {
     let random = SystemRandom::new();
     let mut lookup = [0_u8; API_KEY_LOOKUP_BYTES];
     let mut secret = [0_u8; API_KEY_SECRET_BYTES];
@@ -381,16 +420,21 @@ fn generate_api_key_material() -> AppResult<(String, String)> {
 fn validate_api_key_label(label: String) -> AppResult<String> {
     let label = label.trim().to_string();
     if label.is_empty() {
-        return Err(AppError::Validation("API key label is required".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::api_keys::LABEL_REQUIRED,
+            "API key label is required",
+        ));
     }
     if label.len() > API_KEY_LABEL_MAX_LENGTH {
-        return Err(AppError::Validation(format!(
-            "API key label must not exceed {API_KEY_LABEL_MAX_LENGTH} characters"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::api_keys::LABEL_TOO_LONG,
+            format!("API key label must not exceed {API_KEY_LABEL_MAX_LENGTH} characters"),
+        ));
     }
     if label.chars().any(char::is_control) {
-        return Err(AppError::Validation(
-            "API key label must not contain control characters".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::api_keys::LABEL_CONTROL_CHARACTER,
+            "API key label must not contain control characters",
         ));
     }
     Ok(label)

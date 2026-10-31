@@ -22,9 +22,7 @@ async function renderTotpQrCode(value = SCRYER_TOTP_URI): Promise<string> {
       "/components/common/totp-qr-code.tsx",
     );
     const TotpQrCode = module.TotpQrCode as ComponentType<{ value: string }>;
-    return renderToStaticMarkup(
-      createElement(TotpQrCode, { value }),
-    );
+    return renderToStaticMarkup(createElement(TotpQrCode, { value }));
   } finally {
     await server.close();
   }

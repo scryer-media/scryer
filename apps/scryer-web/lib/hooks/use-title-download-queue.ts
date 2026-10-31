@@ -50,30 +50,34 @@ export function useTitleDownloadQueue({
     });
   }, [initialItems, titleId]);
 
-  useDeferredWsSubscription<{ data?: { downloadQueue?: DownloadQueueItem[] } }>({
-    enabled: enabled && Boolean(titleId),
-    requestKey: `titleDownloadQueue:${titleId ?? "none"}`,
-    request: {
-      query: downloadQueueSubscription,
-      variables: {
-        titleId,
-        includeAllActivity: true,
-        includeImportActivity: true,
-        activityFilter: "ALL",
+  useDeferredWsSubscription<{ data?: { downloadQueue?: DownloadQueueItem[] } }>(
+    {
+      enabled: enabled && Boolean(titleId),
+      requestKey: `titleDownloadQueue:${titleId ?? "none"}`,
+      request: {
+        query: downloadQueueSubscription,
+        variables: {
+          titleId,
+          includeAllActivity: true,
+          includeImportActivity: true,
+          activityFilter: "ALL",
+        },
+      },
+      onNext(result) {
+        const items = result.data?.downloadQueue;
+        if (!items) {
+          return;
+        }
+        streamStartedRef.current = true;
+        setQueueItems((previousItems) =>
+          mergeLiveQueueItems(items, previousItems),
+        );
+      },
+      onError(error) {
+        console.error("[title-download-queue] subscription error:", error);
       },
     },
-    onNext(result) {
-      const items = result.data?.downloadQueue;
-      if (!items) {
-        return;
-      }
-      streamStartedRef.current = true;
-      setQueueItems((previousItems) => mergeLiveQueueItems(items, previousItems));
-    },
-    onError(error) {
-      console.error("[title-download-queue] subscription error:", error);
-    },
-  });
+  );
 
   return queueItems;
 }

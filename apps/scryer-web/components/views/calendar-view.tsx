@@ -98,9 +98,15 @@ function CalendarMonitoringFilterControl({
         size="sm"
         className="gap-1.5"
       >
-        <Eye aria-hidden="true" className="h-3.5 w-3.5 text-[var(--scry-success-text)]" />
+        <Eye
+          aria-hidden="true"
+          className="h-3.5 w-3.5 text-[var(--scry-success-text)]"
+        />
         <span>Monitored</span>
-        <Badge tone="neutral" className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]">
+        <Badge
+          tone="neutral"
+          className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]"
+        >
           {counts.monitored}
         </Badge>
       </ToggleGroupItem>
@@ -110,9 +116,15 @@ function CalendarMonitoringFilterControl({
         size="sm"
         className="gap-1.5"
       >
-        <EyeOff aria-hidden="true" className="h-3.5 w-3.5 text-[var(--scry-danger-text)]" />
+        <EyeOff
+          aria-hidden="true"
+          className="h-3.5 w-3.5 text-[var(--scry-danger-text)]"
+        />
         <span>Unmonitored</span>
-        <Badge tone="neutral" className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]">
+        <Badge
+          tone="neutral"
+          className="h-4 min-w-5 rounded-full px-1 py-0 text-[10px]"
+        >
           {counts.unmonitored}
         </Badge>
       </ToggleGroupItem>
@@ -230,10 +242,16 @@ function CalendarLibraryFacetFilters({
 // Whether the item is an episode, whose missing title reads as "TBA". Movies
 // and title-level items carry no episode title at all.
 function showsEpisodeTitle(ep: CalendarEpisodeItem): boolean {
-  return ep.titleFacet !== "movie" && Boolean(ep.episodeTitle?.trim() || ep.episodeNumber);
+  return (
+    ep.titleFacet !== "movie" &&
+    Boolean(ep.episodeTitle?.trim() || ep.episodeNumber)
+  );
 }
 
-function formatEpisodeLabel(ep: CalendarEpisodeItem, t: (key: string) => string): string {
+function formatEpisodeLabel(
+  ep: CalendarEpisodeItem,
+  t: (key: string) => string,
+): string {
   const parts: string[] = [ep.titleName];
   if (ep.seasonNumber && ep.episodeNumber) {
     parts.push(`S${ep.seasonNumber}E${ep.episodeNumber}`);
@@ -271,7 +289,10 @@ function formatDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function formatTooltip(ep: CalendarEpisodeItem, t: (key: string) => string): string {
+function formatTooltip(
+  ep: CalendarEpisodeItem,
+  t: (key: string) => string,
+): string {
   const lines: string[] = [ep.titleName];
   if (ep.seasonNumber && ep.episodeNumber) {
     lines.push(`Season ${ep.seasonNumber}, Episode ${ep.episodeNumber}`);
@@ -331,7 +352,8 @@ export function CalendarEventHoverCard({
     [episode.imageUrl, episode.titleBackgroundUrl, posterFallbackUrl].find(
       (url) => url && !failedImages.includes(url),
     ) ?? null;
-  const isPoster = imageUrl === posterFallbackUrl || episode.titleFacet === "movie";
+  const isPoster =
+    imageUrl === posterFallbackUrl || episode.titleFacet === "movie";
 
   if (typeof document === "undefined") return null;
 
@@ -343,10 +365,16 @@ export function CalendarEventHoverCard({
       : "SERIES";
   const gap = 12;
   const viewportPadding = 12;
-  const width = Math.min(isMovie ? 360 : 380, window.innerWidth - viewportPadding * 2);
+  const width = Math.min(
+    isMovie ? 360 : 380,
+    window.innerWidth - viewportPadding * 2,
+  );
   const estimatedHeight = isMovie ? 220 : 370;
-  const fitsOnRight = anchor.right + gap + width <= window.innerWidth - viewportPadding;
-  const unclampedLeft = fitsOnRight ? anchor.right + gap : anchor.left - gap - width;
+  const fitsOnRight =
+    anchor.right + gap + width <= window.innerWidth - viewportPadding;
+  const unclampedLeft = fitsOnRight
+    ? anchor.right + gap
+    : anchor.left - gap - width;
   const left = Math.max(
     viewportPadding,
     Math.min(unclampedLeft, window.innerWidth - width - viewportPadding),
@@ -359,76 +387,88 @@ export function CalendarEventHoverCard({
     ),
   );
   const badge = formatEpisodeBadge(episode);
-  const availabilityPill = episodeAvailabilityPill(episode.mediaAvailability, t);
+  const availabilityPill = episodeAvailabilityPill(
+    episode.mediaAvailability,
+    t,
+  );
   const airDate = formatAirDateLabel(episode.airDate);
 
-  return (
-    createPortal(
-      <aside
-        role="dialog"
-        aria-label={`Watch options for ${episode.titleName}`}
-        className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
-        style={{ left, top, width }}
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
+  return createPortal(
+    <aside
+      role="dialog"
+      aria-label={`Watch options for ${episode.titleName}`}
+      className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
+      style={{ left, top, width }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div
+        className="fc-scryer-hover-card-image-wrap"
+        style={artworkFallbackStyle(
+          episode.id || episode.titleId,
+          fallbackTone,
+        )}
       >
-        <div
-          className="fc-scryer-hover-card-image-wrap"
-          style={artworkFallbackStyle(episode.id || episode.titleId, fallbackTone)}
-        >
-          {imageUrl ? (
-            <img
-              src={imageUrl}
-              alt=""
-              className="fc-scryer-hover-card-image"
-              style={isPoster ? { objectFit: "contain", objectPosition: "center" } : undefined}
-              onError={() => setFailedImages((urls) => [...urls, imageUrl])}
-            />
-          ) : null}
-        </div>
-        <div className="fc-scryer-hover-card-copy">
-          <div className="fc-scryer-hover-card-badges">
-            <span className="fc-scryer-hover-card-meta-badge">
-              {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
-            </span>
-            {badge ? <span className="fc-scryer-hover-card-meta-badge">{badge}</span> : null}
-            {availabilityPill ? (
-              <span className="fc-scryer-hover-card-meta-badge">
-                {availabilityPill.label}
-              </span>
-            ) : null}
-            {!episode.monitored ? (
-              <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
-            ) : null}
-          </div>
-          <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
-          {!isMovie && showsEpisodeTitle(episode) ? (
-            <p className="fc-scryer-hover-card-episode-title">
-              {episodeTitleOrTba(episode.episodeTitle, t)}
-            </p>
-          ) : null}
-          {episode.overview ? (
-            <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
-          ) : null}
-          <WatchInMediaServerMenu
-            links={episode.playbackLinks}
-            showLabel
-            className="mt-2"
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt=""
+            className="fc-scryer-hover-card-image"
+            style={
+              isPoster
+                ? { objectFit: "contain", objectPosition: "center" }
+                : undefined
+            }
+            onError={() => setFailedImages((urls) => [...urls, imageUrl])}
           />
-          <div className="fc-scryer-hover-card-footer">
-            {airDate ? (
-              <span>
-                <CalendarClock aria-hidden="true" />
-                {airDate}
-                {episode.airDateEstimated ? ` (${t("settings.movieAvailability.estimated")})` : ""}
-              </span>
-            ) : null}
-            <span>{episode.libraryName ?? episode.libraryId}</span>
-          </div>
+        ) : null}
+      </div>
+      <div className="fc-scryer-hover-card-copy">
+        <div className="fc-scryer-hover-card-badges">
+          <span className="fc-scryer-hover-card-meta-badge">
+            {FACET_LABELS[episode.titleFacet] ?? episode.titleFacet}
+          </span>
+          {badge ? (
+            <span className="fc-scryer-hover-card-meta-badge">{badge}</span>
+          ) : null}
+          {availabilityPill ? (
+            <span className="fc-scryer-hover-card-meta-badge">
+              {availabilityPill.label}
+            </span>
+          ) : null}
+          {!episode.monitored ? (
+            <span className="fc-scryer-hover-card-meta-badge">Unmonitored</span>
+          ) : null}
         </div>
-      </aside>,
-      document.body,
-    )
+        <h3 className="fc-scryer-hover-card-title">{episode.titleName}</h3>
+        {!isMovie && showsEpisodeTitle(episode) ? (
+          <p className="fc-scryer-hover-card-episode-title">
+            {episodeTitleOrTba(episode.episodeTitle, t)}
+          </p>
+        ) : null}
+        {episode.overview ? (
+          <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
+        ) : null}
+        <WatchInMediaServerMenu
+          links={episode.playbackLinks}
+          showLabel
+          className="mt-2"
+        />
+        <div className="fc-scryer-hover-card-footer">
+          {airDate ? (
+            <span>
+              <CalendarClock aria-hidden="true" />
+              {airDate}
+              {episode.airDateEstimated
+                ? ` (${t("settings.movieAvailability.estimated")})`
+                : ""}
+            </span>
+          ) : null}
+          <span>{episode.libraryName ?? episode.libraryId}</span>
+        </div>
+      </div>
+    </aside>,
+    document.body,
   );
 }
 
@@ -445,11 +485,17 @@ export function CalendarView({
   const t = useTranslate();
   const isMobile = useIsMobile();
   const [initialCalendarView] = useState(readStoredCalendarViewMode);
-  const [facetFilter, setFacetFilter] = useState<string[]>(["anime", "movie", "series"]);
+  const [facetFilter, setFacetFilter] = useState<string[]>([
+    "anime",
+    "movie",
+    "series",
+  ]);
   const [visibleMonitoringStatuses, setVisibleMonitoringStatuses] = useState<
     CalendarMonitoringStatus[]
   >(["monitored", "unmonitored"]);
-  const [hoverPreview, setHoverPreview] = useState<CalendarHoverPreview | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<CalendarHoverPreview | null>(
+    null,
+  );
   const hoverTimerRef = useRef<number | null>(null);
 
   const clearHoverTimer = useCallback(() => {
@@ -503,7 +549,9 @@ export function CalendarView({
       episodes.filter(
         (ep) =>
           facetFilter.includes(ep.titleFacet) &&
-          visibleMonitoringStatuses.includes(ep.monitored ? "monitored" : "unmonitored"),
+          visibleMonitoringStatuses.includes(
+            ep.monitored ? "monitored" : "unmonitored",
+          ),
       ),
     [episodes, facetFilter, visibleMonitoringStatuses],
   );
@@ -585,61 +633,78 @@ export function CalendarView({
     scheduleHoverPreviewClose();
   }, [scheduleHoverPreviewClose]);
 
-  const handleEventDidMount = useCallback((arg: MountInfo<EventDisplayInfo>) => {
-    const ep = arg.event.extendedProps as CalendarEpisodeItem;
-    const facetColor = FACET_COLORS[ep.titleFacet] ?? "#6b7280";
-    const facetGradient = FACET_GRADIENTS[ep.titleFacet] ?? facetColor;
-    const facetRgb = FACET_RGB[ep.titleFacet] ?? "107, 114, 128";
-    arg.el.setAttribute("aria-label", formatTooltip(ep, t));
-    arg.el.style.setProperty("--scryer-event-color", facetColor);
-    arg.el.style.setProperty("--scryer-event-accent", facetColor);
-    arg.el.style.setProperty("--scryer-event-gradient", facetGradient);
-    arg.el.style.setProperty("--scryer-event-rgb", facetRgb);
-  }, [t]);
+  const handleEventDidMount = useCallback(
+    (arg: MountInfo<EventDisplayInfo>) => {
+      const ep = arg.event.extendedProps as CalendarEpisodeItem;
+      const facetColor = FACET_COLORS[ep.titleFacet] ?? "#6b7280";
+      const facetGradient = FACET_GRADIENTS[ep.titleFacet] ?? facetColor;
+      const facetRgb = FACET_RGB[ep.titleFacet] ?? "107, 114, 128";
+      arg.el.setAttribute("aria-label", formatTooltip(ep, t));
+      arg.el.style.setProperty("--scryer-event-color", facetColor);
+      arg.el.style.setProperty("--scryer-event-accent", facetColor);
+      arg.el.style.setProperty("--scryer-event-gradient", facetGradient);
+      arg.el.style.setProperty("--scryer-event-rgb", facetRgb);
+    },
+    [t],
+  );
 
-  const renderEventContent = useCallback((arg: EventDisplayInfo) => {
-    const ep = arg.event.extendedProps as CalendarEpisodeItem;
-    const badge = formatEpisodeBadge(ep);
-    const availabilityPill = episodeAvailabilityPill(ep.mediaAvailability, t);
-    const time = formatAirTime(ep.airDate);
+  const renderEventContent = useCallback(
+    (arg: EventDisplayInfo) => {
+      const ep = arg.event.extendedProps as CalendarEpisodeItem;
+      const badge = formatEpisodeBadge(ep);
+      const availabilityPill = episodeAvailabilityPill(ep.mediaAvailability, t);
+      const time = formatAirTime(ep.airDate);
 
-    return (
-      <div className="fc-scryer-event-card">
-        <div className="fc-scryer-event-title-row">
-          <span
-            role="img"
-            aria-label={ep.monitored ? "Monitored" : "Unmonitored"}
-            className={`fc-scryer-event-monitoring-icon${
-              ep.monitored ? " is-monitored" : " is-unmonitored"
-            }`}
-          >
-            {ep.monitored ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
-          </span>
-          <div className="fc-scryer-event-title">{ep.titleName}</div>
-        </div>
-        {badge || availabilityPill || time ? (
-          <div className="fc-scryer-event-meta">
-            {badge ? <span className="fc-scryer-event-badge">{badge}</span> : null}
-            {ep.airDateEstimated ? (
-              <span className="fc-scryer-event-badge">
-                {t("settings.movieAvailability.estimated")}
-              </span>
-            ) : null}
-            {availabilityPill ? (
-              <span className="fc-scryer-event-badge">
-                {availabilityPill.label}
-              </span>
-            ) : null}
-            {time ? <span className="fc-scryer-event-time">{time}</span> : null}
+      return (
+        <div className="fc-scryer-event-card">
+          <div className="fc-scryer-event-title-row">
+            <span
+              role="img"
+              aria-label={ep.monitored ? "Monitored" : "Unmonitored"}
+              className={`fc-scryer-event-monitoring-icon${
+                ep.monitored ? " is-monitored" : " is-unmonitored"
+              }`}
+            >
+              {ep.monitored ? (
+                <Eye aria-hidden="true" />
+              ) : (
+                <EyeOff aria-hidden="true" />
+              )}
+            </span>
+            <div className="fc-scryer-event-title">{ep.titleName}</div>
           </div>
-        ) : null}
-      </div>
-    );
-  }, [t]);
+          {badge || availabilityPill || time ? (
+            <div className="fc-scryer-event-meta">
+              {badge ? (
+                <span className="fc-scryer-event-badge">{badge}</span>
+              ) : null}
+              {ep.airDateEstimated ? (
+                <span className="fc-scryer-event-badge">
+                  {t("settings.movieAvailability.estimated")}
+                </span>
+              ) : null}
+              {availabilityPill ? (
+                <span className="fc-scryer-event-badge">
+                  {availabilityPill.label}
+                </span>
+              ) : null}
+              {time ? (
+                <span className="fc-scryer-event-time">{time}</span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      );
+    },
+    [t],
+  );
 
-  const renderDayHeaderContent = useCallback((arg: DayHeaderInfo) => (
-    <span className="fc-scryer-header-label">{arg.text}</span>
-  ), []);
+  const renderDayHeaderContent = useCallback(
+    (arg: DayHeaderInfo) => (
+      <span className="fc-scryer-header-label">{arg.text}</span>
+    ),
+    [],
+  );
 
   const renderDayCellContent = useCallback((arg: DayCellInfo) => {
     if (arg.view.type !== "dayGridMonth") {
@@ -657,9 +722,12 @@ export function CalendarView({
     );
   }, []);
 
-  const renderMoreLinkContent = useCallback((arg: MoreLinkInfo) => (
-    <span className="fc-scryer-more-link-text">+{arg.num} more</span>
-  ), []);
+  const renderMoreLinkContent = useCallback(
+    (arg: MoreLinkInfo) => (
+      <span className="fc-scryer-more-link-text">+{arg.num} more</span>
+    ),
+    [],
+  );
 
   const handleFacetChange = useCallback((values: string[]) => {
     if (values.length > 0) setFacetFilter(values);
@@ -687,115 +755,118 @@ export function CalendarView({
               />
             </div>
           ) : null}
-        <div className="fc-scryer min-h-0 flex-1">
-          <FullCalendar
-            key={isMobile ? "calendar-mobile" : "calendar-desktop"}
-            plugins={[dayGridPlugin, classicThemePlugin]}
-            initialView={initialCalendarView}
-            headerToolbarClass="fc-scryer-header-toolbar"
-            toolbarSectionClass="fc-scryer-toolbar-section"
-            toolbarTitleClass="fc-scryer-toolbar-title"
-            buttonClass={(arg) =>
-              `fc-scryer-button${arg.isSelected ? " is-selected" : ""}`
-            }
-            events={events}
-            eventClick={handleEventClick}
-            eventMouseEnter={handleEventMouseEnter}
-            eventMouseLeave={handleEventMouseLeave}
-            eventDidMount={handleEventDidMount}
-            datesSet={handleDatesSet}
-            eventContent={renderEventContent}
-            eventClass={(arg) => {
-              const ep = arg.event.extendedProps as CalendarEpisodeItem;
-              const classes = [
-                "fc-scryer-event",
-                `fc-scryer-facet-${ep.titleFacet}`,
-              ];
-              classes.push(ep.monitored ? "is-monitored" : "is-unmonitored");
-              return classes.join(" ");
-            }}
-            dayHeaderClass="fc-scryer-day-header"
-            dayHeaderInnerClass="fc-scryer-day-header-inner"
-            dayHeaderContent={renderDayHeaderContent}
-            dayCellTopContent={renderDayCellContent}
-            dayCellTopClass="fc-scryer-day-cell-top"
-            dayCellTopInnerClass="fc-scryer-day-cell-top-inner"
-            dayCellInnerClass="fc-scryer-day-cell-inner"
-            dayCellBottomClass="fc-scryer-day-cell-bottom"
-            dayCellClass={(arg) => {
-              const classes = ["fc-scryer-day-cell"];
-              if (arg.isToday) classes.push("is-today");
-              if (arg.isOther) classes.push("is-other");
-              if ((dayEventCounts.get(formatDateKey(arg.date)) ?? 0) > 0) {
-                classes.push("has-events");
+          <div className="fc-scryer min-h-0 flex-1">
+            <FullCalendar
+              key={isMobile ? "calendar-mobile" : "calendar-desktop"}
+              plugins={[dayGridPlugin, classicThemePlugin]}
+              initialView={initialCalendarView}
+              headerToolbarClass="fc-scryer-header-toolbar"
+              toolbarSectionClass="fc-scryer-toolbar-section"
+              toolbarTitleClass="fc-scryer-toolbar-title"
+              buttonClass={(arg) =>
+                `fc-scryer-button${arg.isSelected ? " is-selected" : ""}`
               }
-              if (arg.view.type === "dayGridMonth") classes.push("is-month");
-              return classes.join(" ");
-            }}
-            popoverClass="fc-scryer-popover"
-            moreLinkClass="fc-scryer-more-link"
-            moreLinkContent={renderMoreLinkContent}
-            buttonGroupClass="fc-scryer-button-group"
-            buttons={{
-              today: { text: "Today" },
-              dayGridMonth: { text: "Month" },
-              dayGridWeek: { text: "Week" },
-            }}
-            toolbarElements={{
-              calendarLibraryFacetFilters: () => (
-                <CalendarLibraryFacetFilters
-                  libraries={libraries}
-                  librariesLoading={librariesLoading}
-                  selectedLibraryIds={selectedLibraryIds}
-                  onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
-                  facetFilter={facetFilter}
-                  onFacetFilterChange={handleFacetChange}
-                />
-              ),
-              calendarMonitoringFilter: () => (
-                <CalendarMonitoringFilterControl
-                  visibleStatuses={visibleMonitoringStatuses}
-                  counts={monitoringCounts}
-                  onValueChange={setVisibleMonitoringStatuses}
-                />
-              ),
-            }}
-            headerToolbar={
-              isMobile
-                ? {
-                    left: "prev,next",
-                    center: "title",
-                    right: "today",
-                  }
-                : {
-                    left: "calendarLibraryFacetFilters calendarMonitoringFilter",
-                    center: "title",
-                    right: "today dayGridMonth,dayGridWeek prev,next",
-                  }
-            }
-            views={{
-              dayGrid: {
-                className: "fc-scryer-daygrid",
-                tableBodyClass: "fc-scryer-daygrid-body",
-              },
-              dayGridMonth: {
-                fixedWeekCount: !isMobile,
-                showNonCurrentDates: true,
-                dayMaxEvents: isMobile ? 1 : 3,
-              },
-              dayGridWeek: {
-                dayMaxEvents: false,
-              },
-            }}
-            height={isMobile ? "auto" : "100%"}
-            contentHeight={isMobile ? "auto" : "100%"}
-            expandRows={!isMobile}
-            eventDisplay="block"
-            displayEventTime={false}
-          />
-        </div>
+              events={events}
+              eventClick={handleEventClick}
+              eventMouseEnter={handleEventMouseEnter}
+              eventMouseLeave={handleEventMouseLeave}
+              eventDidMount={handleEventDidMount}
+              datesSet={handleDatesSet}
+              eventContent={renderEventContent}
+              eventClass={(arg) => {
+                const ep = arg.event.extendedProps as CalendarEpisodeItem;
+                const classes = [
+                  "fc-scryer-event",
+                  `fc-scryer-facet-${ep.titleFacet}`,
+                ];
+                classes.push(ep.monitored ? "is-monitored" : "is-unmonitored");
+                return classes.join(" ");
+              }}
+              dayHeaderClass="fc-scryer-day-header"
+              dayHeaderInnerClass="fc-scryer-day-header-inner"
+              dayHeaderContent={renderDayHeaderContent}
+              dayCellTopContent={renderDayCellContent}
+              dayCellTopClass="fc-scryer-day-cell-top"
+              dayCellTopInnerClass="fc-scryer-day-cell-top-inner"
+              dayCellInnerClass="fc-scryer-day-cell-inner"
+              dayCellBottomClass="fc-scryer-day-cell-bottom"
+              dayCellClass={(arg) => {
+                const classes = ["fc-scryer-day-cell"];
+                if (arg.isToday) classes.push("is-today");
+                if (arg.isOther) classes.push("is-other");
+                if ((dayEventCounts.get(formatDateKey(arg.date)) ?? 0) > 0) {
+                  classes.push("has-events");
+                }
+                if (arg.view.type === "dayGridMonth") classes.push("is-month");
+                return classes.join(" ");
+              }}
+              popoverClass="fc-scryer-popover"
+              moreLinkClass="fc-scryer-more-link"
+              moreLinkContent={renderMoreLinkContent}
+              buttonGroupClass="fc-scryer-button-group"
+              buttons={{
+                today: { text: "Today" },
+                dayGridMonth: { text: "Month" },
+                dayGridWeek: { text: "Week" },
+              }}
+              toolbarElements={{
+                calendarLibraryFacetFilters: () => (
+                  <CalendarLibraryFacetFilters
+                    libraries={libraries}
+                    librariesLoading={librariesLoading}
+                    selectedLibraryIds={selectedLibraryIds}
+                    onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
+                    facetFilter={facetFilter}
+                    onFacetFilterChange={handleFacetChange}
+                  />
+                ),
+                calendarMonitoringFilter: () => (
+                  <CalendarMonitoringFilterControl
+                    visibleStatuses={visibleMonitoringStatuses}
+                    counts={monitoringCounts}
+                    onValueChange={setVisibleMonitoringStatuses}
+                  />
+                ),
+              }}
+              headerToolbar={
+                isMobile
+                  ? {
+                      left: "prev,next",
+                      center: "title",
+                      right: "today",
+                    }
+                  : {
+                      left: "calendarLibraryFacetFilters calendarMonitoringFilter",
+                      center: "title",
+                      right: "today dayGridMonth,dayGridWeek prev,next",
+                    }
+              }
+              views={{
+                dayGrid: {
+                  className: "fc-scryer-daygrid",
+                  tableBodyClass: "fc-scryer-daygrid-body",
+                },
+                dayGridMonth: {
+                  fixedWeekCount: !isMobile,
+                  showNonCurrentDates: true,
+                  dayMaxEvents: isMobile ? 1 : 3,
+                },
+                dayGridWeek: {
+                  dayMaxEvents: false,
+                },
+              }}
+              height={isMobile ? "auto" : "100%"}
+              contentHeight={isMobile ? "auto" : "100%"}
+              expandRows={!isMobile}
+              eventDisplay="block"
+              displayEventTime={false}
+            />
+          </div>
           {loading ? (
-            <p aria-live="polite" className="mt-2 text-[12.5px] text-[var(--scry-muted3)]">
+            <p
+              aria-live="polite"
+              className="mt-2 text-[12.5px] text-[var(--scry-muted3)]"
+            >
               {t("label.loading")}
             </p>
           ) : null}

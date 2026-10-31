@@ -26,16 +26,35 @@ import type {
   TitleListMembership,
 } from "../types/lists.ts";
 import type { ExternalId, Facet } from "../types/titles.ts";
-import { allOf, anyOf, forEventTypes, forTitle, type DomainEventPredicate } from "../reactive/domain-event-feed.ts";
+import {
+  allOf,
+  anyOf,
+  forEventTypes,
+  forTitle,
+  type DomainEventPredicate,
+} from "../reactive/domain-event-feed.ts";
 import { selectorToken } from "./dom-ids.ts";
 import { facetById } from "../facets/registry.ts";
-import { metadataResultExternalIds, type MetadataResultIdentity } from "./metadata-result-external-ids.ts";
+import {
+  metadataResultExternalIds,
+  type MetadataResultIdentity,
+} from "./metadata-result-external-ids.ts";
 import { getPluginLogoSources } from "./plugin-logos.ts";
 import { ratingSourceInfo } from "./title-ratings.ts";
 
-export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "accent" | "outline";
+export type ListTone =
+  | "neutral"
+  | "positive"
+  | "warning"
+  | "negative"
+  | "info"
+  | "accent"
+  | "outline";
 
-export function listTitleWithoutYear(title: string, year: number | null | undefined): string {
+export function listTitleWithoutYear(
+  title: string,
+  year: number | null | undefined,
+): string {
   if (!year) return title;
   const suffix = ` (${year})`;
   const trimmed = title.trimEnd();
@@ -44,7 +63,11 @@ export function listTitleWithoutYear(title: string, year: number | null | undefi
   return name || title;
 }
 
-export function listMembershipTitleHref(kind: Facet, titleId: string | null, seriesMovieLinkId?: string | null): string | null {
+export function listMembershipTitleHref(
+  kind: Facet,
+  titleId: string | null,
+  seriesMovieLinkId?: string | null,
+): string | null {
   const facet = facetById(kind);
   const id = titleId?.trim();
   if (!facet || !id) return null;
@@ -68,17 +91,22 @@ export function listMembershipMetadataLookup(
   membership: Pick<ListMembership, "kind" | "smgTitleId" | "externalIds">,
 ): ListTitleMetadataLookup | null {
   const movie = membership.kind === "MOVIE";
-  if (membership.smgTitleId != null) return { movie, input: { smgId: membership.smgTitleId } };
+  if (membership.smgTitleId != null)
+    return { movie, input: { smgId: membership.smgTitleId } };
   const idOf = (source: string): string | null => {
     for (const id of membership.externalIds) {
       const kind = id.kind?.trim().toLowerCase();
-      const otherKind = movie ? kind === "series" || kind === "anime" : kind === "movie";
+      const otherKind = movie
+        ? kind === "series" || kind === "anime"
+        : kind === "movie";
       const value = id.value.trim();
-      if (id.source.trim().toLowerCase() === source && !otherKind && value) return value;
+      if (id.source.trim().toLowerCase() === source && !otherKind && value)
+        return value;
     }
     return null;
   };
-  const whole = (value: string | null): number | null => (value && /^\d+$/.test(value) ? Number(value) : null);
+  const whole = (value: string | null): number | null =>
+    value && /^\d+$/.test(value) ? Number(value) : null;
   const smgId = whole(idOf("smg"));
   if (smgId !== null) return { movie, input: { smgId } };
   const tvdbId = idOf("tvdb");
@@ -94,31 +122,50 @@ export function listPreviewMetadataLookup(
   item: Pick<ListPreviewItem, "kind" | "canonicalSmgId">,
 ): ListTitleMetadataLookup | null {
   if (item.canonicalSmgId == null || !item.kind) return null;
-  return { movie: item.kind === "MOVIE", input: { smgId: item.canonicalSmgId } };
+  return {
+    movie: item.kind === "MOVIE",
+    input: { smgId: item.canonicalSmgId },
+  };
 }
 
 /** Modes offered for public lists. `REQUEST` belongs to personal lists only. */
-export const PUBLIC_LIST_MODES: readonly ListMode[] = ["ADD", "HOLD", "DISCOVER"];
+export const PUBLIC_LIST_MODES: readonly ListMode[] = [
+  "ADD",
+  "HOLD",
+  "DISCOVER",
+];
 
 /** Discover-only membership has no destination yet, so it cannot be chosen. */
 export function isListModeSelectable(mode: ListMode): boolean {
   return mode === "ADD" || mode === "HOLD" || mode === "REQUEST";
 }
 
-export const LIST_ON_LEAVE_OPTIONS: readonly ListOnLeave[] = ["KEEP", "LOG", "UNMONITOR", "TAG"];
+export const LIST_ON_LEAVE_OPTIONS: readonly ListOnLeave[] = [
+  "KEEP",
+  "LOG",
+  "UNMONITOR",
+  "TAG",
+];
 
 export const LIST_KINDS: readonly Facet[] = ["MOVIE", "SERIES", "ANIME"];
 
 /** Only media enums duplicate Include; status, credits and order remain source options. */
 export function isListMediaParam(param: ListSourceParamDefinition): boolean {
-  return param.type === "ENUM" && ["type", "kind"].includes(param.key)
-    && param.options.length > 0
-    && param.options.every((option) => ["all", "movie", "movies", "series", "shows", "anime"].includes(option));
+  return (
+    param.type === "ENUM" &&
+    ["type", "kind"].includes(param.key) &&
+    param.options.length > 0 &&
+    param.options.every((option) =>
+      ["all", "movie", "movies", "series", "shows", "anime"].includes(option),
+    )
+  );
 }
 
 /** A source option that picks the order the list's titles are read in. */
 export function isListOrderParam(param: ListSourceParamDefinition): boolean {
-  return param.type === "ENUM" && param.key === "sort" && param.options.length > 0;
+  return (
+    param.type === "ENUM" && param.key === "sort" && param.options.length > 0
+  );
 }
 
 /** Wording for the orders providers offer; any other order shows as the provider names it. */
@@ -130,19 +177,36 @@ export const LIST_ORDER_LABEL_KEYS: Readonly<Record<string, string>> = {
 };
 
 /** Preserve the effective scope of older follows that saved both selectors. */
-export function listKindsFromSourceParams(kinds: readonly Facet[], definitions: readonly ListSourceParamDefinition[], params: readonly ListParam[], legacy = false): Facet[] {
+export function listKindsFromSourceParams(
+  kinds: readonly Facet[],
+  definitions: readonly ListSourceParamDefinition[],
+  params: readonly ListParam[],
+  legacy = false,
+): Facet[] {
   const selector = definitions.find(isListMediaParam);
-  const selected = selector && (params.find((param) => param.key === selector.key)?.value
-    ?? (legacy && !selector.options.includes("all") ? selector.options[0] : undefined));
-  if (!selected || selected === "all" || selected === "__include__") return [...kinds];
-  const allowed: readonly Facet[] = selected === "anime" ? ["ANIME", "MOVIE"]
-    : ["movie", "movies"].includes(selected) ? ["MOVIE"]
-      : selector?.options.includes("anime") ? ["SERIES"] : ["SERIES", "ANIME"];
+  const selected =
+    selector &&
+    (params.find((param) => param.key === selector.key)?.value ??
+      (legacy && !selector.options.includes("all")
+        ? selector.options[0]
+        : undefined));
+  if (!selected || selected === "all" || selected === "__include__")
+    return [...kinds];
+  const allowed: readonly Facet[] =
+    selected === "anime"
+      ? ["ANIME", "MOVIE"]
+      : ["movie", "movies"].includes(selected)
+        ? ["MOVIE"]
+        : selector?.options.includes("anime")
+          ? ["SERIES"]
+          : ["SERIES", "ANIME"];
   return kinds.filter((kind) => allowed.includes(kind));
 }
 
 function camel(value: string): string {
-  return value.toLowerCase().replace(/_([a-z0-9])/g, (_match, next: string) => next.toUpperCase());
+  return value
+    .toLowerCase()
+    .replace(/_([a-z0-9])/g, (_match, next: string) => next.toUpperCase());
 }
 
 export function listModeLabelKey(mode: ListMode): string {
@@ -157,7 +221,10 @@ export function listOnLeaveLabelKey(onLeave: ListOnLeave): string {
   return `lists.onLeave.${camel(onLeave)}`;
 }
 
-export function listSyncStateLabelKey(state: ListSyncState, lastAt?: string | null): string {
+export function listSyncStateLabelKey(
+  state: ListSyncState,
+  lastAt?: string | null,
+): string {
   // Switching a list back on makes it new to the scheduler again; one that has
   // synced before is only waiting for its next sync.
   if (state === "NEW" && lastAt) return "lists.syncState.waiting";
@@ -178,7 +245,9 @@ export function listSyncStateTone(state: ListSyncState): ListTone {
 }
 
 /** The sync state a list's row shows: a switched-off list is off whatever its last sync was. */
-export function shownListSyncState(subscription: Pick<ListSubscription, "enabled" | "sync">): ListSyncState {
+export function shownListSyncState(
+  subscription: Pick<ListSubscription, "enabled" | "sync">,
+): ListSyncState {
   return subscription.enabled ? subscription.sync.state : "OFF";
 }
 
@@ -186,10 +255,17 @@ export type ListSortKey = "name" | "account" | "sync";
 export type ListSort = { key: ListSortKey; descending: boolean };
 
 /** Sorting by last sync groups lists by how it went: failed, waiting, synced, then switched off. */
-const LIST_SYNC_STATE_ORDER: Record<ListSyncState, number> = { FAIL: 0, NEW: 1, OK: 2, OFF: 3 };
+const LIST_SYNC_STATE_ORDER: Record<ListSyncState, number> = {
+  FAIL: 0,
+  NEW: 1,
+  OK: 2,
+  OFF: 3,
+};
 
 function listSyncTime(subscription: Pick<ListSubscription, "sync">): number {
-  const time = subscription.sync.lastAt ? Date.parse(subscription.sync.lastAt) : Number.NaN;
+  const time = subscription.sync.lastAt
+    ? Date.parse(subscription.sync.lastAt)
+    : Number.NaN;
   return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
 }
 
@@ -198,14 +274,17 @@ function listSyncTime(subscription: Pick<ListSubscription, "sync">): number {
  * they keep the order they came in. Within one sync state the most recently
  * synced list comes first, and lists that tie fall back to their names.
  */
-export function sortListSubscriptions<T extends Pick<ListSubscription, "name" | "enabled" | "sync">>(
+export function sortListSubscriptions<
+  T extends Pick<ListSubscription, "name" | "enabled" | "sync">,
+>(
   subscriptions: readonly T[],
   sort: ListSort | null,
   accountLabel: (subscription: T) => string = () => "",
 ): T[] {
   if (!sort) return [...subscriptions];
   const factor = sort.descending ? -1 : 1;
-  const compare = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const compare = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
   const byName = (a: T, b: T) => compare(a.name, b.name);
   return [...subscriptions].sort((a, b) => {
     if (sort.key === "name") return byName(a, b) * factor;
@@ -213,7 +292,9 @@ export function sortListSubscriptions<T extends Pick<ListSubscription, "name" | 
       const account = compare(accountLabel(a), accountLabel(b));
       return account !== 0 ? account * factor : byName(a, b);
     }
-    const state = LIST_SYNC_STATE_ORDER[shownListSyncState(a)] - LIST_SYNC_STATE_ORDER[shownListSyncState(b)];
+    const state =
+      LIST_SYNC_STATE_ORDER[shownListSyncState(a)] -
+      LIST_SYNC_STATE_ORDER[shownListSyncState(b)];
     if (state !== 0) return state * factor;
     const time = listSyncTime(b) - listSyncTime(a);
     if (time !== 0 && !Number.isNaN(time)) return time * factor;
@@ -221,7 +302,9 @@ export function sortListSubscriptions<T extends Pick<ListSubscription, "name" | 
   });
 }
 
-export function listMembershipStateLabelKey(state: ListMembershipState): string {
+export function listMembershipStateLabelKey(
+  state: ListMembershipState,
+): string {
   return `lists.membershipState.${camel(state)}`;
 }
 
@@ -261,8 +344,12 @@ const LIST_MEMBERSHIP_REASON_KEYS: Readonly<Record<string, string>> = {
 };
 
 /** The translation key for a list entry's reason, or null for one this client does not know. */
-export function listMembershipReasonKey(reason: string | null | undefined): string | null {
-  return reason && Object.hasOwn(LIST_MEMBERSHIP_REASON_KEYS, reason) ? LIST_MEMBERSHIP_REASON_KEYS[reason] : null;
+export function listMembershipReasonKey(
+  reason: string | null | undefined,
+): string | null {
+  return reason && Object.hasOwn(LIST_MEMBERSHIP_REASON_KEYS, reason)
+    ? LIST_MEMBERSHIP_REASON_KEYS[reason]
+    : null;
 }
 
 export function listMembershipStateTone(state: ListMembershipState): ListTone {
@@ -287,7 +374,9 @@ export function listMembershipStateTone(state: ListMembershipState): ListTone {
   }
 }
 
-export function listSyncRunOutcomeLabelKey(outcome: ListSyncRunOutcome): string {
+export function listSyncRunOutcomeLabelKey(
+  outcome: ListSyncRunOutcome,
+): string {
   return `lists.runOutcome.${camel(outcome)}`;
 }
 
@@ -337,8 +426,13 @@ export type ListCoverageSegment = {
  * against the list total. Counts larger than the total (a list that shrank
  * between syncs) are scaled down so the bar never overflows.
  */
-export function listCoverageSegments(counts: ListCounts): ListCoverageSegment[] {
-  const values = LIST_COVERAGE_ORDER.map((key) => ({ key, count: Math.max(0, counts[key] ?? 0) }));
+export function listCoverageSegments(
+  counts: ListCounts,
+): ListCoverageSegment[] {
+  const values = LIST_COVERAGE_ORDER.map((key) => ({
+    key,
+    count: Math.max(0, counts[key] ?? 0),
+  }));
   const sum = values.reduce((acc, entry) => acc + entry.count, 0);
   const denominator = Math.max(counts.total, sum);
   if (denominator <= 0) {
@@ -349,7 +443,10 @@ export function listCoverageSegments(counts: ListCounts): ListCoverageSegment[] 
     .map((entry) => ({ ...entry, fraction: entry.count / denominator }));
 }
 
-const COVERAGE_MEMBERSHIP_STATE: Record<ListCoverageSegmentKey, ListMembershipState> = {
+const COVERAGE_MEMBERSHIP_STATE: Record<
+  ListCoverageSegmentKey,
+  ListMembershipState
+> = {
   inLibrary: "IN_LIBRARY",
   added: "ADDED",
   requested: "REQUESTED",
@@ -367,7 +464,9 @@ export function listCoverageSegmentTone(key: ListCoverageSegmentKey): ListTone {
   return listMembershipStateTone(COVERAGE_MEMBERSHIP_STATE[key]);
 }
 
-export function listCoverageSegmentLabelKey(key: ListCoverageSegmentKey): string {
+export function listCoverageSegmentLabelKey(
+  key: ListCoverageSegmentKey,
+): string {
   return `lists.counts.${key}`;
 }
 
@@ -382,23 +481,36 @@ export function listIntervalParts(seconds: number): ListIntervalParts {
   if (safe >= 3_600 && safe % 3_600 === 0) {
     return { key: "lists.interval.hours", count: safe / 3_600 };
   }
-  return { key: "lists.interval.minutes", count: Math.max(1, Math.round(safe / 60)) };
+  return {
+    key: "lists.interval.minutes",
+    count: Math.max(1, Math.round(safe / 60)),
+  };
 }
 
 /**
  * The public catalog: member-account groups and personal items belong to the
  * personal tab and are dropped, along with groups left empty.
  */
-export function publicProviderGroups(manifest: ListProviderManifest): ListProviderGroup[] {
+export function publicProviderGroups(
+  manifest: ListProviderManifest,
+): ListProviderGroup[] {
   return manifest.groups
     .filter((group) => group.authBadge !== "MEMBER_ACCOUNT")
-    .map((group) => ({ ...group, items: group.items.filter((item) => !item.personal) }))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.personal),
+    }))
     .filter((group) => group.items.length > 0);
 }
 
-export function publicProviders(manifests: readonly ListProviderManifest[]): ListProviderManifest[] {
+export function publicProviders(
+  manifests: readonly ListProviderManifest[],
+): ListProviderManifest[] {
   return manifests
-    .map((manifest) => ({ ...manifest, groups: publicProviderGroups(manifest) }))
+    .map((manifest) => ({
+      ...manifest,
+      groups: publicProviderGroups(manifest),
+    }))
     .filter((manifest) => manifest.groups.length > 0);
 }
 
@@ -407,16 +519,27 @@ export function publicProviders(manifests: readonly ListProviderManifest[]): Lis
  * a second follow of the same provider, source type and parameters.
  */
 /** The name a linked account goes by: the provider's display name, else its username, else its id. */
-export function listAccountLabel(account: Pick<ListAccount, "displayName" | "username" | "externalUserId">): string {
+export function listAccountLabel(
+  account: Pick<ListAccount, "displayName" | "username" | "externalUserId">,
+): string {
   return account.displayName ?? account.username ?? account.externalUserId;
 }
 
 export function isListSourceFollowed(
-  subscriptions: readonly (Pick<ListSubscription, "source"> & Partial<Pick<ListSubscription, "accountId">>)[],
-  source: { provider: string; sourceType: string; params: readonly ListParam[]; accountId?: string | null },
+  subscriptions: readonly (Pick<ListSubscription, "source"> &
+    Partial<Pick<ListSubscription, "accountId">>)[],
+  source: {
+    provider: string;
+    sourceType: string;
+    params: readonly ListParam[];
+    accountId?: string | null;
+  },
 ): boolean {
   const paramsKey = (params: readonly ListParam[]) =>
-    params.map((param) => `${param.key}\u0000${param.value.trim()}`).sort().join("\u0001");
+    params
+      .map((param) => `${param.key}\u0000${param.value.trim()}`)
+      .sort()
+      .join("\u0001");
   const wanted = paramsKey(source.params);
   // The same list on two linked accounts is two lists, and neither is a public one.
   const account = source.accountId ?? null;
@@ -529,11 +652,20 @@ export function recognizeListUrl(
       const params: ListParam[] = [];
       for (const capture of urlPattern.captures) {
         const value = match.groups?.[capture.group];
-        if (value) params.push({ key: capture.param, value: decodeListUrlCapture(value) });
+        if (value)
+          params.push({
+            key: capture.param,
+            value: decodeListUrlCapture(value),
+          });
       }
       return {
         manifest,
-        source: { provider: manifest.providerType, sourceType: urlPattern.sourceType, params, url },
+        source: {
+          provider: manifest.providerType,
+          sourceType: urlPattern.sourceType,
+          params,
+          url,
+        },
       };
     }
   }
@@ -547,17 +679,28 @@ export function missingSourceParams(
 ): string[] {
   return definitions
     .filter((definition) => definition.required)
-    .filter((definition) => !params.find((param) => param.key === definition.key && param.value.trim()))
+    .filter(
+      (definition) =>
+        !params.find(
+          (param) => param.key === definition.key && param.value.trim(),
+        ),
+    )
     .map((definition) => definition.key);
 }
 
-export function setListParam(params: readonly ListParam[], key: string, value: string): ListParam[] {
+export function setListParam(
+  params: readonly ListParam[],
+  key: string,
+  value: string,
+): ListParam[] {
   const next = params.filter((param) => param.key !== key);
   next.push({ key, value });
   return next;
 }
 
-export function providerTileStyle(tile: ListProviderTile | null): { background: string; color: string } | null {
+export function providerTileStyle(
+  tile: ListProviderTile | null,
+): { background: string; color: string } | null {
   if (!tile) return null;
   return { background: tile.bg, color: tile.ink };
 }
@@ -569,10 +712,16 @@ export function providerTileStyle(tile: ListProviderTile | null): { background: 
  */
 export function providerLogoSrc(providerType: string): string | null {
   if (!providerType.trim()) return null;
-  return ratingSourceInfo(providerType).logoSrc ?? getPluginLogoSources({ providerType })?.src ?? null;
+  return (
+    ratingSourceInfo(providerType).logoSrc ??
+    getPluginLogoSources({ providerType })?.src ??
+    null
+  );
 }
 
-export function providerTileAbbreviation(manifest: Pick<ListProviderManifest, "name" | "tile">): string {
+export function providerTileAbbreviation(
+  manifest: Pick<ListProviderManifest, "name" | "tile">,
+): string {
   if (manifest.tile?.abbr) return manifest.tile.abbr;
   return manifest.name.slice(0, 2).toUpperCase();
 }
@@ -593,7 +742,8 @@ export function defaultListRoute(
 ): ListRoute {
   const candidates = libraries.filter((library) => library.facet === kind);
   const library = candidates.find((entry) => entry.isDefault) ?? candidates[0];
-  const root = library?.roots.find((entry) => entry.isDefault) ?? library?.roots[0];
+  const root =
+    library?.roots.find((entry) => entry.isDefault) ?? library?.roots[0];
   return {
     kind,
     libraryId: library?.id ?? "",
@@ -608,7 +758,8 @@ export function defaultListRoute(
   };
 }
 
-export type ListEpisodePolicyKind = "MONITOR_SPECIALS" | "FILLER_POLICY" | "RECAP_POLICY";
+export type ListEpisodePolicyKind =
+  "MONITOR_SPECIALS" | "FILLER_POLICY" | "RECAP_POLICY";
 
 /**
  * The label key for what a route's "inherit" choice resolves to in its library,
@@ -630,18 +781,25 @@ export function inheritedListEpisodePolicyLabelKey(
     | undefined,
 ): string | null {
   if (kind === "MONITOR_SPECIALS") {
-    const enabled = facet === "SERIES" ? false : library?.settings?.monitorSpecials;
+    const enabled =
+      facet === "SERIES" ? false : library?.settings?.monitorSpecials;
     if (enabled == null) return null;
-    return enabled ? "search.seasonFolder.enabled" : "search.seasonFolder.disabled";
+    return enabled
+      ? "search.seasonFolder.enabled"
+      : "search.seasonFolder.disabled";
   }
   if (kind === "FILLER_POLICY") {
     const policy = library?.settings?.fillerPolicy;
     if (!policy) return null;
-    return policy === "SKIP_FILLER" ? "settings.fillerPolicySkipFiller" : "settings.fillerPolicyDownloadAll";
+    return policy === "SKIP_FILLER"
+      ? "settings.fillerPolicySkipFiller"
+      : "settings.fillerPolicyDownloadAll";
   }
   const policy = library?.settings?.recapPolicy;
   if (!policy) return null;
-  return policy === "SKIP_RECAP" ? "settings.recapPolicySkipRecap" : "settings.recapPolicyDownloadAll";
+  return policy === "SKIP_RECAP"
+    ? "settings.recapPolicySkipRecap"
+    : "settings.recapPolicyDownloadAll";
 }
 
 /**
@@ -650,7 +808,10 @@ export function inheritedListEpisodePolicyLabelKey(
  */
 export const DEFAULT_LIST_MAX_PER_SYNC = 25;
 
-export function emptyListDraft(name: string, kinds: readonly Facet[]): ListSubscriptionDraft {
+export function emptyListDraft(
+  name: string,
+  kinds: readonly Facet[],
+): ListSubscriptionDraft {
   return {
     name,
     kinds: [...kinds],
@@ -662,7 +823,9 @@ export function emptyListDraft(name: string, kinds: readonly Facet[]): ListSubsc
   };
 }
 
-export function subscriptionToDraft(subscription: ListSubscription): ListSubscriptionDraft {
+export function subscriptionToDraft(
+  subscription: ListSubscription,
+): ListSubscriptionDraft {
   return {
     name: subscription.name,
     kinds: [...subscription.kinds],
@@ -679,7 +842,8 @@ export function listDraftProblems(draft: ListSubscriptionDraft): string[] {
   const problems: string[] = [];
   if (!draft.name.trim()) problems.push("lists.follow.problem.name");
   if (draft.kinds.length === 0) problems.push("lists.follow.problem.kinds");
-  if (!isListModeSelectable(draft.mode)) problems.push("lists.follow.problem.mode");
+  if (!isListModeSelectable(draft.mode))
+    problems.push("lists.follow.problem.mode");
   for (const kind of draft.kinds) {
     const route = draft.routes.find((entry) => entry.kind === kind);
     if (!route || !route.libraryId) {
@@ -687,7 +851,8 @@ export function listDraftProblems(draft: ListSubscriptionDraft): string[] {
       break;
     }
   }
-  if (draft.maxPerSync !== null && draft.maxPerSync < 1) problems.push("lists.follow.problem.maxPerSync");
+  if (draft.maxPerSync !== null && draft.maxPerSync < 1)
+    problems.push("lists.follow.problem.maxPerSync");
   return problems;
 }
 
@@ -722,7 +887,10 @@ export function listFilterInput(filter: ListFilter): ListFilterInput {
   return {
     facet: filter.facet ?? null,
     matchAny: filter.matchAny ?? false,
-    minimums: (filter.minimums ?? []).map(({ source, value }) => ({ source, value })),
+    minimums: (filter.minimums ?? []).map(({ source, value }) => ({
+      source,
+      value,
+    })),
     unresolvedLabels: [...(filter.unresolvedLabels ?? [])],
     kind: filter.kind,
     scale: filter.scale,
@@ -753,7 +921,9 @@ export type SubscribeListInput = UpdateListSubscriptionInput & {
 };
 
 /** Only routes for kinds the list follows are sent; unrouted kinds are never added. */
-export function draftToUpdateInput(draft: ListSubscriptionDraft): UpdateListSubscriptionInput {
+export function draftToUpdateInput(
+  draft: ListSubscriptionDraft,
+): UpdateListSubscriptionInput {
   return {
     name: draft.name.trim(),
     kinds: [...draft.kinds],
@@ -767,13 +937,18 @@ export function draftToUpdateInput(draft: ListSubscriptionDraft): UpdateListSubs
   };
 }
 
-export function draftToSubscribeInput(source: ListSourceDraft, draft: ListSubscriptionDraft): SubscribeListInput {
+export function draftToSubscribeInput(
+  source: ListSourceDraft,
+  draft: ListSubscriptionDraft,
+): SubscribeListInput {
   return {
     scope: source.credentialId ? "PERSONAL" : "PUBLIC",
     ...(source.credentialId ? { credentialId: source.credentialId } : {}),
     provider: source.provider,
     sourceType: source.sourceType,
-    params: source.params.filter((param) => param.value.trim()).map(listParamInput),
+    params: source.params
+      .filter((param) => param.value.trim())
+      .map(listParamInput),
     url: source.url,
     ...draftToUpdateInput(draft),
   };
@@ -817,7 +992,9 @@ export function formatExternalIdList(ids: readonly ExternalId[]): string {
   return ids
     .map((id) => {
       const kind = id.kind?.trim();
-      return kind ? `${id.source}:${kind}:${id.value}` : `${id.source}:${id.value}`;
+      return kind
+        ? `${id.source}:${kind}:${id.value}`
+        : `${id.source}:${id.value}`;
     })
     .join(", ");
 }
@@ -857,14 +1034,21 @@ export function parseExternalIdList(raw: string): ExternalId[] {
       if (parts.length === 3) {
         const [source, kind, value] = parts;
         if (!source || !kind || !value) return null;
-        return { source: source.toLowerCase(), kind: kind.toLowerCase(), value };
+        return {
+          source: source.toLowerCase(),
+          kind: kind.toLowerCase(),
+          value,
+        };
       }
       return null;
     })
     .filter((entry): entry is ExternalId => entry !== null);
 }
 
-export function findListFilter(filters: readonly ListFilter[], kind: ListFilter["kind"]): ListFilter | null {
+export function findListFilter(
+  filters: readonly ListFilter[],
+  kind: ListFilter["kind"],
+): ListFilter | null {
   return filters.find((filter) => filter.kind === kind) ?? null;
 }
 
@@ -880,7 +1064,9 @@ export function withListFilter(
   }
   const filter: ListFilter = { kind, ...next };
   if (index < 0) return [...filters, filter];
-  return filters.map((entry, position) => (position === index ? filter : entry));
+  return filters.map((entry, position) =>
+    position === index ? filter : entry,
+  );
 }
 
 export const EMPTY_LIST_FILTER: Omit<ListFilter, "kind"> = {
@@ -899,7 +1085,10 @@ export function splitListValues(raw: string): string[] {
 }
 
 /** Stable DOM id for one membership row in a list's detail panel. */
-export function listMembershipRowId(subscriptionId: string, itemKey: string): string {
+export function listMembershipRowId(
+  subscriptionId: string,
+  itemKey: string,
+): string {
   return `list-membership-${selectorToken(subscriptionId)}-${selectorToken(itemKey)}`;
 }
 
@@ -912,9 +1101,15 @@ export const LIST_SYNC_RUNS_MAX = 1000;
  * The slice of a list's sync history to show. A collapsed history is read one
  * run past what it shows, which is how it learns that older runs exist.
  */
-export function shownListSyncRuns<T>(runs: readonly T[], expanded: boolean): { runs: T[]; more: boolean } {
+export function shownListSyncRuns<T>(
+  runs: readonly T[],
+  expanded: boolean,
+): { runs: T[]; more: boolean } {
   if (expanded) return { runs: [...runs], more: false };
-  return { runs: runs.slice(0, LIST_SYNC_RUNS_SHOWN), more: runs.length > LIST_SYNC_RUNS_SHOWN };
+  return {
+    runs: runs.slice(0, LIST_SYNC_RUNS_SHOWN),
+    more: runs.length > LIST_SYNC_RUNS_SHOWN,
+  };
 }
 
 /** What the settings form holds for one field the user touched. */
@@ -959,7 +1154,8 @@ export function listProviderSettingsMissing(
       if (!field.required) return false;
       const edit = edits[field.key];
       if (!edit) return !field.isSet;
-      if (field.secret) return edit.clear || (!field.isSet && edit.value.trim() === "");
+      if (field.secret)
+        return edit.clear || (!field.isSet && edit.value.trim() === "");
       return edit.value.trim() === "";
     })
     .map((field) => field.key);
@@ -969,19 +1165,27 @@ export function listProviderSettingsMissing(
  * Live events after which a title's list memberships may read differently: a
  * public list adding the title, or a list dropping it.
  */
-export function titleListMembershipChanged(titleId: string | null | undefined): DomainEventPredicate {
-  return allOf(forTitle(titleId), forEventTypes("LIST_TITLE_ADDED", "LIST_TITLE_LEFT"));
+export function titleListMembershipChanged(
+  titleId: string | null | undefined,
+): DomainEventPredicate {
+  return allOf(
+    forTitle(titleId),
+    forEventTypes("LIST_TITLE_ADDED", "LIST_TITLE_LEFT"),
+  );
 }
 
 /**
  * A list setting of one of the given kinds was saved. Each list setting
  * writes a configuration event naming what changed.
  */
-function listSettingChanged(...resourceTypes: ReadonlyArray<string>): DomainEventPredicate {
+function listSettingChanged(
+  ...resourceTypes: ReadonlyArray<string>
+): DomainEventPredicate {
   const wanted = new Set(resourceTypes);
   return (event) => {
     if (event.eventType !== "CONFIGURATION_CHANGED") return false;
-    const payload = event.payloadJson as { data?: { resource_type?: unknown } } | null | undefined;
+    const payload = event.payloadJson as
+      { data?: { resource_type?: unknown } } | null | undefined;
     const resourceType = payload?.data?.resource_type;
     return typeof resourceType === "string" && wanted.has(resourceType);
   };
@@ -1001,15 +1205,19 @@ export const followedListsChanged: DomainEventPredicate = anyOf(
   listSettingChanged("list_account", "list_member_policy"),
 );
 /** The member's linked list accounts. */
-export const listAccountsChanged: DomainEventPredicate = listSettingChanged("list_account");
-export const listExclusionsChanged: DomainEventPredicate = listSettingChanged("list_exclusion");
+export const listAccountsChanged: DomainEventPredicate =
+  listSettingChanged("list_account");
+export const listExclusionsChanged: DomainEventPredicate =
+  listSettingChanged("list_exclusion");
 /** What the list providers offer and how they are set up. */
 export const listProvidersChanged: DomainEventPredicate = listSettingChanged(
   "list_provider_settings",
   "list_provider_app",
 );
-export const listProviderAppsChanged: DomainEventPredicate = listSettingChanged("list_provider_app");
-export const memberListPoliciesChanged: DomainEventPredicate = listSettingChanged("list_member_policy");
+export const listProviderAppsChanged: DomainEventPredicate =
+  listSettingChanged("list_provider_app");
+export const memberListPoliciesChanged: DomainEventPredicate =
+  listSettingChanged("list_member_policy");
 /** The counts on the lists page's tabs. */
 export const listTabCountsChanged: DomainEventPredicate = anyOf(
   followedListsChanged,
@@ -1047,7 +1255,9 @@ export type TitleListProvenance = { kind: "added" | "left"; name: string };
  * holding it, or, once every list that added it has dropped it, the one it
  * left most recently. Null when no list added the title.
  */
-export function titleListProvenance(memberships: readonly TitleListMembership[]): TitleListProvenance | null {
+export function titleListProvenance(
+  memberships: readonly TitleListMembership[],
+): TitleListProvenance | null {
   const addedBy = memberships.filter((membership) => membership.addedByList);
   const current = addedBy.find((membership) => !membership.leftAt);
   if (current) return { kind: "added", name: current.name };
@@ -1069,6 +1279,8 @@ export function rollBackMemberListPolicy(
   attempted: MemberListPolicy["policy"],
 ): MemberListPolicy[] {
   return current.map((entry) =>
-    entry.user.id === previous.user.id && entry.policy === attempted ? previous : entry,
+    entry.user.id === previous.user.id && entry.policy === attempted
+      ? previous
+      : entry,
   );
 }

@@ -7,23 +7,25 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use scryer_application::{
     AppError, AppResult, BackgroundIndexerSearchStrategyState, DownloadSourceKind, EstimatedCost,
-    ExpectedValueHint, HashDomain, INDEXER_CAPS_REFRESH_ERROR_PREFIX, IndexerClient,
-    IndexerConfigRepository, IndexerErrorClassification, IndexerErrorOperation,
-    IndexerErrorRepository, IndexerPluginProvider, IndexerQueryOutcome, IndexerResponseAttributes,
-    IndexerRoutingPlan, IndexerRssCatchUp, IndexerSearchCandidateWrite, IndexerSearchCompletion,
-    IndexerSearchEligibility, IndexerSearchIncompleteReason, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerSearchNumberingContext, IndexerSearchOutcome, IndexerSearchPageSink,
-    IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
-    NullIndexerErrorRepository, NullIndexerSearchLearningRepository, NullProxyConfigRepository,
-    NullUpstreamScheduler, ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal,
-    RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
-    ReusableIndexerSearchCandidate, RssDueIndexers, RssFreshnessContext, SEARCH_STRATEGY_CONTAINED,
-    SEARCH_STRATEGY_CONVERGED, SEARCH_STRATEGY_OPEN, SchedulerAdmission, SchedulerBatchRequest,
-    SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome,
-    SchedulerIntent, SchedulerLease, SchedulerOperation, SchedulerPluginKind, SchedulerSnapshot,
+    ExpectedValueHint, HashDomain, IndexerClient, IndexerConfigRepository,
+    IndexerErrorClassification, IndexerErrorOperation, IndexerErrorRepository,
+    IndexerFirstPageGate, IndexerFirstPageVerdict, IndexerPluginProvider, IndexerQueryOutcome,
+    IndexerResponseAttributes, IndexerRoutingPlan, IndexerRssCatchUp, IndexerSearchCandidateWrite,
+    IndexerSearchCompletion, IndexerSearchEligibility, IndexerSearchIncompleteReason,
+    IndexerSearchLearningContext, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerSearchListing, IndexerSearchListingClaim, IndexerSearchListingScope,
+    IndexerSearchListingStrategy, IndexerSearchNumberingContext, IndexerSearchOutcome,
+    IndexerSearchPageSink, IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult,
+    IndexerSearchRunWrite, IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink,
+    IndexerSearchStrategyRequest, IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError,
+    NormalizedIndexerSearchCandidate, NullIndexerErrorRepository,
+    NullIndexerSearchLearningRepository, NullProxyConfigRepository, NullUpstreamScheduler,
+    ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal, RawTextSearchRequest,
+    ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReusableIndexerSearchCandidate,
+    RssDueIndexers, RssFreshnessContext, SEARCH_STRATEGY_CONTAINED, SEARCH_STRATEGY_CONVERGED,
+    SEARCH_STRATEGY_OPEN, SchedulerAdmission, SchedulerBatchRequest, SchedulerCandidate,
+    SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome, SchedulerIntent,
+    SchedulerLease, SchedulerOperation, SchedulerPluginKind, SchedulerSnapshot,
     SchedulerSnapshotEntry, SchedulerSnapshotFilter, SearchLearningContext, SearchMode,
     UpstreamScheduler, blake3_identity_hex, escalation_backoff::indexer_backoff_ladder,
     indexer_search_eligibility, indexer_search_identity, rss_poll_is_due,
@@ -38,6 +40,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::search_learning::FREETEXT_LEARNING_KEY_PREFIX;
+use scryer_application::{
+    IndexerFacetLearningPolicy, IndexerFacetLearningState, IndexerFacetSearchOutcome,
+    IndexerFacetTransition, IndexerSearchLearningBatch,
+};
 
 use scryer_outbound_http::{
     DestinationKey, HostKey, HostRpsProfile, HostRpsProfileSource, LOCAL_MANAGED_HOST_RPS,
@@ -405,6 +411,7 @@ fn prepare_search_strategies(
             page_cursor: None,
             page_budget: None,
             result_limit: None,
+            first_page_gate: None,
             strategy_id: strategy_id.clone(),
             labels: vec![strategy.label.clone()],
             query: strategy.request_query,
@@ -489,9 +496,14 @@ async fn select_reusable_strategies(
         let page_chain = background_page_budget.and_then(|_| state.page_chain(now));
         if let Some(replay) = state.replay {
             match replay.send(page_sink, indexer_id).await {
-                Ok(count) => {
+                Ok(ReplayOutcome::Served(count)) => {
                     selection.replayed_result_count =
                         selection.replayed_result_count.saturating_add(count);
+                }
+                Ok(ReplayOutcome::Unavailable) => {
+                    strategy.request.page_cursor = None;
+                    selection.live.push(strategy);
+                    continue;
                 }
                 Err(error) if error.is_canceled() => return Err(error),
                 Err(error) => {
@@ -553,8 +565,6 @@ async fn select_reusable_strategies(
 struct ManagedIndexerMetadata {
     enable_rss: Option<bool>,
     enable_automatic_search: Option<bool>,
-    #[serde(default)]
-    caps_snapshot: Option<IndexerCapsSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -662,15 +672,64 @@ struct ReusableStrategyState {
 // History length changes the number of batches, not the size of a batch.
 const CANDIDATE_REPLAY_BATCH_SIZE: u32 = 100;
 
+#[derive(Debug)]
+enum ReplayOutcome {
+    Served(usize),
+    Unavailable,
+}
+
 struct CandidateReplay {
     context: SearchDiagnosticsContext,
     config: IndexerConfig,
     run_ids: Vec<String>,
     provenance: ReleaseCandidateProvenance,
+    /// The result guard run again on the replayed candidates. Set for a
+    /// listing strategy, whose runs keep the indexer's whole answer rather
+    /// than only the results the reading scope asked for.
+    filter: Option<Arc<ReplayFilter>>,
 }
 
 impl CandidateReplay {
-    async fn send(self, sink: &IndexerSearchPageSink, indexer_id: &str) -> AppResult<usize> {
+    async fn preflight(&self) -> AppResult<bool> {
+        if self.run_ids.is_empty() {
+            return Ok(false);
+        }
+        let mut cursor = None;
+        loop {
+            let page = self
+                .context
+                .repository
+                .list_search_run_candidates(
+                    &self.run_ids,
+                    cursor.as_deref(),
+                    CANDIDATE_REPLAY_BATCH_SIZE,
+                )
+                .await?;
+            let now = Utc::now();
+            if page.candidates.into_iter().any(|record| {
+                record.reusable_until <= now
+                    || reusable_candidate_from_record(record, &self.config).is_none()
+            }) {
+                return Ok(false);
+            }
+            match page.next_cursor {
+                None => return Ok(true),
+                Some(next) if cursor.as_ref().is_none_or(|previous| next > *previous) => {
+                    cursor = Some(next)
+                }
+                Some(_) => return Ok(false),
+            }
+        }
+    }
+
+    async fn send(
+        self,
+        sink: &IndexerSearchPageSink,
+        indexer_id: &str,
+    ) -> AppResult<ReplayOutcome> {
+        if !self.preflight().await? {
+            return Ok(ReplayOutcome::Unavailable);
+        }
         let mut count = 0usize;
         let mut cursor = None;
         loop {
@@ -690,13 +749,20 @@ impl CandidateReplay {
             let mut candidates = page
                 .candidates
                 .into_iter()
-                .map(|record| reusable_candidate_from_record(record, &self.config))
+                .map(|record| {
+                    (record.reusable_until > Utc::now())
+                        .then(|| reusable_candidate_from_record(record, &self.config))
+                        .flatten()
+                })
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
                     AppError::Repository(
                         "persisted indexer candidate could not be rehydrated".to_string(),
                     )
                 })?;
+            if let Some(filter) = self.filter.as_deref() {
+                filter.apply(&mut candidates);
+            }
             for candidate in &mut candidates {
                 candidate.provenance = Some(self.provenance.clone());
                 candidate.indexer_id = Some(indexer_id.to_string());
@@ -720,8 +786,739 @@ impl CandidateReplay {
                 }
             }
         }
-        Ok(count)
+        Ok(ReplayOutcome::Served(count))
     }
+}
+
+/// The local result guard of one strategy, kept so a replay can apply it to
+/// candidates persisted before the guard ran.
+struct ReplayFilter {
+    query: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+    numbering_context: IndexerSearchNumberingContext,
+    tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+    title_guard_mode: TitleGuardMode,
+    strategy_label: String,
+}
+
+impl ReplayFilter {
+    fn apply(&self, results: &mut Vec<IndexerSearchResult>) {
+        filter_strategy_results(
+            results,
+            &FilterStrategyContext {
+                query: &self.query,
+                season: self.season,
+                episode: self.episode,
+                numbering_context: &self.numbering_context,
+                tagged_aliases: &self.tagged_aliases,
+                title_guard_mode: self.title_guard_mode,
+                strategy_label: &self.strategy_label,
+                is_rss_request: false,
+            },
+        );
+    }
+}
+
+/// The scope a search pass guards its results for.
+struct ListingGuardScope {
+    query: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+    absolute_episode: Option<u32>,
+    numbering_context: IndexerSearchNumberingContext,
+    tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+}
+
+impl ListingGuardScope {
+    /// Whether one listed release is evidence that a listing answers this
+    /// scope: it names the scope's season, or, for a scope keyed by absolute
+    /// number, it carries an absolute number or no numbering at all.
+    fn covered_by(&self, result: &IndexerSearchResult) -> bool {
+        let parsed = result
+            .parsed_release_metadata
+            .clone()
+            .unwrap_or_else(|| scryer_application::parse_release_metadata(&result.title));
+        let numbering = parsed.episode.as_ref();
+        let names_season = self.season.is_some_and(|season| {
+            numbering.is_some_and(|numbering| {
+                numbering.season == Some(season) || numbering.season_numbers.contains(&season)
+            })
+        });
+        let fits_absolute = self.absolute_episode.is_some()
+            && numbering.is_none_or(|numbering| {
+                numbering.absolute_episode.is_some()
+                    || !numbering.absolute_episode_numbers.is_empty()
+                    || (numbering.season.is_none()
+                        && numbering.season_numbers.is_empty()
+                        && numbering.episode_numbers.is_empty())
+            });
+        names_season || fits_absolute
+    }
+}
+
+/// The episode-insensitive shape of an id lookup: the strategy request with
+/// its season, episode and absolute number left out, keeping only which of
+/// them it sends. Every scope of a title asks the same shape, so an indexer
+/// that ignores those coordinates answers each of them with one listing.
+/// Text queries are not listings: `None`.
+fn listing_strategy_family(request: &IndexerSearchStrategyRequest) -> Option<String> {
+    if !request.query.trim().is_empty() || request.ids.is_empty() {
+        return None;
+    }
+    let ids = request
+        .ids
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut categories = request.newznab_categories.clone().unwrap_or_default();
+    categories.sort();
+    categories.dedup();
+    let mut aliases = request.tagged_aliases.clone();
+    aliases
+        .sort_by(|left, right| (&left.name, &left.language).cmp(&(&right.name, &right.language)));
+    Some(digest_json(
+        HashDomain::IndexerListingFamily,
+        &serde_json::json!({
+            "ids": ids,
+            "category": request.category,
+            "facet": request.facet,
+            "newznab_categories": categories,
+            "year": request.year,
+            "tagged_aliases": aliases,
+            "coordinates": [
+                request.season.is_some(),
+                request.episode.is_some(),
+                request.absolute_episode.is_some(),
+            ],
+        }),
+    ))
+}
+
+/// How long a listing's chain may sit without recording a page before one of
+/// its readers takes it over and reads on from where it stopped.
+const LISTING_OWNER_IDLE_HOURS: i64 = 1;
+
+/// One listing strategy of a pass, as the probe knows it.
+struct ListingStrategyEntry {
+    family: String,
+    title_guard_mode: TitleGuardMode,
+    label: String,
+    branch: String,
+}
+
+#[derive(Default)]
+struct ListingPassState {
+    /// The listing strategies of this pass, by query signature.
+    strategies: HashMap<String, ListingStrategyEntry>,
+    /// Strategies that own a listing's chain this pass, with the listing's
+    /// first page: their runs keep the indexer's whole answer and advance
+    /// the chain.
+    owned: HashMap<String, String>,
+    /// Candidates replayed successfully before followers stopped reading.
+    follower_replayed: usize,
+    /// Followers whose listing is still being read: their answer is open, not
+    /// contained.
+    riders: HashSet<String>,
+    /// Listings this pass already replayed, by first page.
+    replayed: HashSet<String>,
+}
+
+/// What a tier's listing strategies need before reuse selection.
+struct ListingTierPlan {
+    /// The strategies left for reuse selection and live reading.
+    strategies: Vec<PreparedSearchStrategy>,
+    /// Strategies answered from a listing without asking the indexer.
+    served: usize,
+    /// Of those, the ones whose listing is still being read.
+    served_open: usize,
+    /// Results the listing replays sent.
+    replayed: usize,
+    /// Chains taken over from an idle owner, resumed where it stopped.
+    page_chains: HashMap<String, PageChain>,
+}
+
+/// How a listing strategy stands to a listing.
+enum ListingRelation<'a> {
+    Owns(&'a IndexerSearchListing),
+    Reads(&'a IndexerSearchListing),
+}
+
+/// Same-listing detection for one indexer's background search pass. A
+/// background id strategy that reads from the first page records that page;
+/// when it is the page of a listing another strategy's chain already reads,
+/// the strategy stops there and is answered from that chain. A listing shared
+/// across scopes serves the title's other scopes without asking the indexer,
+/// as long as it lists releases of their season; any other scope reads its
+/// own first page.
+#[derive(Clone)]
+struct ListingProbe {
+    diagnostics: SearchDiagnosticsContext,
+    config: IndexerConfig,
+    title_id: String,
+    facet: String,
+    scope: Arc<ListingGuardScope>,
+    state: Arc<std::sync::Mutex<ListingPassState>>,
+}
+
+impl ListingProbe {
+    fn new(
+        diagnostics: Option<&SearchDiagnosticsContext>,
+        learning_context: Option<&IndexerSearchLearningContext>,
+        config: &IndexerConfig,
+        scope: ListingGuardScope,
+    ) -> Option<Self> {
+        let diagnostics = diagnostics.filter(|diagnostics| diagnostics.background)?;
+        let learning_context = learning_context?;
+        Some(Self {
+            diagnostics: diagnostics.clone(),
+            config: config.clone(),
+            title_id: learning_context.title_id.trim().to_string(),
+            facet: learning_context.facet.trim().to_ascii_lowercase(),
+            scope: Arc::new(scope),
+            state: Arc::new(std::sync::Mutex::new(ListingPassState::default())),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, ListingPassState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn listing_scope(&self) -> IndexerSearchListingScope {
+        IndexerSearchListingScope {
+            indexer_id: self.diagnostics.indexer_id.clone(),
+            indexer_fingerprint: self.diagnostics.indexer_fingerprint.clone(),
+            title_id: self.title_id.clone(),
+            facet: self.facet.clone(),
+        }
+    }
+
+    fn strategy(&self, strategy_id: &str) -> IndexerSearchListingStrategy {
+        IndexerSearchListingStrategy {
+            scope_key: self.diagnostics.scope_key.clone(),
+            query_signature: strategy_id.to_string(),
+        }
+    }
+
+    fn warn(&self, error: &AppError, what: &'static str) {
+        warn!(
+            indexer_id = self.diagnostics.indexer_id.as_str(),
+            %error,
+            "{what}"
+        );
+    }
+
+    async fn listings(&self) -> Vec<IndexerSearchListing> {
+        let fresh_after = Utc::now() - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS);
+        match self
+            .diagnostics
+            .repository
+            .list_search_listings(&self.listing_scope(), fresh_after)
+            .await
+        {
+            Ok(listings) => listings,
+            Err(error) => {
+                self.warn(&error, "failed to read indexer listings");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Notes a tier's listing strategies, gives their own replayable history
+    /// their result guard (a run that owned a listing kept the indexer's
+    /// whole answer), and settles each one's listing: an owner keeps its
+    /// chain, a reader of a finished or still-moving listing is answered
+    /// from it, a reader of an idle one takes the chain over, and anything
+    /// else reads live.
+    async fn plan(
+        &self,
+        strategies: Vec<PreparedSearchStrategy>,
+        reusable: &mut HashMap<String, ReusableStrategyState>,
+        page_sink: &IndexerSearchPageSink,
+    ) -> AppResult<ListingTierPlan> {
+        let mut plan = ListingTierPlan {
+            strategies: Vec::with_capacity(strategies.len()),
+            served: 0,
+            served_open: 0,
+            replayed: 0,
+            page_chains: HashMap::new(),
+        };
+        let mut tracked = false;
+        for strategy in &strategies {
+            let Some(family) = listing_strategy_family(&strategy.request)
+                .filter(|_| strategy.request.page_cursor.is_none())
+            else {
+                continue;
+            };
+            tracked = true;
+            let entry = ListingStrategyEntry {
+                family,
+                title_guard_mode: strategy.title_guard_mode,
+                label: strategy.labels.first().cloned().unwrap_or_default(),
+                branch: strategy.labels.join("|"),
+            };
+            let filter = self.filter_for(&entry);
+            if let Some(replay) = reusable
+                .get_mut(&strategy.strategy_id)
+                .and_then(|reusable| reusable.replay.as_mut())
+            {
+                replay.filter = Some(filter);
+            }
+            self.lock()
+                .strategies
+                .insert(strategy.strategy_id.clone(), entry);
+        }
+        if !tracked {
+            plan.strategies = strategies;
+            return Ok(plan);
+        }
+
+        let listings = self.listings().await;
+        let now = Utc::now();
+        let idle_before = now - Duration::hours(LISTING_OWNER_IDLE_HOURS);
+        for mut strategy in strategies {
+            let family = self
+                .lock()
+                .strategies
+                .get(&strategy.strategy_id)
+                .map(|entry| entry.family.clone());
+            let Some(family) = family else {
+                plan.strategies.push(strategy);
+                continue;
+            };
+            let me = self.strategy(&strategy.strategy_id);
+            let Some(relation) = self.relation(&listings, &me, &family).await? else {
+                plan.strategies.push(strategy);
+                continue;
+            };
+            let listing = match relation {
+                ListingRelation::Owns(listing) => {
+                    self.lock().owned.insert(
+                        strategy.strategy_id.clone(),
+                        listing.first_page_fingerprint.clone(),
+                    );
+                    // The chain's pages are replayed as the listing's, not as
+                    // this strategy's own runs.
+                    if let Some(state) = reusable.get_mut(&strategy.strategy_id) {
+                        state.replay = None;
+                    }
+                    match self
+                        .replay_listing(listing, &strategy.strategy_id, page_sink)
+                        .await?
+                    {
+                        ReplayOutcome::Served(count) => {
+                            plan.replayed = plan.replayed.saturating_add(count)
+                        }
+                        ReplayOutcome::Unavailable => {
+                            reusable.remove(&strategy.strategy_id);
+                            strategy.request.page_cursor = None;
+                        }
+                    }
+                    plan.strategies.push(strategy);
+                    continue;
+                }
+                ListingRelation::Reads(listing) => listing,
+            };
+            let own_state = reusable.remove(&strategy.strategy_id);
+            let ReplayOutcome::Served(count) = self
+                .replay_listing(listing, &strategy.strategy_id, page_sink)
+                .await?
+            else {
+                strategy.request.page_cursor = None;
+                plan.strategies.push(strategy);
+                continue;
+            };
+            plan.replayed = plan.replayed.saturating_add(count);
+            let idle = listing.advanced_at < idle_before;
+            if !listing.finished && idle {
+                match listing.page_cursor.as_deref() {
+                    Some(cursor)
+                        if !own_state
+                            .as_ref()
+                            .is_some_and(|state| state.retry_at.is_some_and(|at| at > now)) =>
+                    {
+                        match self
+                            .diagnostics
+                            .repository
+                            .adopt_search_listing(
+                                &self.listing_scope(),
+                                &listing.first_page_fingerprint,
+                                &listing.owner,
+                                &me,
+                                cursor,
+                                idle_before,
+                                now,
+                            )
+                            .await
+                        {
+                            Ok(true) => {
+                                debug!(
+                                    indexer_id = self.diagnostics.indexer_id.as_str(),
+                                    strategy =
+                                        strategy.labels.first().map(String::as_str).unwrap_or(""),
+                                    previous_owner = listing.owner.scope_key.as_str(),
+                                    "indexer listing chain went idle; resuming it here"
+                                );
+                                self.lock().owned.insert(
+                                    strategy.strategy_id.clone(),
+                                    listing.first_page_fingerprint.clone(),
+                                );
+                                strategy.request.page_cursor = Some(cursor.to_string());
+                                plan.page_chains.insert(
+                                    strategy.strategy_id.clone(),
+                                    PageChain {
+                                        cursor: cursor.to_string(),
+                                        chain_id: uuid::Uuid::new_v4().to_string(),
+                                    },
+                                );
+                                plan.strategies.push(strategy);
+                                continue;
+                            }
+                            Ok(false) => {}
+                            Err(error) => self.warn(&error, "failed to take over indexer listing"),
+                        }
+                    }
+                    Some(_) => {}
+                    // The owner claimed the first page and recorded nothing:
+                    // read it again, which takes the listing over.
+                    None => {
+                        plan.strategies.push(strategy);
+                        continue;
+                    }
+                }
+            }
+            plan.served += 1;
+            if !listing.finished {
+                plan.served_open += 1;
+            }
+            debug!(
+                indexer_id = self.diagnostics.indexer_id.as_str(),
+                strategy = strategy.labels.first().map(String::as_str).unwrap_or(""),
+                owner_scope = listing.owner.scope_key.as_str(),
+                open = !listing.finished,
+                "indexer strategy reads a listing already read; served from it"
+            );
+        }
+        Ok(plan)
+    }
+
+    /// The listing a strategy owns or reads. A strategy with neither joins a
+    /// listing already shared across the title's scopes when it lists a
+    /// release of the strategy's scope; without that evidence it reads live.
+    async fn relation<'a>(
+        &self,
+        listings: &'a [IndexerSearchListing],
+        me: &IndexerSearchListingStrategy,
+        family: &str,
+    ) -> AppResult<Option<ListingRelation<'a>>> {
+        if let Some(listing) = listings.iter().find(|listing| listing.owner == *me) {
+            return Ok(Some(ListingRelation::Owns(listing)));
+        }
+        if let Some(listing) = listings
+            .iter()
+            .find(|listing| listing.readers.iter().any(|reader| reader.strategy == *me))
+        {
+            return Ok(Some(ListingRelation::Reads(listing)));
+        }
+        for listing in listings.iter().filter(|listing| {
+            let shared = listing
+                .readers
+                .iter()
+                .any(|reader| reader.strategy.scope_key != listing.owner.scope_key);
+            let same_shape = listing.owner_strategy_family == family
+                || listing
+                    .readers
+                    .iter()
+                    .any(|reader| reader.strategy_family == family);
+            shared && same_shape && !listing.run_ids.is_empty()
+        }) {
+            match self.listing_covers_scope(listing).await {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(error) if error.is_canceled() => return Err(error),
+                Err(error) => {
+                    self.warn(&error, "failed to read indexer listing");
+                    continue;
+                }
+            }
+            if let Err(error) = self
+                .diagnostics
+                .repository
+                .join_search_listing(
+                    &self.listing_scope(),
+                    &listing.first_page_fingerprint,
+                    me,
+                    family,
+                    Utc::now(),
+                )
+                .await
+            {
+                self.warn(&error, "failed to record indexer listing reader");
+                return Ok(None);
+            }
+            return Ok(Some(ListingRelation::Reads(listing)));
+        }
+        Ok(None)
+    }
+
+    /// Whether the listing's recorded pages hold a release of this scope.
+    async fn listing_covers_scope(&self, listing: &IndexerSearchListing) -> AppResult<bool> {
+        let mut cursor = None;
+        loop {
+            let page = self
+                .diagnostics
+                .repository
+                .list_search_run_candidates(
+                    &listing.run_ids,
+                    cursor.as_deref(),
+                    CANDIDATE_REPLAY_BATCH_SIZE,
+                )
+                .await?;
+            if page
+                .candidates
+                .into_iter()
+                .filter_map(|record| reusable_candidate_from_record(record, &self.config))
+                .any(|candidate| self.scope.covered_by(&candidate))
+            {
+                return Ok(true);
+            }
+            match page.next_cursor {
+                Some(next) if cursor.as_ref().is_none_or(|previous| next > *previous) => {
+                    cursor = Some(next);
+                }
+                _ => return Ok(false),
+            }
+        }
+    }
+
+    fn filter_for(&self, entry: &ListingStrategyEntry) -> Arc<ReplayFilter> {
+        Arc::new(ReplayFilter {
+            query: self.scope.query.clone(),
+            season: self.scope.season,
+            episode: self.scope.episode,
+            numbering_context: self.scope.numbering_context.clone(),
+            tagged_aliases: self.scope.tagged_aliases.clone(),
+            title_guard_mode: entry.title_guard_mode,
+            strategy_label: entry.label.clone(),
+        })
+    }
+
+    /// Whether this strategy is an id lookup whose first page is compared.
+    fn tracks(&self, strategy_id: &str) -> bool {
+        self.lock().strategies.contains_key(strategy_id)
+    }
+
+    /// Whether this strategy owns its listing's chain: its runs then keep
+    /// every result the indexer returned, for whichever scope replays them.
+    fn persists_whole_answer(&self, strategy_id: &str) -> bool {
+        self.lock().owned.contains_key(strategy_id)
+    }
+
+    /// Whether this strategy stopped at a first page whose listing another
+    /// chain is still reading: its partial answer moves with that chain.
+    fn rides(&self, strategy_id: &str) -> bool {
+        self.lock().riders.contains(strategy_id)
+    }
+
+    /// The gate a paged read asks after its first page.
+    fn first_page_gate(
+        &self,
+        strategy_id: &str,
+        sink: IndexerSearchPageSink,
+    ) -> IndexerFirstPageGate {
+        let probe = self.clone();
+        let strategy_id = strategy_id.to_string();
+        IndexerFirstPageGate::new(move |fingerprint| {
+            let probe = probe.clone();
+            let strategy_id = strategy_id.clone();
+            let sink = sink.clone();
+            async move { probe.claim(&strategy_id, fingerprint, &sink).await }
+        })
+    }
+
+    /// Records a strategy's first page: the strategy owns that listing from
+    /// page one, or stops there as a reader of the chain already reading it.
+    async fn claim(
+        &self,
+        strategy_id: &str,
+        first_page_fingerprint: String,
+        sink: &IndexerSearchPageSink,
+    ) -> IndexerFirstPageVerdict {
+        let family = self
+            .lock()
+            .strategies
+            .get(strategy_id)
+            .map(|entry| entry.family.clone());
+        let Some(family) = family else {
+            return IndexerFirstPageVerdict::ReadOn;
+        };
+        let now = Utc::now();
+        match self
+            .diagnostics
+            .repository
+            .claim_search_listing(
+                &self.listing_scope(),
+                &first_page_fingerprint,
+                &self.strategy(strategy_id),
+                &family,
+                now - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS),
+                now - Duration::hours(LISTING_OWNER_IDLE_HOURS),
+                now,
+            )
+            .await
+        {
+            Ok(IndexerSearchListingClaim::Owner) => {
+                self.lock()
+                    .owned
+                    .insert(strategy_id.to_string(), first_page_fingerprint);
+                IndexerFirstPageVerdict::ReadOn
+            }
+            Ok(IndexerSearchListingClaim::SameListing {
+                owner: _,
+                listing_open,
+            }) => {
+                let listings = self.listings().await;
+                let Some(listing) = listings
+                    .iter()
+                    .find(|listing| listing.first_page_fingerprint == first_page_fingerprint)
+                else {
+                    return IndexerFirstPageVerdict::ReadOn;
+                };
+                let Ok(ReplayOutcome::Served(count)) =
+                    self.replay_listing(listing, strategy_id, sink).await
+                else {
+                    return IndexerFirstPageVerdict::ReadOn;
+                };
+                let mut state = self.lock();
+                state.owned.remove(strategy_id);
+                if listing_open {
+                    state.riders.insert(strategy_id.to_string());
+                }
+                state.follower_replayed = state.follower_replayed.saturating_add(count);
+                IndexerFirstPageVerdict::Stop { listing_open }
+            }
+            Err(error) => {
+                self.warn(&error, "failed to record indexer listing page");
+                IndexerFirstPageVerdict::ReadOn
+            }
+        }
+    }
+
+    /// Adds an owner's run to its listing's chain.
+    async fn note_run(&self, strategy_id: &str, run_id: &str, next_cursor: Option<&str>) {
+        let fingerprint = self.lock().owned.get(strategy_id).cloned();
+        let Some(fingerprint) = fingerprint else {
+            return;
+        };
+        match self
+            .diagnostics
+            .repository
+            .link_search_listing_run(
+                &self.listing_scope(),
+                &fingerprint,
+                &self.strategy(strategy_id),
+                run_id,
+                next_cursor,
+                Utc::now(),
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                self.lock().owned.remove(strategy_id);
+            }
+            Err(error) => self.warn(&error, "failed to record indexer listing page"),
+        }
+    }
+
+    /// Collects counts only: replay must succeed before a follower stops.
+    fn take_follower_replayed(&self) -> usize {
+        std::mem::take(&mut self.lock().follower_replayed)
+    }
+
+    /// Sends a listing's recorded pages through this scope's result guard,
+    /// once per listing per pass. A failed replay is logged; the strategy's
+    /// own first page still stands.
+    async fn replay_listing(
+        &self,
+        listing: &IndexerSearchListing,
+        strategy_id: &str,
+        page_sink: &IndexerSearchPageSink,
+    ) -> AppResult<ReplayOutcome> {
+        let (filter, branch, already_replayed) = {
+            let state = self.lock();
+            if listing.run_ids.is_empty() {
+                return Ok(ReplayOutcome::Unavailable);
+            }
+            let Some(entry) = state.strategies.get(strategy_id) else {
+                return Ok(ReplayOutcome::Unavailable);
+            };
+            (
+                self.filter_for(entry),
+                entry.branch.clone(),
+                state.replayed.contains(&listing.first_page_fingerprint),
+            )
+        };
+        let replay = CandidateReplay {
+            context: self.diagnostics.clone(),
+            config: self.config.clone(),
+            run_ids: listing.run_ids.clone(),
+            provenance: reusable_strategy_provenance(&branch),
+            filter: Some(filter),
+        };
+        let outcome = if already_replayed {
+            replay.preflight().await.map(|safe| {
+                if safe {
+                    ReplayOutcome::Served(0)
+                } else {
+                    ReplayOutcome::Unavailable
+                }
+            })
+        } else {
+            replay.send(page_sink, &self.diagnostics.indexer_id).await
+        };
+        match outcome {
+            Ok(ReplayOutcome::Served(count)) => {
+                self.lock()
+                    .replayed
+                    .insert(listing.first_page_fingerprint.clone());
+                Ok(ReplayOutcome::Served(count))
+            }
+            Ok(ReplayOutcome::Unavailable) => Ok(ReplayOutcome::Unavailable),
+            Err(error) if error.is_canceled() => Err(error),
+            Err(error) => {
+                self.warn(&error, "indexer listing replay failed");
+                Ok(ReplayOutcome::Unavailable)
+            }
+        }
+    }
+}
+
+/// The whole answer a listing strategy persists: every result, annotated as
+/// the guard annotates them but with no scope applied, so any scope that
+/// replays the listing can guard it for itself.
+fn listing_persisted_response(
+    response: &IndexerSearchResponse,
+    title_guard_mode: TitleGuardMode,
+    strategy_label: &str,
+) -> IndexerSearchResponse {
+    let mut persisted = response.clone();
+    filter_strategy_results(
+        &mut persisted.results,
+        &FilterStrategyContext {
+            query: "",
+            season: None,
+            episode: None,
+            numbering_context: &IndexerSearchNumberingContext::default(),
+            tagged_aliases: &[],
+            title_guard_mode,
+            strategy_label,
+            is_rss_request: false,
+        },
+    );
+    persisted
 }
 
 impl ReusableStrategyState {
@@ -1162,6 +1959,7 @@ impl SearchDiagnosticsContext {
                 config: config.clone(),
                 run_ids: vec![run_id],
                 provenance: reusable_strategy_provenance(&state.branch),
+                filter: None,
             });
             reusable.insert(
                 state.query_signature,
@@ -1227,6 +2025,7 @@ impl SearchDiagnosticsContext {
                         config: config.clone(),
                         run_ids: Vec::new(),
                         provenance: reusable_strategy_provenance(&state.branch),
+                        filter: None,
                     });
                 for run_id in &state.chain_run_ids {
                     if !replay.run_ids.contains(run_id) {
@@ -1477,6 +2276,7 @@ fn reusable_candidate_from_record(
             tmdb_id: normalized.response_tmdb_id,
             imdb_id: normalized.response_imdb_id,
             categories: normalized.response_categories,
+            ..Default::default()
         },
         guid: normalized.provider_ref,
         info_url: None,
@@ -1712,21 +2512,12 @@ impl StrategyBatchHealth {
 /// [`DEFAULT_RSS_INDEXER_POLL_CONCURRENCY`].
 const INTERACTIVE_INDEXER_SEARCH_CONCURRENCY_LIMIT: usize = 24;
 
-/// How many indexer RSS polls run at once. Every poll holds its whole feed (a
-/// catch-up poll can be thousands of results) until the RSS worker has taken
-/// it, so the old unbounded fan-out made a cycle's peak memory grow with the
-/// number of configured indexers. Two keeps a cycle moving while one poll is
-/// paced or slow and keeps live results at a couple of polls.
-const DEFAULT_RSS_INDEXER_POLL_CONCURRENCY: usize = 2;
+/// Maximum simultaneous RSS polls, including feeds waiting for hand-off.
+/// Completion of any poll frees a slot for the next due indexer; there is no
+/// per-cycle indexer limit and no fixed waves.
+const DEFAULT_RSS_INDEXER_POLL_CONCURRENCY: usize = 15;
 /// Overrides [`DEFAULT_RSS_INDEXER_POLL_CONCURRENCY`].
 pub const RSS_INDEXER_POLL_CONCURRENCY_ENV: &str = "SCRYER_RSS_INDEXER_CONCURRENCY";
-/// How many indexers one RSS tick polls at most, whatever the concurrency.
-/// Indexers due beyond it stay due and go first on the next tick, most
-/// overdue first, so an install with dozens of indexers spreads them over
-/// several ticks instead of hitting every one of them at once.
-const DEFAULT_RSS_TICK_INDEXER_LIMIT: usize = 10;
-/// Overrides [`DEFAULT_RSS_TICK_INDEXER_LIMIT`].
-pub const RSS_TICK_INDEXER_LIMIT_ENV: &str = "SCRYER_RSS_TICK_INDEXER_LIMIT";
 /// Provider pages one RSS poll asks for; its item cap, sent to the plugin as
 /// the request's result limit, is counted in pages of
 /// [`RSS_POLL_ITEMS_PER_PAGE`]. Ten pages of a hundred is Sonarr's
@@ -1764,19 +2555,6 @@ fn parse_rss_indexer_poll_concurrency(raw: Option<&str>) -> usize {
         .filter(|limit| *limit > 0)
         .unwrap_or(DEFAULT_RSS_INDEXER_POLL_CONCURRENCY)
 }
-
-/// Absent, blank, unparseable and zero all fall back to the default.
-fn parse_rss_tick_indexer_limit(raw: Option<&str>) -> usize {
-    raw.map(str::trim)
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|limit| *limit > 0)
-        .unwrap_or(DEFAULT_RSS_TICK_INDEXER_LIMIT)
-}
-
-/// The per-tick RSS indexer limit for this process, read once.
-static RSS_TICK_INDEXER_LIMIT: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
-    parse_rss_tick_indexer_limit(std::env::var(RSS_TICK_INDEXER_LIMIT_ENV).ok().as_deref())
-});
 
 /// Absent, blank, unparseable and zero all fall back to the default.
 fn parse_rss_poll_page_budget(raw: Option<&str>) -> u32 {
@@ -1871,8 +2649,51 @@ fn truncate_rss_poll_results(results: &mut Vec<IndexerSearchResult>, cap: usize)
     before - results.len()
 }
 
+fn rss_deferred_response(
+    indexer_id: String,
+    retry_after: Option<std::time::Duration>,
+) -> IndexerSearchResponse {
+    IndexerSearchResponse {
+        next_cursor: None,
+        results: Vec::new(),
+        indexer_outcomes: vec![IndexerQueryOutcome {
+            page: None,
+            indexer_id,
+            outcome: IndexerSearchOutcome::Deferred { retry_after },
+        }],
+        completion: IndexerSearchCompletion::Partial {
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            retry_after,
+        },
+        api_current: None,
+        api_max: None,
+        grab_current: None,
+        grab_max: None,
+    }
+}
+
 const LEARNED_EMPTY_SUPPRESSION_THRESHOLD: u32 = 3;
 const LEARNED_SUPPRESSION_REPROBE_INTERVAL_DAYS: i64 = 7;
+
+/// Distinct titles in a row whose background searches an indexer answered
+/// with nothing usable before background searches leave it out of that
+/// media facet. A general tracker that never carries anime reaches this
+/// within one walk; one usable result anywhere resets it.
+const FACET_EMPTY_TITLE_THRESHOLD: usize = 5;
+/// How long a learned-empty facet keeps an indexer out of background
+/// searches before one re-probe may ask it again.
+const FACET_SUPPRESSION_HOURS: i64 = 24;
+/// How long a claimed facet re-probe holds other background searches off
+/// before another may claim it, in case the claimed one errors.
+const FACET_REPROBE_CLAIM_MINUTES: i64 = 60;
+
+fn facet_learning_policy() -> IndexerFacetLearningPolicy {
+    IndexerFacetLearningPolicy {
+        empty_title_threshold: FACET_EMPTY_TITLE_THRESHOLD,
+        suppression: Duration::hours(FACET_SUPPRESSION_HOURS),
+        reprobe_claim: Duration::minutes(FACET_REPROBE_CLAIM_MINUTES),
+    }
+}
 
 /// Why an indexer never reached dispatch for one search.
 ///
@@ -1913,6 +2734,8 @@ enum IndexerSkipReason {
     QueryBudgetExceeded,
     /// A Prowlarr managed child whose caps snapshot has not been fetched yet.
     ManagedCapsPending,
+    /// Background searches learned the indexer carries nothing for the facet.
+    FacetSuppressed,
 }
 
 impl IndexerSkipReason {
@@ -1934,6 +2757,7 @@ impl IndexerSkipReason {
             Self::StrategiesSuppressed => "strategies_suppressed",
             Self::QueryBudgetExceeded => "query_budget_exceeded",
             Self::ManagedCapsPending => "managed_caps_pending",
+            Self::FacetSuppressed => "facet_suppressed",
         }
     }
 
@@ -1957,6 +2781,7 @@ impl IndexerSkipReason {
             Self::StrategiesSuppressed => "all automatic search strategies are learned-suppressed",
             Self::QueryBudgetExceeded => "over its query budget for an interactive search",
             Self::ManagedCapsPending => "managed indexer caps not fetched yet",
+            Self::FacetSuppressed => "learned to carry nothing for this facet",
         }
     }
 }
@@ -2091,157 +2916,23 @@ fn log_indexer_skip(
     }
 }
 
-/// Where one indexer's RSS polls fall on the sync worker's tick grid.
-///
-/// The worker wakes every tick, but one healthy-quota cadence spans `slots`
-/// ticks (three at the defaults: a 15-minute cadence on a 5-minute tick). Each
-/// indexer owns one of those ticks, so a tick polls roughly a third of the
-/// indexers rather than all of them every third tick. Ticks are numbered from
-/// wall time, so a restart resumes the same pattern instead of starting over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RssTickSlot {
-    tick_secs: i64,
-    slots: i64,
-    slot: i64,
-}
-
-impl RssTickSlot {
-    fn tick_index(&self, at: DateTime<Utc>) -> i64 {
-        at.timestamp().div_euclid(self.tick_secs)
-    }
-
-    fn tick_start(&self, index: i64) -> DateTime<Utc> {
-        DateTime::<Utc>::from_timestamp(index.saturating_mul(self.tick_secs), 0)
-            .unwrap_or(DateTime::<Utc>::MAX_UTC)
-    }
-
-    /// Ticks until this indexer's own slot comes round, counting from
-    /// `index`: zero when `index` is its slot.
-    fn ticks_until_slot(&self, index: i64) -> i64 {
-        (self.slot - index).rem_euclid(self.slots)
-    }
-
-    /// The tick at which an indexer last polled at `last_poll_at` is due
-    /// again, given the cadence it has learned.
-    ///
-    /// On the healthy cadence the next poll is the slot tick nearest to one
-    /// cadence after the tick the poll ran on (a tie goes to the later one).
-    /// A poll on its own slot is therefore due exactly a cadence later, and a
-    /// poll off it (held back by the per-tick limit, a never-polled indexer's
-    /// first poll, an escalated poll, a slot moved by an added indexer) is
-    /// pulled back onto the slot within half a cadence either way rather than
-    /// a full extra cycle late or a tick after the last.
-    ///
-    /// A learned cadence longer than the healthy one (quota pressure) only
-    /// ever rounds forward, to the first slot tick at least that far on, so it
-    /// is never shortened. One shorter than a slot cycle cannot be held to the
-    /// slot and runs on its own interval.
-    fn next_due_tick(&self, last_poll_at: DateTime<Utc>, interval: std::time::Duration) -> i64 {
-        let poll_tick = self.tick_index(last_poll_at);
-        let interval_ticks = interval
-            .as_secs()
-            .div_ceil(self.tick_secs as u64)
-            .clamp(1, i64::MAX as u64) as i64;
-        if interval_ticks < self.slots {
-            return poll_tick.saturating_add(interval_ticks);
-        }
-        let target = poll_tick.saturating_add(interval_ticks);
-        let forward = self.ticks_until_slot(target);
-        let backward = (self.slots - forward) % self.slots;
-        if interval_ticks == self.slots && backward > 0 && backward < forward {
-            target - backward
-        } else {
-            target.saturating_add(forward)
-        }
-    }
-}
-
-/// Ticks in one healthy-quota RSS cadence, never fewer than one. A cadence
-/// equal to the tick (the shortened test cadence pulls the tick down with it)
-/// gives one slot: every indexer is a candidate on every tick.
-fn rss_slot_count(target_interval: std::time::Duration, tick: std::time::Duration) -> i64 {
-    let tick_secs = tick.as_secs().max(1);
-    (target_interval.as_secs().max(1).div_ceil(tick_secs) as i64).max(1)
-}
-
-/// Spreads indexers over the slots: sorted by id, the n-th takes slot
-/// `n % slots`, so slot sizes differ by at most one. Ids never change, so an
-/// indexer keeps its slot until an indexer is added or removed ahead of it in
-/// that order; one that moves then has a single gap of two to four ticks while
-/// it settles onto the new slot.
-fn rss_tick_slots_for<'a>(
-    indexer_ids: impl IntoIterator<Item = &'a str>,
-    tick: std::time::Duration,
-    target_interval: std::time::Duration,
-) -> HashMap<String, RssTickSlot> {
-    let slots = rss_slot_count(target_interval, tick);
-    let tick_secs = (tick.as_secs().max(1)).min(i64::MAX as u64) as i64;
-    let mut ids = indexer_ids.into_iter().collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    ids.into_iter()
-        .enumerate()
-        .map(|(index, id)| {
-            (
-                id.to_string(),
-                RssTickSlot {
-                    tick_secs,
-                    slots,
-                    slot: index as i64 % slots,
-                },
-            )
-        })
-        .collect()
-}
-
-/// An indexer due on this tick, as the per-tick limit ranks it.
-struct RssTickDueIndexer {
-    indexer_id: String,
-    last_successful_poll_at: Option<DateTime<Utc>>,
-    /// When the slot rule made it due (its `latest_safe_poll_at`).
-    due_since: DateTime<Utc>,
-    slot: RssTickSlot,
-}
-
-/// Splits the indexers due on the tick at `now` into those polled now and
-/// those left due for the next tick.
-///
-/// Most overdue first: never polled before anything, then the oldest last
-/// successful poll, then the longest due, so one held back by the last tick
-/// goes ahead of one whose slot is this tick. Remaining ties go to the
-/// indexer whose own slot is nearest, so a first pass over never-polled
-/// indexers polls each on its own slot, then by id so the split is
-/// reproducible.
-fn rss_tick_poll_selection(
-    mut due: Vec<RssTickDueIndexer>,
-    now: DateTime<Utc>,
-    limit: usize,
-) -> (Vec<String>, Vec<String>) {
-    due.sort_by(|left, right| {
-        left.last_successful_poll_at
-            .is_some()
-            .cmp(&right.last_successful_poll_at.is_some())
-            .then_with(|| {
-                left.last_successful_poll_at
-                    .cmp(&right.last_successful_poll_at)
-            })
-            .then_with(|| left.due_since.cmp(&right.due_since))
-            .then_with(|| {
-                left.slot
-                    .ticks_until_slot(left.slot.tick_index(now))
-                    .cmp(&right.slot.ticks_until_slot(right.slot.tick_index(now)))
-            })
-            .then_with(|| left.indexer_id.cmp(&right.indexer_id))
-    });
-    let deferred = due
-        .split_off(limit.min(due.len()))
-        .into_iter()
-        .map(|entry| entry.indexer_id)
-        .collect();
-    (
-        due.into_iter().map(|entry| entry.indexer_id).collect(),
-        deferred,
+/// Align ordinary polls to the cycle containing their completion, avoiding
+/// an extra skipped cycle just because a request finished after the tick.
+/// Every indexer uses the same grid; there are no assigned indexer groups.
+fn rss_next_poll_at(last_poll_at: DateTime<Utc>, interval: std::time::Duration) -> DateTime<Utc> {
+    let tick_secs = scryer_application::rss_sync_tick_period().as_secs().max(1) as i64;
+    let poll_tick = last_poll_at.timestamp().div_euclid(tick_secs);
+    let interval_ticks = interval
+        .as_secs()
+        .div_ceil(tick_secs as u64)
+        .clamp(1, i64::MAX as u64) as i64;
+    DateTime::<Utc>::from_timestamp(
+        poll_tick
+            .saturating_add(interval_ticks)
+            .saturating_mul(tick_secs),
+        0,
     )
+    .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 fn should_run_fallback_tier(
@@ -2557,6 +3248,207 @@ fn record_auto_strategy_selection(
     );
 }
 
+/// One indexer's learning outcomes from one search, held in memory while the
+/// indexer's strategies run and written in one batch when its part of the
+/// search ends. Suppression is decided from the title's learning rows as
+/// read when the search began plus this search's outcomes, so nothing is
+/// read back after the write.
+struct StrategyLearningBatch {
+    indexer_id: String,
+    indexer_name: String,
+    learning_context: Option<IndexerSearchLearningContext>,
+    mode: SearchMode,
+    /// The title's learning rows on this indexer when the search began.
+    /// `None` when they could not be read, which leaves suppression alone.
+    start_records: Option<Vec<IndexerSearchLearningRecord>>,
+    strategy_outcomes: Vec<(String, u32)>,
+    facet_outcomes: Vec<IndexerFacetSearchOutcome>,
+}
+
+impl StrategyLearningBatch {
+    fn new(
+        indexer_id: String,
+        indexer_name: String,
+        learning_context: Option<IndexerSearchLearningContext>,
+        mode: SearchMode,
+        start_records: Option<Vec<IndexerSearchLearningRecord>>,
+    ) -> Self {
+        Self {
+            indexer_id,
+            indexer_name,
+            learning_context,
+            mode,
+            start_records,
+            strategy_outcomes: Vec::new(),
+            facet_outcomes: Vec::new(),
+        }
+    }
+
+    /// The context outcomes are learned under: a title search, never RSS.
+    fn learnable_context(&self) -> Option<&IndexerSearchLearningContext> {
+        self.learning_context.as_ref().filter(|context| {
+            !context.title_id.trim().is_empty()
+                && context.subject_kind != ReleaseSearchSubjectKind::Rss
+        })
+    }
+
+    /// Notes one complete strategy answer. A usable result from any search
+    /// with a title counts for the facet; only a background pass's empty
+    /// answer counts toward the facet streak, so an operator's searches never
+    /// suppress a facet. Strategy rows learn from automatic searches only.
+    /// Errors, partial answers and deferrals never reach here.
+    fn observe(&mut self, strategy_label: &str, usable_hits: usize) {
+        let (facet_outcome, strategy_key) = {
+            let Some(context) = self.learnable_context() else {
+                return;
+            };
+            let facet_outcome = if usable_hits > 0 {
+                Some(IndexerFacetSearchOutcome::Usable)
+            } else if candidate_reuse_permitted(self.mode, Some(context)) {
+                Some(IndexerFacetSearchOutcome::Empty)
+            } else {
+                None
+            };
+            let strategy_key = (self.mode == SearchMode::Auto)
+                .then(|| learning_strategy_key(strategy_label))
+                .flatten()
+                .map(str::to_string);
+            (facet_outcome, strategy_key)
+        };
+        if let Some(outcome) = facet_outcome {
+            self.facet_outcomes.push(outcome);
+        }
+        if let Some(strategy_key) = strategy_key {
+            self.strategy_outcomes
+                .push((strategy_key, usable_hits.min(u32::MAX as usize) as u32));
+        }
+    }
+
+    /// The ID strategies this search's outcomes leave learned-empty, with
+    /// their empty count: not suppressed yet, at the threshold, never usable,
+    /// and with another strategy of the title that has worked.
+    fn learned_suppressions(&self) -> Vec<(String, u32)> {
+        let Some(start_records) = self.start_records.as_ref() else {
+            return Vec::new();
+        };
+        if self.strategy_outcomes.is_empty() {
+            return Vec::new();
+        }
+        // (strategy key, empty successes, usable successes, suppressed)
+        let mut projected = start_records
+            .iter()
+            .map(|record| {
+                (
+                    record.key.strategy_key.clone(),
+                    record.empty_successes,
+                    record.usable_successes,
+                    record.suppressed,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (strategy_key, usable_hits) in &self.strategy_outcomes {
+            let index = match projected.iter().position(|row| &row.0 == strategy_key) {
+                Some(index) => index,
+                None => {
+                    projected.push((strategy_key.clone(), 0, 0, false));
+                    projected.len() - 1
+                }
+            };
+            let row = &mut projected[index];
+            if *usable_hits == 0 {
+                row.1 = row.1.saturating_add(1);
+            } else {
+                row.2 = row.2.saturating_add(1);
+                row.3 = false;
+            }
+        }
+        projected
+            .iter()
+            .filter(|row| is_learning_id_strategy_key(&row.0))
+            .filter(|row| !row.3 && row.1 >= LEARNED_EMPTY_SUPPRESSION_THRESHOLD && row.2 == 0)
+            .filter(|row| {
+                projected
+                    .iter()
+                    .any(|candidate| candidate.0 != row.0 && candidate.2 > 0)
+            })
+            .map(|row| (row.0.clone(), row.1))
+            .collect()
+    }
+
+    async fn flush(self, search_learning: &Arc<dyn IndexerSearchLearningRepository>) {
+        let Some(context) = self.learnable_context() else {
+            return;
+        };
+        if self.strategy_outcomes.is_empty() && self.facet_outcomes.is_empty() {
+            return;
+        }
+        let suppressions = self.learned_suppressions();
+        let batch = IndexerSearchLearningBatch {
+            indexer_id: self.indexer_id.clone(),
+            title_id: context.title_id.clone(),
+            facet: context.facet.clone(),
+            strategy_outcomes: self.strategy_outcomes.clone(),
+            suppress: suppressions.iter().map(|(key, _)| key.clone()).collect(),
+            facet_outcomes: self.facet_outcomes.clone(),
+            now: Utc::now(),
+            facet_policy: facet_learning_policy(),
+        };
+        let indexer_name = self.indexer_name.as_str();
+        let facet = context.facet.as_str();
+        let transitions = match search_learning.record_learning_batch(&batch).await {
+            Ok(transitions) => transitions,
+            Err(error) => {
+                warn!(
+                    indexer = indexer_name,
+                    facet,
+                    outcomes = batch.strategy_outcomes.len(),
+                    error = %error,
+                    "failed to record indexer search learning outcomes"
+                );
+                return;
+            }
+        };
+        for transition in transitions {
+            match transition {
+                IndexerFacetTransition::Suppressed { streak, until } => {
+                    info!(
+                        indexer = indexer_name,
+                        facet,
+                        streak,
+                        suppressed_until = %until,
+                        "suppressing indexer for this facet in background searches: recent titles all came back empty"
+                    );
+                }
+                IndexerFacetTransition::Cleared {
+                    streak,
+                    was_suppressed: true,
+                } => {
+                    info!(
+                        indexer = indexer_name,
+                        facet,
+                        streak,
+                        "cleared learned-empty facet suppression after a usable result"
+                    );
+                }
+                _ => {}
+            }
+        }
+        for (strategy_key, empty_successes) in &suppressions {
+            info!(
+                indexer = indexer_name,
+                title_id = context.title_id.as_str(),
+                facet,
+                strategy = strategy_key.as_str(),
+                empty_successes,
+                "suppressing learned-empty automatic indexer search strategy"
+            );
+        }
+    }
+}
+
+/// Records one strategy outcome as a search of its own: reads the title's
+/// learning state, observes the outcome and writes the batch.
+#[cfg(test)]
 async fn record_strategy_learning_outcome(
     search_learning: &Arc<dyn IndexerSearchLearningRepository>,
     learning_context: Option<&IndexerSearchLearningContext>,
@@ -2566,90 +3458,65 @@ async fn record_strategy_learning_outcome(
     strategy_label: &str,
     usable_hits: usize,
 ) {
-    if mode != SearchMode::Auto {
-        return;
-    }
-    let Some(learning_context) = learning_context else {
-        return;
+    let start_records = match learning_context {
+        Some(context) if mode == SearchMode::Auto => search_learning
+            .list_for_title(indexer_id, &context.title_id, &context.facet)
+            .await
+            .ok(),
+        _ => None,
     };
-    if learning_context.title_id.trim().is_empty()
-        || learning_context.subject_kind == ReleaseSearchSubjectKind::Rss
-    {
-        return;
-    }
-    let Some(strategy_key) = learning_strategy_key(strategy_label) else {
-        return;
+    let mut batch = StrategyLearningBatch::new(
+        indexer_id.to_string(),
+        indexer_name.to_string(),
+        learning_context.cloned(),
+        mode,
+        start_records,
+    );
+    batch.observe(strategy_label, usable_hits);
+    batch.flush(search_learning).await;
+}
+
+/// Whether a background pass leaves this indexer out of the facet. A
+/// suppression whose window has passed lets exactly one search through as
+/// the re-probe; every other search keeps skipping until that one lands or
+/// its claim lapses. A failed claim keeps the indexer out, like the
+/// per-strategy re-probe.
+async fn facet_suppressed_for_background(
+    search_learning: &Arc<dyn IndexerSearchLearningRepository>,
+    state: Option<&IndexerFacetLearningState>,
+    indexer_id: &str,
+    indexer_name: &str,
+    facet: &str,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(state) = state.filter(|state| state.suppressed_until.is_some()) else {
+        return false;
     };
-
-    let key = IndexerSearchLearningKey {
-        indexer_id: indexer_id.to_string(),
-        title_id: learning_context.title_id.clone(),
-        facet: learning_context.facet.clone(),
-        strategy_key: strategy_key.to_string(),
-    };
-    let usable_hits = usable_hits.min(u32::MAX as usize) as u32;
-
-    if let Err(error) = search_learning.record_outcome(&key, usable_hits).await {
-        warn!(
-            indexer = indexer_name,
-            strategy = strategy_key,
-            error = %error,
-            "failed to record indexer search learning outcome"
-        );
-        return;
+    let policy = facet_learning_policy();
+    if state.held_until(now, policy).is_some() {
+        return true;
     }
-
-    let records = match search_learning
-        .list_for_title(
-            indexer_id,
-            &learning_context.title_id,
-            &learning_context.facet,
-        )
+    match search_learning
+        .try_claim_facet_reprobe(indexer_id, facet, now, policy)
         .await
     {
-        Ok(records) => records,
+        Ok(true) => {
+            debug!(
+                indexer = indexer_name,
+                facet, "claimed learned-empty facet re-probe"
+            );
+            false
+        }
+        Ok(false) => true,
         Err(error) => {
             warn!(
                 indexer = indexer_name,
+                facet,
                 error = %error,
-                "failed to load indexer search learning outcomes"
+                "failed to claim learned-empty facet re-probe"
             );
-            return;
+            true
         }
-    };
-
-    for record in records
-        .iter()
-        .filter(|record| is_learning_id_strategy_key(&record.key.strategy_key))
-        .filter(|record| !record.suppressed)
-        .filter(|record| record.empty_successes >= LEARNED_EMPTY_SUPPRESSION_THRESHOLD)
-        .filter(|record| record.usable_successes == 0)
-    {
-        let has_working_alternative = records.iter().any(|candidate| {
-            candidate.key.strategy_key != record.key.strategy_key && candidate.usable_successes > 0
-        });
-        if !has_working_alternative {
-            continue;
-        }
-
-        if let Err(error) = search_learning.set_suppressed(&record.key, true).await {
-            warn!(
-                indexer = indexer_name,
-                strategy = record.key.strategy_key.as_str(),
-                error = %error,
-                "failed to suppress learned-empty indexer search strategy"
-            );
-            continue;
-        }
-
-        info!(
-            indexer = indexer_name,
-            title_id = learning_context.title_id.as_str(),
-            facet = learning_context.facet.as_str(),
-            strategy = record.key.strategy_key.as_str(),
-            empty_successes = record.empty_successes,
-            "suppressing learned-empty automatic indexer search strategy"
-        );
     }
 }
 
@@ -3106,8 +3973,8 @@ struct IndexerPacing {
     max_queries_per_minute: Option<u32>,
     /// The longest a request waits for its slot. An interactive search has a
     /// user waiting on it, so a slot further out than this skips the indexer
-    /// for that search instead of holding it for minutes. Background intents
-    /// have no deadline to defend and always wait.
+    /// for that search instead of holding it for minutes. RSS waits at most
+    /// half its cadence; background acquisition continues to wait.
     max_wait: Option<std::time::Duration>,
 }
 
@@ -3125,7 +3992,7 @@ impl IndexerPacing {
     /// The configured interval always applies. Background intents additionally
     /// obey the trickle floor, so a provider that declares a *slower* limit
     /// keeps it while one that declares a faster one (or none) still trickles.
-    /// Only an interactive search caps how long it waits for a slot.
+    /// Interactive searches and RSS cap how long they wait for a slot.
     fn resolve(config: &IndexerConfig, intent: SchedulerIntent) -> Self {
         let configured = std::time::Duration::from_secs(
             config.rate_limit_seconds.unwrap_or_default().max(0) as u64,
@@ -3143,7 +4010,13 @@ impl IndexerPacing {
                 .max_queries_per_minute
                 .filter(|budget| *budget >= 1)
                 .map(|budget| u32::try_from(budget).unwrap_or(u32::MAX)),
-            max_wait: interactive.then_some(INTERACTIVE_PACING_MAX_WAIT),
+            max_wait: match intent {
+                SchedulerIntent::InteractiveSearch => Some(INTERACTIVE_PACING_MAX_WAIT),
+                SchedulerIntent::BackgroundRss => {
+                    Some(crate::upstream_scheduler::rss_target_interval() / 2)
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -3294,6 +4167,9 @@ impl Drop for PacingReservation {
 struct IndexerRateLimiter {
     state: Arc<std::sync::Mutex<IndexerRateLimiterState>>,
     registry: RateLimitRegistry,
+    // One RSS request can reserve and wait before taking feed/lane capacity.
+    // The first strategy consumes this exact reservation, without charging twice.
+    initial_slot: Option<Arc<std::sync::Mutex<Option<PacingSlot>>>>,
 }
 
 impl IndexerRateLimiter {
@@ -3305,7 +4181,25 @@ impl IndexerRateLimiter {
         Self {
             state: Arc::new(std::sync::Mutex::new(IndexerRateLimiterState::default())),
             registry,
+            initial_slot: None,
         }
+    }
+
+    async fn prepare_rss(
+        &self,
+        pacing: &IndexerPacing,
+        cancel: &CancellationToken,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Self, Option<std::time::Duration>> {
+        let slot = self.reserve(pacing).map_err(|error| Some(error.wait))?;
+        within_search_window(tokio::time::sleep_until(slot.dispatch_at), cancel, deadline)
+            .await
+            .map_err(|_| None)?;
+        Ok(Self {
+            state: self.state.clone(),
+            registry: self.registry.clone(),
+            initial_slot: Some(Arc::new(std::sync::Mutex::new(Some(slot)))),
+        })
     }
 
     /// Wait until this domain's next slot: the later of its interval slot and
@@ -3330,6 +4224,13 @@ impl IndexerRateLimiter {
     /// rules as [`Self::acquire`]. The slot is spent once [`PacingSlot::wait`]
     /// completes; dropping it before then gives its budget entry back.
     fn reserve(&self, pacing: &IndexerPacing) -> Result<PacingSlot, PacingWaitExceeded> {
+        if let Some(slot) = self.initial_slot.as_ref().and_then(|slot| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        }) {
+            return Ok(slot);
+        }
         let recovering = self
             .registry
             .destination_recovering(&DestinationKey::from(pacing.domain_key.as_str()));
@@ -3664,6 +4565,8 @@ pub struct MultiIndexerSearchClient {
     indexer_errors: Arc<dyn IndexerErrorRepository>,
     plugin_provider: Arc<dyn IndexerPluginProvider>,
     upstream_scheduler: Arc<dyn UpstreamScheduler>,
+    caps_cache: Arc<scryer_application::CapsRequestCache>,
+    caps_refresher: Option<Arc<dyn scryer_application::IndexerCapsSnapshotRefresher>>,
     rate_limiter: IndexerRateLimiter,
     backoff_tracker: IndexerBackoffTracker,
     rss_feed_cache: RssFeedCache,
@@ -3678,8 +4581,6 @@ pub struct MultiIndexerSearchClient {
     rss_hand_off: Arc<Semaphore>,
     /// Provider pages one RSS poll may hand on.
     rss_poll_page_budget: u32,
-    /// The most indexers one RSS tick polls.
-    rss_tick_indexer_limit: usize,
 }
 
 impl MultiIndexerSearchClient {
@@ -3702,6 +4603,8 @@ impl MultiIndexerSearchClient {
             indexer_errors: Arc::new(NullIndexerErrorRepository),
             plugin_provider,
             upstream_scheduler: Arc::new(NullUpstreamScheduler),
+            caps_cache: Arc::new(scryer_application::CapsRequestCache::default()),
+            caps_refresher: None,
             rate_limiter: IndexerRateLimiter::new(),
             backoff_tracker: IndexerBackoffTracker::new(),
             rss_feed_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -3712,7 +4615,6 @@ impl MultiIndexerSearchClient {
             rss_search_limit: Arc::new(Semaphore::new(*RSS_INDEXER_POLL_CONCURRENCY)),
             rss_hand_off: Arc::new(Semaphore::new(*RSS_INDEXER_POLL_CONCURRENCY)),
             rss_poll_page_budget: *RSS_POLL_PAGE_BUDGET,
-            rss_tick_indexer_limit: *RSS_TICK_INDEXER_LIMIT,
         }
     }
 
@@ -3757,6 +4659,71 @@ impl MultiIndexerSearchClient {
                 SearchMode::Auto => SchedulerIntent::BackgroundAcquisition,
             }
         }
+    }
+
+    pub fn with_caps_resolution(
+        mut self,
+        cache: Arc<scryer_application::CapsRequestCache>,
+        refresher: Arc<dyn scryer_application::IndexerCapsSnapshotRefresher>,
+    ) -> Self {
+        self.caps_cache = cache;
+        self.caps_refresher = Some(refresher);
+        self
+    }
+
+    // A search that is waiting on capabilities is refreshed at interactive
+    // priority whatever mode started it: the stale snapshot still serves the
+    // search, and the refresh is what unblocks every later read of this
+    // indexer. The scheduled maintenance refresh keeps its own intent.
+    async fn resolved_caps_config(
+        &self,
+        config: &IndexerConfig,
+        proxies: &HashMap<String, Option<scryer_domain::ProxyConfig>>,
+    ) -> (IndexerConfig, scryer_application::IndexerCapsDiagnostic) {
+        let mut resolved_config = config.clone();
+        let Some(refresher) = self.caps_refresher.as_ref() else {
+            let diagnostic =
+                scryer_application::cached_indexer_caps(config, Utc::now()).diagnostic();
+            return (resolved_config, diagnostic);
+        };
+        let proxy = config
+            .proxy_config_id
+            .as_ref()
+            .and_then(|id| proxies.get(id))
+            .and_then(Option::as_ref);
+        let accounting = scryer_application::IndexerAccountingContext::for_config(config);
+        let resolved = self
+            .caps_cache
+            .resolve(
+                config,
+                scryer_application::IndexerCapsRefreshContext {
+                    configs: self.indexer_configs.as_ref(),
+                    refresher: refresher.as_ref(),
+                    proxy,
+                    accounting: accounting.as_ref(),
+                    intent: SchedulerIntent::InteractiveSearch,
+                    now: Utc::now(),
+                },
+            )
+            .await;
+        let diagnostic = resolved.diagnostic();
+        if let Some(error) = resolved.refresh_error {
+            tracing::debug!(indexer_id = %config.id, caps_source = ?resolved.source, %error,
+                "search proceeding with cached or permissive indexer capabilities");
+        }
+        if let Some(snapshot) = resolved.snapshot {
+            let mut snapshot =
+                serde_json::to_value(snapshot).expect("capabilities are JSON serializable");
+            if matches!(
+                resolved.source,
+                scryer_application::IndexerCapsSource::Fresh
+                    | scryer_application::IndexerCapsSource::Refreshed
+            ) {
+                snapshot["cache_fetched_at"] = serde_json::json!(Utc::now().to_rfc3339());
+            }
+            resolved_config.caps_snapshot_json = serde_json::to_string(&snapshot).ok();
+        }
+        (resolved_config, diagnostic)
     }
 
     fn scheduler_keys_for_indexer(config: &IndexerConfig) -> (HostKey, DestinationKey) {
@@ -3921,30 +4888,11 @@ impl MultiIndexerSearchClient {
             })
     }
 
-    /// The indexer's RSS freshness on the tick at `now`, with `latest_safe_poll_at`
-    /// placed on its tick slot.
-    ///
-    /// The slot decides when an indexer becomes due after a poll: the start of
-    /// its slot tick about one learned cadence after the poll (see
-    /// [`RssTickSlot::next_due_tick`] for the rounding). Once due it stays
-    /// due on every later tick until it is polled, so one held back by the
-    /// per-tick limit, or by downtime, is not made to wait another cycle. A
-    /// never-polled indexer is due on the tick it is first seen.
-    ///
-    /// The slot governs only that default timing. A learned cadence longer than
-    /// the healthy one still pushes the next poll later, onto a later slot
-    /// tick; one shorter than a slot cycle still runs on its own interval.
-    /// Freshness escalation (`rss_poll_is_due`'s risk test) still polls an
-    /// indexer off its slot; the poll after it is pulled back onto the slot.
-    ///
-    /// The boundary the scheduler persisted after the last poll is not read:
-    /// it is that poll's finishing time plus the learned cadence, which is what
-    /// the slot rule derives from the same two values without the drift a
-    /// finishing time carries.
+    /// Every due indexer participates in the next cycle. Quota-driven cadence
+    /// and freshness escalation still belong to the upstream scheduler.
     fn rss_freshness_context(
         now: DateTime<Utc>,
         activity: SchedulerRssActivity,
-        slot: RssTickSlot,
     ) -> RssFreshnessContext {
         // An indexer with no persisted cadence yet derives its cadence and its
         // freshness risk from this interval. It has to honour
@@ -3959,10 +4907,8 @@ impl MultiIndexerSearchClient {
             .target_interval
             .unwrap_or_else(|| std::time::Duration::from_secs(rss_target_interval_secs as u64));
         let latest_safe_poll_at = match last_successful_poll_at.max(last_attempt_at) {
-            Some(last_poll_at) => {
-                slot.tick_start(slot.next_due_tick(last_poll_at, target_interval))
-            }
-            None => slot.tick_start(slot.tick_index(now)),
+            Some(last_poll_at) => rss_next_poll_at(last_poll_at, target_interval),
+            None => now,
         };
         let elapsed_fraction = |since: DateTime<Utc>| {
             let elapsed = (now - since).num_seconds().max(0) as f64;
@@ -3995,11 +4941,9 @@ impl MultiIndexerSearchClient {
         }
     }
 
-    /// Whether an indexer holds an RSS tick slot: enabled, taking part in
-    /// automatic work, and able to serve a feed. Deliberately blind to
-    /// transient state (backoff, a temporary disable), so slots only move when
-    /// an indexer is added, removed, enabled or disabled.
-    fn is_rss_slot_member(&self, config: &IndexerConfig) -> bool {
+    /// Static RSS eligibility. Transient backoff and quota admission are
+    /// evaluated separately by the upstream scheduler.
+    fn is_rss_poll_eligible(&self, config: &IndexerConfig) -> bool {
         if !config.is_enabled || !Self::auto_mode_enabled(config, true) {
             return false;
         }
@@ -4011,46 +4955,13 @@ impl MultiIndexerSearchClient {
             .rss
     }
 
-    /// Every slot-holding indexer's tick slot, on this process's tick and
-    /// cadence.
-    fn rss_tick_slots(&self, configs: &[IndexerConfig]) -> HashMap<String, RssTickSlot> {
-        rss_tick_slots_for(
-            configs
-                .iter()
-                .filter(|config| self.is_rss_slot_member(config))
-                .map(|config| config.id.as_str()),
-            scryer_application::rss_sync_tick_period(),
-            crate::upstream_scheduler::rss_target_interval(),
-        )
-    }
-
-    /// The slot for an indexer [`Self::rss_tick_slots`] did not place, so it
-    /// is never left without a cadence: the first slot.
-    fn rss_fallback_tick_slot(slots: &HashMap<String, RssTickSlot>) -> RssTickSlot {
-        slots
-            .values()
-            .next()
-            .map(|slot| RssTickSlot { slot: 0, ..*slot })
-            .unwrap_or_else(|| {
-                let tick = scryer_application::rss_sync_tick_period();
-                RssTickSlot {
-                    tick_secs: (tick.as_secs().max(1)).min(i64::MAX as u64) as i64,
-                    slots: rss_slot_count(crate::upstream_scheduler::rss_target_interval(), tick),
-                    slot: 0,
-                }
-            })
-    }
-
-    /// The due-check on the tick at `now`, by the same slot rule the RSS
-    /// candidates are admitted on. Due here means due on the slot rule, not
-    /// that this tick will poll it: the per-tick limit may hold it to the next.
+    /// All eligible indexers whose cadence is due, without a per-cycle cap.
     async fn rss_due_indexers_at(&self, now: DateTime<Utc>) -> AppResult<RssDueIndexers> {
         let configs = self.indexer_configs.list(None).await?;
-        let slots = self.rss_tick_slots(&configs);
         let candidates = configs
             .iter()
             .filter(|config| config.disabled_until.is_none_or(|until| until <= now))
-            .filter(|config| slots.contains_key(&config.id))
+            .filter(|config| self.is_rss_poll_eligible(config))
             .collect::<Vec<_>>();
         if candidates.is_empty() {
             return Ok(RssDueIndexers::unknown());
@@ -4085,9 +4996,8 @@ impl MultiIndexerSearchClient {
                     })
                     .collect(),
             );
-            // No cadence at all means never polled, which the slot rule makes
-            // due on the tick it is first seen.
-            let freshness = Self::rss_freshness_context(now, activity, slots[&config.id]);
+            // Never-polled indexers are immediately due.
+            let freshness = Self::rss_freshness_context(now, activity);
             if rss_poll_is_due(
                 Some(freshness.latest_safe_poll_at),
                 Some(freshness.freshness_risk),
@@ -4099,88 +5009,6 @@ impl MultiIndexerSearchClient {
             }
         }
         Ok(RssDueIndexers { due, deferred })
-    }
-
-    /// Holds back the RSS candidates due on this tick beyond the per-tick
-    /// limit, most overdue polled first (see [`rss_tick_poll_selection`]).
-    ///
-    /// A held candidate never reaches the scheduler, so nothing about its
-    /// cadence is recorded: it stays due and competes again on the next tick,
-    /// where its older last poll ranks it ahead of that tick's own slot.
-    /// Candidates the slot rule does not make due are left for the scheduler
-    /// to defer as before. Returns a `Deferred` outcome per held indexer.
-    fn hold_rss_indexers_over_tick_limit(
-        &self,
-        candidates: &mut Vec<SchedulerCandidate>,
-        eligible: &mut Vec<SchedulerEligibleIndexer<'_>>,
-        slots: &HashMap<String, RssTickSlot>,
-        now: DateTime<Utc>,
-    ) -> Vec<IndexerQueryOutcome> {
-        let due = candidates
-            .iter()
-            .filter_map(|candidate| {
-                let freshness = candidate.freshness.as_ref()?;
-                if !rss_poll_is_due(
-                    Some(freshness.latest_safe_poll_at),
-                    Some(freshness.freshness_risk),
-                    now,
-                ) {
-                    return None;
-                }
-                let indexer_id = candidate.plugin_config_id.clone()?;
-                let slot = slots
-                    .get(&indexer_id)
-                    .copied()
-                    .unwrap_or_else(|| Self::rss_fallback_tick_slot(slots));
-                Some(RssTickDueIndexer {
-                    indexer_id,
-                    last_successful_poll_at: freshness.last_successful_poll_at,
-                    due_since: freshness.latest_safe_poll_at,
-                    slot,
-                })
-            })
-            .collect::<Vec<_>>();
-        let due_count = due.len();
-        let (polled, held) = rss_tick_poll_selection(due, now, self.rss_tick_indexer_limit);
-        debug!(
-            due = due_count,
-            polled = polled.len(),
-            deferred = held.len(),
-            limit = self.rss_tick_indexer_limit,
-            "RSS tick indexer selection"
-        );
-        if held.is_empty() {
-            return Vec::new();
-        }
-
-        let held = held.into_iter().collect::<HashSet<_>>();
-        let is_held = |candidate: &SchedulerCandidate| {
-            candidate
-                .plugin_config_id
-                .as_ref()
-                .is_some_and(|id| held.contains(id))
-        };
-        let held_candidate_ids = candidates
-            .iter()
-            .filter(|candidate| is_held(candidate))
-            .map(|candidate| candidate.candidate_id.clone())
-            .collect::<HashSet<_>>();
-        candidates.retain(|candidate| !is_held(candidate));
-        eligible.retain(|dispatch| !held_candidate_ids.contains(&dispatch.candidate_id));
-
-        let retry_after = slots.values().next().and_then(|slot| {
-            (slot.tick_start(slot.tick_index(now).saturating_add(1)) - now)
-                .to_std()
-                .ok()
-        });
-        let mut held = held.into_iter().collect::<Vec<_>>();
-        held.sort_unstable();
-        held.into_iter()
-            .map(|indexer_id| IndexerQueryOutcome {
-                indexer_id,
-                outcome: IndexerSearchOutcome::Deferred { retry_after },
-            })
-            .collect()
     }
 
     async fn record_indexer_scheduler_feedback(
@@ -4409,10 +5237,16 @@ impl MultiIndexerSearchClient {
                 .get(proxy_config_id)
                 .cloned()
                 .flatten()
-                .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_INDEXER_PROXY_NOT_FOUND,
+                        "Proxy configuration was not found.",
+                    )
+                })?;
             if !proxy_config.is_enabled {
-                return Err(AppError::Validation(
-                    "Proxy is disabled for this indexer.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_INDEXER_PROXY_DISABLED,
+                    "Proxy is disabled for this indexer.",
                 ));
             }
             if proxy_config.is_challenge_solver()
@@ -4438,9 +5272,10 @@ impl MultiIndexerSearchClient {
             return Ok((client, proxy_cache_key, search_timeout));
         }
 
-        Err(AppError::Validation(format!(
-            "unsupported indexer provider: '{provider}'"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED,
+            format!("unsupported indexer provider: '{provider}'"),
+        ))
     }
 
     async fn record_indexer_last_error(
@@ -4449,7 +5284,10 @@ impl MultiIndexerSearchClient {
         indexer_name: &str,
         message: Option<String>,
     ) {
-        if let Err(error) = indexer_configs.record_last_error(indexer_id, message).await {
+        if let Err(error) = indexer_configs
+            .record_last_error(indexer_id, message, None)
+            .await
+        {
             warn!(
                 indexer = indexer_name,
                 error = %error,
@@ -4524,11 +5362,7 @@ impl MultiIndexerSearchClient {
         if !config.enable_auto_search {
             return false;
         }
-        if config
-            .last_error_message
-            .as_deref()
-            .is_some_and(|message| message.starts_with(INDEXER_CAPS_REFRESH_ERROR_PREFIX))
-        {
+        if config.last_error_code.as_deref() == Some("INDEXER_CAPS_REFRESH_FAILED") {
             return false;
         }
 
@@ -4714,6 +5548,7 @@ impl MultiIndexerSearchClient {
         strategies: Vec<PreparedSearchStrategy>,
         initial_permit: Option<SearchPermit>,
         page_sink: IndexerSearchPageSink,
+        listing_probe: Option<ListingProbe>,
     ) -> tokio::task::JoinSet<StrategyExecutionOutcome> {
         let mut set = tokio::task::JoinSet::<StrategyExecutionOutcome>::new();
         let mut initial_permit = initial_permit;
@@ -4729,7 +5564,14 @@ impl MultiIndexerSearchClient {
             let strategy_labels = strategy.labels.clone();
             let strategy_label = strategy.labels.first().cloned().unwrap_or_default();
             let title_guard_mode = strategy.title_guard_mode;
-            let strategy = strategy.request;
+            let mut strategy = strategy.request;
+            if let Some(probe) = listing_probe.as_ref()
+                && strategy.page_cursor.is_none()
+                && probe.tracks(&strategy.strategy_id)
+            {
+                strategy.first_page_gate =
+                    Some(probe.first_page_gate(&strategy.strategy_id, page_sink.clone()));
+            }
             let page_sink = page_sink.clone();
 
             set.spawn(async move {
@@ -4960,6 +5802,7 @@ impl MultiIndexerSearchClient {
         strategies: Vec<PreparedSearchStrategy>,
         initial_permit: Option<SearchPermit>,
         page_sink: IndexerSearchPageSink,
+        listing_probe: Option<ListingProbe>,
     ) -> StrategyTierOutcomes {
         if context
             .client
@@ -4973,6 +5816,7 @@ impl MultiIndexerSearchClient {
                 strategies,
                 initial_permit,
                 page_sink,
+                listing_probe,
             ))
         }
     }
@@ -5610,10 +6454,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                 );
                 continue;
             }
-            // Without caps a managed child would be searched query-only and
-            // miss id searches it supports; leave it out of automatic searches
-            // until its caps arrive. The RSS sweep needs no caps.
-            if matches!(mode, SearchMode::Auto) && !is_rss_request && awaits_managed_caps(c) {
+            // Legacy embeddings without the host resolver retain the existing
+            // pending-caps guard. The shared resolver handles this in production.
+            if self.caps_refresher.is_none()
+                && matches!(mode, SearchMode::Auto)
+                && !is_rss_request
+                && awaits_managed_caps(c)
+            {
                 log_indexer_skip(
                     mode,
                     is_rss_request,
@@ -5667,14 +6514,18 @@ impl IndexerClient for MultiIndexerSearchClient {
         {
             Some("movie") | Some("series") | Some("anime") => facet.unwrap(),
             Some(other) => {
-                return Err(AppError::Validation(format!(
-                    "unsupported search facet: {other}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_SEARCH_FACET_UNSUPPORTED,
+                    format!("unsupported search facet: {other}"),
+                ));
             }
             None if is_rss_request => "series".to_string(),
             None if !query.trim().is_empty() => "movie".to_string(),
             None => {
-                return Err(AppError::Validation("search facet is required".to_string()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_SEARCH_FACET_REQUIRED,
+                    "search facet is required".to_string(),
+                ));
             }
         };
         let id_search_facet = match id_search_facet
@@ -5684,9 +6535,10 @@ impl IndexerClient for MultiIndexerSearchClient {
         {
             Some(value @ ("movie" | "series" | "anime")) => value.to_string(),
             Some(other) => {
-                return Err(AppError::Validation(format!(
-                    "unsupported ID search facet: {other}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_ID_SEARCH_FACET_UNSUPPORTED,
+                    format!("unsupported ID search facet: {other}"),
+                ));
             }
             None => facet.clone(),
         };
@@ -5714,11 +6566,6 @@ impl IndexerClient for MultiIndexerSearchClient {
         } else {
             None
         };
-        let rss_tick_slots = if is_rss_request {
-            self.rss_tick_slots(&configs)
-        } else {
-            HashMap::new()
-        };
         // Resolve each distinct proxy config once per search pass; both the
         // scheduler deadline calculation and client construction read from
         // this map. A missing value means the row is absent or cannot be used.
@@ -5742,6 +6589,84 @@ impl IndexerClient for MultiIndexerSearchClient {
             };
             proxy_configs_by_id.insert(proxy_config_id.to_string(), fetched);
         }
+        let resolved_configs =
+            futures_util::future::join_all(enabled.iter().map(|(config, _)| async {
+                if matches!(
+                    indexer_search_eligibility(
+                        indexer_routing.as_ref(),
+                        page_sink.indexer_restriction(),
+                        &config.id
+                    ),
+                    IndexerSearchEligibility::Eligible
+                ) {
+                    self.resolved_caps_config(config, &proxy_configs_by_id)
+                        .await
+                        .0
+                } else {
+                    (*config).clone()
+                }
+            }))
+            .await;
+        let enabled = resolved_configs
+            .iter()
+            .zip(enabled.iter().map(|(_, backed_off)| *backed_off))
+            .collect::<Vec<_>>();
+        // Only a background pass reads learned facet emptiness; interactive
+        // and operator searches always ask every indexer.
+        let background_facet_context = learning_context.as_ref().filter(|context| {
+            !is_rss_request && Self::is_background_pass(mode, is_rss_request, Some(context))
+        });
+        let facet_learning = match background_facet_context {
+            Some(context) => {
+                let indexer_ids = enabled
+                    .iter()
+                    .map(|(config, _)| config.id.clone())
+                    .collect::<Vec<_>>();
+                self.search_learning
+                    .facet_learning_states(&context.facet, &indexer_ids)
+                    .await
+                    .unwrap_or_else(|error| {
+                        warn!(
+                            facet = context.facet.as_str(),
+                            error = %error,
+                            "failed to load indexer facet learning; asking every indexer"
+                        );
+                        HashMap::new()
+                    })
+            }
+            None => HashMap::new(),
+        };
+        // One read of the title's learned strategy state across every
+        // indexer. The scheduler hint, strategy suppression and each
+        // indexer's end-of-search learning batch all work from it.
+        let title_learning = match learning_context
+            .as_ref()
+            .filter(|_| mode == SearchMode::Auto)
+        {
+            Some(context) => {
+                let indexer_ids = enabled
+                    .iter()
+                    .map(|(config, _)| config.id.clone())
+                    .collect::<Vec<_>>();
+                match self
+                    .search_learning
+                    .list_for_title_by_indexer(&indexer_ids, &context.title_id, &context.facet)
+                    .await
+                {
+                    Ok(records) => Some(records),
+                    Err(error) => {
+                        warn!(
+                            title_id = context.title_id.as_str(),
+                            facet = context.facet.as_str(),
+                            error = %error,
+                            "failed to load indexer search learning records"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
         let mut scheduler_candidates = Vec::new();
         let mut scheduler_eligible = Vec::new();
         // Indexers that cannot answer this search at all. They are reported as
@@ -5820,57 +6745,61 @@ impl IndexerClient for MultiIndexerSearchClient {
                     config.name.as_str(),
                     IndexerSkipReason::NoSupportedIds,
                 );
-                info!(
+                debug!(
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
                 unsupported_indexer_ids.push(config.id.clone());
                 continue;
             }
+            if let Some(context) = background_facet_context
+                && facet_suppressed_for_background(
+                    &self.search_learning,
+                    facet_learning.get(&config.id),
+                    &config.id,
+                    config.name.as_str(),
+                    &context.facet,
+                    now,
+                )
+                .await
+            {
+                record_indexer_skip(
+                    mode,
+                    is_rss_request,
+                    config.name.as_str(),
+                    IndexerSkipReason::FacetSuppressed,
+                );
+                debug!(
+                    indexer = config.name.as_str(),
+                    facet = context.facet.as_str(),
+                    "skipping indexer: learned to carry nothing for this facet"
+                );
+                continue;
+            }
 
             let (host_key, destination_key) = Self::scheduler_keys_for_indexer(config);
             Self::register_managed_proxy_host_profile(config, &host_key);
             let account_quota_key = Some(config.id.clone().into());
-            let scheduler_learning_context = if mode == SearchMode::Auto && !is_rss_request {
-                if let Some(learning_context) = learning_context.as_ref() {
-                    match self
-                        .search_learning
-                        .list_for_title(
-                            &config.id,
-                            &learning_context.title_id,
-                            &learning_context.facet,
-                        )
-                        .await
-                    {
-                        Ok(records) => {
-                            let historically_useful = records.iter().any(|record| {
+            let scheduler_learning_context = match (learning_context.as_ref(), &title_learning) {
+                (Some(learning_context), Some(records_by_indexer))
+                    if mode == SearchMode::Auto && !is_rss_request =>
+                {
+                    let historically_useful =
+                        records_by_indexer.get(&config.id).is_some_and(|records| {
+                            records.iter().any(|record| {
                                 record.usable_successes > 0
                                     && !learned_suppression_is_active(record, now)
-                            });
-                            Some(SearchLearningContext {
-                                indexer_id: config.id.clone(),
-                                facet: learning_context.facet.clone(),
-                                strategy: "provider_history".to_string(),
-                                suppressed: false,
-                                historically_useful,
                             })
-                        }
-                        Err(error) => {
-                            warn!(
-                                indexer = config.name.as_str(),
-                                title_id = learning_context.title_id.as_str(),
-                                facet = learning_context.facet.as_str(),
-                                error = %error,
-                                "failed to load scheduler learning hint"
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    None
+                        });
+                    Some(SearchLearningContext {
+                        indexer_id: config.id.clone(),
+                        facet: learning_context.facet.clone(),
+                        strategy: "provider_history".to_string(),
+                        suppressed: false,
+                        historically_useful,
+                    })
                 }
-            } else {
-                None
+                _ => None,
             };
             // Candidate value: the
             // convergence cursor's per-scope lane hint takes precedence — hot
@@ -5955,13 +6884,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                 expected_value,
                 learning_context: scheduler_learning_context.clone(),
                 deadline_at: None,
-                freshness: is_rss_request.then(|| {
-                    let slot = rss_tick_slots
-                        .get(&config.id)
-                        .copied()
-                        .unwrap_or_else(|| Self::rss_fallback_tick_slot(&rss_tick_slots));
-                    Self::rss_freshness_context(scheduler_now, rss_activity.clone(), slot)
-                }),
+                freshness: is_rss_request
+                    .then(|| Self::rss_freshness_context(scheduler_now, rss_activity.clone())),
                 cancel_token: cancel_token.child_token(),
             });
             scheduler_eligible.push(SchedulerEligibleIndexer {
@@ -5974,21 +6898,14 @@ impl IndexerClient for MultiIndexerSearchClient {
             });
         }
 
-        let mut unsupported_outcomes = unsupported_indexer_ids
+        let unsupported_outcomes = unsupported_indexer_ids
             .into_iter()
             .map(|indexer_id| IndexerQueryOutcome {
+                page: None,
                 indexer_id,
                 outcome: IndexerSearchOutcome::Unsupported,
             })
             .collect::<Vec<_>>();
-        if scheduler_intent == SchedulerIntent::BackgroundRss {
-            unsupported_outcomes.extend(self.hold_rss_indexers_over_tick_limit(
-                &mut scheduler_candidates,
-                &mut scheduler_eligible,
-                &rss_tick_slots,
-                scheduler_now,
-            ));
-        }
         if scheduler_candidates.is_empty() {
             debug!(mode = ?mode, "no scheduler-eligible indexer configs found");
             return Ok(IndexerSearchResponse {
@@ -6026,6 +6943,10 @@ impl IndexerClient for MultiIndexerSearchClient {
         // indexers (never queried) are recorded below; fired/errored are recorded as
         // their tasks complete in the join loop.
         let mut indexer_outcomes: Vec<IndexerQueryOutcome> = unsupported_outcomes;
+        let rss_deadline = is_rss_request.then(|| {
+            tokio::time::Instant::now() + crate::upstream_scheduler::rss_target_interval()
+        });
+        let mut rss_pending_ids = HashSet::new();
         let mut set = tokio::task::JoinSet::<(
             String,
             String,
@@ -6140,11 +7061,12 @@ impl IndexerClient for MultiIndexerSearchClient {
                     config.name.as_str(),
                     IndexerSkipReason::NoSupportedIds,
                 );
-                info!(
+                debug!(
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
                 indexer_outcomes.push(IndexerQueryOutcome {
+                    page: None,
                     indexer_id: config.id.clone(),
                     outcome: IndexerSearchOutcome::Unsupported,
                 });
@@ -6208,7 +7130,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 };
             // Queue admission is cancellation-bound. Each dispatched plugin call
             // receives its own per-indexer timeout below.
-            let deadline_at = None;
+            let deadline_at = rss_deadline;
 
             // RSS-only indexers: fetch the feed once, cache it, return cached
             // results for all concurrent callers. The feed content is the same
@@ -6216,6 +7138,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let is_rss_only = !caps.supports_any_search() && caps.rss;
             if is_rss_only && let Some(outcome) = scheduler_blocked_outcome {
                 indexer_outcomes.push(IndexerQueryOutcome {
+                    page: None,
                     indexer_id: config.id.clone(),
                     outcome,
                 });
@@ -6279,6 +7202,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 "skipping indexer: candidate deadline expired while queued"
                             );
                             indexer_outcomes.push(IndexerQueryOutcome {
+                                page: None,
                                 indexer_id: config.id.clone(),
                                 outcome: IndexerSearchOutcome::Skipped { retry_after: None },
                             });
@@ -6317,7 +7241,17 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let rss_poll_item_cap = rss_poll_page_budget.map(rss_poll_item_cap);
                 let rss_hand_off = is_rss_request.then(|| self.rss_hand_off.clone());
 
+                if is_rss_request {
+                    rss_pending_ids.insert(indexer_id.clone());
+                }
                 set.spawn(async move {
+                        let rate_limiter = if is_rss_request {
+                            match rate_limiter.prepare_rss(&pacing, &task_cancel_token, deadline_at).await {
+                                Ok(limiter) => limiter,
+                                Err(wait) => return (indexer_id.clone(), indexer_name, scheduler_lease_for_task,
+                                    Ok((rss_deferred_response(indexer_id, wait), None)), false),
+                            }
+                        } else { rate_limiter };
                         let _initialization_guard = tokio::select! {
                             _ = task_cancel_token.cancelled() => {
                                 return (
@@ -6400,8 +7334,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 .await
                                 {
                                     Ok(Ok(())) => {}
-                                    // Background RSS pacing always waits for its
-                                    // slot; this arm only keeps the match total.
+                                    // The initial RSS wait was admitted before
+                                    // taking either feed or network capacity.
                                     Ok(Err(PacingWaitExceeded { wait })) => {
                                         return Err(format!(
                                             "RSS indexer is over its query budget; next slot in {}s",
@@ -6449,7 +7383,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 let request_cancel_token = task_cancel_token.child_token();
                                 let request_deadline =
                                     effective_request_deadline(search_timeout, deadline_at);
-                                let rss_strategy = IndexerSearchStrategyRequest { page_cursor: None, page_budget: rss_poll_page_budget, result_limit: rss_poll_item_cap,
+                                let rss_strategy = IndexerSearchStrategyRequest { page_cursor: None, page_budget: rss_poll_page_budget, result_limit: rss_poll_item_cap, first_page_gate: None,
                                     strategy_id: String::new(),
                                     labels: Vec::new(),
                                     query,
@@ -6738,44 +7672,25 @@ impl IndexerClient for MultiIndexerSearchClient {
                     label: "rss".into(),
                 });
             }
-            let learned_records = if mode == SearchMode::Auto {
-                if let Some(learning_context) = learning_context.as_ref() {
-                    match self
-                        .search_learning
-                        .list_for_title(
-                            &config.id,
-                            &learning_context.title_id,
-                            &learning_context.facet,
-                        )
-                        .await
-                    {
-                        Ok(records) => records,
-                        Err(error) => {
-                            warn!(
-                                indexer = config.name.as_str(),
-                                title_id = learning_context.title_id.as_str(),
-                                facet = learning_context.facet.as_str(),
-                                error = %error,
-                                "failed to load indexer search learning records"
-                            );
-                            Vec::new()
-                        }
-                    }
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
+            let learned_records = title_learning
+                .as_ref()
+                .map(|records| records.get(&config.id).cloned().unwrap_or_default());
             let strategies = suppress_learned_strategies(
                 &self.search_learning,
                 config.name.as_str(),
                 mode,
                 strategies,
-                &learned_records,
+                learned_records.as_deref().unwrap_or_default(),
                 Utc::now(),
             )
             .await;
+            let learning_batch = StrategyLearningBatch::new(
+                config.id.clone(),
+                config.name.clone(),
+                learning_context.clone(),
+                mode,
+                learned_records,
+            );
             if strategies.is_empty() && !is_rss_request {
                 record_indexer_skip(
                     mode,
@@ -6829,6 +7744,26 @@ impl IndexerClient for MultiIndexerSearchClient {
             } else {
                 HashMap::new()
             };
+            // A plan-capable plugin never pages, so it reads no listing twice.
+            let listing_probe = client
+                .search_plan_capability()
+                .is_none_or(|capability| capability.version != 1)
+                .then(|| {
+                    ListingProbe::new(
+                        search_diagnostics.as_ref(),
+                        learning_context.as_ref(),
+                        config,
+                        ListingGuardScope {
+                            query: query.clone(),
+                            season,
+                            episode,
+                            absolute_episode,
+                            numbering_context: numbering_context.clone(),
+                            tagged_aliases: tagged_aliases.clone(),
+                        },
+                    )
+                })
+                .flatten();
             let rss_category_request = request_categories.clone();
             let prowlarr_nab_proxy = Self::is_prowlarr_nab_proxy(config);
             let indexer_id = config.id.clone();
@@ -6861,7 +7796,14 @@ impl IndexerClient for MultiIndexerSearchClient {
             let rss_poll_page_budget = is_rss_request.then_some(self.rss_poll_page_budget);
             let rss_hand_off = is_rss_request.then(|| self.rss_hand_off.clone());
 
+            if is_rss_request {
+                rss_pending_ids.insert(indexer_id.clone());
+            }
             set.spawn(async move {
+            let mut learning_batch = learning_batch;
+            let task_result = {
+            let learning_batch = &mut learning_batch;
+            async move {
                 if task_cancel_token.is_cancelled() {
                     return (
                         indexer_id,
@@ -6871,8 +7813,14 @@ impl IndexerClient for MultiIndexerSearchClient {
                         false,
                     );
                 }
-                // Taken before any lane permit (those are per plan, below) so
-                // a poll cannot hold the lane while waiting for a slot.
+                let rate_limiter = if is_rss_request {
+                    match rate_limiter.prepare_rss(&pacing, &task_cancel_token, deadline_at).await {
+                        Ok(limiter) => limiter,
+                        Err(wait) => return (indexer_id.clone(), indexer_name, scheduler_lease_for_task.clone(),
+                            Ok((rss_deferred_response(indexer_id, wait), None)), false),
+                    }
+                } else { rate_limiter };
+                // Pacing has finished before either feed or network capacity is held.
                 let hand_off = match acquire_search_permit(
                     rss_hand_off,
                     &task_cancel_token,
@@ -6969,10 +7917,45 @@ impl IndexerClient for MultiIndexerSearchClient {
                         cancel_token: task_cancel_token.child_token(),
                         deadline_at,
                     };
-                let primary_strategies = with_result_limit(
+                let mut primary_strategies = with_result_limit(
                     prepare_search_strategies(&primary_context, primary_strategies),
                     rss_poll_item_cap,
                 );
+                let mut primary_listing_served = 0_usize;
+                if let Some(probe) = listing_probe.as_ref() {
+                    match probe
+                        .plan(
+                            primary_strategies,
+                            &mut reusable_strategies,
+                            page_sink.as_ref().expect("stream sink is present"),
+                        )
+                        .await
+                    {
+                        Ok(plan) => {
+                            primary_strategies = plan.strategies;
+                            primary_listing_served = plan.served;
+                            primary_usable_result_count =
+                                primary_usable_result_count.saturating_add(plan.replayed);
+                            page_chains.extend(plan.page_chains);
+                            // A listing still being read leaves its readers
+                            // open with it, not contained.
+                            if plan.served_open > 0 {
+                                all_strategies_complete = false;
+                                only_unattested_incompleteness = false;
+                                contained.note_open();
+                            }
+                        }
+                        Err(error) => {
+                            return (
+                                indexer_id,
+                                indexer_name,
+                                scheduler_lease_for_task.clone(),
+                                Err(error),
+                                false,
+                            );
+                        }
+                    }
+                }
                 let primary_selection = match select_reusable_strategies(
                     primary_strategies,
                     &mut reusable_strategies,
@@ -6993,7 +7976,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                         );
                     }
                 };
-                primary_attempted = primary_selection.complete_count > 0
+                primary_attempted = primary_listing_served > 0
+                    || primary_selection.complete_count > 0
                     || primary_selection.deferred_count > 0
                     || !primary_selection.live.is_empty();
                 primary_had_error = primary_selection.deferred_count > 0;
@@ -7014,6 +7998,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         primary_live,
                         None,
                         page_sink.as_ref().expect("stream sink is present").clone(),
+                        listing_probe.clone(),
                     )
                 } else {
                     primary_had_error = true;
@@ -7085,10 +8070,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                             }
                             let contained_retry_at =
                                 contained.observe(
-&outcome.strategy_id,
-&response.completion,
-response.next_cursor.is_some(),
-);
+                                &outcome.strategy_id,
+                                &response.completion,
+                                response.next_cursor.is_some()
+                                    || listing_probe
+                                        .as_ref()
+                                        .is_some_and(|probe| probe.rides(&outcome.strategy_id)),
+                            );
                             let raw_result_count = response.results.len();
                             let rss_truncated = rss_poll_item_cap.map_or(0, |cap| {
                                 truncate_rss_poll_results(&mut response.results, rss_poll_safety_cap(cap))
@@ -7139,6 +8127,16 @@ response.next_cursor.is_some(),
                                 }
                             }
 
+                            let listing_persisted = listing_probe
+                                .as_ref()
+                                .filter(|probe| probe.persists_whole_answer(&outcome.strategy_id))
+                                .map(|_| {
+                                    listing_persisted_response(
+                                        &response,
+                                        outcome.title_guard_mode,
+                                        &outcome.label,
+                                    )
+                                });
                             filter_strategy_results(
                                 &mut response.results,
                                 &FilterStrategyContext {
@@ -7156,38 +8154,46 @@ response.next_cursor.is_some(),
                                 .saturating_add(response.results.len());
                             if response.completion == IndexerSearchCompletion::Complete {
                                 for label in &outcome.labels {
-                                    record_strategy_learning_outcome(
-                                        &search_learning,
-                                        learning_context.as_ref(),
-                                        mode,
-                                        &indexer_id,
-                                        &indexer_name,
+                                    learning_batch.observe(
                                         &query_learning_label(label, &search_query),
                                         response.results.len(),
-                                    )
-                                    .await;
+                                    );
                                 }
                             }
                             if page_sink.is_some() {
-                                if let Some(diagnostics) = search_diagnostics.as_ref()
-                                    && let Err(error) = diagnostics
+                                if let Some(diagnostics) = search_diagnostics.as_ref() {
+                                    match diagnostics
                                         .persist_response(
                                             &outcome.strategy_id,
                                             &diagnostic_labels,
                                             raw_result_count,
-                                            &response,
+                                            listing_persisted.as_ref().unwrap_or(&response),
                                             contained_retry_at,
                                             page_chains.get(&outcome.strategy_id),
                                         )
                                         .await
-                                {
-                                    return (
-                                        indexer_id,
-                                        indexer_name,
-                                        scheduler_lease_for_task.clone(),
-                                        Err(error),
-                                        true,
-                                    );
+                                    {
+                                        Ok(run_id) => {
+                                            if let Some(probe) = listing_probe.as_ref() {
+                                                probe
+                                                    .note_run(
+                                                        &outcome.strategy_id,
+                                                        &run_id,
+                                                        response.next_cursor.as_deref(),
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                        Err(error) => {
+                                            return (
+                                                indexer_id,
+                                                indexer_name,
+                                                scheduler_lease_for_task.clone(),
+                                                Err(error),
+                                                true,
+                                            );
+                                        }
+                                    }
                                 }
                                 let mut persisted = std::mem::take(&mut response.results);
                                 for result in &mut persisted {
@@ -7222,7 +8228,7 @@ response.next_cursor.is_some(),
                                             &outcome.strategy_id,
                                             &diagnostic_labels,
                                             raw_result_count,
-                                            &response,
+                                            listing_persisted.as_ref().unwrap_or(&response),
                                             contained_retry_at,
                                             page_chains.get(&outcome.strategy_id),
                                         )
@@ -7310,6 +8316,12 @@ response.next_cursor.is_some(),
                     }
                 }
 
+                // Followers already replayed before their first-page gate stopped them.
+                if let Some(probe) = listing_probe.as_ref() {
+                    primary_usable_result_count =
+                        primary_usable_result_count.saturating_add(probe.take_follower_replayed());
+                }
+
                 // An indexer over its query budget is skipped for the rest of
                 // this search: its fallback would be refused the same way.
                 if query_budget_wait.is_none()
@@ -7346,10 +8358,39 @@ response.next_cursor.is_some(),
                             cancel_token: task_cancel_token.child_token(),
                             deadline_at,
                         };
-                    let fallback_strategies = with_result_limit(
+                    let mut fallback_strategies = with_result_limit(
                         prepare_search_strategies(&fallback_context, fallback_strategies),
                         rss_poll_item_cap,
                     );
+                    if let Some(probe) = listing_probe.as_ref() {
+                        match probe
+                            .plan(
+                                fallback_strategies,
+                                &mut reusable_strategies,
+                                page_sink.as_ref().expect("stream sink is present"),
+                            )
+                            .await
+                        {
+                            Ok(plan) => {
+                                fallback_strategies = plan.strategies;
+                                page_chains.extend(plan.page_chains);
+                                if plan.served_open > 0 {
+                                    all_strategies_complete = false;
+                                    only_unattested_incompleteness = false;
+                                    contained.note_open();
+                                }
+                            }
+                            Err(error) => {
+                                return (
+                                    indexer_id,
+                                    indexer_name,
+                                    scheduler_lease_for_task.clone(),
+                                    Err(error),
+                                    false,
+                                );
+                            }
+                        }
+                    }
                     let fallback_selection = match select_reusable_strategies(
                         fallback_strategies,
                         &mut reusable_strategies,
@@ -7385,6 +8426,7 @@ response.next_cursor.is_some(),
                             fallback_live,
                             None,
                             page_sink.as_ref().expect("stream sink is present").clone(),
+                            listing_probe.clone(),
                         )
                     } else {
                         all_strategies_complete = false;
@@ -7455,10 +8497,13 @@ response.next_cursor.is_some(),
                                     );
                                 }
                                 let contained_retry_at = contained.observe(
-&outcome.strategy_id,
-&response.completion,
-response.next_cursor.is_some(),
-);
+                                &outcome.strategy_id,
+                                &response.completion,
+                                response.next_cursor.is_some()
+                                    || listing_probe
+                                        .as_ref()
+                                        .is_some_and(|probe| probe.rides(&outcome.strategy_id)),
+                            );
                                 let raw_result_count = response.results.len();
                                 let rss_truncated = rss_poll_item_cap.map_or(0, |cap| {
                                     truncate_rss_poll_results(&mut response.results, rss_poll_safety_cap(cap))
@@ -7494,6 +8539,16 @@ response.next_cursor.is_some(),
                                     Some(response.results.len()),
                                 );
 
+                                let listing_persisted = listing_probe
+                                    .as_ref()
+                                    .filter(|probe| probe.persists_whole_answer(&outcome.strategy_id))
+                                    .map(|_| {
+                                        listing_persisted_response(
+                                            &response,
+                                            outcome.title_guard_mode,
+                                            &outcome.label,
+                                        )
+                                    });
                                 filter_strategy_results(
                                     &mut response.results,
                                     &FilterStrategyContext {
@@ -7509,38 +8564,46 @@ response.next_cursor.is_some(),
                                 );
                                 if response.completion == IndexerSearchCompletion::Complete {
                                     for label in &outcome.labels {
-                                        record_strategy_learning_outcome(
-                                            &search_learning,
-                                            learning_context.as_ref(),
-                                            mode,
-                                            &indexer_id,
-                                            &indexer_name,
+                                        learning_batch.observe(
                                             &query_learning_label(label, &search_query),
                                             response.results.len(),
-                                        )
-                                        .await;
+                                        );
                                     }
                                 }
                                 if page_sink.is_some() {
-                                    if let Some(diagnostics) = search_diagnostics.as_ref()
-                                        && let Err(error) = diagnostics
+                                    if let Some(diagnostics) = search_diagnostics.as_ref() {
+                                        match diagnostics
                                             .persist_response(
                                                 &outcome.strategy_id,
                                                 &diagnostic_labels,
                                                 raw_result_count,
-                                                &response,
+                                                listing_persisted.as_ref().unwrap_or(&response),
                                                 contained_retry_at,
                                                 page_chains.get(&outcome.strategy_id),
                                             )
                                             .await
-                                    {
-                                        return (
-                                            indexer_id,
-                                            indexer_name,
-                                            scheduler_lease_for_task.clone(),
-                                            Err(error),
-                                            true,
-                                        );
+                                        {
+                                            Ok(run_id) => {
+                                                if let Some(probe) = listing_probe.as_ref() {
+                                                    probe
+                                                        .note_run(
+                                                            &outcome.strategy_id,
+                                                            &run_id,
+                                                            response.next_cursor.as_deref(),
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                            Err(error) => {
+                                                return (
+                                                    indexer_id,
+                                                    indexer_name,
+                                                    scheduler_lease_for_task.clone(),
+                                                    Err(error),
+                                                    true,
+                                                );
+                                            }
+                                        }
                                     }
                                     let mut persisted = std::mem::take(&mut response.results);
                                     for result in &mut persisted {
@@ -7575,7 +8638,7 @@ response.next_cursor.is_some(),
                                                 &outcome.strategy_id,
                                                 &diagnostic_labels,
                                                 raw_result_count,
-                                                &response,
+                                                listing_persisted.as_ref().unwrap_or(&response),
                                                 contained_retry_at,
                                                 page_chains.get(&outcome.strategy_id),
                                             )
@@ -7642,6 +8705,9 @@ response.next_cursor.is_some(),
                             }
                         }
                     }
+                    if let Some(probe) = listing_probe.as_ref() {
+                        probe.take_follower_replayed();
+                    }
                 }
 
                 let batch_had_success = batch_health.any_success;
@@ -7693,6 +8759,7 @@ response.next_cursor.is_some(),
                         scheduler_lease_for_task.clone(),
                         Err(if batch_had_rate_limit {
                             AppError::TemporaryUnavailable {
+                                reason: None,
                                 // Carry the upstream rate-limit text (status and
                                 // Retry-After) with the aggregate: the interactive
                                 // per-indexer status, the logs, and text-based
@@ -7739,6 +8806,7 @@ response.next_cursor.is_some(),
                 let task_indexer_outcomes = scheduler_blocked_outcome
                     .filter(|_| !all_strategies_complete)
                     .map(|outcome| IndexerQueryOutcome {
+                        page: None,
                         indexer_id: indexer_id.clone(),
                         outcome,
                     })
@@ -7783,6 +8851,11 @@ response.next_cursor.is_some(),
                     }, rss_summary)),
                     any_strategy_fired,
                 )
+            }
+            }
+            .await;
+            learning_batch.flush(&search_learning).await;
+            task_result
             });
         }
 
@@ -7793,6 +8866,7 @@ response.next_cursor.is_some(),
                 "scheduler returned no decision for indexer search candidate"
             );
             indexer_outcomes.push(IndexerQueryOutcome {
+                page: None,
                 indexer_id: dispatch.config.id.clone(),
                 outcome: IndexerSearchOutcome::Skipped { retry_after: None },
             });
@@ -7807,13 +8881,28 @@ response.next_cursor.is_some(),
         let mut first_failure: Option<String> = None;
         let mut first_rate_limit: Option<(Option<std::time::Duration>, RateLimitCooldownAction)> =
             None;
-        loop {
+        'collect: loop {
             let join_result = tokio::select! {
                 _ = cancel_token.cancelled() => {
                     set.abort_all();
                     while set.join_next().await.is_some() {}
                     self.rss_feed_cache.lock().await.clear();
                     return Err(AppError::canceled("indexer search canceled"));
+                }
+                _ = async {
+                    match rss_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    set.abort_all();
+                    while set.join_next().await.is_some() {}
+                    for id in rss_pending_ids.drain() {
+                        indexer_outcomes.push(IndexerQueryOutcome { page: None, indexer_id: id,
+                            outcome: IndexerSearchOutcome::Deferred { retry_after: None } });
+                    }
+                    warn!("RSS feed-cycle deadline reached; unfinished indexers deferred");
+                    break;
                 }
                 join_result = set.join_next() => join_result,
             };
@@ -7822,6 +8911,9 @@ response.next_cursor.is_some(),
                 break;
             };
 
+            if let Ok((id, ..)) = &join_result {
+                rss_pending_ids.remove(id);
+            }
             match join_result {
                 Ok((
                     id,
@@ -7891,11 +8983,42 @@ response.next_cursor.is_some(),
                                     Some(scryer_application::parse_release_metadata(&result.title));
                             }
                         }
-                        if !results.is_empty() && page_sink.send(results).await.is_err() {
-                            set.abort_all();
-                            while set.join_next().await.is_some() {}
-                            self.rss_feed_cache.lock().await.clear();
-                            return Err(AppError::canceled("indexer scoring pipeline closed"));
+                        if !results.is_empty() {
+                            match within_search_window(
+                                page_sink.send(results),
+                                &cancel_token,
+                                rss_deadline,
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Err(SearchWindowError::DeadlineExpired) => {
+                                    rss_pending_ids.insert(id);
+                                    set.abort_all();
+                                    while set.join_next().await.is_some() {}
+                                    for id in rss_pending_ids.drain() {
+                                        indexer_outcomes.push(IndexerQueryOutcome {
+                                            page: None,
+                                            indexer_id: id,
+                                            outcome: IndexerSearchOutcome::Deferred {
+                                                retry_after: None,
+                                            },
+                                        });
+                                    }
+                                    warn!(
+                                        "RSS feed-cycle deadline reached during hand-off; remaining work deferred"
+                                    );
+                                    break 'collect;
+                                }
+                                Ok(Err(_)) | Err(SearchWindowError::Cancelled) => {
+                                    set.abort_all();
+                                    while set.join_next().await.is_some() {}
+                                    self.rss_feed_cache.lock().await.clear();
+                                    return Err(AppError::canceled(
+                                        "indexer scoring pipeline closed",
+                                    ));
+                                }
+                            }
                         }
                         // The page is scoring's now: free the poll's hand-off
                         // slot so the next poll of the cycle may fetch.
@@ -7905,6 +9028,7 @@ response.next_cursor.is_some(),
                     }
                     if explicit_outcomes.is_empty() {
                         indexer_outcomes.push(IndexerQueryOutcome {
+                            page: None,
                             indexer_id: id,
                             outcome,
                         });
@@ -7925,6 +9049,7 @@ response.next_cursor.is_some(),
                             .is_some_and(|lease| lease.operation == SchedulerOperation::Rss);
                     if !was_fired {
                         indexer_outcomes.push(IndexerQueryOutcome {
+                            page: None,
                             indexer_id: id,
                             outcome: IndexerSearchOutcome::Skipped { retry_after: None },
                         });
@@ -7944,6 +9069,7 @@ response.next_cursor.is_some(),
                         rate_limit_signal_from_error(&err).and_then(|signal| signal.retry_after);
                     warn!(indexer = name.as_str(), error = %err, "indexer search failed");
                     indexer_outcomes.push(IndexerQueryOutcome {
+                        page: None,
                         indexer_id: id,
                         outcome: if retry_after.is_some() {
                             IndexerSearchOutcome::Deferred { retry_after }
@@ -7958,6 +9084,16 @@ response.next_cursor.is_some(),
                     warn!(error = %err, "indexer search task panicked");
                 }
             }
+        }
+
+        // A panicked task has no returned indexer id. Its snapshotted member
+        // still needs an explicit terminal outcome instead of disappearing.
+        for id in rss_pending_ids.drain() {
+            indexer_outcomes.push(IndexerQueryOutcome {
+                page: None,
+                indexer_id: id,
+                outcome: IndexerSearchOutcome::Errored,
+            });
         }
 
         // Clear the RSS feed cache after all tasks complete so the next
@@ -8002,6 +9138,7 @@ response.next_cursor.is_some(),
                 first_failure.unwrap_or_else(|| "all indexer search attempts failed".to_string());
             if let Some((retry_after, cooldown_action)) = first_rate_limit {
                 return Err(AppError::TemporaryUnavailable {
+                    reason: None,
                     message: format!("repository: {failure}"),
                     retry_after,
                     rate_limit_cooldown: cooldown_action,
@@ -8052,7 +9189,17 @@ response.next_cursor.is_some(),
         request: RawTextSearchRequest,
         cancel_token: CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
-        let now = Utc::now();
+        if request.page.is_some()
+            && request
+                .indexer_ids
+                .as_ref()
+                .is_none_or(|ids| ids.len() != 1)
+        {
+            return Err(AppError::validation_refused(
+                scryer_application::error_reasons::catalog::RAW_SEARCH_PAGE_REQUIRES_SINGLE_INDEXER,
+                "A raw page read requires exactly one selected indexer",
+            ));
+        }
         let configs = self.indexer_configs.list(None).await?;
         let system_backoffs = self
             .indexer_configs
@@ -8063,7 +9210,6 @@ response.next_cursor.is_some(),
             .iter()
             .filter(|config| {
                 config.is_enabled
-                    && config.disabled_until.is_none_or(|until| until <= now)
                     && request
                         .indexer_ids
                         .as_ref()
@@ -8101,29 +9247,99 @@ response.next_cursor.is_some(),
             )
         }))
         .await;
-        let mut results = Vec::new();
-        let mut indexer_outcomes = Vec::new();
-        for (config, answer) in selected.iter().zip(answers) {
-            let (found, outcome) = answer?;
-            results.extend(found.into_iter().map(|mut result| {
-                result.indexer_id = Some(config.id.clone());
-                result
-            }));
-            indexer_outcomes.push(IndexerQueryOutcome {
-                indexer_id: config.id.clone(),
-                outcome,
-            });
-        }
-        Ok(IndexerSearchResponse {
+        let mut response = IndexerSearchResponse {
             next_cursor: None,
-            results,
+            results: Vec::new(),
             completion: IndexerSearchCompletion::Complete,
             api_current: None,
             api_max: None,
             grab_current: None,
             grab_max: None,
-            indexer_outcomes,
-        })
+            indexer_outcomes: Vec::new(),
+        };
+        for (config, answer) in selected.iter().zip(answers) {
+            let (source, outcome, caps) = answer?;
+            let mut page = source.as_ref().map(IndexerSearchResponse::page_metadata);
+            // Only a caps diagnostic worth explaining is reported, and it never
+            // invents page metadata for a source that failed to answer.
+            let caps = caps.filter(|caps| !nominal_caps_diagnostic(caps));
+            let failed = matches!(
+                outcome,
+                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored
+            );
+            let completion = match outcome {
+                IndexerSearchOutcome::Complete { .. } | IndexerSearchOutcome::Unsupported => {
+                    IndexerSearchCompletion::Complete
+                }
+                IndexerSearchOutcome::Partial {
+                    reason,
+                    retry_after,
+                    ..
+                } => IndexerSearchCompletion::Partial {
+                    reason,
+                    retry_after,
+                },
+                IndexerSearchOutcome::Deferred { retry_after }
+                | IndexerSearchOutcome::Skipped { retry_after } => {
+                    IndexerSearchCompletion::Partial {
+                        reason: None,
+                        retry_after,
+                    }
+                }
+                IndexerSearchOutcome::BackedOff { .. } | IndexerSearchOutcome::Errored => {
+                    IndexerSearchCompletion::Partial {
+                        reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+                        retry_after: None,
+                    }
+                }
+            };
+            if caps.is_some() {
+                if let Some(page) = page.as_mut() {
+                    page.caps = caps;
+                } else if !failed {
+                    page = Some(scryer_application::IndexerSearchPageMetadata {
+                        caps,
+                        completion,
+                        next_cursor: None,
+                        api_current: None,
+                        api_max: None,
+                        grab_current: None,
+                        grab_max: None,
+                    });
+                }
+            }
+            if !completion.is_complete() {
+                response.completion = if selected.len() == 1 {
+                    completion
+                } else {
+                    IndexerSearchCompletion::Partial {
+                        reason: Some(IndexerSearchIncompleteReason::FanoutBranchFailed),
+                        retry_after: None,
+                    }
+                };
+            }
+            if let Some(source) = source {
+                if selected.len() == 1 {
+                    response.next_cursor = source.next_cursor;
+                    response.api_current = source.api_current;
+                    response.api_max = source.api_max;
+                    response.grab_current = source.grab_current;
+                    response.grab_max = source.grab_max;
+                }
+                response
+                    .results
+                    .extend(source.results.into_iter().map(|mut result| {
+                        result.indexer_id = Some(config.id.clone());
+                        result
+                    }));
+            }
+            response.indexer_outcomes.push(IndexerQueryOutcome {
+                page,
+                indexer_id: config.id.clone(),
+                outcome,
+            });
+        }
+        Ok(response)
     }
 
     async fn prune_search_learning(&self, indexer_id: &str) -> AppResult<()> {
@@ -8196,6 +9412,29 @@ response.next_cursor.is_some(),
         }
         Ok(holds)
     }
+
+    async fn facet_suppression_holds(
+        &self,
+        facet: &str,
+        indexer_ids: &[String],
+        now: DateTime<Utc>,
+    ) -> AppResult<HashMap<String, DateTime<Utc>>> {
+        if indexer_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let policy = facet_learning_policy();
+        Ok(self
+            .search_learning
+            .facet_learning_states(facet, indexer_ids)
+            .await?
+            .into_iter()
+            .filter_map(|(indexer_id, state)| {
+                state
+                    .held_until(now, policy)
+                    .map(|until| (indexer_id, until))
+            })
+            .collect())
+    }
 }
 
 impl MultiIndexerSearchClient {
@@ -8209,9 +9448,20 @@ impl MultiIndexerSearchClient {
         proxy_configs_by_id: &HashMap<String, Option<scryer_domain::ProxyConfig>>,
         request: RawTextSearchRequest,
         cancel_token: &CancellationToken,
-    ) -> AppResult<(Vec<IndexerSearchResult>, IndexerSearchOutcome)> {
+    ) -> AppResult<(
+        Option<IndexerSearchResponse>,
+        IndexerSearchOutcome,
+        Option<scryer_application::IndexerCapsDiagnostic>,
+    )> {
         let canceled = || AppError::canceled("indexer search canceled");
         let (id, name) = (config.id.as_str(), config.name.as_str());
+        if let Some(until) = config.disabled_until.filter(|until| *until > Utc::now()) {
+            return Ok((
+                None,
+                IndexerSearchOutcome::BackedOff { until: Some(until) },
+                None,
+            ));
+        }
         if let Some(backoff) = persisted_backoff {
             self.backoff_tracker.seed_persisted(id, name, backoff).await;
         }
@@ -8224,20 +9474,32 @@ impl MultiIndexerSearchClient {
                 Some(until),
             );
             let outcome = IndexerSearchOutcome::BackedOff { until: Some(until) };
-            return Ok((Vec::new(), outcome));
+            return Ok((None, outcome, None));
         }
         let caps = self
             .plugin_provider
             .capabilities_for_provider(&config.provider_type);
-        if caps.query_param.is_none() {
-            return Ok((Vec::new(), IndexerSearchOutcome::Unsupported));
+        let exact_nab = request.nab.is_some() || request.recent_paging;
+        if (exact_nab && !caps.raw_nab_search)
+            || (!exact_nab && caps.query_param.is_none())
+            || (request.page.is_some()
+                && ((!exact_nab && request.query.trim().is_empty())
+                    || !caps
+                        .limits
+                        .as_ref()
+                        .is_some_and(|limits| limits.paged_search)))
+        {
+            return Ok((None, IndexerSearchOutcome::Unsupported, None));
         }
+        let (resolved_config, caps_diagnostic) =
+            self.resolved_caps_config(config, proxy_configs_by_id).await;
+        let config = &resolved_config;
         let (client, _, search_timeout) =
             match Self::client_from_config(config, &self.plugin_provider, proxy_configs_by_id) {
                 Ok(client) => client,
                 Err(error) => {
                     warn!(indexer = name, %error, "raw text search: indexer unavailable");
-                    return Ok((Vec::new(), IndexerSearchOutcome::Errored));
+                    return Ok((None, IndexerSearchOutcome::Errored, Some(caps_diagnostic)));
                 }
             };
         let pacing = IndexerPacing::resolve(config, SchedulerIntent::InteractiveSearch);
@@ -8249,7 +9511,7 @@ impl MultiIndexerSearchClient {
                     reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
                     retry_after: Some(wait),
                 };
-                return Ok((Vec::new(), outcome));
+                return Ok((None, outcome, Some(caps_diagnostic)));
             }
             Err(_) => return Err(canceled()),
         }
@@ -8284,7 +9546,18 @@ impl MultiIndexerSearchClient {
                     response.grab_max,
                 );
                 let empty = response.results.is_empty();
-                (response.results, IndexerSearchOutcome::Complete { empty })
+                let outcome = match response.completion {
+                    IndexerSearchCompletion::Complete => IndexerSearchOutcome::Complete { empty },
+                    IndexerSearchCompletion::Partial {
+                        reason,
+                        retry_after,
+                    } => IndexerSearchOutcome::Partial {
+                        empty,
+                        reason,
+                        retry_after,
+                    },
+                };
+                (Some(response), outcome)
             }
             Err(error) if error.is_canceled() => return Err(error),
             Err(error) => {
@@ -8307,7 +9580,7 @@ impl MultiIndexerSearchClient {
                     },
                     None => IndexerSearchOutcome::Errored,
                 };
-                (Vec::new(), outcome)
+                (None, outcome)
             }
         };
         health
@@ -8319,7 +9592,7 @@ impl MultiIndexerSearchClient {
                 persisted_backoff.is_some(),
             )
             .await;
-        Ok(answer)
+        Ok((answer.0, answer.1, Some(caps_diagnostic)))
     }
 }
 
@@ -8587,17 +9860,7 @@ fn awaits_managed_caps(config: &IndexerConfig) -> bool {
 }
 
 fn stored_caps_snapshot(config: &IndexerConfig) -> Option<IndexerCapsSnapshot> {
-    if let Some(raw) = config.caps_snapshot_json.as_deref()
-        && let Ok(snapshot) = serde_json::from_str::<IndexerCapsSnapshot>(raw)
-    {
-        return Some(snapshot);
-    }
-
-    config
-        .managed_metadata_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<ManagedIndexerMetadata>(raw).ok())
-        .and_then(|metadata| metadata.caps_snapshot)
+    scryer_application::cached_indexer_caps(config, Utc::now()).snapshot
 }
 
 fn supported_ids_from_caps_snapshot(
@@ -9135,6 +10398,16 @@ fn filter_strategy_results(
     }
 }
 
+/// Caps resolved the ordinary way, with no refresh problem to explain.
+fn nominal_caps_diagnostic(caps: &scryer_application::IndexerCapsDiagnostic) -> bool {
+    matches!(
+        caps.source,
+        scryer_application::IndexerCapsSource::ProviderDeclarations
+            | scryer_application::IndexerCapsSource::Fresh
+    ) && caps.reason.is_none()
+        && caps.retry_after.is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9150,6 +10423,7 @@ mod tests {
     use scryer_domain::IndexerProviderCapabilities;
 
     use super::*;
+    use scryer_application::IndexerSearchLearningKey;
 
     #[test]
     fn localized_text_learning_does_not_mix_different_names_or_suppress_ids() {
@@ -9233,6 +10507,7 @@ mod tests {
     fn strategy_batch_health_prefers_the_exact_rate_limit_error() {
         let generic = AppError::Repository("upstream status 503".to_string());
         let rate_limit = AppError::TemporaryUnavailable {
+            reason: None,
             message: "HTTP 429: User configurable Indexer Query Limit reached; retry after 60s"
                 .to_string(),
             retry_after: Some(std::time::Duration::from_secs(60)),
@@ -9450,7 +10725,12 @@ mod tests {
             Ok(())
         }
 
-        async fn record_last_error(&self, id: &str, message: Option<String>) -> AppResult<()> {
+        async fn record_last_error(
+            &self,
+            id: &str,
+            message: Option<String>,
+            _code: Option<String>,
+        ) -> AppResult<()> {
             self.touch_last_error(id).await?;
             self.recorded_messages
                 .lock()
@@ -9825,6 +11105,7 @@ mod tests {
 
     fn mock_indexer_config() -> IndexerConfig {
         IndexerConfig {
+            last_error_code: None,
             id: "idx-1".into(),
             name: "Mock Indexer".into(),
             provider_type: "mock".into(),
@@ -9954,7 +11235,6 @@ mod tests {
     #[tokio::test]
     async fn failed_rss_attempt_defers_until_its_cadence_boundary() {
         let now = aligned_rss_tick_start(1_800_000_000);
-        let slot = rss_tick_slot_owning(now);
         let scheduler = crate::upstream_scheduler::InMemoryUpstreamScheduler::new();
         let host_key = HostKey::from("failed-rss-cadence.example.test");
         let destination_key = DestinationKey::from(host_key.to_string());
@@ -10044,11 +11324,10 @@ mod tests {
             Some(expected_latest_safe_poll_at)
         );
 
-        // The failed attempt is credited to this slot tick, so the next poll
-        // waits a whole cadence from the tick, not from the attempt.
-        let slot_due_at = slot.tick_start(slot.next_due_tick(now, target_interval));
-        let freshness = MultiIndexerSearchClient::rss_freshness_context(now, activity, slot);
-        assert_eq!(freshness.latest_safe_poll_at, slot_due_at);
+        // A failed attempt still waits until the next cadence boundary.
+        let next_poll_at = rss_next_poll_at(now, target_interval);
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(now, activity);
+        assert_eq!(freshness.latest_safe_poll_at, next_poll_at);
 
         let candidate = |candidate_id| SchedulerCandidate {
             candidate_id,
@@ -10091,7 +11370,7 @@ mod tests {
         let admitted = scheduler
             .admit_batch(SchedulerBatchRequest {
                 batch_id: "failed-rss-boundary".to_string(),
-                now: slot_due_at,
+                now: next_poll_at,
                 candidates: vec![candidate(SchedulerCandidateId::new())],
             })
             .await
@@ -10216,12 +11495,6 @@ mod tests {
         assert_eq!(due.deferred, vec![config.id]);
     }
 
-    /// The shipped grid: a 15-minute cadence on a 5-minute tick, three slots.
-    /// Spelled out rather than read from the process so an env override on
-    /// the test runner cannot move it.
-    const TEST_RSS_TICK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-    const TEST_RSS_CADENCE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-
     /// The start of the process tick at or before `timestamp`.
     fn aligned_rss_tick_start(timestamp: i64) -> DateTime<Utc> {
         let tick_secs = scryer_application::rss_sync_tick_period().as_secs() as i64;
@@ -10229,370 +11502,26 @@ mod tests {
             .expect("valid timestamp")
     }
 
-    /// A process-grid slot whose own tick is the one holding `now`.
-    fn rss_tick_slot_owning(now: DateTime<Utc>) -> RssTickSlot {
-        let tick = scryer_application::rss_sync_tick_period();
-        let tick_secs = tick.as_secs() as i64;
-        let slots = rss_slot_count(crate::upstream_scheduler::rss_target_interval(), tick);
-        RssTickSlot {
-            tick_secs,
-            slots,
-            slot: now.timestamp().div_euclid(tick_secs).rem_euclid(slots),
-        }
-    }
-
-    fn test_tick_slot(slot: i64) -> RssTickSlot {
-        RssTickSlot {
-            tick_secs: TEST_RSS_TICK.as_secs() as i64,
-            slots: rss_slot_count(TEST_RSS_CADENCE, TEST_RSS_TICK),
-            slot,
-        }
-    }
-
-    /// The start of test tick `index`; tick 6_000_000 is a slot-0 tick.
-    fn test_tick(index: i64) -> DateTime<Utc> {
-        test_tick_slot(0).tick_start(index)
-    }
-
-    const TEST_FIRST_TICK: i64 = 6_000_000;
-
-    fn polled_activity(
-        polled_at: DateTime<Utc>,
-        cadence: std::time::Duration,
-    ) -> SchedulerRssActivity {
-        SchedulerRssActivity {
-            last_successful_poll_at: Some(polled_at),
-            last_attempt_at: Some(polled_at),
-            target_interval: Some(cadence),
-            freshness_risk: Some(0.0),
-            ..SchedulerRssActivity::default()
-        }
-    }
-
-    fn is_due_on(
-        now: DateTime<Utc>,
-        activity: SchedulerRssActivity,
-        slot: RssTickSlot,
-    ) -> (bool, RssFreshnessContext) {
-        let freshness = MultiIndexerSearchClient::rss_freshness_context(now, activity, slot);
-        (
-            rss_poll_is_due(
-                Some(freshness.latest_safe_poll_at),
-                Some(freshness.freshness_risk),
-                now,
-            ),
-            freshness,
-        )
-    }
-
     #[test]
-    fn a_polled_indexer_is_due_again_on_its_next_slot_tick() {
-        let slot = test_tick_slot(0);
-        let polled_at = test_tick(TEST_FIRST_TICK) + Duration::seconds(40);
-        let activity = polled_activity(polled_at, TEST_RSS_CADENCE);
-
-        let (_, freshness) = is_due_on(polled_at, activity.clone(), slot);
-        assert_eq!(freshness.target_interval, TEST_RSS_CADENCE);
-        // Due at the slot tick a cadence on, not a cadence after the poll
-        // finished, so the 40 seconds never push it to the tick after.
+    fn rss_poll_completion_does_not_skip_the_next_cycle() {
+        let now = aligned_rss_tick_start(1_800_000_000);
+        let cadence = scryer_application::rss_sync_tick_period();
         assert_eq!(
-            freshness.latest_safe_poll_at,
-            test_tick(TEST_FIRST_TICK + 3)
+            rss_next_poll_at(now + Duration::seconds(40), cadence),
+            now + Duration::from_std(cadence).unwrap()
         );
-        for tick in 1..3 {
-            assert!(!is_due_on(test_tick(TEST_FIRST_TICK + tick), activity.clone(), slot).0);
-        }
-        assert!(is_due_on(test_tick(TEST_FIRST_TICK + 3), activity.clone(), slot).0);
-        // Still due on any later tick until it is polled.
-        assert!(is_due_on(test_tick(TEST_FIRST_TICK + 4), activity, slot).0);
-    }
-
-    #[test]
-    fn a_late_poll_is_credited_back_to_its_slot() {
-        let slot = test_tick_slot(0);
-        // Held back a tick by the per-tick limit, and finishing late in it.
-        let polled_at = test_tick(TEST_FIRST_TICK + 1) + Duration::seconds(290);
-        let (_, freshness) = is_due_on(
-            polled_at,
-            polled_activity(polled_at, TEST_RSS_CADENCE),
-            slot,
-        );
+        let longer = cadence * 4;
         assert_eq!(
-            freshness.latest_safe_poll_at,
-            test_tick(TEST_FIRST_TICK + 3)
+            rss_next_poll_at(now + Duration::seconds(40), longer),
+            now + Duration::from_std(longer).unwrap()
         );
-    }
-
-    #[test]
-    fn a_longer_learned_cadence_pushes_the_slot_later() {
-        let slot = test_tick_slot(0);
-        let polled_at = test_tick(TEST_FIRST_TICK) + Duration::seconds(10);
-        let due_at = |cadence_minutes: u64| {
-            is_due_on(
-                polled_at,
-                SchedulerRssActivity {
-                    // Whatever the scheduler persisted after the poll, the slot
-                    // rule derives the boundary from the poll and the cadence.
-                    latest_safe_poll_at: Some(polled_at + Duration::minutes(1)),
-                    ..polled_activity(
-                        polled_at,
-                        std::time::Duration::from_secs(cadence_minutes * 60),
-                    )
-                },
-                slot,
-            )
-            .1
-            .latest_safe_poll_at
-        };
-        // The low-quota hour lands exactly on a slot tick.
-        assert_eq!(due_at(60), test_tick(TEST_FIRST_TICK + 12));
-        // Twenty minutes is not a whole slot cycle: the next slot tick after.
-        assert_eq!(due_at(20), test_tick(TEST_FIRST_TICK + 6));
-        // A cadence faster than a slot cycle runs on its own interval.
-        assert_eq!(due_at(5), test_tick(TEST_FIRST_TICK + 1));
-    }
-
-    #[test]
-    fn a_never_polled_indexer_is_due_on_the_tick_it_is_first_seen() {
-        let now = test_tick(TEST_FIRST_TICK + 1) + Duration::seconds(123);
-        // Slot 0 is not this tick's slot; a never-polled indexer goes anyway.
-        let (due, freshness) = is_due_on(now, SchedulerRssActivity::default(), test_tick_slot(0));
-        assert!(due);
-        assert_eq!(
-            freshness.latest_safe_poll_at,
-            test_tick(TEST_FIRST_TICK + 1)
-        );
-    }
-
-    #[test]
-    fn freshness_escalation_polls_an_indexer_off_its_slot() {
-        let slot = test_tick_slot(0);
-        let polled_at = test_tick(TEST_FIRST_TICK) + Duration::seconds(30);
-        let off_slot = test_tick(TEST_FIRST_TICK + 1);
-        let calm = polled_activity(polled_at, TEST_RSS_CADENCE);
-        let at_risk = SchedulerRssActivity {
-            freshness_risk: Some(scryer_application::RSS_FRESHNESS_ESCALATION_THRESHOLD + 0.05),
-            ..calm.clone()
-        };
-
-        assert!(!is_due_on(off_slot, calm, slot).0);
-        assert!(is_due_on(off_slot, at_risk.clone(), slot).0);
-
-        // The escalated poll counts against the tick's limit like any other.
-        let (polled, deferred) = rss_tick_poll_selection(
-            vec![RssTickDueIndexer {
-                indexer_id: "synthetic-at-risk".into(),
-                last_successful_poll_at: at_risk.last_successful_poll_at,
-                due_since: off_slot,
-                slot,
-            }],
-            off_slot,
-            DEFAULT_RSS_TICK_INDEXER_LIMIT,
-        );
-        assert_eq!(polled, vec!["synthetic-at-risk".to_string()]);
-        assert!(deferred.is_empty());
-    }
-
-    #[test]
-    fn slots_spread_indexers_evenly_and_ignore_listing_order() {
-        let ids = (0..50)
-            .map(|index| format!("synthetic-indexer-{index:02}"))
-            .collect::<Vec<_>>();
-        let forward = rss_tick_slots_for(
-            ids.iter().map(String::as_str),
-            TEST_RSS_TICK,
-            TEST_RSS_CADENCE,
-        );
-        let reverse = rss_tick_slots_for(
-            ids.iter().rev().map(String::as_str),
-            TEST_RSS_TICK,
-            TEST_RSS_CADENCE,
-        );
-        assert_eq!(forward, reverse);
-        let mut sizes = [0usize; 3];
-        for slot in forward.values() {
-            assert_eq!(slot.slots, 3);
-            sizes[slot.slot as usize] += 1;
-        }
-        assert_eq!(sizes, [17, 17, 16]);
-
-        let thirty = rss_tick_slots_for(
-            ids.iter().take(30).map(String::as_str),
-            TEST_RSS_TICK,
-            TEST_RSS_CADENCE,
-        );
-        let mut sizes = [0usize; 3];
-        for slot in thirty.values() {
-            sizes[slot.slot as usize] += 1;
-        }
-        assert_eq!(sizes, [10, 10, 10]);
-    }
-
-    #[test]
-    fn a_cadence_equal_to_the_tick_gives_one_slot() {
-        assert_eq!(rss_slot_count(TEST_RSS_CADENCE, TEST_RSS_TICK), 3);
-        let tick = scryer_application::DEFAULT_RSS_SYNC_TICK;
-        assert_eq!(
-            rss_slot_count(
-                scryer_application::parse_rss_target_interval(Some("300")),
-                tick
-            ),
-            1
-        );
-        // A shortened cadence pulls the worker tick down with it.
-        let short = scryer_application::parse_rss_target_interval(Some("30"));
-        assert_eq!(rss_slot_count(short, short.min(tick)), 1);
-        // A cadence just past a whole number of ticks takes the next slot count.
-        assert_eq!(rss_slot_count(std::time::Duration::from_secs(301), tick), 2);
-
-        // One slot: every indexer is due on every tick after it polls.
-        let slots = rss_tick_slots_for(["synthetic-a", "synthetic-b"], tick, tick);
-        for slot in slots.values() {
-            assert_eq!((slot.slots, slot.slot), (1, 0));
-            let polled_at = slot.tick_start(TEST_FIRST_TICK) + Duration::seconds(20);
-            let activity = polled_activity(polled_at, tick);
-            assert!(!is_due_on(polled_at + Duration::seconds(5), activity.clone(), *slot).0);
-            assert!(is_due_on(slot.tick_start(TEST_FIRST_TICK + 1), activity, *slot).0);
-        }
-    }
-
-    #[test]
-    fn rss_tick_indexer_limit_override_parses_and_is_honored() {
-        for raw in [
-            None,
-            Some(""),
-            Some("  "),
-            Some("ten"),
-            Some("0"),
-            Some("-2"),
-        ] {
-            assert_eq!(
-                parse_rss_tick_indexer_limit(raw),
-                DEFAULT_RSS_TICK_INDEXER_LIMIT
-            );
-        }
-        assert_eq!(DEFAULT_RSS_TICK_INDEXER_LIMIT, 10);
-        assert_eq!(parse_rss_tick_indexer_limit(Some(" 4 ")), 4);
-
-        let now = test_tick(TEST_FIRST_TICK);
-        let due = (0..9)
-            .map(|index| RssTickDueIndexer {
-                indexer_id: format!("synthetic-indexer-{index}"),
-                last_successful_poll_at: None,
-                due_since: now,
-                slot: test_tick_slot(index % 3),
-            })
-            .collect();
-        let (polled, deferred) =
-            rss_tick_poll_selection(due, now, parse_rss_tick_indexer_limit(Some("4")));
-        assert_eq!(polled.len(), 4);
-        assert_eq!(deferred.len(), 5);
-    }
-
-    /// Runs `ticks` RSS ticks over `count` synthetic indexers through the slot
-    /// rule and the per-tick limit, every poll succeeding 30 seconds into its
-    /// tick. Returns what each tick polled and held back.
-    fn simulate_rss_ticks(count: usize, ticks: i64) -> Vec<(Vec<String>, Vec<String>)> {
-        let ids = (0..count)
-            .map(|index| format!("synthetic-indexer-{index:02}"))
-            .collect::<Vec<_>>();
-        let slots = rss_tick_slots_for(
-            ids.iter().map(String::as_str),
-            TEST_RSS_TICK,
-            TEST_RSS_CADENCE,
-        );
-        let mut last_poll: HashMap<String, DateTime<Utc>> = HashMap::new();
-        let mut history = Vec::new();
-        for tick in TEST_FIRST_TICK..TEST_FIRST_TICK + ticks {
-            let now = test_tick(tick);
-            let due = ids
-                .iter()
-                .filter_map(|id| {
-                    let activity = last_poll
-                        .get(id)
-                        .map(|polled_at| polled_activity(*polled_at, TEST_RSS_CADENCE))
-                        .unwrap_or_default();
-                    let (due, freshness) = is_due_on(now, activity, slots[id]);
-                    due.then(|| RssTickDueIndexer {
-                        indexer_id: id.clone(),
-                        last_successful_poll_at: freshness.last_successful_poll_at,
-                        due_since: freshness.latest_safe_poll_at,
-                        slot: slots[id],
-                    })
-                })
-                .collect();
-            let (polled, deferred) =
-                rss_tick_poll_selection(due, now, DEFAULT_RSS_TICK_INDEXER_LIMIT);
-            for id in &polled {
-                last_poll.insert(id.clone(), now + Duration::seconds(30));
-            }
-            history.push((polled, deferred));
-        }
-        history
-    }
-
-    #[test]
-    fn thirty_rss_indexers_poll_ten_per_tick_and_cover_all_once_per_cadence() {
-        let history = simulate_rss_ticks(30, 9);
-        for (cadence, window) in history.chunks(3).enumerate() {
-            let mut covered = HashSet::new();
-            for (polled, deferred) in window {
-                assert_eq!(polled.len(), 10);
-                for id in polled {
-                    assert!(
-                        covered.insert(id.clone()),
-                        "{id} polled twice in one cadence"
-                    );
-                }
-                // Only the first pass, when all thirty have never polled, holds
-                // anyone back; after it every tick's due set is its own slot.
-                if cadence > 0 {
-                    assert!(deferred.is_empty());
-                }
-            }
-            assert_eq!(covered.len(), 30);
-        }
-        // Each indexer settles on its own slot: the same ten every third tick.
-        assert_eq!(history[0].0, history[3].0);
-        assert_eq!(history[1].0, history[4].0);
-        assert_eq!(history[2].0, history[5].0);
-    }
-
-    #[test]
-    fn fifty_rss_indexers_poll_ten_per_tick_and_take_the_held_ones_first() {
-        let history = simulate_rss_ticks(50, 15);
-        let (first_polled, first_deferred) = &history[0];
-        assert_eq!(first_polled.len(), 10);
-        assert_eq!(first_deferred.len(), 40);
-
-        let mut ever_polled = HashSet::new();
-        for (index, (polled, _)) in history.iter().enumerate() {
-            assert_eq!(polled.len(), 10, "tick {index} must poll the limit");
-            ever_polled.extend(polled.iter().cloned());
-            let Some((_, held_before)) = index.checked_sub(1).map(|previous| &history[previous])
-            else {
-                continue;
-            };
-            let held_before = held_before.iter().collect::<HashSet<_>>();
-            if held_before.len() >= 10 {
-                assert!(
-                    polled.iter().all(|id| held_before.contains(id)),
-                    "tick {index} must take the indexers held back by the last tick first"
-                );
-            } else {
-                assert!(
-                    held_before.iter().all(|id| polled.contains(*id)),
-                    "tick {index} must take every indexer held back by the last tick"
-                );
-            }
-        }
-        assert_eq!(ever_polled.len(), 50);
     }
 
     #[tokio::test]
-    async fn the_due_check_follows_each_indexers_slot() {
+    async fn all_indexers_are_due_together_on_the_next_cycle() {
         let configs = (0..3)
             .map(|index| IndexerConfig {
+                last_error_code: None,
                 id: format!("synthetic-slot-{index}"),
                 name: format!("Synthetic slot {index}"),
                 base_url: format!("https://slot-{index}.example.test"),
@@ -10611,21 +11540,17 @@ mod tests {
             }),
         )
         .with_upstream_scheduler(scheduler.clone());
-        // The process grid; the shipped cadence gives three slots, and the
-        // three ids sort onto slots 0, 1 and 2.
-        let slots = multi.rss_tick_slots(&configs);
-        let grid = slots["synthetic-slot-0"];
-        assert_eq!(grid.slots, 3, "the shipped cadence spans three ticks");
-        for (index, config) in configs.iter().enumerate() {
-            assert_eq!(slots[&config.id].slot, index as i64);
-        }
-        let tick = |offset: i64| grid.tick_start(TEST_FIRST_TICK + offset);
-
-        // Each polled on its own slot tick, finishing 45 seconds in.
+        let first_tick = aligned_rss_tick_start(1_800_000_000);
+        let tick = |offset: i32| {
+            first_tick
+                + Duration::from_std(scryer_application::rss_sync_tick_period() * offset as u32)
+                    .unwrap()
+        };
+        // Different completion times in one cycle do not assign separate groups.
         for (index, config) in configs.iter().enumerate() {
             let (host_key, destination_key) =
                 MultiIndexerSearchClient::scheduler_keys_for_indexer(config);
-            let observed_at = tick(index as i64) + Duration::seconds(45);
+            let observed_at = tick(0) + Duration::seconds(10 + index as i64 * 20);
             scheduler
                 .record_feedback(SchedulerFeedback {
                     lease: Some(SchedulerLease {
@@ -10675,19 +11600,16 @@ mod tests {
                 .map(|config| config.id.clone())
                 .collect::<Vec<_>>()
         };
-        // After the last of the three polls, nobody is due yet.
-        assert!(due_at(tick(2) + Duration::minutes(2)).await.is_empty());
-        // Then each comes due on its own slot tick a cadence on, and stays due.
-        assert_eq!(due_at(tick(3)).await, ids(0..1));
-        assert_eq!(due_at(tick(3) + Duration::seconds(299)).await, ids(0..1));
-        assert_eq!(due_at(tick(4)).await, ids(0..2));
-        assert_eq!(due_at(tick(5)).await, ids(0..3));
+        assert!(due_at(tick(0) + Duration::minutes(2)).await.is_empty());
+        assert_eq!(due_at(tick(1)).await, ids(0..3));
+        assert_eq!(due_at(tick(2)).await, ids(0..3));
     }
 
     #[tokio::test]
-    async fn an_rss_poll_fans_out_to_the_tick_limit_and_holds_the_rest_due() {
-        let configs = (0..12)
+    async fn an_rss_cycle_drains_all_fifty_due_indexers() {
+        let configs = (0..50)
             .map(|index| IndexerConfig {
+                last_error_code: None,
                 id: format!("synthetic-fanout-{index:02}"),
                 name: format!("Synthetic fan-out {index:02}"),
                 base_url: format!("https://fanout-{index:02}.example.test"),
@@ -10696,7 +11618,7 @@ mod tests {
             .collect::<Vec<_>>();
         let calls = Arc::new(AtomicUsize::new(0));
         let scheduler = Arc::new(crate::upstream_scheduler::InMemoryUpstreamScheduler::new());
-        let mut multi = MultiIndexerSearchClient::new(
+        let multi = MultiIndexerSearchClient::new(
             Arc::new(MockIndexerConfigRepository { configs }),
             Arc::new(MockIndexerStatsTracker),
             Arc::new(MockIndexerPluginProvider {
@@ -10705,7 +11627,6 @@ mod tests {
             }),
         )
         .with_upstream_scheduler(scheduler);
-        multi.rss_tick_indexer_limit = DEFAULT_RSS_TICK_INDEXER_LIMIT;
         async fn rss_poll(multi: &MultiIndexerSearchClient) -> AppResult<IndexerSearchResponse> {
             multi
                 .search(
@@ -10735,24 +11656,15 @@ mod tests {
             held
         };
 
-        // All twelve have never polled, so all are due; ten go now.
-        let first = rss_poll(&multi).await.expect("first RSS tick");
-        assert_eq!(calls.load(Ordering::SeqCst), 10);
-        let first_held = held(&first);
-        assert_eq!(first_held.len(), 2);
-
-        // The ten just polled are inside their cadence; the two held back are
-        // still due and go on the next tick.
+        let first = rss_poll(&multi).await.expect("first RSS cycle");
+        assert_eq!(calls.load(Ordering::SeqCst), 50);
+        assert!(held(&first).is_empty());
         let due = multi.rss_due_indexers().await.expect("due check");
-        let mut due_ids = due.due.clone();
-        due_ids.sort();
-        assert_eq!(due_ids, first_held);
-        let second = rss_poll(&multi).await.expect("second RSS tick");
-        assert_eq!(calls.load(Ordering::SeqCst), 12);
-        // What is deferred now is the ten inside their cadence, not a backlog.
-        let second_held = held(&second);
-        assert_eq!(second_held.len(), 10);
-        assert!(second_held.iter().all(|id| !first_held.contains(id)));
+        assert!(due.due.is_empty());
+        assert_eq!(due.deferred.len(), 50);
+        let second = rss_poll(&multi).await.expect("second RSS cycle");
+        assert_eq!(calls.load(Ordering::SeqCst), 50);
+        assert_eq!(held(&second).len(), 50);
     }
 
     #[test]
@@ -10799,6 +11711,8 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedCall {
         query: String,
+        nab: Option<scryer_plugin_sdk::PluginNabSearch>,
+        recent_paging: bool,
         ids: HashMap<String, String>,
         category: Option<String>,
         facet: Option<String>,
@@ -10852,6 +11766,8 @@ mod tests {
         ) -> AppResult<IndexerSearchResponse> {
             let call = RecordedCall {
                 query,
+                nab: None,
+                recent_paging: false,
                 ids,
                 category,
                 facet,
@@ -10876,6 +11792,8 @@ mod tests {
         ) -> AppResult<IndexerSearchResponse> {
             let call = RecordedCall {
                 query: request.query,
+                nab: None,
+                recent_paging: false,
                 ids: request.ids,
                 category: request.category,
                 facet: request.facet,
@@ -10900,6 +11818,8 @@ mod tests {
         ) -> AppResult<IndexerSearchResponse> {
             self.answer(RecordedCall {
                 query: request.query,
+                nab: request.nab,
+                recent_paging: request.recent_paging,
                 ids: HashMap::new(),
                 category: None,
                 facet: None,
@@ -10909,8 +11829,8 @@ mod tests {
                 absolute_episode: None,
                 rss_catch_up: None,
                 limit: request.limit,
-                page_cursor: None,
-                page_budget: None,
+                page_cursor: request.page.as_ref().and_then(|page| page.cursor.clone()),
+                page_budget: request.page.as_ref().map(|_| 1),
             })
         }
     }
@@ -11085,6 +12005,225 @@ mod tests {
             self.released.store(true, Ordering::SeqCst);
             self.release.notify_waiters();
         }
+    }
+
+    /// Each request announces itself with a one-shot completion gate. Tests
+    /// control completion order without timers or runtime scheduling guesses.
+    struct ControlledRssClient {
+        probe: StdArc<SearchConcurrencyProbe>,
+        started: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<bool>>,
+    }
+
+    #[async_trait]
+    impl IndexerClient for ControlledRssClient {
+        async fn search(
+            &self,
+            _query: String,
+            _ids: HashMap<String, String>,
+            _category: Option<String>,
+            _facet: Option<String>,
+            _id_search_facet: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<IndexerRoutingPlan>,
+            _mode: SearchMode,
+            _operation: IndexerErrorOperation,
+            _season: Option<u32>,
+            _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
+            _year: Option<i32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+            _learning_context: Option<IndexerSearchLearningContext>,
+            cancel_token: CancellationToken,
+        ) -> AppResult<IndexerSearchResponse> {
+            self.probe.mark_started();
+            let (complete, completion) = tokio::sync::oneshot::channel();
+            self.started
+                .send(complete)
+                .expect("test receives request gates");
+            let success = tokio::select! {
+                result = completion => result.unwrap_or(false),
+                _ = cancel_token.cancelled() => false,
+            };
+            self.probe.mark_finished();
+            if !success {
+                return Err(AppError::Repository("synthetic RSS request failure".into()));
+            }
+            Ok(IndexerSearchResponse {
+                next_cursor: None,
+                completion: IndexerSearchCompletion::Complete,
+                indexer_outcomes: Vec::new(),
+                results: Vec::new(),
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn rss_ring_refills_while_a_slow_indexer_remains_in_flight() {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let probe = StdArc::new(SearchConcurrencyProbe::default());
+            let (started, mut requests) = tokio::sync::mpsc::unbounded_channel();
+            let multi = MultiIndexerSearchClient::new(
+                Arc::new(MockIndexerConfigRepository {
+                    configs: indexed_mock_configs(50),
+                }),
+                Arc::new(MockIndexerStatsTracker),
+                Arc::new(ScriptedIndexerPluginProvider {
+                    client: Arc::new(ControlledRssClient {
+                        probe: probe.clone(),
+                        started,
+                    }),
+                    caps: IndexerProviderCapabilities {
+                        rss: true,
+                        ..movie_caps()
+                    },
+                }),
+            )
+            .with_upstream_scheduler(Arc::new(RecordingScheduler::default()));
+            assert_eq!(multi.rss_hand_off.available_permits(), 15);
+            assert_eq!(multi.rss_search_limit.available_permits(), 15);
+            let cycle = tokio::spawn(async move {
+                multi
+                    .search(
+                        String::new(),
+                        HashMap::new(),
+                        None,
+                        Some("movie".into()),
+                        None,
+                        None,
+                        None,
+                        SearchMode::Auto,
+                        None,
+                        None,
+                        None,
+                        vec![],
+                    )
+                    .await
+            });
+            let slow = requests.recv().await.expect("first request");
+            let mut running = std::collections::VecDeque::new();
+            for _ in 1..15 {
+                running.push_back(requests.recv().await.expect("initial ring request"));
+            }
+            assert_eq!(probe.active.load(Ordering::SeqCst), 15);
+            // The first completion fails. Failure must free a slot just like
+            // success, and the held slow request must not block any refill.
+            for replacement in 15..50 {
+                running
+                    .pop_front()
+                    .unwrap()
+                    .send(replacement != 15)
+                    .unwrap();
+                running.push_back(requests.recv().await.expect("replacement request"));
+                assert!(probe.max_active.load(Ordering::SeqCst) <= 15);
+            }
+            assert_eq!(probe.started.load(Ordering::SeqCst), 50);
+            for request in running {
+                request.send(true).unwrap();
+            }
+            slow.send(true).unwrap();
+            let response = cycle.await.expect("cycle task").expect("RSS cycle");
+            assert_eq!(probe.active.load(Ordering::SeqCst), 0);
+            assert_eq!(probe.max_active.load(Ordering::SeqCst), 15);
+            assert_eq!(response.indexer_outcomes.len(), 50);
+            assert!(
+                !response.indexer_outcomes.iter().any(|outcome| matches!(
+                    outcome.outcome,
+                    IndexerSearchOutcome::Deferred { .. }
+                ))
+            );
+        })
+        .await
+        .expect("RSS ring must drain every due indexer");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rss_cycle_deadline_closes_a_stalled_hand_off_as_partial() {
+        let identity = AtomicUsize::new(0);
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: StdArc::new(StdMutex::new(Vec::new())),
+            responder: StdArc::new(move |_| {
+                let number = identity.fetch_add(1, Ordering::SeqCst);
+                let mut result = search_result("Deadline.Feed.1080p.WEB-DL");
+                result.download_url = Some(format!("https://example.test/deadline-{number}"));
+                Ok(IndexerSearchResponse {
+                    results: vec![result],
+                    next_cursor: None,
+                    indexer_outcomes: vec![],
+                    completion: IndexerSearchCompletion::Complete,
+                    api_current: None,
+                    api_max: None,
+                    grab_current: None,
+                    grab_max: None,
+                })
+            }),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: indexed_mock_configs(2),
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: IndexerProviderCapabilities {
+                    rss: true,
+                    ..movie_caps()
+                },
+            }),
+        )
+        .with_upstream_scheduler(Arc::new(RecordingScheduler::default()));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let sink = IndexerSearchPageSink::new(sender, 1);
+        let poller = multi.clone();
+        let cycle = tokio::spawn(async move {
+            poller
+                .search_stream(
+                    String::new(),
+                    HashMap::new(),
+                    None,
+                    None,
+                    None,
+                    Some(vec!["2000".into()]),
+                    None,
+                    SearchMode::Auto,
+                    IndexerErrorOperation::RssSync,
+                    None,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    None,
+                    CancellationToken::new(),
+                    sink,
+                )
+                .await
+        });
+        let page = tokio::time::timeout(std::time::Duration::from_secs(60), receiver.recv())
+            .await
+            .expect("first page before deadline")
+            .expect("page");
+        // Holding the page retains the sole application reservation. The
+        // second hand-off cannot complete until it is released or times out.
+        tokio::time::advance(crate::upstream_scheduler::rss_target_interval()).await;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(60), cycle)
+            .await
+            .expect("cycle deadline")
+            .expect("cycle task")
+            .expect("partial response");
+        assert!(!response.completion.is_complete());
+        assert_eq!(response.indexer_outcomes.len(), 2);
+        assert!(
+            response
+                .indexer_outcomes
+                .iter()
+                .any(|item| matches!(item.outcome, IndexerSearchOutcome::Deferred { .. }))
+        );
+        assert_eq!(multi.rss_hand_off.available_permits(), 15);
+        assert_eq!(multi.rss_search_limit.available_permits(), 15);
+        drop(page);
     }
 
     struct BlockingIndexerClient {
@@ -11518,6 +12657,7 @@ mod tests {
 
         let stored = ReusableIndexerSearchCandidate {
             normalized: normalized_candidate(&live, None, None, Utc::now()),
+            reusable_until: Utc::now() + Duration::hours(1),
         };
         let replayed = reusable_candidate_from_record(stored, &mock_indexer_config())
             .expect("the stored result rehydrates");
@@ -11548,6 +12688,7 @@ mod tests {
                 page_cursor: None,
                 page_budget: None,
                 result_limit: None,
+                first_page_gate: None,
                 strategy_id: strategy_id.to_string(),
                 labels: vec![format!("strategy:{strategy_id}")],
                 query: format!("synthetic-{strategy_id}"),
@@ -11790,8 +12931,20 @@ mod tests {
                         let mut result = search_result(&title);
                         result.download_url =
                             Some(format!("https://example.invalid/{run_id}/{id}"));
+                        if run_id == "password" && id == total - 1 {
+                            result.password_hint = Some("archive-password".into());
+                        }
+                        if run_id == "http" && id == total - 1 {
+                            result.http = Some(scryer_plugin_sdk::PluginHttpRelease {
+                                provider: "synthetic".into(),
+                                item_id: "item".into(),
+                                page_url: "https://provider.invalid/item".into(),
+                                ..Default::default()
+                            });
+                        }
                         ReusableIndexerSearchCandidate {
                             normalized: normalized_candidate(&result, None, None, Utc::now()),
+                            reusable_until: candidate_reusable_until(&result, Utc::now()),
                         }
                     })
                     .collect(),
@@ -11816,6 +12969,7 @@ mod tests {
             config: mock_indexer_config(),
             run_ids: vec!["run-1".into(), "run-2".into()],
             provenance: reusable_strategy_provenance("ids"),
+            filter: None,
         }
     }
 
@@ -11830,6 +12984,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn candidate_replay_preflights_unsafe_later_pages_and_distinguishes_empty() {
+        for unsafe_run in ["password", "http"] {
+            let repository = Arc::new(ReplayTestRepository {
+                calls: StdMutex::new(Vec::new()),
+                fail: false,
+                candidates_per_run: 101,
+            });
+            let mut replay = test_candidate_replay(repository.clone());
+            replay.run_ids = vec!["plain".into(), unsafe_run.into()];
+            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let sink = IndexerSearchPageSink::new(tx, 1);
+            assert!(matches!(
+                replay.send(&sink, "idx-1").await.unwrap(),
+                ReplayOutcome::Unavailable
+            ));
+            assert!(
+                rx.try_recv().is_err(),
+                "no partial replay escapes preflight"
+            );
+            assert_eq!(repository.calls.lock().unwrap().len(), 3);
+        }
+        let repository = Arc::new(ReplayTestRepository {
+            calls: StdMutex::new(Vec::new()),
+            fail: false,
+            candidates_per_run: 0,
+        });
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let sink = IndexerSearchPageSink::new(tx, 1);
+        assert!(matches!(
+            test_candidate_replay(repository.clone())
+                .send(&sink, "idx-1")
+                .await
+                .unwrap(),
+            ReplayOutcome::Served(0)
+        ));
+        let mut unavailable = test_candidate_replay(repository);
+        unavailable.run_ids.clear();
+        assert!(matches!(
+            unavailable.send(&sink, "idx-1").await.unwrap(),
+            ReplayOutcome::Unavailable
+        ));
+    }
+
+    #[tokio::test]
     async fn candidate_replay_reserves_capacity_before_hydrating_each_batch() {
         let repository = Arc::new(ReplayTestRepository {
             calls: StdMutex::new(Vec::new()),
@@ -11841,14 +13039,21 @@ mod tests {
         let held = sink.reserve().await.unwrap();
         let mut replay = Box::pin(test_candidate_replay(repository.clone()).send(&sink, "idx-1"));
         assert!(futures_util::poll!(&mut replay).is_pending());
-        assert!(repository.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            repository.calls.lock().unwrap().len(),
+            5,
+            "preflight visits every bounded page before emission"
+        );
         drop(held);
 
         let mut titles = HashSet::new();
         for batch in 0..5 {
             let progress = futures_util::poll!(&mut replay);
             if batch == 4 {
-                assert!(matches!(progress, std::task::Poll::Ready(Ok(410))));
+                assert!(matches!(
+                    progress,
+                    std::task::Poll::Ready(Ok(ReplayOutcome::Served(410)))
+                ));
             } else {
                 assert!(progress.is_pending());
             }
@@ -11862,13 +13067,13 @@ mod tests {
             // Receiving does not free capacity: scoring owns the page until drop.
             if batch < 4 {
                 assert!(futures_util::poll!(&mut replay).is_pending());
-                assert_eq!(repository.calls.lock().unwrap().len(), batch + 1);
+                assert_eq!(repository.calls.lock().unwrap().len(), batch + 6);
             }
             drop(page);
         }
         assert_eq!(titles.len(), 410);
         let calls = repository.calls.lock().unwrap();
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 10);
         assert!(calls.iter().all(|(_, _, limit)| *limit == 100));
         assert_eq!(calls[1].1.as_deref(), Some("0099"));
         assert_eq!(calls[2].1.as_deref(), Some("0199"));
@@ -11892,11 +13097,17 @@ mod tests {
                 .await
                 .unwrap_err();
             if fail {
-                assert!(matches!(error, AppError::Repository(_)));
+                assert!(matches!(
+                    error,
+                    AppError::Repository(_) | AppError::RepositoryFailure { .. }
+                ));
             } else {
                 assert!(error.is_canceled());
             }
-            assert_eq!(repository.calls.lock().unwrap().len(), 1);
+            assert_eq!(
+                repository.calls.lock().unwrap().len(),
+                if fail { 1 } else { 6 }
+            );
         }
     }
 
@@ -13190,6 +14401,7 @@ mod tests {
         assert_eq!(
             response.indexer_outcomes,
             vec![IndexerQueryOutcome {
+                page: None,
                 indexer_id: "idx-anime-only".to_string(),
                 outcome: IndexerSearchOutcome::Unsupported,
             }]
@@ -13239,7 +14451,8 @@ mod tests {
     async fn automatic_search_skips_caps_failed_indexers_until_health_recovers() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut unhealthy = mock_indexer_config();
-        unhealthy.last_error_message = Some("caps refresh failed: synthetic failure".into());
+        unhealthy.last_error_message = Some("diagnostic wording may change".into());
+        unhealthy.last_error_code = Some("INDEXER_CAPS_REFRESH_FAILED".into());
         let client = MultiIndexerSearchClient::new(
             Arc::new(MockIndexerConfigRepository {
                 configs: vec![unhealthy],
@@ -15954,6 +17167,7 @@ mod tests {
         let retry_after = std::time::Duration::from_secs(42);
         let (client, _calls) = scripted_search_client(movie_caps(), move |_call| {
             Err(AppError::TemporaryUnavailable {
+                reason: None,
                 message: "upstream returned 429".to_string(),
                 retry_after: Some(retry_after),
                 rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
@@ -16162,6 +17376,7 @@ mod tests {
             calls: calls.clone(),
             responder: StdArc::new(|_call| {
                 Err(AppError::TemporaryUnavailable {
+                    reason: None,
                     message: "HTTP 429: slow down; retry after 120s".to_string(),
                     retry_after: Some(std::time::Duration::from_secs(120)),
                     rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
@@ -17436,11 +18651,349 @@ mod tests {
                 categories: categories.iter().map(|value| value.to_string()).collect(),
                 indexer_ids: None,
                 limit: Some(25),
+                page: None,
+                ..Default::default()
             },
             CancellationToken::new(),
         )
         .await
         .expect("raw search should succeed")
+    }
+
+    #[tokio::test]
+    async fn raw_search_page_requires_one_explicit_source() {
+        let (multi, calls) = raw_search_client(mock_indexer_config(), movie_caps(), &[]);
+        for indexer_ids in [
+            None,
+            Some(HashSet::new()),
+            Some(HashSet::from(["idx1".into(), "idx2".into()])),
+        ] {
+            let error = IndexerClient::search_raw_text(
+                &multi,
+                RawTextSearchRequest {
+                    query: "Example".into(),
+                    indexer_ids,
+                    page: Some(Default::default()),
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("a cursor cannot be shared across sources");
+            assert_eq!(
+                error.validation_reason(),
+                Some(scryer_application::error_reasons::catalog::RAW_SEARCH_PAGE_REQUIRES_SINGLE_INDEXER)
+            );
+        }
+        assert!(calls.lock().expect("calls").is_empty());
+    }
+
+    #[tokio::test]
+    async fn raw_nab_requests_preserve_typed_parameters_and_explicit_recent_mode() {
+        let mut caps = movie_caps();
+        caps.raw_nab_search = true;
+        caps.limits = Some(scryer_domain::IndexerLimitCapabilities {
+            paged_search: true,
+            ..Default::default()
+        });
+        let (multi, calls) = scripted_search_client(caps, |_| response_with_titles(&["Raw item"]));
+        for operation in [
+            scryer_plugin_sdk::PluginNabOperation::Movie,
+            scryer_plugin_sdk::PluginNabOperation::Tv,
+            scryer_plugin_sdk::PluginNabOperation::Music,
+            scryer_plugin_sdk::PluginNabOperation::Book,
+        ] {
+            let nab = scryer_plugin_sdk::PluginNabSearch {
+                operation,
+                parameters: std::collections::BTreeMap::from([(
+                    "custom".into(),
+                    "exact & value".into(),
+                )]),
+            };
+            IndexerClient::search_raw_text(
+                &multi,
+                RawTextSearchRequest {
+                    nab: Some(nab.clone()),
+                    indexer_ids: Some(HashSet::from([mock_indexer_config().id])),
+                    categories: vec!["6000".into(), "100001".into()],
+                    page: Some(Default::default()),
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            let calls = calls.lock().unwrap();
+            let call = calls.last().unwrap();
+            assert_eq!(call.nab, Some(nab));
+            assert!(call.query.is_empty(), "no manufactured text fallback");
+            assert_eq!(call.categories, ["6000", "100001"]);
+            assert!(
+                call.ids.is_empty(),
+                "typed parameters bypass acquisition ID strategy"
+            );
+        }
+        IndexerClient::search_raw_text(
+            &multi,
+            RawTextSearchRequest {
+                recent_paging: true,
+                indexer_ids: Some(HashSet::from([mock_indexer_config().id])),
+                page: Some(scryer_application::RawTextSearchPage {
+                    cursor: Some("recent-next".into()),
+                }),
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let calls = calls.lock().unwrap();
+        let call = calls.last().unwrap();
+        assert!(call.recent_paging);
+        assert_eq!(call.page_cursor.as_deref(), Some("recent-next"));
+        assert!(call.rss_catch_up.is_none());
+    }
+
+    #[tokio::test]
+    async fn raw_nab_requests_never_reach_legacy_adapters() {
+        let (multi, calls) = raw_search_client(mock_indexer_config(), movie_caps(), &[]);
+        for request in [
+            RawTextSearchRequest {
+                recent_paging: true,
+                ..Default::default()
+            },
+            RawTextSearchRequest {
+                nab: Some(scryer_plugin_sdk::PluginNabSearch {
+                    operation: scryer_plugin_sdk::PluginNabOperation::Movie,
+                    parameters: Default::default(),
+                }),
+                ..Default::default()
+            },
+        ] {
+            let response =
+                IndexerClient::search_raw_text(&multi, request, CancellationToken::new())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                response.indexer_outcomes[0].outcome,
+                IndexerSearchOutcome::Unsupported
+            );
+        }
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn raw_search_page_forwards_the_cursor_without_replanning() {
+        let mut caps = movie_caps();
+        caps.limits = Some(scryer_domain::IndexerLimitCapabilities {
+            paged_search: true,
+            ..Default::default()
+        });
+        let (multi, calls) = scripted_search_client(caps, |_| {
+            let mut response = response_with_titles(&["A", "B", "C"])?;
+            response.next_cursor = Some("opaque-next".into());
+            Ok(response)
+        });
+        for cursor in [None, Some("opaque-current".to_string())] {
+            let response = IndexerClient::search_raw_text(
+                &multi,
+                RawTextSearchRequest {
+                    query: "exact query".into(),
+                    categories: vec!["custom-category".into()],
+                    indexer_ids: Some(HashSet::from([mock_indexer_config().id])),
+                    limit: Some(2),
+                    page: Some(scryer_application::RawTextSearchPage {
+                        cursor: cursor.clone(),
+                    }),
+                    ..Default::default()
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .expect("raw page");
+            assert_eq!(response.results.len(), 3, "retain the full page tail");
+            assert_eq!(response.next_cursor.as_deref(), Some("opaque-next"));
+            let calls = calls.lock().expect("calls");
+            let call = calls.last().unwrap();
+            assert_eq!(call.query, "exact query");
+            assert_eq!(call.categories, vec!["custom-category"]);
+            assert_eq!(call.limit, Some(2));
+            assert_eq!(call.page_cursor, cursor);
+            assert_eq!(call.page_budget, Some(1));
+            assert!(call.ids.is_empty());
+            assert!(call.rss_catch_up.is_none());
+        }
+        assert_eq!(calls.lock().expect("calls").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn raw_search_page_does_not_call_an_unpaged_source() {
+        let (multi, calls) = raw_search_client(mock_indexer_config(), movie_caps(), &[]);
+        let response = IndexerClient::search_raw_text(
+            &multi,
+            RawTextSearchRequest {
+                query: "Example".into(),
+                indexer_ids: Some(HashSet::from([mock_indexer_config().id])),
+                page: Some(Default::default()),
+                ..Default::default()
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("unsupported source is skipped");
+        assert!(calls.lock().expect("calls").is_empty());
+        assert_eq!(
+            response.indexer_outcomes[0].outcome,
+            IndexerSearchOutcome::Unsupported
+        );
+        assert!(response.indexer_outcomes[0].page.is_none());
+    }
+
+    #[tokio::test]
+    async fn raw_search_preserves_source_page_completion_cursor_and_limits() {
+        for completion in [
+            IndexerSearchCompletion::Complete,
+            IndexerSearchCompletion::Partial {
+                reason: None,
+                retry_after: None,
+            },
+            IndexerSearchCompletion::Partial {
+                reason: Some(IndexerSearchIncompleteReason::RateLimited),
+                retry_after: Some(std::time::Duration::from_secs(90)),
+            },
+        ] {
+            for empty in [false, true] {
+                let (multi, calls) = scripted_search_client(movie_caps(), move |_| {
+                    let mut response =
+                        response_with_titles(if empty { &[] } else { &["Raw.Result"] })?;
+                    response.completion = completion;
+                    response.next_cursor = Some("opaque-next-page".into());
+                    response.api_current = Some(7);
+                    response.api_max = Some(300);
+                    response.grab_current = Some(2);
+                    response.grab_max = Some(40);
+                    Ok(response)
+                });
+                let response = run_raw_search(&multi, "raw", &[]).await;
+                assert_eq!(calls.lock().expect("calls").len(), 1);
+                assert_eq!(response.completion, completion);
+                assert_eq!(response.results.is_empty(), empty);
+                assert_eq!(response.next_cursor.as_deref(), Some("opaque-next-page"));
+                assert_eq!(response.api_current, Some(7));
+                assert_eq!(response.api_max, Some(300));
+                assert_eq!(response.grab_current, Some(2));
+                assert_eq!(response.grab_max, Some(40));
+                let source = &response.indexer_outcomes[0];
+                assert_eq!(source.indexer_id, "idx-1");
+                assert_eq!(source.page, Some(response.page_metadata()));
+                assert_eq!(
+                    source.outcome,
+                    match completion {
+                        IndexerSearchCompletion::Complete =>
+                            IndexerSearchOutcome::Complete { empty },
+                        IndexerSearchCompletion::Partial {
+                            reason,
+                            retry_after,
+                        } => {
+                            IndexerSearchOutcome::Partial {
+                                empty,
+                                reason,
+                                retry_after,
+                            }
+                        }
+                    }
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_search_keeps_each_sources_cursor_and_quota_separate() {
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let sequence = AtomicUsize::new(0);
+        let client = Arc::new(ScriptedIndexerClient {
+            calls,
+            responder: StdArc::new(move |_| {
+                let ordinal = sequence.fetch_add(1, Ordering::SeqCst);
+                let mut response = response_with_titles(&[&format!("Result-{ordinal}")])?;
+                response.next_cursor = Some(format!("cursor-{ordinal}"));
+                response.api_current = Some(ordinal as u32 + 1);
+                response.api_max = Some(100 + ordinal as u32);
+                response.grab_current = Some(10 + ordinal as u32);
+                response.grab_max = Some(20 + ordinal as u32);
+                if ordinal == 1 {
+                    response.completion = IndexerSearchCompletion::Partial {
+                        reason: Some(IndexerSearchIncompleteReason::MalformedContent),
+                        retry_after: None,
+                    };
+                }
+                Ok(response)
+            }),
+        });
+        let first = mock_indexer_config();
+        let mut second = first.clone();
+        second.id = "idx-2".into();
+        second.base_url = "https://other-indexer.invalid".into();
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![first, second],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: movie_caps(),
+            }),
+        );
+        let response = run_raw_search(&multi, "raw", &[]).await;
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(response.indexer_outcomes.len(), 2);
+        assert_eq!(
+            response.completion,
+            IndexerSearchCompletion::Partial {
+                reason: Some(IndexerSearchIncompleteReason::FanoutBranchFailed),
+                retry_after: None,
+            }
+        );
+        assert_eq!(response.next_cursor, None);
+        assert_eq!((response.api_current, response.api_max), (None, None));
+        assert_eq!((response.grab_current, response.grab_max), (None, None));
+        for source in &response.indexer_outcomes {
+            let result = response
+                .results
+                .iter()
+                .find(|result| result.indexer_id.as_deref() == Some(source.indexer_id.as_str()))
+                .expect("result belongs to a source");
+            let ordinal = if result.title == "Result-0" { 0 } else { 1 };
+            let page = source.page.as_ref().expect("source page metadata");
+            assert_eq!(
+                page.next_cursor.as_deref(),
+                Some(format!("cursor-{ordinal}").as_str())
+            );
+            assert_eq!(
+                (page.api_current, page.api_max),
+                (Some(ordinal + 1), Some(ordinal + 100))
+            );
+            assert_eq!(
+                (page.grab_current, page.grab_max),
+                (Some(ordinal + 10), Some(ordinal + 20))
+            );
+            assert_eq!(page.completion.is_complete(), ordinal == 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_search_does_not_report_a_failed_source_as_complete() {
+        let (multi, _) = scripted_search_client(movie_caps(), |_| {
+            Err(AppError::Repository("synthetic upstream failure".into()))
+        });
+        let response = run_raw_search(&multi, "raw", &[]).await;
+        assert!(response.results.is_empty());
+        assert!(!response.completion.is_complete());
+        assert_eq!(
+            response.indexer_outcomes[0].outcome,
+            IndexerSearchOutcome::Errored
+        );
+        assert_eq!(response.indexer_outcomes[0].page, None);
     }
 
     #[tokio::test]
@@ -17479,6 +19032,8 @@ mod tests {
                     recorded,
                     vec![RecordedCall {
                         query: "Sample Movie 2021".into(),
+                        nab: None,
+                        recent_paging: false,
                         ids: HashMap::new(),
                         category: None,
                         facet: None,
@@ -17568,10 +19123,178 @@ mod tests {
         assert_eq!(
             response.indexer_outcomes,
             vec![IndexerQueryOutcome {
+                page: None,
                 indexer_id: "idx-1".to_string(),
                 outcome: IndexerSearchOutcome::Unsupported,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn search_path_caps_refresh_runs_at_interactive_intent_in_every_mode() {
+        struct RecordingCaps(Arc<std::sync::Mutex<Vec<SchedulerIntent>>>);
+        #[async_trait]
+        impl scryer_application::IndexerCapsSnapshotRefresher for RecordingCaps {
+            async fn fetch_for_config(
+                &self,
+                _: &IndexerConfig,
+                _: Option<&scryer_domain::ProxyConfig>,
+            ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+                panic!("intent must be supplied")
+            }
+            async fn fetch_for_config_with_intent(
+                &self,
+                _: &IndexerConfig,
+                _: Option<&scryer_domain::ProxyConfig>,
+                _: Option<&scryer_application::IndexerAccountingContext>,
+                intent: SchedulerIntent,
+            ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+                self.0.lock().unwrap().push(intent);
+                Ok(None)
+            }
+        }
+        // The search path admits every mode; the refresh it triggers is
+        // scheduled at interactive priority regardless.
+        for (mode, rss) in [
+            (SearchMode::Auto, true),
+            (SearchMode::Auto, false),
+            (SearchMode::Interactive, false),
+        ] {
+            assert_ne!(
+                MultiIndexerSearchClient::scheduler_intent(mode, rss)
+                    == SchedulerIntent::InteractiveSearch,
+                mode == SearchMode::Auto
+            );
+            let mut config = mock_indexer_config();
+            config.provider_type = "newznab".into();
+            config.managed_parent_config_id = Some("parent".into());
+            config.caps_snapshot_json = Some(
+                serde_json::to_string(&scryer_domain::IndexerCapsSnapshot::default()).unwrap(),
+            );
+            let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (multi, _) = raw_search_client(config.clone(), movie_caps(), &[]);
+            let multi = multi.with_caps_resolution(
+                Arc::new(scryer_application::CapsRequestCache::default()),
+                Arc::new(RecordingCaps(observed.clone())),
+            );
+            for _ in 0..2 {
+                multi.resolved_caps_config(&config, &HashMap::new()).await;
+            }
+            assert_eq!(
+                *observed.lock().unwrap(),
+                vec![SchedulerIntent::InteractiveSearch]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_search_retains_caps_diagnostics_without_changing_completion() {
+        struct DeferredCaps;
+        #[async_trait]
+        impl scryer_application::IndexerCapsSnapshotRefresher for DeferredCaps {
+            async fn fetch_for_config(
+                &self,
+                _: &IndexerConfig,
+                _: Option<&scryer_domain::ProxyConfig>,
+            ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+                Err(AppError::TemporaryUnavailable {
+                    reason: Some(scryer_application::error_reasons::indexer_caps::REFRESH_DEFERRED),
+                    message: "Discovery deferred".into(),
+                    retry_after: Some(std::time::Duration::from_secs(30)),
+                    rate_limit_cooldown: scryer_application::RateLimitCooldownAction::None,
+                })
+            }
+        }
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.caps_snapshot_json =
+            Some(serde_json::to_string(&scryer_domain::IndexerCapsSnapshot::default()).unwrap());
+        let (multi, calls) = raw_search_client(config, movie_caps(), &["Software.Release"]);
+        let multi = multi.with_caps_resolution(
+            Arc::new(scryer_application::CapsRequestCache::default()),
+            Arc::new(DeferredCaps),
+        );
+        let response = run_raw_search(&multi, "Software", &[]).await;
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        assert!(response.completion.is_complete());
+        let page = response.indexer_outcomes[0].page.as_ref().unwrap();
+        assert!(page.completion.is_complete());
+        assert_eq!(
+            page.caps,
+            Some(scryer_application::IndexerCapsDiagnostic {
+                source: scryer_application::IndexerCapsSource::Stale,
+                reason: Some(scryer_application::error_reasons::indexer_caps::REFRESH_DEFERRED),
+                retry_after: Some(std::time::Duration::from_secs(30)),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_search_reports_config_cooldown_without_claiming_empty_success() {
+        let mut config = mock_indexer_config();
+        let until = Utc::now() + chrono::Duration::hours(1);
+        config.disabled_until = Some(until);
+        let (multi, calls) = raw_search_client(config, movie_caps(), &[]);
+        let response = run_raw_search(&multi, "Software", &[]).await;
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(!response.completion.is_complete());
+        assert_eq!(
+            response.indexer_outcomes[0].outcome,
+            IndexerSearchOutcome::BackedOff { until: Some(until) }
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn raw_search_admission_wait_is_outside_the_source_operation_timeout() {
+        use std::future::Future;
+        let (multi, calls) = raw_search_client(mock_indexer_config(), movie_caps(), &[]);
+        assert_eq!(multi.interactive_search_limit.available_permits(), 24);
+        let occupied = multi
+            .interactive_search_limit
+            .clone()
+            .try_acquire_many_owned(24)
+            .unwrap();
+        let read = run_raw_search(&multi, "Queued Source", &[]);
+        tokio::pin!(read);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(read.as_mut().poll(&mut context).is_pending());
+        assert!(calls.lock().unwrap().is_empty());
+        tokio::time::advance(std::time::Duration::from_secs(121)).await;
+        assert!(read.as_mut().poll(&mut context).is_pending());
+        assert!(calls.lock().unwrap().is_empty());
+        drop(occupied);
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), read)
+            .await
+            .unwrap();
+        assert!(response.completion.is_complete());
+        assert_eq!(calls.lock().unwrap().len(), 1);
+
+        let occupied = multi
+            .interactive_search_limit
+            .clone()
+            .try_acquire_many_owned(24)
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let read = IndexerClient::search_raw_text(
+            &multi,
+            RawTextSearchRequest {
+                query: "Cancelled Queue".into(),
+                ..Default::default()
+            },
+            cancel.clone(),
+        );
+        tokio::pin!(read);
+        assert!(read.as_mut().poll(&mut context).is_pending());
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), read)
+                .await
+                .unwrap()
+                .unwrap_err()
+                .is_canceled()
+        );
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        drop(occupied);
     }
 
     #[tokio::test]
@@ -17620,13 +19343,14 @@ mod tests {
         assert_eq!(
             response.indexer_outcomes,
             vec![IndexerQueryOutcome {
+                page: None,
                 indexer_id: "idx-1".to_string(),
                 outcome: IndexerSearchOutcome::BackedOff {
                     until: Some(backoff.disabled_until),
                 },
             }]
         );
-        assert!(response.completion.is_complete());
+        assert!(!response.completion.is_complete());
 
         // Other searches keep leaving a backed-off indexer out silently.
         let faceted = multi
@@ -18121,18 +19845,28 @@ mod tests {
             StdArc<StdMutex<Vec<(IndexerSearchRunWrite, Vec<IndexerSearchCandidateWrite>)>>>,
         cleanup_batches: StdArc<StdMutex<std::collections::VecDeque<u32>>>,
         cleanup_limits: StdArc<StdMutex<Vec<u32>>>,
+        facets: StdArc<StdMutex<HashMap<(String, String), IndexerFacetLearningState>>>,
+        /// The learning reads and writes made through the repository, by
+        /// method name, in call order.
+        learning_calls: StdArc<StdMutex<Vec<&'static str>>>,
+        learning_batches: StdArc<StdMutex<Vec<IndexerSearchLearningBatch>>>,
     }
 
-    #[async_trait]
-    impl IndexerSearchLearningRepository for InMemorySearchLearningRepository {
-        async fn list_for_title(
+    impl InMemorySearchLearningRepository {
+        fn note_call(&self, method: &'static str) {
+            self.learning_calls
+                .lock()
+                .expect("learning calls mutex")
+                .push(method);
+        }
+
+        fn rows_for_title(
             &self,
             indexer_id: &str,
             title_id: &str,
             facet: &str,
-        ) -> AppResult<Vec<IndexerSearchLearningRecord>> {
-            Ok(self
-                .records
+        ) -> Vec<IndexerSearchLearningRecord> {
+            self.records
                 .lock()
                 .expect("learning records mutex")
                 .values()
@@ -18142,14 +19876,14 @@ mod tests {
                         && record.key.facet == facet
                 })
                 .cloned()
-                .collect())
+                .collect()
         }
 
-        async fn record_outcome(
+        fn apply_strategy_outcome(
             &self,
             key: &IndexerSearchLearningKey,
             usable_hits: u32,
-        ) -> AppResult<IndexerSearchLearningRecord> {
+        ) -> IndexerSearchLearningRecord {
             let now = Utc::now().to_rfc3339();
             let mut records = self.records.lock().expect("learning records mutex");
             let record =
@@ -18175,7 +19909,118 @@ mod tests {
                 record.last_usable_at = Some(now);
                 record.suppressed = false;
             }
-            Ok(record.clone())
+            record.clone()
+        }
+
+        fn apply_suppressed(&self, key: &IndexerSearchLearningKey, suppressed: bool) {
+            if let Some(record) = self
+                .records
+                .lock()
+                .expect("learning records mutex")
+                .get_mut(key)
+            {
+                record.suppressed = suppressed;
+                record.updated_at = Some(Utc::now().to_rfc3339());
+            }
+        }
+
+        fn apply_facet_outcome(
+            &self,
+            indexer_id: &str,
+            facet: &str,
+            title_id: &str,
+            outcome: IndexerFacetSearchOutcome,
+            now: DateTime<Utc>,
+            policy: IndexerFacetLearningPolicy,
+        ) -> IndexerFacetTransition {
+            let mut facets = self.facets.lock().expect("facet learning mutex");
+            let key = (indexer_id.to_string(), facet.to_string());
+            let (next, transition) = facets
+                .get(&key)
+                .cloned()
+                .unwrap_or_default()
+                .apply_outcome(title_id, outcome, now, policy);
+            if let Some(next) = next {
+                facets.insert(key, next);
+            }
+            transition
+        }
+    }
+
+    #[async_trait]
+    impl IndexerSearchLearningRepository for InMemorySearchLearningRepository {
+        async fn list_for_title(
+            &self,
+            indexer_id: &str,
+            title_id: &str,
+            facet: &str,
+        ) -> AppResult<Vec<IndexerSearchLearningRecord>> {
+            self.note_call("list_for_title");
+            Ok(self.rows_for_title(indexer_id, title_id, facet))
+        }
+
+        async fn list_for_title_by_indexer(
+            &self,
+            indexer_ids: &[String],
+            title_id: &str,
+            facet: &str,
+        ) -> AppResult<HashMap<String, Vec<IndexerSearchLearningRecord>>> {
+            self.note_call("list_for_title_by_indexer");
+            Ok(indexer_ids
+                .iter()
+                .map(|indexer_id| {
+                    (
+                        indexer_id.clone(),
+                        self.rows_for_title(indexer_id, title_id, facet),
+                    )
+                })
+                .collect())
+        }
+
+        async fn record_learning_batch(
+            &self,
+            batch: &IndexerSearchLearningBatch,
+        ) -> AppResult<Vec<IndexerFacetTransition>> {
+            self.note_call("record_learning_batch");
+            self.learning_batches
+                .lock()
+                .expect("learning batches mutex")
+                .push(batch.clone());
+            let key = |strategy_key: &str| IndexerSearchLearningKey {
+                indexer_id: batch.indexer_id.clone(),
+                title_id: batch.title_id.clone(),
+                facet: batch.facet.clone(),
+                strategy_key: strategy_key.to_string(),
+            };
+            for (strategy_key, usable_hits) in &batch.strategy_outcomes {
+                self.apply_strategy_outcome(&key(strategy_key), *usable_hits);
+            }
+            for strategy_key in &batch.suppress {
+                self.apply_suppressed(&key(strategy_key), true);
+            }
+            Ok(batch
+                .facet_outcomes
+                .iter()
+                .map(|outcome| {
+                    self.apply_facet_outcome(
+                        &batch.indexer_id,
+                        &batch.facet,
+                        &batch.title_id,
+                        *outcome,
+                        batch.now,
+                        batch.facet_policy,
+                    )
+                })
+                .collect())
+        }
+
+        async fn record_outcome(
+            &self,
+            key: &IndexerSearchLearningKey,
+            usable_hits: u32,
+        ) -> AppResult<IndexerSearchLearningRecord> {
+            self.note_call("record_outcome");
+            Ok(self.apply_strategy_outcome(key, usable_hits))
         }
 
         async fn record_search_diagnostics(
@@ -18277,6 +20122,7 @@ mod tests {
                     .into_iter()
                     .map(|candidate| ReusableIndexerSearchCandidate {
                         normalized: candidate.normalized.clone(),
+                        reusable_until: candidate.reusable_until.min(candidate.expires_at),
                     })
                     .collect(),
             })
@@ -18305,15 +20151,8 @@ mod tests {
             key: &IndexerSearchLearningKey,
             suppressed: bool,
         ) -> AppResult<()> {
-            if let Some(record) = self
-                .records
-                .lock()
-                .expect("learning records mutex")
-                .get_mut(key)
-            {
-                record.suppressed = suppressed;
-                record.updated_at = Some(Utc::now().to_rfc3339());
-            }
+            self.note_call("set_suppressed");
+            self.apply_suppressed(key, suppressed);
             Ok(())
         }
 
@@ -18322,6 +20161,7 @@ mod tests {
             key: &IndexerSearchLearningKey,
             stale_before: DateTime<Utc>,
         ) -> AppResult<bool> {
+            self.note_call("try_claim_suppressed_reprobe");
             let mut records = self.records.lock().expect("learning records mutex");
             let Some(record) = records.get_mut(key) else {
                 return Ok(false);
@@ -18343,6 +20183,359 @@ mod tests {
             record.updated_at = Some(Utc::now().to_rfc3339());
             Ok(true)
         }
+
+        async fn facet_learning_states(
+            &self,
+            facet: &str,
+            indexer_ids: &[String],
+        ) -> AppResult<HashMap<String, IndexerFacetLearningState>> {
+            self.note_call("facet_learning_states");
+            let facets = self.facets.lock().expect("facet learning mutex");
+            Ok(indexer_ids
+                .iter()
+                .filter_map(|indexer_id| {
+                    facets
+                        .get(&(indexer_id.clone(), facet.to_string()))
+                        .map(|state| (indexer_id.clone(), state.clone()))
+                })
+                .collect())
+        }
+
+        async fn record_facet_search_outcome(
+            &self,
+            indexer_id: &str,
+            facet: &str,
+            title_id: &str,
+            outcome: IndexerFacetSearchOutcome,
+            now: DateTime<Utc>,
+            policy: IndexerFacetLearningPolicy,
+        ) -> AppResult<IndexerFacetTransition> {
+            self.note_call("record_facet_search_outcome");
+            Ok(self.apply_facet_outcome(indexer_id, facet, title_id, outcome, now, policy))
+        }
+
+        async fn try_claim_facet_reprobe(
+            &self,
+            indexer_id: &str,
+            facet: &str,
+            now: DateTime<Utc>,
+            policy: IndexerFacetLearningPolicy,
+        ) -> AppResult<bool> {
+            self.note_call("try_claim_facet_reprobe");
+            let mut facets = self.facets.lock().expect("facet learning mutex");
+            let key = (indexer_id.to_string(), facet.to_string());
+            let Some(next) = facets
+                .get(&key)
+                .and_then(|state| state.claim_reprobe(now, policy))
+            else {
+                return Ok(false);
+            };
+            facets.insert(key, next);
+            Ok(true)
+        }
+    }
+
+    fn facet_context(title_id: &str, background: bool) -> IndexerSearchLearningContext {
+        IndexerSearchLearningContext {
+            title_id: title_id.into(),
+            facet: "anime".into(),
+            subject_kind: ReleaseSearchSubjectKind::Episode,
+            search_session_id: format!("session-{title_id}"),
+            background_value: background.then_some(0.5),
+            candidate_reuse_allowed: background,
+        }
+    }
+
+    fn suppressed_facet_state(until: DateTime<Utc>) -> IndexerFacetLearningState {
+        IndexerFacetLearningState {
+            empty_title_ids: (0..FACET_EMPTY_TITLE_THRESHOLD)
+                .map(|index| format!("title-{index}"))
+                .collect(),
+            suppressed_until: Some(until),
+            reprobe_claimed_at: None,
+            revision: 1,
+        }
+    }
+
+    async fn anime_facet_search(
+        client: &MultiIndexerSearchClient,
+        mode: SearchMode,
+        context: IndexerSearchLearningContext,
+        episode: u32,
+    ) -> IndexerSearchResponse {
+        <MultiIndexerSearchClient as IndexerClient>::search(
+            client,
+            format!("Quiet Lantern {episode:02}"),
+            HashMap::from([("anidb_id".to_string(), "40001".to_string())]),
+            Some("anime".into()),
+            Some("anime".into()),
+            None,
+            None,
+            None,
+            mode,
+            match mode {
+                SearchMode::Interactive => IndexerErrorOperation::InteractiveSearch,
+                SearchMode::Auto => IndexerErrorOperation::AutomaticSearch,
+            },
+            Some(1),
+            Some(episode),
+            Some(episode),
+            None,
+            vec![],
+            Some(context),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("anime search should succeed")
+    }
+
+    #[tokio::test]
+    async fn facet_learning_suppresses_after_distinct_empty_background_titles() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let record = |title: String, background: bool, mode: SearchMode, hits: usize| {
+            let repo = repo.clone();
+            async move {
+                record_strategy_learning_outcome(
+                    &repo,
+                    Some(&facet_context(&title, background)),
+                    mode,
+                    "idx-general",
+                    "General Tracker",
+                    "ids_abs",
+                    hits,
+                )
+                .await;
+            }
+        };
+        let state = || {
+            facets
+                .lock()
+                .expect("facet learning mutex")
+                .get(&("idx-general".to_string(), "anime".to_string()))
+                .cloned()
+        };
+
+        // An operator's empty searches never count.
+        for index in 0..FACET_EMPTY_TITLE_THRESHOLD {
+            record(format!("operator-{index}"), false, SearchMode::Auto, 0).await;
+        }
+        assert_eq!(state(), None);
+
+        for index in 0..FACET_EMPTY_TITLE_THRESHOLD - 1 {
+            let title = format!("title-{index}");
+            record(title.clone(), true, SearchMode::Auto, 0).await;
+            // A second empty strategy or episode of the same title is not
+            // another title.
+            record(title, true, SearchMode::Auto, 0).await;
+        }
+        let pending = state().expect("streak is tracked");
+        assert_eq!(pending.streak(), FACET_EMPTY_TITLE_THRESHOLD - 1);
+        assert_eq!(pending.suppressed_until, None);
+
+        record("title-last".to_string(), true, SearchMode::Auto, 0).await;
+        let suppressed = state().expect("streak is tracked");
+        assert_eq!(suppressed.streak(), FACET_EMPTY_TITLE_THRESHOLD);
+        assert!(
+            suppressed
+                .held_until(Utc::now(), facet_learning_policy())
+                .is_some(),
+            "the indexer is out of the facet for background searches"
+        );
+
+        // A usable hit from any search, interactive included, clears both.
+        record("title-hit".to_string(), false, SearchMode::Interactive, 2).await;
+        let cleared = state().expect("row stays");
+        assert_eq!(cleared.streak(), 0);
+        assert_eq!(cleared.suppressed_until, None);
+    }
+
+    #[tokio::test]
+    async fn facet_learning_ignores_errored_background_searches() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls) = scripted_search_client(anime_caps(), |_call| {
+            Err(AppError::Repository("upstream unavailable".into()))
+        });
+        let client = client.with_search_learning_repository(repo);
+
+        for index in 0..=FACET_EMPTY_TITLE_THRESHOLD {
+            anime_facet_search(
+                &client,
+                SearchMode::Auto,
+                facet_context(&format!("title-{index}"), true),
+                index as u32 + 1,
+            )
+            .await;
+        }
+
+        assert!(!calls.lock().expect("call log mutex").is_empty());
+        assert!(
+            facets.lock().expect("facet learning mutex").is_empty(),
+            "an error is neither empty nor usable"
+        );
+    }
+
+    #[tokio::test]
+    async fn facet_suppressed_indexer_is_skipped_by_background_searches_only() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let until = Utc::now() + Duration::hours(FACET_SUPPRESSION_HOURS);
+        repo_impl
+            .facets
+            .lock()
+            .expect("facet learning mutex")
+            .insert(
+                ("idx-1".to_string(), "anime".to_string()),
+                suppressed_facet_state(until),
+            );
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls) =
+            scripted_search_client(anime_caps(), |_call| response_with_titles(&[]));
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(
+            &client,
+            SearchMode::Auto,
+            facet_context("title-bg", true),
+            1,
+        )
+        .await;
+        assert!(
+            calls.lock().expect("call log mutex").is_empty(),
+            "a background search does not call a facet-suppressed indexer"
+        );
+
+        // The walk sees the same indexer as held until the window ends.
+        let holds = <MultiIndexerSearchClient as IndexerClient>::facet_suppression_holds(
+            &client,
+            "anime",
+            &["idx-1".to_string(), "idx-2".to_string()],
+            Utc::now(),
+        )
+        .await
+        .expect("holds should load");
+        assert_eq!(holds, HashMap::from([("idx-1".to_string(), until)]));
+        assert!(
+            <MultiIndexerSearchClient as IndexerClient>::facet_suppression_holds(
+                &client,
+                "series",
+                &["idx-1".to_string()],
+                Utc::now(),
+            )
+            .await
+            .expect("holds should load")
+            .is_empty(),
+            "other facets are not held"
+        );
+
+        anime_facet_search(
+            &client,
+            SearchMode::Auto,
+            facet_context("title-operator", false),
+            2,
+        )
+        .await;
+        assert!(
+            !calls.lock().expect("call log mutex").is_empty(),
+            "an operator's automatic search still asks the indexer"
+        );
+        calls.lock().expect("call log mutex").clear();
+        anime_facet_search(
+            &client,
+            SearchMode::Interactive,
+            facet_context("title-interactive", false),
+            3,
+        )
+        .await;
+        assert!(
+            !calls.lock().expect("call log mutex").is_empty(),
+            "an interactive search still asks the indexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn facet_suppression_expiry_allows_exactly_one_reprobe() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        let expired = Utc::now() - Duration::minutes(1);
+        facets.lock().expect("facet learning mutex").insert(
+            ("idx-1".to_string(), "anime".to_string()),
+            suppressed_facet_state(expired),
+        );
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, calls) =
+            scripted_search_client(anime_caps(), |_call| response_with_titles(&[]));
+        let client = client.with_search_learning_repository(repo.clone());
+
+        // A claim taken by another search holds this one off.
+        assert!(
+            repo.try_claim_facet_reprobe("idx-1", "anime", Utc::now(), facet_learning_policy())
+                .await
+                .expect("claim")
+        );
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-a", true), 1).await;
+        assert!(
+            calls.lock().expect("call log mutex").is_empty(),
+            "only the claiming search re-probes"
+        );
+
+        // Once that claim lapses, the next background search is the re-probe.
+        facets
+            .lock()
+            .expect("facet learning mutex")
+            .get_mut(&("idx-1".to_string(), "anime".to_string()))
+            .expect("state")
+            .reprobe_claimed_at =
+            Some(Utc::now() - Duration::minutes(FACET_REPROBE_CLAIM_MINUTES + 1));
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-b", true), 2).await;
+        assert!(
+            !calls.lock().expect("call log mutex").is_empty(),
+            "the re-probe asks the indexer"
+        );
+        let resuppressed = facets
+            .lock()
+            .expect("facet learning mutex")
+            .get(&("idx-1".to_string(), "anime".to_string()))
+            .cloned()
+            .expect("state");
+        assert!(
+            resuppressed.suppressed_until.is_some_and(
+                |until| until > Utc::now() + Duration::hours(FACET_SUPPRESSION_HOURS - 1)
+            ),
+            "an empty re-probe suppresses for another full window"
+        );
+
+        calls.lock().expect("call log mutex").clear();
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-c", true), 3).await;
+        assert!(calls.lock().expect("call log mutex").is_empty());
+    }
+
+    #[tokio::test]
+    async fn facet_reprobe_with_a_usable_hit_clears_the_suppression() {
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let facets = repo_impl.facets.clone();
+        facets.lock().expect("facet learning mutex").insert(
+            ("idx-1".to_string(), "anime".to_string()),
+            suppressed_facet_state(Utc::now() - Duration::minutes(1)),
+        );
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let (client, _calls) = scripted_search_client(anime_caps(), |_call| {
+            response_with_titles(&["Quiet.Lantern.S01E04.1080p.WEB-DL"])
+        });
+        let client = client.with_search_learning_repository(repo);
+
+        anime_facet_search(&client, SearchMode::Auto, facet_context("title-a", true), 4).await;
+
+        let state = facets
+            .lock()
+            .expect("facet learning mutex")
+            .get(&("idx-1".to_string(), "anime".to_string()))
+            .cloned()
+            .expect("state");
+        assert_eq!(state.streak(), 0);
+        assert_eq!(state.suppressed_until, None);
     }
 
     #[tokio::test]
@@ -18813,6 +21006,139 @@ mod tests {
             "the suppressed absolute ID query is skipped"
         );
         assert!(calls.iter().any(|call| call.ids.contains_key("anidb_id")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn automatic_search_reads_learning_once_and_writes_one_batch_per_indexer() {
+        const INDEXERS: usize = 3;
+        let repo_impl = StdArc::new(InMemorySearchLearningRepository::default());
+        let learning_calls = repo_impl.learning_calls.clone();
+        let learning_batches = repo_impl.learning_batches.clone();
+        let repo: StdArc<dyn IndexerSearchLearningRepository> = repo_impl;
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let responder = |call: &RecordedCall| {
+            if call.ids.contains_key("anidb_id") && call.season == Some(2) {
+                response_with_titles(&["Blade.Summit.S02E03.720p.WEB-DL"])
+            } else {
+                response_with_titles(&[])
+            }
+        };
+        let client = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: indexed_mock_configs(INDEXERS),
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client: Arc::new(ScriptedIndexerClient {
+                    calls: calls.clone(),
+                    responder: StdArc::new(responder),
+                }),
+                caps: anime_caps(),
+            }),
+        )
+        .with_search_learning_repository(repo.clone());
+        let search = |session: usize| {
+            let client = &client;
+            async move {
+                <MultiIndexerSearchClient as IndexerClient>::search(
+                    client,
+                    "Blade Summit S02E03".into(),
+                    HashMap::from([("anidb_id".to_string(), "1535".to_string())]),
+                    Some("anime".into()),
+                    Some("anime".into()),
+                    None,
+                    None,
+                    None,
+                    SearchMode::Auto,
+                    IndexerErrorOperation::AutomaticSearch,
+                    Some(2),
+                    Some(3),
+                    Some(21),
+                    None,
+                    vec![],
+                    Some(IndexerSearchLearningContext {
+                        title_id: "title-1".into(),
+                        facet: "anime".into(),
+                        subject_kind: ReleaseSearchSubjectKind::Episode,
+                        search_session_id: format!("session-{session}"),
+                        background_value: None,
+                        candidate_reuse_allowed: false,
+                    }),
+                    CancellationToken::new(),
+                )
+                .await
+                .expect("automatic search should succeed")
+            }
+        };
+
+        for session in 0..=LEARNED_EMPTY_SUPPRESSION_THRESHOLD as usize {
+            learning_calls.lock().expect("learning calls mutex").clear();
+            learning_batches
+                .lock()
+                .expect("learning batches mutex")
+                .clear();
+            search(session).await;
+
+            let made = learning_calls.lock().expect("learning calls mutex").clone();
+            let count = |method: &str| made.iter().filter(|call| **call == method).count();
+            assert_eq!(
+                made.first(),
+                Some(&"list_for_title_by_indexer"),
+                "session {session}"
+            );
+            assert_eq!(
+                count("list_for_title_by_indexer"),
+                1,
+                "session {session}: {made:?}"
+            );
+            assert_eq!(
+                count("record_learning_batch"),
+                INDEXERS,
+                "session {session}: {made:?}"
+            );
+            assert_eq!(made.len(), 1 + INDEXERS, "session {session}: {made:?}");
+
+            let batches = learning_batches
+                .lock()
+                .expect("learning batches mutex")
+                .clone();
+            let indexers = batches
+                .iter()
+                .map(|batch| batch.indexer_id.clone())
+                .collect::<HashSet<_>>();
+            assert_eq!(indexers.len(), INDEXERS, "one batch per indexer");
+            let strategies = batches[0].strategy_outcomes.len();
+            // Both ID forms run until the empty one is suppressed.
+            let expected = if session < LEARNED_EMPTY_SUPPRESSION_THRESHOLD as usize {
+                2
+            } else {
+                1
+            };
+            assert_eq!(strategies, expected, "session {session}");
+            assert!(
+                batches
+                    .iter()
+                    .all(|batch| batch.strategy_outcomes.len() == strategies),
+                "every strategy outcome rides its indexer's batch"
+            );
+        }
+
+        for indexer in 0..INDEXERS {
+            let records = repo
+                .list_for_title(&format!("idx-{indexer}"), "title-1", "anime")
+                .await
+                .expect("learning records");
+            let record = |key: &str| records.iter().find(|record| record.key.strategy_key == key);
+            let abs = record("v2:ids_abs").expect("ids_abs record");
+            assert_eq!(abs.empty_successes, LEARNED_EMPTY_SUPPRESSION_THRESHOLD);
+            assert!(abs.suppressed, "idx-{indexer} suppresses the empty ID form");
+            let sxex = record("v2:ids_sxex").expect("ids_sxex record");
+            assert_eq!(
+                sxex.usable_successes,
+                LEARNED_EMPTY_SUPPRESSION_THRESHOLD + 1
+            );
+            assert!(!sxex.suppressed);
+        }
     }
 
     #[tokio::test]
@@ -19639,6 +21965,7 @@ mod tests {
             &[scryer_domain::TaggedAlias {
                 name: "Sora no Vale".into(),
                 language: "jpn".into(),
+                country: None,
             }],
         );
 
@@ -19653,10 +21980,12 @@ mod tests {
                 scryer_domain::TaggedAlias {
                     name: "Silver Horizon: Beyond Harbor's End".into(),
                     language: "jpn".into(),
+                    country: None,
                 },
                 scryer_domain::TaggedAlias {
                     name: "Sora no Vale".into(),
                     language: "jpn".into(),
+                    country: None,
                 },
             ],
         );
@@ -20049,6 +22378,50 @@ mod tests {
         assert_dispatches(&next, &[30.0]);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn rss_pacing_waits_before_capacity_and_spends_its_reservation_once() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let mut config = mock_indexer_config();
+        config.rate_limit_seconds = Some(10);
+        let pacing = IndexerPacing::resolve(&config, SchedulerIntent::BackgroundRss);
+        limiter.acquire(&pacing).await.unwrap();
+        let cancel = CancellationToken::new();
+        let mut prepare = Box::pin(limiter.prepare_rss(&pacing, &cancel, None));
+        assert!(!is_ready(&mut prepare).await);
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        let prepared = prepare.await.unwrap();
+        let before = tokio::time::Instant::now();
+        prepared.acquire(&pacing).await.unwrap();
+        assert_eq!(
+            tokio::time::Instant::now(),
+            before,
+            "first request must use its existing reservation"
+        );
+        let next = limiter.reserve(&pacing).unwrap();
+        assert_eq!(
+            next.dispatch_at,
+            before + std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rss_pacing_refuses_a_wait_beyond_half_a_cadence_without_reserving() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let mut config = mock_indexer_config();
+        config.rate_limit_seconds = Some(3600);
+        let pacing = IndexerPacing::resolve(&config, SchedulerIntent::BackgroundRss);
+        limiter.acquire(&pacing).await.unwrap();
+        let before = tokio::time::Instant::now();
+        for _ in 0..2 {
+            assert!(
+                matches!(limiter.prepare_rss(&pacing, &CancellationToken::new(), None).await,
+                Err(Some(wait)) if wait == std::time::Duration::from_secs(3600))
+            );
+        }
+        assert_eq!(tokio::time::Instant::now(), before);
+        assert!(limiter.state.lock().unwrap().pending_intervals.is_empty());
+    }
+
     fn interactive_budgeted_pacing(domain_key: &str, per_minute: u32) -> IndexerPacing {
         IndexerPacing {
             max_wait: Some(INTERACTIVE_PACING_MAX_WAIT),
@@ -20057,7 +22430,7 @@ mod tests {
     }
 
     #[test]
-    fn only_interactive_pacing_caps_its_wait() {
+    fn interactive_and_rss_pacing_bound_their_wait() {
         let mut config = mock_indexer_config();
         config.max_queries_per_minute = Some(1);
 
@@ -20065,16 +22438,16 @@ mod tests {
             IndexerPacing::resolve(&config, SchedulerIntent::InteractiveSearch).max_wait,
             Some(INTERACTIVE_PACING_MAX_WAIT),
         );
-        for intent in [
-            SchedulerIntent::BackgroundAcquisition,
-            SchedulerIntent::BackgroundRss,
-        ] {
-            assert_eq!(
-                IndexerPacing::resolve(&config, intent).max_wait,
-                None,
-                "{intent:?}"
-            );
-        }
+        assert_eq!(
+            IndexerPacing::resolve(&config, SchedulerIntent::BackgroundRss).max_wait,
+            Some(crate::upstream_scheduler::rss_target_interval() / 2)
+        );
+        let intent = SchedulerIntent::BackgroundAcquisition;
+        assert_eq!(
+            IndexerPacing::resolve(&config, intent).max_wait,
+            None,
+            "{intent:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -20589,6 +22962,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_title_guard_preserves_parenthetical_qualifiers() {
+        let numbering_context = IndexerSearchNumberingContext::default();
+        for (query, qualified) in [
+            ("The Office", "The Office (US)"),
+            ("The Office", "The Office (UK)"),
+            ("Love", "Love (ft. Marriage and Divorce)"),
+        ] {
+            let expected = format!("{query} S01E12 1080p");
+            let other = format!("{qualified} S01E12 1080p");
+            let context = FilterStrategyContext {
+                query,
+                season: Some(1),
+                episode: Some(12),
+                numbering_context: &numbering_context,
+                tagged_aliases: &[],
+                title_guard_mode: TitleGuardMode::ExactTitleMatch,
+                strategy_label: "freetext",
+                is_rss_request: false,
+            };
+            assert_eq!(
+                surviving_titles(&[&expected, &other], &context),
+                vec![expected]
+            );
+            let qualified_context = FilterStrategyContext {
+                query: qualified,
+                ..context
+            };
+            assert_eq!(surviving_titles(&[&other], &qualified_context), vec![other]);
+        }
+    }
+
+    #[test]
     fn exact_title_guard_keeps_parenthetical_dual_names_without_aliases() {
         let numbering_context = IndexerSearchNumberingContext::default();
         for query in ["Lantern Verge", "Touka no Sora"] {
@@ -20885,5 +23290,497 @@ mod tests {
         );
 
         assert!(results.is_empty());
+    }
+
+    /// One page a listing client fetched: the scope it was asked for, where
+    /// the page started, and whether the read carried a first-page gate.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ListingPageFetch {
+        season: Option<u32>,
+        episode: Option<u32>,
+        query: String,
+        cursor: Option<String>,
+        gated: bool,
+        budget: Option<u32>,
+    }
+
+    type ListingPageFn =
+        dyn Fn(&RecordedCall, Option<&str>) -> (Vec<String>, Option<String>) + Send + Sync;
+
+    /// A paged indexer read as the plugin adapter reads one: page after page
+    /// within the page budget, asking the request's first-page gate after a
+    /// fresh read's first non-empty page.
+    struct ListingIndexerClient {
+        fetches: StdArc<StdMutex<Vec<ListingPageFetch>>>,
+        page: StdArc<ListingPageFn>,
+    }
+
+    #[async_trait]
+    impl IndexerClient for ListingIndexerClient {
+        async fn search(
+            &self,
+            _query: String,
+            _ids: HashMap<String, String>,
+            _category: Option<String>,
+            _facet: Option<String>,
+            _id_search_facet: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<IndexerRoutingPlan>,
+            _mode: SearchMode,
+            _operation: IndexerErrorOperation,
+            _season: Option<u32>,
+            _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
+            _year: Option<i32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+            _learning_context: Option<IndexerSearchLearningContext>,
+            _cancel_token: CancellationToken,
+        ) -> AppResult<IndexerSearchResponse> {
+            response_with_titles(&[])
+        }
+
+        async fn search_strategy(
+            &self,
+            request: IndexerSearchStrategyRequest,
+            _mode: SearchMode,
+            _operation: IndexerErrorOperation,
+            _cancel_token: CancellationToken,
+        ) -> AppResult<IndexerSearchResponse> {
+            let call = RecordedCall {
+                query: request.query.clone(),
+                nab: None,
+                recent_paging: false,
+                ids: request.ids.clone(),
+                category: request.category.clone(),
+                facet: request.facet.clone(),
+                categories: request.newznab_categories.clone().unwrap_or_default(),
+                season: request.season,
+                episode: request.episode,
+                absolute_episode: request.absolute_episode,
+                rss_catch_up: None,
+                limit: None,
+                page_cursor: request.page_cursor.clone(),
+                page_budget: request.page_budget,
+            };
+            let budget = request.page_budget.unwrap_or(100);
+            let fresh = request.page_cursor.is_none();
+            let mut cursor = request.page_cursor.clone();
+            let mut titles = Vec::new();
+            let mut pages = 0_u32;
+            let finish = |titles: &[String], next: Option<String>, completion| {
+                let titles = titles.iter().map(String::as_str).collect::<Vec<_>>();
+                let mut response = response_with_titles(&titles)?;
+                response.next_cursor = next;
+                response.completion = completion;
+                Ok(response)
+            };
+            loop {
+                let (page, next) = (self.page)(&call, cursor.as_deref());
+                self.fetches
+                    .lock()
+                    .expect("fetch log")
+                    .push(ListingPageFetch {
+                        season: request.season,
+                        episode: request.episode,
+                        query: request.query.clone(),
+                        cursor: cursor.clone(),
+                        gated: request.first_page_gate.is_some(),
+                        budget: request.page_budget,
+                    });
+                pages += 1;
+                titles.extend(page.iter().cloned());
+                if fresh
+                    && pages == 1
+                    && let Some(gate) = request.first_page_gate.as_ref()
+                    && let Some(fingerprint) = scryer_application::indexer_listing_page_fingerprint(
+                        page.iter()
+                            .map(|title| [None, None, None, Some(title.as_str())]),
+                    )
+                    && let IndexerFirstPageVerdict::Stop { listing_open } =
+                        gate.verdict(fingerprint).await
+                {
+                    let completion = if listing_open {
+                        IndexerSearchCompletion::Partial {
+                            reason: None,
+                            retry_after: None,
+                        }
+                    } else {
+                        IndexerSearchCompletion::Complete
+                    };
+                    return finish(&titles, None, completion);
+                }
+                match next {
+                    None => return finish(&titles, None, IndexerSearchCompletion::Complete),
+                    Some(next) if pages >= budget => {
+                        return finish(
+                            &titles,
+                            Some(next),
+                            IndexerSearchCompletion::Partial {
+                                reason: None,
+                                retry_after: None,
+                            },
+                        );
+                    }
+                    Some(next) => cursor = Some(next),
+                }
+            }
+        }
+    }
+
+    /// A search client over one listing indexer backed by the real search
+    /// learning store.
+    async fn listing_search_client(
+        page: impl Fn(&RecordedCall, Option<&str>) -> (Vec<String>, Option<String>)
+        + Send
+        + Sync
+        + 'static,
+    ) -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<ListingPageFetch>>>,
+        sqlx::SqlitePool,
+    ) {
+        let (store, pool) = super::super::search_learning::tests::sqlite_store().await;
+        let fetches = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ListingIndexerClient {
+            fetches: fetches.clone(),
+            page: StdArc::new(page),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: series_caps(),
+            }),
+        )
+        .with_search_learning_repository(StdArc::new(store));
+        (multi, fetches, pool)
+    }
+
+    fn harbor(season: u32, episode: u32) -> String {
+        format!("Quiet.Harbor.S{season:02}E{episode:02}.1080p.WEB-DL")
+    }
+
+    /// A title-level listing of one release per page, `pages` pages long,
+    /// given for every scope the indexer is asked.
+    fn title_level_pages(
+        pages: u32,
+    ) -> impl Fn(&RecordedCall, Option<&str>) -> (Vec<String>, Option<String>) + Send + Sync + 'static
+    {
+        move |call, cursor| {
+            if !call.query.trim().is_empty() {
+                return (Vec::new(), None);
+            }
+            let page = cursor
+                .and_then(|cursor| cursor.strip_prefix('p'))
+                .and_then(|page| page.parse::<u32>().ok())
+                .unwrap_or(1);
+            let next = (page < pages).then(|| format!("p{}", page + 1));
+            (vec![harbor(1, page)], next)
+        }
+    }
+
+    async fn harbor_pass(
+        client: &MultiIndexerSearchClient,
+        mode: SearchMode,
+        background: bool,
+        session: &str,
+        (season, episode): (u32, u32),
+    ) -> IndexerSearchResponse {
+        <MultiIndexerSearchClient as IndexerClient>::search(
+            client,
+            format!("Quiet Harbor S{season:02}E{episode:02}"),
+            HashMap::from([("tvdb_id".to_string(), "70001".to_string())]),
+            Some("series".into()),
+            Some("series".into()),
+            None,
+            None,
+            None,
+            mode,
+            IndexerErrorOperation::AutomaticSearch,
+            Some(season),
+            Some(episode),
+            None,
+            None,
+            vec![],
+            Some(IndexerSearchLearningContext {
+                title_id: "title-1".into(),
+                facet: "series".into(),
+                subject_kind: ReleaseSearchSubjectKind::Episode,
+                search_session_id: session.into(),
+                background_value: None,
+                candidate_reuse_allowed: background,
+            }),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("listing search should succeed")
+    }
+
+    async fn background_pass(
+        client: &MultiIndexerSearchClient,
+        session: &str,
+        scope: (u32, u32),
+    ) -> IndexerSearchResponse {
+        harbor_pass(client, SearchMode::Auto, true, session, scope).await
+    }
+
+    /// The id-lookup pages fetched since `from`, as (season, episode, cursor).
+    fn id_fetches(
+        fetches: &StdMutex<Vec<ListingPageFetch>>,
+        from: usize,
+    ) -> Vec<(Option<u32>, Option<u32>, Option<String>)> {
+        fetches.lock().expect("fetch log")[from..]
+            .iter()
+            .filter(|fetch| fetch.query.trim().is_empty())
+            .map(|fetch| (fetch.season, fetch.episode, fetch.cursor.clone()))
+            .collect()
+    }
+
+    fn fetched(fetches: &StdMutex<Vec<ListingPageFetch>>) -> usize {
+        fetches.lock().expect("fetch log").len()
+    }
+
+    fn result_titles(response: &IndexerSearchResponse) -> HashSet<String> {
+        response
+            .results
+            .iter()
+            .map(|result| result.title.clone())
+            .collect()
+    }
+
+    fn page_cursor(page: u32) -> Option<String> {
+        (page > 1).then(|| format!("p{page}"))
+    }
+
+    async fn listing_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, Option<String>, bool)> {
+        sqlx::query_as::<_, (String, String, Option<String>, bool)>(
+            "SELECT first_page_fingerprint, owner_scope_key, page_cursor, finished
+               FROM indexer_search_listings ORDER BY owner_scope_key",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("listing rows")
+    }
+
+    #[tokio::test]
+    async fn unsafe_listing_tail_keeps_new_and_known_followers_on_live_search() {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let (client, fetches, pool) = listing_search_client(title_level_pages(3)).await;
+            background_pass(&client, "owner", (1, 1)).await;
+            for (session, episode) in [("new-reader", 2), ("known-reader", 2)] {
+                // Model a later page that is no longer reconstructible. Do not
+                // remove it from the listing: omission would hide lost results.
+                sqlx::query("UPDATE indexer_search_candidate_sources SET reusable_until = '2000-01-01T00:00:00Z'
+                    WHERE candidate_id IN (SELECT id FROM indexer_search_candidates WHERE title = ?)")
+                    .bind(harbor(1, 3)).execute(&pool).await.unwrap();
+                let asked = fetched(&fetches);
+                let response = background_pass(&client, session, (1, episode)).await;
+                assert_eq!(id_fetches(&fetches, asked),
+                    (1..=3).map(|page| (Some(1), Some(episode), page_cursor(page))).collect::<Vec<_>>());
+                assert!(result_titles(&response).contains(&harbor(1, episode)));
+            }
+        }).await.expect("unsafe listing regression timed out");
+    }
+
+    #[tokio::test]
+    async fn a_scope_reading_another_scopes_listing_rides_its_chain_until_it_ends() {
+        let (client, fetches, _pool) = listing_search_client(title_level_pages(7)).await;
+
+        // The first scope owns the listing and reads a pass's worth of it.
+        let owner = background_pass(&client, "owner-1", (1, 1)).await;
+        assert_eq!(
+            id_fetches(&fetches, 0),
+            (1..=5)
+                .map(|page| (Some(1), Some(1), page_cursor(page)))
+                .collect::<Vec<_>>()
+        );
+        assert!(!owner.completion.is_complete());
+        assert!(result_titles(&owner).contains(&harbor(1, 1)));
+
+        // The second scope reads the same first page and stops there; the
+        // owner's chain answers it, and stays open while pages are left.
+        let asked = fetched(&fetches);
+        let follower = background_pass(&client, "follower-1", (1, 2)).await;
+        assert_eq!(id_fetches(&fetches, asked), vec![(Some(1), Some(2), None)]);
+        assert!(result_titles(&follower).contains(&harbor(1, 2)));
+        assert_eq!(
+            follower.completion,
+            IndexerSearchCompletion::Partial {
+                reason: None,
+                retry_after: None,
+            }
+        );
+
+        // A third scope of the season is served from the shared listing
+        // without asking the indexer at all.
+        let asked = fetched(&fetches);
+        let served = background_pass(&client, "served-1", (1, 3)).await;
+        assert!(id_fetches(&fetches, asked).is_empty());
+        assert!(result_titles(&served).contains(&harbor(1, 3)));
+        assert_eq!(
+            served.completion,
+            IndexerSearchCompletion::Partial {
+                reason: None,
+                retry_after: None,
+            }
+        );
+
+        // The owner reads on to the end of the listing.
+        let asked = fetched(&fetches);
+        let finished = background_pass(&client, "owner-2", (1, 1)).await;
+        assert_eq!(
+            id_fetches(&fetches, asked),
+            vec![
+                (Some(1), Some(1), page_cursor(6)),
+                (Some(1), Some(1), page_cursor(7))
+            ]
+        );
+        assert!(finished.completion.is_complete());
+
+        // Its readers are now answered in full, still without a fetch.
+        let asked = fetched(&fetches);
+        let follower = background_pass(&client, "follower-2", (1, 2)).await;
+        let served = background_pass(&client, "served-2", (1, 3)).await;
+        assert!(id_fetches(&fetches, asked).is_empty());
+        assert!(follower.completion.is_complete());
+        assert!(served.completion.is_complete());
+        assert!(result_titles(&follower).contains(&harbor(1, 2)));
+        assert!(result_titles(&served).contains(&harbor(1, 3)));
+        let late = background_pass(&client, "late-1", (1, 7)).await;
+        assert!(result_titles(&late).contains(&harbor(1, 7)));
+        assert!(id_fetches(&fetches, asked).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_listing_without_the_scopes_season_is_read_live_not_served() {
+        // A title-level listing that only holds season one.
+        let (client, fetches, _pool) = listing_search_client(title_level_pages(2)).await;
+        background_pass(&client, "s1e1", (1, 1)).await;
+        background_pass(&client, "s1e2", (1, 2)).await;
+
+        let asked = fetched(&fetches);
+        background_pass(&client, "s2e1", (2, 1)).await;
+        assert_eq!(
+            id_fetches(&fetches, asked),
+            vec![(Some(2), Some(1), None)],
+            "a scope the listing shows nothing of reads its own first page"
+        );
+
+        // A season-one scope is served from the listing.
+        let asked = fetched(&fetches);
+        background_pass(&client, "s1e2-again", (1, 2)).await;
+        background_pass(&client, "s1e3", (1, 3)).await;
+        assert!(id_fetches(&fetches, asked).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_season_sensitive_indexer_keeps_one_listing_per_season() {
+        let (client, fetches, pool) = listing_search_client(|call, _cursor| {
+            if !call.query.trim().is_empty() {
+                return (Vec::new(), None);
+            }
+            let season = call.season.unwrap_or(1);
+            (
+                (1..=3).map(|episode| harbor(season, episode)).collect(),
+                None,
+            )
+        })
+        .await;
+        for (session, scope) in [
+            ("s1e1", (1, 1)),
+            ("s1e2", (1, 2)),
+            ("s2e1", (2, 1)),
+            ("s2e2", (2, 2)),
+        ] {
+            background_pass(&client, session, scope).await;
+        }
+        let rows = listing_rows(&pool).await;
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert!(rows[0].1.ends_with(":1:1:-"), "rows: {rows:?}");
+        assert!(rows[1].1.ends_with(":2:1:-"), "rows: {rows:?}");
+        assert_ne!(rows[0].0, rows[1].0);
+
+        // Each season's later scopes are served from their own listing, and
+        // neither season's reads disturb the other's.
+        let asked = fetched(&fetches);
+        let s1 = background_pass(&client, "s1e3", (1, 3)).await;
+        let s2 = background_pass(&client, "s2e3", (2, 3)).await;
+        assert!(id_fetches(&fetches, asked).is_empty());
+        assert!(result_titles(&s1).contains(&harbor(1, 3)));
+        assert!(result_titles(&s2).contains(&harbor(2, 3)));
+        assert_eq!(listing_rows(&pool).await, rows);
+    }
+
+    #[tokio::test]
+    async fn a_reader_takes_over_an_idle_chain_from_its_cursor() {
+        let (client, fetches, pool) = listing_search_client(title_level_pages(7)).await;
+        background_pass(&client, "owner-1", (1, 1)).await;
+        background_pass(&client, "follower-1", (1, 2)).await;
+        // The owner leaves the walk: its chain goes idle with pages left.
+        sqlx::query("UPDATE indexer_search_listings SET advanced_at = ?")
+            .bind((Utc::now() - Duration::hours(2)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .expect("listing should age");
+
+        let asked = fetched(&fetches);
+        let adopter = background_pass(&client, "adopter-1", (1, 3)).await;
+        assert_eq!(
+            id_fetches(&fetches, asked),
+            vec![
+                (Some(1), Some(3), page_cursor(6)),
+                (Some(1), Some(3), page_cursor(7))
+            ],
+            "the chain resumes where its owner stopped, not at page one"
+        );
+        assert!(adopter.completion.is_complete());
+        assert!(result_titles(&adopter).contains(&harbor(1, 3)));
+        let rows = listing_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.ends_with(":1:3:-"));
+        assert!(rows[0].3, "the adopted chain read to the end");
+
+        // The previous owner reads the listing it left.
+        let asked = fetched(&fetches);
+        let previous = background_pass(&client, "owner-2", (1, 1)).await;
+        assert!(id_fetches(&fetches, asked).is_empty());
+        assert!(previous.completion.is_complete());
+        assert!(result_titles(&previous).contains(&harbor(1, 1)));
+    }
+
+    #[tokio::test]
+    async fn interactive_and_operator_searches_never_meet_the_listing_gate() {
+        let (client, fetches, pool) = listing_search_client(title_level_pages(3)).await;
+        background_pass(&client, "owner-1", (1, 1)).await;
+        background_pass(&client, "follower-1", (1, 2)).await;
+        let rows = listing_rows(&pool).await;
+
+        for (mode, background, session) in [
+            (SearchMode::Interactive, false, "interactive-1"),
+            (SearchMode::Auto, false, "operator-1"),
+        ] {
+            let asked = fetched(&fetches);
+            let response = harbor_pass(&client, mode, background, session, (1, 3)).await;
+            let log = fetches.lock().expect("fetch log")[asked..].to_vec();
+            let id_pages = log
+                .iter()
+                .filter(|fetch| fetch.query.trim().is_empty())
+                .collect::<Vec<_>>();
+            assert_eq!(id_pages.len(), 3, "{session} reads the listing itself");
+            assert!(
+                id_pages
+                    .iter()
+                    .all(|fetch| !fetch.gated && fetch.budget.is_none())
+            );
+            assert!(result_titles(&response).contains(&harbor(1, 3)));
+        }
+        assert_eq!(
+            listing_rows(&pool).await,
+            rows,
+            "nothing they read is recorded"
+        );
     }
 }

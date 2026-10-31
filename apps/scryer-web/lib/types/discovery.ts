@@ -10,11 +10,11 @@ export type DiscoveryExternalId = {
 };
 
 export type DiscoveryHomeInput = {
-    includePublic?: boolean | null;
-    includePersonalized?: boolean | null;
-    includeUnresolved?: boolean | null;
-    limitPerSection?: number | null;
-    filters?: DiscoveryHomeFilters | null;
+  includePublic?: boolean | null;
+  includePersonalized?: boolean | null;
+  includeUnresolved?: boolean | null;
+  limitPerSection?: number | null;
+  filters?: DiscoveryHomeFilters | null;
 };
 
 export type DiscoveryHomeFilters = {

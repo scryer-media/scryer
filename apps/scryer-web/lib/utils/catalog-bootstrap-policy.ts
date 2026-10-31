@@ -1,16 +1,8 @@
 export type CatalogSurfacePhase =
-  | "resolving"
-  | "content"
-  | "empty"
-  | "rootsMissing"
-  | "rootsInvalid"
-  | "error";
+  "resolving" | "content" | "empty" | "rootsMissing" | "rootsInvalid" | "error";
 
 export type CatalogRootValidationState =
-  | "notRun"
-  | "valid"
-  | "invalid"
-  | "unavailable";
+  "notRun" | "valid" | "invalid" | "unavailable";
 
 type CatalogSurfacePhaseInput = {
   canManageLibrarySettings: boolean;

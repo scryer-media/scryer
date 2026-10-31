@@ -4,8 +4,7 @@ const DYNAMIC_IMPORT_FAILURE_MESSAGES = [
   "importing a module script failed",
 ] as const;
 
-export const VITE_IMPORT_RECOVERY_STORAGE_KEY =
-  "scryer:vite-import-recovery";
+export const VITE_IMPORT_RECOVERY_STORAGE_KEY = "scryer:vite-import-recovery";
 export const VITE_IMPORT_RECOVERY_WINDOW_MS = 5_000;
 
 type RecoveryStorage = Pick<Storage, "getItem" | "setItem">;
@@ -41,7 +40,9 @@ export function shouldRetryStaleViteImport(
   );
 }
 
-function isStoredRecoveryAttempt(value: unknown): value is StoredRecoveryAttempt {
+function isStoredRecoveryAttempt(
+  value: unknown,
+): value is StoredRecoveryAttempt {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -53,7 +54,10 @@ function isStoredRecoveryAttempt(value: unknown): value is StoredRecoveryAttempt
   );
 }
 
-function storedRecoveryAttempts(value: string | null, now: number): Map<string, number> {
+function storedRecoveryAttempts(
+  value: string | null,
+  now: number,
+): Map<string, number> {
   const attempts = new Map<string, number>();
   if (!value) {
     return attempts;
@@ -89,9 +93,10 @@ export function claimViteImportRecovery(
   }
 
   try {
-    const previousRecoveryAttempts = storedRecoveryAttempts(storage.getItem(
-      VITE_IMPORT_RECOVERY_STORAGE_KEY,
-    ), now);
+    const previousRecoveryAttempts = storedRecoveryAttempts(
+      storage.getItem(VITE_IMPORT_RECOVERY_STORAGE_KEY),
+      now,
+    );
     if (!shouldRetryStaleViteImport(error, previousRecoveryAttempts, now)) {
       return false;
     }
@@ -104,7 +109,10 @@ export function claimViteImportRecovery(
     storage.setItem(
       VITE_IMPORT_RECOVERY_STORAGE_KEY,
       JSON.stringify(
-        [...previousRecoveryAttempts].map(([key, attemptedAt]) => ({ key, attemptedAt })),
+        [...previousRecoveryAttempts].map(([key, attemptedAt]) => ({
+          key,
+          attemptedAt,
+        })),
       ),
     );
     return true;

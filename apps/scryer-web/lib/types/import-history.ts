@@ -13,20 +13,10 @@ export type ImportType =
   | "RENAME_STALE_PLAN";
 
 export type ImportRecordStatus =
-  | "PENDING"
-  | "RUNNING"
-  | "PROCESSING"
-  | "COMPLETED"
-  | "FAILED"
-  | "SKIPPED";
+  "PENDING" | "RUNNING" | "PROCESSING" | "COMPLETED" | "FAILED" | "SKIPPED";
 
 export type ImportDecision =
-  | "IMPORTED"
-  | "REJECTED"
-  | "SKIPPED"
-  | "CONFLICT"
-  | "UNMATCHED"
-  | "FAILED";
+  "IMPORTED" | "REJECTED" | "SKIPPED" | "CONFLICT" | "UNMATCHED" | "FAILED";
 
 export type ImportSkipReason =
   | "ALREADY_IMPORTED"
@@ -38,9 +28,14 @@ export type ImportSkipReason =
   | "NO_VIDEO_FILES"
   | "UNWANTED_EXECUTABLES"
   | "DOWNLOAD_IN_PROGRESS"
+  | "SOURCE_CHANGED"
+  | "SOURCE_UNAVAILABLE"
+  | "SCENE_SUBTITLE_PENDING"
   | "DISK_FULL"
   | "PERMISSION_DENIED"
-  | "PASSWORD_REQUIRED";
+  | "PASSWORD_REQUIRED"
+  | "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED"
+  | "ARCHIVE_EXTRACTION_TIMED_OUT";
 
 export type ImportRecord = {
   id: string;

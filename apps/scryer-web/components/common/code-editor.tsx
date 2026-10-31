@@ -20,11 +20,25 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/legacy-modes/mode/javascript";
 import { xml } from "@codemirror/legacy-modes/mode/xml";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { defaultHighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  defaultHighlightStyle,
+  StreamLanguage,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { setDiagnostics as setLintDiagnostics } from "@codemirror/lint";
 import { regoAssistance } from "./rego-editor-assistance";
-import { formatScriptIndentation, scriptAssistance, scriptLanguageExtensions, type ScriptEditorLanguage } from "./script-editor-assistance";
+import {
+  formatScriptIndentation,
+  scriptAssistance,
+  scriptLanguageExtensions,
+  type ScriptEditorLanguage,
+} from "./script-editor-assistance";
 import type { ScriptTriggerValue } from "@/lib/types/scripts";
 import type { RegoFamily } from "@/lib/utils/rego-assistance";
 import { useTheme } from "next-themes";
@@ -35,7 +49,8 @@ import { Button } from "@/components/ui/button";
 import { CODE_FONT } from "@/lib/fonts";
 import { isDarkTheme } from "@/lib/theme";
 
-export type CodeEditorLanguage = "plain" | "javascript" | "json" | "rego" | "xml" | ScriptEditorLanguage;
+export type CodeEditorLanguage =
+  "plain" | "javascript" | "json" | "rego" | "xml" | ScriptEditorLanguage;
 
 export type CodeEditorDiagnostic = {
   line: number;
@@ -181,16 +196,18 @@ function buildRegoHighlightDecorations(state: EditorState): DecorationSet {
 
       const from = line.from + index;
       if (char === "#") {
-        ranges.push(regoDecoration("cm-scryer-rego-comment").range(from, line.to));
+        ranges.push(
+          regoDecoration("cm-scryer-rego-comment").range(from, line.to),
+        );
         break;
       }
 
-      if (char === "\"" || char === "`") {
+      if (char === '"' || char === "`") {
         const quote = char;
         let end = index + 1;
         while (end < text.length) {
           const current = text[end];
-          if (current === "\\" && quote === "\"") {
+          if (current === "\\" && quote === '"') {
             end += 2;
             continue;
           }
@@ -233,11 +250,16 @@ function buildRegoHighlightDecorations(state: EditorState): DecorationSet {
         continue;
       }
 
-      const operator = text.slice(index).match(/^(?:==|!=|<=|>=|:=|[_+\-*/%<>=|&!]+|[{}()[\],.;:])/);
+      const operator = text
+        .slice(index)
+        .match(/^(?:==|!=|<=|>=|:=|[_+\-*/%<>=|&!]+|[{}()[\],.;:])/);
       if (operator) {
         const end = index + operator[0].length;
         ranges.push(
-          regoDecoration("cm-scryer-rego-operator").range(from, line.from + end),
+          regoDecoration("cm-scryer-rego-operator").range(
+            from,
+            line.from + end,
+          ),
         );
         index = end;
         continue;
@@ -284,16 +306,22 @@ function diagnosticDecorations(
       }
 
       const line = state.doc.line(diagnostic.line);
-      const column = diagnostic.column && Number.isFinite(diagnostic.column)
-        ? Math.max(1, diagnostic.column)
-        : 1;
+      const column =
+        diagnostic.column && Number.isFinite(diagnostic.column)
+          ? Math.max(1, diagnostic.column)
+          : 1;
       const from = Math.min(line.to, line.from + column - 1);
       const to = Math.max(from + 1, Math.min(line.to, line.to));
-      const attributes = diagnostic.message ? { title: diagnostic.message } : undefined;
+      const attributes = diagnostic.message
+        ? { title: diagnostic.message }
+        : undefined;
 
       return [
         Decoration.line({ class: "cm-code-diagnostic-line" }).range(line.from),
-        Decoration.mark({ attributes, class: "cm-code-diagnostic" }).range(from, to),
+        Decoration.mark({ attributes, class: "cm-code-diagnostic" }).range(
+          from,
+          to,
+        ),
       ];
     });
 
@@ -336,28 +364,60 @@ const diagnosticTheme = EditorView.baseTheme({
 
 const lightTheme = EditorView.theme({
   "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
-  ".cm-gutters": { backgroundColor: "var(--muted)", borderRight: "1px solid var(--border-color)", paddingRight: "8px" },
+  ".cm-gutters": {
+    backgroundColor: "var(--muted)",
+    borderRight: "1px solid var(--border-color)",
+    paddingRight: "8px",
+  },
   ".cm-activeLineGutter": { backgroundColor: "var(--accent)" },
   "&.cm-focused": { outline: "2px solid var(--ring)" },
-  ".cm-content": { fontFamily: CODE_FONT, caretColor: "var(--ring)", paddingLeft: "8px" },
+  ".cm-content": {
+    fontFamily: CODE_FONT,
+    caretColor: "var(--ring)",
+    paddingLeft: "8px",
+  },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ring)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)" },
+  ".cm-selectionBackground, ::selection": {
+    backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)",
+  },
+  "&.cm-focused .cm-selectionBackground": {
+    backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)",
+  },
   ".cm-gutters .cm-gutter": { fontFamily: CODE_FONT },
 });
 
-const scryerDark = EditorView.theme({
-  "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
-  ".cm-content": { fontFamily: CODE_FONT, caretColor: "var(--ring)", paddingLeft: "8px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ring)" },
-  ".cm-gutters": { backgroundColor: "var(--background)", color: "var(--muted-foreground)", borderRight: "1px solid var(--border-color)", fontFamily: CODE_FONT, paddingRight: "8px" },
-  ".cm-activeLineGutter": { backgroundColor: "var(--accent)", color: "var(--foreground)" },
-  ".cm-activeLine": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.06)" },
-  "&.cm-focused": { outline: "2px solid var(--ring)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)" },
-  ".cm-line": { padding: "0 4px" },
-}, { dark: true });
+const scryerDark = EditorView.theme(
+  {
+    "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
+    ".cm-content": {
+      fontFamily: CODE_FONT,
+      caretColor: "var(--ring)",
+      paddingLeft: "8px",
+    },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ring)" },
+    ".cm-gutters": {
+      backgroundColor: "var(--background)",
+      color: "var(--muted-foreground)",
+      borderRight: "1px solid var(--border-color)",
+      fontFamily: CODE_FONT,
+      paddingRight: "8px",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "var(--accent)",
+      color: "var(--foreground)",
+    },
+    ".cm-activeLine": { backgroundColor: "rgba(var(--scry-accent-rgb), 0.06)" },
+    "&.cm-focused": { outline: "2px solid var(--ring)" },
+    ".cm-selectionBackground, ::selection": {
+      backgroundColor: "rgba(var(--scry-accent-rgb), 0.2)",
+    },
+    "&.cm-focused .cm-selectionBackground": {
+      backgroundColor: "rgba(var(--scry-accent-rgb), 0.3)",
+    },
+    ".cm-line": { padding: "0 4px" },
+  },
+  { dark: true },
+);
 
 function languageExtensions(language: CodeEditorLanguage): Extension[] {
   if (language === "javascript") {
@@ -447,7 +507,9 @@ export default function CodeEditor({
     });
     const editorTheme = [
       useDarkTheme ? scryerDark : lightTheme,
-      syntaxHighlighting(useDarkTheme ? oneDarkHighlightStyle : defaultHighlightStyle),
+      syntaxHighlighting(
+        useDarkTheme ? oneDarkHighlightStyle : defaultHighlightStyle,
+      ),
     ];
     const extensions = [
       lineNumbers(),
@@ -456,7 +518,10 @@ export default function CodeEditor({
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       history(),
       appearance.of(editorTheme),
-      editable.of([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
+      editable.of([
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
+      ]),
       updateListener,
       diagnosticField,
       diagnosticTheme,
@@ -493,19 +558,50 @@ export default function CodeEditor({
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    view.dispatch({ effects: [
-      assistance.reconfigure(language === "rego" && regoFamily && regoTranslate
-        ? regoAssistance(regoFamily, regoTranslate, readOnly)
-        : scriptTrigger && scriptTranslate && ["shell", "python", "powershell", "batch", "go"].includes(language)
-          ? scriptAssistance(language as ScriptEditorLanguage, scriptTrigger, scriptTranslate, readOnly)
-          : []),
-      appearance.reconfigure([
-        isDarkTheme(resolvedTheme) ? scryerDark : lightTheme,
-        syntaxHighlighting(isDarkTheme(resolvedTheme) ? oneDarkHighlightStyle : defaultHighlightStyle),
-      ]),
-      editable.reconfigure([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
-    ] });
-  }, [assistance, appearance, editable, language, regoFamily, regoTranslate, scriptTrigger, scriptTranslate, readOnly, resolvedTheme]);
+    view.dispatch({
+      effects: [
+        assistance.reconfigure(
+          language === "rego" && regoFamily && regoTranslate
+            ? regoAssistance(regoFamily, regoTranslate, readOnly)
+            : scriptTrigger &&
+                scriptTranslate &&
+                ["shell", "python", "powershell", "batch", "go"].includes(
+                  language,
+                )
+              ? scriptAssistance(
+                  language as ScriptEditorLanguage,
+                  scriptTrigger,
+                  scriptTranslate,
+                  readOnly,
+                )
+              : [],
+        ),
+        appearance.reconfigure([
+          isDarkTheme(resolvedTheme) ? scryerDark : lightTheme,
+          syntaxHighlighting(
+            isDarkTheme(resolvedTheme)
+              ? oneDarkHighlightStyle
+              : defaultHighlightStyle,
+          ),
+        ]),
+        editable.reconfigure([
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
+        ]),
+      ],
+    });
+  }, [
+    assistance,
+    appearance,
+    editable,
+    language,
+    regoFamily,
+    regoTranslate,
+    scriptTrigger,
+    scriptTranslate,
+    readOnly,
+    resolvedTheme,
+  ]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -522,12 +618,33 @@ export default function CodeEditor({
     const view = viewRef.current;
     if (!view) return;
     if (language === "rego") {
-      view.dispatch(setLintDiagnostics(view.state, readOnly ? [] : diagnostics.flatMap((diagnostic) => {
-        if (diagnostic.line < 1 || diagnostic.line > view.state.doc.lines) return [];
-        const line = view.state.doc.line(diagnostic.line);
-        const from = Math.min(line.to, line.from + Math.max(0, (diagnostic.column ?? 1) - 1));
-        return [{ from, to: Math.min(line.to, from + 1), severity: "error" as const, message: diagnostic.message ?? "" }];
-      })));
+      view.dispatch(
+        setLintDiagnostics(
+          view.state,
+          readOnly
+            ? []
+            : diagnostics.flatMap((diagnostic) => {
+                if (
+                  diagnostic.line < 1 ||
+                  diagnostic.line > view.state.doc.lines
+                )
+                  return [];
+                const line = view.state.doc.line(diagnostic.line);
+                const from = Math.min(
+                  line.to,
+                  line.from + Math.max(0, (diagnostic.column ?? 1) - 1),
+                );
+                return [
+                  {
+                    from,
+                    to: Math.min(line.to, from + 1),
+                    severity: "error" as const,
+                    message: diagnostic.message ?? "",
+                  },
+                ];
+              }),
+        ),
+      );
     } else {
       view.dispatch({ effects: setDiagnosticsEffect.of(diagnostics) });
     }
@@ -543,13 +660,21 @@ export default function CodeEditor({
     <div className="group/code-editor relative">
       {scriptTrigger && scriptTranslate && !readOnly ? (
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">{scriptTranslate("script.editor.assistanceHint")}</span>
-          <Button type="button" variant="outline" size="sm" title={scriptTranslate("script.editor.formatHelp")} onClick={() => {
-            if (viewRef.current) {
-              formatScriptIndentation(viewRef.current);
-              viewRef.current.focus();
-            }
-          }}>
+          <span className="text-xs text-muted-foreground">
+            {scriptTranslate("script.editor.assistanceHint")}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            title={scriptTranslate("script.editor.formatHelp")}
+            onClick={() => {
+              if (viewRef.current) {
+                formatScriptIndentation(viewRef.current);
+                viewRef.current.focus();
+              }
+            }}
+          >
             {scriptTranslate("script.editor.format")}
           </Button>
         </div>
@@ -567,7 +692,11 @@ export default function CodeEditor({
           className="absolute right-2 top-2 z-10 bg-[var(--scry-surf)] opacity-0 shadow-sm transition-opacity group-hover/code-editor:opacity-100 group-focus-within/code-editor:opacity-100 focus-visible:opacity-100"
           onClick={() => void copyValue()}
         >
-          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          {copied ? (
+            <Check className="h-4 w-4" />
+          ) : (
+            <Copy className="h-4 w-4" />
+          )}
         </IconButton>
       ) : null}
     </div>

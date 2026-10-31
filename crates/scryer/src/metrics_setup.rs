@@ -162,7 +162,9 @@ pub(crate) async fn metrics_endpoint(
 ) -> Response {
     let actor = match resolve_actor(&state.auth, &headers, None).await {
         Ok(Some(actor)) if actor.is_api_key() => actor,
-        Ok(_) | Err(AppError::Unauthorized(_)) => return StatusCode::UNAUTHORIZED.into_response(),
+        Ok(_) | Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
         Err(error) => return map_app_error(error),
     };
     if !actor

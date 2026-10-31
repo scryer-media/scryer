@@ -5,18 +5,22 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 import type { Translate } from "@/components/root/types";
+import { HTTP_RELEASE_REFUSAL_KEYS } from "./http-release-error-message.ts";
 
 export function importRetrySucceeded(
   result: { decision?: string; skipReason?: string | null } | null | undefined,
 ): boolean {
-  return result?.decision === "IMPORTED" ||
-    (result?.decision === "SKIPPED" && result.skipReason === "ALREADY_IMPORTED");
+  return (
+    result?.decision === "IMPORTED" ||
+    (result?.decision === "SKIPPED" && result.skipReason === "ALREADY_IMPORTED")
+  );
 }
 
 export type DownloadQueueDisplayStateInput = Pick<
   DownloadQueueItem,
   | "state"
   | "attentionReason"
+  | "attentionReasonCode"
   | "importStatus"
   | "importErrorMessage"
   | "deleteStatus"
@@ -55,6 +59,7 @@ const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
   "lastUpdatedAt",
   "attentionRequired",
   "attentionReason",
+  "attentionReasonCode",
   "downloadClientItemId",
   "downloadId",
   "passwordFailureCode",
@@ -108,7 +113,9 @@ export function reconcileDownloadQueueItems(
   );
   let changed = current.length !== next.length;
   const reconciled = next.map((item, index) => {
-    const currentItem = currentByIdentity.get(downloadQueueItemIdentityKey(item));
+    const currentItem = currentByIdentity.get(
+      downloadQueueItemIdentityKey(item),
+    );
     if (currentItem && sameDownloadQueueItem(currentItem, item)) {
       if (current[index] !== currentItem) {
         changed = true;
@@ -124,7 +131,10 @@ export function reconcileDownloadQueueItems(
 }
 
 export function downloadQueueItemIdentityKey(
-  item: Pick<DownloadQueueItem, "id" | "clientId" | "clientType" | "downloadClientItemId">,
+  item: Pick<
+    DownloadQueueItem,
+    "id" | "clientId" | "clientType" | "downloadClientItemId"
+  >,
 ): string {
   if (!item.clientType.trim() && !item.downloadClientItemId.trim()) {
     return item.id;
@@ -234,7 +244,8 @@ export function compareDownloadQueueItems(
 
   if (leftState === "queued" || leftState === "paused") {
     return (
-      parseQueueSortTimestamp(left.queuedAt) - parseQueueSortTimestamp(right.queuedAt) ||
+      parseQueueSortTimestamp(left.queuedAt) -
+        parseQueueSortTimestamp(right.queuedAt) ||
       left.id.localeCompare(right.id)
     );
   }
@@ -255,11 +266,15 @@ export function sortDownloadQueueItems(
 function queueItemRecencyValue(
   item: Pick<DownloadQueueItem, "lastUpdatedAt" | "queuedAt">,
 ): number {
-  return parseQueueSortTimestamp(item.lastUpdatedAt) ||
-    parseQueueSortTimestamp(item.queuedAt);
+  return (
+    parseQueueSortTimestamp(item.lastUpdatedAt) ||
+    parseQueueSortTimestamp(item.queuedAt)
+  );
 }
 
-function transientQueueStateRank(displayState: string | null | undefined): number {
+function transientQueueStateRank(
+  displayState: string | null | undefined,
+): number {
   // `warning` ranks with the terminal states: a client that starts reporting a
   // problem is the fresher, more specific observation, exactly as `failed` was
   // before it had its own state — without a rank here the merge keeps the stale
@@ -300,48 +315,56 @@ function fillMissingQueueItemFields(
     ...primary,
     titleId: primary.titleId ?? secondary.titleId,
     episodeId: primary.episodeId ?? secondary.episodeId,
-    titleName: primary.titleName.trim().length > 0
-      ? primary.titleName
-      : secondary.titleName,
+    titleName:
+      primary.titleName.trim().length > 0
+        ? primary.titleName
+        : secondary.titleName,
     facet: primary.facet ?? secondary.facet,
     isScryerOrigin: primary.isScryerOrigin || secondary.isScryerOrigin,
-    clientId: primary.clientId.trim().length > 0 ? primary.clientId : secondary.clientId,
-    clientName: primary.clientName.trim().length > 0
-      ? primary.clientName
-      : secondary.clientName,
-    clientType: primary.clientType.trim().length > 0
-      ? primary.clientType
-      : secondary.clientType,
+    clientId:
+      primary.clientId.trim().length > 0
+        ? primary.clientId
+        : secondary.clientId,
+    clientName:
+      primary.clientName.trim().length > 0
+        ? primary.clientName
+        : secondary.clientName,
+    clientType:
+      primary.clientType.trim().length > 0
+        ? primary.clientType
+        : secondary.clientType,
     sizeBytes: primary.sizeBytes ?? secondary.sizeBytes,
     remainingSeconds: primary.remainingSeconds ?? secondary.remainingSeconds,
     queuedAt: primary.queuedAt ?? secondary.queuedAt,
     lastUpdatedAt: primary.lastUpdatedAt ?? secondary.lastUpdatedAt,
     attentionRequired: primary.attentionRequired || secondary.attentionRequired,
     attentionReason: primary.attentionReason ?? secondary.attentionReason,
+    attentionReasonCode:
+      primary.attentionReasonCode ?? secondary.attentionReasonCode,
     importStatus: primary.importStatus ?? secondary.importStatus,
     importTransferPhase: primaryHasImportOverlay
       ? primary.importTransferPhase
-      : primary.importTransferPhase ?? secondary.importTransferPhase,
+      : (primary.importTransferPhase ?? secondary.importTransferPhase),
     importTransferBytes: primaryHasImportOverlay
       ? primary.importTransferBytes
-      : primary.importTransferBytes ?? secondary.importTransferBytes,
-    importTransferTotalBytes:
-      primaryHasImportOverlay
-        ? primary.importTransferTotalBytes
-        : primary.importTransferTotalBytes ?? secondary.importTransferTotalBytes,
-    importTransferStartedAt:
-      primaryHasImportOverlay
-        ? primary.importTransferStartedAt
-        : primary.importTransferStartedAt ?? secondary.importTransferStartedAt,
-    importTransferUpdatedAt:
-      primaryHasImportOverlay
-        ? primary.importTransferUpdatedAt
-        : primary.importTransferUpdatedAt ?? secondary.importTransferUpdatedAt,
+      : (primary.importTransferBytes ?? secondary.importTransferBytes),
+    importTransferTotalBytes: primaryHasImportOverlay
+      ? primary.importTransferTotalBytes
+      : (primary.importTransferTotalBytes ??
+        secondary.importTransferTotalBytes),
+    importTransferStartedAt: primaryHasImportOverlay
+      ? primary.importTransferStartedAt
+      : (primary.importTransferStartedAt ?? secondary.importTransferStartedAt),
+    importTransferUpdatedAt: primaryHasImportOverlay
+      ? primary.importTransferUpdatedAt
+      : (primary.importTransferUpdatedAt ?? secondary.importTransferUpdatedAt),
     importErrorCode: primary.importErrorCode ?? secondary.importErrorCode,
-    importErrorMessage: primary.importErrorMessage ?? secondary.importErrorMessage,
+    importErrorMessage:
+      primary.importErrorMessage ?? secondary.importErrorMessage,
     importedAt: primary.importedAt ?? secondary.importedAt,
     deleteStatus: primary.deleteStatus ?? secondary.deleteStatus,
-    deleteErrorMessage: primary.deleteErrorMessage ?? secondary.deleteErrorMessage,
+    deleteErrorMessage:
+      primary.deleteErrorMessage ?? secondary.deleteErrorMessage,
     trackedState: primary.trackedState ?? secondary.trackedState,
     trackedStatus: primary.trackedStatus ?? secondary.trackedStatus,
     trackedStatusMessages:
@@ -399,8 +422,10 @@ function shouldPreferPreviousTransientItem(
     return false;
   }
 
-  return transientQueueStateRank(previous.displayState) >
-    transientQueueStateRank(authoritative.displayState);
+  return (
+    transientQueueStateRank(previous.displayState) >
+    transientQueueStateRank(authoritative.displayState)
+  );
 }
 
 export function mergeLiveQueueItems(
@@ -426,7 +451,10 @@ export function mergeAuthoritativeQueueItems(
     previousItems.map((item) => [downloadQueueItemIdentityKey(item), item]),
   );
   const authoritativeById = new Map(
-    authoritativeItems.map((item) => [downloadQueueItemIdentityKey(item), item]),
+    authoritativeItems.map((item) => [
+      downloadQueueItemIdentityKey(item),
+      item,
+    ]),
   );
   const merged = authoritativeItems.map((item) => {
     const previous = previousById.get(downloadQueueItemIdentityKey(item));
@@ -452,6 +480,7 @@ export function mergeAuthoritativeQueueItems(
 }
 
 const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
+  ...HTTP_RELEASE_REFUSAL_KEYS,
   download_password_retry: "queue.attention.downloadPasswordRetry",
 };
 
@@ -460,10 +489,15 @@ export function buildQueueStatusDetail(
   t?: Translate,
 ): string {
   const reason = queueItem.attentionReason;
-  const key = reason && Object.hasOwn(QUEUE_ATTENTION_REASON_KEYS, reason)
-    ? QUEUE_ATTENTION_REASON_KEYS[reason] : null;
+  const code = queueItem.attentionReasonCode;
+  const key =
+    code && Object.hasOwn(QUEUE_ATTENTION_REASON_KEYS, code)
+      ? QUEUE_ATTENTION_REASON_KEYS[code]
+      : null;
   const messages = [
-    ...(queueItem.trackedStatusMessages ?? []),
+    ...(code && t && Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code)
+      ? []
+      : (queueItem.trackedStatusMessages ?? [])),
     key && t ? t(key) : reason,
     queueItem.deleteErrorMessage,
     queueItem.importErrorMessage,
@@ -474,7 +508,9 @@ export function buildQueueStatusDetail(
   return Array.from(new Set(messages)).join("\n");
 }
 
-export function isPostProcessingReason(reason: string | null | undefined): boolean {
+export function isPostProcessingReason(
+  reason: string | null | undefined,
+): boolean {
   if (!reason) return false;
   const normalized = reason.toUpperCase();
   return (
@@ -527,7 +563,10 @@ export function deriveDownloadQueueDisplayState(
     return "import_failed";
   }
 
-  if (trackedStateKey === "import_blocked" || trackedStateKey === "import_pending") {
+  if (
+    trackedStateKey === "import_blocked" ||
+    trackedStateKey === "import_pending"
+  ) {
     return trackedStateKey;
   }
 
@@ -611,9 +650,15 @@ export function collectDownloadClientFilterOptions(
 
   return clients.sort((left, right) => {
     return (
-      left.clientName.localeCompare(right.clientName, undefined, { sensitivity: "base" }) ||
-      left.clientType.localeCompare(right.clientType, undefined, { sensitivity: "base" }) ||
-      left.clientId.localeCompare(right.clientId, undefined, { sensitivity: "base" })
+      left.clientName.localeCompare(right.clientName, undefined, {
+        sensitivity: "base",
+      }) ||
+      left.clientType.localeCompare(right.clientType, undefined, {
+        sensitivity: "base",
+      }) ||
+      left.clientId.localeCompare(right.clientId, undefined, {
+        sensitivity: "base",
+      })
     );
   });
 }

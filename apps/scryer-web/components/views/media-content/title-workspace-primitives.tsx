@@ -20,7 +20,9 @@ export function TitleWorkspaceHero({
   headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const [failedBackgroundUrl, setFailedBackgroundUrl] = React.useState<string | null>(null);
+  const [failedBackgroundUrl, setFailedBackgroundUrl] = React.useState<
+    string | null
+  >(null);
   React.useEffect(() => {
     setFailedBackgroundUrl(null);
   }, [backgroundUrl]);
@@ -298,7 +300,10 @@ export function TitleBulkPosterStack({
             />
             {index === 0 ? (
               <span className="absolute right-3 top-3 flex h-[30px] w-[30px] items-center justify-center rounded-full bg-[var(--scry-accent)] shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
-                <Check className="h-[18px] w-[18px] text-[#04121f]" strokeWidth={3.4} />
+                <Check
+                  className="h-[18px] w-[18px] text-[#04121f]"
+                  strokeWidth={3.4}
+                />
               </span>
             ) : null}
           </div>

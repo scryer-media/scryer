@@ -1,6 +1,7 @@
 mod application_upgrade;
 mod collections;
 mod config;
+mod filesystem;
 mod interactive_search;
 mod library;
 mod lists;
@@ -48,6 +49,8 @@ pub struct MutationRoot(
     PostProcessingMutations,
     subtitle::SubtitleMutations,
     recycle_bin::RecycleBinMutations,
+    filesystem::FilesystemMutations,
     interactive_search::InteractiveSearchMutations,
+    scryer_interface_settings::IndexerClientMutations,
     lists::ListMutations,
 );

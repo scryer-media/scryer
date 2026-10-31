@@ -88,9 +88,9 @@ impl JobRunRepository for WorkflowOperationStore {
             || receipt.job_run_id.as_deref() != Some(run.id.as_str())
             || run.job_key != JobKey::AcquisitionSearch
         {
-            return Err(AppError::Validation(
-                "maintenance Search requires an accepted receipt for its acquisition job run"
-                    .into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::WORKFLOW_ACQUISITION_RECEIPT_REQUIRED,
+                "maintenance Search requires an accepted receipt for its acquisition job run",
             ));
         }
 
@@ -229,7 +229,12 @@ impl JobRunRepository for WorkflowOperationStore {
                     .await?;
                     fetch_optional_workflow_operation(SqlExec::Tx(tx), &id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound(format!("workflow operation {id}")))
+                        .ok_or_else(|| {
+                            AppError::not_found_reason(
+                                crate::error_reasons::WORKFLOW_OPERATION_NOT_FOUND,
+                                format!("workflow operation {id}"),
+                            )
+                        })
                 })
             },
         )

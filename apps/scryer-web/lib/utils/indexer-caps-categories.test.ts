@@ -1,17 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { capsCategoryScopes, overlayCapsCategories } from "./indexer-caps-categories.ts";
+import {
+  capsCategoryScopes,
+  overlayCapsCategories,
+} from "./indexer-caps-categories.ts";
 
 test("numeric ranges classify standard newznab trees", () => {
-  assert.deepEqual(capsCategoryScopes({ code: "2045", label: null }), ["MOVIE"]);
-  assert.deepEqual(capsCategoryScopes({ code: "5040", label: null }), ["SERIES", "ANIME"]);
-  assert.deepEqual(capsCategoryScopes({ code: "3010", label: "Audio/MP3" }), []);
-  assert.deepEqual(capsCategoryScopes({ code: "7020", label: "Books/Comics" }), []);
+  assert.deepEqual(capsCategoryScopes({ code: "2045", label: null }), [
+    "MOVIE",
+  ]);
+  assert.deepEqual(capsCategoryScopes({ code: "5040", label: null }), [
+    "SERIES",
+    "ANIME",
+  ]);
+  assert.deepEqual(
+    capsCategoryScopes({ code: "3010", label: "Audio/MP3" }),
+    [],
+  );
+  assert.deepEqual(
+    capsCategoryScopes({ code: "7020", label: "Books/Comics" }),
+    [],
+  );
 });
 
 test("names win over numbers and custom ids are offered everywhere", () => {
-  assert.deepEqual(capsCategoryScopes({ code: "100020", label: "Movies-DE" }), ["MOVIE"]);
+  assert.deepEqual(capsCategoryScopes({ code: "100020", label: "Movies-DE" }), [
+    "MOVIE",
+  ]);
   assert.deepEqual(capsCategoryScopes({ code: "100030", label: "TV/Anime" }), [
     "ANIME",
     "SERIES",
@@ -42,8 +58,14 @@ test("raw category choices include all advertised scopes without default selecti
     { code: "5040", label: "TV/HD" },
     { code: "7020", label: "Books/Comics" },
   ];
-  assert.deepEqual(overlayCapsCategories("RAW", categories, new Set()).extraCategories, categories);
-  assert.deepEqual(overlayCapsCategories("RAW", [], new Set()).extraCategories, []);
+  assert.deepEqual(
+    overlayCapsCategories("RAW", categories, new Set()).extraCategories,
+    categories,
+  );
+  assert.deepEqual(
+    overlayCapsCategories("RAW", [], new Set()).extraCategories,
+    [],
+  );
 });
 
 test("overlay splits known labels from extra categories per scope", () => {

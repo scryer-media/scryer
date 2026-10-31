@@ -46,9 +46,10 @@ pub(crate) async fn download_indexer_search_artifacts_handler(
     let request = match serde_json::from_slice::<DownloadArtifactsRequest>(&body) {
         Ok(request) => request,
         Err(error) => {
-            return map_app_error(AppError::Validation(format!(
-                "invalid release download request: {error}"
-            )));
+            return map_app_error(AppError::validation_refused(
+                crate::error_reasons::HTTP_RELEASE_DOWNLOAD_REQUEST_INVALID,
+                format!("invalid release download request: {error}"),
+            ));
         }
     };
 
@@ -70,7 +71,7 @@ pub(crate) async fn download_indexer_search_artifacts_handler(
         // A permission refusal is not an authentication failure: `map_app_error`
         // would answer 401, which the web client reads as an expired session and
         // turns into a logout. The avatar proxy separates the two the same way.
-        Err(AppError::Unauthorized(_)) => {
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Body::empty())

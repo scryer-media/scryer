@@ -32,7 +32,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
@@ -48,7 +55,11 @@ import type {
   PostProcessingScriptRun,
 } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
-import { formatUiDate, formatUiDateTime, formatUiTime } from "@/lib/utils/date-format";
+import {
+  formatUiDate,
+  formatUiDateTime,
+  formatUiTime,
+} from "@/lib/utils/date-format";
 import {
   describeScriptSchedule,
   documentUiLanguage,
@@ -70,7 +81,8 @@ const JOBS_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const JOBS_PANEL_HEADER_CLASS =
   "border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3";
-const JOBS_PANEL_TITLE_CLASS = "text-[15px] font-semibold text-[var(--scry-ink2)]";
+const JOBS_PANEL_TITLE_CLASS =
+  "text-[15px] font-semibold text-[var(--scry-ink2)]";
 const JOBS_INSET_CLASS =
   "rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const JOBS_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
@@ -115,9 +127,9 @@ type SystemJobsViewState = {
   triggeringKeys: Partial<Record<string, boolean>>;
   onSelectJob: (target: JobTarget | null) => void;
   onTriggerJob: (target: JobTarget) => void;
+  onCancelAcquisitionSearch: (runId: string) => void | Promise<void>;
   customJobEditor: CustomJobEditorState;
 };
-
 
 type HealthCheckIssue = {
   source: string;
@@ -132,7 +144,9 @@ type JobTableRow = {
   instanceKey: string;
   job: JobDefinition;
   activeRun: JobRun | null;
-  activeLibraryScan: ReturnType<ReturnType<typeof useLibraryScanProgress>["getActiveSession"]> | null;
+  activeLibraryScan: ReturnType<
+    ReturnType<typeof useLibraryScanProgress>["getActiveSession"]
+  > | null;
   lastRun: JobRun | null;
   status: JobRun["status"] | "idle";
   isDisabled: boolean;
@@ -262,7 +276,10 @@ function healthCheckStatusTone(status: string): string {
   }
 }
 
-function formatHealthCheckStatus(status: string, t: ReturnType<typeof useTranslate>): string {
+function formatHealthCheckStatus(
+  status: string,
+  t: ReturnType<typeof useTranslate>,
+): string {
   if (!status) {
     return t("label.unknown");
   }
@@ -319,7 +336,10 @@ function isRunButtonDisabled(
 }
 
 function compareText(left: string, right: string): number {
-  return left.localeCompare(right, undefined, { sensitivity: "base", numeric: true });
+  return left.localeCompare(right, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
 }
 
 function compareMaybeDates(
@@ -420,11 +440,15 @@ function CustomJobCapturedOutput({
 }) {
   const t = useTranslate();
   const [pickedRunId, setPickedRunId] = useState<string | null>(null);
-  const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
+  const [outputFilter, setOutputFilter] =
+    useState<ScriptOutputFilter>("combined");
 
   if (runs.length === 0) {
     return (
-      <p id="jobs-history-no-output" className={`text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+      <p
+        id="jobs-history-no-output"
+        className={`text-sm ${JOBS_MUTED_TEXT_CLASS}`}
+      >
         {t("jobs.custom.noOutput")}
       </p>
     );
@@ -485,7 +509,9 @@ function CustomJobCapturedOutput({
                 <TableCell className="text-xs">
                   {formatScriptRunDuration(scriptRun?.durationMs ?? null)}
                 </TableCell>
-                <TableCell className="text-xs">{scriptRun?.exitCode ?? "--"}</TableCell>
+                <TableCell className="text-xs">
+                  {scriptRun?.exitCode ?? "--"}
+                </TableCell>
               </TableRow>
             );
           })}
@@ -500,7 +526,9 @@ function CustomJobCapturedOutput({
               id="jobs-history-exit-code"
               className={cn(
                 "font-[var(--font-code)]",
-                selectedScriptRun ? scriptRunStatusColor(selectedScriptRun.status) : undefined,
+                selectedScriptRun
+                  ? scriptRunStatusColor(selectedScriptRun.status)
+                  : undefined,
               )}
             >
               {isFinished && selectedScriptRun?.exitCode != null
@@ -526,7 +554,8 @@ function CustomJobCapturedOutput({
               id="jobs-history-output-stdout"
               className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-muted-foreground"
             >
-              {selectedScriptRun?.stdoutTail || t("settings.pp.outputNotCaptured")}
+              {selectedScriptRun?.stdoutTail ||
+                t("settings.pp.outputNotCaptured")}
             </pre>
           </div>
         ) : null}
@@ -541,7 +570,8 @@ function CustomJobCapturedOutput({
               id="jobs-history-output-stderr"
               className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-[var(--scry-danger-text)]"
             >
-              {selectedScriptRun?.stderrTail || t("settings.pp.outputNotCaptured")}
+              {selectedScriptRun?.stderrTail ||
+                t("settings.pp.outputNotCaptured")}
             </pre>
           </div>
         ) : null}
@@ -582,6 +612,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     triggeringKeys,
     onSelectJob,
     onTriggerJob,
+    onCancelAcquisitionSearch,
     customJobEditor,
   } = state;
 
@@ -606,9 +637,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
   const activeRunsByJob = useMemo(
     () =>
-      Object.fromEntries(activeRuns.map((run) => [jobInstanceKey(run), run])) as Partial<
-        Record<string, JobRun>
-      >,
+      Object.fromEntries(
+        activeRuns.map((run) => [jobInstanceKey(run), run]),
+      ) as Partial<Record<string, JobRun>>,
     [activeRuns],
   );
 
@@ -621,53 +652,63 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     }
   }, []);
 
-  const handleSort = useCallback((nextKey: SortKey) => {
-    if (sortKey === nextKey) {
-      setSortDirection((currentDirection) => (currentDirection === "asc" ? "desc" : "asc"));
-      return;
-    }
-
-    setSortKey(nextKey);
-    setSortDirection(defaultSortDirectionFor(nextKey));
-  }, [defaultSortDirectionFor, sortKey]);
-
-  const renderSortIcon = useCallback((key: SortKey) => {
-    if (sortKey !== key) {
-      return null;
-    }
-
-    return sortDirection === "asc"
-      ? <ArrowUp className="h-3.5 w-3.5" />
-      : <ArrowDown className="h-3.5 w-3.5" />;
-  }, [sortDirection, sortKey]);
-
-  const renderSortableHeader = useCallback((
-    key: SortKey,
-    label: string,
-    className?: string,
-  ) => (
-    <TableHead
-      className={className}
-      aria-sort={
-        sortKey === key
-          ? sortDirection === "asc"
-            ? "ascending"
-            : "descending"
-          : "none"
+  const handleSort = useCallback(
+    (nextKey: SortKey) => {
+      if (sortKey === nextKey) {
+        setSortDirection((currentDirection) =>
+          currentDirection === "asc" ? "desc" : "asc",
+        );
+        return;
       }
-    >
-      <button
-        type="button"
-        className="inline-flex w-full items-center gap-1 text-left font-semibold text-[var(--scry-muted2)] transition-colors hover:text-[var(--scry-ink2)]"
-        onClick={() => handleSort(key)}
-      >
-        <span>{label}</span>
-        {renderSortIcon(key)}
-      </button>
-    </TableHead>
-  ), [handleSort, renderSortIcon, sortDirection, sortKey]);
 
-  const buildJobRow = useCallback((job: JobDefinition): JobTableRow => {
+      setSortKey(nextKey);
+      setSortDirection(defaultSortDirectionFor(nextKey));
+    },
+    [defaultSortDirectionFor, sortKey],
+  );
+
+  const renderSortIcon = useCallback(
+    (key: SortKey) => {
+      if (sortKey !== key) {
+        return null;
+      }
+
+      return sortDirection === "asc" ? (
+        <ArrowUp className="h-3.5 w-3.5" />
+      ) : (
+        <ArrowDown className="h-3.5 w-3.5" />
+      );
+    },
+    [sortDirection, sortKey],
+  );
+
+  const renderSortableHeader = useCallback(
+    (key: SortKey, label: string, className?: string) => (
+      <TableHead
+        className={className}
+        aria-sort={
+          sortKey === key
+            ? sortDirection === "asc"
+              ? "ascending"
+              : "descending"
+            : "none"
+        }
+      >
+        <button
+          type="button"
+          className="inline-flex w-full items-center gap-1 text-left font-semibold text-[var(--scry-muted2)] transition-colors hover:text-[var(--scry-ink2)]"
+          onClick={() => handleSort(key)}
+        >
+          <span>{label}</span>
+          {renderSortIcon(key)}
+        </button>
+      </TableHead>
+    ),
+    [handleSort, renderSortIcon, sortDirection, sortKey],
+  );
+
+  const buildJobRow = useCallback(
+    (job: JobDefinition): JobTableRow => {
       const instanceKey = jobInstanceKey(job);
       const rawActiveRun = activeRunsByJob[instanceKey];
       const libraryFacet = libraryFacetForJob(job.key);
@@ -679,15 +720,20 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             )
           : null;
       const recentRun = lastRunsByJob[instanceKey] ?? null;
-      const activeRun = isStaleActiveRun(rawActiveRun, recentRun) ? null : (rawActiveRun ?? null);
+      const activeRun = isStaleActiveRun(rawActiveRun, recentRun)
+        ? null
+        : (rawActiveRun ?? null);
       const lastRun = activeRun ?? recentRun;
       const status =
         activeRun?.status ??
-        (activeLibraryScan ? jobStatusFromLibraryScanStatus(activeLibraryScan.status) : null) ??
+        (activeLibraryScan
+          ? jobStatusFromLibraryScanStatus(activeLibraryScan.status)
+          : null) ??
         lastRun?.status ??
         "idle";
       const isTriggering = Boolean(triggeringKeys[instanceKey]);
-      const hasActiveExecution = Boolean(activeRun) || Boolean(activeLibraryScan);
+      const hasActiveExecution =
+        Boolean(activeRun) || Boolean(activeLibraryScan);
       const isDisabled = isRunButtonDisabled(hasActiveExecution, isTriggering);
 
       return {
@@ -699,14 +745,21 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         status,
         isDisabled,
       };
-    }, [activeRunsByJob, getActiveSession, lastRunsByJob, triggeringKeys]);
+    },
+    [activeRunsByJob, getActiveSession, lastRunsByJob, triggeringKeys],
+  );
 
-  const jobRows = useMemo<JobTableRow[]>(() => jobs.map(buildJobRow), [buildJobRow, jobs]);
+  const jobRows = useMemo<JobTableRow[]>(
+    () => jobs.map(buildJobRow),
+    [buildJobRow, jobs],
+  );
   const customJobRows = useMemo(
     () =>
       customJobs
         .map((entry) => ({ ...buildJobRow(entry.job), script: entry.script }))
-        .sort((left, right) => compareText(left.job.displayName, right.job.displayName)),
+        .sort((left, right) =>
+          compareText(left.job.displayName, right.job.displayName),
+        ),
     [buildJobRow, customJobs],
   );
 
@@ -719,7 +772,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           case "name":
             return compareText(left.job.displayName, right.job.displayName);
           case "nextRun":
-            return compareMaybeDates(left.job.schedule.nextRunAt, right.job.schedule.nextRunAt);
+            return compareMaybeDates(
+              left.job.schedule.nextRunAt,
+              right.job.schedule.nextRunAt,
+            );
           case "lastRun":
             return compareMaybeDates(
               left.lastRun?.completedAt ?? left.lastRun?.startedAt ?? null,
@@ -728,7 +784,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           case "status":
             return (
               statusSortWeight(left.status) - statusSortWeight(right.status) ||
-              compareText(runStatusLabel(left.status, t), runStatusLabel(right.status, t))
+              compareText(
+                runStatusLabel(left.status, t),
+                runStatusLabel(right.status, t),
+              )
             );
           default:
             return 0;
@@ -744,7 +803,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   }, [jobRows, sortDirection, sortKey, t]);
 
   const renderRows = (rows: JobTableRow[]) =>
-    rows.map(({ instanceKey, job, lastRun, status, isDisabled }) => (
+    rows.map(({ instanceKey, job, activeRun, lastRun, status, isDisabled }) => (
       <TableRow
         key={instanceKey}
         data-ui="activity-row"
@@ -753,20 +812,32 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
       >
         <TableCell className="min-w-0">
           <div className="space-y-1">
-            <p className="font-medium text-[var(--scry-ink2)]">{job.displayName}</p>
-            <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{job.description}</p>
+            <p className="font-medium text-[var(--scry-ink2)]">
+              {job.displayName}
+            </p>
+            <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+              {job.description}
+            </p>
             {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
-              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                {lastRun.summaryText}
+              </p>
             ) : null}
           </div>
         </TableCell>
-        <TableCell className={`w-[14rem] max-w-[14rem] ${JOBS_MUTED_TEXT_CLASS}`}>
+        <TableCell
+          className={`w-[14rem] max-w-[14rem] ${JOBS_MUTED_TEXT_CLASS}`}
+        >
           {job.schedule.description}
         </TableCell>
-        <TableCell className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}>
+        <TableCell
+          className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+        >
           {renderTableDateTime(job.schedule.nextRunAt, t, dateTimeFormat)}
         </TableCell>
-        <TableCell className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}>
+        <TableCell
+          className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+        >
           {renderTableDateTime(
             lastRun?.completedAt ?? lastRun?.startedAt ?? null,
             t,
@@ -774,19 +845,38 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           )}
         </TableCell>
         <TableCell className="w-[7.5rem] min-w-[7.5rem]">
-          <span className={runStatusTone(status)}>{runStatusLabel(status, t)}</span>
+          <span className={runStatusTone(status)}>
+            {runStatusLabel(status, t)}
+          </span>
         </TableCell>
         <TableCell className="min-w-[6rem] text-right">
-          {job.manualTriggerAllowed ? (
+          {activeRun?.jobKey === "ACQUISITION_SEARCH" ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              aria-label={t("label.cancel")}
+              title={t("label.cancel")}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onCancelAcquisitionSearch(activeRun.id);
+              }}
+            >
+              {t("label.cancel")}
+            </Button>
+          ) : job.manualTriggerAllowed ? (
             <Button
               size="sm"
               variant="primary"
               disabled={isDisabled}
               aria-label={t(
-                job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run",
+                job.key === "ARTWORK_ENCODING"
+                  ? "jobs.action.runArtworkNow"
+                  : "jobs.action.run",
               )}
               title={t(
-                job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run",
+                job.key === "ARTWORK_ENCODING"
+                  ? "jobs.action.runArtworkNow"
+                  : "jobs.action.run",
               )}
               onClick={(event) => {
                 event.stopPropagation();
@@ -797,87 +887,103 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             </Button>
           ) : null}
         </TableCell>
-        </TableRow>
+      </TableRow>
     ));
 
   const renderCustomRows = () =>
-    customJobRows.map(({ instanceKey, job, script, lastRun, status, isDisabled }) => {
-      const nameId = (part: string) => selectorId(`jobs-custom-${part}`, script.name);
-      return (
-        <TableRow
-          key={instanceKey}
-          id={nameId("row")}
-          data-ui="activity-row"
-          className="cursor-pointer border-[var(--scry-border3)]"
-          onClick={() => onSelectJob(jobTargetOf(job))}
-        >
-          <TableCell className="min-w-0">
-            <div className="space-y-1">
-              <p className="font-medium text-[var(--scry-ink2)]">
-                {script.name}
-                {!script.enabled ? (
-                  <span className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}>
-                    {t("jobs.custom.disabled")}
-                  </span>
+    customJobRows.map(
+      ({ instanceKey, job, script, lastRun, status, isDisabled }) => {
+        const nameId = (part: string) =>
+          selectorId(`jobs-custom-${part}`, script.name);
+        return (
+          <TableRow
+            key={instanceKey}
+            id={nameId("row")}
+            data-ui="activity-row"
+            className="cursor-pointer border-[var(--scry-border3)]"
+            onClick={() => onSelectJob(jobTargetOf(job))}
+          >
+            <TableCell className="min-w-0">
+              <div className="space-y-1">
+                <p className="font-medium text-[var(--scry-ink2)]">
+                  {script.name}
+                  {!script.enabled ? (
+                    <span
+                      className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}
+                    >
+                      {t("jobs.custom.disabled")}
+                    </span>
+                  ) : null}
+                </p>
+                {script.description ? (
+                  <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                    {script.description}
+                  </p>
                 ) : null}
-              </p>
-              {script.description ? (
-                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{script.description}</p>
-              ) : null}
-            </div>
-          </TableCell>
-          <TableCell
-            id={nameId("schedule")}
-            className={`w-[12rem] max-w-[12rem] ${JOBS_MUTED_TEXT_CLASS}`}
-          >
-            {describeCustomSchedule(script, job)}
-          </TableCell>
-          <TableCell
-            id={nameId("next-run")}
-            className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
-          >
-            {renderTableDateTime(script.enabled ? job.schedule.nextRunAt : null, t, dateTimeFormat)}
-          </TableCell>
-          <TableCell
-            id={nameId("last-run")}
-            className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
-          >
-            {renderTableDateTime(
-              lastRun?.completedAt ?? lastRun?.startedAt ?? null,
-              t,
-              dateTimeFormat,
-            )}
-            {lastRun ? (
-              <span className="block text-xs">{triggerSourceLabel(lastRun.triggerSource, t)}</span>
-            ) : null}
-          </TableCell>
-          <TableCell className="w-[7.5rem] min-w-[7.5rem]">
-            <span id={nameId("status")} className={runStatusTone(status)}>
-              {runStatusLabel(status, t)}
-            </span>
-          </TableCell>
-          <TableCell className="w-[13rem] min-w-[13rem]">
-            <div
-              className="flex items-center justify-end gap-1"
-              onClick={(event) => event.stopPropagation()}
+              </div>
+            </TableCell>
+            <TableCell
+              id={nameId("schedule")}
+              className={`w-[12rem] max-w-[12rem] ${JOBS_MUTED_TEXT_CLASS}`}
             >
-              <Button
-                id={nameId("run")}
-                size="sm"
-                variant="primary"
-                disabled={isDisabled || !script.enabled}
-                onClick={() => onTriggerJob(jobTargetOf(job))}
+              {describeCustomSchedule(script, job)}
+            </TableCell>
+            <TableCell
+              id={nameId("next-run")}
+              className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+            >
+              {renderTableDateTime(
+                script.enabled ? job.schedule.nextRunAt : null,
+                t,
+                dateTimeFormat,
+              )}
+            </TableCell>
+            <TableCell
+              id={nameId("last-run")}
+              className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+            >
+              {renderTableDateTime(
+                lastRun?.completedAt ?? lastRun?.startedAt ?? null,
+                t,
+                dateTimeFormat,
+              )}
+              {lastRun ? (
+                <span className="block text-xs">
+                  {triggerSourceLabel(lastRun.triggerSource, t)}
+                </span>
+              ) : null}
+            </TableCell>
+            <TableCell className="w-[7.5rem] min-w-[7.5rem]">
+              <span id={nameId("status")} className={runStatusTone(status)}>
+                {runStatusLabel(status, t)}
+              </span>
+            </TableCell>
+            <TableCell className="w-[13rem] min-w-[13rem]">
+              <div
+                className="flex items-center justify-end gap-1"
+                onClick={(event) => event.stopPropagation()}
               >
-                {t("jobs.action.run")}
-              </Button>
-              {renderCustomJobActions(script, nameId)}
-            </div>
-          </TableCell>
-        </TableRow>
-      );
-    });
+                <Button
+                  id={nameId("run")}
+                  size="sm"
+                  variant="primary"
+                  disabled={isDisabled || !script.enabled}
+                  onClick={() => onTriggerJob(jobTargetOf(job))}
+                >
+                  {t("jobs.action.run")}
+                </Button>
+                {renderCustomJobActions(script, nameId)}
+              </div>
+            </TableCell>
+          </TableRow>
+        );
+      },
+    );
 
-  const describeCustomSchedule = (script: PostProcessingScript, job: JobTableRow["job"]) =>
+  const describeCustomSchedule = (
+    script: PostProcessingScript,
+    job: JobTableRow["job"],
+  ) =>
     describeScriptSchedule(
       script.schedule,
       script.scheduleDescription || job.schedule.description,
@@ -885,7 +991,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
       { use24HourTimeFormat: dateTimeFormat === "ISO24H" ? true : undefined },
     ) ?? "--";
 
-  function renderCustomJobActions(script: PostProcessingScript, idOf: (part: string) => string) {
+  function renderCustomJobActions(
+    script: PostProcessingScript,
+    idOf: (part: string) => string,
+  ) {
     const isMutating = customJobEditor.mutatingScriptId === script.id;
     return (
       <>
@@ -900,7 +1009,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         </IconButton>
         <IconButton
           id={idOf("toggle")}
-          label={script.enabled ? t("jobs.custom.disable") : t("jobs.custom.enable")}
+          label={
+            script.enabled ? t("jobs.custom.disable") : t("jobs.custom.enable")
+          }
           tone={script.enabled ? "disabled" : "enabled"}
           aria-pressed={script.enabled}
           disabled={isMutating}
@@ -922,112 +1033,136 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   }
 
   const renderCustomMobileCards = () =>
-    customJobRows.map(({ instanceKey, job, script, lastRun, status, isDisabled }) => {
-      const cardId = (part?: string) =>
-        selectorId(part ? `jobs-custom-card-${part}` : "jobs-custom-card", script.name);
-      return (
-        <div key={instanceKey} id={cardId()} className={`${JOBS_INSET_CLASS} p-4`}>
+    customJobRows.map(
+      ({ instanceKey, job, script, lastRun, status, isDisabled }) => {
+        const cardId = (part?: string) =>
+          selectorId(
+            part ? `jobs-custom-card-${part}` : "jobs-custom-card",
+            script.name,
+          );
+        return (
           <div
-            className="cursor-pointer space-y-3"
-            onClick={() => onSelectJob(jobTargetOf(job))}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onSelectJob(jobTargetOf(job));
-              }
-            }}
+            key={instanceKey}
+            id={cardId()}
+            className={`${JOBS_INSET_CLASS} p-4`}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 space-y-1">
-                <p className="text-sm font-semibold text-[var(--scry-ink2)]">
-                  {script.name}
-                  {!script.enabled ? (
-                    <span className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}>
-                      {t("jobs.custom.disabled")}
-                    </span>
-                  ) : null}
-                </p>
-                {script.description ? (
-                  <p className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}>
-                    {script.description}
-                  </p>
-                ) : null}
-              </div>
-              <span
-                id={cardId("status")}
-                className={cn(
-                  "shrink-0 rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2.5 py-1 text-[11px] font-medium",
-                  runStatusTone(status),
-                )}
-              >
-                {runStatusLabel(status, t)}
-              </span>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1">
-                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
-                  {t("jobs.column.schedule")}
-                </p>
-                <p className="text-sm text-[var(--scry-ink2)]">
-                  {describeCustomSchedule(script, job)}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
-                  {t("jobs.column.nextRun")}
-                </p>
-                <p className="text-sm text-[var(--scry-ink2)]">
-                  {formatDate(script.enabled ? job.schedule.nextRunAt : null, t, dateTimeFormat)}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
-                  {t("jobs.column.lastRun")}
-                </p>
-                <p className="text-sm text-[var(--scry-ink2)]">
-                  {formatDate(
-                    lastRun?.completedAt ?? lastRun?.startedAt ?? null,
-                    t,
-                    dateTimeFormat,
-                  )}
-                </p>
-                {lastRun ? (
-                  <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
-                    {triggerSourceLabel(lastRun.triggerSource, t)}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--scry-border3)] pt-3">
-            <Button
-              id={cardId("run")}
-              size="sm"
-              variant="primary"
-              disabled={isDisabled || !script.enabled}
-              onClick={() => onTriggerJob(jobTargetOf(job))}
+            <div
+              className="cursor-pointer space-y-3"
+              onClick={() => onSelectJob(jobTargetOf(job))}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectJob(jobTargetOf(job));
+                }
+              }}
             >
-              {t("jobs.action.run")}
-            </Button>
-            <div className="flex items-center gap-1">{renderCustomJobActions(script, cardId)}</div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-semibold text-[var(--scry-ink2)]">
+                    {script.name}
+                    {!script.enabled ? (
+                      <span
+                        className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
+                        {t("jobs.custom.disabled")}
+                      </span>
+                    ) : null}
+                  </p>
+                  {script.description ? (
+                    <p
+                      className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}
+                    >
+                      {script.description}
+                    </p>
+                  ) : null}
+                </div>
+                <span
+                  id={cardId("status")}
+                  className={cn(
+                    "shrink-0 rounded-full border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2.5 py-1 text-[11px] font-medium",
+                    runStatusTone(status),
+                  )}
+                >
+                  {runStatusLabel(status, t)}
+                </span>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="space-y-1">
+                  <p
+                    className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+                  >
+                    {t("jobs.column.schedule")}
+                  </p>
+                  <p className="text-sm text-[var(--scry-ink2)]">
+                    {describeCustomSchedule(script, job)}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p
+                    className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+                  >
+                    {t("jobs.column.nextRun")}
+                  </p>
+                  <p className="text-sm text-[var(--scry-ink2)]">
+                    {formatDate(
+                      script.enabled ? job.schedule.nextRunAt : null,
+                      t,
+                      dateTimeFormat,
+                    )}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <p
+                    className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+                  >
+                    {t("jobs.column.lastRun")}
+                  </p>
+                  <p className="text-sm text-[var(--scry-ink2)]">
+                    {formatDate(
+                      lastRun?.completedAt ?? lastRun?.startedAt ?? null,
+                      t,
+                      dateTimeFormat,
+                    )}
+                  </p>
+                  {lastRun ? (
+                    <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {triggerSourceLabel(lastRun.triggerSource, t)}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--scry-border3)] pt-3">
+              <Button
+                id={cardId("run")}
+                size="sm"
+                variant="primary"
+                disabled={isDisabled || !script.enabled}
+                onClick={() => onTriggerJob(jobTargetOf(job))}
+              >
+                {t("jobs.action.run")}
+              </Button>
+              <div className="flex items-center gap-1">
+                {renderCustomJobActions(script, cardId)}
+              </div>
+            </div>
           </div>
-        </div>
-      );
-    });
+        );
+      },
+    );
 
   const selectedCustomScript =
-    customJobs.find((entry) => jobInstanceKey(entry.job) === selectedInstanceKey)?.script ?? null;
+    customJobs.find(
+      (entry) => jobInstanceKey(entry.job) === selectedInstanceKey,
+    )?.script ?? null;
 
   const renderMobileCards = (rows: JobTableRow[]) =>
-    rows.map(({ instanceKey, job, lastRun, status, isDisabled }) => (
-      <div
-        key={instanceKey}
-        className={`${JOBS_INSET_CLASS} p-4`}
-      >
+    rows.map(({ instanceKey, job, activeRun, lastRun, status, isDisabled }) => (
+      <div key={instanceKey} className={`${JOBS_INSET_CLASS} p-4`}>
         <div
           className="cursor-pointer space-y-3"
           onClick={() => onSelectJob(jobTargetOf(job))}
@@ -1049,7 +1184,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 {job.description}
               </p>
               {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
-                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                  {lastRun.summaryText}
+                </p>
               ) : null}
             </div>
             <span
@@ -1064,13 +1201,19 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1">
-              <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+              <p
+                className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+              >
                 {t("jobs.column.schedule")}
               </p>
-              <p className="text-sm text-[var(--scry-ink2)]">{job.schedule.description}</p>
+              <p className="text-sm text-[var(--scry-ink2)]">
+                {job.schedule.description}
+              </p>
             </div>
             <div className="space-y-1">
-              <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+              <p
+                className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+              >
                 {t("jobs.column.nextRun")}
               </p>
               <p className="text-sm text-[var(--scry-ink2)]">
@@ -1078,7 +1221,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               </p>
             </div>
             <div className="space-y-1">
-              <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}>
+              <p
+                className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${JOBS_MUTED_TEXT_CLASS}`}
+              >
                 {t("jobs.column.lastRun")}
               </p>
               <p className="text-sm text-[var(--scry-ink2)]">
@@ -1100,7 +1245,20 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           >
             {t("jobs.recentRuns")}
           </button>
-          {job.manualTriggerAllowed ? (
+          {activeRun?.jobKey === "ACQUISITION_SEARCH" ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              aria-label={t("label.cancel")}
+              title={t("label.cancel")}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onCancelAcquisitionSearch(activeRun.id);
+              }}
+            >
+              {t("label.cancel")}
+            </Button>
+          ) : job.manualTriggerAllowed ? (
             <Button
               size="sm"
               variant="primary"
@@ -1110,7 +1268,11 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 onTriggerJob(jobTargetOf(job));
               }}
             >
-              {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
+              {t(
+                job.key === "ARTWORK_ENCODING"
+                  ? "jobs.action.runArtworkNow"
+                  : "jobs.action.run",
+              )}
             </Button>
           ) : null}
         </div>
@@ -1121,10 +1283,16 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     <>
       <div className="space-y-4 text-sm">
         <section id="jobs-custom" className={JOBS_PANEL_CLASS}>
-          <div className={`${JOBS_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}>
+          <div
+            className={`${JOBS_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}
+          >
             <div className="min-w-0">
-              <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.custom.title")}</h2>
-              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{t("jobs.custom.description")}</p>
+              <h2 className={JOBS_PANEL_TITLE_CLASS}>
+                {t("jobs.custom.title")}
+              </h2>
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                {t("jobs.custom.description")}
+              </p>
             </div>
             <Button
               id="jobs-custom-add"
@@ -1138,29 +1306,44 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             </Button>
           </div>
           {customJobRows.length === 0 ? (
-            <p id="jobs-custom-empty" className={`p-4 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+            <p
+              id="jobs-custom-empty"
+              className={`p-4 text-sm ${JOBS_MUTED_TEXT_CLASS}`}
+            >
               {t("jobs.custom.empty")}
             </p>
           ) : (
             <>
-              <div className="space-y-3 p-4 sm:p-5 md:hidden">{renderCustomMobileCards()}</div>
+              <div className="space-y-3 p-4 sm:p-5 md:hidden">
+                {renderCustomMobileCards()}
+              </div>
               <div className="hidden overflow-x-auto md:block">
                 <Table className="min-w-[70rem] table-fixed">
                   <TableHeader>
                     <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                      <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      <TableHead
+                        className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
                         {t("jobs.column.name")}
                       </TableHead>
-                      <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      <TableHead
+                        className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
                         {t("jobs.column.schedule")}
                       </TableHead>
-                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      <TableHead
+                        className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
                         {t("jobs.column.nextRun")}
                       </TableHead>
-                      <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      <TableHead
+                        className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
                         {t("jobs.column.lastRun")}
                       </TableHead>
-                      <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      <TableHead
+                        className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                      >
                         {t("jobs.column.status")}
                       </TableHead>
                       <TableHead className="w-[13rem]" />
@@ -1175,17 +1358,21 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
         <section className={JOBS_PANEL_CLASS}>
           <div className={JOBS_PANEL_HEADER_CLASS}>
-            <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.builtin.title")}</h2>
+            <h2 className={JOBS_PANEL_TITLE_CLASS}>
+              {t("jobs.builtin.title")}
+            </h2>
           </div>
           <div className="p-4 sm:p-5 md:p-0">
             <div className="space-y-3 md:hidden">
               <div className="flex flex-wrap gap-2">
-                {([
-                  ["name", t("jobs.column.name")],
-                  ["nextRun", t("jobs.column.nextRun")],
-                  ["lastRun", t("jobs.column.lastRun")],
-                  ["status", t("jobs.column.status")],
-                ] as const).map(([key, label]) => (
+                {(
+                  [
+                    ["name", t("jobs.column.name")],
+                    ["nextRun", t("jobs.column.nextRun")],
+                    ["lastRun", t("jobs.column.lastRun")],
+                    ["status", t("jobs.column.status")],
+                  ] as const
+                ).map(([key, label]) => (
                   <Button
                     key={key}
                     type="button"
@@ -1198,7 +1385,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                   </Button>
                 ))}
               </div>
-              <div className="space-y-3">{renderMobileCards(sortedJobRows)}</div>
+              <div className="space-y-3">
+                {renderMobileCards(sortedJobRows)}
+              </div>
             </div>
 
             <div className="hidden overflow-x-auto md:block">
@@ -1206,7 +1395,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 <TableHeader>
                   <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
                     {renderSortableHeader("name", t("jobs.column.name"))}
-                    <TableHead className={`w-[14rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                    <TableHead
+                      className={`w-[14rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}
+                    >
                       {t("jobs.column.schedule")}
                     </TableHead>
                     {renderSortableHeader(
@@ -1246,9 +1437,13 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         >
           <DialogHeader>
             <DialogTitle>
-              {customJobEditor.isEditing ? t("jobs.custom.editTitle") : t("jobs.custom.addTitle")}
+              {customJobEditor.isEditing
+                ? t("jobs.custom.editTitle")
+                : t("jobs.custom.addTitle")}
             </DialogTitle>
-            <DialogDescription>{t("jobs.custom.editorDescription")}</DialogDescription>
+            <DialogDescription>
+              {t("jobs.custom.editorDescription")}
+            </DialogDescription>
           </DialogHeader>
           <ScriptEditorForm
             trigger="SCHEDULE"
@@ -1265,7 +1460,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
       <Sheet
         open={Boolean(selectedJob)}
-        onOpenChange={(open) => onSelectJob(open && selectedJob ? jobTargetOf(selectedJob) : null)}
+        onOpenChange={(open) =>
+          onSelectJob(open && selectedJob ? jobTargetOf(selectedJob) : null)
+        }
       >
         <SheetContent
           side="right"
@@ -1284,7 +1481,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
               <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-4">
                 <div className={`${JOBS_INSET_CLASS} p-3`}>
-                  <p className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}>
+                  <p
+                    className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}
+                  >
                     {t("jobs.schedule")}
                   </p>
                   <p className="mt-1 text-sm text-[var(--scry-ink2)]">
@@ -1292,7 +1491,11 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                   </p>
                   <p className={`mt-1 text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
                     {t("jobs.nextRunPrefix", {
-                      value: formatDate(selectedJob.schedule.nextRunAt, t, dateTimeFormat),
+                      value: formatDate(
+                        selectedJob.schedule.nextRunAt,
+                        t,
+                        dateTimeFormat,
+                      ),
                     })}
                   </p>
                 </div>
@@ -1310,16 +1513,21 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                             defaultLibraryIdForFacet(libraryFacet),
                           )
                         : null;
-                    const effectiveActiveRun = isStaleActiveRun(activeRun, recentRun)
+                    const effectiveActiveRun = isStaleActiveRun(
+                      activeRun,
+                      recentRun,
+                    )
                       ? null
                       : activeRun;
                     const isTriggering = Boolean(triggeringKeys[selectedKey]);
                     const isDisabled =
                       isRunButtonDisabled(
-                        Boolean(effectiveActiveRun) || Boolean(activeLibraryScan),
+                        Boolean(effectiveActiveRun) ||
+                          Boolean(activeLibraryScan),
                         isTriggering,
                       ) ||
-                      (selectedCustomScript !== null && !selectedCustomScript.enabled);
+                      (selectedCustomScript !== null &&
+                        !selectedCustomScript.enabled);
 
                     if (!selectedJob.manualTriggerAllowed) {
                       return null;
@@ -1331,7 +1539,11 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                         onClick={() => onTriggerJob(jobTargetOf(selectedJob))}
                         disabled={isDisabled}
                       >
-                        {t(selectedJob.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.runNow")}
+                        {t(
+                          selectedJob.key === "ARTWORK_ENCODING"
+                            ? "jobs.action.runArtworkNow"
+                            : "jobs.action.runNow",
+                        )}
                       </Button>
                     );
                   })()}
@@ -1393,14 +1605,26 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                 <p className={runStatusTone(run.status)}>
                                   {runStatusLabel(run.status, t)}
                                 </p>
-                                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                                <p
+                                  className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}
+                                >
                                   {t("jobs.startedAt", {
-                                    value: formatDate(run.startedAt, t, dateTimeFormat),
+                                    value: formatDate(
+                                      run.startedAt,
+                                      t,
+                                      dateTimeFormat,
+                                    ),
                                   })}
                                 </p>
-                                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                                <p
+                                  className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}
+                                >
                                   {t("jobs.completedAt", {
-                                    value: formatDate(run.completedAt, t, dateTimeFormat),
+                                    value: formatDate(
+                                      run.completedAt,
+                                      t,
+                                      dateTimeFormat,
+                                    ),
                                   })}
                                 </p>
                                 {run.summaryText ? (
@@ -1409,7 +1633,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                   </p>
                                 ) : null}
                                 {run.errorText ? (
-                                  <p className="text-sm text-[var(--scry-danger-text-soft)]">{run.errorText}</p>
+                                  <p className="text-sm text-[var(--scry-danger-text-soft)]">
+                                    {run.errorText}
+                                  </p>
                                 ) : null}
                               </div>
                               <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
@@ -1419,7 +1645,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
                             {healthCheckIssues.length > 0 ? (
                               <div className="mt-3 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3">
-                                <p className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}>
+                                <p
+                                  className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}
+                                >
                                   {t("jobs.healthCheckIssues")}
                                 </p>
                                 <div className="mt-2 space-y-2">
@@ -1430,15 +1658,22 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                     >
                                       <div className="flex items-start justify-between gap-3">
                                         <p className="text-sm font-medium text-[var(--scry-ink2)]">
-                                          {formatHealthCheckSource(issue.source)}
+                                          {formatHealthCheckSource(
+                                            issue.source,
+                                          )}
                                         </p>
                                         <span
                                           className={`text-xs ${healthCheckStatusTone(issue.status)}`}
                                         >
-                                          {formatHealthCheckStatus(issue.status, t)}
+                                          {formatHealthCheckStatus(
+                                            issue.status,
+                                            t,
+                                          )}
                                         </span>
                                       </div>
-                                      <p className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+                                      <p
+                                        className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}
+                                      >
                                         {issue.message}
                                       </p>
                                     </div>
@@ -1449,26 +1684,34 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
                             {hashFailures.failures.length > 0 ? (
                               <div className="mt-3 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3">
-                                <p className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}>
+                                <p
+                                  className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}
+                                >
                                   {t("jobs.fullHashBackfillFailures")}
                                 </p>
                                 <div className="mt-2 space-y-2">
-                                  {hashFailures.failures.map((failure, index) => (
-                                    <div
-                                      key={`${run.id}-${failure.mediaFileId}-${index}`}
-                                      className="rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] p-2"
-                                    >
-                                      <p className="break-all text-sm font-medium text-[var(--scry-ink2)]">
-                                        {failure.path}
-                                      </p>
-                                      <p className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
-                                        {failure.reason}
-                                      </p>
-                                    </div>
-                                  ))}
+                                  {hashFailures.failures.map(
+                                    (failure, index) => (
+                                      <div
+                                        key={`${run.id}-${failure.mediaFileId}-${index}`}
+                                        className="rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] p-2"
+                                      >
+                                        <p className="break-all text-sm font-medium text-[var(--scry-ink2)]">
+                                          {failure.path}
+                                        </p>
+                                        <p
+                                          className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}
+                                        >
+                                          {failure.reason}
+                                        </p>
+                                      </div>
+                                    ),
+                                  )}
                                 </div>
                                 {hashFailures.notListed > 0 ? (
-                                  <p className={`mt-2 text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                                  <p
+                                    className={`mt-2 text-xs ${JOBS_MUTED_TEXT_CLASS}`}
+                                  >
                                     {t("jobs.fullHashBackfillFailuresMore", {
                                       count: hashFailures.notListed,
                                     })}

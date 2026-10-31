@@ -1,6 +1,7 @@
 export type WantedMediaType = "MOVIE" | "EPISODE" | "SERIES_MOVIE";
 export type WantedStatus = "WANTED" | "GRABBED" | "PAUSED" | "COMPLETED";
-export type ConvergenceState = "QUEUED" | "SEARCHING" | "CONVERGED" | "DEFERRED";
+export type ConvergenceState =
+  "QUEUED" | "SEARCHING" | "CONVERGED" | "DEFERRED";
 export type RecencyLane = "HOT" | "COLD";
 export type WantedKind = "MISSING" | "CUTOFF_UPGRADE";
 export type PendingReleaseStatus =

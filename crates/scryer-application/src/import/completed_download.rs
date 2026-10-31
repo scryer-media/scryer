@@ -37,6 +37,8 @@ mod verification;
 
 pub use check::check;
 pub(crate) use check::check_with_lookup;
+#[cfg(test)]
+pub(crate) use check::has_id_only_conflict;
 pub use execute::import;
 #[cfg(test)]
 pub(crate) use execute::import_with_lookup;
@@ -70,6 +72,16 @@ const ID_ONLY_CONFLICT_MESSAGE: &str = "Download name conflicts with the current
 const NO_VIDEO_FIRST_RETRY_DELAY_SECS: i64 = 30;
 const NO_VIDEO_SECOND_RETRY_DELAY_SECS: i64 = 120;
 const NO_VIDEO_SLOW_RETRY_DELAY_SECS: i64 = 15 * 60;
+/// How long unchanged-source no-video retries keep running at the slow
+/// cadence before the import is blocked for manual review.
+const NO_VIDEO_SLOW_RETRY_WINDOW_SECS: i64 = 48 * 60 * 60;
+/// The unchanged attempt that blocks: the two fast retries plus every slow
+/// retry that fits in the slow window.
+const NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS: u8 = {
+    let attempts = 2 + NO_VIDEO_SLOW_RETRY_WINDOW_SECS / NO_VIDEO_SLOW_RETRY_DELAY_SECS;
+    assert!(attempts <= u8::MAX as i64);
+    attempts as u8
+};
 const IMPORT_RUNNING_MESSAGE: &str = "Moving files to library.";
 const COMPLETED_PATH_GRACE_PERIOD_MINUTES: i64 = 10;
 

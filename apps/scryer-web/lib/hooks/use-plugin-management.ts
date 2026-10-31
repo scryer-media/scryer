@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Client } from "urql";
 
@@ -30,24 +31,11 @@ type PluginInstallProgressSubscriptionResult = {
   };
 };
 
-function extractPluginMutationErrorMessage(error: unknown): string | null {
-  if (error && typeof error === "object" && "graphQLErrors" in error) {
-    const graphQLErrors = (
-      error as { graphQLErrors?: Array<{ message?: string }> }
-    ).graphQLErrors;
-    const message = graphQLErrors?.find(
-      (entry) => typeof entry.message === "string",
-    )?.message;
-    if (message?.trim()) {
-      return message.trim();
-    }
-  }
-
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-
-  return null;
+function extractPluginMutationErrorMessage(
+  error: unknown,
+  translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
+): string | null {
+  return userFacingGraphQlErrorMessage(error, "", translate) || null;
 }
 
 function extractPluginMutationErrorCode(error: unknown): string | null {
@@ -76,27 +64,11 @@ function formatPluginInstallError(
   error: unknown,
   t: TranslateFn,
 ): string {
-  const rawMessage = extractPluginMutationErrorMessage(error);
+  const rawMessage = extractPluginMutationErrorMessage(error, t);
   const normalized = rawMessage
     ?.replace(/^\[GraphQL\]\s*/i, "")
     .replace(/^validation:\s*/i, "")
     .trim();
-
-  if (normalized && /WASM SHA256 mismatch/i.test(normalized)) {
-    return t("status.pluginInstallFailedChecksumMismatch", {
-      name: plugin.name,
-    });
-  }
-
-  if (
-    normalized &&
-    normalized.includes("has sdk_constraint") &&
-    normalized.includes("but registry selected")
-  ) {
-    return t("status.pluginInstallFailedSdkMetadataMismatch", {
-      name: plugin.name,
-    });
-  }
 
   if (normalized) {
     if (
@@ -224,9 +196,11 @@ export function usePluginManagement({
         ]);
       } catch (error) {
         setPluginsError(
-          error instanceof Error
-            ? error.message
-            : translateRef.current("status.failedToLoad"),
+          userFacingGraphQlErrorMessage(
+            error,
+            translateRef.current("status.failedToLoad"),
+            translateRef.current,
+          ),
         );
       } finally {
         pluginsLoadedRef.current = true;
@@ -257,7 +231,7 @@ export function usePluginManagement({
       setPlugins((data?.refreshPluginCatalog ?? []) as RegistryPluginRecord[]);
     } catch (error) {
       setPluginsError(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
       );
     } finally {
       setPluginsRefreshing(false);
@@ -325,9 +299,11 @@ export function usePluginManagement({
                   }
                 } catch (error) {
                   setPluginsError(
-                    error instanceof Error
-                      ? error.message
-                      : t("status.failedToLoad"),
+                    userFacingGraphQlErrorMessage(
+                      error,
+                      t("status.failedToLoad"),
+                      t,
+                    ),
                   );
                 } finally {
                   clearPluginProgress(plugin.id);
@@ -370,8 +346,17 @@ export function usePluginManagement({
             }
             clearPluginProgress(plugin.id);
             endPluginMutation(plugin.id);
-            void Promise.all([loadPlugins(false), refreshProviderOptions()]).catch((error) => {
-              setPluginsError(error instanceof Error ? error.message : t("status.failedToLoad"));
+            void Promise.all([
+              loadPlugins(false),
+              refreshProviderOptions(),
+            ]).catch((error) => {
+              setPluginsError(
+                userFacingGraphQlErrorMessage(
+                  error,
+                  t("status.failedToLoad"),
+                  t,
+                ),
+              );
             });
           },
         },

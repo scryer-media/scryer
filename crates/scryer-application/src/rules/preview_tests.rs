@@ -224,6 +224,7 @@ async fn preview_ordinary_copy_uses_create_metadata_instead_of_custom_source_met
         priority: 0,
         evaluation_phase: RuleEvaluationPhase::Baseline,
         exclusive_group: Some("custom-group".to_string()),
+        disabled_reason_code: None,
         disabled_reason: None,
         applied_facets: vec![MediaFacet::Movie],
         created_at: now,
@@ -297,7 +298,10 @@ async fn preview_requires_catalog_permission_and_rejects_episode_from_another_sh
         .await
         .expect_err("preview requires catalog-management permission");
     assert!(
-        matches!(denied_error, AppError::Unauthorized(_)),
+        matches!(
+            denied_error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "{denied_error}"
     );
 

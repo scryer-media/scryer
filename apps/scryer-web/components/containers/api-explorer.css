@@ -1,6 +1,7 @@
 /* Keep the embedded editor on Scryer's theme tokens, including custom accents. */
 .scryer-api-explorer .graphiql-container,
-body:has(.scryer-api-explorer) :is(.graphiql-dialog, .graphiql-tooltip, .graphiql-dropdown-content) {
+body:has(.scryer-api-explorer)
+  :is(.graphiql-dialog, .graphiql-tooltip, .graphiql-dropdown-content) {
   --font-family: var(--font-inter);
   --font-family-mono: var(--font-code);
   --font-size-body: 0.875rem;
@@ -36,7 +37,9 @@ body:has(.scryer-api-explorer) :is(.graphiql-dialog, .graphiql-tooltip, .graphiq
   order: 1;
 }
 
-.scryer-api-explorer .graphiql-tab:has(.scryer-api-tab-name) .graphiql-tab-button {
+.scryer-api-explorer
+  .graphiql-tab:has(.scryer-api-tab-name)
+  .graphiql-tab-button {
   display: none;
 }
 
@@ -82,7 +85,8 @@ body:has(.scryer-api-explorer) :is(.graphiql-dialog, .graphiql-tooltip, .graphiq
   padding-right: 8px;
 }
 
-.scryer-api-explorer :is(.graphiql-container a, .graphiql-sidebar button.active) {
+.scryer-api-explorer
+  :is(.graphiql-container a, .graphiql-sidebar button.active) {
   color: var(--scry-accent-text);
 }
 

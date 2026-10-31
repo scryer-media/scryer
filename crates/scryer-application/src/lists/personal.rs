@@ -23,7 +23,12 @@ impl AppUseCase {
             .subscriptions
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound("list subscription not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::SUBSCRIPTION_NOT_FOUND,
+                    "list subscription not found",
+                )
+            })?;
         ensure_subscription_visible(actor, &row)?;
         Ok(row)
     }
@@ -44,7 +49,10 @@ impl AppUseCase {
             .await;
         let current = self.personal_subscription(actor, id).await?;
         if !current.is_personal() || current.credential_id != row.credential_id {
-            return Err(AppError::NotFound("list subscription changed".into()));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::lists::SUBSCRIPTION_CHANGED_NOT_FOUND,
+                "list subscription changed",
+            ));
         }
         Ok((guard, current))
     }
@@ -72,7 +80,7 @@ impl AppUseCase {
                 Ok(Some(row))
             }
             Ok(_) => self.public_list_subscription(actor, id).await,
-            Err(AppError::NotFound(_)) => Ok(None),
+            Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -108,10 +116,18 @@ impl AppUseCase {
                     .list_provider()
                     .is_some_and(|list| list.provider_type == account.provider)
             })
-            .ok_or_else(|| AppError::NotFound("list provider not found".into()))?;
-        let list = descriptor
-            .list_provider()
-            .ok_or_else(|| AppError::NotFound("list provider not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::PROVIDER_NOT_FOUND,
+                    "list provider not found",
+                )
+            })?;
+        let list = descriptor.list_provider().ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::lists::PROVIDER_NOT_FOUND,
+                "list provider not found",
+            )
+        })?;
         let item = list
             .groups
             .iter()
@@ -218,17 +234,16 @@ impl AppUseCase {
                 self.require_library_permission(actor, &library.id, LibraryPermission::Request)
                     .await?;
                 if input.mode != ListMode::Request {
-                    return Err(AppError::Unauthorized(
-                        "add and search need title management permission".into(),
+                    return Err(AppError::unauthorized_reason(
+                        crate::error_reasons::lists::ADD_SEARCH_NEED_TITLE_MANAGEMENT_PERMISSION,
+                        "add and search need title management permission",
                     ));
                 }
                 if !matches!(
                     input.on_leave,
                     scryer_domain::ListOnLeave::Keep | scryer_domain::ListOnLeave::Log
                 ) {
-                    return Err(AppError::Unauthorized(
-                        "departure changes need title management permission".into(),
-                    ));
+                    return Err(AppError::unauthorized_reason(crate::error_reasons::lists::DEPARTURE_CHANGES_NEED_TITLE_MANAGEMENT_PERMISSION, "departure changes need title management permission"));
                 }
                 self.request_quality_profile_snapshot_for_submission(
                     &library,

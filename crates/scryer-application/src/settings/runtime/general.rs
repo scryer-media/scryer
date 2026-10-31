@@ -49,25 +49,19 @@ fn validate_auto_backup_key_update(
     if let Some(replacement_key) = replacement_key
         && auto_backup_key_non_whitespace_len(replacement_key) < AUTO_BACKUP_KEY_MIN_LENGTH
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::settings::AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE, format!(
             "automatic backup key must be at least {AUTO_BACKUP_KEY_MIN_LENGTH} non-whitespace characters"
         )));
     }
     if clear_auto_backup_key && replacement_key_present {
-        return Err(AppError::Validation(
-            "automatic backup key cannot be replaced and cleared in the same request".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::AUTOMATIC_BACKUP_KEY_CANNOT_REPLACED_CLEARED_SAME_REQUEST, "automatic backup key cannot be replaced and cleared in the same request".to_string()));
     }
     if enabled && clear_auto_backup_key {
-        return Err(AppError::Validation(
-            "automatic backup key cannot be cleared while automatic backups are enabled"
-                .to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::AUTOMATIC_BACKUP_KEY_CANNOT_CLEARED_WHILE_AUTOMATIC_BACKUPS_DISABLED, "automatic backup key cannot be cleared while automatic backups are enabled"
+                .to_string()));
     }
     if enabled && !existing_auto_backup_key_present && !replacement_key_present {
-        return Err(AppError::Validation(
-            "automatic backups require a backup key".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::AUTOMATIC_BACKUPS_REQUIRE_BACKUP_KEY, "automatic backups require a backup key".to_string()));
     }
 
     Ok(())
@@ -91,16 +85,12 @@ fn split_pem_certificate_blocks(bundle_pem: &str) -> AppResult<Vec<String>> {
         .collect::<Vec<_>>();
 
     if blocks.is_empty() {
-        return Err(AppError::Validation(
-            "trusted certificate bundle must contain PEM-encoded X.509 certificates".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::TRUSTED_CERTIFICATE_BUNDLE_INVALID, "trusted certificate bundle must contain PEM-encoded X.509 certificates".to_string()));
     }
 
     let remaining = PEM_CERT_BLOCK_RE.replace_all(trimmed, "");
     if !remaining.trim().is_empty() {
-        return Err(AppError::Validation(
-            "trusted certificate bundle may only contain X.509 certificate PEM blocks".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS, "trusted certificate bundle may only contain X.509 certificate PEM blocks".to_string()));
     }
 
     Ok(blocks)
@@ -110,13 +100,11 @@ fn parse_pem_certificate_der(block_pem: &str) -> AppResult<Vec<u8>> {
     let certificate = certificates
         .next()
         .ok_or_else(|| {
-            AppError::Validation(
-                "trusted certificate bundle did not contain a readable X.509 certificate"
-                    .to_string(),
-            )
+            AppError::validation_refused(crate::error_reasons::settings::CERTIFICATE_BUNDLE_EMPTY, "trusted certificate bundle did not contain a readable X.509 certificate"
+                    .to_string())
         })?
         .map_err(|error| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::settings::FAILED_PARSE_TRUSTED_CERTIFICATE_PEM_BLOCK, format!(
                 "failed to parse trusted certificate PEM block: {error}"
             ))
         })?;
@@ -125,15 +113,13 @@ fn parse_pem_certificate_der(block_pem: &str) -> AppResult<Vec<u8>> {
         .next()
         .transpose()
         .map_err(|error| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::settings::FAILED_PARSE_TRAILING_PEM_CONTENT_TRUSTED_CERTIFICATE, format!(
                 "failed to parse trailing PEM content for trusted certificate: {error}"
             ))
         })?
         .is_some()
     {
-        return Err(AppError::Validation(
-            "each trusted certificate entry must contain exactly one X.509 certificate".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::EACH_TRUSTED_CERTIFICATE_ENTRY_INVALID, "each trusted certificate entry must contain exactly one X.509 certificate".to_string()));
     }
 
     Ok(certificate.as_ref().to_vec())
@@ -242,9 +228,7 @@ fn normalize_backup_path_setting(value: Option<String>) -> AppResult<Option<Path
     };
     let path = PathBuf::from(value);
     if !path.is_absolute() {
-        return Err(AppError::Validation(
-            "backup path must be an absolute server path".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::BACKUP_PATH_INVALID, "backup path must be an absolute server path".to_string()));
     }
     Ok(Some(path))
 }
@@ -255,12 +239,10 @@ fn backup_path_to_string(path: &Path) -> String {
 
 fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
     std::fs::create_dir_all(path).map_err(|error| {
-        AppError::Validation(format!("failed to create backup directory: {error}"))
+        AppError::validation_refused(crate::error_reasons::settings::FAILED_CREATE_BACKUP_DIRECTORY, format!("failed to create backup directory: {error}"))
     })?;
     if !path.is_dir() {
-        return Err(AppError::Validation(
-            "backup path must be a directory".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::BACKUP_PATH_INVALID, "backup path must be a directory".to_string()));
     }
 
     let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
@@ -269,9 +251,9 @@ fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
         std::process::id()
     ));
     std::fs::write(&probe_path, b"scryer backup path probe")
-        .map_err(|error| AppError::Validation(format!("backup path is not writable: {error}")))?;
+        .map_err(|error| AppError::validation_refused(crate::error_reasons::settings::BACKUP_PATH_NOT_WRITABLE, format!("backup path is not writable: {error}")))?;
     std::fs::remove_file(&probe_path).map_err(|error| {
-        AppError::Validation(format!("failed to remove backup path probe: {error}"))
+        AppError::validation_refused(crate::error_reasons::settings::FAILED_REMOVE_BACKUP_PATH_PROBE, format!("failed to remove backup path probe: {error}"))
     })?;
     Ok(())
 }
@@ -549,14 +531,10 @@ impl AppUseCase {
             .unwrap_or(current.image_cache_max_size_mb);
 
         if history_retention_days < 1 {
-            return Err(AppError::Validation(
-                "history retention days must be at least 1".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::HISTORY_RETENTION_DAYS_OUT_OF_RANGE, "history retention days must be at least 1".to_string()));
         }
         if image_cache_max_size_mb < 1 {
-            return Err(AppError::Validation(
-                "image cache maximum size must be at least 1 MiB".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::IMAGE_CACHE_MAXIMUM_SIZE_OUT_OF_RANGE, "image cache maximum size must be at least 1 MiB".to_string()));
         }
         let plugin_http_ca_bundle_pem_update = input
             .plugin_http_ca_bundle_pem

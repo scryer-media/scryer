@@ -27,10 +27,19 @@ fn merge_omitted_notification_secrets(
     existing_json: &str,
     config_fields: &[scryer_domain::ConfigFieldDef],
 ) -> scryer_application::AppResult<String> {
-    let mut incoming = serde_json::from_str::<serde_json::Value>(&incoming_json)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))?;
-    let existing = serde_json::from_str::<serde_json::Value>(existing_json)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))?;
+    let mut incoming =
+        serde_json::from_str::<serde_json::Value>(&incoming_json).map_err(|error| {
+            scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_NOTIFICATION_JSON_INVALID,
+                error.to_string(),
+            )
+        })?;
+    let existing = serde_json::from_str::<serde_json::Value>(existing_json).map_err(|error| {
+        scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_NOTIFICATION_JSON_INVALID,
+            error.to_string(),
+        )
+    })?;
     let Some(incoming_object) = incoming.as_object_mut() else {
         return Ok(incoming_json);
     };
@@ -51,8 +60,12 @@ fn merge_omitted_notification_secrets(
         }
     }
 
-    serde_json::to_string(&incoming)
-        .map_err(|error| scryer_application::AppError::Validation(error.to_string()))
+    serde_json::to_string(&incoming).map_err(|error| {
+        scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_NOTIFICATION_JSON_INVALID,
+            error.to_string(),
+        )
+    })
 }
 
 #[derive(Default)]
@@ -109,10 +122,10 @@ impl NotificationMutations {
             .into_iter()
             .find(|channel| channel.id == input.id.as_ref())
             .ok_or_else(|| {
-                to_gql_error(scryer_application::AppError::NotFound(format!(
-                    "notification channel {}",
-                    input.id.as_ref()
-                )))
+                to_gql_error(scryer_application::AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_NOTIFICATION_CHANNEL_NOT_FOUND,
+                    format!("notification channel {}", input.id.as_ref()),
+                ))
             })?;
         let fields = app.notification_provider_config_fields(existing.channel_type.as_str());
         let config_json = input

@@ -194,6 +194,26 @@ fn import_hold_reason(record: &ImportRecord) -> HeldSourcesReason {
     )
 }
 
+/// The sole compatibility reader for pending-subtitle results saved before
+/// separate codes. A present code is authoritative, even when unknown.
+pub(crate) fn scene_subtitle_hold_from_fields(error_code: Option<&str>, skip_reason: Option<&str>, message: Option<&str>) -> bool {
+    if let Some(code) = error_code {
+        return code == "scene_subtitle_pending";
+    }
+    if let Some(reason) = skip_reason {
+        return reason == "scene_subtitle_pending";
+    }
+    message == Some(SCENE_SUBTITLE_PENDING_WARNING)
+}
+
+fn stored_result_has_scene_subtitle_hold(object: &serde_json::Value) -> bool {
+    scene_subtitle_hold_from_fields(object["error_code"].as_str(), object["skip_reason"].as_str(), object["error_message"].as_str())
+}
+
+fn manual_file_has_scene_subtitle_hold(file: &ManualImportFileResult) -> bool {
+    scene_subtitle_hold_from_fields(file.error_code.map(ImportErrorCode::as_str), None, file.error_message.as_deref())
+}
+
 fn result_carries_pending_warning(record: &ImportRecord) -> bool {
     let Some(result) = record
         .result_json
@@ -202,8 +222,7 @@ fn result_carries_pending_warning(record: &ImportRecord) -> bool {
     else {
         return false;
     };
-    let carries =
-        |object: &serde_json::Value| object["error_message"] == SCENE_SUBTITLE_PENDING_WARNING;
+    let carries = stored_result_has_scene_subtitle_hold;
     carries(&result)
         || result["file_results"]
             .as_array()
@@ -272,7 +291,9 @@ fn result_json_without_pending_warning(result_json: &str) -> Option<String> {
     let mut result = serde_json::from_str::<serde_json::Value>(result_json).ok()?;
     let mut changed = false;
     let mut clear = |object: &mut serde_json::Value| {
-        if object["error_message"].as_str() == Some(SCENE_SUBTITLE_PENDING_WARNING) {
+        if stored_result_has_scene_subtitle_hold(object) {
+            if object["error_code"] == "scene_subtitle_pending" { object["error_code"] = serde_json::Value::Null; }
+            if object["skip_reason"] == "scene_subtitle_pending" { object["skip_reason"] = serde_json::Value::Null; }
             object["error_message"] = serde_json::Value::Null;
             changed = true;
         }
@@ -352,9 +373,7 @@ async fn authorized_release_titles(
     let mut titles: HashMap<String, Title> = HashMap::new();
     for record in pending {
         let title_id = held_import_title_id(record).ok_or_else(|| {
-            AppError::Validation(
-                "an import of this download has no title to authorize its release against".into(),
-            )
+            AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_NO_TITLE_AUTHORIZE_RELEASE_AGAINST, "an import of this download has no title to authorize its release against")
         })?;
         if titles.contains_key(&title_id) {
             continue;
@@ -365,7 +384,7 @@ async fn authorized_release_titles(
             .titles
             .get_by_id(&title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         match app
             .require_library_permission(
                 actor,
@@ -375,12 +394,10 @@ async fn authorized_release_titles(
             .await
         {
             Ok(()) => {}
-            Err(AppError::Unauthorized(_)) => {
-                return Err(AppError::Unauthorized(
-                    "releasing these sources also releases an import for a title you may not \
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+                return Err(AppError::unauthorized_reason(crate::error_reasons::import::RELEASING_THESE_SOURCES_ALSO_RELEASES_IMPORT_TITLE_MAY_NOT_RESOLVE_IMPORTS, "releasing these sources also releases an import for a title you may not \
                      resolve imports for"
-                        .into(),
-                ));
+                        ));
             }
             Err(error) => return Err(error),
         }
@@ -497,7 +514,7 @@ async fn settle_tracked_download(
         Ok(HeldImportReleaseSettlement::AwaitingImport) => HeldSourcesSettlement::AwaitingImport,
         Ok(HeldImportReleaseSettlement::Unchanged) => HeldSourcesSettlement::Unchanged,
         Ok(HeldImportReleaseSettlement::Unproven) => HeldSourcesSettlement::Unproven,
-        Err(AppError::NotFound(_)) => HeldSourcesSettlement::Untracked,
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => HeldSourcesSettlement::Untracked,
         Err(error) => {
             tracing::warn!(import_id = %record.id, error = %error,
                 "held sources were released but the tracked download could not be settled");
@@ -645,15 +662,13 @@ pub async fn release_held_import_sources(
     let record = imports
         .get_import_by_id(import_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("import {import_id}")))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::RESOURCE_NOT_FOUND, format!("import {import_id}")))?;
     let source = held_import_source(&record);
     // The cleanup claim and the release serialize on the canonical download.
     // Without one there is nothing to serialize on, so the sources stay held.
     let Some(canonical_download_id) = imports.canonical_download_id_for_import(&record.id).await?
     else {
-        return Err(AppError::Validation(
-            "this download has no stable identity yet; its sources stay held".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_NO_STABLE_IDENTITY_YET, "this download has no stable identity yet; its sources stay held"));
     };
     // The release covers every import of the download, including those a
     // different client locator recorded, as the store's release does.
@@ -669,16 +684,14 @@ pub async fn release_held_import_sources(
         }
     }
     if source_imports.iter().any(|other| other.status.is_active()) {
-        return Err(AppError::Validation(
-            "this download is still being imported; release its sources once that finishes".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_STILL_BEING_IMPORTED, "this download is still being imported; release its sources once that finishes"));
     }
     let pending: Vec<&ImportRecord> = source_imports
         .iter()
         .filter(|other| import_release_pending(other))
         .collect();
     if !pending.iter().any(|other| other.id == record.id) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::NOT_HOLDING_SOURCES, format!(
             "import {import_id} is not holding its sources"
         )));
     }
@@ -818,7 +831,7 @@ impl AppUseCase {
             // A failure for one queue item drops only that item's offer.
             let titles = match authorized_release_titles(self, actor, &pending).await {
                 Ok(titles) => titles,
-                Err(AppError::Unauthorized(_)) => continue,
+                Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => continue,
                 Err(error) => {
                     tracing::warn!(import_id = %latest.id, error = %error,
                         "held sources offer skipped: its titles could not be authorized");
@@ -885,5 +898,18 @@ impl AppUseCase {
             .held_sources_release_offers(actor, std::slice::from_ref(source))
             .await?
             .remove(source))
+    }
+}
+
+#[cfg(test)]
+mod stored_hold_reason_tests {
+    use super::*;
+    #[test]
+    fn stored_subtitle_hold_codes_override_reworded_and_legacy_sentences() {
+        assert!(scene_subtitle_hold_from_fields(Some("scene_subtitle_pending"), None, Some("translated text")));
+        assert!(scene_subtitle_hold_from_fields(None, Some("scene_subtitle_pending"), None));
+        assert!(scene_subtitle_hold_from_fields(None, None, Some(SCENE_SUBTITLE_PENDING_WARNING)));
+        assert!(!scene_subtitle_hold_from_fields(Some("unknown_new_code"), None, Some(SCENE_SUBTITLE_PENDING_WARNING)));
+        assert!(!scene_subtitle_hold_from_fields(None, Some("policy_mismatch"), Some(SCENE_SUBTITLE_PENDING_WARNING)));
     }
 }

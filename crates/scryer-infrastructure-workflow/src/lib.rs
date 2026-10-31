@@ -17,3 +17,5 @@ pub(crate) mod config_store {
 pub(crate) mod encryption {
     pub(crate) use scryer_infrastructure_crypto::*;
 }
+
+mod error_reasons;

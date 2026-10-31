@@ -189,9 +189,14 @@ impl ProwlarrRequestError {
 
     fn into_app_error(self) -> AppError {
         match self {
-            Self::InvalidConfig(message) | Self::AuthFailed(message) => {
-                AppError::Validation(message)
-            }
+            Self::InvalidConfig(message) => AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_PROWLARR_CONFIG_INVALID,
+                message,
+            ),
+            Self::AuthFailed(message) => AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_PROWLARR_AUTH_FAILED,
+                message,
+            ),
             Self::Unreachable(message) | Self::Unsupported(message) => {
                 AppError::Repository(message)
             }
@@ -300,6 +305,10 @@ pub struct ProwlarrCapsSearchNode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProwlarrCapsSnapshot {
+    #[serde(default)]
+    pub parser_version: u32,
+    #[serde(default)]
+    pub searching_present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -611,9 +620,51 @@ impl ProwlarrManagementClient {
     }
 
     fn config(&self) -> AppResult<&ProwlarrConfig> {
-        self.config
-            .as_ref()
-            .map_err(|message| AppError::Validation(message.clone()))
+        self.config.as_ref().map_err(|message| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_PROWLARR_CONFIG_INVALID,
+                message.clone(),
+            )
+        })
+    }
+
+    /// Refresh exactly one existing managed child, using the same transport and
+    /// child quota identity as parent management. No discovery or sync occurs.
+    pub(crate) async fn refresh_configured_child_caps(
+        mut self,
+        child: &IndexerConfig,
+        request_client: reqwest::Client,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+    ) -> AppResult<DomainCapsSnapshot> {
+        let indexer_id = child
+            .managed_child_key
+            .as_deref()
+            .and_then(|key| key.parse::<i64>().ok())
+            .filter(|id| *id > 0)
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_PROWLARR_CONFIG_INVALID,
+                    "Managed indexer has no valid Prowlarr child id",
+                )
+            })?;
+        self.outbound_http = OutboundHttpClient::new(request_client, RateLimitRegistry::indexers());
+        self.accounting = accounting.cloned();
+        let snapshot = self
+            .fetch_child_caps_snapshot(self.config()?, indexer_id)
+            .await
+            .map_err(ProwlarrRequestError::into_app_error)?;
+        let raw = serialize_caps_snapshot(Some(&snapshot), &[])
+            .ok_or_else(|| AppError::Repository("Cannot serialize child capabilities".into()))?;
+        let mut snapshot: DomainCapsSnapshot =
+            serde_json::from_str(&raw).map_err(|error| AppError::Repository(error.to_string()))?;
+        // Parent management learned the category tree from the child resource;
+        // a caps-only refresh must retain it without resyncing every child.
+        if let Some(previous) =
+            scryer_application::cached_indexer_caps(child, chrono::Utc::now()).snapshot
+        {
+            snapshot.categories = previous.categories;
+        }
+        Ok(snapshot)
     }
 
     fn error_capture(&self) -> ProwlarrErrorCapture {
@@ -1074,7 +1125,8 @@ impl IndexerClient for ProwlarrSearchStub {
         _cancel_token: tokio_util::sync::CancellationToken,
         _page_sink: scryer_application::IndexerSearchPageSink,
     ) -> AppResult<IndexerSearchResponse> {
-        Err(AppError::Validation(
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_PROWLARR_PARENT_SEARCH_UNSUPPORTED,
             "Prowlarr parent configs are management-only; search through synced child indexers"
                 .to_string(),
         ))
@@ -1701,12 +1753,16 @@ fn parse_caps_snapshot(body: &[u8]) -> Result<ProwlarrCapsSnapshot, ProwlarrRequ
     let mut reader = Reader::from_reader(Cursor::new(body));
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
-    let mut snapshot = ProwlarrCapsSnapshot::default();
+    let mut snapshot = ProwlarrCapsSnapshot {
+        parser_version: scryer_domain::INDEXER_CAPS_PARSER_VERSION,
+        ..Default::default()
+    };
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
                 match element.name().as_ref() {
+                    "searching" => snapshot.searching_present = true,
                     "server" => {
                         snapshot.server_title = attr_value(&element, "title")?;
                     }
@@ -1754,9 +1810,9 @@ fn parse_caps_node(
 ) -> Result<ProwlarrCapsSearchNode, ProwlarrRequestError> {
     Ok(ProwlarrCapsSearchNode {
         available: attr_value(element, "available")?
-            .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
+            .is_none_or(|value| value.eq_ignore_ascii_case("yes")),
         supported_params: attr_value(element, "supportedParams")?
-            .unwrap_or_default()
+            .unwrap_or_else(|| "q".into())
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1778,6 +1834,8 @@ fn serialize_caps_snapshot(
 ) -> Option<String> {
     let snapshot = snapshot?;
     serde_json::to_string(&DomainCapsSnapshot {
+        parser_version: snapshot.parser_version,
+        searching_present: snapshot.searching_present,
         server_title: snapshot.server_title.clone(),
         limits_default: snapshot.limits_default,
         limits_max: snapshot.limits_max,
@@ -2058,6 +2116,7 @@ mod tests {
 
     fn test_indexer_config(base_url: &str) -> IndexerConfig {
         IndexerConfig {
+            last_error_code: None,
             id: "cfg-1".to_string(),
             name: "Prowlarr".to_string(),
             provider_type: PROWLARR_PROVIDER_TYPE.to_string(),

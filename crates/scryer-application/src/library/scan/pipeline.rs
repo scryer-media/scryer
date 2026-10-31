@@ -299,7 +299,7 @@ async fn run_library_scan_pipeline_with_discovery(
         discovered,
     )?;
 
-    let worker_handle = tokio::spawn(run_scan_match_worker(
+    let worker_handle = app.restore_coordinator().spawn_task(run_scan_match_worker(
         ScanMatchWorkerContext {
             app: app.clone(),
             actor: actor.clone(),
@@ -1422,7 +1422,7 @@ async fn commit_hydration_batch(
     batch: ScanHydrationBatchResult,
 ) -> AppResult<()> {
     for (reservation, reason) in batch.failed {
-        pool.fail_reserved(reservation, &reason).await;
+        pool.fail_reserved(reservation, &reason.message).await;
     }
     for reservation in batch.ready {
         pool.commit_reserved(reservation);
@@ -1613,7 +1613,10 @@ async fn dispatch_media_work(
 /// stays in bulk requests and off the candidate-to-match critical path.
 struct ScanHydrationBatchResult {
     ready: Vec<LibraryScanMediaWorkReservation>,
-    failed: Vec<(LibraryScanMediaWorkReservation, String)>,
+    failed: Vec<(
+        LibraryScanMediaWorkReservation,
+        crate::catalog_workflow::HydrationFailure,
+    )>,
 }
 
 enum ScanHydrationSubmission {
@@ -1769,7 +1772,7 @@ async fn hydrate_library_scan_title_works(
         .await?;
 
     let mut hydrated_by_id: HashMap<String, Title> = outcome.hydrated_titles.into_iter().collect();
-    let failed: HashMap<String, String> = outcome.failed_titles.into_iter().collect();
+    let failed = outcome.failed_titles;
 
     let mut ready = Vec::with_capacity(reservations.len());
     let mut failed_reservations = Vec::new();
@@ -1835,33 +1838,37 @@ fn spawn_candidate_jobs(
     ctx: CandidateJobContext,
     discovered: Option<TitleBoundaryBatchReceiver>,
 ) -> AppResult<tokio::task::JoinHandle<AppResult<()>>> {
-    Ok(tokio::spawn(async move {
-        let result = match (ctx.kind, discovered) {
-            (LibraryScanPipelineKind::Movie, Some(discovered)) => {
-                run_movie_candidate_jobs_from_discovery(&ctx, discovered).await
+    Ok(ctx
+        .app
+        .restore_coordinator()
+        .clone()
+        .spawn_task(async move {
+            let result = match (ctx.kind, discovered) {
+                (LibraryScanPipelineKind::Movie, Some(discovered)) => {
+                    run_movie_candidate_jobs_from_discovery(&ctx, discovered).await
+                }
+                (LibraryScanPipelineKind::Series, Some(discovered)) => {
+                    run_series_candidate_jobs_from_discovery(
+                        &ctx,
+                        PathBuf::from(&ctx.library_path),
+                        discovered,
+                    )
+                    .await
+                }
+                (LibraryScanPipelineKind::Movie, None) => run_movie_candidate_jobs(&ctx).await,
+                (LibraryScanPipelineKind::Series, None) => run_series_candidate_jobs(&ctx).await,
+            };
+            if let Err(error) = &result {
+                let _ = ctx
+                    .candidate_events
+                    .send(ScanCandidateJobEvent::DiscoveryFailed {
+                        error: AppError::Repository(format!(
+                            "library scan candidate producer failed: {error}"
+                        )),
+                    });
             }
-            (LibraryScanPipelineKind::Series, Some(discovered)) => {
-                run_series_candidate_jobs_from_discovery(
-                    &ctx,
-                    PathBuf::from(&ctx.library_path),
-                    discovered,
-                )
-                .await
-            }
-            (LibraryScanPipelineKind::Movie, None) => run_movie_candidate_jobs(&ctx).await,
-            (LibraryScanPipelineKind::Series, None) => run_series_candidate_jobs(&ctx).await,
-        };
-        if let Err(error) = &result {
-            let _ = ctx
-                .candidate_events
-                .send(ScanCandidateJobEvent::DiscoveryFailed {
-                    error: AppError::Repository(format!(
-                        "library scan candidate producer failed: {error}"
-                    )),
-                });
-        }
-        result
-    }))
+            result
+        }))
 }
 
 enum EvidenceJobOutput {
@@ -2279,7 +2286,10 @@ async fn run_movie_candidate_jobs_from_discovery(
                 runner
                     .forward_evidence_output(EvidenceJobOutput::Failed {
                         item_path: path_to_stored_string(&entry.path),
-                        error: AppError::Validation(reason),
+                        error: AppError::validation_refused(
+                            crate::error_reasons::library::SCAN_FOLDER_BOUNDARY_INVALID,
+                            reason,
+                        ),
                         invalid_boundary: true,
                     })
                     .await;
@@ -2450,7 +2460,10 @@ async fn run_series_candidate_jobs_from_discovery(
                 runner
                     .forward_evidence_output(EvidenceJobOutput::Failed {
                         item_path: path_to_stored_string(&folder.path),
-                        error: AppError::Validation(reason),
+                        error: AppError::validation_refused(
+                            crate::error_reasons::library::SCAN_FOLDER_BOUNDARY_INVALID,
+                            reason,
+                        ),
                         invalid_boundary: true,
                     })
                     .await;
@@ -3564,7 +3577,7 @@ mod tests {
                 .unwrap()
                 .expect_err("incomplete discovery must fail the pipeline");
             assert!(
-                matches!(error, AppError::Repository(message) if message == "fixture incomplete discovery")
+                matches!(error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message == "fixture incomplete discovery")
             );
             let remaining = app
                 .services
@@ -3720,7 +3733,7 @@ mod tests {
                 _ => panic!("terminal discovery failure must be retained"),
             };
             assert!(
-                matches!(error, AppError::Repository(message) if message == "fixture discovery I/O failure")
+                matches!(error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message == "fixture discovery I/O failure")
             );
 
             let mut inventoried = HashSet::new();

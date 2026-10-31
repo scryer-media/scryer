@@ -16,18 +16,17 @@ impl AppUseCase {
             .get_by_id(connection_id.trim())
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("media server connection {connection_id}"))
+                AppError::not_found_reason(
+                    crate::error_reasons::media_servers::CONNECTION_NOT_FOUND,
+                    format!("media server connection {connection_id}"),
+                )
             })?;
         if connection.provider != MediaServerProvider::Jellyfin {
-            return Err(AppError::Validation(
-                "Jellyfin user listing requires a Jellyfin connection".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::JELLYFIN_USER_LISTING_REQUIRES_JELLYFIN_CONNECTION, "Jellyfin user listing requires a Jellyfin connection"));
         }
         let api_key = connection.api_key.as_deref().ok_or_else(|| {
-            AppError::Validation(
-                "Jellyfin user listing requires a saved API key; save an API key to load Jellyfin users"
-                    .into(),
-            )
+            AppError::validation_refused(crate::error_reasons::media_servers::JELLYFIN_USER_LISTING_REQUIRES_SAVED_API_KEY, "Jellyfin user listing requires a saved API key; save an API key to load Jellyfin users"
+                    )
         })?;
         self.services
             .integrations
@@ -54,10 +53,8 @@ impl AppUseCase {
             .map(str::trim)
             .filter(|value| !value.is_empty());
         if api_key_supplied && (admin_username.is_some() || admin_password.is_some()) {
-            return Err(AppError::Validation(
-                "choose either a Jellyfin API key or Jellyfin admin login credentials, not both"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::CHOOSE_EITHER_JELLYFIN_API_KEY_JELLYFIN_ADMIN_LOGIN_CREDENTIALS_NOT_BOTH, "choose either a Jellyfin API key or Jellyfin admin login credentials, not both"
+                    ));
         }
         match (admin_username, admin_password) {
             (Some(username), Some(password)) => {
@@ -75,8 +72,9 @@ impl AppUseCase {
                 Ok(Some(generated))
             }
             (None, None) => Ok(api_key),
-            _ => Err(AppError::Validation(
-                "both Jellyfin admin username and password are required".into(),
+            _ => Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::BOTH_JELLYFIN_ADMIN_USERNAME_PASSWORD_REQUIRED,
+                "both Jellyfin admin username and password are required",
             )),
         }
     }

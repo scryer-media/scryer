@@ -661,9 +661,12 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
         .expect("scoped postgres pool should connect");
 
     let outcome = async {
-        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(PRE_UPGRADE_VERSION))
-            .await
-            .expect("pre-upgrade postgres fixture should apply");
+        crate::postgres_history_test_support::replay_historical_postgres(
+            &pool,
+            PRE_UPGRADE_VERSION,
+        )
+        .await
+        .expect("pre-upgrade postgres fixture should apply");
 
         let legacy_id = path_derived_id("/mnt/archive/movies");
         sqlx::query(

@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { buildSchema, Kind, parse, validate, type DocumentNode } from "graphql";
 
+import * as indexerClients from "./indexer-clients.ts";
 import * as mutations from "./mutations.ts";
 import * as queries from "./queries.ts";
 
@@ -44,7 +45,7 @@ function collectDocuments(
   return documents;
 }
 
-const documents = collectDocuments({ queries, mutations });
+const documents = collectDocuments({ queries, mutations, indexerClients });
 
 test("collects the hand-written operations", () => {
   assert.ok(
@@ -61,4 +62,19 @@ test("every exported GraphQL document validates against the API schema", () => {
     }
   }
   assert.deepEqual(failures, []);
+});
+
+test("background restore start and polling documents validate against the API schema", () => {
+  const source = readFileSync(
+    new URL("../../components/setup/setup-restore-view.tsx", import.meta.url),
+    "utf8",
+  );
+  const operations =
+    source.match(
+      /(?:mutation (?:InspectRestoreBundle|ApplyRestoreBundle)|query RestoreInspectionStatus)\b[^`]+/g,
+    ) ?? [];
+  assert.equal(operations.length, 3);
+  for (const operation of operations) {
+    assert.deepEqual(validate(schema, parse(operation)), []);
+  }
 });

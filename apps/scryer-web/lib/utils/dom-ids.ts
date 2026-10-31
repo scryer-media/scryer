@@ -97,8 +97,16 @@ function normalizedEpisodeSelectorKey(
 ): string {
   const season = Number.parseInt(String(seasonNumber ?? "").trim(), 10);
   const episode = Number.parseInt(String(episodeNumber ?? "").trim(), 10);
-  if (Number.isFinite(season) && season > 0 && Number.isFinite(episode) && episode > 0) {
-    return selectorId(facet, `s${String(season).padStart(2, "0")}e${String(episode).padStart(2, "0")}`);
+  if (
+    Number.isFinite(season) &&
+    season > 0 &&
+    Number.isFinite(episode) &&
+    episode > 0
+  ) {
+    return selectorId(
+      facet,
+      `s${String(season).padStart(2, "0")}e${String(episode).padStart(2, "0")}`,
+    );
   }
 
   const absolute = Number.parseInt(String(absoluteNumber ?? "").trim(), 10);
@@ -128,7 +136,12 @@ export function seriesOverviewEpisodeRowId(
 ): string {
   return selectorId(
     "series-overview-episode",
-    normalizedEpisodeSelectorKey(facet, seasonNumber, episodeNumber, absoluteNumber),
+    normalizedEpisodeSelectorKey(
+      facet,
+      seasonNumber,
+      episodeNumber,
+      absoluteNumber,
+    ),
   );
 }
 
@@ -140,7 +153,12 @@ export function seriesOverviewEpisodeAutoSearchId(
 ): string {
   return selectorId(
     "series-overview-episode-auto-search",
-    normalizedEpisodeSelectorKey(facet, seasonNumber, episodeNumber, absoluteNumber),
+    normalizedEpisodeSelectorKey(
+      facet,
+      seasonNumber,
+      episodeNumber,
+      absoluteNumber,
+    ),
   );
 }
 
@@ -152,20 +170,37 @@ export function seriesOverviewEpisodeInteractiveSearchId(
 ): string {
   return selectorId(
     "series-overview-episode-interactive-search",
-    normalizedEpisodeSelectorKey(facet, seasonNumber, episodeNumber, absoluteNumber),
+    normalizedEpisodeSelectorKey(
+      facet,
+      seasonNumber,
+      episodeNumber,
+      absoluteNumber,
+    ),
   );
 }
 
-export function seriesOverviewSeriesMovieRowId(seriesMovieLinkId: string): string {
+export function seriesOverviewSeriesMovieRowId(
+  seriesMovieLinkId: string,
+): string {
   return selectorId("series-overview-series-movie", seriesMovieLinkId);
 }
 
-export function seriesOverviewSeriesMovieInteractiveSearchId(seriesMovieLinkId: string): string {
-  return selectorId("series-overview-series-movie-interactive-search", seriesMovieLinkId);
+export function seriesOverviewSeriesMovieInteractiveSearchId(
+  seriesMovieLinkId: string,
+): string {
+  return selectorId(
+    "series-overview-series-movie-interactive-search",
+    seriesMovieLinkId,
+  );
 }
 
-export function seriesOverviewSeriesMovieAutoSearchId(seriesMovieLinkId: string): string {
-  return selectorId("series-overview-series-movie-auto-search", seriesMovieLinkId);
+export function seriesOverviewSeriesMovieAutoSearchId(
+  seriesMovieLinkId: string,
+): string {
+  return selectorId(
+    "series-overview-series-movie-auto-search",
+    seriesMovieLinkId,
+  );
 }
 
 export function seriesOverviewSeasonMonitorId(collectionId: string): string {
@@ -189,7 +224,9 @@ export function seriesOverviewSeasonSearchId(collectionId: string): string {
   return selectorId("series-overview-season-search", collectionId);
 }
 
-export function seriesOverviewSeasonInteractiveSearchId(collectionId: string): string {
+export function seriesOverviewSeasonInteractiveSearchId(
+  collectionId: string,
+): string {
   return selectorId("series-overview-season-interactive-search", collectionId);
 }
 
@@ -257,7 +294,10 @@ export function mediaRequestCancelId(requestId: string): string {
   return selectorId("media-request-cancel", requestId);
 }
 
-export function mediaRequestProfileOptionId(scope: string, profileId: string): string {
+export function mediaRequestProfileOptionId(
+  scope: string,
+  profileId: string,
+): string {
   return selectorId(scope, "media-request-profile-option", profileId);
 }
 
@@ -265,7 +305,10 @@ export function mediaRequestMonitorSelectionId(requestId: string): string {
   return selectorId("media-request-monitor-selection", requestId);
 }
 
-export function mediaRequestMonitorOptionId(scope: string, monitorType: string): string {
+export function mediaRequestMonitorOptionId(
+  scope: string,
+  monitorType: string,
+): string {
   return selectorId(scope, "media-request-monitor-option", monitorType);
 }
 
@@ -322,7 +365,8 @@ export const APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID =
 /// free-text field these ids used to name no longer exists.
 export const APPROVE_MEDIA_REQUEST_TAGS_PREFIX = "approve-media-request";
 export const APPROVE_MEDIA_REQUEST_TAGS_ID = "approve-media-request-tags";
-export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID = "approve-media-request-tags-add";
+export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID =
+  "approve-media-request-tags-add";
 
 export function approveMediaRequestLeaseOptionId(value: string): string {
   return selectorId("approve-media-request-lease-option", value);

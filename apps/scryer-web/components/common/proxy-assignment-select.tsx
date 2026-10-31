@@ -50,13 +50,14 @@ export function ProxyAssignmentSelect({
   helpText,
 }: ProxyAssignmentSelectProps) {
   const t = useTranslate();
-  const assigned = value ? proxies.find((proxy) => proxy.id === value) ?? null : null;
+  const assigned = value
+    ? (proxies.find((proxy) => proxy.id === value) ?? null)
+    : null;
   const isMissing = Boolean(value) && !assigned;
   // A disabled proxy is still shown while it is the assignment, so the operator
   // can see what is set instead of the select silently reading as "direct".
   const selectable = React.useMemo(
-    () =>
-      proxies.filter((proxy) => proxy.isEnabled || proxy.id === value),
+    () => proxies.filter((proxy) => proxy.isEnabled || proxy.id === value),
     [proxies, value],
   );
   const groups = React.useMemo(
@@ -86,7 +87,9 @@ export function ProxyAssignmentSelect({
           position="popper"
           className="w-80 max-w-[var(--radix-select-content-available-width)]"
         >
-          <SelectItem value={NO_PROXY_VALUE}>{t("settings.proxyDirect")}</SelectItem>
+          <SelectItem value={NO_PROXY_VALUE}>
+            {t("settings.proxyDirect")}
+          </SelectItem>
           {isMissing ? (
             <SelectItem value={value ?? "missing"} disabled>
               {t("settings.proxyMissing")}

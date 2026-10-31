@@ -9,7 +9,7 @@ import { BackendRestartOverlay } from "@/components/common/backend-restart-overl
 import { SetupIntroLoading } from "@/components/setup/setup-intro";
 
 export default function SetupPage() {
-  const { serviceRestarting, setServiceRestarting } = useBackendRestarting();
+  const { serviceRestarting } = useBackendRestarting();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -37,11 +37,7 @@ export default function SetupPage() {
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
       <div className="min-h-screen bg-fixed text-[var(--scry-body)] [background-image:var(--scry-shell-bg)]">
-        <SetupWizardContainer
-          t={t}
-          isReentry={isReentry}
-          onBackendRestarting={() => setServiceRestarting(true)}
-        />
+        <SetupWizardContainer t={t} isReentry={isReentry} />
       </div>
     </ScryerGraphqlProvider>
   );

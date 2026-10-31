@@ -57,7 +57,7 @@ async fn decode_catalog_wasm_artifact(
     plugin_id: &str,
 ) -> AppResult<Vec<u8>> {
     if expected_bytes > MANUAL_PLUGIN_WASM_OUTPUT_LIMIT {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::WASM_ARTIFACT_TOO_LARGE, format!(
             "plugin '{plugin_id}' WASM artifact declared size {expected_bytes} exceeds maximum size of {MANUAL_PLUGIN_WASM_OUTPUT_LIMIT} bytes"
         )));
     }
@@ -132,7 +132,7 @@ impl AppUseCase {
             Some("br") => PluginWasmEncoding::Brotli,
             Some("zst") => PluginWasmEncoding::Zstd,
             _ => {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::plugins::SELECTED_ARTIFACT_UNSUPPORTED_ENCODING, format!(
                     "plugin '{}' selected artifact '{}' has unsupported encoding",
                     resolved.catalog_entry.id, artifact_url
                 )));
@@ -151,13 +151,13 @@ impl AppUseCase {
             &wasm,
         )?;
         let actual_bytes = u64::try_from(wasm.len()).map_err(|_| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::plugins::SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES, format!(
                 "plugin '{}' selected artifact '{}' is too large to validate bytes",
                 resolved.catalog_entry.id, artifact_url
             ))
         })?;
         if actual_bytes != resolved.artifact.bytes {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::SELECTED_ARTIFACT_BYTES_MISMATCH, format!(
                 "plugin '{}' selected artifact '{}' bytes mismatch: expected {}, got {}",
                 resolved.catalog_entry.id, artifact_url, resolved.artifact.bytes, actual_bytes
             )));
@@ -181,7 +181,7 @@ impl AppUseCase {
         reporter: &PluginInstallProgressReporter,
     ) -> AppResult<PreparedCatalogPluginInstall> {
         if is_reserved_first_party_provider(&resolved.catalog_entry.provider_type) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE, format!(
                 "provider type '{}' is reserved for first-party code",
                 resolved.catalog_entry.provider_type
             )));
@@ -330,13 +330,13 @@ impl AppUseCase {
             resolved.release.version.trim_start_matches('v'),
         )
         .map_err(|e| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::plugins::CATALOG_VERSION_INVALID, format!(
                 "invalid catalog version '{}': {e}",
                 resolved.release.version
             ))
         })?;
         let installed_version = semver::Version::parse(&installation.version).map_err(|e| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::plugins::INSTALLED_VERSION_INVALID, format!(
                 "invalid installed version '{}': {e}",
                 installation.version
             ))
@@ -350,7 +350,7 @@ impl AppUseCase {
         if selected_version < installed_version
             || (selected_version == installed_version && !same_version_optimized_update)
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::ALREADY_VERSION_SELECTED_RELEASE, format!(
                 "plugin '{}' is already at version {} (selected release is {})",
                 resolved.catalog_entry.id, installation.version, resolved.release.version
             )));
@@ -421,9 +421,7 @@ impl AppUseCase {
                     && resolved.effective_support_tier == PluginSupportTier::Official
             })
             .ok_or_else(|| {
-                AppError::NotFound(
-                    "official nzbgeek plugin is not available for builtin migration".to_string(),
-                )
+                AppError::not_found_reason(crate::error_reasons::plugins::OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND, "official nzbgeek plugin is not available for builtin migration".to_string())
             })?;
         let reporter = PluginInstallProgressReporter::new(self, "system", LEGACY_NZBGEEK_PLUGIN_ID);
         let prepared = self
@@ -475,7 +473,7 @@ impl AppUseCase {
             .await?;
         let (resolved, catalog_json) = self.resolve_manual_plugin_repo(github_repo_url).await?;
         if is_reserved_first_party_provider(&resolved.catalog_entry.provider_type) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE, format!(
                 "provider type '{}' is reserved for first-party code",
                 resolved.catalog_entry.provider_type
             )));
@@ -494,7 +492,8 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(format!(
+            return Err(// Released startup migration 0002 still reads this sentence; preserve its wording.
+            AppError::validation_refused(crate::error_reasons::plugins::ALREADY_INSTALLED, format!(
                 "plugin '{}' is already installed",
                 resolved.catalog_entry.id
             )));
@@ -552,7 +551,8 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(format!(
+            return Err(// Released startup migration 0002 still reads this sentence; preserve its wording.
+            AppError::validation_refused(crate::error_reasons::plugins::ALREADY_INSTALLED, format!(
                 "plugin '{plugin_id}' is already installed"
             )));
         }
@@ -565,7 +565,7 @@ impl AppUseCase {
         {
             return self.install_catalog_plugin(resolved, reporter).await;
         }
-        Err(AppError::NotFound(format!(
+        Err(AppError::not_found_reason(crate::error_reasons::plugins::NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND, format!(
             "plugin '{plugin_id}' is not available from the plugin catalog"
         )))
     }
@@ -582,11 +582,11 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RESOURCE_NOT_FOUND, format!("plugin '{plugin_id}' not installed")))?;
 
         if installation.source_kind == PluginSourceKind::Manual {
             let source_repo = installation.source_repo.as_deref().ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_MISSING_SOURCE_REPO, format!(
                     "manual plugin '{plugin_id}' is missing source repo"
                 ))
             })?;
@@ -614,7 +614,7 @@ impl AppUseCase {
                 .upgrade_catalog_plugin(resolved, installation, reporter)
                 .await;
         }
-        Err(AppError::NotFound(format!(
+        Err(AppError::not_found_reason(crate::error_reasons::plugins::NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND, format!(
             "plugin '{plugin_id}' is not available from the plugin catalog"
         )))
     }

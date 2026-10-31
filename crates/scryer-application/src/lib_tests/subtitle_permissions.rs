@@ -397,7 +397,7 @@ fn catalog_admin() -> User {
 
 fn assert_unauthorized(result: AppResult<impl std::fmt::Debug>, what: &str) {
     match result {
-        Err(AppError::Unauthorized(_)) => {}
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {}
         Err(error) => panic!("{what}: expected Unauthorized, got {error}"),
         Ok(value) => panic!("{what}: expected Unauthorized, got Ok({value:?})"),
     }

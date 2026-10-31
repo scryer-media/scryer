@@ -9,6 +9,7 @@ import type { Client } from "urql";
 import type { Release } from "@/lib/types";
 import {
   cancelInteractiveReleaseSearchMutation,
+  continueInteractiveReleaseSearchMutation,
   startInteractiveReleaseSearchMutation,
 } from "./mutations";
 import { interactiveReleaseSearchQuery } from "./queries";
@@ -34,13 +35,25 @@ export type InteractiveSearchIndexerProgress = {
   skipReason?: InteractiveSearchSkipReason | null;
   /** When a skip that lifts on its own ends, if known. */
   skippedUntil?: string | null;
+  /** How the capabilities used for this indexer were obtained; never changes its search outcome. */
+  capsSource?: IndexerCapsSource | null;
+  /** Stable reason code for a capability fallback; an open set, so unknown codes are expected. */
+  capsReason?: string | null;
+  /** Seconds the provider asked Scryer to wait before discovering capabilities again. */
+  capsRetryAfterSeconds?: number | null;
 };
 
+/** How Scryer obtained the capabilities it used to search an indexer. */
+export type IndexerCapsSource =
+  | "FRESH"
+  | "MANAGED_METADATA"
+  | "REFRESHED"
+  | "STALE"
+  | "PERMISSIVE"
+  | "PROVIDER_DECLARATIONS";
+
 export type InteractiveSearchSkipReason =
-  | "INDEXER_DISABLED"
-  | "TEMPORARILY_DISABLED"
-  | "BACKED_OFF"
-  | "NO_TEXT_SEARCH";
+  "INDEXER_DISABLED" | "TEMPORARILY_DISABLED" | "BACKED_OFF" | "NO_TEXT_SEARCH";
 
 export type InteractiveSearchProgress = {
   /**
@@ -54,6 +67,14 @@ export type InteractiveSearchProgress = {
   state: "RUNNING" | "COMPLETED" | "CANCELLED";
   startedAt?: string;
   completedAt?: string | null;
+  /** Opaque cursor for the following page of a query search; null when there is none. */
+  nextCursor?: string | null;
+  /** The page was returned at its time bound while some indexers were still searching. */
+  deadlineReached?: boolean;
+  /** Server sentence for a failed query search, shown only for an unknown code. */
+  failureReason?: string | null;
+  /** Stable failure condition of a query search. */
+  failureReasonCode?: string | null;
 };
 
 export {
@@ -68,10 +89,14 @@ type InteractiveReleaseSearchJobPayload = {
   indexers: InteractiveSearchIndexerProgress[] | null;
   startedAt?: string;
   completedAt?: string | null;
+  nextCursor?: string | null;
+  deadlineReached?: boolean;
+  failureReason?: string | null;
+  failureReasonCode?: string | null;
 };
 
 const POLL_INTERVAL_MS = 1_000;
-// Defensive client-side stop; the server enforces its own 55s job deadline.
+// Raw pages answer within 75 seconds; this leaves room for the final poll.
 const CLIENT_DEADLINE_MS = 90_000;
 
 function waitForNextPoll(signal?: AbortSignal): Promise<void> {
@@ -95,6 +120,8 @@ export async function runIterativeReleaseSearch(
   input: InteractiveReleaseSearchInput,
   options: {
     signal?: AbortSignal;
+    /** `nextCursor` of the previous page; fetches the following page instead of starting a search. */
+    after?: string;
     onUpdate?: (snapshot: InteractiveSearchProgress) => void;
   } = {},
 ): Promise<Release[]> {
@@ -124,6 +151,10 @@ export async function runIterativeReleaseSearch(
       state: job.state,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
+      nextCursor: job.nextCursor,
+      deadlineReached: job.deadlineReached,
+      failureReason: job.failureReason,
+      failureReasonCode: job.failureReasonCode,
     });
   };
 
@@ -134,12 +165,22 @@ export async function runIterativeReleaseSearch(
   let job: InteractiveReleaseSearchJobPayload | undefined;
   try {
     const { data, error } = await client
-      .mutation(startInteractiveReleaseSearchMutation, { input }, fetchOptions)
+      .mutation(
+        options.after
+          ? continueInteractiveReleaseSearchMutation
+          : startInteractiveReleaseSearchMutation,
+        options.after
+          ? { after: options.after, first: input.aggregatePageSize }
+          : { input },
+        fetchOptions,
+      )
       .toPromise();
     if (error) throw error;
-    job = data?.startInteractiveReleaseSearch as
-      | InteractiveReleaseSearchJobPayload
-      | undefined;
+    job = (
+      options.after
+        ? data?.continueInteractiveReleaseSearch
+        : data?.startInteractiveReleaseSearch
+    ) as InteractiveReleaseSearchJobPayload | undefined;
   } catch (startError) {
     if (signal?.aborted || isAbortError(startError)) {
       return releases;
@@ -180,9 +221,8 @@ export async function runIterativeReleaseSearch(
           return releases;
         }
         if (pollError) throw pollError;
-        const snapshot = (pollData?.interactiveReleaseSearch ?? null) as
-          | InteractiveReleaseSearchJobPayload
-          | null;
+        const snapshot = (pollData?.interactiveReleaseSearch ??
+          null) as InteractiveReleaseSearchJobPayload | null;
         if (!snapshot) {
           // Unknown/evicted job — treat as finished with what we have.
           return releases;

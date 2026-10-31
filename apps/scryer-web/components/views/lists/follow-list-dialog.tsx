@@ -13,13 +13,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SingleSelectField } from "@/components/ui/select";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useSessionUser, type AuthUser } from "@/lib/hooks/use-auth";
-import { hasLibraryPermission, LIBRARY_PERMISSIONS } from "@/lib/utils/permissions";
+import {
+  hasLibraryPermission,
+  LIBRARY_PERMISSIONS,
+} from "@/lib/utils/permissions";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type {
@@ -70,34 +77,82 @@ export type FollowListTarget =
       kinds: Facet[];
       preview: ListPreview | null;
     }
-  | { kind: "edit"; subscription: ListSubscription; manifest: ListProviderManifest | null };
+  | {
+      kind: "edit";
+      subscription: ListSubscription;
+      manifest: ListProviderManifest | null;
+    };
 
 type FollowListDialogProps = {
   target: FollowListTarget | null;
   routeOptions: ListRouteOptions;
   onClose: () => void;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
-  onPreviewSubscription: (id: string, draft?: ListSubscriptionDraft) => Promise<ListPreview | null>;
-  onSubscribe: (source: ListSourceDraft, draft: ListSubscriptionDraft) => Promise<boolean>;
+  onPreviewSubscription: (
+    id: string,
+    draft?: ListSubscriptionDraft,
+  ) => Promise<ListPreview | null>;
+  onSubscribe: (
+    source: ListSourceDraft,
+    draft: ListSubscriptionDraft,
+  ) => Promise<boolean>;
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
 };
 
 const ID = "follow-list";
 
-function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, user: AuthUser | null): ListSubscriptionDraft {
+function initialDraft(
+  target: FollowListTarget,
+  routeOptions: ListRouteOptions,
+  user: AuthUser | null,
+): ListSubscriptionDraft {
   if (target.kind === "edit") {
     const draft = subscriptionToDraft(target.subscription);
-    const item = target.manifest && findProviderItem([target.manifest], target.subscription.source.provider, target.subscription.source.sourceType)?.item;
-    draft.kinds = listKindsFromSourceParams(draft.kinds, item?.params ?? [], target.subscription.source.params, true);
+    const item =
+      target.manifest &&
+      findProviderItem(
+        [target.manifest],
+        target.subscription.source.provider,
+        target.subscription.source.sourceType,
+      )?.item;
+    draft.kinds = listKindsFromSourceParams(
+      draft.kinds,
+      item?.params ?? [],
+      target.subscription.source.params,
+      true,
+    );
     return draft;
   }
-  const draft = emptyListDraft(target.name, listKindsFromSourceParams(target.kinds, target.item?.params ?? [], target.source.params));
+  const draft = emptyListDraft(
+    target.name,
+    listKindsFromSourceParams(
+      target.kinds,
+      target.item?.params ?? [],
+      target.source.params,
+    ),
+  );
   if (target.source.credentialId) draft.mode = "REQUEST";
   draft.routes = target.kinds.map((kind) => {
-    const route = defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
-    const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
-    if (target.source.credentialId && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)) {
-      route.qualityProfileId = library?.requestQualityProfileDefaultId ?? library?.requestQualityProfileIds?.[0] ?? null;
+    const route = defaultListRoute(
+      kind,
+      routeOptions.libraries,
+      defaultMonitorTypeForFacet(kind),
+    );
+    const library = routeOptions.libraries.find(
+      (entry) => entry.id === route.libraryId,
+    );
+    if (
+      target.source.credentialId &&
+      !hasLibraryPermission(
+        user,
+        route.libraryId,
+        LIBRARY_PERMISSIONS.manageTitles,
+      )
+    ) {
+      route.qualityProfileId =
+        library?.requestQualityProfileDefaultId ??
+        library?.requestQualityProfileIds?.[0] ??
+        null;
       route.rootFolderId = null;
     }
     return route;
@@ -108,8 +163,17 @@ function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, 
 export function FollowListDialog(props: FollowListDialogProps) {
   const { target, onClose } = props;
   return (
-    <Dialog open={target !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
-      {target ? <FollowListDialogBody key={dialogKey(target)} {...props} target={target} /> : null}
+    <Dialog
+      open={target !== null}
+      onOpenChange={(open) => (!open ? onClose() : undefined)}
+    >
+      {target ? (
+        <FollowListDialogBody
+          key={dialogKey(target)}
+          {...props}
+          target={target}
+        />
+      ) : null}
     </Dialog>
   );
 }
@@ -131,32 +195,54 @@ function FollowListDialogBody({
 }: FollowListDialogProps & { target: FollowListTarget }) {
   const t = useTranslate();
   const user = useSessionUser();
-  const { definitions: tagDefinitions, loading: tagsLoading } = useTitleTagDefinitions();
-  const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions, user));
+  const { definitions: tagDefinitions, loading: tagsLoading } =
+    useTitleTagDefinitions();
+  const [draft, setDraft] = React.useState(() =>
+    initialDraft(target, routeOptions, user),
+  );
   const [source, setSource] = React.useState<ListSourceDraft | null>(
-    target.kind === "new" ? {
-      ...target.source,
-      params: [
-        ...target.source.params.filter((param) => !target.item?.params.some((definition) => definition.key === param.key && isListMediaParam(definition))),
-        ...(target.item?.params.filter(isListMediaParam).map((param) => ({ key: param.key, value: "__include__" })) ?? []),
-      ],
-    } : null,
+    target.kind === "new"
+      ? {
+          ...target.source,
+          params: [
+            ...target.source.params.filter(
+              (param) =>
+                !target.item?.params.some(
+                  (definition) =>
+                    definition.key === param.key &&
+                    isListMediaParam(definition),
+                ),
+            ),
+            ...(target.item?.params
+              .filter(isListMediaParam)
+              .map((param) => ({ key: param.key, value: "__include__" })) ??
+              []),
+          ],
+        }
+      : null,
   );
   const [preview, setPreview] = React.useState<ListPreview | null>(null);
-  const [previewDraftKey, setPreviewDraftKey] = React.useState<string | null>(null);
+  const [previewDraftKey, setPreviewDraftKey] = React.useState<string | null>(
+    null,
+  );
   const draftKey = JSON.stringify({ draft, source });
   const [previewing, setPreviewing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
   const manifest = target.manifest;
   const item = target.kind === "new" ? target.item : null;
-  const paramDefinitions = (item?.params ?? []).filter((param) => !isListMediaParam(param));
+  const paramDefinitions = (item?.params ?? []).filter(
+    (param) => !isListMediaParam(param),
+  );
   const sourceItem =
     target.kind === "new"
       ? target.item
       : manifest
-        ? (findProviderItem([manifest], manifest.providerType, target.subscription.source.sourceType)?.item ??
-          null)
+        ? (findProviderItem(
+            [manifest],
+            manifest.providerType,
+            target.subscription.source.sourceType,
+          )?.item ?? null)
         : null;
   const offeredKinds: readonly Facet[] = followListOfferedKinds({
     requestedKinds: target.kind === "new" ? target.kinds : null,
@@ -165,21 +251,51 @@ function FollowListDialogBody({
     savedKinds: target.kind === "edit" ? target.subscription.kinds : null,
   });
 
-  const missingParams = source ? missingSourceParams(paramDefinitions, source.params) : [];
-  const personal = target.kind === "new" ? !!target.source.credentialId : target.subscription.scope === "PERSONAL";
-  const canDirectAdd = draft.kinds.length > 0 && draft.kinds.every((kind) => hasLibraryPermission(user, draft.routes.find((route) => route.kind === kind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
-  const modes: readonly ListMode[] = personal ? canDirectAdd ? ["ADD", "REQUEST"] : ["REQUEST"] : PUBLIC_LIST_MODES;
+  const missingParams = source
+    ? missingSourceParams(paramDefinitions, source.params)
+    : [];
+  const personal =
+    target.kind === "new"
+      ? !!target.source.credentialId
+      : target.subscription.scope === "PERSONAL";
+  const canDirectAdd =
+    draft.kinds.length > 0 &&
+    draft.kinds.every((kind) =>
+      hasLibraryPermission(
+        user,
+        draft.routes.find((route) => route.kind === kind)?.libraryId,
+        LIBRARY_PERMISSIONS.manageTitles,
+      ),
+    );
+  const modes: readonly ListMode[] = personal
+    ? canDirectAdd
+      ? ["ADD", "REQUEST"]
+      : ["REQUEST"]
+    : PUBLIC_LIST_MODES;
   const problems = listDraftProblems(draft);
-  const canSave = !saving && problems.length === 0 && missingParams.length === 0 && modes.includes(draft.mode);
+  const canSave =
+    !saving &&
+    problems.length === 0 &&
+    missingParams.length === 0 &&
+    modes.includes(draft.mode);
 
   const toggleKind = (kind: Facet, checked: boolean) => {
     setDraft((current) => {
       const kinds = checked
-        ? LIST_KINDS.filter((entry) => entry === kind || current.kinds.includes(entry))
+        ? LIST_KINDS.filter(
+            (entry) => entry === kind || current.kinds.includes(entry),
+          )
         : current.kinds.filter((entry) => entry !== kind);
       const routes = current.routes.some((route) => route.kind === kind)
         ? current.routes
-        : [...current.routes, defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind))];
+        : [
+            ...current.routes,
+            defaultListRoute(
+              kind,
+              routeOptions.libraries,
+              defaultMonitorTypeForFacet(kind),
+            ),
+          ];
       return { ...current, kinds, routes };
     });
   };
@@ -187,9 +303,18 @@ function FollowListDialogBody({
   const runPreview = async () => {
     setPreviewing(true);
     try {
-      setPreview(target.kind === "edit"
-        ? await onPreviewSubscription(target.subscription.id, draft)
-        : source ? await onPreviewSource({ ...source, previewFilters: draft.filters, previewKinds: draft.kinds, previewMaxPerSync: draft.maxPerSync }) : null);
+      setPreview(
+        target.kind === "edit"
+          ? await onPreviewSubscription(target.subscription.id, draft)
+          : source
+            ? await onPreviewSource({
+                ...source,
+                previewFilters: draft.filters,
+                previewKinds: draft.kinds,
+                previewMaxPerSync: draft.maxPerSync,
+              })
+            : null,
+      );
       setPreviewDraftKey(draftKey);
     } finally {
       setPreviewing(false);
@@ -218,13 +343,18 @@ function FollowListDialogBody({
       : (item?.name ?? target.source.sourceType);
 
   return (
-    <DialogContent id={`${ID}-dialog`} className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
+    <DialogContent
+      id={`${ID}-dialog`}
+      className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-3xl"
+    >
       <DialogHeader className="border-b border-[var(--scry-border3)] p-5 sm:p-6">
         <div className="flex items-center gap-3">
           <ProviderTile provider={manifest} />
           <div className="min-w-0">
             <DialogTitle className="font-display text-[19px]">
-              {target.kind === "edit" ? t("lists.follow.editTitle") : t("lists.follow.title")}
+              {target.kind === "edit"
+                ? t("lists.follow.editTitle")
+                : t("lists.follow.title")}
             </DialogTitle>
             <DialogDescription className="truncate">
               {[manifest?.name, sourceLabel].filter(Boolean).join(" · ")}
@@ -238,10 +368,21 @@ function FollowListDialogBody({
           <LabeledFieldset label={t("lists.follow.sourceHeading")}>
             <div className="grid gap-3 sm:grid-cols-2">
               {paramDefinitions.map((definition) => {
-                const value = source.params.find((param) => param.key === definition.key)?.value ?? "";
+                const value =
+                  source.params.find((param) => param.key === definition.key)
+                    ?.value ?? "";
                 const onValue = (next: string) => {
                   setSource((current) =>
-                    current ? { ...current, params: setListParam(current.params, definition.key, next) } : current,
+                    current
+                      ? {
+                          ...current,
+                          params: setListParam(
+                            current.params,
+                            definition.key,
+                            next,
+                          ),
+                        }
+                      : current,
                   );
                   setPreview(null);
                 };
@@ -253,21 +394,34 @@ function FollowListDialogBody({
                     key={definition.key}
                     id={fieldId}
                     label={order ? t("lists.follow.order") : definition.label}
-                    description={order ? t("lists.follow.orderHint") : undefined}
-                    placeholder={order ? t("lists.follow.orderUnset") : undefined}
+                    description={
+                      order ? t("lists.follow.orderHint") : undefined
+                    }
+                    placeholder={
+                      order ? t("lists.follow.orderUnset") : undefined
+                    }
                     required={definition.required}
                     value={value}
                     options={definition.options.map((option) => ({
                       value: option,
-                      label: order && LIST_ORDER_LABEL_KEYS[option] ? t(LIST_ORDER_LABEL_KEYS[option]) : option,
+                      label:
+                        order && LIST_ORDER_LABEL_KEYS[option]
+                          ? t(LIST_ORDER_LABEL_KEYS[option])
+                          : option,
                     }))}
                     onValueChange={onValue}
                   />
                 ) : (
-                  <label key={definition.key} className="space-y-1.5" htmlFor={fieldId}>
+                  <label
+                    key={definition.key}
+                    className="space-y-1.5"
+                    htmlFor={fieldId}
+                  >
                     <span className="block text-sm font-medium text-[var(--scry-ink2)]">
                       {definition.label}
-                      {definition.required ? <span aria-hidden="true"> *</span> : null}
+                      {definition.required ? (
+                        <span aria-hidden="true"> *</span>
+                      ) : null}
                     </span>
                     <Input
                       id={fieldId}
@@ -283,11 +437,15 @@ function FollowListDialogBody({
         ) : null}
 
         <label className="block space-y-1.5" htmlFor={`${ID}-name`}>
-          <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.name")}</span>
+          <span className="block text-sm font-medium text-[var(--scry-ink2)]">
+            {t("lists.follow.name")}
+          </span>
           <Input
             id={`${ID}-name`}
             value={draft.name}
-            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, name: event.target.value }))
+            }
           />
         </label>
 
@@ -299,7 +457,9 @@ function FollowListDialogBody({
                 id={`${ID}-kind-${kind.toLowerCase()}`}
                 label={t(listKindLabelKey(kind))}
                 checked={draft.kinds.includes(kind)}
-                onCheckedChange={(checked) => toggleKind(kind, checked === true)}
+                onCheckedChange={(checked) =>
+                  toggleKind(kind, checked === true)
+                }
               />
             ))}
           </div>
@@ -308,7 +468,9 @@ function FollowListDialogBody({
         <LabeledFieldset label={t("lists.follow.modeHeading")}>
           <RadioGroup
             value={draft.mode}
-            onValueChange={(mode) => setDraft((current) => ({ ...current, mode: mode as ListMode }))}
+            onValueChange={(mode) =>
+              setDraft((current) => ({ ...current, mode: mode as ListMode }))
+            }
             className="grid gap-2 sm:grid-cols-2"
           >
             {modes.map((mode) => {
@@ -326,14 +488,20 @@ function FollowListDialogBody({
                     className="mt-0.5"
                   />
                   <span className={selectable ? undefined : "opacity-60"}>
-                    <span className="block font-medium text-[var(--scry-ink2)]">{t(listModeLabelKey(mode))}</span>
+                    <span className="block font-medium text-[var(--scry-ink2)]">
+                      {t(listModeLabelKey(mode))}
+                    </span>
                   </span>
                 </label>
               );
               return selectable ? (
                 option
               ) : (
-                <ActionTooltip key={mode} content={t("lists.mode.discoverUnavailable")} wrapperClassName="flex">
+                <ActionTooltip
+                  key={mode}
+                  content={t("lists.mode.discoverUnavailable")}
+                  wrapperClassName="flex"
+                >
                   {option}
                 </ActionTooltip>
               );
@@ -343,38 +511,108 @@ function FollowListDialogBody({
 
         {draft.kinds.length > 0 ? (
           // Each card's own header says what it routes, so the group needs no visible heading.
-          <section className="space-y-3" aria-label={t("lists.follow.routesHeading")}>
+          <section
+            className="space-y-3"
+            aria-label={t("lists.follow.routesHeading")}
+          >
             {draft.kinds.map((kind) => {
               const route =
                 draft.routes.find((entry) => entry.kind === kind) ??
-                defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
+                defaultListRoute(
+                  kind,
+                  routeOptions.libraries,
+                  defaultMonitorTypeForFacet(kind),
+                );
               return (
                 <ListRouteCard
                   filters={draft.filters}
-                  onFiltersChange={(filters) => setDraft((current) => ({ ...current, filters }))}
+                  onFiltersChange={(filters) =>
+                    setDraft((current) => ({ ...current, filters }))
+                  }
                   key={kind}
                   kind={kind}
                   route={route}
                   libraries={routeOptions.libraries}
-                  requestOnly={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)}
-                  qualityProfiles={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)
-                    ? routeOptions.qualityProfiles.filter((profile) => {
-                      const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
-                      return (library?.requestQualityProfileIds?.length ? library.requestQualityProfileIds : [library?.requestQualityProfileDefaultId]).includes(profile.id);
-                    })
-                    : routeOptions.qualityProfiles}
+                  requestOnly={
+                    personal &&
+                    !hasLibraryPermission(
+                      user,
+                      route.libraryId,
+                      LIBRARY_PERMISSIONS.manageTitles,
+                    )
+                  }
+                  qualityProfiles={
+                    personal &&
+                    !hasLibraryPermission(
+                      user,
+                      route.libraryId,
+                      LIBRARY_PERMISSIONS.manageTitles,
+                    )
+                      ? routeOptions.qualityProfiles.filter((profile) => {
+                          const library = routeOptions.libraries.find(
+                            (entry) => entry.id === route.libraryId,
+                          );
+                          return (
+                            library?.requestQualityProfileIds?.length
+                              ? library.requestQualityProfileIds
+                              : [library?.requestQualityProfileDefaultId]
+                          ).includes(profile.id);
+                        })
+                      : routeOptions.qualityProfiles
+                  }
                   tagDefinitions={tagDefinitions}
                   tagsLoading={tagsLoading}
                   idPrefix={ID}
-                  onChange={(next) => setDraft((current) => {
-                    const selectedLibrary = routeOptions.libraries.find((library) => library.id === next.libraryId);
-                    const managesLibrary = hasLibraryPermission(user, next.libraryId, LIBRARY_PERMISSIONS.manageTitles);
-                    const allowedProfiles = selectedLibrary?.requestQualityProfileIds?.length ? selectedLibrary.requestQualityProfileIds : [selectedLibrary?.requestQualityProfileDefaultId];
-                    const normalized = personal && !managesLibrary ? { ...next, rootFolderId: null, qualityProfileId: next.qualityProfileId && allowedProfiles.includes(next.qualityProfileId) ? next.qualityProfileId : selectedLibrary?.requestQualityProfileDefaultId ?? selectedLibrary?.requestQualityProfileIds?.[0] ?? null } : next;
-                    const routes = [...current.routes.filter((entry) => entry.kind !== kind), normalized];
-                    const direct = current.kinds.every((selectedKind) => hasLibraryPermission(user, routes.find((route) => route.kind === selectedKind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
-                    return { ...current, routes, mode: personal && !direct ? "REQUEST" : current.mode };
-                  })}
+                  onChange={(next) =>
+                    setDraft((current) => {
+                      const selectedLibrary = routeOptions.libraries.find(
+                        (library) => library.id === next.libraryId,
+                      );
+                      const managesLibrary = hasLibraryPermission(
+                        user,
+                        next.libraryId,
+                        LIBRARY_PERMISSIONS.manageTitles,
+                      );
+                      const allowedProfiles = selectedLibrary
+                        ?.requestQualityProfileIds?.length
+                        ? selectedLibrary.requestQualityProfileIds
+                        : [selectedLibrary?.requestQualityProfileDefaultId];
+                      const normalized =
+                        personal && !managesLibrary
+                          ? {
+                              ...next,
+                              rootFolderId: null,
+                              qualityProfileId:
+                                next.qualityProfileId &&
+                                allowedProfiles.includes(next.qualityProfileId)
+                                  ? next.qualityProfileId
+                                  : (selectedLibrary?.requestQualityProfileDefaultId ??
+                                    selectedLibrary
+                                      ?.requestQualityProfileIds?.[0] ??
+                                    null),
+                            }
+                          : next;
+                      const routes = [
+                        ...current.routes.filter(
+                          (entry) => entry.kind !== kind,
+                        ),
+                        normalized,
+                      ];
+                      const direct = current.kinds.every((selectedKind) =>
+                        hasLibraryPermission(
+                          user,
+                          routes.find((route) => route.kind === selectedKind)
+                            ?.libraryId,
+                          LIBRARY_PERMISSIONS.manageTitles,
+                        ),
+                      );
+                      return {
+                        ...current,
+                        routes,
+                        mode: personal && !direct ? "REQUEST" : current.mode,
+                      };
+                    })
+                  }
                 />
               );
             })}
@@ -385,22 +623,31 @@ function FollowListDialogBody({
           <ListFiltersFields
             filters={draft.filters}
             idPrefix={ID}
-            onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
+            onChange={(filters) =>
+              setDraft((current) => ({ ...current, filters }))
+            }
           />
         </LabeledFieldset>
 
         <LabeledFieldset label={t("lists.follow.syncHeading")}>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5" htmlFor={`${ID}-max-per-sync`}>
-              <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.follow.maxPerSync")}</span>
+              <span className="block text-sm font-medium text-[var(--scry-ink2)]">
+                {t("lists.follow.maxPerSync")}
+              </span>
               <Input
                 id={`${ID}-max-per-sync`}
                 {...integerInputProps}
                 placeholder={t("lists.follow.maxPerSyncPlaceholder")}
-                value={draft.maxPerSync === null ? "" : String(draft.maxPerSync)}
+                value={
+                  draft.maxPerSync === null ? "" : String(draft.maxPerSync)
+                }
                 onChange={(event) => {
                   const digits = sanitizeDigits(event.target.value);
-                  setDraft((current) => ({ ...current, maxPerSync: digits ? Number(digits) : null }));
+                  setDraft((current) => ({
+                    ...current,
+                    maxPerSync: digits ? Number(digits) : null,
+                  }));
                 }}
               />
             </label>
@@ -408,9 +655,21 @@ function FollowListDialogBody({
               id={`${ID}-on-leave`}
               label={t("lists.follow.onLeave")}
               value={draft.onLeave}
-              options={LIST_ON_LEAVE_OPTIONS.filter((value) => !personal || canDirectAdd || value === "KEEP" || value === "LOG").map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
+              options={LIST_ON_LEAVE_OPTIONS.filter(
+                (value) =>
+                  !personal ||
+                  canDirectAdd ||
+                  value === "KEEP" ||
+                  value === "LOG",
+              ).map((value) => ({
+                value,
+                label: t(listOnLeaveLabelKey(value)),
+              }))}
               onValueChange={(value) =>
-                setDraft((current) => ({ ...current, onLeave: value as ListSubscriptionDraft["onLeave"] }))
+                setDraft((current) => ({
+                  ...current,
+                  onLeave: value as ListSubscriptionDraft["onLeave"],
+                }))
               }
             />
           </div>
@@ -419,7 +678,9 @@ function FollowListDialogBody({
         {source || target.kind === "edit" ? (
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium">{t("lists.preview.heading")}</h3>
+              <h3 className="text-sm font-medium">
+                {t("lists.preview.heading")}
+              </h3>
               <Button
                 id={`${ID}-preview-button`}
                 type="button"
@@ -428,17 +689,36 @@ function FollowListDialogBody({
                 onClick={() => void runPreview()}
                 disabled={previewing || missingParams.length > 0}
               >
-                {previewing ? <LoadingMark className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {previewing ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
                 {t("lists.preview.run")}
               </Button>
             </div>
-            {preview && previewDraftKey === draftKey ? <ListPreviewSummary preview={preview} idPrefix={ID} providerType={target.kind === "new" ? target.source.provider : target.subscription.source.provider} /> : null}
+            {preview && previewDraftKey === draftKey ? (
+              <ListPreviewSummary
+                preview={preview}
+                idPrefix={ID}
+                providerType={
+                  target.kind === "new"
+                    ? target.source.provider
+                    : target.subscription.source.provider
+                }
+              />
+            ) : null}
           </section>
         ) : null}
 
         {problems.length > 0 || missingParams.length > 0 ? (
-          <ul id={`${ID}-problems`} className="space-y-1 text-[12.5px] text-[var(--scry-warning-text)]">
-            {missingParams.length > 0 ? <li>{t("lists.follow.problem.params")}</li> : null}
+          <ul
+            id={`${ID}-problems`}
+            className="space-y-1 text-[12.5px] text-[var(--scry-warning-text)]"
+          >
+            {missingParams.length > 0 ? (
+              <li>{t("lists.follow.problem.params")}</li>
+            ) : null}
             {problems.map((key) => (
               <li key={key}>{t(key)}</li>
             ))}
@@ -447,11 +727,26 @@ function FollowListDialogBody({
       </div>
 
       <DialogFooter className="border-t border-[var(--scry-border3)] p-5 sm:p-6">
-        <Button id={`${ID}-cancel`} type="button" variant="outline" onClick={onClose} disabled={saving}>
+        <Button
+          id={`${ID}-cancel`}
+          type="button"
+          variant="outline"
+          onClick={onClose}
+          disabled={saving}
+        >
           {t("label.cancel")}
         </Button>
-        <Button id={`${ID}-submit`} type="button" onClick={() => void save()} disabled={!canSave}>
-          {saving ? <LoadingMark className="h-4 w-4" /> : <ListPlus className="h-4 w-4" />}
+        <Button
+          id={`${ID}-submit`}
+          type="button"
+          onClick={() => void save()}
+          disabled={!canSave}
+        >
+          {saving ? (
+            <LoadingMark className="h-4 w-4" />
+          ) : (
+            <ListPlus className="h-4 w-4" />
+          )}
           {target.kind === "edit" ? t("label.save") : t("lists.follow.submit")}
         </Button>
       </DialogFooter>

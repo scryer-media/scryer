@@ -50,10 +50,13 @@ pub fn normalize_import_object_for_target(
 
     for column in columns {
         if !column.nullable && !column.has_default && !object.contains_key(&column.name) {
-            return Err(AppError::Validation(format!(
-                "backup row for {table}:{line_number} is missing required column `{}` for the current schema",
-                column.name
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_REQUIRED_COLUMN_MISSING,
+                format!(
+                    "backup row for {table}:{line_number} is missing required column `{}` for the current schema",
+                    column.name
+                ),
+            ));
         }
     }
 
@@ -85,9 +88,10 @@ fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>)
     }
     let payload = legacy_json_value(payload, "domain_events.payload_json")?;
     let encoded = encode_domain_event_payload(&payload).map_err(|error| {
-        AppError::Validation(format!(
-            "failed to encode restored domain event payload: {error}"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_RESTORED_EVENT_INVALID,
+            format!("failed to encode restored domain event payload: {error}"),
+        )
     })?;
     let event_type = object
         .get("event_type")
@@ -139,18 +143,21 @@ fn normalize_release_decision_import_object(
     let encoded = (|| -> AppResult<Vec<u8>> {
         let explanation = legacy_json_value(explanation, "release_decisions.explanation_json")?;
         let compact = serde_json::to_string(&explanation).map_err(|error| {
-            AppError::Validation(format!(
-                "failed to compact restored release explanation: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_RESTORED_EXPLANATION_COMPACTION_FAILED,
+                format!("failed to compact restored release explanation: {error}"),
+            )
         })?;
         encode_release_decision_explanation(Some(&compact))
             .map_err(|error| {
-                AppError::Validation(format!(
-                    "failed to encode restored release explanation: {error}"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_RESTORED_EXPLANATION_INVALID,
+                    format!("failed to encode restored release explanation: {error}"),
+                )
             })?
             .ok_or_else(|| {
-                AppError::Validation(
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_RESTORED_EXPLANATION_NULL,
                     "present restored release explanation encoded as null".to_string(),
                 )
             })
@@ -174,14 +181,18 @@ fn normalize_release_decision_import_object(
 fn legacy_json_value(value: JsonValue, field: &str) -> AppResult<JsonValue> {
     match value {
         JsonValue::String(value) => serde_json::from_str(&value).map_err(|error| {
-            AppError::Validation(format!("restored {field} is invalid JSON: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_RESTORED_JSON_INVALID,
+                format!("restored {field} is invalid JSON: {error}"),
+            )
         }),
         JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Bool(_) | JsonValue::Number(_) => {
             Ok(value)
         }
-        JsonValue::Null => Err(AppError::Validation(format!(
-            "restored {field} is unexpectedly null"
-        ))),
+        JsonValue::Null => Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_RESTORED_REQUIRED_VALUE_NULL,
+            format!("restored {field} is unexpectedly null"),
+        )),
     }
 }
 
@@ -231,10 +242,13 @@ fn normalize_column_value(
                 object.remove(&column.name);
                 return Ok(());
             }
-            return Err(AppError::Validation(format!(
-                "backup row for {table}:{line_number} contains a blank required timestamp column `{}`",
-                column.name
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_TIMESTAMP_BLANK,
+                format!(
+                    "backup row for {table}:{line_number} contains a blank required timestamp column `{}`",
+                    column.name
+                ),
+            ));
         }
     }
 
@@ -242,10 +256,13 @@ fn normalize_column_value(
         if !column.nullable && column.has_default {
             object.remove(&column.name);
         } else if !column.nullable {
-            return Err(AppError::Validation(format!(
-                "backup row for {table}:{line_number} contains null for required column `{}`",
-                column.name
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_REQUIRED_COLUMN_NULL,
+                format!(
+                    "backup row for {table}:{line_number} contains null for required column `{}`",
+                    column.name
+                ),
+            ));
         }
     }
 

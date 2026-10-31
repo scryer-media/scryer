@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { Subtitles } from "lucide-react";
@@ -169,8 +170,7 @@ function serializeProviderConfigValues(
     }
 
     if (field.fieldType === "BOOL") {
-      entries[field.key] =
-        nextValue.trim() || field.defaultValue || "false";
+      entries[field.key] = nextValue.trim() || field.defaultValue || "false";
       continue;
     }
 
@@ -196,7 +196,9 @@ type PendingSubtitleProviderEditorAction =
   | { type: "close" }
   | null;
 
-function cloneProviderDraft(draft: SubtitleProviderDraft): SubtitleProviderDraft {
+function cloneProviderDraft(
+  draft: SubtitleProviderDraft,
+): SubtitleProviderDraft {
   return {
     ...draft,
     enabledFacets: [...draft.enabledFacets],
@@ -216,28 +218,38 @@ export function SettingsSubtitlesContainer({
   const [saving, setSaving] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [plugins, setPlugins] = React.useState<RegistryPluginRecord[]>([]);
-  const [pluginsTarget, setPluginsTarget] = React.useState<HTMLElement | null>(null);
-  const [pluginsLoading, setPluginsLoading] = React.useState(true);
-  const [syncPluginInstallError, setSyncPluginInstallError] = React.useState<string | null>(
+  const [pluginsTarget, setPluginsTarget] = React.useState<HTMLElement | null>(
     null,
   );
+  const [pluginsLoading, setPluginsLoading] = React.useState(true);
+  const [syncPluginInstallError, setSyncPluginInstallError] = React.useState<
+    string | null
+  >(null);
   const [syncPluginProgress, setSyncPluginProgress] =
     React.useState<PluginInstallProgressRecord | null>(null);
   const [installingSyncPlugin, setInstallingSyncPlugin] = React.useState(false);
-  const [providerTypes, setProviderTypes] = React.useState<SubtitleProviderTypeInfo[]>([]);
-  const [providerConfigs, setProviderConfigs] = React.useState<SubtitleProviderConfigRecord[]>([]);
-  const [providerDraft, setProviderDraft] = React.useState<SubtitleProviderDraft>(
-    DEFAULT_PROVIDER_DRAFT,
-  );
-  const [editingProviderId, setEditingProviderId] = React.useState<string | null>(null);
-  const [mutatingProviderId, setMutatingProviderId] = React.useState<string | null>(null);
+  const [providerTypes, setProviderTypes] = React.useState<
+    SubtitleProviderTypeInfo[]
+  >([]);
+  const [providerConfigs, setProviderConfigs] = React.useState<
+    SubtitleProviderConfigRecord[]
+  >([]);
+  const [providerDraft, setProviderDraft] =
+    React.useState<SubtitleProviderDraft>(DEFAULT_PROVIDER_DRAFT);
+  const [editingProviderId, setEditingProviderId] = React.useState<
+    string | null
+  >(null);
+  const [mutatingProviderId, setMutatingProviderId] = React.useState<
+    string | null
+  >(null);
   const [pendingDeleteProvider, setPendingDeleteProvider] =
     React.useState<SubtitleProviderConfigRecord | null>(null);
   const [isTestingProviderConnection, setIsTestingProviderConnection] =
     React.useState(false);
   const [isProviderEditorOpen, setIsProviderEditorOpen] = React.useState(false);
-  const [providerEditorMode, setProviderEditorMode] =
-    React.useState<"create" | "edit">("create");
+  const [providerEditorMode, setProviderEditorMode] = React.useState<
+    "create" | "edit"
+  >("create");
   const [pendingProviderEditorAction, setPendingProviderEditorAction] =
     React.useState<PendingSubtitleProviderEditorAction>(null);
   const [providerDraftBaseline, setProviderDraftBaseline] =
@@ -302,7 +314,11 @@ export function SettingsSubtitlesContainer({
 
   const refreshProviderConfigs = React.useCallback(async () => {
     const { data, error } = await client
-      .query(subtitleProviderConfigsQuery, {}, { requestPolicy: "network-only" })
+      .query(
+        subtitleProviderConfigsQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
       .toPromise();
     if (error) {
       throw error;
@@ -339,8 +355,11 @@ export function SettingsSubtitlesContainer({
         if (cancelled) {
           return;
         }
-        const message =
-          error instanceof Error ? error.message : t("settings.sub.syncPluginLoadFailed");
+        const message = userFacingGraphQlErrorMessage(
+          error,
+          t("settings.sub.syncPluginLoadFailed"),
+          t,
+        );
         setPlugins([]);
         setSyncPluginInstallError(message);
       })
@@ -411,7 +430,11 @@ export function SettingsSubtitlesContainer({
     (async () => {
       try {
         const { data, error } = await client
-          .query(subtitleSettingsInitQuery, {}, { requestPolicy: "network-only" })
+          .query(
+            subtitleSettingsInitQuery,
+            {},
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
         if (error) {
           throw error;
@@ -431,7 +454,8 @@ export function SettingsSubtitlesContainer({
           (data?.subtitleProviderTypes ?? []) as SubtitleProviderTypeInfo[],
         );
         setProviderConfigs(
-          (data?.subtitleProviderConfigs ?? []) as SubtitleProviderConfigRecord[],
+          (data?.subtitleProviderConfigs ??
+            []) as SubtitleProviderConfigRecord[],
         );
         loadedRef.current = true;
       } catch {
@@ -455,8 +479,11 @@ export function SettingsSubtitlesContainer({
 
     providerCatalogVersionRef.current = providerCatalogVersion;
     void refreshProviderTypes().catch((error: unknown) => {
-      const message =
-        error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setGlobalStatus(message, { level: "ERROR" });
     });
   }, [providerCatalogVersion, refreshProviderTypes, setGlobalStatus, t]);
@@ -471,14 +498,17 @@ export function SettingsSubtitlesContainer({
     [plugins],
   );
   const syncPluginName = syncPlugin?.name ?? ENHANCED_SUBTITLE_SYNC_PLUGIN_NAME;
-  const syncPluginActive = syncPlugin?.isInstalled === true && syncPlugin.isEnabled;
+  const syncPluginActive =
+    syncPlugin?.isInstalled === true && syncPlugin.isEnabled;
   const syncPluginInstallBusy =
     installingSyncPlugin || syncPlugin?.installInProgress === true;
   const syncPluginBlockedReason =
     syncPlugin?.isInstalled === true && !syncPlugin.isEnabled
       ? t("settings.sub.syncPluginDisabled")
       : syncPlugin?.blockedReason
-        ? t("settings.sub.syncPluginBlocked", { reason: syncPlugin.blockedReason })
+        ? t("settings.sub.syncPluginBlocked", {
+            reason: syncPlugin.blockedReason,
+          })
         : null;
 
   const beginSyncPluginProgress = React.useCallback(
@@ -534,7 +564,11 @@ export function SettingsSubtitlesContainer({
                     setGlobalStatus(message, { level: "ERROR" });
                   }
                 } catch (error: unknown) {
-                  const detail = error instanceof Error ? error.message : String(error);
+                  const detail = userFacingGraphQlErrorMessage(
+                    error,
+                    String(error),
+                    t,
+                  );
                   const message = t("settings.sub.syncPluginInstallFailed", {
                     plugin: plugin.name,
                     error: detail,
@@ -560,7 +594,11 @@ export function SettingsSubtitlesContainer({
             stopSyncPluginProgressSubscription();
             setInstallingSyncPlugin(false);
             setSyncPluginProgress(null);
-            const detail = error instanceof Error ? error.message : String(error);
+            const detail = userFacingGraphQlErrorMessage(
+              error,
+              String(error),
+              t,
+            );
             const message = t("settings.sub.syncPluginInstallFailed", {
               plugin: plugin.name,
               error: detail,
@@ -616,21 +654,20 @@ export function SettingsSubtitlesContainer({
     setSyncPluginInstallError(null);
     setSyncPluginProgress(null);
     try {
-	      const { data, error } = await client
-	        .mutation(beginInstallPluginMutation, { pluginId: syncPlugin.id })
+      const { data, error } = await client
+        .mutation(beginInstallPluginMutation, { pluginId: syncPlugin.id })
         .toPromise();
       if (error) {
         throw error;
       }
       const snapshot = data?.beginInstallPlugin as
-        | PluginInstallProgressRecord
-        | undefined;
+        PluginInstallProgressRecord | undefined;
       if (!snapshot) {
         throw new Error("plugin install did not return progress");
       }
       beginSyncPluginProgress(syncPlugin, snapshot);
     } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = userFacingGraphQlErrorMessage(error, String(error), t);
       const message = t("settings.sub.syncPluginInstallFailed", {
         plugin: syncPluginName,
         error: detail,
@@ -649,10 +686,7 @@ export function SettingsSubtitlesContainer({
   ]);
 
   React.useEffect(() => {
-    if (
-      !loadedRef.current ||
-      settings === lastSubmittedSettingsRef.current
-    ) {
+    if (!loadedRef.current || settings === lastSubmittedSettingsRef.current) {
       return;
     }
 
@@ -682,13 +716,20 @@ export function SettingsSubtitlesContainer({
       .toPromise()
       .then(({ error }) => {
         if (error) {
-          const message = error.message || t("status.failedToUpdate");
+          const message = userFacingGraphQlErrorMessage(
+            error,
+            t("status.failedToUpdate"),
+            t,
+          );
           setGlobalStatus(message, { level: "ERROR" });
         }
       })
       .catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : t("status.failedToUpdate");
+        const message = userFacingGraphQlErrorMessage(
+          error,
+          t("status.failedToUpdate"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
       })
       .finally(() => setSaving(false));
@@ -715,8 +756,7 @@ export function SettingsSubtitlesContainer({
       }
 
       const validation = data?.testSubtitleProviderConnection as
-        | SubtitleProviderValidationResult
-        | undefined;
+        SubtitleProviderValidationResult | undefined;
       const success =
         validation?.status === "valid" || validation?.status === "ok";
       if (!success) {
@@ -727,8 +767,7 @@ export function SettingsSubtitlesContainer({
       }
 
       return (
-        validation?.message ||
-        t("status.subtitleProviderConnectionTestPassed")
+        validation?.message || t("status.subtitleProviderConnectionTestPassed")
       );
     },
     [client, editingProviderId, t],
@@ -738,10 +777,13 @@ export function SettingsSubtitlesContainer({
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
 
-      const normalizedProviderType = providerDraft.providerType.trim().toLowerCase();
+      const normalizedProviderType = providerDraft.providerType
+        .trim()
+        .toLowerCase();
       const selectedProvider =
         providerTypes.find(
-          (providerType) => providerType.providerType === normalizedProviderType,
+          (providerType) =>
+            providerType.providerType === normalizedProviderType,
         ) ?? null;
       const persistedConfigValues = sanitizePersistedConfigValues(
         normalizedProviderType,
@@ -774,7 +816,9 @@ export function SettingsSubtitlesContainer({
           setGlobalStatus,
           startMessage: t("status.testingSubtitleProviderConnection"),
           successMessage: t("status.subtitleProviderConnectionTestPassed"),
-          failureFallbackMessage: t("status.subtitleProviderConnectionTestFailed"),
+          failureFallbackMessage: t(
+            "status.subtitleProviderConnectionTestFailed",
+          ),
           t,
           announceSuccess: false,
           run: () => probeProviderConnection(payload.providerType, config),
@@ -796,7 +840,9 @@ export function SettingsSubtitlesContainer({
           if (error) {
             throw error;
           }
-          setGlobalStatus(t("settings.subtitleProviderUpdated"), { level: "SUCCESS" });
+          setGlobalStatus(t("settings.subtitleProviderUpdated"), {
+            level: "SUCCESS",
+          });
         } else {
           const { error } = await client
             .mutation(createSubtitleProviderConfigMutation, {
@@ -812,7 +858,9 @@ export function SettingsSubtitlesContainer({
           if (error) {
             throw error;
           }
-          setGlobalStatus(t("settings.subtitleProviderCreated"), { level: "SUCCESS" });
+          setGlobalStatus(t("settings.subtitleProviderCreated"), {
+            level: "SUCCESS",
+          });
         }
         resetProviderDraft();
         setIsProviderEditorOpen(false);
@@ -822,7 +870,7 @@ export function SettingsSubtitlesContainer({
       } catch (error) {
         if (!isReportedConnectionFeedbackError(error)) {
           setGlobalStatus(
-            error instanceof Error ? error.message : t("status.failedToUpdate"),
+            userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
             { level: "ERROR" },
           );
         }
@@ -869,7 +917,9 @@ export function SettingsSubtitlesContainer({
         storedSecretKeys: provider.storedSecretKeys ?? [],
         configDirty: false,
       });
-      setGlobalStatus(t("status.editingSubtitleProvider", { name: provider.name }));
+      setGlobalStatus(
+        t("status.editingSubtitleProvider", { name: provider.name }),
+      );
     },
     [providerTypes, setGlobalStatus, t],
   );
@@ -898,11 +948,7 @@ export function SettingsSubtitlesContainer({
     }
 
     setPendingProviderEditorAction({ type: "create" });
-  }, [
-    isProviderDraftDirty,
-    isProviderEditorOpen,
-    openCreateProviderEditor,
-  ]);
+  }, [isProviderDraftDirty, isProviderEditorOpen, openCreateProviderEditor]);
 
   const requestEditProvider = React.useCallback(
     (provider: SubtitleProviderConfigRecord) => {
@@ -972,11 +1018,13 @@ export function SettingsSubtitlesContainer({
         if (error) {
           throw error;
         }
-        setGlobalStatus(t("settings.subtitleProviderUpdated"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.subtitleProviderUpdated"), {
+          level: "SUCCESS",
+        });
         await refreshProviderConfigs();
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -1023,7 +1071,7 @@ export function SettingsSubtitlesContainer({
       }
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -1041,7 +1089,9 @@ export function SettingsSubtitlesContainer({
   ]);
 
   const testProviderConnection = React.useCallback(async () => {
-    const normalizedProviderType = providerDraft.providerType.trim().toLowerCase();
+    const normalizedProviderType = providerDraft.providerType
+      .trim()
+      .toLowerCase();
     const selectedProvider =
       providerTypes.find(
         (providerType) => providerType.providerType === normalizedProviderType,
@@ -1061,7 +1111,9 @@ export function SettingsSubtitlesContainer({
         setGlobalStatus,
         startMessage: t("status.testingSubtitleProviderConnection"),
         successMessage: t("status.subtitleProviderConnectionTestPassed"),
-        failureFallbackMessage: t("status.subtitleProviderConnectionTestFailed"),
+        failureFallbackMessage: t(
+          "status.subtitleProviderConnectionTestFailed",
+        ),
         t,
         run: () =>
           probeProviderConnection(
@@ -1078,7 +1130,13 @@ export function SettingsSubtitlesContainer({
     } finally {
       setIsTestingProviderConnection(false);
     }
-  }, [probeProviderConnection, providerDraft, providerTypes, setGlobalStatus, t]);
+  }, [
+    probeProviderConnection,
+    providerDraft,
+    providerTypes,
+    setGlobalStatus,
+    t,
+  ]);
 
   return (
     <>
@@ -1092,7 +1150,10 @@ export function SettingsSubtitlesContainer({
           )
         : null}
       <div className="space-y-4">
-        <section id="settings-subtitles-section" className={SUBTITLES_PANEL_CLASS}>
+        <section
+          id="settings-subtitles-section"
+          className={SUBTITLES_PANEL_CLASS}
+        >
           <div className={SUBTITLES_PANEL_HEADER_CLASS}>
             <button
               type="button"
@@ -1101,12 +1162,12 @@ export function SettingsSubtitlesContainer({
               aria-expanded={subtitlesExpanded}
             >
               <div className="min-w-0 flex-1 space-y-1">
-                <h2 className={`flex items-center gap-2 ${SUBTITLES_PANEL_TITLE_CLASS}`}>
+                <h2
+                  className={`flex items-center gap-2 ${SUBTITLES_PANEL_TITLE_CLASS}`}
+                >
                   <Subtitles className="h-4 w-4" />
                   {t("settings.subtitles")}
-                  {saving ? (
-                    <LoadingMark className="h-3.5 w-3.5" />
-                  ) : null}
+                  {saving ? <LoadingMark className="h-3.5 w-3.5" /> : null}
                 </h2>
                 <p className={`text-sm ${SUBTITLES_MUTED_TEXT_CLASS}`}>
                   {t("settings.subtitlesDescription")}

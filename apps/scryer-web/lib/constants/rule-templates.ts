@@ -60,14 +60,15 @@ score_entry["poorly_seeded"] := -300 if {
   {
     id: "block-exe-torrents",
     title: "No .exe torrents",
-    description: "Strongly penalize torrents whose title names an executable file extension",
+    description:
+      "Strongly penalize torrents whose title names an executable file extension",
     category: "Torrent",
     regoSource: `import rego.v1
 
 blocked_extensions := ["exe", "msi", "bat", "lnk"]
 
 score_entry["blocked_file_extension"] := scryer.block_score() if {
-    input.release.extra.protocol == "torrent"
+    input.release.protocol == "torrent"
     some part in split(lower(input.release.raw_title), ".")
     part in blocked_extensions
 }`,
@@ -88,7 +89,8 @@ score_entry["prefer_webdl"] := 100 if {
   {
     id: "prefer-hevc",
     title: "Prefer HEVC",
-    description: "Boost HEVC releases by 100 points and penalize x264 at 4K by 200",
+    description:
+      "Boost HEVC releases by 100 points and penalize x264 at 4K by 200",
     category: "Quality",
     regoSource: `import rego.v1
 
@@ -125,7 +127,8 @@ score_entry["too_large"] := scryer.block_score() if {
   {
     id: "prefer-atmos-audio",
     title: "Prefer Atmos audio",
-    description: "Add a small bonus for Atmos releases and a light penalty when Atmos is missing",
+    description:
+      "Add a small bonus for Atmos releases and a light penalty when Atmos is missing",
     category: "Audio",
     regoSource: `import rego.v1
 
@@ -142,7 +145,8 @@ score_entry["atmos_missing"] := -20 if {
   {
     id: "release-group-scores",
     title: "Prefer release groups",
-    description: "Boost releases from the groups you list; use a negative score to penalize them instead",
+    description:
+      "Boost releases from the groups you list; use a negative score to penalize them instead",
     category: "Groups",
     regoSource: `import rego.v1
 
@@ -174,7 +178,8 @@ score_entry["too_old"] := scryer.block_score() if {
   {
     id: "block-obfuscated-retagged",
     title: "Penalize obfuscated or retagged releases",
-    description: "Strongly penalize releases with normalized obfuscation or retagging signals",
+    description:
+      "Strongly penalize releases with normalized obfuscation or retagging signals",
     category: "Penalties",
     regoSource: `import rego.v1
 
@@ -189,7 +194,8 @@ score_entry["retagged_release"] := scryer.block_score() if {
   {
     id: "block-hardcoded-subs",
     title: "Penalize hardcoded subtitles",
-    description: "Strongly penalize releases with hardcoded (burned-in) subtitles",
+    description:
+      "Strongly penalize releases with hardcoded (burned-in) subtitles",
     category: "Penalties",
     regoSource: `import rego.v1
 

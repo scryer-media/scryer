@@ -6,9 +6,14 @@ import type { Release } from "@/lib/types";
 const MOVIE_AVAILABILITY_REASON_CODE_PATTERN = /: ([a-z_]+)(?: \(|$)/;
 const MOVIE_AVAILABILITY_DATE_PATTERN = /\((\d{4}-\d{2}-\d{2})\)/;
 
-type AvailabilityResult = Pick<Release, "autoDecisionCode" | "autoDecisionSummary">;
+type AvailabilityResult = Pick<
+  Release,
+  "autoDecisionCode" | "autoDecisionSummary"
+>;
 
-export function isMovieAvailabilityBlocked(result: AvailabilityResult): boolean {
+export function isMovieAvailabilityBlocked(
+  result: AvailabilityResult,
+): boolean {
   return result.autoDecisionCode === "movie_availability_blocked";
 }
 

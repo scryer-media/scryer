@@ -112,7 +112,7 @@ query Titles($ids: [Int!]!, $language: String!, $includeEpisodes: Boolean! = fal
       external_ratings { source value score normalized votes url }
       credits { kind person_id person_name person_original_name person_image_url person_source person_external_id character_name language billing_order episode_count }
       aliases
-      tagged_aliases { name language }
+      tagged_aliases { name language country }
       artworks { kind url }
       external_ids { source kind id key }
       seasons { tvdb_id tmdb_id number label episode_type }

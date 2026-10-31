@@ -154,6 +154,7 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
         let now = chrono::Utc::now();
         let config = configs
             .create(scryer_domain::IndexerConfig {
+                last_error_code: None,
                 id: format!("legacy-{provider_type}"),
                 name: provider_type.into(),
                 provider_type: provider_type.into(),

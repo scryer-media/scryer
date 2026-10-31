@@ -17,5 +17,7 @@ type SearchLanguagePickerProps = Omit<
 export const SearchLanguagePicker = React.memo(function SearchLanguagePicker(
   props: SearchLanguagePickerProps,
 ) {
-  return <SubtitleLanguagePicker {...props} languageOptions={SEARCH_LANGUAGES} />;
+  return (
+    <SubtitleLanguagePicker {...props} languageOptions={SEARCH_LANGUAGES} />
+  );
 });

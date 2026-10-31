@@ -13,27 +13,41 @@ export type TranslateFn = ReturnType<typeof useTranslate>;
 export type ActivityTab = Exclude<ActivitySection, "history">;
 
 export const queueStateClasses: Record<string, string> = {
-  queued: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  downloading: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  post_processing: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  paused: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  completed: "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
+  queued:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  downloading:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  post_processing:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  paused:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  completed:
+    "border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
   // Imported and still seeding is a healthy post-import state, so it stays in
   // the success family that `completed` uses; the stronger border is what makes
   // it legible as its own thing rather than a warning.
   imported_seeding:
     "border-[var(--scry-success-border-strong)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)]",
-  importing: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  removing: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  import_pending: "border-[rgba(var(--scry-accent-rgb),0.4)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)]",
-  import_blocked: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  import_failed: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
-  ignored: "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
-  remove_failed: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  importing:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  removing:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  import_pending:
+    "border-[rgba(var(--scry-accent-rgb),0.4)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)]",
+  import_blocked:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  import_failed:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  ignored:
+    "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]",
+  remove_failed:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
   // A recoverable client problem: loud enough to be noticed, not dressed as a
   // dead grab.
-  warning: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
-  failed: "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
+  warning:
+    "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  failed:
+    "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)]",
 };
 
 export const queueStateLabels: Record<string, string> = {
@@ -69,7 +83,10 @@ export function compareStrings(left: string, right: string): number {
   return left.localeCompare(right, undefined, { sensitivity: "base" });
 }
 
-export function activityStatusRank(tab: ActivityTab, displayState: string): number {
+export function activityStatusRank(
+  tab: ActivityTab,
+  displayState: string,
+): number {
   switch (tab) {
     case "import":
       switch (displayState.toLowerCase()) {
@@ -174,24 +191,26 @@ export function deriveQueueRowPresentation(
         : stateKey === "extracting"
           ? "queue.state.extracting"
           : "queue.state.postProcessing";
-  const statusLabel =
-    isWaitingForDiskSpace(queueItem)
-      ? t("queue.state.waitingForDiskSpace")
-      : displayStateKey === "IGNORED"
+  const statusLabel = isWaitingForDiskSpace(queueItem)
+    ? t("queue.state.waitingForDiskSpace")
+    : displayStateKey === "IGNORED"
       ? t("queue.state.ignored")
       : queueItem.importTransferPhase === "EXTRACTING"
         ? t("queue.transfer.extracting")
         : queueItem.importTransferPhase === "COPYING"
-        ? t("queue.transfer.copying")
-        : queueItem.importTransferPhase === "VERIFYING"
-          ? t("move.checkpointState.VERIFYING")
-        : queueItem.importTransferPhase === "WAITING"
-          ? t("move.checkpointState.PENDING")
-        : queueItem.importTransferPhase === "FINALIZING"
-          ? t("queue.transfer.finalizing")
-          : displayStateKey === "POST_PROCESSING"
-            ? t(postProcessingStatusKey)
-            : t(queueStateLabels[statusBadgeKey.toLowerCase()] ?? "queue.state.unknown");
+          ? t("queue.transfer.copying")
+          : queueItem.importTransferPhase === "VERIFYING"
+            ? t("move.checkpointState.VERIFYING")
+            : queueItem.importTransferPhase === "WAITING"
+              ? t("move.checkpointState.PENDING")
+              : queueItem.importTransferPhase === "FINALIZING"
+                ? t("queue.transfer.finalizing")
+                : displayStateKey === "POST_PROCESSING"
+                  ? t(postProcessingStatusKey)
+                  : t(
+                      queueStateLabels[statusBadgeKey.toLowerCase()] ??
+                        "queue.state.unknown",
+                    );
   const hasStatusDetails =
     (stateKey === "failed" ||
       stateKey === "warning" ||
@@ -265,11 +284,14 @@ export function canDeleteImportItem(queueItem: DownloadQueueItem): boolean {
   return displayStateKey !== "importing" && displayStateKey !== "removing";
 }
 
-export function parseByteCount(sizeBytes: number | string | null): number | null {
+export function parseByteCount(
+  sizeBytes: number | string | null,
+): number | null {
   if (sizeBytes === null || sizeBytes === "") {
     return null;
   }
-  const bytes = typeof sizeBytes === "number" ? sizeBytes : Number.parseFloat(sizeBytes);
+  const bytes =
+    typeof sizeBytes === "number" ? sizeBytes : Number.parseFloat(sizeBytes);
   if (!Number.isFinite(bytes) || bytes < 0) {
     return null;
   }
@@ -311,7 +333,9 @@ export function formatProgress(progressPercent: number): number {
   return Math.round(progressPercent);
 }
 
-export function effectiveQueueItemProgress(queueItem: DownloadQueueItem): number {
+export function effectiveQueueItemProgress(
+  queueItem: DownloadQueueItem,
+): number {
   const transferBytes = parseByteCount(queueItem.importTransferBytes);
   const transferTotalBytes = parseByteCount(queueItem.importTransferTotalBytes);
   if (
@@ -326,7 +350,9 @@ export function effectiveQueueItemProgress(queueItem: DownloadQueueItem): number
   return formatProgress(queueItem.progressPercent);
 }
 
-export function formatRemainingDuration(remainingSeconds: number | null): string | null {
+export function formatRemainingDuration(
+  remainingSeconds: number | null,
+): string | null {
   if (remainingSeconds === null || !Number.isFinite(remainingSeconds)) {
     return null;
   }

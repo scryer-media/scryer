@@ -133,7 +133,9 @@ async fn rejected_title_delete_does_not_record_an_inferred_folder() {
         assert!(
             matches!(
                 error,
-                AppError::Validation(_) | AppError::ValidationRefused { .. }
+                AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }
             ),
             "{error}"
         );
@@ -385,7 +387,12 @@ async fn nested_title_single_file_delete_refuses_sibling_path_and_keeps_row() {
         .app
         .preview_delete_media_file(&fixture.admin, &file_id)
         .await;
-    assert!(matches!(result, Err(AppError::Validation(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
+    ));
     assert_eq!(fixture.remaining_file_ids().await, vec![file_id]);
     assert_eq!(blake3::hash(&std::fs::read(path).unwrap()), before);
 }
@@ -592,14 +599,30 @@ async fn preview_delete_episode_files_rejects_an_empty_selection() {
         .preview_delete_episode_files(&fixture.admin, &fixture.title_id, &[])
         .await
         .expect_err("empty selection must be rejected");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
 
     let error = fixture
         .app
         .start_delete_episode_files_job(&fixture.admin, &fixture.title_id, &[], false, None)
         .await
         .expect_err("empty selection must be rejected before a run is created");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     assert!(fixture.deletion_runs().await.is_empty());
 }
 
@@ -626,7 +649,10 @@ async fn preview_delete_episode_files_requires_manage_titles() {
         .expect_err("viewer must not preview episode file deletes");
 
     assert!(
-        matches!(error, AppError::Unauthorized(_)),
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
         "expected Unauthorized, got {error:?}"
     );
 }
@@ -684,7 +710,7 @@ async fn delete_episode_files_requires_confirmation_for_disk_deletes() {
         .expect_err("disk delete without confirmation must be rejected");
 
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("confirmation")),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("confirmation")),
         "expected a confirmation validation error, got {error:?}"
     );
     assert!(
@@ -744,7 +770,7 @@ async fn delete_episode_files_rejects_a_busy_media_file_guard() {
         .expect_err("a busy media file must abort the whole batch");
 
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains(&busy)),
+        matches!(&error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains(&busy)),
         "expected a busy-file validation error, got {error:?}"
     );
     assert!(

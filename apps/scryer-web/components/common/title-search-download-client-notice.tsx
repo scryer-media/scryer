@@ -29,7 +29,12 @@ export function TitleSearchDownloadClientNotice({ className }: Props) {
               {t("title.searchNeedsDownloadClientDescription")}
             </p>
           </div>
-          <Button asChild size="sm" variant="outline" className="border-[var(--scry-warning-border)] bg-background/80">
+          <Button
+            asChild
+            size="sm"
+            variant="outline"
+            className="border-[var(--scry-warning-border)] bg-background/80"
+          >
             <Link to="/settings/download-clients">
               {t("title.searchNeedsDownloadClientAction")}
             </Link>

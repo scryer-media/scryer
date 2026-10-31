@@ -208,7 +208,12 @@ impl AppUseCase {
             .integrations
             .plugin_provider
             .available()
-            .ok_or_else(|| AppError::Validation("indexer provider is unavailable".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::INDEXER_PROVIDER_UNAVAILABLE,
+                    "indexer provider is unavailable",
+                )
+            })?;
         let cache_key = CacheKey {
             provider_type: provider_type.to_string(),
             plugin_version: provider.plugin_version_for_provider(provider_type),
@@ -247,6 +252,7 @@ impl AppUseCase {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: Some(config_json),
@@ -320,7 +326,10 @@ fn trigger_values_from_map(
 }
 
 fn invalid(message: impl std::fmt::Display) -> AppError {
-    AppError::Validation(format!("plugin returned invalid config fields: {message}"))
+    AppError::validation_refused(
+        crate::error_reasons::integration::PLUGIN_RETURNED_INVALID_CONFIG_FIELDS,
+        format!("plugin returned invalid config fields: {message}"),
+    )
 }
 
 /// Hold a plugin's answer to the rules static fields obey, plus the ones that

@@ -121,7 +121,8 @@ impl IndexerArtifactResolver for AcquisitionIndexerArtifactResolver {
     ) -> AppResult<PreparedIndexerArtifact> {
         let source = request.source_url.trim();
         if source.is_empty() {
-            return Err(scryer_application::AppError::Validation(
+            return Err(scryer_application::AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_ARTIFACT_SOURCE_REQUIRED,
                 "an indexer artifact source is required".to_string(),
             ));
         }

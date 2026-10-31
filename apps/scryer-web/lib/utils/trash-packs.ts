@@ -49,9 +49,7 @@ export function conflictingFrenchPack(
   return (
     records.find(
       (record) =>
-        record.id !== target.id &&
-        record.enabled &&
-        isFrenchLocalePack(record),
+        record.id !== target.id && record.enabled && isFrenchLocalePack(record),
     ) ?? null
   );
 }

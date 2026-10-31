@@ -43,7 +43,10 @@ impl DirectNabConfig {
             .map(serde_json::from_str::<Value>)
             .transpose()
             .map_err(|error| {
-                AppError::Validation(format!("indexer config_json is invalid: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_INDEXER_CONFIG_JSON_INVALID,
+                    format!("indexer config_json is invalid: {error}"),
+                )
             })?
             .unwrap_or(Value::Null);
 
@@ -59,8 +62,9 @@ impl DirectNabConfig {
             .map(|parts| parts.base_url.clone())
             .unwrap_or_else(|| raw_base_url.trim_end_matches('/').to_string());
         if base_url.is_empty() {
-            return Err(AppError::Validation(
-                "indexer caps refresh requires a base_url".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_CAPS_BASE_URL_REQUIRED,
+                "indexer caps refresh requires a base_url",
             ));
         }
 
@@ -107,7 +111,10 @@ impl DirectNabConfig {
         };
         let endpoint = format!("{}{}", self.base_url.trim_end_matches('/'), normalized_path);
         let mut url = reqwest::Url::parse(&endpoint).map_err(|error| {
-            AppError::Validation(format!("indexer caps base_url is invalid: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_CAPS_BASE_URL_INVALID,
+                format!("indexer caps base_url is invalid: {error}"),
+            )
         })?;
         {
             let mut pairs = url.query_pairs_mut();
@@ -250,10 +257,13 @@ fn caps_request_client(
     direct: &reqwest::Client,
 ) -> AppResult<reqwest::Client> {
     if config.proxy_config_id.as_deref() != proxy.map(|proxy| proxy.id.as_str()) {
-        return Err(AppError::Validation(format!(
-            "caps refresh for indexer {} was not given its assigned proxy; refusing to send it directly",
-            config.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_INDEXER_CAPS_PROXY_REQUIRED,
+            format!(
+                "caps refresh for indexer {} was not given its assigned proxy; refusing to send it directly",
+                config.name
+            ),
+        ));
     }
     scryer_application::transport_proxy::indexer_host_request_client(proxy, || direct.clone())
         .map_err(AppError::Repository)
@@ -295,6 +305,8 @@ pub struct DirectNabCapsSnapshotRefresher {
     outbound_http: OutboundHttpClient,
     upstream_scheduler: Arc<dyn UpstreamScheduler>,
     indexer_stats: Arc<dyn scryer_application::IndexerStatsTracker>,
+    indexer_configs: Option<Arc<dyn scryer_application::IndexerConfigRepository>>,
+    indexer_errors: Arc<dyn scryer_application::IndexerErrorRepository>,
 }
 
 impl DirectNabCapsSnapshotRefresher {
@@ -306,11 +318,23 @@ impl DirectNabCapsSnapshotRefresher {
             ),
             upstream_scheduler: Arc::new(NullUpstreamScheduler),
             indexer_stats: Arc::new(scryer_application::NullIndexerStatsTracker),
+            indexer_configs: None,
+            indexer_errors: Arc::new(scryer_application::NullIndexerErrorRepository),
         }
     }
 
     pub fn with_upstream_scheduler(mut self, scheduler: Arc<dyn UpstreamScheduler>) -> Self {
         self.upstream_scheduler = scheduler;
+        self
+    }
+
+    pub fn with_managed_indexers(
+        mut self,
+        configs: Arc<dyn scryer_application::IndexerConfigRepository>,
+        errors: Arc<dyn scryer_application::IndexerErrorRepository>,
+    ) -> Self {
+        self.indexer_configs = Some(configs);
+        self.indexer_errors = errors;
         self
     }
 
@@ -350,15 +374,60 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         proxy: Option<&ProxyConfig>,
         accounting: Option<&scryer_application::IndexerAccountingContext>,
     ) -> AppResult<Option<IndexerCapsSnapshot>> {
-        if !config.is_direct_nab() {
+        self.fetch_for_config_with_intent(config, proxy, accounting, SchedulerIntent::Maintenance)
+            .await
+    }
+
+    async fn fetch_for_config_with_intent(
+        &self,
+        config: &IndexerConfig,
+        proxy: Option<&ProxyConfig>,
+        accounting: Option<&scryer_application::IndexerAccountingContext>,
+        intent: SchedulerIntent,
+    ) -> AppResult<Option<IndexerCapsSnapshot>> {
+        if !config.is_direct_nab() && !config.is_prowlarr_nab_proxy() {
             return Ok(None);
         }
+
+        let parent = if config.is_prowlarr_nab_proxy() {
+            let Some(configs) = self.indexer_configs.as_ref() else {
+                return Ok(None);
+            };
+            let Some(parent_id) = config.managed_parent_config_id.as_deref() else {
+                return Ok(None);
+            };
+            let Some(parent) = configs.get_by_id(parent_id).await? else {
+                return Ok(None);
+            };
+            let now = Utc::now();
+            if !parent.is_enabled
+                || parent.provider_type != "prowlarr"
+                || parent.disabled_until.is_some_and(|until| until > now)
+                || configs
+                    .list_system_backoffs()
+                    .await?
+                    .get(parent_id)
+                    .is_some_and(|backoff| backoff.disabled_until > now)
+            {
+                return Ok(None);
+            }
+            Some(parent)
+        } else {
+            None
+        };
 
         let direct_config = DirectNabConfig::from_indexer_config(config)?;
         // Settled before the scheduler is asked, so a caps fetch that cannot
         // take the indexer's route neither sends nor spends an admission.
         let request_client = caps_request_client(config, proxy, self.outbound_http.client())?;
-        let (host_key, destination_key) = scheduler_keys_for_caps(&direct_config.base_url, config);
+        let (host_key, destination_key) = scheduler_keys_for_caps(
+            parent
+                .as_ref()
+                .map_or(direct_config.base_url.as_str(), |parent| {
+                    parent.base_url.as_str()
+                }),
+            config,
+        );
         let candidate_id = SchedulerCandidateId::new();
         let scheduler_decision = self
             .upstream_scheduler
@@ -370,7 +439,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                     plugin_config_id: Some(config.id.clone()),
                     plugin_kind: SchedulerPluginKind::Maintenance,
                     operation: SchedulerOperation::CapsRefresh,
-                    intent: SchedulerIntent::Maintenance,
+                    intent,
                     host_key: host_key.clone(),
                     destination_key: destination_key.clone(),
                     account_quota_key: Some(config.id.clone().into()),
@@ -409,6 +478,46 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
             }
             None => return Ok(None),
         };
+        if let Some(parent) = parent {
+            let response = super::providers::prowlarr::ProwlarrManagementClient::new_with_indexer_error_repository_and_stats(
+                &parent, self.indexer_errors.clone(), self.indexer_stats.clone(),
+            ).refresh_configured_child_caps(config, request_client, accounting).await;
+            let (outcome, retry_after, cooldown_action) = match &response {
+                Ok(_) => (
+                    SchedulerFeedbackOutcome::Success,
+                    None,
+                    RateLimitCooldownAction::None,
+                ),
+                Err(error) => match error {
+                    AppError::TemporaryUnavailable {
+                        retry_after,
+                        rate_limit_cooldown,
+                        ..
+                    } => (
+                        SchedulerFeedbackOutcome::RateLimited,
+                        *retry_after,
+                        *rate_limit_cooldown,
+                    ),
+                    _ => (
+                        SchedulerFeedbackOutcome::TransportFailure,
+                        None,
+                        RateLimitCooldownAction::None,
+                    ),
+                },
+            };
+            record_caps_scheduler_feedback(
+                self.upstream_scheduler.as_ref(),
+                scheduler_lease,
+                host_key,
+                destination_key,
+                Some(config.id.clone().into()),
+                outcome,
+                retry_after,
+                cooldown_action,
+            )
+            .await;
+            return response.map(Some);
+        }
         let url = direct_config.caps_url()?;
         let tally = scryer_application::IndexerRequestTally::new(
             accounting
@@ -616,7 +725,10 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
     let mut saw_declaration = false;
     let mut saw_doctype = false;
     let mut buf = Vec::new();
-    let mut snapshot = IndexerCapsSnapshot::default();
+    let mut snapshot = IndexerCapsSnapshot {
+        parser_version: scryer_domain::INDEXER_CAPS_PARSER_VERSION,
+        ..Default::default()
+    };
     let mut categories = BTreeMap::<String, IndexerCategoryDescriptor>::new();
 
     loop {
@@ -640,6 +752,7 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
                 }
                 match element.name().as_ref() {
                     "error" => return Err(parse_caps_newznab_error(&element)?),
+                    "searching" => snapshot.searching_present = true,
                     "server" => {
                         snapshot.server_title = attr_value(&element, "title")?;
                     }
@@ -780,9 +893,9 @@ fn parse_caps_newznab_error(element: &BytesStart<'_>) -> AppResult<AppError> {
 fn parse_caps_node(element: &BytesStart<'_>) -> AppResult<IndexerCapsSearchNode> {
     Ok(IndexerCapsSearchNode {
         available: attr_value(element, "available")?
-            .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
+            .is_none_or(|value| value.eq_ignore_ascii_case("yes")),
         supported_params: attr_value(element, "supportedParams")?
-            .unwrap_or_default()
+            .unwrap_or_else(|| "q".to_string())
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1000,6 +1113,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_caps_preserves_absent_searching_and_defaults_listed_modes() {
+        let absent = parse_caps_snapshot_xml(b"<caps/>").unwrap();
+        assert_eq!(
+            absent.parser_version,
+            scryer_domain::INDEXER_CAPS_PARSER_VERSION
+        );
+        assert!(!absent.searching_present);
+        let empty = parse_caps_snapshot_xml(b"<caps><searching/></caps>").unwrap();
+        assert!(empty.searching_present);
+        assert!(empty.search.is_none());
+        let listed = parse_caps_snapshot_xml(
+            b"<caps><searching><search/><movie-search available=\"no\" supportedParams=\"\"/></searching></caps>",
+        ).unwrap();
+        let search = listed.search.unwrap();
+        assert!(search.available);
+        assert_eq!(search.supported_params, vec!["q"]);
+        let movie = listed.movie_search.unwrap();
+        assert!(!movie.available);
+        assert!(movie.supported_params.is_empty());
+    }
+
+    #[test]
     fn parse_caps_snapshot_xml_lowercases_supported_params_and_respects_availability() {
         let xml = br#"
             <caps>
@@ -1019,6 +1154,7 @@ mod tests {
     #[test]
     fn direct_nab_config_canonicalizes_query_bearing_connection_urls_for_caps() {
         let config = IndexerConfig {
+            last_error_code: None,
             id: "cfg-1".to_string(),
             name: "NZBGeek".to_string(),
             provider_type: "nzbgeek".to_string(),
@@ -1070,6 +1206,7 @@ mod tests {
     #[tokio::test]
     async fn direct_nab_caps_refresher_ignores_prowlarr_proxy_configs() {
         let config = IndexerConfig {
+            last_error_code: None,
             id: "proxy-1".to_string(),
             name: "Prowlarr Proxy".to_string(),
             provider_type: "newznab".to_string(),
@@ -1114,9 +1251,100 @@ mod tests {
 
     const PROXIED_CAPS_XML: &str = r#"<caps><server title="Through The Proxy" /><searching><search available="yes" supportedParams="q" /></searching></caps>"#;
 
+    struct ManagedParentRepository(IndexerConfig);
+
+    #[async_trait]
+    impl scryer_application::IndexerConfigRepository for ManagedParentRepository {
+        async fn list(&self, _: Option<String>) -> AppResult<Vec<IndexerConfig>> {
+            Ok(vec![self.0.clone()])
+        }
+        async fn get_by_id(&self, id: &str) -> AppResult<Option<IndexerConfig>> {
+            Ok((self.0.id == id).then(|| self.0.clone()))
+        }
+        async fn create(&self, _: IndexerConfig) -> AppResult<IndexerConfig> {
+            unreachable!()
+        }
+        async fn touch_last_error(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _: scryer_application::IndexerConfigUpdate,
+        ) -> AppResult<IndexerConfig> {
+            unreachable!()
+        }
+        async fn delete(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_caps_refreshes_only_the_selected_child_with_current_parent_credentials() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/7/api"))
+            .and(wiremock::matchers::query_param("t", "caps"))
+            .and(wiremock::matchers::query_param("apikey", "parent-key"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(PROXIED_CAPS_XML))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut parent = direct_newznab_config(&server.uri(), None);
+        parent.id = "parent".into();
+        parent.provider_type = "prowlarr".into();
+        parent.config_json = Some(
+            serde_json::json!({ "base_url": server.uri(), "api_key": "parent-key" }).to_string(),
+        );
+        let mut child = direct_newznab_config(&format!("{}/7", server.uri()), None);
+        child.managed_parent_config_id = Some(parent.id.clone());
+        child.managed_child_key = Some("7".into());
+        child.caps_snapshot_json = Some(
+            serde_json::json!({ "categories": {
+                "categories": [{ "value": "100001", "value_kind": "numeric", "label": "Custom" }]
+            }})
+            .to_string(),
+        );
+        let mut unavailable = parent.clone();
+        unavailable.is_enabled = false;
+        let refresher = DirectNabCapsSnapshotRefresher::new().with_managed_indexers(
+            Arc::new(ManagedParentRepository(unavailable)),
+            Arc::new(scryer_application::NullIndexerErrorRepository),
+        );
+        assert!(
+            refresher
+                .fetch_for_config(&child, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        let refresher = DirectNabCapsSnapshotRefresher::new().with_managed_indexers(
+            Arc::new(ManagedParentRepository(parent)),
+            Arc::new(scryer_application::NullIndexerErrorRepository),
+        );
+        let snapshot = refresher
+            .fetch_for_config_with_intent(&child, None, None, SchedulerIntent::InteractiveSearch)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.searching_present);
+        assert_eq!(snapshot.categories.categories[0].value, "100001");
+        assert_eq!(
+            snapshot.parser_version,
+            scryer_domain::INDEXER_CAPS_PARSER_VERSION
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "a child refresh must not perform parent sync or discovery"
+        );
+    }
+
     /// A direct Newznab indexer pointed at `origin`, assigned `proxy_config_id`.
     fn direct_newznab_config(origin: &str, proxy_config_id: Option<&str>) -> IndexerConfig {
         IndexerConfig {
+            last_error_code: None,
             id: "cfg-proxied-caps".to_string(),
             name: "Proxied Newznab".to_string(),
             provider_type: "newznab".to_string(),

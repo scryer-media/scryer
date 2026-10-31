@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import en from "../i18n/locales/en.ts";
-import type { TitleTagDefinition, TitleTagRewriteCounts } from "../types/title-tags.ts";
+import type {
+  TitleTagDefinition,
+  TitleTagRewriteCounts,
+} from "../types/title-tags.ts";
 import {
   availableTitleTagLabels,
   buildBulkTitleTagsDelta,
@@ -34,7 +37,9 @@ function definition(
   };
 }
 
-function counts(overrides: Partial<TitleTagRewriteCounts>): TitleTagRewriteCounts {
+function counts(
+  overrides: Partial<TitleTagRewriteCounts>,
+): TitleTagRewriteCounts {
   return { ...EMPTY_TITLE_TAG_REWRITE_COUNTS, ...overrides };
 }
 
@@ -109,12 +114,19 @@ test("picker delta adds everything when a title starts bare", () => {
 });
 
 test("available labels exclude what the title already carries", () => {
-  const registry = [definition("keep"), definition("archive"), definition("Needs Review")];
+  const registry = [
+    definition("keep"),
+    definition("archive"),
+    definition("Needs Review"),
+  ];
   assert.deepEqual(availableTitleTagLabels(registry, ["keep"]), [
     "archive",
     "needs review",
   ]);
-  assert.deepEqual(availableTitleTagLabels(registry, ["keep", "archive", "needs review"]), []);
+  assert.deepEqual(
+    availableTitleTagLabels(registry, ["keep", "archive", "needs review"]),
+    [],
+  );
   assert.deepEqual(availableTitleTagLabels([], ["keep"]), []);
 });
 
@@ -142,13 +154,19 @@ test("bulk change builder lets removal win a contradictory label", () => {
 });
 
 test("bulk change builder drops reserved entries outright", () => {
-  const draft = { add: ["scryer:monitor-type:all"], remove: ["scryer:filler-policy:skip"] };
+  const draft = {
+    add: ["scryer:monitor-type:all"],
+    remove: ["scryer:filler-policy:skip"],
+  };
   assert.deepEqual(buildBulkTitleTagsDelta(draft), { add: [], remove: [] });
   assert.equal(hasBulkTitleTagsChanges(draft), false);
 });
 
 test("rename warning is null when nothing was left behind", () => {
-  assert.equal(titleTagRenameWarning(counts({ titles: 12, delayProfiles: 2 })), null);
+  assert.equal(
+    titleTagRenameWarning(counts({ titles: 12, delayProfiles: 2 })),
+    null,
+  );
   assert.equal(
     formatTitleTagRenameWarning(
       counts({ titles: 12, delayProfiles: 2 }),
@@ -161,7 +179,11 @@ test("rename warning is null when nothing was left behind", () => {
 
 test("rename warning totals every rule reference the rename could not rewrite", () => {
   const warning = titleTagRenameWarning(
-    counts({ maintenanceRuleSets: 2, releaseRuleSets: 1, managedTagFilters: 3 }),
+    counts({
+      maintenanceRuleSets: 2,
+      releaseRuleSets: 1,
+      managedTagFilters: 3,
+    }),
   );
   assert.deepEqual(warning, {
     total: 6,
@@ -175,7 +197,11 @@ test("rename warning totals every rule reference the rename could not rewrite", 
 
 test("rename warning lists only the non-zero reference kinds, in a fixed order", () => {
   const warning = titleTagRenameWarning(
-    counts({ maintenanceRuleSets: 0, releaseRuleSets: 4, managedTagFilters: 1 }),
+    counts({
+      maintenanceRuleSets: 0,
+      releaseRuleSets: 4,
+      managedTagFilters: 1,
+    }),
   );
   assert.deepEqual(warning, {
     total: 5,
@@ -232,6 +258,12 @@ test("label validation names the reason a label cannot be defined", () => {
     titleTagLabelErrorKey("scryer:quality-profile:hd"),
     "settings.titleTagLabelReserved",
   );
-  assert.equal(titleTagLabelErrorKey("x".repeat(65)), "settings.titleTagLabelTooLong");
-  assert.equal(titleTagLabelErrorKey("bad\u0007label"), "settings.titleTagLabelInvalid");
+  assert.equal(
+    titleTagLabelErrorKey("x".repeat(65)),
+    "settings.titleTagLabelTooLong",
+  );
+  assert.equal(
+    titleTagLabelErrorKey("bad\u0007label"),
+    "settings.titleTagLabelInvalid",
+  );
 });

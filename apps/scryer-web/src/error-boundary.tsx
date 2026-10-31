@@ -7,7 +7,11 @@ import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
 const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
 const VITE_IMPORT_RECOVERY_DELAY_MS = 500;
 
-function errorInfo(error: unknown): { status: number | null; title: string; detail: string } {
+function errorInfo(error: unknown): {
+  status: number | null;
+  title: string;
+  detail: string;
+} {
   if (isRouteErrorResponse(error)) {
     if (error.status === 404) {
       return {
@@ -67,7 +71,9 @@ export function RouteErrorBoundary() {
 
         {/* Status code */}
         {status !== null && (
-          <p className="mb-3 text-6xl font-bold tracking-tight text-[#8b96b9]">{status}</p>
+          <p className="mb-3 text-6xl font-bold tracking-tight text-[#8b96b9]">
+            {status}
+          </p>
         )}
 
         {/* Icon + Title */}
@@ -77,7 +83,9 @@ export function RouteErrorBoundary() {
         </div>
 
         {/* Detail */}
-        <p className="mb-6 max-w-sm text-sm leading-relaxed text-[#8b96b9] [overflow-wrap:anywhere]">{detail}</p>
+        <p className="mb-6 max-w-sm text-sm leading-relaxed text-[#8b96b9] [overflow-wrap:anywhere]">
+          {detail}
+        </p>
 
         {/* Error message (collapsible for long stack traces) */}
         {error instanceof Error && error.stack && (

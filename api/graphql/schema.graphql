@@ -1002,6 +1002,18 @@ Effective authentication runtime flags after configuration and environment overr
 """
 type AuthRuntimeStatePayload {
 	"""
+	Initial authentication stage; null means this predates mandatory setup.
+	"""
+	initialAuthenticationStage: String
+	"""
+	Whether the pending initial choice requires the operator's console code.
+	"""
+	initialAuthenticationCodeRequired: Boolean!
+	"""
+	Minimum length for the administrator's new password.
+	"""
+	passwordMinLength: Int!
+	"""
 	Effective form-login state.
 	"""
 	effectiveFormLoginEnabled: Boolean!
@@ -1915,6 +1927,28 @@ enum CollectionTypeValue {
 	A specials grouping.
 	"""
 	SPECIALS
+}
+
+"""
+The operator's explicit first-run authentication decision.
+"""
+input CompleteInitialAuthenticationInput {
+	"""
+	Authentication mode explicitly selected by the operator.
+	"""
+	mode: InitialAuthenticationMode!
+	"""
+	Administrator password; required only when selecting password authentication.
+	"""
+	password: String
+	"""
+	Explicit acknowledgement that disabling authentication permits unauthenticated access.
+	"""
+	acknowledgeNoAuthentication: Boolean!
+	"""
+	One-time setup code authorizing the initial authentication decision.
+	"""
+	setupCode: String
 }
 
 """
@@ -4778,6 +4812,10 @@ enum DomainEventTypeValue {
 	"""
 	DOWNLOAD_IGNORED
 	"""
+	A successful client listing omitted an accepted download.
+	"""
+	DOWNLOAD_MISSING
+	"""
 	A release was blocklisted.
 	"""
 	RELEASE_BLOCKLISTED
@@ -5630,6 +5668,10 @@ type DownloadQueueItemPayload {
 	Reason for the attention flag, or null when no attention is required.
 	"""
 	attentionReason: String
+	"""
+	Stable condition explaining why attention is needed.
+	"""
+	attentionReasonCode: String
 	"""
 	Stable password-related download failure classification; never contains credentials.
 	"""
@@ -7980,6 +8022,10 @@ enum ImportErrorCodeValue {
 	"""
 	PERMISSION_DENIED
 	"""
+	Scene subtitles are still being prepared.
+	"""
+	SCENE_SUBTITLE_PENDING
+	"""
 	Storage is full.
 	"""
 	DISK_FULL
@@ -8148,6 +8194,18 @@ enum ImportSkipReasonValue {
 	"""
 	DOWNLOAD_IN_PROGRESS
 	"""
+	The source changed after it was inspected.
+	"""
+	SOURCE_CHANGED
+	"""
+	The source snapshot is temporarily unavailable.
+	"""
+	SOURCE_UNAVAILABLE
+	"""
+	Scene subtitles are still being prepared.
+	"""
+	SCENE_SUBTITLE_PENDING
+	"""
 	Storage is full.
 	"""
 	DISK_FULL
@@ -8298,6 +8356,186 @@ type IndexerCapsCategoryPayload {
 	Human-readable name from the caps document, or null when it has none.
 	"""
 	label: String
+}
+
+"""
+How Scryer obtained the capabilities it used to search an indexer.
+Capability provenance never changes the indexer's search outcome.
+"""
+enum IndexerCapsSourceValue {
+	"""
+	A cached capability snapshot that is still current.
+	"""
+	FRESH
+	"""
+	Capabilities supplied by the managing indexer.
+	"""
+	MANAGED_METADATA
+	"""
+	Capabilities fetched again for this search.
+	"""
+	REFRESHED
+	"""
+	An expired snapshot, used because refreshing it did not succeed.
+	"""
+	STALE
+	"""
+	No snapshot was available, so the requested search was attempted as asked.
+	"""
+	PERMISSIVE
+	"""
+	Capabilities the provider plugin declares for itself.
+	"""
+	PROVIDER_DECLARATIONS
+}
+
+"""
+Operator configuration for a client sharing Scryer's existing indexers.
+"""
+input IndexerClientConfigurationInput {
+	"""
+	Operator-visible client name.
+	"""
+	name: String!
+	"""
+	Whether this client may authenticate.
+	"""
+	enabled: Boolean!
+	"""
+	Compatibility protocols this key is allowed to access.
+	"""
+	protocols: [IndexerClientProtocolValue!]!
+	"""
+	Explicit source and category grants; an empty list grants no sources.
+	"""
+	grants: [IndexerClientGrantInput!]!
+}
+
+"""
+Explicit access to one existing source, including a managed child.
+"""
+input IndexerClientGrantInput {
+	"""
+	Existing indexer configuration identity.
+	"""
+	indexerId: ID!
+	"""
+	Null permits all source categories; an empty list permits none.
+	"""
+	categories: [String!]
+}
+
+"""
+Effective access to one existing indexer.
+"""
+type IndexerClientGrantPayload {
+	"""
+	Existing indexer configuration identity.
+	"""
+	indexerId: ID!
+	"""
+	Null permits all categories; an empty list permits none.
+	"""
+	categories: [String!]
+}
+
+"""
+Management record for an indexer client. This projection intentionally has
+no lookup identifier or key verification material.
+"""
+type IndexerClientPayload {
+	"""
+	Stable client identity.
+	"""
+	id: ID!
+	"""
+	Operator-visible name.
+	"""
+	name: String!
+	"""
+	Whether this client may authenticate.
+	"""
+	enabled: Boolean!
+	"""
+	Allowed compatibility protocols.
+	"""
+	protocols: [IndexerClientProtocolValue!]!
+	"""
+	Explicit source and category grants.
+	"""
+	grants: [IndexerClientGrantPayload!]!
+	"""
+	Whether the client has a key that has not been revoked.
+	"""
+	keyActive: Boolean!
+	"""
+	Current client revision required by update, rotate and revoke.
+	"""
+	revision: Long!
+	"""
+	When the most recent request from this client was recorded, or null if never.
+	"""
+	lastUsedAt: DateTime
+	"""
+	Outcome of the most recently recorded request, or null if none was recorded.
+	"""
+	lastOutcome: IndexerClientRequestOutcomeValue
+	"""
+	When this client was created.
+	"""
+	createdAt: DateTime!
+	"""
+	When its configuration or key last changed.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+Compatibility protocol an indexer client may use.
+"""
+enum IndexerClientProtocolValue {
+	"""
+	Newznab feeds for Usenet releases.
+	"""
+	NEWZNAB
+	"""
+	Torznab feeds for torrent releases.
+	"""
+	TORZNAB
+}
+
+"""
+How Scryer finished preparing the most recent request from an indexer client.
+"""
+enum IndexerClientRequestOutcomeValue {
+	"""
+	A capabilities response was prepared.
+	"""
+	CAPS_READY
+	"""
+	A search page was prepared with every granted source answering.
+	"""
+	SEARCH_READY
+	"""
+	A search page was prepared while some sources were pending or unavailable.
+	"""
+	SEARCH_PARTIAL
+	"""
+	An authorized download was fetched and revalidated for delivery.
+	"""
+	ARTIFACT_READY
+	"""
+	The request was refused by the client's current authorization or input.
+	"""
+	REFUSED
+	"""
+	The request could not be served for now.
+	"""
+	UNAVAILABLE
+	"""
+	The request failed before a response was prepared.
+	"""
+	FAILED
 }
 
 """
@@ -9009,21 +9247,63 @@ type IndexerSearchResultPayload {
 	"""
 	seeders: Int
 	"""
-	Torrent peer count, or null for non-torrent results.
+	Torrent peer count, or null for non-torrent results. Seeders plus
+	leechers when the indexer reported those but no peer count.
 	"""
 	peers: Int
+	"""
+	Torrent leecher count, or null when not reported.
+	"""
+	leechers: Int
 	"""
 	Torrent info hash, or null for non-torrent results.
 	"""
 	infoHash: String
 	"""
-	Whether the torrent is marked freeleech, or null for non-torrent results.
+	Whether the torrent is freeleech: the indexer's explicit claim, or else
+	whether the download volume factor is zero. Null when neither is known.
 	"""
 	freeleech: Boolean
 	"""
 	Torrent download volume factor, or null for non-torrent results.
 	"""
 	downloadVolumeFactor: Float
+	"""
+	Torrent upload volume factor, or null when not reported.
+	"""
+	uploadVolumeFactor: Float
+	"""
+	Minimum seed ratio the tracker requires, or null when not reported.
+	"""
+	minimumSeedRatio: Float
+	"""
+	Minimum seed time the tracker requires in minutes, or null when not reported.
+	"""
+	minimumSeedTimeMinutes: Int
+	"""
+	Indexer flags such as freeleech or internal, in indexer order.
+	"""
+	indexerFlags: [String!]!
+	"""
+	Audio languages the indexer reported for the release.
+	"""
+	languages: [String!]!
+	"""
+	Subtitle languages the indexer reported for the release.
+	"""
+	subtitles: [String!]!
+	"""
+	Number of files in the release, or null when not reported.
+	"""
+	files: Int
+	"""
+	Release year the indexer reported, or null when not reported.
+	"""
+	year: Int
+	"""
+	Poster or cover image URL the indexer reported, or null when not reported.
+	"""
+	posterUrl: String
 	"""
 	Opaque token accepted when queuing this candidate, or null when unavailable.
 	"""
@@ -9044,6 +9324,34 @@ type IndexerSearchResultPayload {
 	Human-readable automatic acquisition decision summary, or null when not evaluated.
 	"""
 	autoDecisionSummary: String
+}
+
+"""
+Authentication mode explicitly selected during initial setup.
+"""
+enum InitialAuthenticationMode {
+	"""
+	Require a local password login for this instance.
+	"""
+	PASSWORD
+	"""
+	Allow unauthenticated access after the operator explicitly acknowledges it.
+	"""
+	NO_AUTHENTICATION
+}
+
+"""
+Result of the operator's first-run authentication decision.
+"""
+type InitialAuthenticationPayload {
+	"""
+	Whether the initial authentication decision is durably complete.
+	"""
+	completed: Boolean!
+	"""
+	Login tokens for password authentication; null when authentication is disabled.
+	"""
+	login: LoginPayload
 }
 
 """
@@ -9096,8 +9404,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	status: InteractiveReleaseSearchIndexerStatusValue!
 	"""
 	The indexer's result count. A title search counts its own batch, before
-	cross-indexer dedup; a query search counts what it contributed to the
-	listing, after exact duplicates are removed.
+	cross-indexer dedup. A `query` search counts every result the indexer
+	has returned to the search so far, across all of its pages, whether or
+	not those results have reached the page being shown.
 	"""
 	resultCount: Int!
 	"""
@@ -9108,6 +9417,21 @@ type InteractiveReleaseSearchIndexerPayload {
 	Failure reason, or null when the indexer did not fail.
 	"""
 	failureReason: String
+	"""
+	How the capabilities used for this indexer were obtained, or null
+	before they were resolved.
+	"""
+	capsSource: IndexerCapsSourceValue
+	"""
+	Stable reason code for why capability discovery fell back to stale or
+	permissive data, or null when it did not.
+	"""
+	capsReason: String
+	"""
+	Seconds the provider asked Scryer to wait before discovering
+	capabilities again, when it said so.
+	"""
+	capsRetryAfterSeconds: Int
 	"""
 	True when the indexer asked Scryer to slow down rather than failing.
 	Searching resumes on its own, so this reads as a cooldown, not an error.
@@ -9177,6 +9501,25 @@ type InteractiveReleaseSearchPayload {
 	UTC completion time, or null while running.
 	"""
 	completedAt: DateTime
+	"""
+	Opaque cursor for the following page of a query search, or null when
+	there is no following page. Pass it to `continueInteractiveReleaseSearch`.
+	"""
+	nextCursor: String
+	"""
+	True when a query search page was returned at its time bound while some
+	indexers were still searching.
+	"""
+	deadlineReached: Boolean!
+	"""
+	Human-readable reason a query search could not complete, or null when it
+	did not fail. Shown only when the client does not know the code.
+	"""
+	failureReason: String
+	"""
+	Stable failure condition separate from the human-readable reason.
+	"""
+	failureReasonCode: String
 }
 
 """
@@ -9243,6 +9586,20 @@ input IssueInteractiveReleaseCandidateTokenInput {
 	Optional episode label or number for an episode target; requires `season`.
 	"""
 	episode: String
+}
+
+"""
+A newly issued client key and its public management record.
+"""
+type IssuedIndexerClientKeyPayload {
+	"""
+	Current client configuration without key verification material.
+	"""
+	client: IndexerClientPayload!
+	"""
+	Returned once. Scryer does not persist this secret.
+	"""
+	apiKey: String!
 }
 
 """
@@ -15479,6 +15836,10 @@ Result of validating maintenance rule source without saving it.
 """
 type MaintenanceRuleValidationPayload {
 	"""
+	Structured conditions and source locations.
+	"""
+	diagnostics: [RuleValidationDiagnosticPayload!]!
+	"""
 	Whether the source is valid.
 	"""
 	valid: Boolean!
@@ -18977,7 +19338,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, no_glow, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -18989,6 +19350,24 @@ type MutationRoot {
 		Layout to save; a null view mode or column list keeps the saved value.
 		"""
 		input: SetMyCatalogViewInput!
+	): UiSettingsPayload!
+	"""
+	Replaces the authenticated actor's dashboard layout for one breakpoint, leaving the other breakpoints unchanged.
+	"""
+	setMyDashboardLayout(
+		"""
+		Complete layout for one breakpoint; an empty item list saves a layout with no panels.
+		"""
+		input: SetMyDashboardLayoutInput!
+	): UiSettingsPayload!
+	"""
+	Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
+	"""
+	resetMyDashboardLayout(
+		"""
+		Breakpoint to reset; null resets every breakpoint.
+		"""
+		breakpoint: UiDashboardBreakpoint
 	): UiSettingsPayload!
 	"""
 	Saves subtitle preferences after checking the catalog-settings permission.
@@ -19477,6 +19856,15 @@ type MutationRoot {
 		"""
 		input: LoginInput!
 	): LoginPayload!
+	"""
+	Completes the mandatory authentication decision on a new database.
+	"""
+	completeInitialAuthentication(
+		"""
+		The operator's authentication choice and setup authorization.
+		"""
+		input: CompleteInitialAuthenticationInput!
+	): InitialAuthenticationPayload!
 	"""
 	Replaces an administrator-provided temporary password and issues the full session.
 	"""
@@ -20623,18 +21011,56 @@ type MutationRoot {
 	Inspect and stage an uploaded restore bundle while setup mode is active.
 	The returned upload ID remains temporary and must be supplied to the apply operation.
 	"""
+	startInspectRestoreBundle(
+		"""
+		Backup bundle supplied through GraphQL multipart upload.
+		"""
+		bundleUpload: Upload!,
+		"""
+		Password required to decrypt the backup bundle.
+		"""
+		password: String,
+		"""
+		One-time setup code authorizing restore while initial authentication is pending.
+		"""
+		setupCode: String
+	): RestoreJobPayload!
+	"""
+	Compatibility operation; accepted work survives a disconnected caller.
+	"""
 	inspectRestoreBundle(
 		"""
 		Backup bundle supplied through GraphQL multipart upload.
 		"""
 		bundleUpload: Upload!,
 		"""
-		Bundle password; null or blank selects an unencrypted bundle.
+		Password required to decrypt the backup bundle.
 		"""
-		password: String
+		password: String,
+		"""
+		One-time setup code authorizing restore while initial authentication is pending.
+		"""
+		setupCode: String
 	): RestoreInspectPayload!
 	"""
 	Stage an inspected restore bundle for application on restart and schedule that restart.
+	"""
+	startApplyRestoreBundle(
+		"""
+		Temporary upload ID returned by inspectRestoreBundle.
+		"""
+		uploadId: ID!,
+		"""
+		Password required to decrypt the backup bundle.
+		"""
+		password: String,
+		"""
+		One-time setup code authorizing restore while initial authentication is pending.
+		"""
+		setupCode: String
+	): RestoreJobPayload!
+	"""
+	Compatibility operation; restoration is owned by the coordinator.
 	"""
 	applyRestoreBundle(
 		"""
@@ -20642,9 +21068,13 @@ type MutationRoot {
 		"""
 		uploadId: ID!,
 		"""
-		Bundle password; null or blank selects an unencrypted bundle.
+		Password required to decrypt the backup bundle.
 		"""
-		password: String
+		password: String,
+		"""
+		One-time setup code authorizing restore while initial authentication is pending.
+		"""
+		setupCode: String
 	): RestoreApplyPayload!
 	"""
 	Save the caller's external-import secret draft and report whether another draft was replaced.
@@ -20855,6 +21285,22 @@ type MutationRoot {
 		libraryIds: [ID!]
 	): EmptyRecycleBinPayload!
 	"""
+	Create one folder inside an absolute directory for the folder picker;
+	requires library-settings read permission, the same as browsePath. The
+	folder gets the server's umask and is owned by the user Scryer runs as.
+	Refusals carry a FOLDER_CREATE_* reason.
+	"""
+	createFolder(
+		"""
+		Absolute path of the directory to create the folder in.
+		"""
+		parentPath: String!,
+		"""
+		Name of the new folder; surrounding spaces are trimmed.
+		"""
+		name: String!
+	): DirectoryEntryPayload!
+	"""
 	Start a background interactive release-search job for the requested scopes.
 	A title with a season and no episode searches the whole season as a season pack.
 	Results accumulate as indexers complete, and a new search cancels the caller's running job for the same scope.
@@ -20864,6 +21310,19 @@ type MutationRoot {
 		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query, plus an optional indexer restriction, categories and limit.
 		"""
 		input: SearchReleasesInput!
+	): InteractiveReleaseSearchPayload!
+	"""
+	Fetch the following page of a `query` interactive release search.
+	"""
+	continueInteractiveReleaseSearch(
+		"""
+		Opaque `nextCursor` returned by the previous page of the search.
+		"""
+		after: String!,
+		"""
+		Merged results per page from 1 through 100; defaults to 100.
+		"""
+		first: Int = 100
 	): InteractiveReleaseSearchPayload!
 	"""
 	Cancel a running interactive release-search job.
@@ -20893,6 +21352,58 @@ type MutationRoot {
 		"""
 		input: QueueUnlinkedReleaseInput!
 	): QueueUnlinkedReleasePayload!
+	"""
+	Create an indexer client and reveal its key once; requires fresh MFA.
+	"""
+	createIndexerClient(
+		"""
+		Name, protocols and explicit source/category grants.
+		"""
+		input: IndexerClientConfigurationInput!
+	): IssuedIndexerClientKeyPayload!
+	"""
+	Replace a client's configuration if its revision is still current; requires fresh MFA.
+	"""
+	updateIndexerClient(
+		"""
+		Client identity to update.
+		"""
+		id: ID!,
+		"""
+		Revision observed when opening the client for editing.
+		"""
+		expectedRevision: Long!,
+		"""
+		Complete replacement configuration and grants.
+		"""
+		input: IndexerClientConfigurationInput!
+	): IndexerClientPayload!
+	"""
+	Invalidate the previous key and reveal a new key once; requires fresh MFA.
+	"""
+	rotateIndexerClientKey(
+		"""
+		Client whose key is rotated.
+		"""
+		id: ID!,
+		"""
+		Current client revision.
+		"""
+		expectedRevision: Long!
+	): IssuedIndexerClientKeyPayload!
+	"""
+	Revoke a client's key and derived retrieval access; requires fresh MFA.
+	"""
+	revokeIndexerClientKey(
+		"""
+		Client whose key is revoked.
+		"""
+		id: ID!,
+		"""
+		Current client revision.
+		"""
+		expectedRevision: Long!
+	): IndexerClientPayload!
 	"""
 	Start linking a provider account to the current member from an approved instance origin.
 	"""
@@ -23499,6 +24010,15 @@ Read-only GraphQL query root for authenticated HTTP requests.
 """
 type QueryRoot {
 	"""
+	Observe the current restore without extending its deadline or starting work.
+	"""
+	restoreStatus(
+		"""
+		One-time setup code authorizing restore while initial authentication is pending.
+		"""
+		setupCode: String
+	): RestoreJobPayload
+	"""
 	List a permission-filtered title catalog page with optional facet, filter, search, sort, and pagination controls.
 	"""
 	titles(
@@ -24579,6 +25099,11 @@ type QueryRoot {
 	Lists users with authorization and authentication-factor status, excluding secret values.
 	"""
 	users: [UserPayload!]!
+	"""
+	List indexer clients. Client administration is available only to fully
+	privileged interactive sessions.
+	"""
+	indexerClients: [IndexerClientPayload!]!
 	"""
 	Read title counts and indexer activity for the dashboard.
 	"""
@@ -26600,6 +27125,10 @@ Result of validating request rule source without saving it.
 """
 type RequestRuleValidationPayload {
 	"""
+	Structured conditions and source locations.
+	"""
+	diagnostics: [RuleValidationDiagnosticPayload!]!
+	"""
 	Whether the source is valid.
 	"""
 	valid: Boolean!
@@ -26739,6 +27268,53 @@ type RestoreInspectPayload {
 	Inspected backup contents and source metadata.
 	"""
 	summary: RestoreSummaryPayload!
+}
+
+"""
+An independently owned restore attempt and its current processing phase.
+"""
+type RestoreJobPayload {
+	"""
+	Stable identifier for this accepted attempt.
+	"""
+	id: ID!
+	"""
+	Staged upload associated with this attempt.
+	"""
+	uploadId: ID!
+	"""
+	Whether this attempt inspects or applies the backup.
+	"""
+	kind: String!
+	"""
+	Current processing or recovery phase.
+	"""
+	phase: String!
+	"""
+	UTC time when the processing budget began.
+	"""
+	startedAt: DateTime!
+	"""
+	Original UTC deadline, preserved through restart.
+	"""
+	expiresAt: DateTime!
+	"""
+	Stable failure reason code, if processing stopped.
+	"""
+	reason: String
+	"""
+	Server sentence for the failure, when this process observed it; clients
+	translate `reason` and show this only for a code they do not know.
+	"""
+	message: String
+	"""
+	Approximate database import percentage; 100 still requires finalization.
+	"""
+	importPercent: Int
+	"""
+	Inspected contents when available; never contains backup secrets.
+	"""
+	summary: RestoreSummaryPayload
 }
 
 """
@@ -27254,6 +27830,10 @@ treats the release as a fresh, never-grabbed search result.
 """
 input RuleSetTestListingInput {
 	"""
+	Download protocol: usenet, torrent, or http. Other values are unknown.
+	"""
+	protocol: String
+	"""
 	Publish time as an RFC 2822 (newznab `pubDate`) or RFC 3339
 	timestamp, kept as written; `input.release.age_days` is measured from
 	it to now.
@@ -27286,6 +27866,10 @@ input RuleSetTestListingInput {
 Indexer listing facts a scoring preview read, as rules saw them.
 """
 type RuleSetTestListingPayload {
+	"""
+	Frozen download protocol: usenet, torrent, http, or null when unknown.
+	"""
+	protocol: String
 	"""
 	Publish time the listing reported, or null when unknown.
 	"""
@@ -27415,9 +27999,39 @@ type RuleSetTestRuleSetPayload {
 }
 
 """
+Structured rule diagnostic. Coordinates refer to the compiled Rego source.
+"""
+type RuleValidationDiagnosticPayload {
+	"""
+	Stable condition code.
+	"""
+	code: String!
+	"""
+	Human-readable diagnostic for unknown-code fallback.
+	"""
+	message: String!
+	"""
+	One-based source line when the compiler supplies it.
+	"""
+	line: Int
+	"""
+	One-based source column when the compiler supplies it.
+	"""
+	column: Int
+	"""
+	Input path involved in the diagnostic.
+	"""
+	path: String
+}
+
+"""
 Result of validating Rego source.
 """
 type RuleValidationResultPayload {
+	"""
+	Structured conditions and source locations.
+	"""
+	diagnostics: [RuleValidationDiagnosticPayload!]!
 	"""
 	Whether the source is valid.
 	"""
@@ -27904,9 +28518,16 @@ input SearchReleasesInput {
 	"""
 	Optional limit. A title search lists at most this many results
 	(default 50, max 200); a `query` search asks each indexer for this many
-	(default 100, 1 to 500) and lists everything returned.
+	(default 100, 1 to 500); `aggregatePageSize` sets how many merged results
+	each page lists.
 	"""
 	limit: Int
+	"""
+	Results per page for a `query` search, after merging every indexer's
+	results (default 100, 1 to 100). Later pages use the `first` argument
+	of `continueInteractiveReleaseSearch`.
+	"""
+	aggregatePageSize: Int
 	"""
 	Raw operator query sent as typed to each indexer, without a catalog title.
 	"""
@@ -28408,6 +29029,24 @@ input SetMyCatalogViewInput {
 }
 
 """
+The caller's complete dashboard layout for one breakpoint.
+"""
+input SetMyDashboardLayoutInput {
+	"""
+	Breakpoint the layout was arranged for.
+	"""
+	breakpoint: UiDashboardBreakpoint!
+	"""
+	Number of grid columns, from 1 to 24.
+	"""
+	columns: Int!
+	"""
+	Every panel on the grid, at most 64; an empty list saves a layout with no panels.
+	"""
+	items: [UiDashboardLayoutItemInput!]!
+}
+
+"""
 Complete caller presentation-preferences update.
 """
 input SetMyUiSettingsInput {
@@ -28443,10 +29082,6 @@ input SetMyUiSettingsInput {
 	Whether the sponsor button should be hidden.
 	"""
 	hideSponsorButton: Boolean!
-	"""
-	Optional glow preference; true turns the decorative accent glow off and null preserves the existing value.
-	"""
-	noGlow: Boolean
 	"""
 	Selected density.
 	"""
@@ -29758,6 +30393,24 @@ type TitleAcquisitionDiagnosticsPayload {
 }
 
 """
+Alternate title metadata associated with a catalog title.
+"""
+type TitleAliasPayload {
+	"""
+	Alternate title text.
+	"""
+	name: String!
+	"""
+	Language code for this title, or an empty string when unknown.
+	"""
+	language: String!
+	"""
+	Country code associated with this title, or null when unknown.
+	"""
+	country: String
+}
+
+"""
 Broad content lifecycle states used by title catalog filters.
 """
 enum TitleCatalogContentStatusValue {
@@ -30325,6 +30978,10 @@ type TitleHistoryEventPayload {
 	"""
 	failureReason: String
 	"""
+	Stable failure condition separate from the human-readable reason.
+	"""
+	failureReasonCode: String
+	"""
 	Blocklist reason, or null when the event was not blocklisted.
 	"""
 	blocklistReason: String
@@ -30418,6 +31075,10 @@ enum TitleHistoryEventTypeValue {
 	Download was ignored.
 	"""
 	DOWNLOAD_IGNORED
+	"""
+	A successful client listing omitted an accepted download.
+	"""
+	DOWNLOAD_MISSING
 	"""
 	Title or file was rematched.
 	"""
@@ -30960,6 +31621,10 @@ type TitlePayload {
 	"""
 	aliases: [String!]!
 	"""
+	Alternate titles with their source language and country, when known.
+	"""
+	taggedAliases: [TitleAliasPayload!]!
+	"""
 	Language used for the latest metadata fetch, or null when not recorded.
 	"""
 	metadataLanguage: String
@@ -31476,6 +32141,10 @@ Lifecycle state of a tracked download.
 """
 enum TrackedDownloadStateValue {
 	"""
+	Accepted download is absent from a successful client listing.
+	"""
+	MISSING
+	"""
 	Download is in progress.
 	"""
 	DOWNLOADING
@@ -31775,6 +32444,98 @@ type UiCatalogViewSettingPayload {
 }
 
 """
+Responsive breakpoint a dashboard layout was arranged for; each keeps its own layout.
+"""
+enum UiDashboardBreakpoint {
+	"""
+	Extra-small screens.
+	"""
+	XS
+	"""
+	Small screens.
+	"""
+	SM
+	"""
+	Medium screens.
+	"""
+	MD
+	"""
+	Large screens.
+	"""
+	LG
+}
+
+"""
+The dashboard layout saved for one breakpoint. An empty item list means every panel was removed.
+"""
+type UiDashboardLayout {
+	"""
+	Breakpoint the layout was arranged for.
+	"""
+	breakpoint: UiDashboardBreakpoint!
+	"""
+	Number of grid columns the layout was arranged on.
+	"""
+	columns: Int!
+	"""
+	Panels placed on the grid.
+	"""
+	items: [UiDashboardLayoutItem!]!
+}
+
+"""
+One panel's place on a saved dashboard grid.
+"""
+type UiDashboardLayoutItem {
+	"""
+	Identifier of the panel, defined by the web client.
+	"""
+	panelId: String!
+	"""
+	Zero-based column the panel starts at.
+	"""
+	x: Int!
+	"""
+	Zero-based row the panel starts at.
+	"""
+	y: Int!
+	"""
+	Width in grid columns.
+	"""
+	w: Int!
+	"""
+	Height in grid rows.
+	"""
+	h: Int!
+}
+
+"""
+One panel's place in a dashboard layout saved with setMyDashboardLayout.
+"""
+input UiDashboardLayoutItemInput {
+	"""
+	Identifier of the panel: 1 to 64 lowercase letters, digits or hyphens.
+	"""
+	panelId: String!
+	"""
+	Zero-based column the panel starts at.
+	"""
+	x: Int!
+	"""
+	Zero-based row the panel starts at.
+	"""
+	y: Int!
+	"""
+	Width in grid columns, at least 1; x plus w may not exceed the layout's columns.
+	"""
+	w: Int!
+	"""
+	Height in grid rows, at least 1.
+	"""
+	h: Int!
+}
+
+"""
 Date and time display format preference.
 """
 enum UiDateTimeFormatValue {
@@ -31955,10 +32716,6 @@ type UiSettingsPayload {
 	"""
 	hideSponsorButton: Boolean!
 	"""
-	Whether the decorative accent glow is turned off.
-	"""
-	noGlow: Boolean!
-	"""
 	Selected density.
 	"""
 	density: UiDensityValue!
@@ -31982,6 +32739,10 @@ type UiSettingsPayload {
 	Persisted catalog view modes, per device class and facet.
 	"""
 	catalogViews: [UiCatalogViewSettingPayload!]!
+	"""
+	Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
+	"""
+	dashboardLayouts: [UiDashboardLayout!]!
 }
 
 """

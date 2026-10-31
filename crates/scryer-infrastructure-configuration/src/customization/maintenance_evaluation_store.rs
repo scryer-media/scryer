@@ -259,7 +259,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::Validation(format!(
+                    return Err(AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE, format!(
                         "maintenance rule {rule_set_id} already has an active candidate for title {title_id}"
                     )));
                 }
@@ -280,9 +280,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
                     .await?
                     .is_some()
                 {
-                    return Err(AppError::Validation(
-                        "maintenance sequence membership is terminal until a confirmed no-match".to_string(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL, "maintenance sequence membership is terminal until a confirmed no-match".to_string()));
                 }
                 let insert_sql = format!("{INSERT_CANDIDATE_SQL} ON CONFLICT DO NOTHING");
                 if SqlRuntime::execute(
@@ -293,7 +291,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
                 .await?
                     != 1
                 {
-                    return Err(AppError::Validation(format!(
+                    return Err(AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE, format!(
                         "maintenance rule {rule_set_id} already has an active candidate for title {title_id}"
                     )));
                 }
@@ -368,7 +366,8 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         // UPDATE the compare-and-set exists to remove, so it is refused rather
         // than silently widened.
         if expected_states.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED,
                 "a candidate transition must name the states it expects".to_string(),
             ));
         }
@@ -678,7 +677,8 @@ impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
             || run.finished_at.is_none()
             || run.idempotency_key != format!("hold:{}", run.id)
         {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID,
                 "invalid maintenance held-attempt release".to_string(),
             ));
         }
@@ -687,7 +687,10 @@ impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
             .as_deref()
             .filter(|reason| !reason.is_empty())
             .ok_or_else(|| {
-                AppError::Validation("maintenance held-attempt release lacks a reason".to_string())
+                AppError::validation_refused(
+                    crate::error_reasons::CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED,
+                    "maintenance held-attempt release lacks a reason".to_string(),
+                )
             })?;
         let finished_at = run.finished_at.expect("checked above");
         let candidate_sql = "UPDATE lifecycle_candidates
@@ -936,13 +939,15 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
         leased_at: DateTime<Utc>,
     ) -> AppResult<MaintenanceActionStepClaim> {
         if step.state != MaintenanceActionStepState::Running || step.attempt < 0 {
-            return Err(AppError::Validation(
-                "a maintenance action step claim must start a non-negative running attempt".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID,
+                "a maintenance action step claim must start a non-negative running attempt",
             ));
         }
         if !action_step_target_identity_is_consistent(step) {
-            return Err(AppError::Validation(
-                "a maintenance action step claim has an invalid target identity".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID,
+                "a maintenance action step claim has an invalid target identity",
             ));
         }
         let mut claimed = step.clone();
@@ -1014,9 +1019,7 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
                     || existing.step_kind != claimed.step_kind
                     || !action_step_target_identity_is_consistent(&existing)
                 {
-                    return Err(AppError::Validation(
-                        "maintenance action step does not match its persisted sequence identity".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH, "maintenance action step does not match its persisted sequence identity"));
                 }
                 if existing.state.is_completion_success() {
                     return Ok(MaintenanceActionStepClaim::Completed(existing));
@@ -1093,9 +1096,7 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
                     return Ok(MaintenanceActionStepClaim::Claimed(resumed));
                 }
                 if claimed.attempt <= existing.attempt {
-                    return Err(AppError::Validation(
-                        "a retried maintenance action step must advance its attempt".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED, "a retried maintenance action step must advance its attempt"));
                 }
                 let mut retried = existing.clone();
                 retried.state = MaintenanceActionStepState::Running;
@@ -1142,8 +1143,9 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
         expected_lease_id: &str,
     ) -> AppResult<bool> {
         if !step.state.is_attempt_finished() || step.state == MaintenanceActionStepState::Running {
-            return Err(AppError::Validation(
-                "a maintenance action step finish must carry an attempt result".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED,
+                "a maintenance action step finish must carry an attempt result",
             ));
         }
         update_running_action_step(&self.datastore, step, expected_lease_id, true).await
@@ -1182,8 +1184,9 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
             return Ok(Vec::new());
         }
         if candidates.len() > 100 {
-            return Err(AppError::Validation(
-                "maintenance sequence progress accepts at most 100 candidates per page".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE,
+                "maintenance sequence progress accepts at most 100 candidates per page",
             ));
         }
         let mut args = Vec::with_capacity(candidates.len() * 3);
@@ -1282,8 +1285,9 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
             return Ok(Vec::new());
         }
         if steps.len() > 700 {
-            return Err(AppError::Validation(
-                "maintenance sequence receipt projection accepts at most 700 steps".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE,
+                "maintenance sequence receipt projection accepts at most 700 steps",
             ));
         }
         let mut args = Vec::with_capacity(steps.len() * 4);
@@ -1319,8 +1323,9 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
             .validate_schema()
             .map_err(|error| AppError::Validation(error.to_string()))?;
         if receipt.state != MaintenanceActionJobReceiptState::Dispatching {
-            return Err(AppError::Validation(
-                "a generic maintenance job dispatch must begin in dispatching state".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID,
+                "a generic maintenance job dispatch must begin in dispatching state",
             ));
         }
         let receipt = receipt.clone();
@@ -1408,7 +1413,10 @@ impl MaintenanceSequenceCompletionRepository for MaintenanceEvaluationStore {
         limit: usize,
     ) -> AppResult<Vec<MaintenanceSequenceTerminalMembership>> {
         let limit = i64::try_from(limit.min(100)).map_err(|error| {
-            AppError::Validation(format!("invalid maintenance completion limit: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID,
+                format!("invalid maintenance completion limit: {error}"),
+            )
         })?;
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),
@@ -2088,8 +2096,9 @@ async fn transition_action_job_receipt(
     transition: &MaintenanceActionJobReceiptTransition,
 ) -> AppResult<bool> {
     if transition.expected_states.is_empty() {
-        return Err(AppError::Validation(
-            "a maintenance job receipt transition must name expected states".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED,
+            "a maintenance job receipt transition must name expected states",
         ));
     }
     if matches!(
@@ -2100,8 +2109,9 @@ async fn transition_action_job_receipt(
         .as_deref()
         .is_none_or(|job_run_id| job_run_id.trim().is_empty())
     {
-        return Err(AppError::Validation(
-            "accepted maintenance job receipts require a real job run id".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED,
+            "accepted maintenance job receipts require a real job run id",
         ));
     }
     let mut args = vec![
@@ -2149,8 +2159,9 @@ fn validate_terminal_membership(
         MaintenanceSequenceTerminalOutcome::Failed => MaintenanceCandidateState::Failed,
     };
     if terminal_candidate_state != expected_state {
-        return Err(AppError::Validation(
-            "maintenance sequence terminal marker and candidate terminal state disagree".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH,
+            "maintenance sequence terminal marker and candidate terminal state disagree",
         ));
     }
     if membership.expected_step_ids.len() > 7
@@ -2162,8 +2173,9 @@ fn validate_terminal_membership(
             .len()
             != membership.expected_step_ids.len()
     {
-        return Err(AppError::Validation(
-            "maintenance sequence terminal marker has invalid expected step ids".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID,
+            "maintenance sequence terminal marker has invalid expected step ids",
         ));
     }
     Ok(())
@@ -2203,22 +2215,25 @@ async fn verify_terminal_step_evidence(
             if membership.terminal_step_id.is_some()
                 || membership.completed_step_ids != membership.expected_step_ids
             {
-                return Err(AppError::Validation(
-                    "successful maintenance sequence marker lacks complete step evidence".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE,
+                    "successful maintenance sequence marker lacks complete step evidence",
                 ));
             }
             membership.expected_step_ids.as_slice()
         }
         MaintenanceSequenceTerminalOutcome::Failed => {
             let Some(index) = terminal_index else {
-                return Err(AppError::Validation(
-                    "failed maintenance sequence marker lacks its failed step id".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED,
+                    "failed maintenance sequence marker lacks its failed step id",
                 ));
             };
             let expected = &membership.expected_step_ids[..=index];
             if membership.completed_step_ids != expected {
-                return Err(AppError::Validation(
-                    "failed maintenance sequence marker does not preserve its step prefix".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH,
+                    "failed maintenance sequence marker does not preserve its step prefix",
                 ));
             }
             expected
@@ -2249,8 +2264,9 @@ async fn verify_terminal_step_evidence(
         if (is_failed_terminal && state != MaintenanceActionStepState::Failed)
             || (!is_failed_terminal && !state.is_completion_success())
         {
-            return Err(AppError::Validation(
-                "maintenance terminal marker does not match persisted step evidence".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH,
+                "maintenance terminal marker does not match persisted step evidence",
             ));
         }
     }

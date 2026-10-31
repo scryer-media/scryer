@@ -536,13 +536,13 @@ pub fn submit_media_request_input_into_application(
 /// The sample an author-side preview is evaluated against.
 pub fn request_rule_sample_into_application(
     sample: RequestRuleSampleInput,
-) -> Result<scryer_application::RequestRuleSample, String> {
+) -> Result<scryer_application::RequestRuleSample, scryer_application::AppError> {
     let lease_days = match (sample.lease_days, sample.lease_forever.unwrap_or(false)) {
         (Some(_), true) => {
-            return Err(
-                "a preview sample accepts either 'leaseDays' or 'leaseForever', not both"
-                    .to_string(),
-            );
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_REQUEST_SAMPLE_LEASE_CONFLICT,
+                "a preview sample accepts either 'leaseDays' or 'leaseForever', not both",
+            ));
         }
         (Some(days), false) => Some(Some(i64::from(days))),
         (None, true) => Some(None),

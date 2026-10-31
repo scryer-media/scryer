@@ -715,7 +715,10 @@ async fn catalogued_analysis_rejects_moved_or_deleted_records_before_probing() {
         .await
         .err()
         .unwrap();
-    assert!(matches!(missing, AppError::NotFound(_)));
+    assert!(matches!(
+        missing,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. }
+    ));
     assert!(seen.lock().await.is_empty());
     assert!(
         app.analyze_catalogued_media_file(None, other).await.is_ok(),
@@ -826,7 +829,12 @@ async fn disc_title_selection_rejects_concurrent_selection_and_source_changes() 
                 .revision = 7;
         }
         resume.notify_one();
-        assert!(matches!(task.await.unwrap(), Err(AppError::Validation(_))));
+        assert!(matches!(
+            task.await.unwrap(),
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
+        ));
         assert!(
             files
                 .get_media_file_by_id(&id)

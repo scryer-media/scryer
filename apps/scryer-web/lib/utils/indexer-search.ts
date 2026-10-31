@@ -13,12 +13,7 @@ export type IndexerSearchSortKey =
   `${"release" | "indexer" | "size" | "age" | "peers"}-${"asc" | "desc"}`;
 
 export type IndexerSearchFacetGroupKey =
-  | "protocol"
-  | "resolution"
-  | "source"
-  | "audio"
-  | "flags"
-  | "indexer";
+  "protocol" | "resolution" | "source" | "audio" | "flags" | "indexer";
 
 export type IndexerSearchFacetItem = {
   /** `<group>:<value>`; the identity the selection set stores. */
@@ -283,7 +278,10 @@ export function formatReleaseSize(bytes: number | null | undefined): string {
 }
 
 export function totalReleaseBytes(releases: Release[]): number {
-  return releases.reduce((total, release) => total + (release.sizeBytes ?? 0), 0);
+  return releases.reduce(
+    (total, release) => total + (release.sizeBytes ?? 0),
+    0,
+  );
 }
 
 export function filterIndexerSearchReleases(
@@ -353,26 +351,40 @@ export function sortIndexerSearchReleases(
   const [column, direction] = sortKey.split("-");
   const value = (release: Release): string | number | null => {
     switch (column) {
-      case "release": return release.title?.trim() || null;
-      case "indexer": return release.source?.trim() || null;
-      case "size": return release.sizeBytes ?? null;
-      case "peers": return release.seeders ?? release.grabs ?? null;
+      case "release":
+        return release.title?.trim() || null;
+      case "indexer":
+        return release.source?.trim() || null;
+      case "size":
+        return release.sizeBytes ?? null;
+      case "peers":
+        return release.seeders ?? release.grabs ?? null;
       default: {
-        const date = release.publishedAt ? Date.parse(release.publishedAt) : NaN;
+        const date = release.publishedAt
+          ? Date.parse(release.publishedAt)
+          : NaN;
         return Number.isFinite(date) ? -date : null;
       }
     }
   };
   return [...releases].sort((left, right) => {
-    const a = value(left), b = value(right);
+    const a = value(left),
+      b = value(right);
     if (a == null && b != null) return 1;
     if (b == null && a != null) return -1;
-    const compared = a == null || b == null ? 0
-      : typeof a === "string" && typeof b === "string"
-        ? a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
-        : Number(a) - Number(b);
-    return compared * (direction === "desc" ? -1 : 1)
-      || indexerSearchRowKey(left).localeCompare(indexerSearchRowKey(right));
+    const compared =
+      a == null || b == null
+        ? 0
+        : typeof a === "string" && typeof b === "string"
+          ? a.localeCompare(b, undefined, {
+              sensitivity: "base",
+              numeric: true,
+            })
+          : Number(a) - Number(b);
+    return (
+      compared * (direction === "desc" ? -1 : 1) ||
+      indexerSearchRowKey(left).localeCompare(indexerSearchRowKey(right))
+    );
   });
 }
 
@@ -419,13 +431,7 @@ export function mergeIndexerProgress(
 }
 
 export type IndexerHealthTone =
-  | "pending"
-  | "ok"
-  | "slow"
-  | "partial"
-  | "failed"
-  | "skipped"
-  | "cooling";
+  "pending" | "ok" | "slow" | "partial" | "failed" | "skipped" | "cooling";
 
 export function indexerHealthTone(
   entry: InteractiveSearchIndexerProgress,

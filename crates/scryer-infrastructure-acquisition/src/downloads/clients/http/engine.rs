@@ -58,8 +58,8 @@ struct EngineInner {
 
 struct RunningJob {
     cancel: CancellationToken,
-    host: String,
     live: Arc<LiveProgress>,
+    admission_host: Option<String>,
 }
 
 /// In-memory progress of a running job, for queue listings only.
@@ -82,6 +82,7 @@ pub(crate) struct HttpEngine {
     #[cfg(test)]
     egress_builds: AtomicU64,
     limiter: Arc<BandwidthLimiter>,
+    host_limiter: super::transfer::HostLimiter,
     backoff_unit: std::sync::Mutex<Duration>,
     media_probe: std::sync::Mutex<Arc<dyn MediaProbe>>,
     checkpoint_cadence: std::sync::Mutex<CheckpointCadence>,
@@ -123,6 +124,7 @@ impl HttpEngine {
             client_id,
             download_dir,
             store,
+            host_limiter: super::transfer::HostLimiter::new(limits.max_connections_per_host),
             limiter: Arc::new(BandwidthLimiter::new(bytes_per_second(
                 limits.bandwidth_limit_kbps,
             ))),
@@ -157,6 +159,7 @@ impl HttpEngine {
     /// Apply new limits to transfers that start from now on.
     pub(crate) fn set_limits(&self, limits: HttpEngineLimits) {
         *self.limits.lock().unwrap_or_else(|p| p.into_inner()) = limits;
+        self.host_limiter.set_limit(limits.max_connections_per_host);
         self.limiter
             .set_rate(bytes_per_second(limits.bandwidth_limit_kbps));
     }
@@ -384,8 +387,9 @@ impl HttpEngine {
             if inner.document.jobs.iter().any(|existing| {
                 existing.download_id.is_some() && existing.download_id == job.download_id
             }) {
-                return Err(AppError::Validation(
-                    "this download was already submitted to the HTTP downloader".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_HTTP_DOWNLOAD_ALREADY_SUBMITTED,
+                    "this download was already submitted to the HTTP downloader",
                 ));
             }
             inner.document.jobs.push(job);
@@ -447,10 +451,10 @@ impl HttpEngine {
                 }
                 HttpJobState::Paused => return Ok(()),
                 state => {
-                    return Err(AppError::Validation(format!(
-                        "a {} download cannot be paused",
-                        state_label(state)
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_DOWNLOAD_NOT_PAUSABLE,
+                        format!("a {} download cannot be paused", state_label(state)),
+                    ));
                 }
             }
             if let Some(running) = inner.running.get(id) {
@@ -472,10 +476,10 @@ impl HttpEngine {
                 }
                 HttpJobState::Queued | HttpJobState::Downloading => return Ok(()),
                 state => {
-                    return Err(AppError::Validation(format!(
-                        "a {} download cannot be resumed",
-                        state_label(state)
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_DOWNLOAD_NOT_RESUMABLE,
+                        format!("a {} download cannot be resumed", state_label(state)),
+                    ));
                 }
             }
         }
@@ -498,9 +502,10 @@ impl HttpEngine {
             before != inner.document.jobs.len()
         };
         if !removed {
-            return Err(AppError::NotFound(format!(
-                "the HTTP downloader has no download {id}"
-            )));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::ACQUISITION_HTTP_DOWNLOAD_NOT_FOUND,
+                format!("the HTTP downloader has no download {id}"),
+            ));
         }
         if remove_data {
             warn!(
@@ -529,26 +534,42 @@ impl HttpEngine {
         }
         let limits = self.limits();
         let mut inner = self.inner.lock().await;
-        let mut per_host: HashMap<String, usize> = HashMap::new();
-        for running in inner.running.values() {
-            *per_host.entry(running.host.clone()).or_default() += 1;
-        }
-        let candidates: Vec<(String, String)> = inner
+        let candidates: Vec<String> = inner
             .document
             .jobs
             .iter()
             .filter(|job| job.state == HttpJobState::Queued && !inner.running.contains_key(&job.id))
-            .map(|job| (job.id.clone(), job_host(job)))
+            .map(|job| job.id.clone())
             .collect();
-        for (id, host) in candidates {
+        for id in candidates {
             if inner.running.len() >= limits.max_concurrent_downloads.max(1) {
                 break;
             }
-            let on_host = per_host.entry(host.clone()).or_default();
-            if *on_host >= limits.max_connections_per_host.max(1) {
+            let admission_host = inner
+                .document
+                .jobs
+                .iter()
+                .find(|job| job.id == id)
+                .and_then(|job| {
+                    job.files
+                        .iter()
+                        .find(|file| !file.complete && file.skipped_error.is_none())
+                })
+                .and_then(|file| url::Url::parse(&file.resource.url).ok())
+                .and_then(|url| {
+                    url.host_str()
+                        .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+                });
+            if admission_host.as_ref().is_some_and(|host| {
+                inner
+                    .running
+                    .values()
+                    .filter(|job| job.admission_host.as_ref() == Some(host))
+                    .count()
+                    >= limits.max_connections_per_host.max(1)
+            }) {
                 continue;
             }
-            *on_host += 1;
             let cancel = self.shutdown.child_token();
             let live = Arc::new(LiveProgress {
                 file_index: AtomicU64::new(0),
@@ -566,8 +587,8 @@ impl HttpEngine {
                 id.clone(),
                 RunningJob {
                     cancel: cancel.clone(),
-                    host,
                     live: Arc::clone(&live),
+                    admission_host,
                 },
             );
             let engine = Arc::clone(self);
@@ -597,6 +618,7 @@ impl HttpEngine {
                         Ok(()) => {
                             job.state = HttpJobState::Completed;
                             job.error = None;
+                            job.error_reason = None;
                             job.completed_at = Some(Utc::now());
                             info!(item_id = id.as_str(), "HTTP download completed");
                         }
@@ -612,6 +634,7 @@ impl HttpEngine {
                             );
                             job.state = HttpJobState::Failed;
                             job.error = Some(message);
+                            job.error_reason = error.reason().map(str::to_owned);
                         }
                     }
                     if job.state.is_terminal() {
@@ -701,6 +724,7 @@ impl HttpEngine {
                 cancel,
                 live_bytes: &live.current_file_bytes,
                 limiter: Some(self.limiter.as_ref()),
+                host_limiter: Some(&self.host_limiter),
                 backoff_unit: self.backoff_unit(),
                 cadence: self.checkpoint_cadence(),
                 clock: self.clock(),
@@ -724,10 +748,14 @@ impl HttpEngine {
                 Err(error) if file.role == HttpFileRole::Subtitle => {
                     let language = file.language.as_deref().unwrap_or("unlabelled");
                     if subtitle_required {
-                        return Err(TransferError::Permanent(format!(
+                        let message = format!(
                             "the required {language} subtitle could not be downloaded: {}; the media file is on disk",
                             error.message()
-                        )));
+                        );
+                        return Err(match error.reason() {
+                            Some(reason) => TransferError::Refused(reason, message),
+                            None => TransferError::Permanent(message),
+                        });
                     }
                     warn!(
                         item_id = id,
@@ -735,7 +763,7 @@ impl HttpEngine {
                         error = error.message().as_str(),
                         "HTTP download skipping a subtitle it could not fetch"
                     );
-                    self.skip_file(id, index, error.message()).await?;
+                    self.skip_file(id, index, &error).await?;
                     index += 1;
                 }
                 Err(error) => return Err(error),
@@ -762,7 +790,12 @@ impl HttpEngine {
 
     /// Record that an optional file was given up on, so it is neither tried
     /// again nor reported as delivered.
-    async fn skip_file(&self, id: &str, index: usize, reason: String) -> Result<(), TransferError> {
+    async fn skip_file(
+        &self,
+        id: &str,
+        index: usize,
+        error: &TransferError,
+    ) -> Result<(), TransferError> {
         {
             let mut inner = self.inner.lock().await;
             let job = inner
@@ -771,7 +804,8 @@ impl HttpEngine {
                 .iter_mut()
                 .find(|job| job.id == id)
                 .ok_or(TransferError::Cancelled)?;
-            job.files[index].skipped_error = Some(reason);
+            job.files[index].skipped_error = Some(error.message());
+            job.files[index].skipped_reason = error.reason().map(str::to_owned);
             job.progress_revision = job.progress_revision.saturating_add(1);
             job.updated_at = Utc::now();
         }
@@ -818,6 +852,8 @@ impl HttpEngine {
                         role: HttpFileRole::Media,
                         resource,
                         final_path,
+                        partial_path: None,
+                        publication: None,
                         attempt,
                         bytes_done: 0,
                         total_bytes: None,
@@ -826,6 +862,7 @@ impl HttpEngine {
                         language: slot.language.clone(),
                         forbidden_answers: 0,
                         skipped_error: None,
+                        skipped_reason: None,
                     };
                     info!(
                         item_id = id,
@@ -856,10 +893,11 @@ impl HttpEngine {
             let finishes = file.complete && job.files.get(index).is_some_and(|slot| !slot.complete);
             // The progress file carries bytes only; a new final name goes
             // into the document.
-            let renamed = job
-                .files
-                .get(index)
-                .is_some_and(|slot| slot.final_path != file.final_path);
+            let renamed = job.files.get(index).is_some_and(|slot| {
+                slot.final_path != file.final_path
+                    || slot.partial_path != file.partial_path
+                    || slot.publication != file.publication
+            });
             if let Some(slot) = job.files.get_mut(index) {
                 *slot = file.clone();
             }
@@ -969,7 +1007,12 @@ fn find_job_mut<'a>(document: &'a mut HttpQueueDocument, id: &str) -> AppResult<
         .jobs
         .iter_mut()
         .find(|job| job.id == id)
-        .ok_or_else(|| AppError::NotFound(format!("the HTTP downloader has no download {id}")))
+        .ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::ACQUISITION_HTTP_DOWNLOAD_NOT_FOUND,
+                format!("the HTTP downloader has no download {id}"),
+            )
+        })
 }
 
 /// Keep the newest finished jobs within the retention bound. Dropping a job
@@ -994,13 +1037,6 @@ fn prune_finished(document: &mut HttpQueueDocument) {
     let drop: std::collections::HashSet<String> =
         by_age.into_iter().take(excess).map(|(_, id)| id).collect();
     document.jobs.retain(|job| !drop.contains(&job.id));
-}
-
-fn job_host(job: &HttpJob) -> String {
-    job.media_file()
-        .and_then(|file| reqwest::Url::parse(&file.resource.url).ok())
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .unwrap_or_default()
 }
 
 fn bytes_per_second(kbps: Option<u64>) -> u64 {

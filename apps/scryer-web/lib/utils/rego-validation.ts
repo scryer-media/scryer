@@ -1,8 +1,18 @@
 import type { RegoValidationResult } from "./rego-diagnostics.ts";
 
-export type ValidationSnapshot = { key: string; validating: boolean; result: RegoValidationResult | null };
-export type ValidationClock = { set: (run: () => void, delay: number) => unknown; clear: (timer: unknown) => void };
-const clock: ValidationClock = { set: (run, delay) => setTimeout(run, delay), clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>) };
+export type ValidationSnapshot = {
+  key: string;
+  validating: boolean;
+  result: RegoValidationResult | null;
+};
+export type ValidationClock = {
+  set: (run: () => void, delay: number) => unknown;
+  clear: (timer: unknown) => void;
+};
+const clock: ValidationClock = {
+  set: (run, delay) => setTimeout(run, delay),
+  clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
 
 /** One editor session: one active request, one latest document, one cached result. */
 export class RegoValidationSession {
@@ -38,7 +48,10 @@ export class RegoValidationSession {
     this.key = key;
     this.enabled = enabled && Boolean(source.trim());
     this.publish({ key, validating: false, result: null });
-    if (this.enabled) this.timer = this.timers.set(() => { void this.validate(); }, 500);
+    if (this.enabled)
+      this.timer = this.timers.set(() => {
+        void this.validate();
+      }, 500);
   }
 
   async validate(): Promise<RegoValidationResult | null> {
@@ -59,9 +72,13 @@ export class RegoValidationSession {
     }
     this.publish({ key, validating: true, result: null });
     const source = this.source;
-    const active = Promise.resolve().then(() => this.validateSource(source)).catch(() => ({
-      valid: false, errors: [this.unavailableMessage], unavailable: true,
-    }));
+    const active = Promise.resolve()
+      .then(() => this.validateSource(source))
+      .catch(() => ({
+        valid: false,
+        errors: [this.unavailableMessage],
+        unavailable: true,
+      }));
     this.active = active;
     const result = await active;
     if (this.active === active) this.active = null;

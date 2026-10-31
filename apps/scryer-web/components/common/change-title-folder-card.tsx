@@ -61,7 +61,9 @@ export function ChangeTitleFolderCard({
 
   return (
     <>
-      {compact ? action : (
+      {compact ? (
+        action
+      ) : (
         <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">

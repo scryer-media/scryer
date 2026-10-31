@@ -222,11 +222,14 @@ pub fn enforce_nzb_category_gate(nzb_head_bytes: &[u8], facet: &MediaFacet) -> A
         return Ok(());
     }
 
-    Err(AppError::Validation(format!(
-        "{CATEGORY_MISMATCH_CODE}: indexer category '{category}' contradicts the release's {} \
+    Err(AppError::validation_refused(
+        crate::error_reasons::indexer_category::MISMATCH,
+        format!(
+            "indexer category '{category}' contradicts the release's {} \
          subject; the NZB was not handed to the download client",
-        facet.as_str()
-    )))
+            facet.as_str()
+        ),
+    ))
 }
 
 fn category_segment_family(segment: &str) -> Option<IndexerCategoryFamily> {
@@ -509,7 +512,7 @@ mod tests {
             .expect_err("an anime nzb must not be submitted for a series subject");
 
         assert!(
-            error.to_string().contains(CATEGORY_MISMATCH_CODE),
+            error.validation_reason() == Some(crate::error_reasons::indexer_category::MISMATCH),
             "gate error must carry the category_mismatch code: {error}"
         );
         assert!(error.to_string().contains("TV > Anime"), "{error}");

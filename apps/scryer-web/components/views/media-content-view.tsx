@@ -1,5 +1,8 @@
 import * as React from "react";
-import { RefreshScoresButton, useScoreRefreshUpdates } from "@/components/common/refresh-scores-button";
+import {
+  RefreshScoresButton,
+  useScoreRefreshUpdates,
+} from "@/components/common/refresh-scores-button";
 import { useLocation } from "react-router";
 import {
   ArrowDown,
@@ -199,6 +202,10 @@ import { SeriesOverviewContainer } from "@/components/containers/series-overview
 import { handleFixTitleMatchComplete } from "@/lib/fix-title-match";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { LoadingMark } from "@/components/common/loading-mark";
+import {
+  ReleaseSearchLoader,
+  ReleaseSearchSummary,
+} from "@/components/common/release-search-status";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
 
@@ -291,7 +298,6 @@ function managedStorageSummary(rawBytes: number): string {
   }
   return `${gigabytes.toFixed(2)} GB`;
 }
-
 
 function useMinViewportWidth(query: string) {
   const [matches, setMatches] = React.useState(() =>
@@ -630,8 +636,7 @@ function TitleContextForYouPanel({
 }) {
   const t = useTranslate();
   const recommendationGroups = React.useMemo(
-    () =>
-      titleContextRecommendationGroupsFromPayload(discoveryGroups, view, t),
+    () => titleContextRecommendationGroupsFromPayload(discoveryGroups, view, t),
     [discoveryGroups, t, view],
   );
 
@@ -753,40 +758,6 @@ function TitleContextReleaseSearchPanel({
       }),
     [indexerProgress, loading, results],
   );
-  const releaseSearchDescription = React.useMemo(() => {
-    if (results === null) {
-      return t("help.interactiveSearchTooltip");
-    }
-
-    if (loading && indexerProgress !== null) {
-      return t("title.contextReleaseSearchProgress", {
-        releaseCount: results.length,
-        done: searchPresentation.completedIndexerCount,
-        total: searchPresentation.totalIndexerCount,
-      });
-    }
-
-    // Report what the run did, not which sources happened to return
-    // results: an indexer that answered with nothing still searched, and one
-    // that failed or was skipped is called out on its own line below.
-    if (searchPresentation.totalIndexerCount > 0) {
-      return t("title.contextReleaseSearchSummaryDetailed", {
-        releaseCount: results.length,
-        searched: searchPresentation.searchedIndexerCount,
-        total: searchPresentation.totalIndexerCount,
-      });
-    }
-    const sourceCount = new Set(
-      results
-        .map((release) => release.source?.trim())
-        .filter((source): source is string => Boolean(source)),
-    ).size;
-    return t("title.contextReleaseSearchSummary", {
-      releaseCount: results.length,
-      indexerCount: sourceCount,
-    });
-  }, [indexerProgress, loading, results, searchPresentation, t]);
-
   const handleSortChange = React.useCallback(
     (
       nextKey: ReleaseSearchSortKey,
@@ -887,43 +858,17 @@ function TitleContextReleaseSearchPanel({
   return (
     <section>
       <div className="flex flex-wrap items-center gap-3 border-b border-[var(--scry-line3)] pb-3">
-        <div className="min-w-0 flex-1">
-          <p
-            className="flex items-center gap-1.5 truncate text-[11.5px] text-[var(--scry-faint)]"
-            data-ui="title-release-search-summary"
-            data-search-state={loading ? "searching" : "done"}
-          >
-            {loading && indexerProgress !== null ? (
-              <LoadingMark className="h-3 w-3 shrink-0" label={t("label.searching")} />
-            ) : null}
-            <span className="truncate">{releaseSearchDescription}</span>
+        {results === null ? (
+          <p className="min-w-0 flex-1 truncate text-[11.5px] text-[var(--scry-faint)]">
+            {t("help.interactiveSearchTooltip")}
           </p>
-          {!loading && searchPresentation.failedIndexerNames.length > 0 ? (
-            <p className="mt-0.5 truncate text-[11.5px] text-[var(--scry-danger-text)]">
-              {t("title.contextReleaseSearchIndexerFailures", {
-                count: searchPresentation.failedIndexerNames.length,
-                names: searchPresentation.failedIndexerNames.join(", "),
-              })}
-            </p>
-          ) : null}
-          {!loading && searchPresentation.skippedIndexers.length > 0 ? (
-            <p
-              className="mt-0.5 truncate text-[11.5px] text-[var(--scry-faint)]"
-              title={searchPresentation.skippedIndexers
-                .map((indexer) =>
-                  indexer.reason ? `${indexer.name}: ${indexer.reason}` : indexer.name,
-                )
-                .join("\n")}
-            >
-              {t("title.contextReleaseSearchIndexerSkipped", {
-                count: searchPresentation.skippedIndexers.length,
-                names: searchPresentation.skippedIndexers
-                  .map((indexer) => indexer.name)
-                  .join(", "),
-              })}
-            </p>
-          ) : null}
-        </div>
+        ) : (
+          <ReleaseSearchSummary
+            presentation={searchPresentation}
+            results={results}
+            dataUi="title-release-search-summary"
+          />
+        )}
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           {results && results.length > 1 ? (
             <>
@@ -978,14 +923,13 @@ function TitleContextReleaseSearchPanel({
       </div>
       <div
         className={cn(
-          results !== null && results.length > 0 && !searchFailed ? "pt-3" : "py-4",
+          results !== null && results.length > 0 && !searchFailed
+            ? "pt-3"
+            : "py-4",
         )}
       >
-        {loading && (results === null || results.length === 0) ? (
-          <div className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 py-2 text-[12px] text-[var(--scry-muted2)]">
-            <LoadingMark className="h-4 w-4 text-[var(--scry-accent)]" />
-            {t("title.searchingReleases")}
-          </div>
+        {searchPresentation.showInitialLoader ? (
+          <ReleaseSearchLoader />
         ) : searchFailed ? (
           <p className="rounded-[10px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-2 text-[12px] text-[var(--scry-danger-text)]">
             {t("nzb.searchFailed")}
@@ -1205,7 +1149,8 @@ function TitleContextPanel({
     onCleared: reloadSelectedBlocklist,
   });
   const manualImportTitle = React.useMemo(
-    () => (title ? { id: title.id, name: title.name, facet: title.facet } : null),
+    () =>
+      title ? { id: title.id, name: title.name, facet: title.facet } : null,
     [title],
   );
   const manualImport = useManualImportLauncher({
@@ -1355,7 +1300,8 @@ function TitleContextPanel({
   }
 
   const posterUrl = selectPosterVariantUrl(title.posterUrl, "w250");
-  const backgroundUrl = title.backgroundUrl ?? title.backgroundSourceUrl ?? null;
+  const backgroundUrl =
+    title.backgroundUrl ?? title.backgroundSourceUrl ?? null;
   const yearLabel = formatTitleYear(title);
   const statusLabel = localizedTitleStatus(t, title.contentStatus);
   const addedAtLabel =
@@ -1385,10 +1331,9 @@ function TitleContextPanel({
       ? null
       : qualityLabel,
   ].filter((value): value is string => Boolean(value));
-  const heroMutedMetadata = [
-    runtimeLabel,
-    studioOrNetworkLabel,
-  ].filter((value): value is string => Boolean(value));
+  const heroMutedMetadata = [runtimeLabel, studioOrNetworkLabel].filter(
+    (value): value is string => Boolean(value),
+  );
   const heroGenreLabels = titleGenreLabels(title).slice(0, 4);
   const releaseSearchPanelId = `title-context-release-search-${title.id}`;
   const handleInteractiveSearchAction = () => {
@@ -1502,7 +1447,11 @@ function TitleContextPanel({
               <div className="mt-3 hidden min-h-10 sm:block">
                 <TitleRatingsStrip ratings={title.ratings} variant="hero" />
               </div>
-              <TitleListProvenance titleId={title.id} variant="hero" className="mt-2" />
+              <TitleListProvenance
+                titleId={title.id}
+                variant="hero"
+                className="mt-2"
+              />
               <p className="mt-3 min-h-[6.25rem] line-clamp-5 text-[12.5px] leading-5 text-[#b7c0dd]">
                 {overviewText}
               </p>
@@ -1511,9 +1460,15 @@ function TitleContextPanel({
                   <div className="hidden flex-wrap items-center gap-2 sm:flex [&_a]:h-8 [&_a]:rounded-[8px] [&_a]:border-white/10 [&_a]:bg-white/[0.07] [&_a]:px-2.5 [&_a]:py-1 [&_a]:text-[11px] [&_a]:text-[#dbe4fb] [&_a:hover]:bg-white/[0.12] [&_img]:h-4 [&_img]:w-4 [&_span]:text-[#dbe4fb]">
                     <ImdbExternalLink imdbId={imdbId} />
                     {view === "movies" ? (
-                      <TvdbMovieExternalLink tvdbId={tvdbId} slug={title.slug} />
+                      <TvdbMovieExternalLink
+                        tvdbId={tvdbId}
+                        slug={title.slug}
+                      />
                     ) : (
-                      <TvdbSeriesExternalLink tvdbId={tvdbId} slug={title.slug} />
+                      <TvdbSeriesExternalLink
+                        tvdbId={tvdbId}
+                        slug={title.slug}
+                      />
                     )}
                     <TmdbExternalLink
                       mediaType={view === "movies" ? "movie" : "tv"}
@@ -1596,7 +1551,9 @@ function TitleContextPanel({
               title={title}
               onInteractiveSearch={onInteractiveSearch}
               onQueueFromInteractive={onQueueFromInteractive}
-              onQueueAdditionalFromInteractive={onQueueAdditionalFromInteractive}
+              onQueueAdditionalFromInteractive={
+                onQueueAdditionalFromInteractive
+              }
               disabled={bulkActionBusy}
               runRequestId={releaseSearchRequestId}
               onLoadingChange={setReleaseSearchLoading}
@@ -1861,11 +1818,17 @@ export function MediaContentView({
       React.SetStateAction<Record<ViewCategoryId, string>>
     >;
     fileChmod: Record<ViewCategoryId, string>;
-    setFileChmod: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
+    setFileChmod: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
     folderChmod: Record<ViewCategoryId, string>;
-    setFolderChmod: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
+    setFolderChmod: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
     chownGroup: Record<ViewCategoryId, string>;
-    setChownGroup: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
+    setChownGroup: React.Dispatch<
+      React.SetStateAction<Record<ViewCategoryId, string>>
+    >;
     qualityProfileInheritValue: string;
     toProfileOptions: (
       profiles: ParsedQualityProfile[],
@@ -2091,12 +2054,9 @@ export function MediaContentView({
 }) {
   const t = useTranslate();
   const location = useLocation();
-  const contextPanelViewportMatches = useMinViewportWidth(
-    "(min-width: 760px)",
-  );
-  const posterContextPanelViewportMatches = useMinViewportWidth(
-    "(min-width: 720px)",
-  );
+  const contextPanelViewportMatches = useMinViewportWidth("(min-width: 760px)");
+  const posterContextPanelViewportMatches =
+    useMinViewportWidth("(min-width: 720px)");
   const selectedTitleListInlineViewportMatches = useMinViewportWidth(
     "(min-width: 1180px)",
   );
@@ -2297,8 +2257,7 @@ export function MediaContentView({
     React.useState(titleFilter);
   const [titleLayoutRef, titleLayoutWidth] =
     useMeasuredElementWidth<HTMLDivElement>();
-  const deferredTitleContextTitles =
-    React.useDeferredValue(titleContextTitles);
+  const deferredTitleContextTitles = React.useDeferredValue(titleContextTitles);
   const deferredCatalogDiscoveryGroups = React.useDeferredValue(
     catalogDiscoveryGroups,
   );
@@ -2330,8 +2289,7 @@ export function MediaContentView({
     [view],
   );
   const isTitleTableColumnSupported = React.useCallback(
-    (key: TitleTableColumnKey) =>
-      isTitleTableColumnSupportedForView(key, view),
+    (key: TitleTableColumnKey) => isTitleTableColumnSupportedForView(key, view),
     [view],
   );
   const titleTableColumnGroups = React.useMemo(
@@ -2412,8 +2370,7 @@ export function MediaContentView({
   }, [titleFilter]);
   const compactSelectedVisibleCount = React.useMemo(
     () =>
-      monitoredTitles.filter((title) => selectedTitleIds.has(title.id))
-        .length,
+      monitoredTitles.filter((title) => selectedTitleIds.has(title.id)).length,
     [monitoredTitles, selectedTitleIds],
   );
   const bulkPosterStackTitles = React.useMemo(
@@ -2423,43 +2380,41 @@ export function MediaContentView({
         .slice(0, 3),
     [monitoredTitles, selectedTitleIds],
   );
-  const selectedOverviewTitle = React.useMemo(
-    () => {
-      if (selectedOverviewTitleId) {
-        if (selectedOverviewTitleOverride?.id === selectedOverviewTitleId) {
-          return selectedOverviewTitleOverride;
-        }
-        return (
-          deferredTitleContextTitles.find(
-            (title) => title.id === selectedOverviewTitleId,
-          ) ??
-          monitoredTitles.find((title) => title.id === selectedOverviewTitleId) ??
-          null
-        );
+  const selectedOverviewTitle = React.useMemo(() => {
+    if (selectedOverviewTitleId) {
+      if (selectedOverviewTitleOverride?.id === selectedOverviewTitleId) {
+        return selectedOverviewTitleOverride;
       }
-      if (routeOverviewSlug) {
-        return (
-          deferredTitleContextTitles.find(
-            (title) => title.slug === routeOverviewSlug,
-          ) ?? null
-        );
-      }
-      return null;
-    },
-    [
-      deferredTitleContextTitles,
-      monitoredTitles,
-      routeOverviewSlug,
-      selectedOverviewTitleId,
-      selectedOverviewTitleOverride,
-    ],
-  );
+      return (
+        deferredTitleContextTitles.find(
+          (title) => title.id === selectedOverviewTitleId,
+        ) ??
+        monitoredTitles.find((title) => title.id === selectedOverviewTitleId) ??
+        null
+      );
+    }
+    if (routeOverviewSlug) {
+      return (
+        deferredTitleContextTitles.find(
+          (title) => title.slug === routeOverviewSlug,
+        ) ?? null
+      );
+    }
+    return null;
+  }, [
+    deferredTitleContextTitles,
+    monitoredTitles,
+    routeOverviewSlug,
+    selectedOverviewTitleId,
+    selectedOverviewTitleOverride,
+  ]);
   const activeOverviewTitle = selectedOverviewTitle;
   const seriesSidePanelTitleId = selectedSeriesSidePanelTitleId(
     view,
     selectedOverviewTitleId,
   );
-  const activeOverviewTitleId = activeOverviewTitle?.id ?? seriesSidePanelTitleId;
+  const activeOverviewTitleId =
+    activeOverviewTitle?.id ?? seriesSidePanelTitleId;
   React.useEffect(() => {
     if (
       !selectedOverviewTitleId ||
@@ -2520,8 +2475,7 @@ export function MediaContentView({
         ? t("search.facetSeries")
         : t("search.facetAnime");
   const effectiveViewMode: ContentViewMode = viewMode;
-  const contextPanelMinimumWidth =
-    effectiveViewMode === "poster" ? 720 : 760;
+  const contextPanelMinimumWidth = effectiveViewMode === "poster" ? 720 : 760;
   const catalogDiscoveryInlineMinimumWidth =
     effectiveViewMode === "poster"
       ? CATALOG_DISCOVERY_POSTER_INLINE_MIN_WIDTH
@@ -2692,8 +2646,7 @@ export function MediaContentView({
   const showTitleBulkSelectionBar =
     multiSelectActive &&
     !contextPanelAvailable &&
-    (collectionViewMode === "compact" ||
-      collectionViewMode === "poster-table");
+    (collectionViewMode === "compact" || collectionViewMode === "poster-table");
 
   React.useEffect(() => {
     if (
@@ -2776,8 +2729,7 @@ export function MediaContentView({
     ],
   );
   const showInitialScanAction =
-    canManageLibrarySettings &&
-    catalogSurfacePhase === "empty";
+    canManageLibrarySettings && catalogSurfacePhase === "empty";
   const showConfigureRootFoldersAction =
     canManageLibrarySettings &&
     (catalogSurfacePhase === "rootsMissing" ||
@@ -2981,7 +2933,12 @@ export function MediaContentView({
         ...previous,
         [activeQualityScopeId]: value,
       }));
-      saveSetting("system", activeQualityScopeId, "permissions.set_linux", value);
+      saveSetting(
+        "system",
+        activeQualityScopeId,
+        "permissions.set_linux",
+        value,
+      );
     },
     [activeQualityScopeId, saveSetting, setSetPermissionsLinux],
   );
@@ -2992,7 +2949,12 @@ export function MediaContentView({
         ...previous,
         [activeQualityScopeId]: value,
       }));
-      saveSetting("system", activeQualityScopeId, "permissions.file_chmod", value);
+      saveSetting(
+        "system",
+        activeQualityScopeId,
+        "permissions.file_chmod",
+        value,
+      );
     },
     [activeQualityScopeId, saveSetting, setFileChmod],
   );
@@ -3003,7 +2965,12 @@ export function MediaContentView({
         ...previous,
         [activeQualityScopeId]: value,
       }));
-      saveSetting("system", activeQualityScopeId, "permissions.folder_chmod", value);
+      saveSetting(
+        "system",
+        activeQualityScopeId,
+        "permissions.folder_chmod",
+        value,
+      );
     },
     [activeQualityScopeId, saveSetting, setFolderChmod],
   );
@@ -3014,7 +2981,12 @@ export function MediaContentView({
         ...previous,
         [activeQualityScopeId]: value,
       }));
-      saveSetting("system", activeQualityScopeId, "permissions.chown_group", value);
+      saveSetting(
+        "system",
+        activeQualityScopeId,
+        "permissions.chown_group",
+        value,
+      );
     },
     [activeQualityScopeId, saveSetting, setChownGroup],
   );
@@ -3121,7 +3093,8 @@ export function MediaContentView({
     };
 
     window.addEventListener("keydown", handleSelectedOverviewEscape);
-    return () => window.removeEventListener("keydown", handleSelectedOverviewEscape);
+    return () =>
+      window.removeEventListener("keydown", handleSelectedOverviewEscape);
   }, [
     activeOverviewTitleId,
     handleSelectedOverviewBackToList,
@@ -3213,10 +3186,7 @@ export function MediaContentView({
                         <Checkbox
                           checked={visibleTitleTableColumns[columnKey]}
                           onCheckedChange={(checked) =>
-                            toggleTitleTableColumn(
-                              columnKey,
-                              checked === true,
-                            )
+                            toggleTitleTableColumn(columnKey, checked === true)
                           }
                           aria-label={label}
                           size="compact"
@@ -3422,7 +3392,7 @@ export function MediaContentView({
               ? "reference"
               : facetSettingsSection === "routing"
                 ? "full"
-              : "default"
+                : "default"
           }
           trailingCrumb={
             facetSettingsSection === "library"
@@ -3431,171 +3401,177 @@ export function MediaContentView({
           }
         >
           {effectiveContentSettingsSection === "quality" ? (
-        <QualitySettingsPanel
-          contentSettingsLabel={contentSettingsLabel}
-          mediaSettingsLoading={mediaSettingsLoading}
-          mediaSettingsSaving={mediaSettingsSaving}
-          qualityProfiles={qualityProfiles}
-          qualityProfileParseError={qualityProfileParseError}
-          categoryQualityProfileOverrides={categoryQualityProfileOverrides}
-          categoryRequiredAudioLanguages={categoryRequiredAudioLanguages}
-          saveCategoryRequiredAudioLanguages={
-            saveCategoryRequiredAudioLanguages
-          }
-          activeQualityScopeId={activeQualityScopeId}
-          globalScoringPersona={globalScoringPersona}
-          categoryPersonaSelections={categoryPersonaSelections}
-          qualityProfileInheritValue={qualityProfileInheritValue}
-          toProfileOptions={toProfileOptions}
-          saveCategoryQualityProfileOverride={
-            saveCategoryQualityProfileOverride
-          }
-          onFacetPersonaSave={handleFacetPersonaSave}
-        />
-      ) : effectiveContentSettingsSection === "renaming" ? (
-        <RenameSettingsPanel
-          activeQualityScopeId={activeQualityScopeId}
-          mediaSettingsLoading={mediaSettingsLoading}
-          mediaSettingsSaving={mediaSettingsSaving}
-          categoryFolderTemplates={categoryFolderTemplates}
-          handleFolderTemplateChange={handleFolderTemplateChange}
-          categorySeasonFolderTemplates={categorySeasonFolderTemplates}
-          handleSeasonFolderTemplateChange={handleSeasonFolderTemplateChange}
-          categoryUseSeasonFolders={categoryUseSeasonFolders}
-          handleUseSeasonFoldersChange={(checked) =>
-            setCategoryUseSeasonFolders((previous) => ({
-              ...previous,
-              [activeQualityScopeId]: checked,
-            }))
-          }
-          categorySpecialsFolderTemplates={categorySpecialsFolderTemplates}
-          handleSpecialsFolderTemplateChange={handleSpecialsFolderTemplateChange}
-          categoryRenameTemplates={categoryRenameTemplates}
-          handleRenameTemplateChange={handleRenameTemplateChange}
-          categoryRenameEnabled={categoryRenameEnabled}
-          handleRenameEnabledChange={(checked) =>
-            setCategoryRenameEnabled((previous) => ({
-              ...previous,
-              [activeQualityScopeId]: checked ? "true" : "false",
-            }))
-          }
-          categoryRenameCollisionPolicies={categoryRenameCollisionPolicies}
-          handleRenameCollisionPolicyChange={handleRenameCollisionPolicyChange}
-          categoryRenameMissingMetadataPolicies={
-            categoryRenameMissingMetadataPolicies
-          }
-          handleRenameMissingMetadataPolicyChange={
-            handleRenameMissingMetadataPolicyChange
-          }
-          updateCategoryMediaProfileSettings={
-            updateCategoryMediaProfileSettings
-          }
-        />
-      ) : effectiveContentSettingsSection === "routing" ? (
-        <div className="space-y-[18px]">
-          <IndexerRoutingPanel
-            scopeLabel={scopeLabel}
-            activeQualityScopeId={activeQualityScopeId}
-            indexers={indexers}
-            activeScopeIndexerRouting={activeScopeIndexerRouting}
-            activeScopeIndexerRoutingOrder={activeScopeIndexerRoutingOrder}
-            indexerRoutingLoading={indexerRoutingLoading}
-            indexerRoutingSaving={indexerRoutingSaving}
-            onEnabledChange={handleIndexerEnabledChange}
-            onCategoriesChange={handleIndexerCategoriesChange}
-            onMoveUp={moveIndexerUp}
-            onMoveDown={moveIndexerDown}
-          />
-          <DownloadClientRoutingPanel
-            scopeLabel={scopeLabel}
-            downloadClients={downloadClients}
-            activeScopeRouting={activeScopeRouting}
-            activeScopeRoutingOrder={activeScopeRoutingOrder}
-            downloadClientRoutingLoading={downloadClientRoutingLoading}
-            downloadClientRoutingSaving={downloadClientRoutingSaving}
-            updateDownloadClientRoutingForScope={
-              updateDownloadClientRoutingForScope
-            }
-            moveDownloadClientInScope={moveDownloadClientInScope}
-          />
-        </div>
-      ) : effectiveContentSettingsSection === "library" ? (
-        view === "movies" || view === "series" || view === "anime" ? (
-          <MediaLibrarySettingsPanel
-            facet={
-              view === "movies"
-                ? "MOVIE"
-                : view === "series"
-                  ? "SERIES"
-                  : "ANIME"
-            }
-            settingsTitle={mediaLibrarySettingsTitle}
-            libraries={libraries}
-            librariesLoading={librariesLoading}
-            onActiveLibraryNameChange={setLibraryCrumb}
-            rootValidationLibraries={rootValidationLibraries}
-            rootValidationLibrariesLoading={rootValidationLibrariesLoading}
-            rootValidationUnavailable={rootValidationUnavailable}
-            invalidRootPathsByLibraryId={invalidRootPathsByLibraryId}
-            preferredLibraryId={
-              selectedLibraryIds.length === 1
-                ? selectedLibraryIds[0]
-                : allLibrariesValue
-            }
-            allLibrariesValue={allLibrariesValue}
-            loading={mediaSettingsLoading}
-            saving={librarySettingsSaving}
-            scanLoading={libraryScanLoading}
-            scanNotice={libraryScanNotice}
-            scanSummary={libraryScanSummary}
-            localPathStyle={localPathStyle}
-            qualityProfiles={qualityProfiles}
-            downloadClients={libraryDownloadClients}
-            downloadClientsLoading={libraryDownloadClientsLoading}
-            canCreateLibrary={canManageCatalogSettings}
-            canManageDownloadClientRouting={
-              canManageSystemSettings || canManageCatalogSettings
-            }
-            loadLibrarySettings={state.loadLibrarySettings}
-            loadFacetDownloadClientRouting={
-              state.loadFacetDownloadClientRouting
-            }
-            onCreateLibrary={state.createLibrary}
-            onUpdateLibrary={state.updateLibrary}
-            onDeleteLibrary={state.deleteLibrary}
-            onScan={handleLibraryScan}
-          />
-        ) : null
-      ) : effectiveContentSettingsSection === "general" ? (
-        <GeneralSettingsPanel
-          activeQualityScopeId={activeQualityScopeId}
-          mediaSettingsLoading={mediaSettingsLoading || mediaSettingsSaving}
-          categoryFillerPolicies={categoryFillerPolicies}
-          handleFillerPolicyChange={handleFillerPolicyChange}
-          categoryRecapPolicies={categoryRecapPolicies}
-          handleRecapPolicyChange={handleRecapPolicyChange}
-          categoryMonitorSpecials={categoryMonitorSpecials}
-          handleMonitorSpecialsChange={handleMonitorSpecialsChange}
-          categoryInterSeasonMovies={categoryInterSeasonMovies}
-          handleInterSeasonMoviesChange={handleInterSeasonMoviesChange}
-          categoryMonitorFillerMovies={categoryMonitorFillerMovies}
-          handleMonitorFillerMoviesChange={handleMonitorFillerMoviesChange}
-          nfoWriteOnImport={nfoWriteOnImport}
-          handleNfoWriteChange={handleNfoWriteChange}
-          plexmatchWriteOnImport={plexmatchWriteOnImport}
-          handlePlexmatchWriteChange={handlePlexmatchWriteChange}
-          importMode={importMode}
-          handleImportModeChange={handleImportModeChange}
-          localPathStyle={localPathStyle}
-          setPermissionsLinux={setPermissionsLinux}
-          handleSetPermissionsLinuxChange={handleSetPermissionsLinuxChange}
-          fileChmod={fileChmod}
-          handleFileChmodChange={handleFileChmodChange}
-          folderChmod={folderChmod}
-          handleFolderChmodChange={handleFolderChmodChange}
-          chownGroup={chownGroup}
-          handleChownGroupChange={handleChownGroupChange}
-        />
+            <QualitySettingsPanel
+              contentSettingsLabel={contentSettingsLabel}
+              mediaSettingsLoading={mediaSettingsLoading}
+              mediaSettingsSaving={mediaSettingsSaving}
+              qualityProfiles={qualityProfiles}
+              qualityProfileParseError={qualityProfileParseError}
+              categoryQualityProfileOverrides={categoryQualityProfileOverrides}
+              categoryRequiredAudioLanguages={categoryRequiredAudioLanguages}
+              saveCategoryRequiredAudioLanguages={
+                saveCategoryRequiredAudioLanguages
+              }
+              activeQualityScopeId={activeQualityScopeId}
+              globalScoringPersona={globalScoringPersona}
+              categoryPersonaSelections={categoryPersonaSelections}
+              qualityProfileInheritValue={qualityProfileInheritValue}
+              toProfileOptions={toProfileOptions}
+              saveCategoryQualityProfileOverride={
+                saveCategoryQualityProfileOverride
+              }
+              onFacetPersonaSave={handleFacetPersonaSave}
+            />
+          ) : effectiveContentSettingsSection === "renaming" ? (
+            <RenameSettingsPanel
+              activeQualityScopeId={activeQualityScopeId}
+              mediaSettingsLoading={mediaSettingsLoading}
+              mediaSettingsSaving={mediaSettingsSaving}
+              categoryFolderTemplates={categoryFolderTemplates}
+              handleFolderTemplateChange={handleFolderTemplateChange}
+              categorySeasonFolderTemplates={categorySeasonFolderTemplates}
+              handleSeasonFolderTemplateChange={
+                handleSeasonFolderTemplateChange
+              }
+              categoryUseSeasonFolders={categoryUseSeasonFolders}
+              handleUseSeasonFoldersChange={(checked) =>
+                setCategoryUseSeasonFolders((previous) => ({
+                  ...previous,
+                  [activeQualityScopeId]: checked,
+                }))
+              }
+              categorySpecialsFolderTemplates={categorySpecialsFolderTemplates}
+              handleSpecialsFolderTemplateChange={
+                handleSpecialsFolderTemplateChange
+              }
+              categoryRenameTemplates={categoryRenameTemplates}
+              handleRenameTemplateChange={handleRenameTemplateChange}
+              categoryRenameEnabled={categoryRenameEnabled}
+              handleRenameEnabledChange={(checked) =>
+                setCategoryRenameEnabled((previous) => ({
+                  ...previous,
+                  [activeQualityScopeId]: checked ? "true" : "false",
+                }))
+              }
+              categoryRenameCollisionPolicies={categoryRenameCollisionPolicies}
+              handleRenameCollisionPolicyChange={
+                handleRenameCollisionPolicyChange
+              }
+              categoryRenameMissingMetadataPolicies={
+                categoryRenameMissingMetadataPolicies
+              }
+              handleRenameMissingMetadataPolicyChange={
+                handleRenameMissingMetadataPolicyChange
+              }
+              updateCategoryMediaProfileSettings={
+                updateCategoryMediaProfileSettings
+              }
+            />
+          ) : effectiveContentSettingsSection === "routing" ? (
+            <div className="space-y-[18px]">
+              <IndexerRoutingPanel
+                scopeLabel={scopeLabel}
+                activeQualityScopeId={activeQualityScopeId}
+                indexers={indexers}
+                activeScopeIndexerRouting={activeScopeIndexerRouting}
+                activeScopeIndexerRoutingOrder={activeScopeIndexerRoutingOrder}
+                indexerRoutingLoading={indexerRoutingLoading}
+                indexerRoutingSaving={indexerRoutingSaving}
+                onEnabledChange={handleIndexerEnabledChange}
+                onCategoriesChange={handleIndexerCategoriesChange}
+                onMoveUp={moveIndexerUp}
+                onMoveDown={moveIndexerDown}
+              />
+              <DownloadClientRoutingPanel
+                scopeLabel={scopeLabel}
+                downloadClients={downloadClients}
+                activeScopeRouting={activeScopeRouting}
+                activeScopeRoutingOrder={activeScopeRoutingOrder}
+                downloadClientRoutingLoading={downloadClientRoutingLoading}
+                downloadClientRoutingSaving={downloadClientRoutingSaving}
+                updateDownloadClientRoutingForScope={
+                  updateDownloadClientRoutingForScope
+                }
+                moveDownloadClientInScope={moveDownloadClientInScope}
+              />
+            </div>
+          ) : effectiveContentSettingsSection === "library" ? (
+            view === "movies" || view === "series" || view === "anime" ? (
+              <MediaLibrarySettingsPanel
+                facet={
+                  view === "movies"
+                    ? "MOVIE"
+                    : view === "series"
+                      ? "SERIES"
+                      : "ANIME"
+                }
+                settingsTitle={mediaLibrarySettingsTitle}
+                libraries={libraries}
+                librariesLoading={librariesLoading}
+                onActiveLibraryNameChange={setLibraryCrumb}
+                rootValidationLibraries={rootValidationLibraries}
+                rootValidationLibrariesLoading={rootValidationLibrariesLoading}
+                rootValidationUnavailable={rootValidationUnavailable}
+                invalidRootPathsByLibraryId={invalidRootPathsByLibraryId}
+                preferredLibraryId={
+                  selectedLibraryIds.length === 1
+                    ? selectedLibraryIds[0]
+                    : allLibrariesValue
+                }
+                allLibrariesValue={allLibrariesValue}
+                loading={mediaSettingsLoading}
+                saving={librarySettingsSaving}
+                scanLoading={libraryScanLoading}
+                scanNotice={libraryScanNotice}
+                scanSummary={libraryScanSummary}
+                localPathStyle={localPathStyle}
+                qualityProfiles={qualityProfiles}
+                downloadClients={libraryDownloadClients}
+                downloadClientsLoading={libraryDownloadClientsLoading}
+                canCreateLibrary={canManageCatalogSettings}
+                canManageDownloadClientRouting={
+                  canManageSystemSettings || canManageCatalogSettings
+                }
+                loadLibrarySettings={state.loadLibrarySettings}
+                loadFacetDownloadClientRouting={
+                  state.loadFacetDownloadClientRouting
+                }
+                onCreateLibrary={state.createLibrary}
+                onUpdateLibrary={state.updateLibrary}
+                onDeleteLibrary={state.deleteLibrary}
+                onScan={handleLibraryScan}
+              />
+            ) : null
+          ) : effectiveContentSettingsSection === "general" ? (
+            <GeneralSettingsPanel
+              activeQualityScopeId={activeQualityScopeId}
+              mediaSettingsLoading={mediaSettingsLoading || mediaSettingsSaving}
+              categoryFillerPolicies={categoryFillerPolicies}
+              handleFillerPolicyChange={handleFillerPolicyChange}
+              categoryRecapPolicies={categoryRecapPolicies}
+              handleRecapPolicyChange={handleRecapPolicyChange}
+              categoryMonitorSpecials={categoryMonitorSpecials}
+              handleMonitorSpecialsChange={handleMonitorSpecialsChange}
+              categoryInterSeasonMovies={categoryInterSeasonMovies}
+              handleInterSeasonMoviesChange={handleInterSeasonMoviesChange}
+              categoryMonitorFillerMovies={categoryMonitorFillerMovies}
+              handleMonitorFillerMoviesChange={handleMonitorFillerMoviesChange}
+              nfoWriteOnImport={nfoWriteOnImport}
+              handleNfoWriteChange={handleNfoWriteChange}
+              plexmatchWriteOnImport={plexmatchWriteOnImport}
+              handlePlexmatchWriteChange={handlePlexmatchWriteChange}
+              importMode={importMode}
+              handleImportModeChange={handleImportModeChange}
+              localPathStyle={localPathStyle}
+              setPermissionsLinux={setPermissionsLinux}
+              handleSetPermissionsLinuxChange={handleSetPermissionsLinuxChange}
+              fileChmod={fileChmod}
+              handleFileChmodChange={handleFileChmodChange}
+              folderChmod={folderChmod}
+              handleFolderChmodChange={handleFolderChmodChange}
+              chownGroup={chownGroup}
+              handleChownGroupChange={handleChownGroupChange}
+            />
           ) : null}
         </FacetSettingsSection>
       ) : view === "movies" || view === "series" || view === "anime" ? (
@@ -3627,84 +3603,95 @@ export function MediaContentView({
                     {catalogDiscoveryFlyoutAvailable ? (
                       <div className="my-3 flex shrink-0 justify-end">
                         <div className="flex min-w-0 flex-[999_1_28rem] overflow-hidden rounded-[11px] border !border-[rgba(var(--scry-accent-rgb),0.55)] bg-[var(--scry-inset)] shadow-none">
-                      {catalogDiscoveryFlyoutAvailable ? (
-                        <Sheet>
-                          <SheetTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-10 min-w-0 flex-1 shrink-0 gap-2 rounded-none border-0 bg-transparent px-3 text-[13px] text-[var(--scry-body)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                            >
-                              <SlidersHorizontal className="h-4 w-4 text-[var(--scry-accent-text)]" />
-                              <span>{t("discovery.filters")}</span>
-                            </Button>
-                          </SheetTrigger>
-                          <SheetContent
-                            side="right"
-                            className="w-[min(92vw,26rem)] max-w-none gap-0 border-l border-[var(--scry-border2)] bg-[var(--scry-surfD)] p-0 sm:max-w-none"
-                          >
-                            <SheetHeader className="sr-only">
-                              <SheetTitle>{t("discovery.filters")}</SheetTitle>
-                            </SheetHeader>
-                            <CatalogFiltersPanel
-                              libraries={libraries}
-                              librariesLoading={librariesLoading}
-                              selectedLibraryIds={selectedLibraryIds}
-                              onSelectedLibraryIdsChange={
-                                setSelectedLibraryIds
-                              }
-                              filters={advancedTitleFilters}
-                              options={titleCatalogFilterOptions}
-                              optionsError={titleCatalogFilterOptionsError}
-                              onRetryOptions={retryTitleCatalogFilterOptions}
-                              onFiltersChange={updateAdvancedTitleFilters}
-                              searchValue={titleFilterInputValue}
-                              onSearchValueChange={handleTitleFilterValueChange}
-                              onClear={clearAdvancedTitleFilters}
-                              quickFilters={titleQuickFilters}
-                              quickFilterCounts={titleQuickFilterCounts}
-                              quickFilterView={view}
-                              onToggleQuickMonitoring={
-                                toggleTitleQuickMonitoringFilter
-                              }
-                              onToggleQuickStatus={toggleTitleQuickStatusFilter}
-                              onClearQuickFilters={clearTitleQuickFilters}
-                              className="h-full"
-                            />
-                          </SheetContent>
-                        </Sheet>
-                      ) : null}
-                      {catalogDiscoveryFlyoutAvailable ? (
-                        <Sheet>
-                          <SheetTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="h-10 min-w-0 flex-1 shrink-0 gap-2 rounded-none border-0 border-l border-[var(--scry-border2)] bg-transparent px-3 text-[13px] text-[var(--scry-body)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                            >
-                              <Sparkles className="h-4 w-4 text-[var(--scry-accent-text)]" />
-                              <span>{t("title.contextForYouTitle")}</span>
-                            </Button>
-                          </SheetTrigger>
-                          <SheetContent
-                            side="right"
-                            className="w-[min(92vw,34rem)] max-w-none gap-0 border-l border-[var(--scry-border2)] bg-[var(--scry-surfD)] p-0 sm:max-w-none"
-                          >
-                            <SheetHeader className="sr-only">
-                              <SheetTitle>
-                                {t("title.contextForYouTitle")}
-                              </SheetTitle>
-                            </SheetHeader>
-                            <TitleContextForYouPanel
-                              discoveryGroups={deferredCatalogDiscoveryGroups}
-                              view={view}
-                              canManageTitle={canManageCatalogDiscovery}
-                              canRequestMedia={canRequestCatalogDiscovery}
-                              onDiscoveryAction={onCatalogDiscoveryAction}
-                            />
-                          </SheetContent>
-                        </Sheet>
-                      ) : null}
+                          {catalogDiscoveryFlyoutAvailable ? (
+                            <Sheet>
+                              <SheetTrigger asChild>
+                                <Button
+                                  id="catalog-filters-open"
+                                  type="button"
+                                  variant="outline"
+                                  className="h-10 min-w-0 flex-1 shrink-0 gap-2 rounded-none border-0 bg-transparent px-3 text-[13px] text-[var(--scry-body)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                                >
+                                  <SlidersHorizontal className="h-4 w-4 text-[var(--scry-accent-text)]" />
+                                  <span>{t("discovery.filters")}</span>
+                                </Button>
+                              </SheetTrigger>
+                              <SheetContent
+                                side="right"
+                                className="w-[min(92vw,26rem)] max-w-none gap-0 border-l border-[var(--scry-border2)] bg-[var(--scry-surfD)] p-0 sm:max-w-none"
+                              >
+                                <SheetHeader className="sr-only">
+                                  <SheetTitle>
+                                    {t("discovery.filters")}
+                                  </SheetTitle>
+                                </SheetHeader>
+                                <CatalogFiltersPanel
+                                  libraries={libraries}
+                                  librariesLoading={librariesLoading}
+                                  selectedLibraryIds={selectedLibraryIds}
+                                  onSelectedLibraryIdsChange={
+                                    setSelectedLibraryIds
+                                  }
+                                  filters={advancedTitleFilters}
+                                  options={titleCatalogFilterOptions}
+                                  optionsError={titleCatalogFilterOptionsError}
+                                  onRetryOptions={
+                                    retryTitleCatalogFilterOptions
+                                  }
+                                  onFiltersChange={updateAdvancedTitleFilters}
+                                  searchValue={titleFilterInputValue}
+                                  onSearchValueChange={
+                                    handleTitleFilterValueChange
+                                  }
+                                  onClear={clearAdvancedTitleFilters}
+                                  quickFilters={titleQuickFilters}
+                                  quickFilterCounts={titleQuickFilterCounts}
+                                  quickFilterView={view}
+                                  onToggleQuickMonitoring={
+                                    toggleTitleQuickMonitoringFilter
+                                  }
+                                  onToggleQuickStatus={
+                                    toggleTitleQuickStatusFilter
+                                  }
+                                  onClearQuickFilters={clearTitleQuickFilters}
+                                  className="h-full"
+                                />
+                              </SheetContent>
+                            </Sheet>
+                          ) : null}
+                          {catalogDiscoveryFlyoutAvailable ? (
+                            <Sheet>
+                              <SheetTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-10 min-w-0 flex-1 shrink-0 gap-2 rounded-none border-0 border-l border-[var(--scry-border2)] bg-transparent px-3 text-[13px] text-[var(--scry-body)] shadow-none transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                                >
+                                  <Sparkles className="h-4 w-4 text-[var(--scry-accent-text)]" />
+                                  <span>{t("title.contextForYouTitle")}</span>
+                                </Button>
+                              </SheetTrigger>
+                              <SheetContent
+                                side="right"
+                                className="w-[min(92vw,34rem)] max-w-none gap-0 border-l border-[var(--scry-border2)] bg-[var(--scry-surfD)] p-0 sm:max-w-none"
+                              >
+                                <SheetHeader className="sr-only">
+                                  <SheetTitle>
+                                    {t("title.contextForYouTitle")}
+                                  </SheetTitle>
+                                </SheetHeader>
+                                <TitleContextForYouPanel
+                                  discoveryGroups={
+                                    deferredCatalogDiscoveryGroups
+                                  }
+                                  view={view}
+                                  canManageTitle={canManageCatalogDiscovery}
+                                  canRequestMedia={canRequestCatalogDiscovery}
+                                  onDiscoveryAction={onCatalogDiscoveryAction}
+                                />
+                              </SheetContent>
+                            </Sheet>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -3903,7 +3890,8 @@ export function MediaContentView({
                     ? "minmax(0,1fr) minmax(23rem,30rem)"
                     : undefined;
                 const selectedTitleGridTemplateColumns =
-                  selectedTitleListInlineActive || selectedTitlePosterInlineActive
+                  selectedTitleListInlineActive ||
+                  selectedTitlePosterInlineActive
                     ? "minmax(0,1fr) clamp(700px,50%,1030px)"
                     : undefined;
                 const titleListDisclosure =
@@ -3934,17 +3922,16 @@ export function MediaContentView({
                       <span>{t("title.contextListDisclosure")}</span>
                     </Button>
                   ) : undefined;
-                const titleOverviewPaneClassName =
-                  selectedTitleLayoutActive
-                    ? selectedTitleListInlineActive ||
-                      selectedTitlePosterInlineActive
+                const titleOverviewPaneClassName = selectedTitleLayoutActive
+                  ? selectedTitleListInlineActive ||
+                    selectedTitlePosterInlineActive
+                    ? "flex h-full min-h-0"
+                    : "flex min-h-0 flex-1"
+                  : contextPanelAvailable
+                    ? collectionViewMode === "poster"
                       ? "flex h-full min-h-0"
-                      : "flex min-h-0 flex-1"
-                    : contextPanelAvailable
-                      ? collectionViewMode === "poster"
-                        ? "flex h-full min-h-0"
-                        : "flex h-full"
-                      : "hidden";
+                      : "flex h-full"
+                    : "hidden";
                 const titleOverviewPane = multiSelectActive ? (
                   <section
                     id={selectedTitleContextPanelId}
@@ -4036,109 +4023,110 @@ export function MediaContentView({
                     </div>
                   </section>
                 ) : seriesSidePanelTitleId !== null ? (
-                    <section
-                      id={selectedTitleContextPanelId}
-                      aria-label={t("title.contextPanelTitle")}
-                      className={cn(
-                        "min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
-                        titleOverviewPaneClassName,
-                      )}
+                  <section
+                    id={selectedTitleContextPanelId}
+                    aria-label={t("title.contextPanelTitle")}
+                    className={cn(
+                      "min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
+                      titleOverviewPaneClassName,
+                    )}
+                  >
+                    <div
+                      data-slot="title-context-scroll"
+                      className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] sm:p-5 sm:pb-5"
                     >
-                      <div
-                        data-slot="title-context-scroll"
-                        className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] sm:p-5 sm:pb-5"
-                      >
-                        {titleListDisclosure ? (
-                          <div className="mb-3 flex items-center">
-                            {titleListDisclosure}
-                          </div>
-                        ) : null}
-                        <SeriesOverviewContainer
-                          titleId={seriesSidePanelTitleId}
-                          fullBleedHero
-                          initialEpisodeId={routeOverviewEpisodeId}
-                          onTitleNotFound={handleSelectedOverviewBackToList}
-                          onBackToList={handleSelectedOverviewBackToList}
-                          onTitleResolved={(resolvedTitle) => {
-                            if (resolvedTitle.id !== seriesSidePanelTitleId) {
-                              onOpenOverview(view, resolvedTitle);
-                            }
-                          }}
-                        />
-                      </div>
-                    </section>
-                  ) : (
-                    <TitleContextPanel
-                      id={selectedTitleContextPanelId}
-                      title={activeOverviewTitle}
-                      discoveryGroups={deferredCatalogDiscoveryGroups}
-                      libraries={libraries}
-                      librariesLoading={librariesLoading}
-                      selectedLibraryIds={selectedLibraryIds}
-                      onSelectedLibraryIdsChange={setSelectedLibraryIds}
-                      advancedFilters={advancedTitleFilters}
-                      filterOptions={titleCatalogFilterOptions}
-                      filterOptionsError={titleCatalogFilterOptionsError}
-                      onRetryFilterOptions={retryTitleCatalogFilterOptions}
-                      onAdvancedFiltersChange={updateAdvancedTitleFilters}
-                      onClearAdvancedFilters={clearAdvancedTitleFilters}
-                      view={view}
-                      blocklistEntries={selectedOverviewBlocklistEntries}
-                      onBlocklistChanged={reloadSelectedOverviewBlocklist}
-                      externalSubtitles={selectedOverviewExternalSubtitles}
-                      isTogglingMonitored={
-                        activeOverviewTitle
-                          ? isTogglingTitleMonitoredById[
-                              activeOverviewTitle.id
-                            ] === true
-                          : false
-                      }
-                      isDeleting={
-                        activeOverviewTitle
-                          ? isDeletingCatalogTitleById[
-                              activeOverviewTitle.id
-                            ] === true
-                          : false
-                      }
-                      onUpdateTitleOptions={updateMovieTitleOptions}
-                      onTitleOptionsChanged={refreshMovieTitleOptions}
-                      onCriticalMutation={recordCriticalCatalogMutation}
-                      onToggleMonitored={toggleTitleMonitored}
-                      onRefreshSubtitles={refreshSelectedOverviewExternalSubtitles}
-                      onMakePrimaryMediaFile={
-                        makeSelectedOverviewMovieFilePrimary
-                      }
-                      primaryMediaFileUpdatingId={
-                        selectedOverviewPrimaryMovieFileUpdatingId
-                      }
-                      onInteractiveSearch={runInteractiveSearchForTitle}
-                      onQueueFromInteractive={queueExistingFromRelease}
-                      onQueueAdditionalFromInteractive={
-                        queueAdditionalFromRelease
-                      }
-                      bulkActionBusy={bulkActionBusy}
-                      onDelete={handleDeleteCatalogTitle}
-                      onClearSelection={onCloseOverview}
-                      canManageTitle={canManageTitle}
-                      canRequestMedia={canRequestCatalogDiscovery}
-                      manageableDiscoveryFacets={manageableDiscoveryFacetSet}
-                      requestableDiscoveryFacets={requestableDiscoveryFacetSet}
-                      onDiscoveryAction={onCatalogDiscoveryAction}
-                      titleFilterValue={titleFilterInputValue}
-                      onTitleFilterValueChange={handleTitleFilterValueChange}
-                      quickFilters={titleQuickFilters}
-                      quickFilterCounts={titleQuickFilterCounts}
-                      quickFilterView={view}
-                      onToggleQuickMonitoring={toggleTitleQuickMonitoringFilter}
-                      onToggleQuickStatus={toggleTitleQuickStatusFilter}
-                      onClearQuickFilters={clearTitleQuickFilters}
-                      titleListDisclosure={titleListDisclosure}
-                      onCollapseCatalogRail={() =>
-                        setCatalogContextRailCollapsed(true)
-                      }
-                      className={titleOverviewPaneClassName}
-                    />
-                  );
+                      {titleListDisclosure ? (
+                        <div className="mb-3 flex items-center">
+                          {titleListDisclosure}
+                        </div>
+                      ) : null}
+                      <SeriesOverviewContainer
+                        titleId={seriesSidePanelTitleId}
+                        fullBleedHero
+                        initialEpisodeId={routeOverviewEpisodeId}
+                        onTitleNotFound={handleSelectedOverviewBackToList}
+                        onBackToList={handleSelectedOverviewBackToList}
+                        onTitleResolved={(resolvedTitle) => {
+                          if (resolvedTitle.id !== seriesSidePanelTitleId) {
+                            onOpenOverview(view, resolvedTitle);
+                          }
+                        }}
+                      />
+                    </div>
+                  </section>
+                ) : (
+                  <TitleContextPanel
+                    id={selectedTitleContextPanelId}
+                    title={activeOverviewTitle}
+                    discoveryGroups={deferredCatalogDiscoveryGroups}
+                    libraries={libraries}
+                    librariesLoading={librariesLoading}
+                    selectedLibraryIds={selectedLibraryIds}
+                    onSelectedLibraryIdsChange={setSelectedLibraryIds}
+                    advancedFilters={advancedTitleFilters}
+                    filterOptions={titleCatalogFilterOptions}
+                    filterOptionsError={titleCatalogFilterOptionsError}
+                    onRetryFilterOptions={retryTitleCatalogFilterOptions}
+                    onAdvancedFiltersChange={updateAdvancedTitleFilters}
+                    onClearAdvancedFilters={clearAdvancedTitleFilters}
+                    view={view}
+                    blocklistEntries={selectedOverviewBlocklistEntries}
+                    onBlocklistChanged={reloadSelectedOverviewBlocklist}
+                    externalSubtitles={selectedOverviewExternalSubtitles}
+                    isTogglingMonitored={
+                      activeOverviewTitle
+                        ? isTogglingTitleMonitoredById[
+                            activeOverviewTitle.id
+                          ] === true
+                        : false
+                    }
+                    isDeleting={
+                      activeOverviewTitle
+                        ? isDeletingCatalogTitleById[activeOverviewTitle.id] ===
+                          true
+                        : false
+                    }
+                    onUpdateTitleOptions={updateMovieTitleOptions}
+                    onTitleOptionsChanged={refreshMovieTitleOptions}
+                    onCriticalMutation={recordCriticalCatalogMutation}
+                    onToggleMonitored={toggleTitleMonitored}
+                    onRefreshSubtitles={
+                      refreshSelectedOverviewExternalSubtitles
+                    }
+                    onMakePrimaryMediaFile={
+                      makeSelectedOverviewMovieFilePrimary
+                    }
+                    primaryMediaFileUpdatingId={
+                      selectedOverviewPrimaryMovieFileUpdatingId
+                    }
+                    onInteractiveSearch={runInteractiveSearchForTitle}
+                    onQueueFromInteractive={queueExistingFromRelease}
+                    onQueueAdditionalFromInteractive={
+                      queueAdditionalFromRelease
+                    }
+                    bulkActionBusy={bulkActionBusy}
+                    onDelete={handleDeleteCatalogTitle}
+                    onClearSelection={onCloseOverview}
+                    canManageTitle={canManageTitle}
+                    canRequestMedia={canRequestCatalogDiscovery}
+                    manageableDiscoveryFacets={manageableDiscoveryFacetSet}
+                    requestableDiscoveryFacets={requestableDiscoveryFacetSet}
+                    onDiscoveryAction={onCatalogDiscoveryAction}
+                    titleFilterValue={titleFilterInputValue}
+                    onTitleFilterValueChange={handleTitleFilterValueChange}
+                    quickFilters={titleQuickFilters}
+                    quickFilterCounts={titleQuickFilterCounts}
+                    quickFilterView={view}
+                    onToggleQuickMonitoring={toggleTitleQuickMonitoringFilter}
+                    onToggleQuickStatus={toggleTitleQuickStatusFilter}
+                    onClearQuickFilters={clearTitleQuickFilters}
+                    titleListDisclosure={titleListDisclosure}
+                    onCollapseCatalogRail={() =>
+                      setCatalogContextRailCollapsed(true)
+                    }
+                    className={titleOverviewPaneClassName}
+                  />
+                );
 
                 return (
                   <div
@@ -4189,7 +4177,9 @@ export function MediaContentView({
                         selectedTitleListDrawerModeActive ? true : undefined
                       }
                       aria-label={t("title.contextTitleList")}
-                      tabIndex={selectedTitleListDrawerModeActive ? -1 : undefined}
+                      tabIndex={
+                        selectedTitleListDrawerModeActive ? -1 : undefined
+                      }
                       className={cn(
                         "min-w-0",
                         collectionViewMode === "poster"
@@ -4207,7 +4197,9 @@ export function MediaContentView({
                               : "hidden"),
                       )}
                     >
-                      {!keepCatalogHeaderOutsideWorkspace ? catalogHeader : null}
+                      {!keepCatalogHeaderOutsideWorkspace
+                        ? catalogHeader
+                        : null}
                       {titleCatalogControlBar}
                       <div
                         className={cn(

@@ -578,7 +578,10 @@ fn transient_poll_status(error: &AppError) -> Option<ListAccountPollStatus> {
 fn link_write_failure_is_transient(error: &AppError) -> bool {
     matches!(
         error,
-        AppError::Repository(_) | AppError::TemporaryUnavailable { .. }
+        AppError::Repository(_)
+            | AppError::RepositoryFailure { .. }
+            | AppError::RepositoryFailed { .. }
+            | AppError::TemporaryUnavailable { .. }
     ) || transient_poll_status(error).is_some()
 }
 fn poll_answer(status: ListAccountPollStatus) -> ListAccountPoll {
@@ -647,12 +650,19 @@ fn key_rejected() -> AppError {
     )
 }
 fn missing() -> AppError {
-    AppError::NotFound("list account link not found or expired".into())
+    AppError::not_found_reason(
+        crate::error_reasons::lists::ACCOUNT_LINK_NOT_FOUND,
+        "list account link not found or expired",
+    )
 }
 fn random_token() -> AppResult<String> {
     let mut bytes = [0u8; 32];
-    aws_lc_rs::rand::fill(&mut bytes)
-        .map_err(|_| AppError::Validation("could not start account link".into()))?;
+    aws_lc_rs::rand::fill(&mut bytes).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::lists::COULD_NOT_START_ACCOUNT_LINK,
+            "could not start account link",
+        )
+    })?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 fn origin(value: &str) -> AppResult<String> {
@@ -760,7 +770,10 @@ impl ListAccountRuntime {
 impl AppUseCase {
     pub(crate) async fn require_personal_lists_allowed(&self, actor: &User) -> AppResult<()> {
         if !actor.authorization.login_status.is_enabled() {
-            return Err(AppError::Unauthorized("account is disabled".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::lists::ACCOUNT_DISABLED,
+                "account is disabled",
+            ));
         }
         if self
             .services
@@ -770,8 +783,9 @@ impl AppUseCase {
             .await?
             .is_some_and(|policy| policy.policy == ListPolicy::None)
         {
-            return Err(AppError::Unauthorized(
-                "personal lists are not allowed for this member".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::lists::PERSONAL_LISTS_NOT_ALLOWED_MEMBER,
+                "personal lists are not allowed for this member",
             ));
         }
         Ok(())
@@ -806,7 +820,12 @@ impl AppUseCase {
         let (_guard, account) = self
             .refresh_list_account_interactive(id, |account| ensure_account_owner(actor, account))
             .await?;
-        let account = account.ok_or_else(|| AppError::NotFound("list account not found".into()))?;
+        let account = account.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::lists::ACCOUNT_NOT_FOUND,
+                "list account not found",
+            )
+        })?;
         let runtime = &self.services.lists.account_runtime;
         // Only a working account answers from an earlier read; one that needs
         // reconnecting still asks, so the provider's refusal is what shows.
@@ -832,7 +851,12 @@ impl AppUseCase {
             .accounts
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound("list account not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::ACCOUNT_NOT_FOUND,
+                    "list account not found",
+                )
+            })?;
         ensure_account_owner(actor, &account)?;
         Ok(account)
     }
@@ -848,7 +872,12 @@ impl AppUseCase {
                         || list.provider_aliases.iter().any(|alias| alias == provider)
                 })
             })
-            .ok_or_else(|| AppError::NotFound("list provider not found".into()))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::lists::PROVIDER_NOT_FOUND,
+                    "list provider not found",
+                )
+            })
     }
     pub async fn start_list_account_link(
         &self,
@@ -1458,9 +1487,12 @@ impl AppUseCase {
                     None,
                 ))
             }
-            Err(error @ (AppError::Repository(_) | AppError::TemporaryUnavailable { .. })) => {
-                Err(error)
-            }
+            Err(
+                error @ (AppError::Repository(_)
+                | AppError::RepositoryFailure { .. }
+                | AppError::RepositoryFailed { .. }
+                | AppError::TemporaryUnavailable { .. }),
+            ) => Err(error),
             // A key being linked was refused by the provider; nothing is stored
             // yet, so the member is asked for the right key rather than to reconnect.
             Ok(PluginResult::Err(error))

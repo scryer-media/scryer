@@ -429,7 +429,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id} not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id} not found"),
+                )
+            })?;
         if let Some(rule_set_id) = rule_set_id.as_deref() {
             self.require_maintenance_rule_set(rule_set_id).await?;
         }
@@ -469,7 +474,12 @@ impl AppUseCase {
             .maintenance_evaluation
             .get_exclusion(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("maintenance exclusion {id} not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::maintenance::EXCLUSION_NOT_FOUND,
+                    format!("maintenance exclusion {id} not found"),
+                )
+            })?;
         self.services
             .customization
             .maintenance_evaluation
@@ -651,7 +661,13 @@ impl AppUseCase {
                 .await
             {
                 Ok(subject) => subject,
-                Err(AppError::NotFound(_) | AppError::Validation(_)) => continue,
+                Err(
+                    AppError::NotFound(_)
+                    | AppError::NotFoundReason { .. }
+                    | AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. },
+                ) => continue,
                 Err(error) => return Err(error),
             };
             let root_summary = if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title {
@@ -998,10 +1014,13 @@ impl AppUseCase {
             rego_source: detail.revision.rego_source.clone(),
         }])
         .map_err(|error| {
-            AppError::Validation(format!(
-                "maintenance rule {} failed to compile: {error}",
-                rule_set.id
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_FAILED_COMPILE,
+                format!(
+                    "maintenance rule {} failed to compile: {error}",
+                    rule_set.id
+                ),
+            )
         })?;
         let mut evaluator = engine.evaluator();
 
@@ -1354,7 +1373,7 @@ impl AppUseCase {
                     .await
                 {
                     Ok(subject) => subject,
-                    Err(AppError::NotFound(_)) => {
+                    Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
                         self.release_storage_sequence_completion_if_capacity_available(
                             &membership,
                             storage_root_id,

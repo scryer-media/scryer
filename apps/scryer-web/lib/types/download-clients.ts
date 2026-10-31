@@ -81,5 +81,7 @@ export type DownloadClientRoutingSettingsByScope = Record<
 >;
 
 export type NzbgetCategoryRoutingSettings = DownloadClientRoutingSettings;
-export type NzbgetClientRoutingSettingsByClient = DownloadClientRoutingSettingsByClient;
-export type NzbgetClientRoutingSettingsByScope = DownloadClientRoutingSettingsByScope;
+export type NzbgetClientRoutingSettingsByClient =
+  DownloadClientRoutingSettingsByClient;
+export type NzbgetClientRoutingSettingsByScope =
+  DownloadClientRoutingSettingsByScope;

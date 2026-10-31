@@ -9,6 +9,8 @@ use crate::services::{CanonicalSubmissionTitleState, UncertainDownloadSubmission
 
 #[derive(Clone)]
 pub(crate) struct CanonicalDownloadSubmissionIntent {
+    /// Automatic submissions must recheck recent missing-download history under the title lock.
+    pub automatic: bool,
     pub request: DownloadClientAddRequest,
     pub scope: SubmissionScope,
     pub conflict_policy: SubmissionConflictPolicy,
@@ -25,6 +27,8 @@ pub(crate) struct CanonicalDownloadSubmissionIntent {
 pub(crate) enum CanonicalDownloadSubmissionOutcome {
     Accepted(CanonicalDownloadSubmission),
     Conflict(SubmissionScopeConflict),
+    /// Admission could not establish that another automatic grab is safe.
+    Deferred,
 }
 
 pub(crate) struct CanonicalDownloadSubmission {
@@ -228,6 +232,15 @@ impl AppUseCase {
             .find_by_canonical_download_id(&effective_download_id)
             .await?
         else {
+            // Adoption may already have withdrawn our pending intent. Keep
+            // the title fenced until this unknown acceptance is reconciled.
+            self.runtime
+                .acquisition
+                .download_submission_guards
+                .mark_uncertain(
+                    title_id,
+                    UncertainDownloadSubmissionClaim::ambiguous(effective_download_id, None),
+                );
             return Err(AppError::DownloadSubmitAmbiguous(format!(
                 "download client reused canonical identity {effective_download_id}, but its submission could not be loaded"
             )));
@@ -301,6 +314,13 @@ impl AppUseCase {
                     .find_by_canonical_download_id(&download_id)
                     .await?
                 else {
+                    self.runtime
+                        .acquisition
+                        .download_submission_guards
+                        .mark_uncertain(
+                            title_id,
+                            UncertainDownloadSubmissionClaim::ambiguous(download_id, None),
+                        );
                     return Err(AppError::DownloadSubmitAmbiguous(format!(
                         "download client reused canonical identity {download_id}, but its submission could not be loaded"
                     )));
@@ -342,6 +362,14 @@ impl AppUseCase {
             .download_submission_guards
             .acquire_title(&title_id)
             .await;
+
+        if intent.automatic
+            && let Err(error) = self.require_recent_missing_grab_admission(&intent).await
+        {
+            tracing::warn!(title_id = %title_id, reason = ?error.validation_reason(), error = %error,
+                "automatic submission deferred by recent-grab admission");
+            return Ok(CanonicalDownloadSubmissionOutcome::Deferred);
+        }
 
         let _location_guard = self
             .acquire_location_title_mutation(
@@ -537,15 +565,21 @@ impl AppUseCase {
                 {
                     snapshot
                 } else {
-                    let snapshot = self
-                        .services
-                        .integrations
-                        .download_client
-                        .list_snapshot_outcome_excluding_client_types(100, &[])
-                        .await
-                        .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?;
-                    guards.store_client_snapshot(snapshot.clone());
-                    snapshot
+                    loop {
+                        let generation = guards.client_snapshot_generation();
+                        let snapshot = self
+                            .services
+                            .integrations
+                            .download_client
+                            .list_snapshot_outcome_excluding_client_types(100, &[])
+                            .await
+                            .map_err(|error| {
+                                AppError::DownloadSubmitUnavailable(error.to_string())
+                            })?;
+                        if guards.store_client_snapshot(generation, snapshot.clone()) {
+                            break snapshot;
+                        }
+                    }
                 };
                 Some(snapshot)
             }
@@ -644,7 +678,7 @@ impl AppUseCase {
         }
 
         let download_id = intent.request.download_id.ok_or_else(|| {
-            AppError::Validation("canonical download submission requires a download id".to_string())
+            AppError::validation_refused(crate::error_reasons::acquisition::CANONICAL_DOWNLOAD_SUBMISSION_REQUIRES_DOWNLOAD_ID, "canonical download submission requires a download id".to_string())
         })?;
         let source_kind = intent.request.source_kind;
         let source_hint = normalize_release_attempt_hint(intent.request.source_hint.as_deref());
@@ -705,15 +739,15 @@ impl AppUseCase {
                 scope: intent.scope.clone(),
             })
             .await?;
-        // The intent's unbound binding retires memoized resolutions of its id.
+        // Retire cached ownership before any subsequent fallible write.
+        self.runtime
+            .acquisition
+            .invalidate_download_registry_observations();
         self.services
             .workflow
             .download_submissions
             .set_password_candidates(&download_id, &request.password_candidates())
             .await?;
-        self.runtime
-            .acquisition
-            .invalidate_download_registry_observations();
         tracing::debug!(
             title_id = %title_id,
             download_id = %download_id,
@@ -869,6 +903,9 @@ impl AppUseCase {
             .await
         {
             Ok(disposition) => {
+                self.runtime
+                    .acquisition
+                    .invalidate_download_registry_observations();
                 tracing::debug!(
                     title_id = %title_id,
                     download_id = %download_id,
@@ -899,11 +936,6 @@ impl AppUseCase {
                 ));
             }
         };
-        // A grab's binding was created (or a stale terminal one retired and
-        // replaced) inside the store's own transaction.
-        self.runtime
-            .acquisition
-            .invalidate_download_registry_observations();
         if let CanonicalDownloadIdentityDisposition::AdoptedExisting {
             download_id: effective_download_id,
         } = identity_disposition
@@ -946,7 +978,10 @@ impl AppUseCase {
 
         Ok(CanonicalDownloadSubmissionOutcome::Accepted(
             CanonicalDownloadSubmission {
-                grab,
+                grab: DownloadGrabResult {
+                    download_id: Some(download_id),
+                    ..grab
+                },
                 newly_submitted: true,
             },
         ))
@@ -1141,6 +1176,7 @@ fn grab_submission_result_label(
             }
         }
         Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => RESULT_CONFLICT,
+        Ok(CanonicalDownloadSubmissionOutcome::Deferred) => RESULT_DEFERRED,
         Err(err) => grab_error_result_label(err),
     }
 }

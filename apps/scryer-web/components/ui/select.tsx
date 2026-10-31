@@ -190,6 +190,7 @@ function SelectItem({
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
+      data-option-value={props.value}
       className={selectItemClassName(className)}
       {...props}
     >
@@ -213,7 +214,10 @@ function SelectSeparator({
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn("pointer-events-none -mx-1 my-1 h-px bg-[var(--scry-border3)]", className)}
+      className={cn(
+        "pointer-events-none -mx-1 my-1 h-px bg-[var(--scry-border3)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -226,7 +230,10 @@ function SelectScrollUpButton({
   return (
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
-      className={cn("flex cursor-default items-center justify-center py-1 text-[var(--scry-faint)]", className)}
+      className={cn(
+        "flex cursor-default items-center justify-center py-1 text-[var(--scry-faint)]",
+        className,
+      )}
       {...props}
     >
       <ChevronUpIcon className="size-4" />
@@ -241,7 +248,10 @@ function SelectScrollDownButton({
   return (
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"
-      className={cn("flex cursor-default items-center justify-center py-1 text-[var(--scry-faint)]", className)}
+      className={cn(
+        "flex cursor-default items-center justify-center py-1 text-[var(--scry-faint)]",
+        className,
+      )}
       {...props}
     >
       <ChevronDownIcon className="size-4" />
@@ -267,7 +277,9 @@ type SingleSelectFieldProps = Omit<
   triggerClassName?: string;
   contentClassName?: string;
   itemClassName?: string;
-  contentPosition?: React.ComponentProps<typeof SelectPrimitive.Content>["position"];
+  contentPosition?: React.ComponentProps<
+    typeof SelectPrimitive.Content
+  >["position"];
   contentAlign?: React.ComponentProps<typeof SelectPrimitive.Content>["align"];
 };
 
@@ -338,7 +350,12 @@ function SingleSelectField({
         </SelectContent>
       </Select>
       {description ? (
-        <p className={cn("text-xs leading-5 text-[var(--scry-muted3)]", disabled && "opacity-60")}>
+        <p
+          className={cn(
+            "text-xs leading-5 text-[var(--scry-muted3)]",
+            disabled && "opacity-60",
+          )}
+        >
           {description}
         </p>
       ) : null}

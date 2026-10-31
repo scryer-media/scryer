@@ -288,12 +288,16 @@ export function titleCatalogProjectionForTable({
   const next = { ...EMPTY_TITLE_CATALOG_PROJECTION };
   const activeFacet = normalizedFacet(facet);
   const supportedRatingColumnKeys =
-    activeFacet === "anime" ? ANIME_RATING_COLUMN_KEYS : SHARED_RATING_COLUMN_KEYS;
+    activeFacet === "anime"
+      ? ANIME_RATING_COLUMN_KEYS
+      : SHARED_RATING_COLUMN_KEYS;
   const selectedOrSorted = (key: string) =>
     visibleColumns[key] === true || sort.key === key;
-  const anyRatingSelectedOrSorted = Object.keys(visibleColumns).some(
-    (key) => supportedRatingColumnKeys.has(key) && visibleColumns[key] === true,
-  ) || supportedRatingColumnKeys.has(sort.key);
+  const anyRatingSelectedOrSorted =
+    Object.keys(visibleColumns).some(
+      (key) =>
+        supportedRatingColumnKeys.has(key) && visibleColumns[key] === true,
+    ) || supportedRatingColumnKeys.has(sort.key);
 
   next.library = selectedOrSorted("library");
   next.quality = activeFacet === "movie" && selectedOrSorted("quality");

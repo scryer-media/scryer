@@ -1,49 +1,72 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_HK: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "此發布的詳細資料已無法使用。請重新搜尋以取得。",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "系統時鐘偏差超過 5 分鐘，Scryer 無法連線至中繼資料閘道。請同步系統時鐘並重新啟動 Scryer。",
+  "httpRelease.refusal.detailsUnavailable":
+    "此發布的詳細資料已無法使用。請重新搜尋以取得。",
   "httpRelease.refusal.live": "此發布是直播，無法下載。",
   "httpRelease.refusal.upcoming": "此發布尚未公開。",
   "httpRelease.refusal.removed": "此發布已被提供者移除。",
-  "httpRelease.refusal.unsupportedTransport": "此發布未以 HTTP 下載器可取得的形式提供。",
-  "httpRelease.refusal.separateTracks": "此發布僅以分開的音訊與視訊軌提供，無法合併。",
+  "httpRelease.refusal.unsupportedTransport":
+    "此發布未以 HTTP 下載器可取得的形式提供。",
+  "httpRelease.refusal.separateTracks":
+    "此發布僅以分開的音訊與視訊軌提供，無法合併。",
   "httpRelease.refusal.noMediaResource": "此發布沒有可下載的媒體檔案。",
   "httpRelease.refusal.noSubtitleResource": "此發布未提供所需語言的字幕。",
   "titleDelete.refusal.selection": "請選擇不重複的標題。",
   "titleDelete.refusal.busy": "刪除操作已在進行中。",
   "titleDelete.refusal.preview": "請重新整理刪除預覽並確認。",
   "titleDelete.refusal.confirmation": "輸入 DELETE 以確認刪除。",
-  "titleDelete.refusal.boundary": "標題資料夾必須位於媒體庫根目錄內，不能是根目錄本身。",
+  "titleDelete.refusal.boundary":
+    "標題資料夾必須位於媒體庫根目錄內，不能是根目錄本身。",
   "titleDelete.refusal.ownership": "無法驗證資料夾的歸屬。檔案已保留。",
   "titleDelete.refusal.layout": "無法將此資料夾或其內容作為單一標題安全刪除。",
-  "titleDelete.refusal.unavailable": "媒體庫根目錄無法使用。請恢復存取後重新預覽。",
-  "titleDelete.refusal.outsideRoots": "檔案路徑不在任何已設定的媒體庫根目錄內。請修正媒體庫根目錄或標題資料夾後重新預覽。",
-  "queue.attention.downloadPasswordRetry": "下載密碼重試正在等待核對。如果用戶端已不再有該工作，請移除此下載。",
+  "titleDelete.refusal.unavailable":
+    "媒體庫根目錄無法使用。請恢復存取後重新預覽。",
+  "titleDelete.refusal.outsideRoots":
+    "檔案路徑不在任何已設定的媒體庫根目錄內。請修正媒體庫根目錄或標題資料夾後重新預覽。",
+  "queue.attention.downloadPasswordRetry":
+    "下載密碼重試正在等待核對。如果用戶端已不再有該工作，請移除此下載。",
   "titleDelete.refusal.recycle": "標題已刪除，但部分資源回收筒項目無法清除。",
   "titleDelete.refusal.retry": "目錄清理失敗。請取得新的預覽後再重試。",
   "settings.downloadClientHttpDownloadDir": "下載資料夾",
-  "settings.downloadClientHttpDownloadDirHelp": "完成的檔案及其部分檔案的寫入位置（Scryer 看到的路徑）。此下載器的佇列儲存在其中的 .scryer-http 資料夾內。",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "完成的檔案及其部分檔案的寫入位置（Scryer 看到的路徑）。此下載器的佇列儲存在其中的 .scryer-http 資料夾內。",
   "settings.downloadClientHttpMaxConcurrentDownloads": "同時下載數",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "同時下載的發佈數量（1 至 8）。",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "同時下載的發佈數量（1 至 8）。",
   "settings.downloadClientHttpMaxConnectionsPerHost": "每個主機的連線數",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "可同時從同一伺服器取得的下載數量（1 至 8）。",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "可同時從同一伺服器取得的下載數量（1 至 8）。",
   "settings.downloadClientHttpBandwidthLimit": "頻寬限制（KB/s）",
-  "settings.downloadClientHttpBandwidthLimitHelp": "由此用戶端的所有下載共用。留空或 0 表示不限制。",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "由此用戶端的所有下載共用。留空或 0 表示不限制。",
   "settings.publicUrlTitle": "公開 URL",
-  "settings.publicUrlHelp": "用戶及服務存取 Scryer 所用的地址，例如 https://scryer.example.com。帳戶連結及 OAuth 會即時使用變更；密鑰要在 Scryer 重新啟動後才使用。",
+  "settings.publicUrlHelp":
+    "用戶及服務存取 Scryer 所用的地址，例如 https://scryer.example.com。帳戶連結及 OAuth 會即時使用變更；密鑰要在 Scryer 重新啟動後才使用。",
   "settings.publicUrlLabel": "公開 URL",
-  "settings.publicUrlEnvironmentLocked": "由 SCRYER_PUBLIC_URL 設定。請修改環境變數以更改。",
+  "settings.publicUrlEnvironmentLocked":
+    "由 SCRYER_PUBLIC_URL 設定。請修改環境變數以更改。",
   "settings.publicUrlInvalid": "已設定的公開 URL 無效，未被使用：{{error}}",
-  "settings.publicUrlError.invalid_url": "請輸入絕對的 http 或 https URL，例如 https://scryer.example.com。",
-  "settings.publicUrlError.wildcard_host": "公開 URL 必須指定單一主機，不能使用萬用字元。",
+  "settings.publicUrlError.invalid_url":
+    "請輸入絕對的 http 或 https URL，例如 https://scryer.example.com。",
+  "settings.publicUrlError.wildcard_host":
+    "公開 URL 必須指定單一主機，不能使用萬用字元。",
   "settings.publicUrlError.credentials": "公開 URL 不能包含用戶名稱或密碼。",
-  "settings.publicUrlError.query_or_fragment": "公開 URL 不能包含查詢字串或片段。",
-  "settings.publicUrlError.path_not_allowed": "Scryer 在根路徑提供服務，因此公開 URL 不能包含路徑。",
-  "settings.publicUrlError.path_mismatch": "公開 URL 的路徑必須留空或與 Scryer 的基本路徑相同。",
-  "settings.publicUrlError.environment_locked": "公開 URL 由 SCRYER_PUBLIC_URL 設定，無法在此更改。",
+  "settings.publicUrlError.query_or_fragment":
+    "公開 URL 不能包含查詢字串或片段。",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer 在根路徑提供服務，因此公開 URL 不能包含路徑。",
+  "settings.publicUrlError.path_mismatch":
+    "公開 URL 的路徑必須留空或與 Scryer 的基本路徑相同。",
+  "settings.publicUrlError.environment_locked":
+    "公開 URL 由 SCRYER_PUBLIC_URL 設定，無法在此更改。",
   "settings.publicUrlError.save_and_reset": "不能同時儲存及清除公開 URL。",
-  "settings.publicUrlError.passkey_acknowledgement_required": "此變更會令已註冊的密鑰失效。請確認後再儲存。",
-  "settings.publicUrlPasskeyRestart": "密鑰會在 Scryer 重新啟動後採用變更後的公開 URL。",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "此變更會令已註冊的密鑰失效。請確認後再儲存。",
+  "settings.publicUrlPasskeyRestart":
+    "密鑰會在 Scryer 重新啟動後採用變更後的公開 URL。",
   "settings.publicUrlClear": "清除公開 URL",
   "settings.publicUrlSaved": "已儲存公開 URL。",
   "settings.publicUrlLoadError": "無法載入公開 URL。",
@@ -64,23 +87,33 @@ const zh_HK: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "預設",
   "settings.publicUrlSourcePublicUrl": "公開 URL",
   "settings.publicUrlPasskeyWarningTitle": "現有密鑰將無法使用",
-  "settings.publicUrlPasskeyWarningChanged": "已為 {{rpId}} 註冊密鑰。下次重新啟動後，密鑰會改用 {{nextRpId}}，所有現有密鑰都無法再登入。",
-  "settings.publicUrlPasskeyWarningDisabled": "已為 {{rpId}} 註冊密鑰。此公開 URL 無法使用密鑰（需要 https 網域名稱或 localhost），因此下次重新啟動後密鑰會被關閉，所有現有密鑰都無法再登入。",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}} 位用戶擁有密鑰。其中 {{passkeyOnly}} 位沒有驗證器應用程式作為第二重驗證，將會被鎖定：在其驗證因素被重設前完全無法登入。",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer 無法統計已註冊的密鑰；請假設部分用戶會被鎖定。",
-  "settings.publicUrlPasskeyWarningRecovery": "如要恢復存取，仍可登入的管理員可以開啟「{{users}}」，為每位被鎖定的用戶使用「{{reset}}」；或還原公開 URL 並重新啟動 Scryer；或以 SCRYER_RECOVERY_ADMIN_PASSWORD 啟動 Scryer，以復原管理員身分登入。",
+  "settings.publicUrlPasskeyWarningChanged":
+    "已為 {{rpId}} 註冊密鑰。下次重新啟動後，密鑰會改用 {{nextRpId}}，所有現有密鑰都無法再登入。",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "已為 {{rpId}} 註冊密鑰。此公開 URL 無法使用密鑰（需要 https 網域名稱或 localhost），因此下次重新啟動後密鑰會被關閉，所有現有密鑰都無法再登入。",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}} 位用戶擁有密鑰。其中 {{passkeyOnly}} 位沒有驗證器應用程式作為第二重驗證，將會被鎖定：在其驗證因素被重設前完全無法登入。",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer 無法統計已註冊的密鑰；請假設部分用戶會被鎖定。",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "如要恢復存取，仍可登入的管理員可以開啟「{{users}}」，為每位被鎖定的用戶使用「{{reset}}」；或還原公開 URL 並重新啟動 Scryer；或以 SCRYER_RECOVERY_ADMIN_PASSWORD 啟動 Scryer，以復原管理員身分登入。",
   "settings.publicUrlPasskeyWarningConfirm": "仍然儲存",
   "settings.trustedProxiesTitle": "速率限制信任的 Proxy",
-  "settings.trustedProxiesHelp": "僅在識別用於速率限制的客戶端時信任來自這些 Proxy 地址的 X-Forwarded-For。這不會更改登入規則、本地訪問或速率限制旁路。變更將立即生效。",
-  "settings.trustedProxiesAddresses": "IPv4、IPv6 或 CIDR 地址（每行一個或以逗號分隔）",
-  "settings.trustedProxiesEmptyHelp": "儲存空清單表示不信任任何 Proxy。已儲存的設定將覆寫 SCRYER_RATE_LIMIT_TRUSTED_PROXY_IPS。",
+  "settings.trustedProxiesHelp":
+    "僅在識別用於速率限制的客戶端時信任來自這些 Proxy 地址的 X-Forwarded-For。這不會更改登入規則、本地訪問或速率限制旁路。變更將立即生效。",
+  "settings.trustedProxiesAddresses":
+    "IPv4、IPv6 或 CIDR 地址（每行一個或以逗號分隔）",
+  "settings.trustedProxiesEmptyHelp":
+    "儲存空清單表示不信任任何 Proxy。已儲存的設定將覆寫 SCRYER_RATE_LIMIT_TRUSTED_PROXY_IPS。",
   "settings.trustedProxiesSavedSource": "來源：已儲存的設定",
-  "settings.trustedProxiesEnvironmentSource": "來源：環境變數（預設為不信任任何 Proxy）",
+  "settings.trustedProxiesEnvironmentSource":
+    "來源：環境變數（預設為不信任任何 Proxy）",
   "settings.trustedProxiesReset": "使用環境變數/預設值",
   "settings.trustedProxiesSaved": "已套用受信任的 Proxy 政策。",
   "settings.trustedProxiesLoadError": "無法載入受信任的 Proxy 設定。",
   "settings.trustedProxiesSaveError": "無法儲存受信任的 Proxy 設定。",
-  "mediaInfo.discIntactImport": "光碟映像檔將作為單一檔案匯入。若為劇集，請為各單集明確對應已製作的標題。",
+  "mediaInfo.discIntactImport":
+    "光碟映像檔將作為單一檔案匯入。若為劇集，請為各單集明確對應已製作的標題。",
   "mediaInfo.discReviewRequired": "光碟分析需要審查",
   "mediaInfo.discImportMovie": "匯入電影",
   "mediaInfo.discSkip": "略過 (未分配)",
@@ -96,7 +129,8 @@ const zh_HK: LocaleDictionary = {
   "label.interactive": "手動",
   "label.searching": "搜尋中",
   "help.autoSearchTooltip": "自動搜尋並將此項目的最新匹配版本加入隊列。",
-  "help.interactiveSearchTooltip": "立即搜尋此項目並打開版本選擇器來選擇要加入隊列的內容。",
+  "help.interactiveSearchTooltip":
+    "立即搜尋此項目並打開版本選擇器來選擇要加入隊列的內容。",
   "series.searchSeason": "搜尋季度合集",
   "help.seasonSearchTooltip": "在索引器中搜索此季度的合集版本。",
   "label.refresh": "重新整理",
@@ -117,7 +151,8 @@ const zh_HK: LocaleDictionary = {
   "label.cancel": "取消",
   "folderBrowser.selectPath": "選擇路徑",
   "folderBrowser.go": "前往",
-  "folderBrowser.descriptionFileOrFolder": "瀏覽 Scryer 主機上的路徑並選擇檔案或資料夾。",
+  "folderBrowser.descriptionFileOrFolder":
+    "瀏覽 Scryer 主機上的路徑並選擇檔案或資料夾。",
   "folderBrowser.descriptionFile": "瀏覽 Scryer 主機上的路徑並選擇檔案。",
   "folderBrowser.descriptionFolder": "瀏覽 Scryer 主機上的路徑並選擇資料夾。",
   "folderBrowser.loading": "正在載入資料夾",
@@ -126,6 +161,40 @@ const zh_HK: LocaleDictionary = {
   "folderBrowser.error": "無法瀏覽該路徑。",
   "folderBrowser.browseRoot": "瀏覽 /",
   "folderBrowser.selectFolder": "選擇資料夾",
+  "folderBrowser.newFolder": "新增資料夾",
+  "folderBrowser.newFolderName": "資料夾名稱",
+  "folderBrowser.create": "建立",
+  "folderBrowser.newFolderFailed": "無法建立資料夾。",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED": "請輸入資料夾名稱。",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "此名稱為保留名稱，不能用作資料夾名稱。",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    '資料夾名稱不能包含 / \\ : * ? " < > | 或控制字元。',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT": "資料夾名稱不能以點結尾。",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "資料夾名稱不能以點開頭，否則資料夾會被隱藏。",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG": "此名稱對這個磁碟機來說太長。",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "此磁碟機不接受這個名稱，請改用較簡單的名稱。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE": "請選擇絕對資料夾路徑。",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING":
+    "目前的資料夾已不存在或無法存取。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "目前的路徑是檔案，而不是資料夾。",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "這裡已有同名的檔案或資料夾。部分磁碟機不區分大小寫。",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer 無權在此建立資料夾。請檢查執行 Scryer 的使用者（Docker 中的 PUID 和 PGID）對該資料夾的權限。",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "此磁碟機為唯讀。如果 Scryer 在 Docker 中執行，請檢查磁碟區是否以唯讀方式（:ro）掛載。",
+  "error.reason.FOLDER_CREATE_DISK_FULL": "磁碟機已滿，或儲存配額已用完。",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "此資料夾內的子資料夾數量已達磁碟機允許的上限。",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED": "此位置不支援建立資料夾。",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "磁碟機或網絡共用沒有回應。請檢查它是否已連接並掛載。",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer 無法建立資料夾。詳細資料請查看伺服器記錄。",
   "label.discard": "放棄變更",
   "label.clear": "清除",
   "label.add": "添加",
@@ -303,64 +372,83 @@ const zh_HK: LocaleDictionary = {
   "settings.security": "Security",
   "settings.enableFormLogin": "啟用登入",
   "settings.securityLoginSettings": "Login settings",
-  "settings.securityEnableFormLoginHelp": "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
+  "settings.securityEnableFormLoginHelp":
+    "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",
   "settings.securityPasswordMinLength": "密碼長度下限",
   "settings.securitySessionDuration": "登入有效期限",
-  "settings.securitySessionDurationHelp": "適用於此實例上所有人的新登入。若啟用了「保持登入」，登入階段將在瀏覽器重新啟動後持續有效直至過期。既有登入階段將保留其原始到期時間。",
-  "settings.securitySessionDurationInvalid": "登入有效期限必須是 1 到 365 天之間的整數。",
-  "settings.securityPasswordMinLengthHelp": "僅適用於全新或變更後的 Scryer 密碼。既有的較短密碼仍可繼續使用。下限：{{min}}。",
-  "settings.securityPasswordMinLengthInvalid": "密碼長度下限必須至少為 {{min}}。",
+  "settings.securitySessionDurationHelp":
+    "適用於此實例上所有人的新登入。若啟用了「保持登入」，登入階段將在瀏覽器重新啟動後持續有效直至過期。既有登入階段將保留其原始到期時間。",
+  "settings.securitySessionDurationInvalid":
+    "登入有效期限必須是 1 到 365 天之間的整數。",
+  "settings.securityPasswordMinLengthHelp":
+    "僅適用於全新或變更後的 Scryer 密碼。既有的較短密碼仍可繼續使用。下限：{{min}}。",
+  "settings.securityPasswordMinLengthInvalid":
+    "密碼長度下限必須至少為 {{min}}。",
   "settings.openMediaServers": "開啟媒體伺服器",
   "settings.securitySkipLocalIps": "Skip for local IPs",
-  "settings.securitySkipLocalIpsHelp": "When enabled, callers from 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 can access Scryer without signing in.",
+  "settings.securitySkipLocalIpsHelp":
+    "When enabled, callers from 10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16 can access Scryer without signing in.",
   "settings.securityMfaConfigStepUp": "設定變更需要 MFA 提權驗證",
-  "settings.securityMfaConfigStepUpHelp": "啟用後，變更系統與面向設定時需要最近通過 MFA 驗證。",
+  "settings.securityMfaConfigStepUpHelp":
+    "啟用後，變更系統與面向設定時需要最近通過 MFA 驗證。",
   "settings.securityMfaPasswordLogin": "密碼登入需要 MFA",
-  "settings.securityMfaPasswordLoginHelp": "啟用後，使用 Scryer 用戶名稱與密碼登入時需要單次動態驗證碼。通行密鑰登入不受影響。",
+  "settings.securityMfaPasswordLoginHelp":
+    "啟用後，使用 Scryer 用戶名稱與密碼登入時需要單次動態驗證碼。通行密鑰登入不受影響。",
   "settings.securityTotpJellyfinLogin": "Jellyfin 登入需要 MFA",
-  "settings.securityTotpJellyfinLoginHelp": "啟用後，Jellyfin 密碼穿透登入需要用戶已註冊的 Scryer 通行密鑰或驗證器要素。",
+  "settings.securityTotpJellyfinLoginHelp":
+    "啟用後，Jellyfin 密碼穿透登入需要用戶已註冊的 Scryer 通行密鑰或驗證器要素。",
   "settings.securitySavedPreference": "Saved preference",
   "settings.securityEffectiveMode": "Effective runtime mode",
   "settings.securityOverrideTitle": "Deployment override active",
-  "settings.securityOverrideDescription": "Environment configuration is currently overriding the saved preference. Change the deployment config and restart Scryer for a different runtime mode.",
+  "settings.securityOverrideDescription":
+    "Environment configuration is currently overriding the saved preference. Change the deployment config and restart Scryer for a different runtime mode.",
   "settings.securityOverrideReason": "Override source: {{override}}",
   "settings.securityModeEnabled": "Form login enabled",
   "settings.securityModeDisabled": "Open admin mode",
   "settings.securityConfirmTitle": "Enable form login?",
-  "settings.securityConfirmDescription": "Enter your password before Scryer starts requiring login.",
+  "settings.securityConfirmDescription":
+    "Enter your password before Scryer starts requiring login.",
   "settings.securityConfirmPassword": "Password",
   "settings.securityConfirmAction": "Enable",
   "settings.securitySetAdminPasswordTitle": "設定管理員密碼",
-  "settings.securitySetAdminPasswordDescription": "您的帳號尚未設定密碼。立即選擇一組密碼，Scryer 將會以此密碼啟用登入功能。",
+  "settings.securitySetAdminPasswordDescription":
+    "您的帳號尚未設定密碼。立即選擇一組密碼，Scryer 將會以此密碼啟用登入功能。",
   "settings.securitySetAdminPasswordAction": "設定密碼並啟用",
   "settings.securitySetAdminPasswordMinLength": "至少 {{count}} 個字元。",
   "settings.securityPasswordTooShort": "密碼必須至少為 {{count}} 個字元。",
   "settings.securityDisableConfirmTitle": "Disable form login?",
-  "settings.securityDisableConfirmDescription": "Scryer will return to open admin mode after reload.",
+  "settings.securityDisableConfirmDescription":
+    "Scryer will return to open admin mode after reload.",
   "settings.securityDisableConfirmAction": "Disable",
   "settings.securityCredentialsInvalid": "Invalid password.",
-  "settings.securityCredentialsInsufficient": "That account cannot manage settings.",
+  "settings.securityCredentialsInsufficient":
+    "That account cannot manage settings.",
   "settings.mfaStepUpTitle": "驗證以開啟設定",
   "settings.securityAccessControl": "存取控制",
   "profile.apiKeyMfaTitle": "驗證以建立 API 金鑰",
   "profile.apiKeyMfaDescription": "輸入驗證器或復原碼以繼續建立您的 API 金鑰。",
   "profile.apiKeyMfaCode": "驗證器或復原碼",
-  "settings.mfaStepUpDescription": "在檢視或變更組態設定之前，請先輸入驗證器代碼。",
+  "settings.mfaStepUpDescription":
+    "在檢視或變更組態設定之前，請先輸入驗證器代碼。",
   "settings.mfaStepUpSubmit": "繼續",
   "settings.mfaStepUpVerifying": "正在驗證…",
   "settings.mfaStepUpVerified": "已驗證設定存取權限。",
   "settings.mfaStepUpFailed": "無法驗證該代碼。請重試。",
-  "settings.mfaStepUpRequiredAgain": "您的設定驗證已過期。請輸入新的驗證器代碼以繼續。",
+  "settings.mfaStepUpRequiredAgain":
+    "您的設定驗證已過期。請輸入新的驗證器代碼以繼續。",
   "settings.mfaStepUpPolicyLoadFailed": "無法載入設定驗證狀態",
-  "settings.mfaStepUpPolicyLoadFailedDescription": "在檢視或變更組態設定之前請重試。",
+  "settings.mfaStepUpPolicyLoadFailedDescription":
+    "在檢視或變更組態設定之前請重試。",
   "settings.mfaStepUpPolicyRetry": "重試",
   "settings.securityEnabledSuccess": "Form login enabled.",
-  "settings.securityDisabledSuccess": "Form login disabled. Reloading into open admin mode…",
+  "settings.securityDisabledSuccess":
+    "Form login disabled. Reloading into open admin mode…",
   "settings.securityPreferenceSaved": "Security preference saved.",
   "settings.securityLoadFailed": "Failed to load security settings.",
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.externalAuthLoginEnabled": "已啟用登入",
-  "settings.mediaServerLoginRequiresFormLogin": "啟用媒體伺服器登入之前，請先啟用表單登入。",
+  "settings.mediaServerLoginRequiresFormLogin":
+    "啟用媒體伺服器登入之前，請先啟用表單登入。",
   "settings.openSecuritySettings": "開啟安全性設定",
   "settings.externalAuthLinkingEnabled": "已啟用關聯",
   "settings.externalAccountInvites": "外部帳號邀請",
@@ -392,11 +480,15 @@ const zh_HK: LocaleDictionary = {
   "settings.proxyCredentialsStored": "已設定憑據",
   "settings.proxyCredentialUnchanged": "保持不變",
   "settings.proxyClearCredentials": "清除已儲存的憑據",
-  "settings.proxyCredentialsHelp": "憑據以加密方式儲存，不會再次顯示。如果代理不需要憑據，請將兩項留空。",
-  "settings.proxyCredentialsStoredHelp": "該代理已儲存憑據。留空以保留，或輸入新值以替換。",
+  "settings.proxyCredentialsHelp":
+    "憑據以加密方式儲存，不會再次顯示。如果代理不需要憑據，請將兩項留空。",
+  "settings.proxyCredentialsStoredHelp":
+    "該代理已儲存憑據。留空以保留，或輸入新值以替換。",
   "settings.proxyRemoteDns": "在代理端解析 DNS",
-  "settings.proxyRemoteDnsHelp": "在代理端解析 DNS 即 socks5h 行為：由代理解析目標主機名，而不是本機。",
-  "settings.proxiesHelp": "代理會為分配給它的索引器和下載客戶端轉發流量。求解器負責應答瀏覽器挑戰，標準代理是 HTTP 或 SOCKS 中轉，隧道則自行建立傳輸通道。",
+  "settings.proxyRemoteDnsHelp":
+    "在代理端解析 DNS 即 socks5h 行為：由代理解析目標主機名，而不是本機。",
+  "settings.proxiesHelp":
+    "代理會為分配給它的索引器和下載客戶端轉發流量。求解器負責應答瀏覽器挑戰，標準代理是 HTTP 或 SOCKS 中轉，隧道則自行建立傳輸通道。",
   "settings.proxyFamilySolver": "求解器",
   "settings.proxyFamilyStandard": "標準",
   "settings.proxyFamilyTunnel": "隧道",
@@ -409,8 +501,10 @@ const zh_HK: LocaleDictionary = {
   "settings.proxyTest": "測試",
   "settings.proxyTestTitle": "測試 {{name}}",
   "settings.proxyTestUrl": "測試 URL",
-  "settings.proxyTestDescription": "透過已儲存的 Proxy 抓取此 URL，並顯示端點回報的公開 IP。",
-  "settings.proxyTestSolverDescription": "要求求解器抓取此 URL 並顯示其傳出 IP。此操作僅檢查抓取功能，不會驗證挑戰求解或 Scryer 其他流量所使用的路由。",
+  "settings.proxyTestDescription":
+    "透過已儲存的 Proxy 抓取此 URL，並顯示端點回報的公開 IP。",
+  "settings.proxyTestSolverDescription":
+    "要求求解器抓取此 URL 並顯示其傳出 IP。此操作僅檢查抓取功能，不會驗證挑戰求解或 Scryer 其他流量所使用的路由。",
   "settings.proxyTestRunning": "正在測試對外連線…",
   "settings.proxyTestExitIp": "Proxy 出口 IP",
   "settings.proxyTestSolverIp": "求解器出口 IP",
@@ -430,9 +524,11 @@ const zh_HK: LocaleDictionary = {
   "settings.proxyDisabledHelp": "已分配的代理已停用。",
   "settings.proxyDisabledSuffix": "（已停用）",
   "settings.proxyClearPassword": "清除已儲存的密碼",
-  "settings.proxyTunnelAuthHelp": "SSH 需要用戶名和 Ed25519 私鑰，不支援密碼認證。",
+  "settings.proxyTunnelAuthHelp":
+    "SSH 需要用戶名和 Ed25519 私鑰，不支援密碼認證。",
   "settings.proxyPrivateKey": "私鑰",
-  "settings.proxyPrivateKeyHelp": "僅支援 Ed25519 私鑰；請使用 `ssh-keygen -t ed25519` 生成，並粘貼 OpenSSH 格式的私鑰。",
+  "settings.proxyPrivateKeyHelp":
+    "僅支援 Ed25519 私鑰；請使用 `ssh-keygen -t ed25519` 生成，並粘貼 OpenSSH 格式的私鑰。",
   "settings.proxyPrivateKeyStored": "已設定私鑰",
   "settings.proxyPrivateKeyUnchanged": "已儲存私鑰。粘貼新的私鑰即可替換。",
   "settings.proxyClearPrivateKey": "清除已儲存的私鑰",
@@ -440,55 +536,76 @@ const zh_HK: LocaleDictionary = {
   "settings.proxyPrivateKeyPassphraseHelp": "僅當私鑰受口令保護時才需要填寫。",
   "settings.proxyHostKey": "主機密鑰",
   "settings.proxyHostKeyPinnedAt": "固定於 {{time}}。",
-  "settings.proxyHostKeyUnpinned": "尚未固定。首次連接成功時會固定伺服器的主機密鑰。",
+  "settings.proxyHostKeyUnpinned":
+    "尚未固定。首次連接成功時會固定伺服器的主機密鑰。",
   "settings.proxyHostKeyReset": "重設主機密鑰",
-  "settings.proxyHostKeyResetDescription": "忘記已固定的主機密鑰。下次連接會直接信任並固定伺服器提供的密鑰，因此只有在確認伺服器密鑰確實更換時才執行。",
+  "settings.proxyHostKeyResetDescription":
+    "忘記已固定的主機密鑰。下次連接會直接信任並固定伺服器提供的密鑰，因此只有在確認伺服器密鑰確實更換時才執行。",
   "settings.proxyValidationTunnelUsername": "隧道需要用戶名。",
   "settings.proxyValidationTunnelAuth": "SSH 隧道需要 Ed25519 私鑰。",
-  "settings.downloadClientProxyHelp": "可以分配任意類型的代理。原生客戶端的請求並非由插件發出，因此挑戰求解器對其無效。",
+  "settings.downloadClientProxyHelp":
+    "可以分配任意類型的代理。原生客戶端的請求並非由插件發出，因此挑戰求解器對其無效。",
   "status.proxyCreated": "已創建代理。",
   "status.proxyUpdated": "已更新代理。",
   "status.proxyDeleted": "已刪除代理 {{name}}。",
   "status.proxyTestPassed": "代理測試通過。",
   "status.proxyTestFailed": "代理測試失敗。",
   "status.editingProxy": "正在編輯代理 {{name}}。",
-  "status.proxyHostKeyReset": "已重設 {{name}} 的主機密鑰。下次連接會重新固定。",
-  "settings.proxyEndpointHelpHttp3": "https://host:port（預設為 443）。使用帶有已驗證 TLS 的 QUIC 上 HTTP/3 CONNECT。指派索引器以測試路由。",
-  "settings.proxyEndpointHelpWireguard": "wireguard://主機:連接埠。省略連接埠時使用 51820。",
-  "settings.proxyPrivateKeyHelpWireguard": "WireGuard 密鑰是 32 字節的 base64，與 `wg genkey` 輸出的完全一致（44 個字符，以 `=` 結尾）",
+  "status.proxyHostKeyReset":
+    "已重設 {{name}} 的主機密鑰。下次連接會重新固定。",
+  "settings.proxyEndpointHelpHttp3":
+    "https://host:port（預設為 443）。使用帶有已驗證 TLS 的 QUIC 上 HTTP/3 CONNECT。指派索引器以測試路由。",
+  "settings.proxyEndpointHelpWireguard":
+    "wireguard://主機:連接埠。省略連接埠時使用 51820。",
+  "settings.proxyPrivateKeyHelpWireguard":
+    "WireGuard 密鑰是 32 字節的 base64，與 `wg genkey` 輸出的完全一致（44 個字符，以 `=` 結尾）",
   "settings.proxyPeerPublicKey": "對端公鑰",
-  "settings.proxyPeerPublicKeyHelp": "伺服器 `[Peer]` 段中的 `PublicKey` 行。公鑰本就是公開的，因此完整顯示。",
+  "settings.proxyPeerPublicKeyHelp":
+    "伺服器 `[Peer]` 段中的 `PublicKey` 行。公鑰本就是公開的，因此完整顯示。",
   "settings.proxyPresharedKey": "預共享密鑰",
-  "settings.proxyPresharedKeyHelp": "可選。伺服器使用預共享密鑰時，填入 `PresharedKey` 行。",
+  "settings.proxyPresharedKeyHelp":
+    "可選。伺服器使用預共享密鑰時，填入 `PresharedKey` 行。",
   "settings.proxyPresharedKeyStored": "已設定預共享密鑰",
-  "settings.proxyPresharedKeyUnchanged": "已儲存預共享密鑰。粘貼新的密鑰可替換它。",
+  "settings.proxyPresharedKeyUnchanged":
+    "已儲存預共享密鑰。粘貼新的密鑰可替換它。",
   "settings.proxyClearPresharedKey": "清除已儲存的預共享密鑰",
   "settings.proxyTunnelAddresses": "地址",
-  "settings.proxyTunnelAddressesHelp": "`[Interface]` 段中的 `Address` 行，例如 10.6.0.2/32。每行一個，或用逗號分隔。",
+  "settings.proxyTunnelAddressesHelp":
+    "`[Interface]` 段中的 `Address` 行，例如 10.6.0.2/32。每行一個，或用逗號分隔。",
   "settings.proxyTunnelDnsServers": "DNS 伺服器",
-  "settings.proxyTunnelDnsServersHelp": "通過隧道訪問的可選解析器，每行一個或用逗號分隔。不填時只能用 IP 地址訪問目標。",
+  "settings.proxyTunnelDnsServersHelp":
+    "通過隧道訪問的可選解析器，每行一個或用逗號分隔。不填時只能用 IP 地址訪問目標。",
   "settings.proxyTunnelMtu": "MTU",
-  "settings.proxyTunnelMtuHelp": "可選，取值在 {{min}} 到 {{max}} 之間。留空則使用預設值 {{default}}。",
+  "settings.proxyTunnelMtuHelp":
+    "可選，取值在 {{min}} 到 {{max}} 之間。留空則使用預設值 {{default}}。",
   "settings.proxyTunnelKeepalive": "保活間隔",
-  "settings.proxyTunnelKeepaliveHelp": "可選，單位為秒。留空則使用預設值 {{default}}，填 0 可關閉保活。",
+  "settings.proxyTunnelKeepaliveHelp":
+    "可選，單位為秒。留空則使用預設值 {{default}}，填 0 可關閉保活。",
   "settings.proxyTunnelPublicKey": "此隧道的公鑰",
-  "settings.proxyTunnelPublicKeyHelp": "把這一行粘貼到伺服器 `[Peer]` 段的 `PublicKey` 中。",
+  "settings.proxyTunnelPublicKeyHelp":
+    "把這一行粘貼到伺服器 `[Peer]` 段的 `PublicKey` 中。",
   "settings.proxyTunnelPublicKeyPending": "儲存私鑰後生成。",
   "settings.proxyTunnelPublicKeyCopy": "複製",
   "settings.proxyImportConfig": "導入 WireGuard 配置",
-  "settings.proxyImportConfigHelp": "粘貼 VPN 提供商給你的整份配置，或選擇 .conf 檔案，下面的字段會據此填充。每個字段同樣接受單獨粘貼的一行。",
+  "settings.proxyImportConfigHelp":
+    "粘貼 VPN 提供商給你的整份配置，或選擇 .conf 檔案，下面的字段會據此填充。每個字段同樣接受單獨粘貼的一行。",
   "settings.proxyImportConfigApply": "填充表單",
   "settings.proxyImportConfigFile": "選擇檔案",
   "status.proxyImportConfigFilled": "已根據 WireGuard 配置填充表單。",
   "status.proxyImportConfigUnreadable": "這看起來不是 WireGuard 配置。",
-  "status.proxyImportConfigFirstPeer": "其中有 {{count}} 個對端；只導入了第一個。",
+  "status.proxyImportConfigFirstPeer":
+    "其中有 {{count}} 個對端；只導入了第一個。",
   "status.proxyImportConfigIgnored": "已忽略 {{keys}}，隧道代理不會使用它。",
   "settings.proxyValidationWireguardPrivateKey": "WireGuard 需要私鑰。",
   "settings.proxyValidationWireguardPeerPublicKey": "WireGuard 需要對端公鑰。",
-  "settings.proxyValidationWireguardAddresses": "WireGuard 至少需要一個接口地址，例如 10.6.0.2/32。",
-  "settings.proxyValidationWireguardKeyShape": "{{field}}看起來不是 WireGuard 密鑰：密鑰是 32 字節的 base64，與 `wg genkey` 輸出的完全一致（44 個字符，以 `=` 結尾）。",
-  "settings.proxyValidationWireguardMtu": "隧道 MTU 必須在 {{min}} 到 {{max}} 之間。",
-  "settings.proxyValidationWireguardKeepalive": "保活間隔是以秒為單位的整數，填 0 可關閉。",
+  "settings.proxyValidationWireguardAddresses":
+    "WireGuard 至少需要一個接口地址，例如 10.6.0.2/32。",
+  "settings.proxyValidationWireguardKeyShape":
+    "{{field}}看起來不是 WireGuard 密鑰：密鑰是 32 字節的 base64，與 `wg genkey` 輸出的完全一致（44 個字符，以 `=` 結尾）。",
+  "settings.proxyValidationWireguardMtu":
+    "隧道 MTU 必須在 {{min}} 到 {{max}} 之間。",
+  "settings.proxyValidationWireguardKeepalive":
+    "保活間隔是以秒為單位的整數，填 0 可關閉。",
   "status.proxyTunnelPublicKeyCopied": "已複製公鑰。",
   "status.proxyTunnelPublicKeyCopyFailed": "無法複製公鑰。",
   "settings.qualityProfiles": "質素配置",
@@ -506,7 +623,8 @@ const zh_HK: LocaleDictionary = {
   "facetSettings.scoringPersonaOverrideLabel": "人格覆蓋",
   "facetSettings.scoringPersonaUseDefault": "使用配置預設值",
   "facetSettings.scoringBehavior": "評分行為",
-  "facetSettings.scoringBehaviorHint": "搜尋時版本的評分方式。由人格決定。編輯質素配置以進行精細控制。",
+  "facetSettings.scoringBehaviorHint":
+    "搜尋時版本的評分方式。由人格決定。編輯質素配置以進行精細控制。",
   "persona.trait.balanced.source": "來源：標準偏好（BluRay > WEB-DL > WeRip）",
   "persona.trait.balanced.audio": "音訊：均衡編碼器權重",
   "persona.trait.balanced.x265": "x265：4K 以下扣分",
@@ -514,7 +632,8 @@ const zh_HK: LocaleDictionary = {
   "persona.trait.balanced.remux": "Remux：預設不優先",
   "persona.trait.balanced.hdr": "HDR：Dolby Vision 和 HDR10 加分",
   "persona.trait.audiophile.source": "來源：強烈偏好 BluRay",
-  "persona.trait.audiophile.audio": "音訊：無損編碼器高權重（TrueHD、DTS-X、FLAC）",
+  "persona.trait.audiophile.audio":
+    "音訊：無損編碼器高權重（TrueHD、DTS-X、FLAC）",
   "persona.trait.audiophile.x265": "x265：4K 以下強烈扣分",
   "persona.trait.audiophile.size": "檔案大小：偏好較大檔案",
   "persona.trait.audiophile.remux": "Remux：非常高的加分",
@@ -542,7 +661,8 @@ const zh_HK: LocaleDictionary = {
   "settings.librarySaveAndScanButton": "儲存並掃描",
   "settings.librarySaveOnlyButton": "僅儲存",
   "settings.libraryDeleteButton": "刪除媒體庫",
-  "settings.libraryDeleteConfirm": "確定要刪除 {{name}} 嗎？硬碟上的媒體文件不會被移除。",
+  "settings.libraryDeleteConfirm":
+    "確定要刪除 {{name}} 嗎？硬碟上的媒體文件不會被移除。",
   "settings.libraryEmpty": "無可用媒體庫。",
   "settings.libraryCreated": "已建立媒體庫。",
   "settings.librarySaved": "已儲存媒體庫。",
@@ -558,10 +678,12 @@ const zh_HK: LocaleDictionary = {
   "settings.libraryEffectiveSeasonFolders": "實際生效：{{value}}",
   "settings.libraryInheritGlobal": "繼承全域預設值",
   "settings.useSeasonFoldersLabel": "使用季度資料夾",
-  "settings.useSeasonFoldersHelp": "將分集文件放置於其季資料夾或特別篇資料夾中。",
+  "settings.useSeasonFoldersHelp":
+    "將分集文件放置於其季資料夾或特別篇資料夾中。",
   "settings.libraryQualityProfileLabel": "質素設定檔",
   "settings.libraryRequestQualityProfilesLabel": "請求設定檔",
-  "settings.libraryRequestQualityProfilesHelp": "留空以讓請求使用媒體庫的質素設定檔。",
+  "settings.libraryRequestQualityProfilesHelp":
+    "留空以讓請求使用媒體庫的質素設定檔。",
   "settings.libraryInheritFacet": "繼承目錄預設值",
   "settings.libraryCustomRouting": "自訂媒體庫路由",
   "settings.libraryEffectiveProfile": "實際生效：{{value}}",
@@ -569,25 +691,30 @@ const zh_HK: LocaleDictionary = {
   "settings.libraryEffectivePersona": "實際生效：{{value}}",
   "settings.rootFoldersLabel": "根資料夾",
   "settings.rootFoldersEmpty": "未配置根資料夾。請至少添加一個路徑。",
-  "settings.rootFoldersHelp": "根資料夾是存儲媒體的頂級目錄。標星的資料夾是新標題的預設資料夾。",
+  "settings.rootFoldersHelp":
+    "根資料夾是存儲媒體的頂級目錄。標星的資料夾是新標題的預設資料夾。",
   "settings.rootFolderAdd": "添加根資料夾",
   "settings.rootFolderEdit": "編輯根資料夾",
   "settings.rootFolderConflict": "此根資料夾已被 {{libraries}} 使用。",
   "settings.rootFolderSetDefault": "設為預設",
   "settings.rootFolderInvalid": "無效",
   "settings.rootFolderInvalidTooltip": "Scryer 無法從主機瀏覽此根目錄資料夾。",
-  "settings.rootFolderValidationUnavailable": "根目錄資料夾驗證暫時無法使用。已儲存的路徑尚未標記為無效。",
+  "settings.rootFolderValidationUnavailable":
+    "根目錄資料夾驗證暫時無法使用。已儲存的路徑尚未標記為無效。",
   "settings.unsavedLibraryChangesTitle": "未儲存的媒體庫變更",
-  "settings.unsavedLibraryChangesConfirm": "放棄未儲存的媒體庫變更並離開此頁面？",
+  "settings.unsavedLibraryChangesConfirm":
+    "放棄未儲存的媒體庫變更並離開此頁面？",
   "settings.libraryScanTitle": "媒體庫掃描",
   "settings.libraryScanButton": "掃描媒體庫",
   "settings.libraryScanRunning": "正在掃描媒體庫…",
-  "settings.libraryScanSummary": "已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
+  "settings.libraryScanSummary":
+    "已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
   "settings.libraryScanFailed": "媒體庫掃描失敗。",
   "settings.libraryScanCancel": "取消",
   "settings.libraryScanRunInBackground": "轉到後台運行",
   "settings.libraryScanCancelFailed": "無法取消庫掃描。",
-  "settings.libraryScanCanceledSummary": "圖書館掃描已取消。已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
+  "settings.libraryScanCanceledSummary":
+    "圖書館掃描已取消。已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
   "settings.libraryScanToastTitle": "{{facet}} 媒體庫掃描",
   "settings.libraryScanDiscovering": "正在發現標題…",
   "settings.libraryScanProgressPending": "等待發現中…",
@@ -599,7 +726,8 @@ const zh_HK: LocaleDictionary = {
   "settings.libraryScanNoFilesToScan": "無需進行媒體分析",
   "settings.libraryScanAlreadyRunning": "{{facet}} 庫掃描已在運行。",
   "settings.libraryScanProgressCount": "{{current}} / {{total}}",
-  "settings.libraryScanScanningSubtitle": "已找到 {{count}} 部作品 · 正在分析媒體…",
+  "settings.libraryScanScanningSubtitle":
+    "已找到 {{count}} 部作品 · 正在分析媒體…",
   "settings.libraryScanDoneSubtitle": "掃描完成 · 共 {{count}} 部作品",
   "settings.libraryScanIssuesSubtitle": "已完成但有問題 · 共 {{count}} 部作品",
   "settings.libraryScanFailedSubtitle": "掃描失敗",
@@ -630,6 +758,10 @@ const zh_HK: LocaleDictionary = {
   "jobs.column.status": "狀態",
   "jobs.action.run": "運行",
   "jobs.action.runNow": "立即運行",
+  "jobs.cancelSearchRequested":
+    "已請求取消。當前搜尋步驟完成後，其餘步驟將停止。",
+  "jobs.cancelSearchNotRunning": "此搜尋已不在執行。",
+  "jobs.cancelSearchFailed": "無法取消搜尋。",
   "jobs.action.runArtworkNow": "立即執行 (覆寫排程)",
   "jobs.status.idle": "空閒",
   "jobs.status.queued": "隊列中",
@@ -645,7 +777,8 @@ const zh_HK: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "系統內部",
   "deletePreview.counting": "正在計算要刪除的檔案...",
   "deletePreview.error": "無法準備刪除預覽。",
-  "deletePreview.folderUnknown": "Scryer 無法確定哪個資料夾存放此作品的檔案，因此不會從硬碟刪除任何內容。",
+  "deletePreview.folderUnknown":
+    "Scryer 無法確定哪個資料夾存放此作品的檔案，因此不會從硬碟刪除任何內容。",
   "deletePreview.removeFromCatalogOnly": "僅從目錄中移除",
   "deletePreview.files": "檔案",
   "deletePreview.media": "媒體",
@@ -664,155 +797,202 @@ const zh_HK: LocaleDictionary = {
   "settings.qualityProfileGlobalHelp": "當分類未單獨指定時使用。",
   "settings.qualityProfileOverrideLabel": "{{category}} 質素覆蓋",
   "settings.qualityProfileOverridesLabel": "分類質素配置覆蓋",
-  "settings.qualityProfileOverrideHelp": "使用繼承以回退到此內容類別的全局預設值。",
+  "settings.qualityProfileOverrideHelp":
+    "使用繼承以回退到此內容類別的全局預設值。",
   "settings.qualityProfileInheritLabel": "從全局繼承",
   "settings.qualityProfileCatalogInvalid": "質素配置目錄不是有效的 JSON。",
   "settings.qualityProfileUnknown": "未知的質素配置檔案 ID“{{id}}”。",
   "settings.qualitySettingsSaved": "質素設定已儲存。",
   "settings.downloadClientRoutingSaved": "下載客戶端路由已儲存。",
-  "settings.downloadClientRoutingSavedFor": "下載為“{{name}}”儲存的客戶端路由。",
+  "settings.downloadClientRoutingSavedFor":
+    "下載為“{{name}}”儲存的客戶端路由。",
   "settings.delayProfiles": "延遲配置",
   "settings.acquisition": "獲取",
   "settings.acquisitionSaved": "獲取設定已儲存。",
-  "settings.acquisitionIntro": "RSS 是穩態獲取路徑：每個想要的項目在每個索引器上主動搜尋一次，之後通過 RSS 監控。主動回填有節奏且有限。",
+  "settings.acquisitionIntro":
+    "RSS 是穩態獲取路徑：每個想要的項目在每個索引器上主動搜尋一次，之後通過 RSS 監控。主動回填有節奏且有限。",
   "settings.acquisitionEnabled": "啓用自動獲取",
-  "settings.acquisitionEnabledHelp": "運行後台獲取循環：收斂搜尋掃描與 RSS 匹配。",
+  "settings.acquisitionEnabledHelp":
+    "運行後台獲取循環：收斂搜尋掃描與 RSS 匹配。",
   "settings.acquisitionThresholds": "升級閾值",
   "settings.acquisitionUpgradeCooldownHours": "升級冷卻時間（小時）",
-  "settings.acquisitionUpgradeCooldownHoursHelp": "同一項目兩次升級抓取之間的最短時間。",
+  "settings.acquisitionUpgradeCooldownHoursHelp":
+    "同一項目兩次升級抓取之間的最短時間。",
   "settings.acquisitionSameTierMinDelta": "同級最小分數差",
-  "settings.acquisitionSameTierMinDeltaHelp": "同一質素級別的資源必須比當前檔案的分數至少高出此值。",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "同一質素級別的資源必須比當前檔案的分數至少高出此值。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
-  "settings.acquisitionCrossTierMinDeltaHelp": "更高質素級別的資源必須比當前檔案的分數至少高出此值。",
+  "settings.acquisitionCrossTierMinDeltaHelp":
+    "更高質素級別的資源必須比當前檔案的分數至少高出此值。",
   "settings.acquisitionForcedUpgradeDeltaBypass": "強制升級分數差",
-  "settings.acquisitionForcedUpgradeDeltaBypassHelp": "分數提升達到此值時立即升級，繞過冷卻時間。",
+  "settings.acquisitionForcedUpgradeDeltaBypassHelp":
+    "分數提升達到此值時立即升級，繞過冷卻時間。",
   "settings.acquisitionConvergence": "收斂與節奏",
   "settings.acquisitionPollIntervalSeconds": "輪詢間隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp": "後台獲取循環喚醒的頻率。",
   "settings.acquisitionMaxScopesPerCycle": "每週期最大評估數",
-  "settings.acquisitionMaxScopesPerCycleHelp": "單個回填週期的評估上限。實際請求速率由索引器速率限制決定，而非此值。",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "單個回填週期的評估上限。實際請求速率由索引器速率限制決定，而非此值。",
   "settings.acquisitionReconvergeDays": "重新收斂間隔（天）",
-  "settings.acquisitionReconvergeDaysHelp": "0 表示禁用（推薦）：已收斂項目通過 RSS 監控。僅當某個源確實不完整時，作為應急複查啓用。",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0 表示禁用（推薦）：已收斂項目通過 RSS 監控。僅當某個源確實不完整時，作為應急複查啓用。",
   "settings.delayProfileExisting": "現有延遲配置",
   "settings.delayProfileNone": "未配置延遲配置。版本將被立即抓取。",
   "settings.delayProfileCreate": "創建配置",
   "settings.delayProfileCreateNew": "建立新的延遲設定檔",
   "settings.delayProfileEdit": "編輯配置",
   "settings.delayProfileConfirmDiscardTitle": "放棄目前的延遲設定檔編輯？",
-  "settings.delayProfileConfirmDiscardDescription": "您目前的延遲設定檔編輯內容將會遺失。",
+  "settings.delayProfileConfirmDiscardDescription":
+    "您目前的延遲設定檔編輯內容將會遺失。",
   "settings.delayProfileDeleteConfirm": "確定要刪除此延遲設定檔嗎？",
   "settings.delayProfileNameLabel": "名稱",
   "settings.delayProfileNamePlaceholder": "例如：等待更好的質素",
   "settings.delayProfileNameRequired": "延遲配置名稱為必填項。",
   "settings.delayProfileUsenetDelay": "Usenet 延遲（分鐘）",
-  "settings.delayProfileUsenetDelayHelp": "抓取前保留 Usenet 版本的時間。0 = 立即抓取。",
+  "settings.delayProfileUsenetDelayHelp":
+    "抓取前保留 Usenet 版本的時間。0 = 立即抓取。",
   "settings.delayProfileTorrentDelay": "Torrent 延遲（分鐘）",
-  "settings.delayProfileTorrentDelayHelp": "抓取前保留 Torrent 版本的時間。0 = 立即抓取。",
+  "settings.delayProfileTorrentDelayHelp":
+    "抓取前保留 Torrent 版本的時間。0 = 立即抓取。",
   "settings.delayProfilePreferred": "首選協議",
-  "settings.delayProfilePreferredHelp": "基於分數的跳過僅適用於首選協議的版本。",
+  "settings.delayProfilePreferredHelp":
+    "基於分數的跳過僅適用於首選協議的版本。",
   "settings.delayProfileProtocolModeLabel": "協議模式",
-  "settings.delayProfileProtocolModeHelp": "延遲從索引器發佈版本的時間開始計算。首選協議會在其他條件相同的版本之間進行選擇，並控制跳過延遲的資格。",
+  "settings.delayProfileProtocolModeHelp":
+    "延遲從索引器發佈版本的時間開始計算。首選協議會在其他條件相同的版本之間進行選擇，並控制跳過延遲的資格。",
   "settings.delayProfileProtocolMode.preferUsenet": "首選 Usenet",
   "settings.delayProfileProtocolMode.preferTorrent": "首選 Torrent",
   "settings.delayProfileProtocolMode.onlyUsenet": "僅 Usenet",
   "settings.delayProfileProtocolMode.onlyTorrent": "僅 Torrent",
   "settings.delayProfileMinAge": "最小時限（分鐘）",
-  "settings.delayProfileMinAgeHelp": "僅限 Usenet。硬性門檻 — 比此更新的版本無論分數如何都將被保留。防止抓取不完整的 NZB。0 = 禁用。",
+  "settings.delayProfileMinAgeHelp":
+    "僅限 Usenet。硬性門檻 — 比此更新的版本無論分數如何都將被保留。防止抓取不完整的 NZB。0 = 禁用。",
   "settings.delayProfileBypassLabel": "跳過分數閾值",
   "settings.delayProfileBypassPlaceholder": "留空表示永不跳過",
-  "settings.delayProfileBypassHelp": "如果首選協議的版本分數達到或超過此閾值，則無視延遲立即抓取。",
+  "settings.delayProfileBypassHelp":
+    "如果首選協議的版本分數達到或超過此閾值，則無視延遲立即抓取。",
   "settings.delayProfileBypassHighestQualityLabel": "最高質素時跳過延遲",
-  "settings.delayProfileBypassHighestQualityHelp": "如果使用首選協議，立即抓取符合條件的最高質素版本。",
+  "settings.delayProfileBypassHighestQualityHelp":
+    "如果使用首選協議，立即抓取符合條件的最高質素版本。",
   "settings.delayProfileFacetsLabel": "適用於",
-  "settings.delayProfileFacetsHelp": "此配置適用的內容類型。全部取消選中則適用於所有類型。",
+  "settings.delayProfileFacetsHelp":
+    "此配置適用的內容類型。全部取消選中則適用於所有類型。",
   "settings.delayProfileLibrariesLabel": "媒體庫",
-  "settings.delayProfileLibrariesHelp": "此配置適用的媒體庫。保持全選則適用於所有媒體庫。刪除配置的最後一個媒體庫會停用該配置。",
+  "settings.delayProfileLibrariesHelp":
+    "此配置適用的媒體庫。保持全選則適用於所有媒體庫。刪除配置的最後一個媒體庫會停用該配置。",
   "settings.delayProfileUnknownLibrary": "未知媒體庫",
   "settings.delayProfileAllFacets": "全部",
   "settings.delayProfileTagsLabel": "標籤",
   "settings.delayProfileTagsPlaceholder": "逗號分隔的標籤（留空 = 預設通用）",
-  "settings.delayProfileTagsHelp": "通過標籤匹配標題。留空表示此配置為預設通用配置。",
+  "settings.delayProfileTagsHelp":
+    "通過標籤匹配標題。留空表示此配置為預設通用配置。",
   "settings.delayProfilePriorityLabel": "優先級",
-  "settings.delayProfilePriorityHelp": "數字越小 = 優先級越高。第一個匹配的配置生效。",
+  "settings.delayProfilePriorityHelp":
+    "數字越小 = 優先級越高。第一個匹配的配置生效。",
   "settings.delayProfileEnabledLabel": "啓用",
   "settings.delayProfilesSaved": "延遲配置已儲存。",
   "settings.delayProfileSaveError": "延遲配置儲存失敗。",
   "settings.seedingProfiles": "做種設定檔",
   "settings.seedingProfileExisting": "現有做種設定檔",
-  "settings.seedingProfileNone": "未設定做種設定檔。抓取 Torrent 時不設定 Scryer 做種目標，並遵循您下載客戶端本身的限制。",
+  "settings.seedingProfileNone":
+    "未設定做種設定檔。抓取 Torrent 時不設定 Scryer 做種目標，並遵循您下載客戶端本身的限制。",
   "settings.seedingProfileCreate": "建立設定檔",
   "settings.seedingProfileCreateNew": "建立新的做種設定檔",
   "settings.seedingProfileEdit": "編輯設定檔",
   "settings.seedingProfileConfirmDiscardTitle": "放棄目前的做種設定檔編輯？",
-  "settings.seedingProfileConfirmDiscardDescription": "您目前的做種設定檔編輯內容將會遺失。",
+  "settings.seedingProfileConfirmDiscardDescription":
+    "您目前的做種設定檔編輯內容將會遺失。",
   "settings.seedingProfileDeleteConfirm": "確定要刪除此做種設定檔嗎？",
   "settings.seedingProfileNameLabel": "名稱",
   "settings.seedingProfileNamePlaceholder": "例如：私有 Tracker — 1.0 分享率",
   "settings.seedingProfileGoalPlaceholder": "留空以使用客戶端本身的限制",
   "settings.seedingProfileRatioLabel": "分享率",
-  "settings.seedingProfileRatioHelp": "達到此分享率時停止做種。留空則遵循下載客戶端本身的限制。",
-  "settings.seedingProfileSeedTimeFormatHint": "持續時間例如 90m、36h、1d 12h 或 2w。純數字代表分鐘。",
+  "settings.seedingProfileRatioHelp":
+    "達到此分享率時停止做種。留空則遵循下載客戶端本身的限制。",
+  "settings.seedingProfileSeedTimeFormatHint":
+    "持續時間例如 90m、36h、1d 12h 或 2w。純數字代表分鐘。",
   "settings.seedingProfileSeedTimeLabel": "做種時間",
   "settings.seedingProfileMinimumSeedersLabel": "做種者數量下限",
-  "settings.seedingProfileMinimumSeedersHelp": "來自使用此設定檔索引器的發行版本至少需要達到此數量的做種者才會被抓取。留空以使用系統預設值；輸入 0 關閉檢查。",
-  "settings.seedingProfileMinimumSeedersUnknownHelp": "未回報做種者數量的索引器一律符合資格。",
-  "settings.seedingProfileMinimumSeedersRoutingHelp": "僅透過下載客戶端路由項目指派的設定檔不會套用其下限：檢查在選取客戶端之前執行，因此會依序查看索引器的設定檔、從 Prowlarr 匯入的設定檔，最後是預設設定檔。",
-  "settings.seedingProfileMinimumSeedersInheritHelp": "空白欄位繼承「預設做種者數量下限」設定，而非從 Prowlarr 匯入的值 — 將此設定檔指派給由 Prowlarr 管理的索引器將取代該匯入的下限。",
+  "settings.seedingProfileMinimumSeedersHelp":
+    "來自使用此設定檔索引器的發行版本至少需要達到此數量的做種者才會被抓取。留空以使用系統預設值；輸入 0 關閉檢查。",
+  "settings.seedingProfileMinimumSeedersUnknownHelp":
+    "未回報做種者數量的索引器一律符合資格。",
+  "settings.seedingProfileMinimumSeedersRoutingHelp":
+    "僅透過下載客戶端路由項目指派的設定檔不會套用其下限：檢查在選取客戶端之前執行，因此會依序查看索引器的設定檔、從 Prowlarr 匯入的設定檔，最後是預設設定檔。",
+  "settings.seedingProfileMinimumSeedersInheritHelp":
+    "空白欄位繼承「預設做種者數量下限」設定，而非從 Prowlarr 匯入的值 — 將此設定檔指派給由 Prowlarr 管理的索引器將取代該匯入的下限。",
   "settings.seedingProfileMinimumSeedersPlaceholder": "留空以使用系統預設值",
   "settings.seedingProfileMinimumSeedersOffBadge": "做種者檢查已關閉",
   "settings.seedingProfileMinimumSeedersBadge": "≥ {{value}} 個做種者",
   "settings.seedingMinimumSeedersFloorLabel": "預設做種者數量下限",
-  "settings.seedingMinimumSeedersFloorHelp": "當沒有做種設定檔涵蓋發行版本來源的索引器時套用。輸入 0 允許完全無做種者的發行版本。",
+  "settings.seedingMinimumSeedersFloorHelp":
+    "當沒有做種設定檔涵蓋發行版本來源的索引器時套用。輸入 0 允許完全無做種者的發行版本。",
   "settings.seedingMinimumSeedersFloorSaved": "已儲存預設做種者數量下限。",
-  "settings.seedingProfileSeedTimeHelp": "Torrent 做種達到此時長後停止做種。留空則遵循下載客戶端本身的限制。",
-  "settings.seedingProfileSeedTimeTransmissionHelp": "Transmission 沒有總做種時間限制，因此在此處會對應至其閒置時間限制。",
+  "settings.seedingProfileSeedTimeHelp":
+    "Torrent 做種達到此時長後停止做種。留空則遵循下載客戶端本身的限制。",
+  "settings.seedingProfileSeedTimeTransmissionHelp":
+    "Transmission 沒有總做種時間限制，因此在此處會對應至其閒置時間限制。",
   "settings.seedingProfileBehaviorColumn": "行為",
   "settings.seedingProfileSeasonPackSummary": "季度合集：{{value}}",
   "settings.seedingProfileIgnoresMinimums": "忽略 Tracker 下限",
-  "settings.seedingProfileNoneAvailable": "尚無設定檔 — 請在「設定 → 做種設定檔」中建立一個",
+  "settings.seedingProfileNoneAvailable":
+    "尚無設定檔 — 請在「設定 → 做種設定檔」中建立一個",
   "settings.seedingProfileSeasonPackAdvanced": "季度合集進階設定",
   "settings.seedingProfileSeasonPackModeLabel": "季度合集模式",
-  "settings.seedingProfileSeasonPackModeHelp": "選擇季度合集是繼承單集目標還是使用其專屬的做種目標。",
+  "settings.seedingProfileSeasonPackModeHelp":
+    "選擇季度合集是繼承單集目標還是使用其專屬的做種目標。",
   "settings.seedingProfileSeasonPackInherit": "繼承分集目標",
   "settings.seedingProfileSeasonPackOverride": "覆寫季度合集目標",
   "settings.seedingProfileSeasonPackRatioLabel": "季度合集分享率",
   "settings.seedingProfileSeasonPackSeedTimeLabel": "季度合集做種時間",
-  "settings.seedingProfileSeasonPackGoalsHelp": "季度合集抓取的獨立做種目標。留空則遵循下載客戶端本身的限制。",
+  "settings.seedingProfileSeasonPackGoalsHelp":
+    "季度合集抓取的獨立做種目標。留空則遵循下載客戶端本身的限制。",
   "settings.seedingProfileHonorTrackerMinimumsLabel": "遵循 Tracker 下限",
-  "settings.seedingProfileHonorTrackerMinimumsHelp": "若 Tracker 指定了分享率或做種時間下限，至少做種至達到該下限，即使此設定檔的目標較低。",
+  "settings.seedingProfileHonorTrackerMinimumsHelp":
+    "若 Tracker 指定了分享率或做種時間下限，至少做種至達到該下限，即使此設定檔的目標較低。",
   "settings.seedingProfilePostImportTrackingLabel": "導入後追蹤",
-  "settings.seedingProfilePostImportTrackingHelp": "當 Scryer 完成文件導入後如何處理下載項目的追蹤。",
+  "settings.seedingProfilePostImportTrackingHelp":
+    "當 Scryer 完成文件導入後如何處理下載項目的追蹤。",
   "settings.seedingProfilePostImportTrackingPark": "在下載客戶端中暫停/保留",
   "settings.seedingProfilePostImportTrackingHandOff": "移交給下載客戶端管理",
   "settings.seedingProfilePostImportTrackingHandOffBadge": "已移交",
-  "settings.seedingProfilePostImportTrackingHandOffHelp": "導入完成後立即停止由 Scryer 監控此 Torrent，將剩餘做種控制權交給下載客戶端。",
+  "settings.seedingProfilePostImportTrackingHandOffHelp":
+    "導入完成後立即停止由 Scryer 監控此 Torrent，將剩餘做種控制權交給下載客戶端。",
   "settings.seedingProfileGoalMetActionLabel": "達成目標時的操作",
   "settings.seedingProfileGoalMetActionHelp": "當做種目標達成後所採取的動作。",
   "settings.seedingProfileGoalMetRemoveEntry": "從客戶端移除任務（保留文件）",
   "settings.seedingProfileGoalMetStopSeeding": "停止做種/暫停",
   "settings.seedingProfileGoalMetKeep": "保持做種",
   "settings.seedingProfileNeverRemoveLabel": "永不從客戶端移除",
-  "settings.seedingProfileNeverRemoveHelp": "即使達成目標也絕不從下載客戶端中刪除 Torrent 項目。",
+  "settings.seedingProfileNeverRemoveHelp":
+    "即使達成目標也絕不從下載客戶端中刪除 Torrent 項目。",
   "settings.seedingProfileNeverRemoveBadge": "永不移除",
   "settings.seedingProfileDefaultTitle": "預設做種設定檔",
   "settings.seedingProfileDefaultLabel": "預設做種設定檔",
-  "settings.seedingProfileDefaultHelp": "當索引器未指派特定做種設定檔時套用此設定檔。",
+  "settings.seedingProfileDefaultHelp":
+    "當索引器未指派特定做種設定檔時套用此設定檔。",
   "settings.seedingProfileDefaultNone": "無預設（使用客戶端限制）",
   "settings.seedingProfileDefaultBadge": "預設",
-  "settings.seedingProfileMissing": "遺失設定檔 \"{{id}}\"",
+  "settings.seedingProfileMissing": '遺失設定檔 "{{id}}"',
   "settings.seedingProfileSaved": "已儲存做種設定檔。",
   "settings.seedingProfileSaveError": "儲存做種設定檔失敗。",
   "settings.seedingProfileDeleted": "已刪除做種設定檔。",
   "settings.seedingProfileDeleteError": "刪除做種設定檔失敗。",
   "settings.seedingProfileDefaultSaved": "已儲存預設做種設定檔。",
   "settings.seedingProfileProwlarrManaged": "由 Prowlarr 管理",
-  "settings.seedingProfileProwlarrManagedMinimum": "由 Prowlarr 管理 · 做種者下限 {{count}} 個",
-  "settings.seedingProfileProwlarrManagedMinimumOne": "由 Prowlarr 管理 · 做種者下限 1 個",
-  "settings.seedingProfileProwlarrManagedMinimumOff": "由 Prowlarr 管理 · 做種者檢查已關閉",
+  "settings.seedingProfileProwlarrManagedMinimum":
+    "由 Prowlarr 管理 · 做種者下限 {{count}} 個",
+  "settings.seedingProfileProwlarrManagedMinimumOne":
+    "由 Prowlarr 管理 · 做種者下限 1 個",
+  "settings.seedingProfileProwlarrManagedMinimumOff":
+    "由 Prowlarr 管理 · 做種者檢查已關閉",
   "settings.seedingProfileInherit": "繼承預設",
-  "settings.seedingProfileInheritProwlarrMinimum": "繼承預設 · Prowlarr 做種者下限 {{count}} 個",
-  "settings.seedingProfileInheritProwlarrMinimumOne": "繼承預設 · Prowlarr 做種者下限 1 個",
-  "settings.seedingProfileInheritProwlarrMinimumOff": "繼承預設 · Prowlarr 做種者檢查已關閉",
+  "settings.seedingProfileInheritProwlarrMinimum":
+    "繼承預設 · Prowlarr 做種者下限 {{count}} 個",
+  "settings.seedingProfileInheritProwlarrMinimumOne":
+    "繼承預設 · Prowlarr 做種者下限 1 個",
+  "settings.seedingProfileInheritProwlarrMinimumOff":
+    "繼承預設 · Prowlarr 做種者檢查已關閉",
   "settings.seedingProfileRoutingInherit": "繼承路由設定",
   "settings.seedingProfileColumn": "做種設定檔",
   "settings.seedingProfileIndexerLabel": "{{name}} 的做種設定檔",
@@ -825,12 +1005,14 @@ const zh_HK: LocaleDictionary = {
   "settings.mediaServerCreateNew": "建立新的媒體伺服器",
   "settings.mediaServerUpdate": "更新媒體伺服器",
   "settings.mediaServerConfirmDiscardTitle": "放棄目前的媒體伺服器編輯？",
-  "settings.mediaServerConfirmDiscardDescription": "您目前的媒體伺服器編輯內容將會遺失。",
+  "settings.mediaServerConfirmDiscardDescription":
+    "您目前的媒體伺服器編輯內容將會遺失。",
   "settings.mediaServerEnabled": "已啟用媒體伺服器",
   "settings.mediaServerAuthCapabilities": "驗證功能",
   "settings.mediaServerAutoAddEnabled": "自動新增已啟用",
   "settings.mediaServerPathMappings": "路徑對應",
-  "settings.mediaServerPathMappingsHelp": "若媒體伺服器對媒體資料夾的檢視路徑與 Scryer 不同，請在此設定路徑對應。",
+  "settings.mediaServerPathMappingsHelp":
+    "若媒體伺服器對媒體資料夾的檢視路徑與 Scryer 不同，請在此設定路徑對應。",
   "settings.mediaServerValidation": "媒體伺服器驗證",
   "settings.noMediaServersFound": "找不到已設定的媒體伺服器。",
   "settings.capabilities": "功能",
@@ -852,7 +1034,8 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientCreateNew": "建立新的下載客戶端",
   "settings.downloadClientUpdate": "更新下載客戶端",
   "settings.downloadClientConfirmDiscardTitle": "放棄目前的下載客戶端編輯？",
-  "settings.downloadClientConfirmDiscardDescription": "您目前的下載客戶端編輯內容將會遺失。",
+  "settings.downloadClientConfirmDiscardDescription":
+    "您目前的下載客戶端編輯內容將會遺失。",
   "settings.downloadClientUseSsl": "使用 SSL",
   "settings.downloadClientUrlBase": "URL 基礎路徑",
   "settings.downloadClientUrlPreview": "計算的基礎 URL",
@@ -869,27 +1052,42 @@ const zh_HK: LocaleDictionary = {
   "settings.downloadClientRemoveCompleted": "移除已完成",
   "settings.downloadClientRemoveFailed": "移除失敗項",
   "settings.downloadClientUseSslInfo": "連接此下載客戶端時使用 SSL/TLS。",
-  "settings.downloadClientEnabledInfo": "禁用後，此客戶端在下載路由中將被跳過。",
+  "settings.downloadClientEnabledInfo":
+    "禁用後，此客戶端在下載路由中將被跳過。",
   "settings.downloadClientEnabledLabel": "Enable download client",
-  "settings.downloadClientFilesystemPathMapping": "Filesystem Path Mapping (Advanced)",
-  "settings.downloadClientFilesystemPathMappingHelp": "Remote path mappings are rarely needed. Use them only when Scryer and this download client see the same download folder at different filesystem paths.",
+  "settings.downloadClientFilesystemPathMapping":
+    "Filesystem Path Mapping (Advanced)",
+  "settings.downloadClientFilesystemPathMappingHelp":
+    "Remote path mappings are rarely needed. Use them only when Scryer and this download client see the same download folder at different filesystem paths.",
   "settings.downloadClientRemotePathMappings": "遠程路徑映射",
-  "settings.downloadClientRemotePathMappingsHelp": "將下載客戶端在其容器或主機內報告的路徑映射到 Scryer 可讀取的本地路徑。每行輸入一條規則，格式為 REMOTE => LOCAL。",
+  "settings.downloadClientRemotePathMappingsHelp":
+    "將下載客戶端在其容器或主機內報告的路徑映射到 Scryer 可讀取的本地路徑。每行輸入一條規則，格式為 REMOTE => LOCAL。",
   "settings.downloadClientRemotePathMappingsRemoteLabel": "Remote Path",
-  "settings.downloadClientRemotePathMappingsRemoteHelp": "Path reported by the download client.",
+  "settings.downloadClientRemotePathMappingsRemoteHelp":
+    "Path reported by the download client.",
   "settings.downloadClientRemotePathMappingsLocalLabel": "Local Path",
-  "settings.downloadClientRemotePathMappingsLocalHelp": "Path Scryer should use on this machine.",
+  "settings.downloadClientRemotePathMappingsLocalHelp":
+    "Path Scryer should use on this machine.",
   "settings.downloadClientRemotePathMappingsAdd": "Add Mapping",
-  "settings.downloadClientRemotePathMappingsEmptyState": "No path mappings configured yet. Add one only if Scryer cannot read the path reported by the download client.",
+  "settings.downloadClientRemotePathMappingsEmptyState":
+    "No path mappings configured yet. Add one only if Scryer cannot read the path reported by the download client.",
   "settings.downloadClientRemotePathMappingsExampleLabel": "Example",
-  "settings.downloadClientRemotePathMappingsRemoteRequired": "Remote Path is required when a mapping row is present.",
-  "settings.downloadClientRemotePathMappingsLocalRequired": "Local Path is required when a mapping row is present.",
-  "settings.downloadClientRemotePathMappingsLocalAbsolute": "Local Path must be an absolute path.",
-  "settings.downloadClientRemotePathMappingsRemoteDuplicate": "Remote Path duplicates another mapping in this client.",
-  "settings.downloadClientSabnzbdAuthHelp": "SABnzbd supports either an API key or username/password. For Decypharr, this is typically host :8282, URL base /sabnzbd, username = your Arr URL, password = your Arr token.",
-  "settings.downloadClientSabnzbdNzbdavHelp": "For NzbDav, point SAB-compatible completed downloads at the mounted completed-symlinks path, make sure Scryer can read that mount locally, and add remote path mappings if NzbDav reports a different visible path.",
-  "settings.downloadClientQbittorrentDecypharrHelp": "For Decypharr-backed qBittorrent, use your Arr URL as the username and your Arr token as the password.",
-  "settings.downloadClientDecypharrFilesystemHelp": "Completed-download import only works from paths Scryer can read locally. Mount Decypharr or NzbDav output paths into Scryer and add remote path mappings when the reported paths differ.",
+  "settings.downloadClientRemotePathMappingsRemoteRequired":
+    "Remote Path is required when a mapping row is present.",
+  "settings.downloadClientRemotePathMappingsLocalRequired":
+    "Local Path is required when a mapping row is present.",
+  "settings.downloadClientRemotePathMappingsLocalAbsolute":
+    "Local Path must be an absolute path.",
+  "settings.downloadClientRemotePathMappingsRemoteDuplicate":
+    "Remote Path duplicates another mapping in this client.",
+  "settings.downloadClientSabnzbdAuthHelp":
+    "SABnzbd supports either an API key or username/password. For Decypharr, this is typically host :8282, URL base /sabnzbd, username = your Arr URL, password = your Arr token.",
+  "settings.downloadClientSabnzbdNzbdavHelp":
+    "For NzbDav, point SAB-compatible completed downloads at the mounted completed-symlinks path, make sure Scryer can read that mount locally, and add remote path mappings if NzbDav reports a different visible path.",
+  "settings.downloadClientQbittorrentDecypharrHelp":
+    "For Decypharr-backed qBittorrent, use your Arr URL as the username and your Arr token as the password.",
+  "settings.downloadClientDecypharrFilesystemHelp":
+    "Completed-download import only works from paths Scryer can read locally. Mount Decypharr or NzbDav output paths into Scryer and add remote path mappings when the reported paths differ.",
   "settings.downloadClientNamePlaceholder": "我的下載客戶端",
   "settings.downloadClientHostPlaceholder": "download.example.com",
   "settings.downloadClientUrlBasePlaceholder": "例如 api",
@@ -939,13 +1137,18 @@ const zh_HK: LocaleDictionary = {
   "settings.specialsFolderTemplateLabel": "特別篇資料夾範本",
   "settings.specialsFolderTemplatePlaceholder": "Specials",
   "settings.specialsFolderTemplateRequired": "特別篇資料夾範本為必填項。",
-  "settings.seasonFolderTemplateMustContainSeason": "季度資料夾範本必須包含季度標記。",
-  "settings.seasonFolderValidationUnknownToken": "季度資料夾範本支援 {season}、作品標題、年份以及外部 ID 標記。無效的標記：{{token}}",
+  "settings.seasonFolderTemplateMustContainSeason":
+    "季度資料夾範本必須包含季度標記。",
+  "settings.seasonFolderValidationUnknownToken":
+    "季度資料夾範本支援 {season}、作品標題、年份以及外部 ID 標記。無效的標記：{{token}}",
   "settings.folderRenameSectionTitle": "資料夾重新命名",
-  "settings.folderValidationUnknownToken": "資料夾模板支援 {title}、{year} 和外部 ID 標記。無效標記：{{token}}",
+  "settings.folderValidationUnknownToken":
+    "資料夾模板支援 {title}、{year} 和外部 ID 標記。無效標記：{{token}}",
   "settings.folderValidationEmpty": "資料夾名稱不可為空。",
-  "settings.folderValidationLeafTitleToken": "範本中的最後一個資料夾必須包含標題或外部 ID 標記",
-  "settings.folderValidationIllegalCharacter": "資料夾範本包含非法的文件系統字元：{{character}}",
+  "settings.folderValidationLeafTitleToken":
+    "範本中的最後一個資料夾必須包含標題或外部 ID 標記",
+  "settings.folderValidationIllegalCharacter":
+    "資料夾範本包含非法的文件系統字元：{{character}}",
   "settings.renameTemplateLabel": "重命名模板",
   "settings.renameTemplatePlaceholder": "佔位符",
   "settings.renameTemplateRequired": "重命名模板為必填項。",
@@ -965,9 +1168,11 @@ const zh_HK: LocaleDictionary = {
   "settings.renameLiteralBracesLabel": "字面大括號",
   "settings.renameFunctionTruncateTitle": "截斷函數",
   "settings.renameFunctionOptionalGroupTitle": "可選分組",
-  "settings.renameOptionalGroupDescription": "若分組內的標記未提供任何值，則整個選用分組將會被略過。",
+  "settings.renameOptionalGroupDescription":
+    "若分組內的標記未提供任何值，則整個選用分組將會被略過。",
   "settings.renameFunctionWhitespaceTitle": "空白處理",
-  "settings.renameFunctionWhitespaceDescription": "控制標記與文字之間的空格替換規則。",
+  "settings.renameFunctionWhitespaceDescription":
+    "控制標記與文字之間的空格替換規則。",
   "settings.renameFunctionPaddingTitle": "數字填補補零",
   "settings.renameFunctionChainTitle": "鏈接過濾條件",
   "settings.renameFunctionBracesTitle": "括號處理",
@@ -989,6 +1194,9 @@ const zh_HK: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "來源（例如 BluRay、WEB-DL）",
+  "settings.renameTokenDynamicRange": "動態範圍（例如 HDR10、DV、HDR10+）",
+  "settings.renameTokenRevision": "發行修訂版（Proper/REPACK）",
+  "settings.renameTokenIs3d": "3D 標記",
   "settings.renameTokenVideoCodec": "影片編碼器（例如 x265）",
   "settings.renameTokenAudioCodec": "音訊編碼器（例如 DTS）",
   "settings.renameTokenAudioChannels": "音訊聲道（例如 5.1）",
@@ -1002,12 +1210,14 @@ const zh_HK: LocaleDictionary = {
   "settings.renameValidationUnmatchedOpen": "未匹配的左括號 '{'",
   "settings.renameValidationUnmatchedClose": "未匹配的右括號 '}'",
   "settings.renameValidationUnknownToken": "未知標記：{{token}}",
-  "settings.renameValidationInvalidPadding": "數字填補補零必須為 0 到 240 之間的 ASCII 整數：{{padding}}",
+  "settings.renameValidationInvalidPadding":
+    "數字填補補零必須為 0 到 240 之間的 ASCII 整數：{{padding}}",
   "settings.renameValidationInvalidFilter": "無效的標記過濾條件：{{filter}}",
   "settings.renameValidationEmpty": "重命名模板不能為空",
   "settings.renameValidationInvalidOptionalGroup": "無效的可選分組語法。",
   "settings.renameValidationNestedOptionalGroup": "不支援嵌套可選分組。",
-  "settings.renameValidationUnsupportedOptionalFallback": "可選後備回退語法不受支援。",
+  "settings.renameValidationUnsupportedOptionalFallback":
+    "可選後備回退語法不受支援。",
   "settings.mediaSettingsSaved": "媒體設定已儲存。",
   "rename.previewButton": "預覽重命名",
   "rename.previewing": "預覽中…",
@@ -1015,10 +1225,13 @@ const zh_HK: LocaleDictionary = {
   "rename.applying": "應用中…",
   "rename.currentPath": "當前的",
   "rename.proposedPath": "建議的",
-  "rename.planSummary": "{{total}} 項，{{renamable}} 可重命名，{{noop}} 無變化，{{conflicts}} 衝突，{{errors}} 錯誤",
+  "rename.planSummary":
+    "{{total}} 項，{{renamable}} 可重命名，{{noop}} 無變化，{{conflicts}} 衝突，{{errors}} 錯誤",
   "rename.noRenamableFiles": "沒有檔案需要重新命名。",
-  "rename.blockedFiles": "{{count}} 個檔案無法重新命名，將阻止此作品進行重新命名。",
-  "rename.sampleNote": "顯示需重新命名的 {{renamable}} 個檔案中的前 {{shown}} 個。",
+  "rename.blockedFiles":
+    "{{count}} 個檔案無法重新命名，將阻止此作品進行重新命名。",
+  "rename.sampleNote":
+    "顯示需重新命名的 {{renamable}} 個檔案中的前 {{shown}} 個。",
   "settings.sectionTitle": "設定 • {{section}}",
   "settings.generalText": "通用應用程序設定。",
   "settings.generalPlaceholder": "配置語言和其他全局偏好設定。",
@@ -1027,8 +1240,10 @@ const zh_HK: LocaleDictionary = {
   "settings.dateTimeFormatIso24h": "ISO 8601 (24 小時制)",
   "settings.dateTimeFormatHelp": "選擇介面中時間戳與日期的顯示格式。",
   "settings.historyRetentionTitle": "歷史保留",
-  "settings.historyRetentionHelp": "這會保留 Scryer 面向用戶的歷史記錄和審計軌跡。更改將在下一次清理運行時生效。",
-  "settings.historyRetentionExternalHelp": "採集臨時數據的運行級清理仍會繼續執行，並且此設定不控制 SABnzbd、NZBGet 或 Weaver 保留的歷史記錄。",
+  "settings.historyRetentionHelp":
+    "這會保留 Scryer 面向用戶的歷史記錄和審計軌跡。更改將在下一次清理運行時生效。",
+  "settings.historyRetentionExternalHelp":
+    "採集臨時數據的運行級清理仍會繼續執行，並且此設定不控制 SABnzbd、NZBGet 或 Weaver 保留的歷史記錄。",
   "settings.featuresHeader": "功能",
   "settings.apiExplorerLabel": "API 探索器",
   "settings.apiExplorerHelp": "在 Web UI 中啟用互動式 GraphQL API 探索器分頁。",
@@ -1037,15 +1252,20 @@ const zh_HK: LocaleDictionary = {
   "apiExplorer.tabName": "分頁名稱",
   "apiExplorer.apiKey": "API 金鑰",
   "apiExplorer.oauth": "OAuth 應用程式",
-  "apiExplorer.apiKeyHelp": "具備您的應用程式與媒體庫權限，但無互動式帳號存取權。無法使用訂閱。",
-  "apiExplorer.oauthHelp": "僅具備您的媒體庫權限。無法存取應用程式設定與帳號操作。",
+  "apiExplorer.apiKeyHelp":
+    "具備您的應用程式與媒體庫權限，但無互動式帳號存取權。無法使用訂閱。",
+  "apiExplorer.oauthHelp":
+    "僅具備您的媒體庫權限。無法存取應用程式設定與帳號操作。",
   "apiExplorer.sessionHelp": "使用您目前的登入階段。無需憑證或客戶端設定。",
   "settings.experimentalFeaturesLabel": "啓用實驗性功能",
-  "settings.experimentalFeaturesHelp": "顯示仍在為此實例上的所有人完善的功能：在媒體庫和根目錄之間移動條目，以及維護規則。",
+  "settings.experimentalFeaturesHelp":
+    "顯示仍在為此實例上的所有人完善的功能：在媒體庫和根目錄之間移動條目，以及維護規則。",
   "settings.personalizedDiscoveryLabel": "個性化發現",
-  "settings.personalizedDiscoveryHelp": "將你的媒體庫摘要發送到元數據網關，讓發現頁可以根據你擁有的內容推薦條目。關閉後，發現頁僅使用公共資訊流。",
+  "settings.personalizedDiscoveryHelp":
+    "將你的媒體庫摘要發送到元數據網關，讓發現頁可以根據你擁有的內容推薦條目。關閉後，發現頁僅使用公共資訊流。",
   "settings.srrdbFilenameRecoveryLabel": "通過 srrdb.com 恢復混淆的檔案名",
-  "settings.srrdbFilenameRecoveryHelp": "當來自 SABnzbd 或 NZBGet 的自動導入包含名稱被混淆的影片檔案時，Scryer 會將每個檔案的 CRC-32 校驗和與大小發送到第三方服務 srrdb.com，以查詢原始檔案名。不會發送有關你的媒體庫或該檔案的其他任何資訊。硬碟上的檔案永遠不會被重命名。",
+  "settings.srrdbFilenameRecoveryHelp":
+    "當來自 SABnzbd 或 NZBGet 的自動導入包含名稱被混淆的影片檔案時，Scryer 會將每個檔案的 CRC-32 校驗和與大小發送到第三方服務 srrdb.com，以查詢原始檔案名。不會發送有關你的媒體庫或該檔案的其他任何資訊。硬碟上的檔案永遠不會被重命名。",
   "discovery.personalizedDisabled": "此實例已關閉個性化發現。",
   "settings.keepHistoryForever": "永久保留歷史記錄",
   "settings.historyRetentionDaysHeader": "歷史記錄保留時長",
@@ -1053,16 +1273,21 @@ const zh_HK: LocaleDictionary = {
   "settings.securitySessionDurationSuffix": "天",
   "settings.generalSaved": "已儲存一般設定。",
   "settings.verificationDepthTitle": "導入副本校驗",
-  "settings.verificationDepthHelp": "Scryer 在動源檔案之前，對複製出的檔案核對得有多嚴格。",
-  "settings.verificationDepthScope": "僅適用於下載客戶端的導入副本。無論此處如何選擇，媒體庫和根目錄的移動始終執行完整校驗。",
+  "settings.verificationDepthHelp":
+    "Scryer 在動源檔案之前，對複製出的檔案核對得有多嚴格。",
+  "settings.verificationDepthScope":
+    "僅適用於下載客戶端的導入副本。無論此處如何選擇，媒體庫和根目錄的移動始終執行完整校驗。",
   "settings.verificationDepthLabel": "校驗深度",
   "settings.verificationDepthFull": "完整回讀",
-  "settings.verificationDepthFullHelp": "完整回讀副本，並與複製過程中計算的校驗和比對。",
+  "settings.verificationDepthFullHelp":
+    "完整回讀副本，並與複製過程中計算的校驗和比對。",
   "settings.verificationDepthQuick": "快速檢查（預設）",
-  "settings.verificationDepthQuickHelp": "比對檔案大小以及首尾抽樣內容。更快，但保證更弱。",
+  "settings.verificationDepthQuickHelp":
+    "比對檔案大小以及首尾抽樣內容。更快，但保證更弱。",
   "settings.verificationDepthSaved": "校驗深度已儲存。",
   "settings.uiSaved": "已儲存介面設定。",
-  "settings.historyRetentionValidation": "除非永久保留歷史記錄，否則歷史保留天數必須至少為 1。",
+  "settings.historyRetentionValidation":
+    "除非永久保留歷史記錄，否則歷史保留天數必須至少為 1。",
   "settings.imageCacheTitle": "圖片快取",
   "settings.imageCacheMaxSizeLabel": "快取大小上限",
   "settings.imageCacheMbSuffix": "MB",
@@ -1074,19 +1299,24 @@ const zh_HK: LocaleDictionary = {
   "settings.pluginHttpTrustTitle": "插件 HTTP CA 憑證",
   "settings.pluginHttpTrustAdvancedLabel": "進階 TLS 設定",
   "settings.pluginHttpTrustStoredCount": "已儲存 {{count}} 個自訂憑證",
-  "settings.pluginHttpTrustDescription": "上傳自訂 CA 憑證，以允許插件透過 HTTPS 連線至具有自簽憑證的內部服務。",
+  "settings.pluginHttpTrustDescription":
+    "上傳自訂 CA 憑證，以允許插件透過 HTTPS 連線至具有自簽憑證的內部服務。",
   "settings.pluginHttpTrustWarningTitle": "憑證信任警告",
-  "settings.pluginHttpTrustWarningBody": "信任未驗證的根憑證可能會使您的連線暴露於中間人攻擊之中。請僅新增受信任的 CA 憑證。",
+  "settings.pluginHttpTrustWarningBody":
+    "信任未驗證的根憑證可能會使您的連線暴露於中間人攻擊之中。請僅新增受信任的 CA 憑證。",
   "settings.pluginHttpTrustUploadButton": "上傳憑證",
   "settings.pluginHttpTrustClearButton": "清除所有自訂憑證",
   "settings.pluginHttpTrustEmpty": "尚未設定任何自訂 CA 憑證。",
   "settings.pluginHttpTrustEntryLabel": "憑證項目",
-  "settings.pluginHttpTrustUploadMissingCertificate": "上傳內容中缺少有效的 PEM 憑證。",
-  "settings.pluginHttpTrustUploadTrailingText": "憑證資料後方包含無法識別的文字。",
+  "settings.pluginHttpTrustUploadMissingCertificate":
+    "上傳內容中缺少有效的 PEM 憑證。",
+  "settings.pluginHttpTrustUploadTrailingText":
+    "憑證資料後方包含無法識別的文字。",
   "settings.pluginHttpTrustUploadInvalidCertificate": "無效的 X.509 憑證。",
   "settings.pluginHttpTrustUploadReadError": "讀取憑證文件失敗。",
   "settings.languageChangeTitle": "更改語言",
-  "settings.languageChangeWarning": "更改為 {{language}} 將以新語言重新下載庫中所有標題的元數據（名稱、描述、排序標題）。這可能需要幾分鐘的時間，具體取決於您的庫大小。界面將立即改變。",
+  "settings.languageChangeWarning":
+    "更改為 {{language}} 將以新語言重新下載庫中所有標題的元數據（名稱、描述、排序標題）。這可能需要幾分鐘的時間，具體取決於您的庫大小。界面將立即改變。",
   "settings.languageChangeConfirm": "更改語言",
   "settings.metadataRehydrationStarted": "元數據補充開始。標題將在後台更新。",
   "theme.light": "淺色",
@@ -1128,7 +1358,8 @@ const zh_HK: LocaleDictionary = {
   "search.tipTitlesNoLibrary": "按電影、劇集、動漫標題、設定項或操作名稱搜尋。",
   "search.tipTabs": "使用標籤將結果縮小到媒體庫、導航或某個目錄類型。",
   "search.tipTabsNoLibrary": "使用標籤將結果縮小到導航或某個目錄類型。",
-  "search.tipIndexers": "在索引器中查找元數據結果之外的標題前，先嚐試更寬泛的詞。",
+  "search.tipIndexers":
+    "在索引器中查找元數據結果之外的標題前，先嚐試更寬泛的詞。",
   "search.noMatchesFor": "沒有匹配“{{query}}”的結果",
   "search.emptyHint": "試試其他電影、劇集、動漫、目錄名稱、設定項或操作。",
   "search.emptyHintNoLibrary": "試試其他電影、劇集、動漫、設定項或操作。",
@@ -1168,7 +1399,8 @@ const zh_HK: LocaleDictionary = {
   "monitorSelection.loading": "正在載入季度…",
   "monitorSelection.loadFailed": "無法載入此作品的季度。",
   "monitorSelection.noSeasons": "此作品未返回任何季度。",
-  "monitorSelection.unavailable": "進階監控需要 TVDB 相符項目，但此結果中沒有。",
+  "monitorSelection.unavailable":
+    "進階監控需要 TVDB 相符項目，但此結果中沒有。",
   "monitorSelection.emptyHint": "請至少選取一個季度或關聯電影。",
   "monitorSelection.summaryPrefix": "已請求：{{selection}}",
   "monitorSelection.summaryMovies": "電影：{{movies}}",
@@ -1191,9 +1423,11 @@ const zh_HK: LocaleDictionary = {
   "pwa.installApp": "安裝 Scryer",
   "pwa.iosInstallHint": "點擊共享按鈕並選擇“添加到主屏幕”進行安裝。",
   "smgUpgrade.deprecatedTitle": "建議更新 Scryer",
-  "smgUpgrade.deprecatedBody": "此 Scryer 版本即將停止支援。請儘速升級以繼續使用 Scryer。",
+  "smgUpgrade.deprecatedBody":
+    "此 Scryer 版本即將停止支援。請儘速升級以繼續使用 Scryer。",
   "smgUpgrade.blockedTitle": "需要更新 Scryer",
-  "smgUpgrade.blockedBody": "此 Scryer 版本已不再受支援。請立即升級以繼續使用 Scryer。",
+  "smgUpgrade.blockedBody":
+    "此 Scryer 版本已不再受支援。請立即升級以繼續使用 Scryer。",
   "smgUpgrade.minimumVersion": "最低支援版本：{{version}}",
   "smgUpgrade.deadline": "支援截止日期：{{date}}",
   "smgUpdate.title": "有可用的 Scryer 更新",
@@ -1269,7 +1503,8 @@ const zh_HK: LocaleDictionary = {
   "title.table.runtime": "片長",
   "title.table.avgRuntime": "平均片長",
   "title.table.episodeProgressTooltip": "{{owned}} / {{total}} 集",
-  "title.table.episodeProgressTooltipWithTotal": "{{owned}} / {{total}} 集 ({{monitored}} 集已監控)",
+  "title.table.episodeProgressTooltipWithTotal":
+    "{{owned}} / {{total}} 集 ({{monitored}} 集已監控)",
   "title.table.status": "狀態",
   "title.table.root": "根目錄",
   "title.table.popularity": "熱門度",
@@ -1305,9 +1540,11 @@ const zh_HK: LocaleDictionary = {
   "title.files": "檔案",
   "title.noFilesTracked": "沒有已跟蹤的檔案。",
   "title.noFilesTrackedHint": "運行一次資料庫掃描以檢測硬碟上的檔案。",
-  "title.configureRootFoldersHint": "掃描此資料庫之前，請先在該分面設定中配置根數據資料夾。",
+  "title.configureRootFoldersHint":
+    "掃描此資料庫之前，請先在該分面設定中配置根數據資料夾。",
   "title.invalidRootFoldersTitle": "一個或多個根資料夾無效。",
-  "title.invalidRootFoldersHint": "在執行媒體庫掃描之前，請先在分類設定中修正您設定的根資料夾。",
+  "title.invalidRootFoldersHint":
+    "在執行媒體庫掃描之前，請先在分類設定中修正您設定的根資料夾。",
   "title.configureRootFoldersButton": "配置根數據資料夾",
   "title.descriptionUnavailable": "暫無簡介。",
   "title.canon": "正傳",
@@ -1317,15 +1554,20 @@ const zh_HK: LocaleDictionary = {
   "title.episodeRange": "第 {{start}} 集 - 第 {{end}} 集",
   "title.episodeCountOne": "{{count}} 集",
   "title.episodeCountOther": "{{count}} 集",
-  "title.searchingReleases": "正在索引站中搜索發佈資源…",
-  "title.contextReleaseSearchSummary": "{{releaseCount}} 個發行版本 · 已搜尋 {{indexerCount}} 個索引器",
-  "title.contextReleaseSearchProgress": "{{releaseCount}} 個發行版本 · {{done}}/{{total}} 個索引器",
-  "title.contextReleaseSearchSummaryDetailed": "{{releaseCount}} 個發行版本 · 已搜尋 {{searched}}/{{total}} 個索引器",
-  "title.contextReleaseSearchIndexerFailures": "{{count}} 個索引器失敗：{{names}}",
-  "title.contextReleaseSearchIndexerSkipped": "{{count}} 個索引器已略過：{{names}}",
+  "title.contextReleaseSearchSummary":
+    "{{releaseCount}} 個發行版本 · 已搜尋 {{indexerCount}} 個索引器",
+  "title.contextReleaseSearchProgress":
+    "{{releaseCount}} 個發行版本 · {{done}}/{{total}} 個索引器",
+  "title.contextReleaseSearchSummaryDetailed":
+    "{{releaseCount}} 個發行版本 · 已搜尋 {{searched}}/{{total}} 個索引器",
+  "title.contextReleaseSearchIndexerFailures":
+    "{{count}} 個索引器失敗：{{names}}",
+  "title.contextReleaseSearchIndexerSkipped":
+    "{{count}} 個索引器已略過：{{names}}",
   "title.noReleasesFound": "未找到 {{name}} 的發佈資源。",
   "title.searchNeedsDownloadClientTitle": "搜尋需要下載客戶端",
-  "title.searchNeedsDownloadClientDescription": "在此標題頁面使用搜索或交互式搜尋之前，請先配置至少一個下載客戶端。",
+  "title.searchNeedsDownloadClientDescription":
+    "在此標題頁面使用搜索或交互式搜尋之前，請先配置至少一個下載客戶端。",
   "title.searchNeedsDownloadClientAction": "打開下載客戶端",
   "title.blockedReleases": "已阻止的發佈資源",
   "title.noBlockedReleases": "此電影沒有記錄任何已阻止的發佈資源。",
@@ -1344,14 +1586,18 @@ const zh_HK: LocaleDictionary = {
   "title.queueLatest": "加入最新隊列",
   "title.requiredAudioLanguages": "必需音訊語言",
   "title.originalAudioLanguagePerTitle": "原始語言（按標題）",
-  "title.requiredAudioLanguagesFacetInfo": "這些語言是在該方面的發佈選擇和導入驗證期間強制執行的。",
+  "title.requiredAudioLanguagesFacetInfo":
+    "這些語言是在該方面的發佈選擇和導入驗證期間強制執行的。",
   "title.requiredAudioResetInherit": "重設為繼承",
   "title.fixMatchHeading": "修復元數據匹配",
   "title.fixMatchAction": "修復匹配",
-  "title.fixMatchDescriptionMovie": "修復此電影的 TVDB 配對。本機作品與資料夾命名保持不變。",
-  "title.fixMatchDescriptionSeries": "修復該標題的 TVDB 匹配。本地標題和資料夾命名保持不變。",
+  "title.fixMatchDescriptionMovie":
+    "修復此電影的 TVDB 配對。本機作品與資料夾命名保持不變。",
+  "title.fixMatchDescriptionSeries":
+    "修復該標題的 TVDB 匹配。本地標題和資料夾命名保持不變。",
   "title.fixMatchDialogTitle": "修復匹配",
-  "title.fixMatchDialogDescription": "修復 {{name}} 的 TVDB 匹配。本地標題和資料夾名稱保持不變。系列和動畫將在內部重建季節和劇集。",
+  "title.fixMatchDialogDescription":
+    "修復 {{name}} 的 TVDB 匹配。本地標題和資料夾名稱保持不變。系列和動畫將在內部重建季節和劇集。",
   "title.fixMatchUnnamed": "這個標題",
   "title.fixMatchSearchPlaceholder": "搜尋 TVDB 節目",
   "title.fixMatchCurrentTvdbId": "當前 TVDB ID",
@@ -1365,10 +1611,12 @@ const zh_HK: LocaleDictionary = {
   "title.fixMatchSearchFailed": "無法搜尋元數據。",
   "title.fixMatchApplyFailed": "無法修復標題匹配。",
   "title.changeFolderHeading": "更改資料夾",
-  "title.changeFolderDescription": "更正該標題所擁有的現有資料夾。不會移動任何檔案。",
+  "title.changeFolderDescription":
+    "更正該標題所擁有的現有資料夾。不會移動任何檔案。",
   "title.changeFolderAction": "更改資料夾",
   "title.changeFolderDialogTitle": "更改資料夾",
-  "title.changeFolderDialogDescription": "選擇屬於 {{name}} 的資料夾。Scryer 會重新分配歸屬並重新掃描該資料夾；不會移動任何檔案。",
+  "title.changeFolderDialogDescription":
+    "選擇屬於 {{name}} 的資料夾。Scryer 會重新分配歸屬並重新掃描該資料夾；不會移動任何檔案。",
   "title.changeFolderLibrary": "庫",
   "title.changeFolderCurrentFolder": "當前資料夾",
   "title.changeFolderCurrentFolderUnknown": "選擇資料夾後顯示",
@@ -1389,27 +1637,36 @@ const zh_HK: LocaleDictionary = {
   "title.changeFolderOwnershipUnowned": "沒有標題擁有此資料夾。",
   "title.changeFolderOwnershipThisTitle": "該標題已擁有此資料夾。",
   "title.changeFolderOwnershipAnother": "{{name}} 擁有此資料夾。",
-  "title.changeFolderNoOpHelp": "不會提交任何內容。請選擇其他資料夾或關閉此對話框。",
+  "title.changeFolderNoOpHelp":
+    "不會提交任何內容。請選擇其他資料夾或關閉此對話框。",
   "title.changeFolderTrackedMediaCurrent": "當前資料夾中的受管媒體：{{count}}",
   "title.changeFolderTrackedMediaSelected": "所選資料夾中的受管媒體：{{count}}",
-  "title.changeFolderNoFilesMoved": "不會移動任何檔案。僅更改資料夾匹配以及由此派生的媒體關聯。",
+  "title.changeFolderNoFilesMoved":
+    "不會移動任何檔案。僅更改資料夾匹配以及由此派生的媒體關聯。",
   "title.changeFolderConflictHeading": "此資料夾已屬於另一個標題",
-  "title.changeFolderChooseResolution": "請選擇“交換資料夾”或“接管資料夾”以繼續。",
+  "title.changeFolderChooseResolution":
+    "請選擇“交換資料夾”或“接管資料夾”以繼續。",
   "title.changeFolderSwapAction": "交換資料夾",
-  "title.changeFolderSwapExplanation": "{{owner}} 取得該標題的當前資料夾，該標題取得 {{folder}}。兩個標題都會被重新掃描。",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} 取得該標題的當前資料夾，該標題取得 {{folder}}。兩個標題都會被重新掃描。",
   "title.changeFolderTakeOverAction": "接管資料夾",
-  "title.changeFolderTakeOverExplanation": "該標題將取得 {{folder}}。{{owner}} 將失去資料夾、變為未匹配狀態，並需要在待處理的導入中修復。",
+  "title.changeFolderTakeOverExplanation":
+    "該標題將取得 {{folder}}。{{owner}} 將失去資料夾、變為未匹配狀態，並需要在待處理的導入中修復。",
   "title.changeFolderConfirm": "更改資料夾",
   "title.changeFolderApplying": "正在更改資料夾…",
   "title.changeFolderApplyFailed": "無法更改資料夾匹配。",
   "title.changeFolderOutcomeAssigned": "{{name}} 現在擁有 {{folder}}。",
   "title.changeFolderOutcomeSwapped": "{{name}} 與 {{other}} 已交換資料夾。",
-  "title.changeFolderOutcomeAlreadyOwned": "{{name}} 已經擁有該資料夾，未做任何更改。",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} 已經擁有該資料夾，未做任何更改。",
   "title.changeFolderDetachedMedia": "已解除 {{count}} 項媒體關聯。",
-  "title.changeFolderScanSummary": "掃描：已掃描 {{scanned}} • 已匹配 {{matched}} • 已導入 {{imported}} • 未匹配 {{unmatched}}",
-  "title.changeFolderDisplacedNote": "{{name}} 失去了 {{folder}}，現在處於未匹配狀態。請在待處理的導入中修復，它會以“資料夾歸屬已由用戶更改”作為原因顯示。",
+  "title.changeFolderScanSummary":
+    "掃描：已掃描 {{scanned}} • 已匹配 {{matched}} • 已導入 {{imported}} • 未匹配 {{unmatched}}",
+  "title.changeFolderDisplacedNote":
+    "{{name}} 失去了 {{folder}}，現在處於未匹配狀態。請在待處理的導入中修復，它會以“資料夾歸屬已由用戶更改”作為原因顯示。",
   "pendingImports.title": "待處理的進口",
-  "pendingImports.description": "通過選擇正確的元數據匹配來解決 {{facet}} 不匹配的硬碟項目。",
+  "pendingImports.description":
+    "通過選擇正確的元數據匹配來解決 {{facet}} 不匹配的硬碟項目。",
   "pendingImports.unresolvedCountOne": "1 個未解析",
   "pendingImports.unresolvedCountOther": "{{count}} 個未解析",
   "pendingImports.loading": "正在載入等待導入...",
@@ -1420,7 +1677,8 @@ const zh_HK: LocaleDictionary = {
   "pendingImports.searchYearLabel": "年份",
   "pendingImports.searchYearPlaceholder": "年份",
   "pendingImports.searchYearClear": "清除年份",
-  "pendingImports.searchYearHint": "年份來自掃描。當檔案名稱中的年份有誤時，清除年份可擴大搜尋範圍。",
+  "pendingImports.searchYearHint":
+    "年份來自掃描。當檔案名稱中的年份有誤時，清除年份可擴大搜尋範圍。",
   "pendingImports.searching": "正在搜尋元數據...",
   "pendingImports.searchFailed": "無法搜尋元數據。",
   "pendingImports.searchRequestFailed": "中繼資料搜尋失敗：{{error}}",
@@ -1442,11 +1700,16 @@ const zh_HK: LocaleDictionary = {
   "pendingImports.pageRange": "{{start}}–{{end}} / {{total}}",
   "pendingImports.library": "媒體庫：",
   "pendingImports.knownTitle": "已知作品：",
-  "pendingImports.reason.title_already_owns_another_folder": "作品已擁有另一個資料夾",
-  "pendingImports.reason.metadata_id_lookup_unresolved": "中繼資料查詢無法解析此資料夾的外部 ID；下次掃描將重試",
-  "pendingImports.reason.folder_ownership_changed_by_user": "資料夾歸屬已由用戶更改",
-  "pendingImports.folderOwnershipChangedHelp": "此資料夾已分配給另一個標題，因此該標題不再擁有資料夾。請打開該標題並使用“更改資料夾”指向正確的資料夾，或使用“忽略”隱藏此項目。",
-  "pendingImports.ownershipConflictHelp": "此作品已分配給 {{folder}}。請將此資料夾的檔案移至該處，或刪除重複的資料夾後重新掃描。",
+  "pendingImports.reason.title_already_owns_another_folder":
+    "作品已擁有另一個資料夾",
+  "pendingImports.reason.metadata_id_lookup_unresolved":
+    "中繼資料查詢無法解析此資料夾的外部 ID；下次掃描將重試",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "資料夾歸屬已由用戶更改",
+  "pendingImports.folderOwnershipChangedHelp":
+    "此資料夾已分配給另一個標題，因此該標題不再擁有資料夾。請打開該標題並使用“更改資料夾”指向正確的資料夾，或使用“忽略”隱藏此項目。",
+  "pendingImports.ownershipConflictHelp":
+    "此作品已分配給 {{folder}}。請將此資料夾的檔案移至該處，或刪除重複的資料夾後重新掃描。",
   "pendingImports.bindEpisodes": "繫結單集",
   "pendingImports.bindPreviewLoadFailed": "載入繫結預覽失敗",
   "pendingImports.bindFailed": "繫結待處理匯入失敗。",
@@ -1548,9 +1811,12 @@ const zh_HK: LocaleDictionary = {
   "queue.manualImportTooltip": "手動導入可用於需要關注的隊列項。",
   "queue.releaseTitle": "發佈資源",
   "queue.blockReason": "阻止原因",
-  "queue.blockReasonFallbackUnassigned": "自動導入無法識別媒體庫標題。請指定標題後繼續。",
-  "queue.blockReasonFallbackEpisodic": "自動導入無法確定唯一的季和集映射。請打開手動導入並指定正確的季和集。",
-  "queue.blockReasonFallbackReview": "自動導入需要人工檢查。請打開手動導入並確認檔案映射後繼續。",
+  "queue.blockReasonFallbackUnassigned":
+    "自動導入無法識別媒體庫標題。請指定標題後繼續。",
+  "queue.blockReasonFallbackEpisodic":
+    "自動導入無法確定唯一的季和集映射。請打開手動導入並指定正確的季和集。",
+  "queue.blockReasonFallbackReview":
+    "自動導入需要人工檢查。請打開手動導入並確認檔案映射後繼續。",
   "queue.seeding.stateSeeding": "做種中",
   "queue.seeding.stateGoalMet": "已達成做種目標",
   "queue.seeding.stateHeldPrivate": "做種中 · 私人",
@@ -1558,14 +1824,16 @@ const zh_HK: LocaleDictionary = {
   "queue.seeding.ratio": "分享率 {{value}}",
   "queue.seeding.seedTime": "已做種 {{value}}",
   "queue.seeding.private": "私人 Tracker",
-  "queue.seeding.privateTooltip": "私人 Tracker。除非達成做種設定檔目標，否則 Scryer 不會主動從客戶端移除此種子。",
+  "queue.seeding.privateTooltip":
+    "私人 Tracker。除非達成做種設定檔目標，否則 Scryer 不會主動從客戶端移除此種子。",
   "queue.errorCode": "錯誤代碼",
   "queue.showDetails": "顯示詳情",
   "queue.hideDetails": "隱藏詳情",
   "queue.assignTitle": "指定標題",
   "queue.reassignTitle": "更改標題",
   "queue.assignTitleTitle": "指定下載標題",
-  "queue.assignTitleDescription": "選擇此被阻止的下載所屬的庫標題。 Scryer 將在分配後重新檢查導入。",
+  "queue.assignTitleDescription":
+    "選擇此被阻止的下載所屬的庫標題。 Scryer 將在分配後重新檢查導入。",
   "queue.assignTitlePlaceholder": "搜尋標題…",
   "queue.assignTitleResults": "匹配的標題",
   "queue.assignTitleEmpty": "未找到匹配的標題。",
@@ -1577,30 +1845,45 @@ const zh_HK: LocaleDictionary = {
   "queue.ignoreFailed": "無法忽略下載。",
   "queue.releaseHeldSources": "釋放保留的來源檔案",
   "queue.releaseHeldSourcesConfirmTitle": "釋放保留的來源檔案？",
-  "queue.releaseHeldSourcesConfirmDescription": "{{client}} 中的 {{download}} 已完成匯入，但其來源檔案仍被保留。釋放後將解除此下載所有匯入的保留。暫存解壓資料夾僅在其中所有影片均已匯入且沒有其他用途時才會刪除。",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}} 設定為移除已完成的下載。Scryer 確認匯入後，此下載及其檔案將從下載器中移除。",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}} 設定為保留已完成的下載，因此此下載將保留在下載器中。",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{client}} 中的 {{download}} 已完成匯入，但其來源檔案仍被保留。釋放後將解除此下載所有匯入的保留。暫存解壓資料夾僅在其中所有影片均已匯入且沒有其他用途時才會刪除。",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}} 設定為移除已完成的下載。Scryer 確認匯入後，此下載及其檔案將從下載器中移除。",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}} 設定為保留已完成的下載，因此此下載將保留在下載器中。",
   "queue.releaseHeldSourcesSuccess": "已釋放保留的來源檔案。",
   "queue.releaseHeldSourcesFailed": "無法釋放保留的來源檔案。",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "由於字幕仍需處理，來源檔案被保留。釋放後將停止等待並清除警告。",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "由於刪除此匯入所取代的檔案未完成，來源檔案被保留。",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "此下載的壓縮檔解壓失敗，未解壓的壓縮檔從未被匯入。只有在證明每個預期檔案都已匯入時，釋放才會將此下載標記為已匯入，下載器才可能將其移除；從未匯入的內容會一併被移除。",
-  "queue.releaseHeldSourcesReasonUnknown": "Scryer 沒有記錄這些來源檔案被保留的原因。只有在證明每個預期檔案都已匯入時，釋放才會將此下載標記為已匯入，下載器才可能將其移除；其中從未匯入的內容會一併被移除。",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "由於字幕仍需處理，來源檔案被保留。釋放後將停止等待並清除警告。",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "由於刪除此匯入所取代的檔案未完成，來源檔案被保留。",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "此下載的壓縮檔解壓失敗，未解壓的壓縮檔從未被匯入。只有在證明每個預期檔案都已匯入時，釋放才會將此下載標記為已匯入，下載器才可能將其移除；從未匯入的內容會一併被移除。",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "Scryer 沒有記錄這些來源檔案被保留的原因。只有在證明每個預期檔案都已匯入時，釋放才會將此下載標記為已匯入，下載器才可能將其移除；其中從未匯入的內容會一併被移除。",
   "queue.releaseHeldSourcesTitles": "此次釋放涉及：{{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}} 會在達到做種要求後移除已完成的下載。Scryer 確認匯入後，此下載及其檔案將在做種結束時移除。",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "Scryer 無法確定釋放後 {{client}} 將如何處理此下載。",
-  "queue.releaseHeldSourcesAwaitingImport": "已釋放保留的來源檔案。下載尚未完全匯入，因此已返回匯入流程，未移除任何內容。",
-  "queue.releaseHeldSourcesNotSettled": "已釋放保留的來源檔案，但無法更新該下載。請再次釋放以完成。",
-  "queue.releaseHeldSourcesUnproven": "已釋放保留的來源檔案，但無法證明此下載的每個檔案都已匯入，因此未將其標記為已匯入，也未清理任何內容。請匯入其餘檔案或自行移除此下載。",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "已釋放保留的來源檔案，但該下載未完成結算，亦未清理任何內容。",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "部分暫存解壓資料夾已保留：{{reasons}}。",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}} 會在達到做種要求後移除已完成的下載。Scryer 確認匯入後，此下載及其檔案將在做種結束時移除。",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "Scryer 無法確定釋放後 {{client}} 將如何處理此下載。",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "已釋放保留的來源檔案。下載尚未完全匯入，因此已返回匯入流程，未移除任何內容。",
+  "queue.releaseHeldSourcesNotSettled":
+    "已釋放保留的來源檔案，但無法更新該下載。請再次釋放以完成。",
+  "queue.releaseHeldSourcesUnproven":
+    "已釋放保留的來源檔案，但無法證明此下載的每個檔案都已匯入，因此未將其標記為已匯入，也未清理任何內容。請匯入其餘檔案或自行移除此下載。",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "已釋放保留的來源檔案，但該下載未完成結算，亦未清理任何內容。",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "部分暫存解壓資料夾已保留：{{reasons}}。",
   "queue.releaseHeldSourcesPreservedNotOwned": "無法確認擁有權",
   "queue.releaseHeldSourcesPreservedUnsafe": "內容異常或無法讀取",
   "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "包含從未匯入的影片",
   "queue.releaseHeldSourcesPreservedInUse": "其他匯入仍需要",
   "queue.releaseHeldSourcesPreservedUnverified": "無法確認已匯入的檔案",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "移除失敗",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "未能確認該下載已匯入",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "未能確認該下載已匯入",
   "queue.releaseHeldSourcesPreservedLookupIncomplete": "無法檢查所有資料夾",
   "queue.markFailedSearchAgain": "封鎖、刪除資料並重新搜尋",
   "queue.markFailedOnly": "封鎖並刪除資料",
@@ -1621,16 +1904,19 @@ const zh_HK: LocaleDictionary = {
   "queue.deleteFailed": "刪除下載失敗。",
   "queue.removeFromDownloader": "從下載器中移除",
   "queue.deleteConfirmTitle": "移除下載",
-  "queue.deleteConfirmDescription": "確定要從隊列中移除此下載嗎？此操作無法撤銷。",
+  "queue.deleteConfirmDescription":
+    "確定要從隊列中移除此下載嗎？此操作無法撤銷。",
   "queue.bulkDeleteQueued": "已將 {{count}} 個下載從下載器中移除排入隊列。",
   "queue.bulkDeletePartial": "已排入移除 {{count}} 個下載；{{failed}} 個失敗。",
   "queue.bulkDeleteFailed": "刪除選取的下載失敗。",
   "queue.bulkDeleteConfirmTitle": "從下載器中移除選取項目",
-  "queue.bulkDeleteConfirmDescription": "確定要從下載器中移除選取的 {{count}} 個下載？移除成功後它們將被忽略。",
+  "queue.bulkDeleteConfirmDescription":
+    "確定要從下載器中移除選取的 {{count}} 個下載？移除成功後它們將被忽略。",
   "queue.manualUnavailableForResult": "此結果不支援手動入隊。",
   "queue.belowMinimumSeeders": "做種數低於該索引器的最低要求。",
   "importHistory.retry": "重試導入",
-  "importHistory.retryHelp": "使用當前分配和質素配置重新評估已下載的檔案，不會重新下載。",
+  "importHistory.retryHelp":
+    "使用當前分配和質素配置重新評估已下載的檔案，不會重新下載。",
   "importHistory.retryWithPassword": "使用密碼重試導入",
   "importHistory.passwordRequired": "需要密碼",
   "importHistory.passwordPlaceholder": "壓縮包密碼",
@@ -1654,7 +1940,8 @@ const zh_HK: LocaleDictionary = {
   "system.facetLabel": "類型",
   "system.recentEventSample": "近期事件樣本",
   "system.sourcesTitle": "數據源",
-  "system.sourcesSupport": "如果這些服務為您的媒體庫提供了幫助，請考慮捐贈支援。",
+  "system.sourcesSupport":
+    "如果這些服務為您的媒體庫提供了幫助，請考慮捐贈支援。",
   "system.sourceTvdbName": "TheTVDB",
   "system.sourceTmdbName": "The Movie Database (TMDB)",
   "system.sourceMalName": "MyAnimeList",
@@ -1674,7 +1961,8 @@ const zh_HK: LocaleDictionary = {
   "settings.temporaryPasswordHelp": "用戶下次登入時必須變更此密碼。",
   "settings.passwordChangeRequired": "必須變更密碼",
   "settings.temporaryPasswordResetTitle": "重設用戶密碼",
-  "settings.temporaryPasswordResetDescription": "這將撤銷 {{name}} 的活躍登入階段，並要求其在本地登入後選擇新密碼。",
+  "settings.temporaryPasswordResetDescription":
+    "這將撤銷 {{name}} 的活躍登入階段，並要求其在本地登入後選擇新密碼。",
   "settings.apiKey": "API 密鑰",
   "settings.existingIndexers": "現有索引器",
   "settings.indexerProvider": "提供者",
@@ -1683,7 +1971,8 @@ const zh_HK: LocaleDictionary = {
   "settings.indexerStatus": "狀態",
   "settings.indexerDisabledUntil": "退避 {{time}}",
   "settings.indexerCoolingDownUntil": "冷卻中 · {{time}} 恢復",
-  "settings.indexerCoolingDownHelp": "索引器要求 Scryer 放慢速度。搜尋將自動恢復。",
+  "settings.indexerCoolingDownHelp":
+    "索引器要求 Scryer 放慢速度。搜尋將自動恢復。",
   "settings.indexerLastError": "錯誤 {{time}}",
   "settings.indexerLastSearched": "搜尋於 {{time}}",
   "settings.indexerNoActivity": "無活動",
@@ -1693,7 +1982,8 @@ const zh_HK: LocaleDictionary = {
   "settings.indexerCreateNew": "建立新的索引器",
   "settings.indexerManagedParentHint": "此索引器由上層提供者管理。",
   "settings.indexerConfirmDiscardTitle": "放棄目前的索引器編輯？",
-  "settings.indexerConfirmDiscardDescription": "您目前的索引器編輯內容將會遺失。",
+  "settings.indexerConfirmDiscardDescription":
+    "您目前的索引器編輯內容將會遺失。",
   "settings.indexerFilterPlaceholder": "按提供者類型過濾",
   "settings.noIndexersFound": "未找到索引器。",
   "settings.indexerConfig": "插件配置",
@@ -1704,9 +1994,12 @@ const zh_HK: LocaleDictionary = {
   "settings.indexerLoginChallengeError": "無法載入登入圖片：{{error}}",
   "settings.indexerLoginChallengeRefresh": "換一張",
   "settings.indexerLoginChallengeRefusal.malformed": "無法讀取插件的登入圖片。",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "此索引器要求一種 Scryer 無法顯示的登入驗證。",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "登入圖片的格式 Scryer 不顯示。",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "登入圖片太大，無法顯示。",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "此索引器要求一種 Scryer 無法顯示的登入驗證。",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "登入圖片的格式 Scryer 不顯示。",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "登入圖片太大，無法顯示。",
   "settings.advancedConfig": "進階設定",
   "settings.managedIndexerBadge": "受管理",
   "settings.managedByIndexer": "由 {{name}} 管理",
@@ -1719,17 +2012,22 @@ const zh_HK: LocaleDictionary = {
   "settings.indexerDownloadClientAutomatic": "自動路由",
   "settings.indexerDownloadClientLoading": "正在載入下載客戶端…",
   "settings.indexerDownloadClientLoadRetry": "重試載入客戶端",
-  "settings.indexerDownloadClientCatalogStale": "客戶端目錄可能已過期。請重新整理以檢視最新項目。",
+  "settings.indexerDownloadClientCatalogStale":
+    "客戶端目錄可能已過期。請重新整理以檢視最新項目。",
   "settings.indexerDownloadClientSelectionInvalid": "選取的下載客戶端無效。",
   "settings.indexerDownloadClientNotApplicable": "不適用於此通訊協定",
   "settings.indexerDownloadClientDisabled": "下載客戶端已停用",
-  "settings.indexerDownloadClientDisabledWarning": "{{name}} 已停用。在啟用之前抓取將會失敗。",
+  "settings.indexerDownloadClientDisabledWarning":
+    "{{name}} 已停用。在啟用之前抓取將會失敗。",
   "settings.indexerDownloadClientChooseAutomatic": "使用自動路由",
   "settings.indexerDownloadClientInvalidOption": "無效：{{name}}",
   "settings.indexerDownloadClientInvalidMissing": "選取的客戶端不存在。",
-  "settings.indexerDownloadClientInvalidIncompatible": "選取的客戶端與此索引器協議不相容。",
-  "settings.indexerDownloadClientInvalidUnavailable": "選取的客戶端目前無法使用。",
-  "settings.downloadClientDeleteConfirmDescription": "確定要刪除 {{name}} 嗎？任何對應至此客戶端的索引器將恢復為「自動」。",
+  "settings.indexerDownloadClientInvalidIncompatible":
+    "選取的客戶端與此索引器協議不相容。",
+  "settings.indexerDownloadClientInvalidUnavailable":
+    "選取的客戶端目前無法使用。",
+  "settings.downloadClientDeleteConfirmDescription":
+    "確定要刪除 {{name}} 嗎？任何對應至此客戶端的索引器將恢復為「自動」。",
   "settings.newPassword": "新密碼",
   "settings.passwordManagedExternally": "密碼由外部提供者管理",
   "settings.mfa": "多要素驗證 (MFA)",
@@ -1737,17 +2035,21 @@ const zh_HK: LocaleDictionary = {
   "settings.setUp": "已設定",
   "settings.notSetUp": "未設定",
   "settings.resetMfa": "重設 MFA",
-  "settings.resetMfaConfirm": "確定要重設 {{name}} 的身份驗證要素嗎？所有活躍登入階段與已註冊的驗證要素都將被撤銷。他們將需要再次使用其主要憑證。若登入政策要求 MFA，他們將需要註冊新的通行密鑰或驗證器；否則下次密碼登入將無需註冊即可成功。",
+  "settings.resetMfaConfirm":
+    "確定要重設 {{name}} 的身份驗證要素嗎？所有活躍登入階段與已註冊的驗證要素都將被撤銷。他們將需要再次使用其主要憑證。若登入政策要求 MFA，他們將需要註冊新的通行密鑰或驗證器；否則下次密碼登入將無需註冊即可成功。",
   "settings.loginEnabled": "已啟用登入",
   "settings.loginDisabled": "已停用登入",
   "settings.enableLogin": "啟用登入",
   "settings.disableLogin": "停用登入",
-  "settings.disableLoginConfirm": "確定要停用 {{name}} 的登入功能嗎？其憑證與要素將會保留，但現有的登入階段將被撤銷。",
+  "settings.disableLoginConfirm":
+    "確定要停用 {{name}} 的登入功能嗎？其憑證與要素將會保留，但現有的登入階段將被撤銷。",
   "settings.rules": "自定義規則",
   "settings.noRulesFound": "未配置自定義規則。",
   "settings.trashPacksTitle": "TRaSH Guides 區域包",
-  "settings.trashPacksHelp": "源自 TRaSH Guides 的純打分包。預設關閉。啓用後的包會應用於所有符合其條件的條目；設定標籤篩選可將其收窄到符合包的區域意圖或所列標籤的條目。",
-  "settings.trashPackFrenchConflict": "“{{name}}”已啓用。啓用其他法語包前請先將其停用。",
+  "settings.trashPacksHelp":
+    "源自 TRaSH Guides 的純打分包。預設關閉。啓用後的包會應用於所有符合其條件的條目；設定標籤篩選可將其收窄到符合包的區域意圖或所列標籤的條目。",
+  "settings.trashPackFrenchConflict":
+    "“{{name}}”已啓用。啓用其他法語包前請先將其停用。",
   "settings.ruleCreate": "創建規則",
   "settings.ruleCreateNew": "建立新規則",
   "settings.ruleCopyAsCustom": "複製為自訂規則",
@@ -1765,49 +2067,62 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleValid": "規則有效。",
   "settings.ruleValidationRequired": "名稱和 Rego 源碼為必填項。",
   "settings.ruleLibrary": "規則庫",
-  "settings.ruleLibraryDescription": "預置規則，一鍵即可添加。選擇模板以填充編輯器。",
+  "settings.ruleLibraryDescription":
+    "預置規則，一鍵即可添加。選擇模板以填充編輯器。",
   "settings.ruleLibraryAll": "全部",
-  "settings.ruleLibraryCommunityEmpty": "沒有可用的社區規則包。重新整理插件註冊表以檢查新包。",
+  "settings.ruleLibraryCommunityEmpty":
+    "沒有可用的社區規則包。重新整理插件註冊表以檢查新包。",
   "settings.arrImportAction": "導入 Arr 自訂格式",
   "settings.ruleAiPrompt": "AI 提示詞",
   "settings.ruleAiPromptTitle": "使用 AI 建立規則",
-  "settings.ruleAiPromptDescription": "描述您想要的結果，然後將提示詞複製到 AI 助理中。",
+  "settings.ruleAiPromptDescription":
+    "描述您想要的結果，然後將提示詞複製到 AI 助理中。",
   "settings.ruleAiPromptOutcome": "預期結果",
-  "settings.ruleAiPromptOutcomePlaceholder": "例如：為具備日語音訊的發行版本給予 100 分。",
+  "settings.ruleAiPromptOutcomePlaceholder":
+    "例如：為具備日語音訊的發行版本給予 100 分。",
   "settings.ruleAiPromptCopy": "複製提示詞",
   "settings.ruleAiPromptCopied": "已複製",
   "settings.arrImportTitle": "導入 Arr 自訂格式",
-  "settings.arrImportDescription": "貼上 Sonarr 或 Radarr 自訂格式導出內容，以建立新的 Rego 規則草稿。",
+  "settings.arrImportDescription":
+    "貼上 Sonarr 或 Radarr 自訂格式導出內容，以建立新的 Rego 規則草稿。",
   "settings.arrImportSource": "來源應用程式",
   "settings.arrImportJson": "自訂格式 JSON",
   "settings.arrImportJsonPlaceholder": "貼上單一自訂格式或自訂格式數組。",
   "settings.arrImportReviewAction": "審查格式",
   "settings.arrImportReview": "已準備好翻譯 {{count}} 個自訂格式",
   "settings.arrImportNoFormats": "在此 JSON 中找不到有效的自訂格式。",
-  "settings.arrImportInvalidJson": "請貼上由 Sonarr 或 Radarr 導出的有效 JSON。",
+  "settings.arrImportInvalidJson":
+    "請貼上由 Sonarr 或 Radarr 導出的有效 JSON。",
   "settings.arrImportReviewFailed": "無法審查這些自訂格式。",
   "settings.arrImportScore": "分數",
   "settings.arrImportScoreRequired": "在翻譯前請為 {{name}} 輸入整數分數。",
   "settings.arrImportSuggestedScore": "建議分數：{{score}}。",
   "settings.arrImportUseSuggestion": "使用建議",
   "settings.arrImportScoreReasonExported": "使用導出內容中包含的分數。",
-  "settings.arrImportScoreReasonDefault": "使用導出內容的預設分數；下方有其他設定檔選擇可用。",
+  "settings.arrImportScoreReasonDefault":
+    "使用導出內容的預設分數；下方有其他設定檔選擇可用。",
   "settings.arrImportScoreReasonPreference": "格式名稱表示一種偏好。",
   "settings.arrImportScoreReasonPenalty": "格式名稱識別了不想要的內容。",
   "settings.arrImportScoreReasonExtras": "該格式看似識別了額外附加內容或範例。",
-  "settings.arrImportScoreSuggestionHelp": "建議分數是可編輯的起點。符合的格式會將其分數累加；懲罰扣分可由其他加分抵銷。",
-  "settings.arrImportAmbiguousScore": "此格式有多個建議分數。請選擇您想套用的分數。",
-  "settings.arrImportBlockScoreHelp": "總分必須高於 -9000 且達到配置的最低分數。強制要求仍然有效。",
+  "settings.arrImportScoreSuggestionHelp":
+    "建議分數是可編輯的起點。符合的格式會將其分數累加；懲罰扣分可由其他加分抵銷。",
+  "settings.arrImportAmbiguousScore":
+    "此格式有多個建議分數。請選擇您想套用的分數。",
+  "settings.arrImportBlockScoreHelp":
+    "總分必須高於 -9000 且達到配置的最低分數。強制要求仍然有效。",
   "settings.arrImportTranslate": "翻譯為 Rego",
-  "settings.arrImportTranslationFailed": "翻譯失敗。您貼上的 JSON 仍可供檢視或重試。",
-  "settings.arrImportResultSummary": "已翻譯 {{translated}} 個；{{disabled}} 個已停用以供手動修復。",
+  "settings.arrImportTranslationFailed":
+    "翻譯失敗。您貼上的 JSON 仍可供檢視或重試。",
+  "settings.arrImportResultSummary":
+    "已翻譯 {{translated}} 個；{{disabled}} 個已停用以供手動修復。",
   "settings.arrImportDraftName": "已導入的 Arr 自訂格式",
   "settings.arrImportDraftDescription": "從 Arr 自訂格式 JSON 導入。",
   "settings.arrImportDiagnostics": "翻譯備註",
   "settings.arrImportApply": "使用導入草稿",
   "settings.refTitle": "輸入上下文參考",
   "settings.refSubtitle": "點擊以展開適用於您的 Rego 規則的所有字段完整參考。",
-  "settings.refIntro": "每條規則都會收到一個包含五個頂層文檔的 input 對象。您的 Rego 代碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 訪問這些文檔。input.file 在下載前評分期間為 null，僅在下載後導入評估時填入。",
+  "settings.refIntro":
+    "每條規則都會收到一個包含五個頂層文檔的 input 對象。您的 Rego 代碼可透過 input.release、input.profile、input.context、input.builtin_score 與 input.file 訪問這些文檔。input.file 在下載前評分期間為 null，僅在下載後導入評估時填入。",
   "settings.refColField": "字段",
   "settings.refColType": "類型",
   "settings.refColDescription": "描述",
@@ -1824,27 +2139,35 @@ const zh_HK: LocaleDictionary = {
   "settings.refReleaseNormalizedTokens": "發行版本解析器產生的已排序規範化標記",
   "settings.refReleaseAudioChannels": "聲道配置（例如 5.1、7.1、2.0）",
   "settings.refReleaseLangsAudio": "ISO 639-3 音訊語言代碼（例如 eng、jpn）",
-  "settings.refReleaseIndexerLanguages": "索引器列表本身回報的 ISO 639-3 音訊語言代碼，於抓取發行時凍結；從不由名稱或作品推斷，索引器未回報時為空",
+  "settings.refReleaseIndexerLanguages":
+    "索引器列表本身回報的 ISO 639-3 音訊語言代碼，於抓取發行時凍結；從不由名稱或作品推斷，索引器未回報時為空",
   "settings.refReleaseLangsSub": "ISO 639-3 字幕語言代碼",
   "settings.refReleaseIsDualAudio": "偵測到多個音軌時為 true",
   "settings.refReleaseIsAtmos": "存在杜比全景聲 (Dolby Atmos) 音訊時為 true",
   "settings.refReleaseIsDV": "偵測到杜比視界 (Dolby Vision) 元數據時為 true",
-  "settings.refReleaseHasHdrFallback": "發行版本解析器偵測到 HDR 後備回退層時為 true",
+  "settings.refReleaseHasHdrFallback":
+    "發行版本解析器偵測到 HDR 後備回退層時為 true",
   "settings.refReleaseDetectedHdr": "偵測到 HDR（非杜比視界）時為 true",
   "settings.refReleaseIsRemux": "完全 Remux（無轉碼）時為 true",
   "settings.refReleaseIsBdDisk": "來源為藍光光碟時為 true",
-  "settings.refReleaseStereoscopy": "發行版本名稱宣告的立體成像樣式；null 表示未知",
+  "settings.refReleaseStereoscopy":
+    "發行版本名稱宣告的立體成像樣式；null 表示未知",
   "settings.refSectionStereoscopy": "— 立體成像樣式",
-  "settings.refStereoPresentation": "two_d、three_d 或 mixed_2d_3d；這些為名稱聲明，非已驗證的串流屬性",
-  "settings.refStereoLayout": "side_by_side、top_bottom、frame_sequential、row_interleaved、column_interleaved、checkerboard 或 anaglyph；未指定、衝突或混合時為 null",
+  "settings.refStereoPresentation":
+    "two_d、three_d 或 mixed_2d_3d；這些為名稱聲明，非已驗證的串流屬性",
+  "settings.refStereoLayout":
+    "side_by_side、top_bottom、frame_sequential、row_interleaved、column_interleaved、checkerboard 或 anaglyph；未指定、衝突或混合時為 null",
   "settings.refStereoSampling": "左右或上下格式為 half 或 full；未知時為 null",
   "settings.refStereoEncoding": "由 3D 標記明確佐證時為 mvc；未知時為 null",
-  "settings.refReleaseStereoscopyTokens": "標準立體標記：stereo:two_d、stereo:three_d、stereo:mixed_2d_3d、stereo:has_3d、stereo:layout:<layout>、stereo:sampling:half/full、stereo:encoding:mvc 與 stereo:<field>_conflict。為空表示未知。原始 normalized_tokens 保留其原意。",
+  "settings.refReleaseStereoscopyTokens":
+    "標準立體標記：stereo:two_d、stereo:three_d、stereo:mixed_2d_3d、stereo:has_3d、stereo:layout:<layout>、stereo:sampling:half/full、stereo:encoding:mvc 與 stereo:<field>_conflict。為空表示未知。原始 normalized_tokens 保留其原意。",
   "settings.refReleaseIsProper": "發行版本標記為 Proper 時為 true",
   "settings.refReleaseIsRepack": "發行版本標記為 Repack 時為 true",
   "settings.refReleaseIsAiEnhanced": "解析器偵測到 AI 增強編碼標記時為 true",
-  "settings.refReleaseIsHardcodedSubs": "在發行版本名稱中偵測到內嵌/硬字幕時為 true",
-  "settings.refReleaseIsPasswordProtected": "索引器提供規範化的歸檔或壓縮包密碼提示時為 true",
+  "settings.refReleaseIsHardcodedSubs":
+    "在發行版本名稱中偵測到內嵌/硬字幕時為 true",
+  "settings.refReleaseIsPasswordProtected":
+    "索引器提供規範化的歸檔或壓縮包密碼提示時為 true",
   "settings.refReleaseIsHdr10Plus": "從發行版本元數據偵測到 HDR10+ 時為 true",
   "settings.refReleaseIsHlg": "從發行版本元數據偵測到 HLG 時為 true",
   "settings.refReleaseIs10Bit": "從發行版本元數據偵測到 10-bit 影片時為 true",
@@ -1856,17 +2179,21 @@ const zh_HK: LocaleDictionary = {
   "settings.refReleaseStreamingService": "偵測到的串流服務標籤（若存在）",
   "settings.refReleaseEdition": "版本標籤，例如 extended、IMAX 或 criterion",
   "settings.refReleaseAnimeVersion": "動漫版本號（例如 v2 或 v3，若存在）",
-  "settings.refReleaseEpisodeReleaseType": "分集封裝類型，例如 single_episode、multi_episode、season_pack 或 unknown",
-  "settings.refReleaseIsSeasonPack": "發行版本看似包含完整或部分季度合集時為 true",
+  "settings.refReleaseEpisodeReleaseType":
+    "分集封裝類型，例如 single_episode、multi_episode、season_pack 或 unknown",
+  "settings.refReleaseIsSeasonPack":
+    "發行版本看似包含完整或部分季度合集時為 true",
   "settings.refReleaseIsMultiEpisode": "發行版本看似包含多集時為 true",
   "settings.refReleaseGroup": "發行小組或上傳者名稱",
   "settings.refReleaseYear": "發行年份",
   "settings.refReleaseParseConf": "解析的置信度分數（0.0 至 1.0）",
-  "settings.refReleaseSizeBytes": "文件大小字節數（使用 scryer.size_gib() 進行轉換）",
+  "settings.refReleaseSizeBytes":
+    "文件大小字節數（使用 scryer.size_gib() 進行轉換）",
   "settings.refReleaseAgeDays": "發行版本發布至今的天數",
   "settings.refReleaseThumbsUp": "索引器好評 / 贊同票數",
   "settings.refReleaseThumbsDown": "索引器差評 / 反對票數",
-  "settings.refReleaseExtra": "插件提供的元數據對象，可透過 input.release.extra.<key> 讀取",
+  "settings.refReleaseExtra":
+    "插件提供的元數據對象，可透過 input.release.extra.<key> 讀取",
   "settings.refSectionProfile": "— 使用中的質素設定檔配置",
   "settings.refProfileId": "設定檔唯一標識符",
   "settings.refProfileName": "設定檔顯示名稱",
@@ -1879,7 +2206,8 @@ const zh_HK: LocaleDictionary = {
   "settings.refProfileVCodecBlock": "已封鎖的影片編解碼器",
   "settings.refProfileACodecAllow": "允許的音訊編解碼器（為空表示允許所有）",
   "settings.refProfileACodecBlock": "已封鎖的音訊編解碼器",
-  "settings.refProfileAtmosPreferred": "設定檔在可用時優先選擇杜比全景聲 (Dolby Atmos)",
+  "settings.refProfileAtmosPreferred":
+    "設定檔在可用時優先選擇杜比全景聲 (Dolby Atmos)",
   "settings.refProfileDVAllowed": "接受杜比視界 (Dolby Vision) 發行版本",
   "settings.refProfileHdrAllowed": "接受 HDR 發行版本",
   "settings.refProfilePreferRemux": "設定檔優先選擇完整 Remux 發行版本",
@@ -1887,26 +2215,36 @@ const zh_HK: LocaleDictionary = {
   "settings.refProfileAllowUpgrades": "允許升級現有文件",
   "settings.refProfilePreferDualAudio": "設定檔優先選擇雙語音訊發行版本",
   "settings.refProfileRequiredLangs": "必要的音訊語言（ISO 639-3 代碼）",
-  "settings.refProfileScoringPersona": "解析後的人物誌：balanced、audiophile、efficient 或 compatible",
-  "settings.refProfileScoringOverrides": "明確的設定檔選擇；null 保持人物誌預設值不變",
+  "settings.refProfileScoringPersona":
+    "解析後的人物誌：balanced、audiophile、efficient 或 compatible",
+  "settings.refProfileScoringOverrides":
+    "明確的設定檔選擇；null 保持人物誌預設值不變",
   "settings.refSectionScoringOverrides": "— 評分覆寫",
   "settings.refOverrideX265": "允許非 4K HEVC；null 繼承人物誌預設值",
-  "settings.refOverrideDolbyVision": "拒絕無後備回退層的杜比視界；null 繼承人物誌預設值",
+  "settings.refOverrideDolbyVision":
+    "拒絕無後備回退層的杜比視界；null 繼承人物誌預設值",
   "settings.refOverrideCompact": "偏好精簡編碼；null 繼承人物誌預設值",
   "settings.refOverrideLossless": "偏好無損音訊；null 繼承人物誌預設值",
-  "settings.refOverrideUpscaled": "對超解像度/提升的發行版本進行扣分；null 繼承人物誌預設值",
-  "settings.refCtxCoverageTotalRuntime": "發行版本涵蓋範圍的總播放時間（分鐘，若已知）",
-  "settings.refCtxCoverageMemberRuntime": "涵蓋成員的單一播放時間（分鐘，若已知）",
+  "settings.refOverrideUpscaled":
+    "對超解像度/提升的發行版本進行扣分；null 繼承人物誌預設值",
+  "settings.refCtxCoverageTotalRuntime":
+    "發行版本涵蓋範圍的總播放時間（分鐘，若已知）",
+  "settings.refCtxCoverageMemberRuntime":
+    "涵蓋成員的單一播放時間（分鐘，若已知）",
   "settings.refCtxCoverageMemberCount": "涵蓋成員的數量（若已知）",
   "settings.refSectionContext": "— 作品與搜尋上下文",
   "settings.refCtxTitleId": "已知具體作品時的 Scryer 內部作品標識符",
-  "settings.refCtxLibraryName": "當評估範圍限定於特定媒體庫時的解析後媒體庫名稱",
-  "settings.refCtxMediaType": "正在評估的媒體面向，通常為 movie、series 或 anime",
+  "settings.refCtxLibraryName":
+    "當評估範圍限定於特定媒體庫時的解析後媒體庫名稱",
+  "settings.refCtxMediaType":
+    "正在評估的媒體面向，通常為 movie、series 或 anime",
   "settings.refCtxCategory": "用於評分與規則評估的分類提示",
   "settings.refCtxOriginalLanguage": "規範化的原始作品語言（若元數據有提供）",
   "settings.refCtxOriginalCountry": "規範化的原始作品國家（若元數據有提供）",
-  "settings.refCtxInferredOriginalAudioLanguage": "為未標記發行版本推斷的規範化原始音訊語言",
-  "settings.refCtxTags": "作品上的用戶自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
+  "settings.refCtxInferredOriginalAudioLanguage":
+    "為未標記發行版本推斷的規範化原始音訊語言",
+  "settings.refCtxTags":
+    "作品上的用戶自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
   "settings.refCtxHasExisting": "此作品已存在文件時為 true",
   "settings.refCtxExistingScore": "現有文件的內建評分（若有）",
   "settings.refCtxSearchMode": "評估模式。目前的值為 auto 與 post_download",
@@ -1923,20 +2261,25 @@ const zh_HK: LocaleDictionary = {
   "settings.refFileVideoHeight": "以像素為單位的已驗證影片高度",
   "settings.refFileVideoBitrateKbps": "以 kbps 為單位的已驗證影片碼率",
   "settings.refFileVideoBitDepth": "已驗證的影片位元深度",
-  "settings.refFileVideoHdrFormat": "已驗證的 HDR 格式，例如 Dolby Vision、HDR10、HDR10+ 或 HLG",
+  "settings.refFileVideoHdrFormat":
+    "已驗證的 HDR 格式，例如 Dolby Vision、HDR10、HDR10+ 或 HLG",
   "settings.refFileDoviProfile": "杜比視界 Profile 設定檔編號（若存在）",
   "settings.refFileDoviBlCompatId": "杜比視界基礎層相容性 ID（若存在）",
   "settings.refFileVideoFrameRate": "來自媒體分析的已驗證幀率字符串",
-  "settings.refFileVideoProfile": "已驗證的編解碼器規格設定（例如 Main 10 或 High）",
+  "settings.refFileVideoProfile":
+    "已驗證的編解碼器規格設定（例如 Main 10 或 High）",
   "settings.refFileAudioCodec": "主要已驗證音訊編解碼器",
-  "settings.refFileAudioProfile": "主要已驗證音訊規格或延伸標籤，例如 LC、Dolby TrueHD + Dolby Atmos 或 DTS-HD MA + DTS:X IMAX",
+  "settings.refFileAudioProfile":
+    "主要已驗證音訊規格或延伸標籤，例如 LC、Dolby TrueHD + Dolby Atmos 或 DTS-HD MA + DTS:X IMAX",
   "settings.refFileAudioChannels": "主要已驗證聲道數",
   "settings.refFileAudioBitrateKbps": "以 kbps 為單位的已驗證音訊碼率",
   "settings.refFileAudioLanguages": "來自實際文件偵測到的所有音訊語言",
-  "settings.refFileAudioStreams": "個別音訊串流詳細資訊；請參閱下方的 input.file.audio_streams[]",
+  "settings.refFileAudioStreams":
+    "個別音訊串流詳細資訊；請參閱下方的 input.file.audio_streams[]",
   "settings.refFileSubtitleLanguages": "來自實際文件偵測到的所有字幕語言",
   "settings.refFileSubtitleCodecs": "來自實際文件偵測到的所有字幕編解碼器",
-  "settings.refFileSubtitleStreams": "個別字幕串流詳細資訊；請參閱下方的 input.file.subtitle_streams[]",
+  "settings.refFileSubtitleStreams":
+    "個別字幕串流詳細資訊；請參閱下方的 input.file.subtitle_streams[]",
   "settings.refFileHasMultiAudio": "實際文件中存在多個音軌串流時為 true",
   "settings.refFileDurationSeconds": "以秒為單位的已驗證播放時間",
   "settings.refFileNumChapters": "容器提供章節時的已驗證章節數",
@@ -1954,36 +2297,53 @@ const zh_HK: LocaleDictionary = {
   "settings.refSubtitleStreamForced": "字幕串流標記為強制 (Forced) 時為 true",
   "settings.refSubtitleStreamDefault": "字幕串流標記為預設 (Default) 時為 true",
   "settings.refSectionBuiltins": "自訂 Scryer 函數",
-  "settings.refBuiltinsIntro": "除了所有標準 OPA 內建函數之外，您的 Rego 規則亦可使用這些輔助函數。",
+  "settings.refBuiltinsIntro":
+    "除了所有標準 OPA 內建函數之外，您的 Rego 規則亦可使用這些輔助函數。",
   "settings.refFnBlockScore": "返回可由其他加分抵消的 -10000 分懲罰",
-  "settings.refFnSizeGib": "將字節數轉換為 GiB（例如 scryer.size_gib(input.release.size_bytes) > 50）",
-  "settings.refFnLangMatches": "匹配包含別名的 ISO 639-3 代碼（例如 scryer.lang_matches(\"jpn\", \"ja\") 為 true）",
-  "settings.refFnNormalizeSource": "規範化來源名稱（例如 \"webdl\" 轉換為 \"WEB-DL\"）",
-  "settings.refFnNormalizeCodec": "規範化編解碼器名稱（例如 \"h264\" 轉換為 \"H.264\"）",
+  "settings.refFnSizeGib":
+    "將字節數轉換為 GiB（例如 scryer.size_gib(input.release.size_bytes) > 50）",
+  "settings.refFnLangMatches":
+    '匹配包含別名的 ISO 639-3 代碼（例如 scryer.lang_matches("jpn", "ja") 為 true）',
+  "settings.refFnNormalizeSource":
+    '規範化來源名稱（例如 "webdl" 轉換為 "WEB-DL"）',
+  "settings.refFnNormalizeCodec":
+    '規範化編解碼器名稱（例如 "h264" 轉換為 "H.264"）',
   "settings.refSectionSandbox": "沙盒與限制",
-  "settings.refSandboxIntro": "所有用戶規則皆在具備下列限制的沙盒 Rego 評估器內執行：",
-  "settings.refSandboxNoIO": "無網絡或文件系統訪問權限 — 規則無法發出 HTTP 請求、讀取文件或執行任何 I/O。如 http.send 等標準 OPA 內建函數皆無法使用。",
-  "settings.refSandboxPkgIsolation": "包隔離 — 每條規則會自動命名空間隔離至其獨立的 package。規則無法讀取或修改其他規則的數據。",
-  "settings.refSandboxReadOnly": "唯讀輸入 — 規則僅能讀取輸入文檔。規則無法修改應用程式狀態或在多次評估之間保留數據。",
-  "settings.refSandboxOutputRestricted": "輸出僅限 score_entry — 每條規則僅會提取 score_entry 映射表。任何其他定義或賦值皆會被忽略。",
-  "settings.refSandboxIntegerOnly": "分數增減僅限整數 — score_entry 中的值必須為 i32 範圍內的整數。驗證期間會拒絕浮點數（請使用 round() 或 ceil() 轉換）。",
-  "settings.refSandboxValidation": "儲存前驗證 — 規則在儲存前會針對合成輸入進行編譯與模擬試行測試。無效的規則將被拒絕。",
-  "settings.refSandboxErrorIsolation": "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。失敗會記錄在日誌中，但絕不會中斷評分流程。",
+  "settings.refSandboxIntro":
+    "所有用戶規則皆在具備下列限制的沙盒 Rego 評估器內執行：",
+  "settings.refSandboxNoIO":
+    "無網絡或文件系統訪問權限 — 規則無法發出 HTTP 請求、讀取文件或執行任何 I/O。如 http.send 等標準 OPA 內建函數皆無法使用。",
+  "settings.refSandboxPkgIsolation":
+    "包隔離 — 每條規則會自動命名空間隔離至其獨立的 package。規則無法讀取或修改其他規則的數據。",
+  "settings.refSandboxReadOnly":
+    "唯讀輸入 — 規則僅能讀取輸入文檔。規則無法修改應用程式狀態或在多次評估之間保留數據。",
+  "settings.refSandboxOutputRestricted":
+    "輸出僅限 score_entry — 每條規則僅會提取 score_entry 映射表。任何其他定義或賦值皆會被忽略。",
+  "settings.refSandboxIntegerOnly":
+    "分數增減僅限整數 — score_entry 中的值必須為 i32 範圍內的整數。驗證期間會拒絕浮點數（請使用 round() 或 ceil() 轉換）。",
+  "settings.refSandboxValidation":
+    "儲存前驗證 — 規則在儲存前會針對合成輸入進行編譯與模擬試行測試。無效的規則將被拒絕。",
+  "settings.refSandboxErrorIsolation":
+    "錯誤隔離 — 若單一規則在執行階段失敗，所有其他規則仍會繼續正常評估。失敗會記錄在日誌中，但絕不會中斷評分流程。",
   "settings.refSectionOutput": "規則輸出格式",
-  "settings.refOutputIntro": "規則必須定義一個 score_entry 規則，返回一個將字符串鍵（評分代碼）映射至整數值（分數增減）的 map。正值提升發行版本，負值懲罰發行版本，而 scryer.block_score() 則提供可恢復的 -10000 懲罰分。資格是在計算所有貢獻後決定的；強制的質素設定檔要求仍具阻擋性。以文件為基礎的規則在下載前自然會成為無操作 (no-op)，因為 input.file 在下載後評估之前皆為 null。",
+  "settings.refOutputIntro":
+    "規則必須定義一個 score_entry 規則，返回一個將字符串鍵（評分代碼）映射至整數值（分數增減）的 map。正值提升發行版本，負值懲罰發行版本，而 scryer.block_score() 則提供可恢復的 -10000 懲罰分。資格是在計算所有貢獻後決定的；強制的質素設定檔要求仍具阻擋性。以文件為基礎的規則在下載前自然會成為無操作 (no-op)，因為 input.file 在下載後評估之前皆為 null。",
   "settings.subtitles": "字幕",
-  "settings.subtitlesDescription": "設定字幕語言、匹配閾值、同步行為以及提供者連線。",
+  "settings.subtitlesDescription":
+    "設定字幕語言、匹配閾值、同步行為以及提供者連線。",
   "settings.existingSubtitleProviders": "已設定的字幕提供者",
   "settings.subtitleProviderType": "提供者",
   "settings.subtitleProviderStatus": "狀態",
   "settings.subtitleProviderFacets": "內容類型",
-  "settings.subtitleProviderFacetsHelp": "Scryer 僅會針對所選的內容類型向此提供者搜尋字幕。插件推薦會填入這些預設值，但不會限制您的選擇。",
+  "settings.subtitleProviderFacetsHelp":
+    "Scryer 僅會針對所選的內容類型向此提供者搜尋字幕。插件推薦會填入這些預設值，但不會限制您的選擇。",
   "settings.subtitleProviderEmpty": "尚未設定任何字幕提供者。",
   "settings.subtitleProviderCreate": "新增字幕提供者",
   "settings.subtitleProviderCreateNew": "建立新的字幕提供者",
   "settings.subtitleProviderEdit": "編輯字幕提供者",
   "settings.subtitleProviderConfirmDiscardTitle": "放棄目前的字幕提供者編輯？",
-  "settings.subtitleProviderConfirmDiscardDescription": "您目前的字幕提供者編輯內容將會遺失。",
+  "settings.subtitleProviderConfirmDiscardDescription":
+    "您目前的字幕提供者編輯內容將會遺失。",
   "settings.subtitleProviderNamePlaceholder": "OpenSubtitles",
   "settings.subtitleProviderCreated": "已建立字幕提供者。",
   "settings.subtitleProviderUpdated": "已更新字幕提供者。",
@@ -1991,7 +2351,8 @@ const zh_HK: LocaleDictionary = {
   "settings.subtitleProviderNoActivity": "尚無活動",
   "settings.subtitleProviderDisabledUntil": "已停用至 {{time}}",
   "settings.subtitleProviderLastError": "上次錯誤於 {{time}}",
-  "settings.subtitleProviderUnknownType": "此提供者類型已安裝，但其字段架構結構尚不可用。",
+  "settings.subtitleProviderUnknownType":
+    "此提供者類型已安裝，但其字段架構結構尚不可用。",
   "settings.subtitleProviderSecretStored": "保留已儲存的值，除非手動替換",
   "settings.sub.languages": "字幕語言",
   "settings.sub.languagePickerAriaLabel": "選擇字幕語言",
@@ -2003,7 +2364,8 @@ const zh_HK: LocaleDictionary = {
   "settings.sub.forcedOnly": "僅強制字幕",
   "settings.sub.minScoreSeries": "分集最低匹配分數",
   "settings.sub.minScoreMovie": "電影最低匹配分數",
-  "settings.sub.minScoreHelp": "低於此分數的字幕將被跳過。劇集需要更高的閾值，因為劇集級別的匹配必須精確。",
+  "settings.sub.minScoreHelp":
+    "低於此分數的字幕將被跳過。劇集需要更高的閾值，因為劇集級別的匹配必須精確。",
   "settings.sub.searchInterval": "搜尋間隔（小時）",
   "settings.sub.autoDownload": "導入時自動下載",
   "settings.sub.excludeAi": "排除 AI 翻譯的字幕",
@@ -2012,23 +2374,28 @@ const zh_HK: LocaleDictionary = {
   "settings.sub.syncEnabledHelp": "使用音訊分析來修正已下載字幕的時間偏移。",
   "settings.sub.syncThresholdSeries": "自動更正低於此分數（電視劇）",
   "settings.sub.syncThresholdMovie": "自動更正低於此分數（電影）",
-  "settings.sub.syncThresholdHelp": "低分字幕更有可能出現時間問題。高於此分數的字幕被認為是適時的。",
+  "settings.sub.syncThresholdHelp":
+    "低分字幕更有可能出現時間問題。高於此分數的字幕被認為是適時的。",
   "settings.sub.syncMaxOffset": "最大校正（秒）",
-  "settings.sub.syncMaxOffsetHelp": "跳過大於此值的時間變化，以避免損壞可能已經足夠接近的字幕。",
+  "settings.sub.syncMaxOffsetHelp":
+    "跳過大於此值的時間變化，以避免損壞可能已經足夠接近的字幕。",
   "settings.sub.syncPluginRequiredTitle": "需要增強字幕同步插件",
-  "settings.sub.syncPluginRequiredDescription": "安裝 {{plugin}} 以解除鎖定自動時間校準設定。",
+  "settings.sub.syncPluginRequiredDescription":
+    "安裝 {{plugin}} 以解除鎖定自動時間校準設定。",
   "settings.sub.syncPluginLoadingCatalog": "正在檢查插件目錄…",
   "settings.sub.syncPluginInstall": "安裝插件",
   "settings.sub.syncPluginInstalling": "正在安裝…",
   "settings.sub.syncPluginUnavailable": "插件目錄中未提供增強字幕同步插件。",
   "settings.sub.syncPluginBlocked": "無法安裝增強字幕同步插件：{{reason}}",
-  "settings.sub.syncPluginDisabled": "增強字幕同步已安裝但已停用。請在「插件」中啟用它以使用時間校準。",
+  "settings.sub.syncPluginDisabled":
+    "增強字幕同步已安裝但已停用。請在「插件」中啟用它以使用時間校準。",
   "settings.sub.syncPluginInstalled": "已安裝 {{plugin}}",
   "settings.sub.syncPluginLoadFailed": "無法載入插件目錄。",
   "settings.sub.syncPluginInstallFailed": "無法安裝 {{plugin}}：{{error}}",
   "settings.postProcessing": "後處理",
   "settings.pp.title": "後處理腳本",
-  "settings.pp.description": "導入媒體後腳本會自動運行。阻塞腳本按優先順序執行。即發即忘腳本並行運行，不會延遲導入管道。",
+  "settings.pp.description":
+    "導入媒體後腳本會自動運行。阻塞腳本按優先順序執行。即發即忘腳本並行運行，不會延遲導入管道。",
   "settings.pp.noScripts": "未配置後處理腳本。",
   "settings.pp.name": "腳本名稱",
   "settings.pp.namePlaceholder": "例如通知叢",
@@ -2042,7 +2409,8 @@ const zh_HK: LocaleDictionary = {
   "settings.pp.blocking": "阻塞",
   "settings.pp.fireAndForget": "發射即忘",
   "settings.pp.blockingHelp": "按優先順序運行。下一個腳本等待此腳本完成。",
-  "settings.pp.fireAndForgetHelp": "在背景執行而不阻擋導入流程。若有啟用，輸出仍會被捕獲。",
+  "settings.pp.fireAndForgetHelp":
+    "在背景執行而不阻擋導入流程。若有啟用，輸出仍會被捕獲。",
   "settings.pp.executionMode": "執行模式",
   "settings.pp.timeout": "超時（秒）",
   "settings.pp.timeoutLabel": "超時",
@@ -2050,35 +2418,42 @@ const zh_HK: LocaleDictionary = {
   "settings.pp.priorityHelp": "數字較小的先運行。",
   "settings.pp.facets": "適用於",
   "settings.pp.debug": "捕獲腳本輸出",
-  "settings.pp.debugHelp": "啟用後，每次執行的 stdout 與 stderr 都會被儲存（包含背景執行）。適合用於疑難排解。",
+  "settings.pp.debugHelp":
+    "啟用後，每次執行的 stdout 與 stderr 都會被儲存（包含背景執行）。適合用於疑難排解。",
   "settings.pp.runHistory": "運行歷史",
   "settings.pp.noRuns": "尚未執行死刑。",
-  "settings.pp.outputNotCaptured": "未捕獲輸出。對此腳本啓用調試模式以查看輸出。",
+  "settings.pp.outputNotCaptured":
+    "未捕獲輸出。對此腳本啓用調試模式以查看輸出。",
   "settings.pp.envHeading": "環境變量",
-  "settings.pp.envDescription": "指令碼會在 SCRYER_METADATA 中接收 JSON 負載，以及下方顯示的便利變數。當 Scryer 沒有這些資料時，值可能為 null。",
+  "settings.pp.envDescription":
+    "指令碼會在 SCRYER_METADATA 中接收 JSON 負載，以及下方顯示的便利變數。當 Scryer 沒有這些資料時，值可能為 null。",
   "settings.pp.created": "腳本已創建。",
   "settings.pp.updated": "腳本已更新。",
   "settings.pp.deleted": "腳本已刪除。",
   "settings.pp.toggled": "腳本{{state}}。",
   "settings.pp.createNewScript": "建立新指令碼",
   "settings.pp.confirmDiscardTitle": "放棄目前的後處理指令碼編輯？",
-  "settings.pp.confirmDiscardDescription": "您目前的後處理指令碼編輯內容將會遺失。",
+  "settings.pp.confirmDiscardDescription":
+    "您目前的後處理指令碼編輯內容將會遺失。",
   "settings.pp.inlineShellConfirmTitle": "允許內嵌 Shell 指令碼？",
-  "settings.pp.inlineShellConfirmDescription": "內嵌後處理指令碼會在導入完成後透過伺服器 shell 執行。請僅儲存您已審查並信任的指令碼。",
+  "settings.pp.inlineShellConfirmDescription":
+    "內嵌後處理指令碼會在導入完成後透過伺服器 shell 執行。請僅儲存您已審查並信任的指令碼。",
   "settings.pp.inlineShellConfirm": "允許內嵌 Shell",
   "settings.plugins": "插件",
   "settings.scripts": "腳本",
   "settings.pluginRuntimeMemoryEstimate": "預估的插件運行時記憶體用量",
   "settings.pluginsRefresh": "重新整理註冊表",
   "settings.pluginAutoUpdateEnabled": "自動更新插件補丁",
-  "settings.pluginAutoUpdateEnabledHelp": "啓用後，計劃任務“Plugin Catalog Refresh”（或手動運行該任務）會將官方插件更新到最新補丁版本，例如 1.0.1 → 1.0.2，並在有可用的優化構建時為已安裝版本安裝該構建。次版本和主版本仍由運維人員控制。",
+  "settings.pluginAutoUpdateEnabledHelp":
+    "啓用後，計劃任務“Plugin Catalog Refresh”（或手動運行該任務）會將官方插件更新到最新補丁版本，例如 1.0.1 → 1.0.2，並在有可用的優化構建時為已安裝版本安裝該構建。次版本和主版本仍由運維人員控制。",
   "settings.pluginsUpdateAll": "全部更新",
   "settings.pluginsUpdatingAll": "正在全部更新…",
   "settings.host": "主機",
   "settings.port": "連接埠",
   "settings.baseUrl": "基礎 URL",
   "settings.externalUrl": "外部 URL",
-  "settings.externalUrlHint": "用於 Jellyfin 或 Emby 播放連結的瀏覽器公開 URL。",
+  "settings.externalUrlHint":
+    "用於 Jellyfin 或 Emby 播放連結的瀏覽器公開 URL。",
   "label.watchIn": "觀看於",
   "settings.pluginsInstalled": "已安裝",
   "settings.pluginsAvailable": "可用",
@@ -2103,7 +2478,8 @@ const zh_HK: LocaleDictionary = {
   "settings.pluginRevertToBundled": "恢復為內置版本",
   "settings.pluginRevert": "恢復",
   "settings.pluginUninstallWarning": "刪除此插件將會刪除與其相關的所有設定",
-  "settings.pluginRevertToBundledWarning": "這會移除 '{{name}}' 的已下載覆蓋版本，並恢復為內置插件。",
+  "settings.pluginRevertToBundledWarning":
+    "這會移除 '{{name}}' 的已下載覆蓋版本，並恢復為內置插件。",
   "settings.pluginBuiltin": "內置",
   "settings.pluginInstalled": "已安裝",
   "settings.pluginOfficial": "官方",
@@ -2117,18 +2493,23 @@ const zh_HK: LocaleDictionary = {
   "settings.pluginDocs": "文檔",
   "settings.pluginInstallManually": "手動安裝",
   "settings.pluginManualUploadTitle": "上傳本地文件",
-  "settings.pluginManualUploadHelp": "上傳本地插件構建以進行快速迭代。Scryer 接受原始 .wasm 文件與 .wasm.zst 套件。",
+  "settings.pluginManualUploadHelp":
+    "上傳本地插件構建以進行快速迭代。Scryer 接受原始 .wasm 文件與 .wasm.zst 套件。",
   "settings.pluginManualUploadSelect": "選取插件文件",
   "settings.pluginManualUploadInstall": "審查並安裝文件",
   "settings.pluginManualUploadNoFile": "未選取插件文件。",
   "settings.pluginManualUploadFormats": "接受的格式：.wasm 與 .wasm.zst",
-  "settings.pluginManualFileUnsupported": "手動插件上傳必須為 .wasm 或 .wasm.zst 文件。",
+  "settings.pluginManualFileUnsupported":
+    "手動插件上傳必須為 .wasm 或 .wasm.zst 文件。",
   "settings.pluginManualUploadConfirmTitle": "安裝本地插件文件？",
-  "settings.pluginManualUploadConfirmDescription": "您即將在 Scryer 內部執行未經驗證的本地插件代碼。請僅安裝您自行構建或明確信任的文件。",
-  "settings.pluginManualUploadConfirmCheckbox": "我了解此插件將以其清單所宣告的權限執行自訂代碼。",
+  "settings.pluginManualUploadConfirmDescription":
+    "您即將在 Scryer 內部執行未經驗證的本地插件代碼。請僅安裝您自行構建或明確信任的文件。",
+  "settings.pluginManualUploadConfirmCheckbox":
+    "我了解此插件將以其清單所宣告的權限執行自訂代碼。",
   "settings.pluginManualUploadConfirmAction": "安裝本地插件",
   "settings.pluginManualRepoTitle": "從 GitHub 代碼庫安裝",
-  "settings.pluginManualRepoHelp": "直接從發布 Scryer 插件目錄格式的 GitHub 插件代碼庫安裝未驗證的插件。",
+  "settings.pluginManualRepoHelp":
+    "直接從發布 Scryer 插件目錄格式的 GitHub 插件代碼庫安裝未驗證的插件。",
   "settings.pluginManualRepoUrl": "GitHub 插件代碼庫",
   "settings.pluginInspectManual": "檢查代碼庫",
   "settings.pluginOverride": "覆蓋",
@@ -2138,10 +2519,14 @@ const zh_HK: LocaleDictionary = {
   "settings.pluginOptimizedBuildAvailable": "優化構建可用",
   "settings.pluginInstallOptimizedBuild": "安裝優化構建",
   "status.pluginInstalled": "插件'{{name}}'已安裝。",
-  "status.pluginInstallAlreadyInProgress": "外掛程式「{{name}}」已在安裝或升級中。",
-  "status.pluginInstallFailedChecksumMismatch": "Failed to install plugin '{{name}}': the published artifact no longer matches the registry checksum. Refresh the registry or try again later.",
-  "status.pluginInstallFailedSdkMetadataMismatch": "Failed to install plugin '{{name}}': the published artifact does not match the registry SDK compatibility metadata. Refresh the registry or try again later.",
-  "status.pluginInstallFailedWithReason": "Failed to install plugin '{{name}}': {{reason}}",
+  "status.pluginInstallAlreadyInProgress":
+    "外掛程式「{{name}}」已在安裝或升級中。",
+  "status.pluginInstallFailedChecksumMismatch":
+    "Failed to install plugin '{{name}}': the published artifact no longer matches the registry checksum. Refresh the registry or try again later.",
+  "status.pluginInstallFailedSdkMetadataMismatch":
+    "Failed to install plugin '{{name}}': the published artifact does not match the registry SDK compatibility metadata. Refresh the registry or try again later.",
+  "status.pluginInstallFailedWithReason":
+    "Failed to install plugin '{{name}}': {{reason}}",
   "status.pluginRevertedToBundled": "插件'{{name}}'已恢復為內置版本。",
   "status.pluginUninstalled": "插件'{{name}}'已卸載。",
   "status.pluginUpgraded": "插件'{{name}}'已升級到 v{{version}}。",
@@ -2152,7 +2537,8 @@ const zh_HK: LocaleDictionary = {
   "form.indexerNamePlaceholder": "我的 Newznab 索引器",
   "form.providerTypePlaceholder": "提供者類型",
   "form.subtitleProviderValidation": "名稱與提供者類型為必填。",
-  "form.subtitleProviderFacetsRequired": "請至少選擇一種內容類型。Scryer 不會搜尋未設定任何類型的提供者。",
+  "form.subtitleProviderFacetsRequired":
+    "請至少選擇一種內容類型。Scryer 不會搜尋未設定任何類型的提供者。",
   "form.apiKeyInputPlaceholder": "API 密鑰",
   "form.apiKeyStoredPlaceholder": "已存儲（留空以保留）",
   "form.usernamePlaceholder": "用戶名",
@@ -2163,11 +2549,13 @@ const zh_HK: LocaleDictionary = {
   "qualityProfile.createNewProfile": "建立新質素設定檔",
   "qualityProfile.editProfile": "編輯質素配置",
   "qualityProfile.confirmDiscardTitle": "放棄目前的質素設定檔編輯？",
-  "qualityProfile.confirmDiscardDescription": "您目前對質素設定檔的編輯將會遺失。",
+  "qualityProfile.confirmDiscardDescription":
+    "您目前對質素設定檔的編輯將會遺失。",
   "qualityProfile.profileNameLabel": "配置名稱",
   "qualityProfile.qualityTiersAndArchival": "質素級別與存檔質素",
   "qualityProfile.qualityPreference": "質素偏好",
-  "qualityProfile.qualityPreferenceHelp": "最高偏好排在最前。層級偏好優先於評分。新層級會新增於最低偏好處。",
+  "qualityProfile.qualityPreferenceHelp":
+    "最高偏好排在最前。層級偏好優先於評分。新層級會新增於最低偏好處。",
   "qualityProfile.moveQualityTierUp": "將 {{value}} 上移",
   "qualityProfile.moveQualityTierDown": "將 {{value}} 下移",
   "qualityProfile.dragQualityTier": "拖曳以重新排序 {{value}}",
@@ -2178,28 +2566,37 @@ const zh_HK: LocaleDictionary = {
   "qualityProfile.availableQualityTiers": "可用質素級別",
   "qualityProfile.allQualityTiersSelected": "已選擇所有已知質素級別。",
   "qualityProfile.archivalQuality": "存檔質素",
-  "qualityProfile.archivalQualityInfo": "用於長期儲存的質素級別。Scryer 可能會在沒有存檔質素時先下載更高質素，然後在找到存檔質素版本時替換。",
+  "qualityProfile.archivalQualityInfo":
+    "用於長期儲存的質素級別。Scryer 可能會在沒有存檔質素時先下載更高質素，然後在找到存檔質素版本時替換。",
   "qualityProfile.qualityTiers": "質素級別",
   "qualityProfile.allowHdr": "HDR",
   "qualityProfile.detectedHdrAllowed": "允許 HDR",
-  "qualityProfile.detectedHdrAllowedInfo": "允許檢測為 HDR 的版本（HDR10、HLG、Dolby Vision 等）。注意：許多版本名稱不明確包含 HDR，因此不保證能完全過濾 HDR 版本。",
+  "qualityProfile.detectedHdrAllowedInfo":
+    "允許檢測為 HDR 的版本（HDR10、HLG、Dolby Vision 等）。注意：許多版本名稱不明確包含 HDR，因此不保證能完全過濾 HDR 版本。",
   "qualityProfile.allowUnknownQuality": "允許未知質素",
-  "qualityProfile.allowUnknownQualityInfo": "允許解析器規則無法識別質素的版本。這有助於處理不常見的編碼，但可能允許低置信度的匹配。",
+  "qualityProfile.allowUnknownQualityInfo":
+    "允許解析器規則無法識別質素的版本。這有助於處理不常見的編碼，但可能允許低置信度的匹配。",
   "qualityProfile.dolbyVisionAllowed": "Dolby Vision",
-  "qualityProfile.dolbyVisionInfo": "允許 Dolby Vision 版本。某些顯示器無法正確渲染 Dolby Vision 內容，因此可能並非所有人都需要。",
+  "qualityProfile.dolbyVisionInfo":
+    "允許 Dolby Vision 版本。某些顯示器無法正確渲染 Dolby Vision 內容，因此可能並非所有人都需要。",
   "qualityProfile.preferRemux": "偏好 Remux",
-  "qualityProfile.preferRemuxInfo": "Remux 是物理媒體的完整質素副本。主要適用於 Audiophile 人格。",
+  "qualityProfile.preferRemuxInfo":
+    "Remux 是物理媒體的完整質素副本。主要適用於 Audiophile 人格。",
   "qualityProfile.allowBdDisk": "BD 光盤",
-  "qualityProfile.allowBdDiskInfo": "允許 BD/光盤映像版本（ISO/藍光光盤樣式）通過配置。",
+  "qualityProfile.allowBdDiskInfo":
+    "允許 BD/光盤映像版本（ISO/藍光光盤樣式）通過配置。",
   "qualityProfile.allowDv": "Dolby Vision",
   "qualityProfile.allowUpgrades": "允許升級",
-  "qualityProfile.allowUpgradesInfo": "允許已管理的副本稍後被更好的匹配替換，但不會超過所選的存檔質素。",
+  "qualityProfile.allowUpgradesInfo":
+    "允許已管理的副本稍後被更好的匹配替換，但不會超過所選的存檔質素。",
   "qualityProfile.sourceAllowlist": "來源",
   "qualityProfile.videoCodecAllowlist": "影片編碼器",
   "qualityProfile.audioCodecAllowlist": "音訊編碼器",
-  "qualityProfile.sourceAllowlistInfo": "僅允許匹配所選來源值的版本（例如 WEB-DL、HDTV）。",
+  "qualityProfile.sourceAllowlistInfo":
+    "僅允許匹配所選來源值的版本（例如 WEB-DL、HDTV）。",
   "qualityProfile.sourceBlocklistDefault": "預設不應用來源阻止。",
-  "qualityProfile.videoCodecAllowlistInfo": "僅允許使用這些影片編碼器編碼的版本。",
+  "qualityProfile.videoCodecAllowlistInfo":
+    "僅允許使用這些影片編碼器編碼的版本。",
   "qualityProfile.videoCodecBlocklistDefault": "預設沒有阻止的影片編碼器。",
   "qualityProfile.audioCodecAllowlistInfo": "僅允許匹配音訊編碼器的版本。",
   "qualityProfile.audioCodecBlocklistDefault": "預設沒有阻止的音訊編碼器。",
@@ -2208,35 +2605,47 @@ const zh_HK: LocaleDictionary = {
   "qualityProfile.useDefaultQualityFallback": "使用預設質素回退",
   "qualityProfile.defaultCategoryProfiles": "預設分類配置",
   "qualityProfile.scoringAndPreferences": "評分與偏好",
-  "qualityProfile.scoringAndPreferencesInfo": "控制版本的排名和過濾方式。設定評分人格、偏好和升級行為。",
+  "qualityProfile.scoringAndPreferencesInfo":
+    "控制版本的排名和過濾方式。設定評分人格、偏好和升級行為。",
   "qualityProfile.facetPersonaUseDefault": "使用預設",
   "qualityProfile.scoringPersona": "評分人格",
-  "qualityProfile.scoringPersonaInfo": "優先考慮不同版本質素的預設評分權重。大多數用戶推薦使用 Balanced。",
+  "qualityProfile.scoringPersonaInfo":
+    "優先考慮不同版本質素的預設評分權重。大多數用戶推薦使用 Balanced。",
   "qualityProfile.personaBalanced": "均衡",
   "qualityProfile.personaAudiophile": "發燒友",
   "qualityProfile.personaEfficient": "高效",
   "qualityProfile.personaCompatible": "兼容",
   "qualityProfile.scoringOverrides": "評分覆蓋",
-  "qualityProfile.scoringOverridesInfo": "無論選擇何種人格，都覆蓋特定評分行為。保留為「預設」以使用人格的設定。",
+  "qualityProfile.scoringOverridesInfo":
+    "無論選擇何種人格，都覆蓋特定評分行為。保留為「預設」以使用人格的設定。",
   "qualityProfile.overrideAllowX265Non4k": "非 4K 允許 x265",
-  "qualityProfile.overrideAllowX265Non4kInfo": "允許 4K 以下解像度的 x265/HEVC 編碼版本。某些設備在較低解像度下難以處理 x265。",
+  "qualityProfile.overrideAllowX265Non4kInfo":
+    "允許 4K 以下解像度的 x265/HEVC 編碼版本。某些設備在較低解像度下難以處理 x265。",
   "qualityProfile.overrideBlockDvNoFallback": "阻止無回退的 DV",
-  "qualityProfile.overrideBlockDvNoFallbackInfo": "阻止缺少 HDR10 回退層的 Dolby Vision 版本，這些版本在非 DV 顯示器上可能顯示綠色/紫色。",
+  "qualityProfile.overrideBlockDvNoFallbackInfo":
+    "阻止缺少 HDR10 回退層的 Dolby Vision 版本，這些版本在非 DV 顯示器上可能顯示綠色/紫色。",
   "qualityProfile.overridePreferCompact": "偏好緊湊編碼",
-  "qualityProfile.overridePreferCompactInfo": "獎勵較小的、帶寬效率高的編碼。適用於存儲有限或通過較慢連接串流。",
+  "qualityProfile.overridePreferCompactInfo":
+    "獎勵較小的、帶寬效率高的編碼。適用於存儲有限或通過較慢連接串流。",
   "qualityProfile.overridePreferLossless": "偏好無損音訊",
-  "qualityProfile.overridePreferLosslessInfo": "為無損音軌的版本加分（TrueHD、FLAC、DTS-HD MA）。",
+  "qualityProfile.overridePreferLosslessInfo":
+    "為無損音軌的版本加分（TrueHD、FLAC、DTS-HD MA）。",
   "qualityProfile.overrideBlockUpscaled": "阻止 AI 放大",
-  "qualityProfile.overrideBlockUpscaledInfo": "阻止經過 AI 放大的版本。這些版本通常有瑕疵且非真正的原生解像度。",
+  "qualityProfile.overrideBlockUpscaledInfo":
+    "阻止經過 AI 放大的版本。這些版本通常有瑕疵且非真正的原生解像度。",
   "qualityProfile.cutoffTier": "閾值級別",
-  "qualityProfile.cutoffTierInfo": "達到此質素級別（或更高）後停止升級。防止不必要的重新下載。",
+  "qualityProfile.cutoffTierInfo":
+    "達到此質素級別（或更高）後停止升級。防止不必要的重新下載。",
   "qualityProfile.cutoffNone": "無閾值",
   "qualityProfile.minScoreToGrab": "抓取最低分數",
-  "qualityProfile.minScoreToGrabInfo": "僅抓取達到或超過此閾值分數的版本。留空表示無最低要求。",
+  "qualityProfile.minScoreToGrabInfo":
+    "僅抓取達到或超過此閾值分數的版本。留空表示無最低要求。",
   "qualityProfile.minScorePlaceholder": "無最低要求",
   "qualityProfile.confirmDeleteTitle": "刪除質素配置",
-  "qualityProfile.confirmDeleteDescription": "您確定要刪除質素配置檔案“{{name}}”嗎？此操作無法撤消。",
-  "qualityProfile.deleteDisabledInUse": "該配置檔案正在使用中。刪除之前，將其從所有標題和類別預設值中刪除。",
+  "qualityProfile.confirmDeleteDescription":
+    "您確定要刪除質素配置檔案“{{name}}”嗎？此操作無法撤消。",
+  "qualityProfile.deleteDisabledInUse":
+    "該配置檔案正在使用中。刪除之前，將其從所有標題和類別預設值中刪除。",
   "episode.details": "詳情",
   "episode.search": "搜尋",
   "episode.blocklist": "阻止列表",
@@ -2263,13 +2672,17 @@ const zh_HK: LocaleDictionary = {
   "seriesOverview.clearEpisodeSelection": "清除選取",
   "seriesOverview.deleteSelectedEpisodeFiles": "刪除選取的 {{count}} 個檔案",
   "seriesOverview.deleteEpisodeFilesTitle": "刪除選取的單集檔案",
-  "seriesOverview.deleteEpisodeFilesDescription": "這將永久刪除磁碟上選取單集的檔案。單集記錄將會保留。",
-  "seriesOverview.deleteEpisodeFilesSummary": "橫跨 {{episodes}} 個單集的 {{files}} 個檔案",
-  "seriesOverview.deleteEpisodeFilesPreviewFailures": "{{count}} 個檔案無法預覽，刪除時可能會失敗。",
+  "seriesOverview.deleteEpisodeFilesDescription":
+    "這將永久刪除磁碟上選取單集的檔案。單集記錄將會保留。",
+  "seriesOverview.deleteEpisodeFilesSummary":
+    "橫跨 {{episodes}} 個單集的 {{files}} 個檔案",
+  "seriesOverview.deleteEpisodeFilesPreviewFailures":
+    "{{count}} 個檔案無法預覽，刪除時可能會失敗。",
   "mediaFile.pendingScan": "待掃描",
   "mediaFile.scanFailed": "掃描失敗",
   "mediaFile.reviewRequired": "需要審查",
-  "mediaFile.discReviewInventory": "來自最新檢查的標題。在您儲存經過驗證的選擇前，已儲存的選取與單集對應將保持不變。",
+  "mediaFile.discReviewInventory":
+    "來自最新檢查的標題。在您儲存經過驗證的選擇前，已儲存的選取與單集對應將保持不變。",
   "mediaFile.score": "評分 {{score}}",
   "mediaFile.primary": "主要",
   "mediaFile.additional": "附加",
@@ -2281,10 +2694,13 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.program": "節目 {{id}}",
   "mediaFile.discTitle": "光碟播放標題",
   "mediaFile.discReviewAction": "光碟需要關注",
-  "mediaFile.discOutcomeAutomatic": "正在播放標題 {{id}} ({{duration}})，系統已自動選擇最長的完整標題。",
-  "mediaFile.discOutcomeManual": "正在播放標題 {{id}} ({{duration}})，由您手動選擇。此光碟已關閉自動選取。",
+  "mediaFile.discOutcomeAutomatic":
+    "正在播放標題 {{id}} ({{duration}})，系統已自動選擇最長的完整標題。",
+  "mediaFile.discOutcomeManual":
+    "正在播放標題 {{id}} ({{duration}})，由您手動選擇。此光碟已關閉自動選取。",
   "mediaFile.discOutcomeUnselected": "無法選擇可播放的標題。請在下方選取一個。",
-  "mediaFile.discOutcomeIncomplete": "選取的標題檢查未完成 ({{status}})。請選擇完整的標題或重新檢查檔案。",
+  "mediaFile.discOutcomeIncomplete":
+    "選取的標題檢查未完成 ({{status}})。請選擇完整的標題或重新檢查檔案。",
   "mediaFile.discChooseTitle": "應播放哪個標題",
   "mediaFile.discAutomaticCurrent": "目前標題 {{id}}",
   "mediaFile.discTitleChapterCount": "{{count}} 個章節",
@@ -2297,7 +2713,8 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.discTechnicalDetails": "技術詳細資料",
   "mediaFile.discTitleIdentity": "標題 {{id}}",
   "mediaFile.discInspectTitles": "檢查標題串流與章節",
-  "mediaFile.discAngleInventory": "{{count}} 個視角。可用時媒體檢查將涵蓋第一視角。",
+  "mediaFile.discAngleInventory":
+    "{{count}} 個視角。可用時媒體檢查將涵蓋第一視角。",
   "mediaFile.discTitleAliases": "等效標題 ID：{{ids}}",
   "mediaFile.discTitleBudgetExhausted": "此標題的檢查已達探測上限。",
   "mediaFile.discTitleStreams": "標題串流",
@@ -2306,7 +2723,8 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.discTitleChaptersUnknown": "未復原此標題的章節中繼資料。",
   "mediaFile.discChapterIdentity": "章節 {{id}}",
   "mediaFile.discEpisodeMapping": "將光碟標題對應至單集",
-  "mediaFile.discMappingScope": "為每個已編排的播放標題選擇一個單集。未對應的標題不會使該單集變為可用。ISO 映像檔保持為單一檔案。",
+  "mediaFile.discMappingScope":
+    "為每個已編排的播放標題選擇一個單集。未對應的標題不會使該單集變為可用。ISO 映像檔保持為單一檔案。",
   "mediaFile.discMappingSave": "儲存單集對應",
   "mediaFile.discMappingFailed": "無法儲存單集對應",
   "mediaFile.discMappingLoading": "正在載入單集…",
@@ -2319,7 +2737,8 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.analysisPreviousRetained": "保留先前的儲存檢查結果。",
   "mediaFile.analysisNoneSaved": "此檔案尚未儲存任何檢查記錄。",
   "mediaFile.analysisBudgetExhausted": "檢查預算額度已耗盡。",
-  "mediaFile.analysisSummary": "片長 {{duration}} · 整體 {{overall}} · 視訊 {{video}}",
+  "mediaFile.analysisSummary":
+    "片長 {{duration}} · 整體 {{overall}} · 視訊 {{video}}",
   "mediaFile.analysisBudgetStopped": "檢查達到探測上限後已停止。",
   "mediaFile.analysisProgram": "節目 {{id}}",
   "mediaFile.analysisProgramStreams": "串流 {{ids}}",
@@ -2328,7 +2747,8 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.analysisAttachments": "附件",
   "mediaFile.analysisUnknownType": "未知類型",
   "mediaFile.analysisBytes": "{{count}} 個位元組",
-  "mediaFile.analysisCaptionService": "{{standard}} 隱藏字幕服務 {{number}} · {{language}}",
+  "mediaFile.analysisCaptionService":
+    "{{standard}} 隱藏字幕服務 {{number}} · {{language}}",
   "mediaFile.analysisUnknownLanguage": "未知語言",
   "mediaFile.streamUnknownCodec": "未知編碼",
   "mediaFile.streamLanguage": "語言",
@@ -2357,9 +2777,12 @@ const zh_HK: LocaleDictionary = {
   "mediaFile.diagnose": "檢查結構標頭",
   "mediaFile.diagnosing": "正在檢查標頭…",
   "mediaFile.diagnosticsFailed": "無法檢查此檔案",
-  "mediaFile.diagnosticsScope": "局部標頭取樣不會驗證每個封包或解碼後的畫面及音訊內容。",
-  "mediaFile.diagnosticsRead": "{{bytes}} 個位元組讀取於 {{milliseconds}} 毫秒內",
-  "mediaFile.diagnosticsSamples": "已取樣 {{packets}} 個傳輸封包與 {{frames}} 個影格標頭",
+  "mediaFile.diagnosticsScope":
+    "局部標頭取樣不會驗證每個封包或解碼後的畫面及音訊內容。",
+  "mediaFile.diagnosticsRead":
+    "{{bytes}} 個位元組讀取於 {{milliseconds}} 毫秒內",
+  "mediaFile.diagnosticsSamples":
+    "已取樣 {{packets}} 個傳輸封包與 {{frames}} 個影格標頭",
   "mediaFile.diagnosticsCoverage": "已檢查來源位元組的 {{percent}}%",
   "mediaFile.diagnosticsRanges": "已檢查的位元組範圍",
   "mediaFile.diagnosticsTruncated": "由於達到報告上限，省略了部分範圍或警告。",
@@ -2379,12 +2802,14 @@ const zh_HK: LocaleDictionary = {
   "subtitle.external": "外部",
   "subtitle.manualSearch": "手動搜尋",
   "subtitle.providersRequiredTitle": "需要字幕提供者",
-  "subtitle.providersRequiredBody": "搜尋字幕前，請先新增並啟用至少一個字幕提供者。",
+  "subtitle.providersRequiredBody":
+    "搜尋字幕前，請先新增並啟用至少一個字幕提供者。",
   "subtitle.providersRequiredAction": "開啟字幕提供者設定",
   "subtitle.providerUnavailableTitle": "字幕服務不可用",
   "subtitle.providerUnavailableBody": "該檔案的字幕服務當前不可用。",
   "subtitle.subtitlesDisabledTitle": "字幕下載已關閉",
-  "subtitle.subtitlesDisabledBody": "搜尋字幕前，請先在字幕設定中開啟字幕下載。",
+  "subtitle.subtitlesDisabledBody":
+    "搜尋字幕前，請先在字幕設定中開啟字幕下載。",
   "subtitle.blocklist": "阻止列表",
   "subtitle.blocklisted": "字幕已添加到阻止列表",
   "subtitle.deleted": "字幕已刪除",
@@ -2409,19 +2834,23 @@ const zh_HK: LocaleDictionary = {
   "settings.interSeasonMoviesLabel": "季間劇場版",
   "settings.interSeasonMoviesDescription": "為季間的正典劇場版創建敍事條目",
   "settings.monitorFillerMoviesLabel": "監控填充電影",
-  "settings.monitorFillerMoviesDescription": "將分類為填充內容的電影包含在下載隊列中",
+  "settings.monitorFillerMoviesDescription":
+    "將分類為填充內容的電影包含在下載隊列中",
   "settings.importModeLabel": "導入模式",
-  "settings.importModeDescription": "選擇 Scryer 在完成驗證的媒體庫導入後，是保留下載端的文件還是將其移除。",
+  "settings.importModeDescription":
+    "選擇 Scryer 在完成驗證的媒體庫導入後，是保留下載端的文件還是將其移除。",
   "settings.importModeHardlinkCopy": "硬鏈接 / 複製",
   "settings.importModeMove": "移動",
   "settings.setPermissionsLinuxLabel": "設定 Unix 權限",
-  "settings.setPermissionsLinuxDescription": "在 Unix 導入時套用配置的文件權限模式與組。數字組視為 GID。",
+  "settings.setPermissionsLinuxDescription":
+    "在 Unix 導入時套用配置的文件權限模式與組。數字組視為 GID。",
   "settings.fileChmodLabel": "文件 chmod",
   "settings.folderChmodLabel": "資料夾 chmod",
   "settings.chownGroupLabel": "組擁有者",
   "settings.fileChmodDeriveFromFolder": "衍生自資料夾 chmod",
   "settings.chmodPresetOwnerWriteEveryoneRead": "擁有者可寫入，其他人唯讀",
-  "settings.chmodPresetOwnerGroupWriteOtherRead": "擁有者與組可寫入，其他人唯讀",
+  "settings.chmodPresetOwnerGroupWriteOtherRead":
+    "擁有者與組可寫入，其他人唯讀",
   "settings.chmodPresetOwnerGroupWrite": "擁有者與組可寫入",
   "settings.chmodPresetOwnerWriteGroupRead": "擁有者可寫入，組唯讀",
   "settings.chmodPresetEveryoneWrite": "所有人皆可寫入",
@@ -2429,13 +2858,16 @@ const zh_HK: LocaleDictionary = {
   "settings.sidecarFilesTitle": "Sidecar 檔案",
   "settings.identityStorageTitle": "身份與儲存空間",
   "settings.mediaProfilesTitle": "媒體設定檔",
-  "settings.mediaProfilesHelp": "保留為「繼承目錄預設值」以遵循目錄設定，或針對個別媒體庫進行覆寫。解析後的值顯示在各控制項下方。",
+  "settings.mediaProfilesHelp":
+    "保留為「繼承目錄預設值」以遵循目錄設定，或針對個別媒體庫進行覆寫。解析後的值顯示在各控制項下方。",
   "settings.importBehaviorTitle": "導入行為",
   "settings.libraryUnsavedChanges": "未儲存的變更",
   "settings.nfoWriteOnImportLabel": "導入時寫入 NFO",
-  "settings.nfoWriteOnImportDescription": "在導入的媒體旁寫入 Kodi/Jellyfin/Emby 兼容的 .nfo 元數據檔案；已存在的 .nfo 檔案絕不會被覆蓋",
+  "settings.nfoWriteOnImportDescription":
+    "在導入的媒體旁寫入 Kodi/Jellyfin/Emby 兼容的 .nfo 元數據檔案；已存在的 .nfo 檔案絕不會被覆蓋",
   "settings.plexmatchWriteOnImportLabel": "導入時寫入 .plexmatch",
-  "settings.plexmatchWriteOnImportDescription": "寫入 Plex 提示檔案以實現精確的劇集匹配",
+  "settings.plexmatchWriteOnImportDescription":
+    "寫入 Plex 提示檔案以實現精確的劇集匹配",
   "settings.minAvailabilityLabel": "最低可用性",
   "settings.minAvailability.announced": "已公佈",
   "settings.minAvailability.in_cinemas": "院線上映中",
@@ -2443,7 +2875,8 @@ const zh_HK: LocaleDictionary = {
   "status.titleRequired": "標題為必填項。",
   "status.facetRequired": "類型為必填項。",
   "status.catalogAddSuccess": "已將 {{name}} 添加到目錄。",
-  "status.catalogAddSuccessAutoSearch": "已將 {{name}} 添加到目錄。自動搜尋已加入隊列。",
+  "status.catalogAddSuccessAutoSearch":
+    "已將 {{name}} 添加到目錄。自動搜尋已加入隊列。",
   "status.requestSubmitted": "已提交 {{name}} 的請求。",
   "status.queueSuccess": "已將 {{name}} 加入隊列",
   "status.primaryMovieFileUpdated": "主要電影檔案已更新",
@@ -2457,26 +2890,32 @@ const zh_HK: LocaleDictionary = {
   "status.searchingTvdb": "正在 TVDB 元數據中搜索“{{query}}”。",
   "status.foundTvdb": "找到 {{count}} 個 TVDB 結果。",
   "status.foundNzb": "找到 {{count}} 個 NZBGeek 結果。",
-  "status.renamePreviewGenerated": "重命名預覽就緒：{{total}} 個檔案中 {{renamable}} 個可重命名。",
+  "status.renamePreviewGenerated":
+    "重命名預覽就緒：{{total}} 個檔案中 {{renamable}} 個可重命名。",
   "status.renameQueued": "正在背景重新命名；進度將顯示在活動中。",
   "status.releaseMissingCandidateToken": "所選發佈缺少已驗證的候選令牌。",
   "status.searchResultsExpired": "搜尋結果已過期，請重新搜尋",
-  "status.deleteCatalogConfirm": "從目錄中移除 {{name}}？使用下方選項可同時刪除本地檔案。",
+  "status.deleteCatalogConfirm":
+    "從目錄中移除 {{name}}？使用下方選項可同時刪除本地檔案。",
   "status.titleDeleted": "{{name}} 已從目錄中移除。",
   "status.bulkMonitorSuccess": "已監控 {{count}} 部作品。",
   "status.bulkMonitorPartial": "已監控 {{count}} 部作品；{{failed}} 部失敗。",
   "status.bulkMonitorFailed": "監控選取的作品失敗。",
   "status.bulkUnmonitorSuccess": "已取消監控 {{count}} 部作品。",
-  "status.bulkUnmonitorPartial": "已取消監控 {{count}} 部作品；{{failed}} 部失敗。",
+  "status.bulkUnmonitorPartial":
+    "已取消監控 {{count}} 部作品；{{failed}} 部失敗。",
   "status.bulkUnmonitorFailed": "取消監控選取的作品失敗。",
   "status.bulkTitleUpdateSuccess": "已更新 {{count}} 部作品。",
-  "status.bulkTitleUpdatePartial": "已更新 {{count}} 部作品；{{failed}} 部失敗。",
+  "status.bulkTitleUpdatePartial":
+    "已更新 {{count}} 部作品；{{failed}} 部失敗。",
   "status.bulkTitleUpdateFailed": "更新選取的作品失敗。",
-  "status.bulkDeletePreviewFailed": "無法為 {{failed}} 部選取的作品準備刪除預覽。",
+  "status.bulkDeletePreviewFailed":
+    "無法為 {{failed}} 部選取的作品準備刪除預覽。",
   "status.bulkTitleDeleteFailed": "刪除選取的作品失敗。",
   "status.bulkRenamePreviewFailed": "無法預覽 {{failed}} 部作品的重新命名。",
   "status.bulkRenameFailed": "重新命名選取的作品失敗。",
-  "status.bulkRenameQueued": "正在背景重新命名 {{count}} 部作品；進度將顯示在活動中。",
+  "status.bulkRenameQueued":
+    "正在背景重新命名 {{count}} 部作品；進度將顯示在活動中。",
   "status.bulkRenameForbidden": "您沒有在所有選取媒體庫中重新命名作品的權限。",
   "status.titleMatchUpdated": "更新了 {{name}} 的匹配。",
   "status.languageChanged": "界面語言已設定為 {{language}}。",
@@ -2500,36 +2939,50 @@ const zh_HK: LocaleDictionary = {
   "status.indexerUpdated": "索引器已更新。",
   "status.indexerSynced": "已同步由 {{name}} 管理的索引器。",
   "status.mismatchRecoveryQueued": "已將 {{count}} 個不匹配恢復項目加入隊列。",
-  "status.titleScanSuccess": "掃描完成。已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
+  "status.titleScanSuccess":
+    "掃描完成。已導入 {{imported}} 個，跳過 {{skipped}} 個，未匹配 {{unmatched}} 個。",
   "status.titleMonitoringEnabled": "標題監控已啓用。",
   "status.titleMonitoringDisabled": "標題監控已禁用。",
   "status.indexerDeleted": "已刪除索引器 {{name}}。",
   "plugins.failure.invalidConfig": "插件無法使用這些設定。請檢查後再試。",
-  "plugins.failure.authFailed": "服務拒絕了登入資料。請檢查 API 金鑰、用戶名稱或密碼。",
+  "plugins.failure.authFailed":
+    "服務拒絕了登入資料。請檢查 API 金鑰、用戶名稱或密碼。",
   "plugins.failure.rateLimited": "服務要求 Scryer 放慢請求速度。請稍後再試。",
-  "plugins.failure.upstreamUnavailable": "無法連接到服務，或服務沒有回應。請檢查地址後再試。",
+  "plugins.failure.upstreamUnavailable":
+    "無法連接到服務，或服務沒有回應。請檢查地址後再試。",
   "plugins.failure.unsupported": "插件不支援此操作。",
   "plugins.failure.temporary": "插件遇到暫時性問題。請稍後再試。",
-  "plugins.failure.permanent": "插件無法完成此請求。在情況改變之前，重試也無補於事。",
+  "plugins.failure.permanent":
+    "插件無法完成此請求。在情況改變之前，重試也無補於事。",
   "plugins.failure.hostFailure": "插件意外停止。詳細資料請查看 Scryer 日誌。",
   "plugins.failure.timedOut": "插件回應時間過長。",
   "plugins.failure.resourceLimit": "插件記憶體不足。",
   "plugins.failure.withDetail": "{{reason}} 詳細資料：{{detail}}",
-  "plugins.failure.invalidUsernamePassword": "服務拒絕了用戶名稱或密碼。請檢查後再試。",
+  "plugins.failure.invalidUsernamePassword":
+    "服務拒絕了用戶名稱或密碼。請檢查後再試。",
   "plugins.failure.invalidApiKey": "服務拒絕了 API 金鑰。請檢查金鑰後再試。",
-  "plugins.failure.invalidPasskey": "服務拒絕了 Passkey。請檢查 Passkey 後再試。",
-  "plugins.failure.invalidCookie": "服務拒絕了工作階段 Cookie。請從瀏覽器複製新的 Cookie 後再試。",
-  "plugins.failure.captchaRequired": "服務要求完成驗證碼。請先在其網站登入一次，然後再試。",
-  "plugins.failure.twoFactorRequired": "這次登入需要雙重認證碼。請改用 API 金鑰或應用程式密碼。",
+  "plugins.failure.invalidPasskey":
+    "服務拒絕了 Passkey。請檢查 Passkey 後再試。",
+  "plugins.failure.invalidCookie":
+    "服務拒絕了工作階段 Cookie。請從瀏覽器複製新的 Cookie 後再試。",
+  "plugins.failure.captchaRequired":
+    "服務要求完成驗證碼。請先在其網站登入一次，然後再試。",
+  "plugins.failure.twoFactorRequired":
+    "這次登入需要雙重認證碼。請改用 API 金鑰或應用程式密碼。",
   "plugins.failure.accountBanned": "服務已封鎖此帳戶。請聯絡該服務解決。",
-  "plugins.failure.accountDisabled": "服務已停用此帳戶。請在該服務的網站檢查帳戶狀態。",
-  "plugins.failure.endpointNotFound": "在此地址找不到該服務。請檢查網址及基本路徑。",
+  "plugins.failure.accountDisabled":
+    "服務已停用此帳戶。請在該服務的網站檢查帳戶狀態。",
+  "plugins.failure.endpointNotFound":
+    "在此地址找不到該服務。請檢查網址及基本路徑。",
   "plugins.failure.tlsError": "無法與服務建立安全連線。請檢查地址及其證書。",
-  "plugins.failure.invalidResponse": "服務傳回了插件無法讀取的回應。請確認地址指向正確的服務。",
-  "plugins.failure.quotaExceeded": "此帳戶在該服務的配額已用完。請等待配額重設或提高上限。",
+  "plugins.failure.invalidResponse":
+    "服務傳回了插件無法讀取的回應。請確認地址指向正確的服務。",
+  "plugins.failure.quotaExceeded":
+    "此帳戶在該服務的配額已用完。請等待配額重設或提高上限。",
   "plugins.failure.itemNotFound": "服務上已不再有此項目。",
   "plugins.failure.downloadRejected": "下載用戶端拒絕了此下載。",
-  "plugins.failure.pathNotWritable": "插件無法寫入設定的資料夾。請確認資料夾存在且可寫入。",
+  "plugins.failure.pathNotWritable":
+    "插件無法寫入設定的資料夾。請確認資料夾存在且可寫入。",
   "plugins.failure.unknown": "插件報告了一個問題：{{code}}",
   "status.testingIndexerConnection": "正在測試連接…",
   "status.indexerConnectionTestPassed": "索引器連接測試通過。",
@@ -2554,14 +3007,18 @@ const zh_HK: LocaleDictionary = {
   "status.mediaServerConnectionTestFailed": "{{server}} 連線測試失敗。",
   "status.downloadClientCreated": "下載客戶端已儲存。",
   "status.downloadClientUpdated": "下載客戶端已更新。",
-  "status.downloadClientDeletedWithMappings": "已刪除下載客戶端 {{name}}。{{count}} 個索引器已還原為自動。",
+  "status.downloadClientDeletedWithMappings":
+    "已刪除下載客戶端 {{name}}。{{count}} 個索引器已還原為自動。",
   "status.indexerDownloadClientMappingSaving": "正在儲存下載客戶端路由…",
-  "status.indexerDownloadClientMappingSaved": "已為 {{name}} 儲存下載客戶端路由。",
+  "status.indexerDownloadClientMappingSaved":
+    "已為 {{name}} 儲存下載客戶端路由。",
   "status.testingDownloadClient": "正在測試 {{client}} 連接…",
   "status.downloadClientConnectionTestPassed": "{{client}} 連接測試通過。",
   "status.downloadClientConnectionTestFailed": "{{client}} 連接測試失敗。",
-  "status.autoSearchNoCandidates": "未找到 {{name}} 的發佈：沒有索引器返回候選。請檢查索引器路由分類和索引器狀態。",
-  "status.autoSearchAllRejected": "未找到 {{name}} 的發佈：自動搜尋拒絕了全部 {{count}} 個候選。{{reasons}}",
+  "status.autoSearchNoCandidates":
+    "未找到 {{name}} 的發佈：沒有索引器返回候選。請檢查索引器路由分類和索引器狀態。",
+  "status.autoSearchAllRejected":
+    "未找到 {{name}} 的發佈：自動搜尋拒絕了全部 {{count}} 個候選。{{reasons}}",
   "status.queueFailed": "隊列操作失敗。",
   "status.apiError": "請求失敗",
   "status.permissionDenied": "您沒有執行此操作的權限。",
@@ -2600,7 +3057,8 @@ const zh_HK: LocaleDictionary = {
   "profile.passwordMismatch": "密碼不一致",
   "profile.passwordUpdated": "密碼修改成功。",
   "profile.passkeys": "通行密鑰",
-  "profile.passkeysDescription": "新增或移除通行密鑰，以便在您的裝置上更快速地登入。",
+  "profile.passkeysDescription":
+    "新增或移除通行密鑰，以便在您的裝置上更快速地登入。",
   "profile.passkeysEmpty": "尚未新增任何通行密鑰。",
   "profile.passkeyAdd": "新增通行密鑰",
   "profile.passkeyAdding": "正在新增通行密鑰…",
@@ -2611,11 +3069,13 @@ const zh_HK: LocaleDictionary = {
   "profile.passkeyAdded": "已新增通行密鑰。",
   "profile.passkeyDeleted": "已刪除通行密鑰。",
   "profile.passkeyDeleteConfirmTitle": "刪除通行密鑰？",
-  "profile.passkeyDeleteConfirmDescription": "此通行密鑰將無法再用於登入您的帳號。",
+  "profile.passkeyDeleteConfirmDescription":
+    "此通行密鑰將無法再用於登入您的帳號。",
   "profile.passkeyDeleteFailed": "刪除通行密鑰失敗。",
   "profile.passkeyOperationFailed": "通行密鑰請求失敗。",
   "profile.totp": "驗證器應用程式",
-  "profile.totpDescription": "使用 1Password 或其他驗證器的單次動態驗證碼進行二步驟驗證。",
+  "profile.totpDescription":
+    "使用 1Password 或其他驗證器的單次動態驗證碼進行二步驟驗證。",
   "profile.totpStartEnrollment": "設定驗證器",
   "profile.totpOpenSetupLink": "開啟設定連結",
   "profile.totpSecret": "設定金鑰",
@@ -2633,7 +3093,8 @@ const zh_HK: LocaleDictionary = {
   "profile.totpRecoveryCodesRegenerated": "已重新產生復原碼。",
   "profile.totpOperationFailed": "驗證器請求失敗。",
   "profile.linkedAccounts": "關聯帳號",
-  "profile.linkedAccountsDescription": "管理與此 Scryer 帳號連結的 Jellyfin 身分。",
+  "profile.linkedAccountsDescription":
+    "管理與此 Scryer 帳號連結的 Jellyfin 身分。",
   "profile.linkedAccountsEmpty": "尚未連結任何外部帳號。",
   "profile.linkedAccountsLoadFailed": "無法載入已關聯的帳號。",
   "profile.linkAccountLoadFailed": "無法載入關聯選項。",
@@ -2645,7 +3106,8 @@ const zh_HK: LocaleDictionary = {
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "用戶名稱",
   "profile.linkAccountPassword": "密碼",
-  "profile.linkAccountPasswordlessHint": "若此 Jellyfin 帳號沒有密碼請留空。無密碼帳號可以關聯，但無法用於登入 Scryer。",
+  "profile.linkAccountPasswordlessHint":
+    "若此 Jellyfin 帳號沒有密碼請留空。無密碼帳號可以關聯，但無法用於登入 Scryer。",
   "profile.linkAccountSubmit": "連結帳號",
   "profile.linkAccountCancel": "取消",
   "profile.linkAccountNoConnections": "無合適的連線可用。",
@@ -2674,12 +3136,14 @@ const zh_HK: LocaleDictionary = {
   "auth.passkeyCancelled": "通行密鑰請求已取消。",
   "auth.totpCodeRequired": "輸入您的 Scryer 單次動態代碼以完成登入。",
   "auth.mfaSetupTitle": "設定 Scryer 多要素驗證",
-  "auth.mfaSetupDescription": "登入成功。立即設定 Scryer 動態驗證碼，以便未來登入時進行安全驗證。",
+  "auth.mfaSetupDescription":
+    "登入成功。立即設定 Scryer 動態驗證碼，以便未來登入時進行安全驗證。",
   "auth.mfaSetupStartFailed": "無法開始設定 MFA。",
   "auth.mfaSetupCompleteFailed": "無法完成設定 MFA。",
   "auth.mfaSetupCancel": "返回登入頁",
   "auth.mfaSetupRestart": "重新開始設定 MFA",
-  "auth.mfaRecoveryCodesDescription": "請將這些復原碼妥善存放在安全處。若無法存取驗證器，每組復原碼可使用一次。",
+  "auth.mfaRecoveryCodesDescription":
+    "請將這些復原碼妥善存放在安全處。若無法存取驗證器，每組復原碼可使用一次。",
   "auth.continue": "繼續",
   "auth.logoutButton": "退出登入",
   "nav.wanted": "待尋",
@@ -2710,7 +3174,8 @@ const zh_HK: LocaleDictionary = {
   "requests.status.approved": "已核准",
   "requests.status.canceled": "已取消",
   "status.requestApproved": "已核准 {{name}}。",
-  "status.requestApprovedSearchFailed": "已核准 {{name}}，但未能將搜尋加入隊列：{{error}}",
+  "status.requestApprovedSearchFailed":
+    "已核准 {{name}}，但未能將搜尋加入隊列：{{error}}",
   "status.requestDismissed": "已關閉 {{name}} 的請求。",
   "status.requestUpdated": "已更新 {{name}} 的請求。",
   "status.requestCanceled": "已取消 {{name}} 的請求。",
@@ -2727,19 +3192,25 @@ const zh_HK: LocaleDictionary = {
   "wanted.colIndexers": "索引器",
   "wanted.convergence.searching": "搜尋中 {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS 監控中",
-  "wanted.convergence.convergedHint": "已搜尋全部索引器 — 新資源將通過 RSS 到達。如需重新檢查請運行搜尋。",
+  "wanted.convergence.convergedHint":
+    "已搜尋全部索引器 — 新資源將通過 RSS 到達。如需重新檢查請運行搜尋。",
   "wanted.convergence.deferred": "等待索引器配額",
-  "wanted.convergence.deferredHint": "其餘索引器均在冷卻或配額耗盡；搜尋將自動恢復。",
+  "wanted.convergence.deferredHint":
+    "其餘索引器均在冷卻或配額耗盡；搜尋將自動恢復。",
   "wanted.convergence.queuedHot": "排隊中 · 近期",
   "wanted.convergence.queuedCold": "排隊中 · 長尾",
   "wanted.searchJobStarted": "搜尋已開始。",
-  "wanted.searchJobProgress": "已完成 {{processed}}/{{total}} 個搜尋步驟。{{title}}",
+  "wanted.searchJobProgress":
+    "已完成 {{processed}}/{{total}} 個搜尋步驟。{{title}}",
   "wanted.searchNoEligibleWork": "沒有需要下載或升級的已監控項目。",
   "wanted.searchNoAcceptableReleases": "搜尋完成；未找到可接受的發行版本。",
-  "wanted.searchSnapshotMissing": "搜尋回應不完整。請在再次嘗試前檢查活動記錄。",
+  "wanted.searchSnapshotMissing":
+    "搜尋回應不完整。請在再次嘗試前檢查活動記錄。",
   "wanted.searchInvalidSeason": "無法識別此季度。請重新整理該作品並重試。",
-  "wanted.searchJobComplete": "搜尋完成：已搜尋 {{processed}} 項，抓取 {{grabbed}} 項，失敗 {{failed}} 項。",
-  "wanted.searchJobCancelled": "已在處理 {{processed}} 項後取消搜尋；已抓取 {{grabbed}} 項。",
+  "wanted.searchJobComplete":
+    "搜尋完成：已搜尋 {{processed}} 項，抓取 {{grabbed}} 項，失敗 {{failed}} 項。",
+  "wanted.searchJobCancelled":
+    "已在處理 {{processed}} 項後取消搜尋；已抓取 {{grabbed}} 項。",
   "wanted.colPhase": "階段",
   "wanted.colLatestDecision": "最新決策",
   "wanted.colScore": "分數",
@@ -2773,8 +3244,10 @@ const zh_HK: LocaleDictionary = {
   "wanted.loadingDecisions": "正在載入版本決定…",
   "wanted.noDecisions": "尚無版本決定記錄。",
   "wanted.standby": "候選 · {{count}}",
-  "wanted.standbyTooltip": "若當前抓取失敗，將嘗試 {{count}} 個儲存的候選版本。",
-  "wanted.standbyScopeNote": "計算鎖定在此範圍的資料列；季度合集計算在該季度的錨點單集上。",
+  "wanted.standbyTooltip":
+    "若當前抓取失敗，將嘗試 {{count}} 個儲存的候選版本。",
+  "wanted.standbyScopeNote":
+    "計算鎖定在此範圍的資料列；季度合集計算在該季度的錨點單集上。",
   "wanted.loadingStandby": "正在載入儲存的候選版本…",
   "wanted.standbyCandidates": "候選版本 · {{count}}",
   "wanted.standbyRank": "排名 {{rank}}",
@@ -2826,9 +3299,12 @@ const zh_HK: LocaleDictionary = {
   "settings.notificationSubscriptionCreateNew": "建立新訂閱",
   "settings.notificationSubscriptionUpdate": "更新訂閲",
   "settings.notificationChannelConfirmDiscardTitle": "放棄目前的頻道編輯？",
-  "settings.notificationChannelConfirmDiscardDescription": "您目前的通知頻道編輯內容將會遺失。",
-  "settings.notificationSubscriptionConfirmDiscardTitle": "放棄目前的訂閱編輯？",
-  "settings.notificationSubscriptionConfirmDiscardDescription": "您目前的通知訂閱編輯內容將會遺失。",
+  "settings.notificationChannelConfirmDiscardDescription":
+    "您目前的通知頻道編輯內容將會遺失。",
+  "settings.notificationSubscriptionConfirmDiscardTitle":
+    "放棄目前的訂閱編輯？",
+  "settings.notificationSubscriptionConfirmDiscardDescription":
+    "您目前的通知訂閱編輯內容將會遺失。",
   "settings.notificationNoChannels": "未配置通知渠道。",
   "settings.notificationNoSubscriptions": "未配置通知訂閲。",
   "settings.notificationEventType": "事件類型",
@@ -2843,8 +3319,10 @@ const zh_HK: LocaleDictionary = {
   "settings.notificationTestSuccess": "測試通知發送成功。",
   "settings.notificationTestFailed": "測試通知發送失敗。",
   "settings.notificationProviderType": "提供者類型",
-  "settings.notificationNoProviders": "未安裝通知插件。請先在插件頁面安裝通知插件。",
-  "settings.notificationJellyfinSubscriptionHint": "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
+  "settings.notificationNoProviders":
+    "未安裝通知插件。請先在插件頁面安裝通知插件。",
+  "settings.notificationJellyfinSubscriptionHint":
+    "Import Complete is the usual post-import Jellyfin scan trigger. Only Jellyfin events that can refresh the library are available here.",
   "settings.notificationEvent.grab": "已抓取發佈",
   "settings.notificationEvent.download": "下載失敗",
   "settings.notificationEvent.upgrade": "升級進口",
@@ -2900,7 +3378,8 @@ const zh_HK: LocaleDictionary = {
   "setup.welcomeTitle": "歡迎使用 Scryer",
   "setup.welcomeDescription": "讓我們配置基本設定以開始使用。",
   "setup.freshSetup": "從頭開始設定",
-  "setup.freshSetupDescription": "配置媒體路徑，安裝 qBittorrent 等提供者，逐步添加客戶端和索引器。",
+  "setup.freshSetupDescription":
+    "配置媒體路徑，安裝 qBittorrent 等提供者，逐步添加客戶端和索引器。",
   "setup.importSetup": "從 Sonarr / Radarr 導入",
   "setup.importSetupDescription": "將現有配置導入 Scryer。",
   "setup.restoreSetup": "從備份還原",
@@ -2914,23 +3393,26 @@ const zh_HK: LocaleDictionary = {
   "setup.stepConnect": "連接",
   "setup.stepRestore": "還原",
   "setup.restoreTitle": "從備份套件還原",
-  "setup.restoreDescription": "上傳 Scryer 備份套件，檢查其清單，並還原至此全新實例。",
+  "setup.restoreDescription":
+    "上傳 Scryer 備份套件，檢查其清單，並還原至此全新實例。",
   "setup.restoreSelectBundle": "備份套件",
   "setup.restoreDropTargetTitle": "將備份套件拖放至此處",
-  "setup.restoreDropTargetDescription": "從您的裝置選取備份檔案，或拖放至此處以在還原前進行檢查。",
+  "setup.restoreDropTargetDescription":
+    "從您的裝置選取備份檔案，或拖放至此處以在還原前進行檢查。",
   "setup.restoreDropTargetSelected": "已選取套件，準備檢查。",
-  "setup.restoreDropTargetEncryptedSelected": "已選取加密套件。請輸入建立備份時使用的密碼以繼續。",
-  "setup.restoreDropTargetFormats": "支援的格式：.tar.zst 與 .enc",
+  "setup.restoreDropTargetEncryptedSelected":
+    "已選取加密套件。請輸入建立備份時使用的密碼以繼續。",
+  "setup.restoreDropTargetFormats": "僅支援加密的 .enc 備份。",
   "setup.restoreSelectFile": "選取檔案",
   "setup.restoreClearFile": "清除選取",
-  "setup.restorePasswordHelp": "輸入建立此加密備份時所使用的密碼。",
   "setup.restoreNoFile": "請選取備份套件以繼續。",
   "setup.restorePasswordRequired": "請先輸入套件密碼再繼續。",
   "setup.restoreInspect": "檢查套件",
   "setup.restoreApply": "立即還原",
   "setup.restoreChooseAnother": "選取其他套件",
   "setup.restoreSummaryTitle": "套件內容",
-  "setup.restoreConfirmDescription": "這將會取代全新安裝的資料庫、寫入已還原的實例密鑰，並將 Scryer 重新啟動至已還原的實例。",
+  "setup.restoreConfirmDescription":
+    "這將會取代全新安裝的資料庫、寫入已還原的實例密鑰，並將 Scryer 重新啟動至已還原的實例。",
   "setup.restoreCreatedAt": "建立時間",
   "setup.restoreSourceVersion": "來源版本",
   "setup.restoreSourceEngine": "來源引擎",
@@ -2943,34 +3425,48 @@ const zh_HK: LocaleDictionary = {
   "setup.facetAnime": "動漫",
   "setup.qualityTarget": "質素",
   "setup.scoringFocus": "人格",
-  "setup.personaBalancedDesc": "適合大多數配置的合理預設值。良好質素而不追求 Remux。",
-  "setup.personaAudiophileDesc": "最高保真度。優先 BluRay、Remux、無損音訊、HDR 和大檔案。",
+  "setup.personaBalancedDesc":
+    "適合大多數配置的合理預設值。良好質素而不追求 Remux。",
+  "setup.personaAudiophileDesc":
+    "最高保真度。優先 BluRay、Remux、無損音訊、HDR 和大檔案。",
   "setup.personaEfficientDesc": "每 GB 最佳質素。偏好 x265、WEB-DL、緊湊編碼。",
-  "setup.personaCompatibleDesc": "在所有設備上播放。H.264 優於 H.265，避免 Dolby Vision，廣泛設備支援。",
+  "setup.personaCompatibleDesc":
+    "在所有設備上播放。H.264 優於 H.265，避免 Dolby Vision，廣泛設備支援。",
   "setup.pluginsTitle": "安裝您要使用的提供者",
-  "setup.pluginsDescription": "某些服務（如 qBittorrent）需要先作為插件添加，然後才能在 Scryer 中配置。",
+  "setup.pluginsDescription":
+    "某些服務（如 qBittorrent）需要先作為插件添加，然後才能在 Scryer 中配置。",
   "setup.pluginsBuiltInTitle": "已內置",
   "setup.pluginsBuiltInDescription": "NZBGet 和 SABnzbd 無需額外安裝即可配置。",
   "setup.pluginsAvailableHeading": "官方插件",
-  "setup.pluginsAvailableHint": "安裝您計劃在此主機上使用的官方插件。稍後可在設定中更改。",
-  "setup.pluginsNoneFound": "未找到插件。請重新整理註冊表或使用內置提供者繼續。",
+  "setup.pluginsAvailableHint":
+    "安裝您計劃在此主機上使用的官方插件。稍後可在設定中更改。",
+  "setup.pluginsNoneFound":
+    "未找到插件。請重新整理註冊表或使用內置提供者繼續。",
   "setup.recommendedHeading": "推薦",
-  "setup.recommendedHint": "多數環境所需的推薦插件。請安裝符合您使用 Scryer 方式的項目。",
+  "setup.recommendedHint":
+    "多數環境所需的推薦插件。請安裝符合您使用 Scryer 方式的項目。",
   "setup.recommendedArchiveTitle": "歸檔解壓",
-  "setup.recommendedArchiveReason": "若您使用 Torrent 或下載字幕，請安裝此項目。這兩者通常封裝在 RAR 或 ZIP 壓縮檔中。",
+  "setup.recommendedArchiveReason":
+    "若您使用 Torrent 或下載字幕，請安裝此項目。這兩者通常封裝在 RAR 或 ZIP 壓縮檔中。",
   "setup.recommendedQbittorrentTitle": "qBittorrent",
   "setup.recommendedSubtitlesTitle": "字幕",
-  "setup.recommendedSubtitlesReason": "若 Scryer 管理您的字幕，請安裝此插件。增強同步可讓字幕與影片對齊，OpenSubtitles 涵蓋電影與電視劇，Jimaku 與 AnimeTosho 則涵蓋動漫。",
+  "setup.recommendedSubtitlesReason":
+    "若 Scryer 管理您的字幕，請安裝此插件。增強同步可讓字幕與影片對齊，OpenSubtitles 涵蓋電影與電視劇，Jimaku 與 AnimeTosho 則涵蓋動漫。",
   "setup.recommendedAdvancedIndexersTitle": "進階索引器",
-  "setup.recommendedAdvancedIndexersReason": "若您使用 Prowlarr 較複雜的索引器（建置於 Cardigann 引擎上的索引器），請安裝此項目。",
+  "setup.recommendedAdvancedIndexersReason":
+    "若您使用 Prowlarr 較複雜的索引器（建置於 Cardigann 引擎上的索引器），請安裝此項目。",
   "setup.recommendedMediaServerTitle": "媒體伺服器",
-  "setup.recommendedMediaServerReason": "當 Scryer 匯入內容時重新整理您的媒體伺服器。請選取您使用的伺服器。",
+  "setup.recommendedMediaServerReason":
+    "當 Scryer 匯入內容時重新整理您的媒體伺服器。請選取您使用的伺服器。",
   "setup.rulePacksHeading": "規則包",
-  "setup.rulePacksHint": "社群評分規則可協助 Scryer 選取最佳發行版本。您稍後可在「設定 → 規則」中調整。",
+  "setup.rulePacksHint":
+    "社群評分規則可協助 Scryer 選取最佳發行版本。您稍後可在「設定 → 規則」中調整。",
   "setup.rulePackTrashTitle": "TRaSH 指南",
-  "setup.rulePackTrashReason": "依據 TRaSH 指南針對發行小組、音訊、HDR、大小及不想要的版本之推薦進行發行版本評分。",
+  "setup.rulePackTrashReason":
+    "依據 TRaSH 指南針對發行小組、音訊、HDR、大小及不想要的版本之推薦進行發行版本評分。",
   "setup.rulePackSeadexTitle": "SeaDex",
-  "setup.rulePackSeadexReason": "若您收集動漫，請開啟此項。優先選取 SeaDex 列為最佳的發行版本。",
+  "setup.rulePackSeadexReason":
+    "若您收集動漫，請開啟此項。優先選取 SeaDex 列為最佳的發行版本。",
   "setup.rulePackUnavailable": "目前無法使用。請重新整理註冊表以重試。",
   "setup.otherPluginsHeading": "更多插件",
   "setup.mediaPathsTitle": "您的媒體存儲在哪裏？",
@@ -2982,12 +3478,16 @@ const zh_HK: LocaleDictionary = {
   "setup.browse": "瀏覽",
   "setup.addMediaFolder": "新增資料夾",
   "setup.removeMediaFolder": "移除資料夾",
-  "setup.mediaPathsNoneChosen": "未選取任何資料夾，因此此媒體庫保留其既有資料夾。",
+  "setup.mediaPathsNoneChosen":
+    "未選取任何資料夾，因此此媒體庫保留其既有資料夾。",
   "setup.mediaPathNotReachable": "尚不可訪問",
-  "setup.mediaPathsNotReachableWarning": "部分媒體路徑尚不可訪問。路徑已儲存，稍後可在設定中更改。",
-  "setup.mediaPathsVerificationUnavailable": "無法驗證這些路徑。您可以繼續，稍後在設定中更改。",
+  "setup.mediaPathsNotReachableWarning":
+    "部分媒體路徑尚不可訪問。路徑已儲存，稍後可在設定中更改。",
+  "setup.mediaPathsVerificationUnavailable":
+    "無法驗證這些路徑。您可以繼續，稍後在設定中更改。",
   "setup.downloadClientTitle": "添加下載客戶端",
-  "setup.downloadClientDescription": "Scryer 將下載發送到您首選的客戶端。上一步安裝的插件將顯示在此處。",
+  "setup.downloadClientDescription":
+    "Scryer 將下載發送到您首選的客戶端。上一步安裝的插件將顯示在此處。",
   "setup.indexerTitle": "添加索引器",
   "setup.indexerDescription": "索引器提供 Scryer 搜尋的版本數據庫。",
   "setup.summaryTitle": "一切就緒",
@@ -3017,7 +3517,8 @@ const zh_HK: LocaleDictionary = {
   "setup.summaryImportedClients": "已導入下載客戶端",
   "setup.summaryImportedIndexers": "已導入索引器",
   "setup.monitorWarmupTitle": "正在準備監控狀態匯入",
-  "setup.monitorWarmupDescription": "Scryer 正在背景提取監控狀態，讓最終匯入步驟更快速。",
+  "setup.monitorWarmupDescription":
+    "Scryer 正在背景提取監控狀態，讓最終匯入步驟更快速。",
   "setup.monitorWarmupQueued": "正在等待進度詳細資訊…",
   "setup.monitorWarmupLoadingIndexers": "正在探索索引器",
   "setup.monitorWarmupLoadingMovies": "正在載入電影",
@@ -3025,21 +3526,27 @@ const zh_HK: LocaleDictionary = {
   "setup.monitorWarmupLoadingEpisodes": "正在載入分集",
   "setup.monitorWarmupBuildingSnapshot": "正在建立快照",
   "setup.monitorWarmupReady": "就緒",
-  "setup.monitorWarmupFailed": "背景準備遇到錯誤。當您開始匯入時，Scryer 將會重試。",
-  "setup.monitorWarmupCanceled": "已取消背景準備。如有需要，Scryer 將會重新啟動。",
+  "setup.monitorWarmupFailed":
+    "背景準備遇到錯誤。當您開始匯入時，Scryer 將會重試。",
+  "setup.monitorWarmupCanceled":
+    "已取消背景準備。如有需要，Scryer 將會重新啟動。",
   "setup.importFinalizeFailed": "Scryer 無法完成準備此匯入的監控狀態。",
-  "setup.apiKeyMasked": "Sonarr/Radarr 隱藏了此 API 密鑰。請手動輸入以繼續導入：",
+  "setup.apiKeyMasked":
+    "Sonarr/Radarr 隱藏了此 API 密鑰。請手動輸入以繼續導入：",
   "setup.stepLibraries": "媒體庫",
   "setup.stepQuality": "質素",
   "setup.stepSources": "來源",
   "setup.continue": "繼續",
   "setup.finishImport": "完成匯入",
   "setup.connectMultiTitle": "連線至 Sonarr、Radarr 與 Prowlarr",
-  "setup.connectMultiDescription": "為 Scryer 應從中提取資料的每個實例新增 URL 與 API 金鑰。可連線多個實例 — 至少需要一個。",
+  "setup.connectMultiDescription":
+    "為 Scryer 應從中提取資料的每個實例新增 URL 與 API 金鑰。可連線多個實例 — 至少需要一個。",
   "setup.librariesTitle": "媒體庫與對應",
-  "setup.librariesDescription": "為每種分類內容的方式建立媒體庫，然後將每個來源根目錄對應至其中。",
+  "setup.librariesDescription":
+    "為每種分類內容的方式建立媒體庫，然後將每個來源根目錄對應至其中。",
   "setup.qualityPersonaTitle": "質素與設定檔人物誌",
-  "setup.qualityPersonaDescription": "為您對應的每個媒體庫選取質素設定檔與調整人物誌。",
+  "setup.qualityPersonaDescription":
+    "為您對應的每個媒體庫選取質素設定檔與調整人物誌。",
   "setup.sourcesTitle": "客戶端與索引器",
   "setup.sourcesDescription": "選取要移轉過來的下載客戶端與索引器。",
   "setup.importReadyTitle": "準備匯入",
@@ -3052,7 +3559,8 @@ const zh_HK: LocaleDictionary = {
   "setup.couldntConnect": "無法連線",
   "setup.enterUrlAndKey": "輸入 URL 與 API 金鑰以驗證",
   "setup.apiKeyHelpHint": "設定 → 一般",
-  "setup.secretDraftOtherUserWarning": "另一位用戶已儲存匯入草稿。在此輸入您自己的金鑰將會取代他們已儲存的憑證。",
+  "setup.secretDraftOtherUserWarning":
+    "另一位用戶已儲存匯入草稿。在此輸入您自己的金鑰將會取代他們已儲存的憑證。",
   "setup.sourceRoots": "來源根目錄",
   "setup.addSourceRoot": "新增來源根目錄",
   "setup.chooseFolder": "選擇資料夾…",
@@ -3082,15 +3590,19 @@ const zh_HK: LocaleDictionary = {
   "setup.moveToUnassigned": "移至未指派",
   "setup.noPathSet": "(未設定路徑)",
   "setup.remapTitle": "重新對應路徑",
-  "setup.remapExplain": "Scryer 會保留 {{instance}} 回報的路徑作為來源記錄，以便正確重新套用監控狀態。若這些檔案位於 Scryer 主機上的不同路徑，請在下方設定。",
+  "setup.remapExplain":
+    "Scryer 會保留 {{instance}} 回報的路徑作為來源記錄，以便正確重新套用監控狀態。若這些檔案位於 Scryer 主機上的不同路徑，請在下方設定。",
   "setup.remapAsReported": "依來源所回報",
   "setup.remapScryerHostPath": "Scryer 主機上的路徑",
   "setup.remapResetToSource": "重設為來源",
   "setup.remapSave": "儲存重新對應",
-  "setup.mappedPathValidationChecking": "正在檢查 Scryer 是否可存取每個已對應的來源路徑…",
+  "setup.mappedPathValidationChecking":
+    "正在檢查 Scryer 是否可存取每個已對應的來源路徑…",
   "setup.invalidMappedPathTitle": "Scryer 無法存取此已對應的來源路徑",
-  "setup.invalidMappedPathsTitle": "Scryer 無法存取 {{count}} 個已對應的來源路徑",
-  "setup.invalidMappedPathsHelp": "這些根目錄已指派，但其路徑對 Scryer 不可見。在繼續之前，請將每個根目錄重新對應至 Scryer 主機上的相應資料夾。",
+  "setup.invalidMappedPathsTitle":
+    "Scryer 無法存取 {{count}} 個已對應的來源路徑",
+  "setup.invalidMappedPathsHelp":
+    "這些根目錄已指派，但其路徑對 Scryer 不可見。在繼續之前，請將每個根目錄重新對應至 Scryer 主機上的相應資料夾。",
   "setup.remapInvalidRootAria": "重新對應來自 {{path}} 的 {{name}}",
   "setup.library": "媒體庫",
   "setup.qualityProfile": "質素設定檔",
@@ -3117,7 +3629,8 @@ const zh_HK: LocaleDictionary = {
   "setup.summaryLibraries": "媒體庫",
   "setup.summaryLibrariesDetail": "涵蓋電影、電視劇與動漫",
   "setup.summaryInstancesConnected": "已連線的實例",
-  "setup.summaryInstancesConnectedDetail": "{{sonarr}} 個 Sonarr · {{radarr}} 個 Radarr",
+  "setup.summaryInstancesConnectedDetail":
+    "{{sonarr}} 個 Sonarr · {{radarr}} 個 Radarr",
   "setup.summaryRootsMapped": "已對應來源根目錄",
   "setup.summaryRootsMappedDetail": "已導向至 Scryer 媒體庫",
   "setup.summaryPathsRemapped": "已重新對應路徑",
@@ -3125,25 +3638,30 @@ const zh_HK: LocaleDictionary = {
   "setup.summaryClientsMerged": "跨實例已合併",
   "setup.summaryIndexersEnabled": "已支援並已啟用",
   "setup.fetchingMonitoredStatus": "正在提取監控狀態…",
-  "setup.fetchingMonitoredStatusDetail": "正在背景從您的實例提取各作品的監控狀態。",
+  "setup.fetchingMonitoredStatusDetail":
+    "正在背景從您的實例提取各作品的監控狀態。",
   "setup.monitoredStatusSynced": "已同步監控狀態",
   "setup.monitoredStatusSyncedDetail": "已從您的實例提取各作品的監控狀態。",
   "setup.importGateHint": "在監控狀態同步完成之前無法結束匯入。",
   "setup.importGateDoneHint": "已完成 — 您現在可以完成匯入。",
   "setup.titlesFetched": "{{fetched}} / {{total}} 部作品",
   "setup.importWarmupFailedTitle": "監控狀態同步失敗",
-  "setup.importWarmupFailedDetail": "Scryer 無法完成從您的實例提取監控狀態。請檢查連線並重試。",
+  "setup.importWarmupFailedDetail":
+    "Scryer 無法完成從您的實例提取監控狀態。請檢查連線並重試。",
   "setup.importWarmupRetrying": "正在重新啟動同步…",
   "setup.importWarmupSessionExpiredTitle": "匯入準備已逾時",
-  "setup.importWarmupSessionExpired": "您的匯入準備已無法使用 — Scryer 可能已重新啟動，或閒置時間過長。請重新連線至您的實例以開始新的匯入。",
+  "setup.importWarmupSessionExpired":
+    "您的匯入準備已無法使用 — Scryer 可能已重新啟動，或閒置時間過長。請重新連線至您的實例以開始新的匯入。",
   "setup.importReconnect": "重新連線",
   "setup.applyingImport": "正在套用匯入…",
-  "setup.applyingImportDetail": "正在將匯入的監控狀態寫入您的媒體庫中。若您離開此頁面，此作業仍會在背景繼續執行。",
+  "setup.applyingImportDetail":
+    "正在將匯入的監控狀態寫入您的媒體庫中。若您離開此頁面，此作業仍會在背景繼續執行。",
   "setup.importApplied": "已套用匯入",
   "setup.importAppliedDetail": "所有已匯入作品的監控狀態已寫入您的媒體庫中。",
   "setup.importFinalizeFailedTitle": "完成匯入失敗",
   "setup.titlesApplied": "{{applied}} / {{total}} 部作品",
-  "setup.importUnmappedRootsNotice": "部分偵測到的來源資料夾仍需要媒體庫。請返回「媒體庫」步驟以在完成前對應它們。",
+  "setup.importUnmappedRootsNotice":
+    "部分偵測到的來源資料夾仍需要媒體庫。請返回「媒體庫」步驟以在完成前對應它們。",
   "settings.runSetupWizard": "運行設定嚮導",
   "history.title": "歷史記錄",
   "history.empty": "暫無歷史事件",
@@ -3177,6 +3695,7 @@ const zh_HK: LocaleDictionary = {
   "history.seedingStarted": "做種中",
   "history.seedingCompleted": "做種完成",
   "history.downloadIgnored": "已忽略",
+  "history.downloadMissing": "用戶端中不可見",
   "history.facet": "分類",
   "history.actions": "操作",
   "history.expandDetails": "展開事件詳情",
@@ -3200,7 +3719,8 @@ const zh_HK: LocaleDictionary = {
   "indexerErrors.detailLoadError": "無法載入擷取的回應。",
   "indexerErrors.detailMissing": "此擷取的回應已不再提供。",
   "indexerErrors.empty": "過去 30 天內未記錄任何索引器錯誤。",
-  "indexerErrors.retentionNotice": "索引器錯誤保留 30 天。HTTP 回應包含擷取的標頭與內文；傳輸失敗僅保留診斷資訊。",
+  "indexerErrors.retentionNotice":
+    "索引器錯誤保留 30 天。HTTP 回應包含擷取的標頭與內文；傳輸失敗僅保留診斷資訊。",
   "indexerErrors.occurred": "發生時間",
   "indexerErrors.indexer": "索引器",
   "indexerErrors.operation": "操作",
@@ -3212,7 +3732,8 @@ const zh_HK: LocaleDictionary = {
   "indexerErrors.expand": "展開擷取的回應",
   "indexerErrors.collapse": "收合擷取的回應",
   "indexerErrors.response": "擷取的 HTTP 回應",
-  "indexerErrors.noHttpResponse": "未收到 HTTP 回應；此傳輸失敗僅有診斷詳細資料。",
+  "indexerErrors.noHttpResponse":
+    "未收到 HTTP 回應；此傳輸失敗僅有診斷詳細資料。",
   "indexerErrors.headers": "回應標頭",
   "indexerErrors.noHeaders": "未擷取到回應標頭。",
   "indexerErrors.body": "回應內文",
@@ -3220,51 +3741,50 @@ const zh_HK: LocaleDictionary = {
   "indexerErrors.raw": "原始內容",
   "indexerErrors.redacted": "[儲存前已隱藏]",
   "indexerErrors.base64Value": "Base64",
-  "indexerErrors.previewTruncated": "預覽限制為 {{size}} 的前 1 MiB。下載完整內文以檢查所有擷取的位元組。",
+  "indexerErrors.previewTruncated":
+    "預覽限制為 {{size}} 的前 1 MiB。下載完整內文以檢查所有擷取的位元組。",
   "indexerErrors.emptyBody": "回應內文為空。",
-  "indexerErrors.binaryBody": "此 {{size}} 的回應不是有效的 UTF-8。下載以檢查擷取的位元組。",
+  "indexerErrors.binaryBody":
+    "此 {{size}} 的回應不是有效的 UTF-8。下載以檢查擷取的位元組。",
   "indexerErrors.downloadFullBody": "下載完整內文",
   "settings.autoBackupsTitle": "自動備份",
-  "settings.autoBackupsDescription": "選擇在伺服器本地時間每天進行一次系統備份。自動備份會在 30 分鐘後逾時，且 Scryer 會保留最近 5 次成功的自動備份。",
   "settings.autoBackupsDisabledMissingKeyToastTitle": "自動備份已停用",
-  "settings.autoBackupsDisabledMissingKeyToastDescription": "自動備份現在需要已儲存的備份金鑰。請開啟「備份」以設定金鑰並重新啟用。",
+  "settings.autoBackupsDisabledMissingKeyToastDescription":
+    "自動備份現在需要已儲存的備份金鑰。請開啟「備份」以設定金鑰並重新啟用。",
   "settings.autoBackupsDisabledMissingKeyToastAction": "開啟備份",
   "settings.autoBackupsTime": "每日備份時間",
   "settings.autoBackupsHour": "時",
   "settings.autoBackupsMinute": "分",
-  "settings.autoBackupsTimeHelp": "使用伺服器的本地時區。",
   "settings.autoBackupsNextRun": "下次自動備份",
-  "settings.autoBackupsNextRunHelp": "儲存您的變更以更新排程器。已停用的自動備份不會執行。",
   "settings.autoBackupsKeyLabel": "自動備份金鑰",
   "settings.autoBackupsKeyHelpLabel": "關於自動備份金鑰",
   "settings.autoBackupsSetKey": "設定自動備份金鑰",
   "settings.autoBackupsKeyAlreadySetHint": "（備份金鑰已設定）",
-  "settings.autoBackupsClearKey": "清除已儲存的自動備份金鑰",
-  "settings.autoBackupsClearKeyHelp": "在您儲存後移除儲存的金鑰。在清除金鑰前請先停用自動備份。",
-  "settings.autoBackupsKeyHelp": "將欄位留空以保留現有已儲存的金鑰。輸入至少 {{count}} 個非空白字元的新值以進行替換。",
-  "settings.autoBackupsKeyRequired": "自動備份需要至少 {{count}} 個非空白字元的已儲存備份金鑰。",
-  "settings.autoBackupsKeyTooShort": "自動備份金鑰必須至少包含 {{count}} 個非空白字元。",
+  "settings.autoBackupsKeyHelp":
+    "將欄位留空以保留現有已儲存的金鑰。輸入至少 {{count}} 個非空白字元的新值以進行替換。",
+  "settings.autoBackupsKeyRequired":
+    "自動備份需要至少 {{count}} 個非空白字元的已儲存備份金鑰。",
+  "settings.autoBackupsKeyTooShort":
+    "自動備份金鑰必須至少包含 {{count}} 個非空白字元。",
   "settings.autoBackupsShowKey": "顯示自動備份金鑰",
   "settings.autoBackupsHideKey": "隱藏自動備份金鑰",
   "settings.autoBackupsSaved": "已儲存自動備份設定。",
   "settings.backupLocationTitle": "備份存放位置",
-  "settings.backupLocationDescription": "選擇 Scryer 在伺服器上儲存備份套件的位置。",
   "settings.backupLocationCustomPath": "自訂備份路徑",
   "settings.backupLocationBrowse": "瀏覽",
   "settings.backupLocationEffectivePath": "使用中路徑",
-  "settings.backupLocationHelp": "請使用伺服器或容器路徑。變更此路徑會切換使用中的備份資料夾；既有的備份不會被移動，並會隱藏直到您切換回來。",
   "settings.backupLocationReset": "使用預設值",
   "settings.backupLocationPickerTitle": "選取備份資料夾",
   "settings.backupLocationSaved": "已儲存備份存放位置。",
-  "settings.backupsSection": "建立可還原的 Scryer 備份套件。手動備份會在背景執行，因此即使自動備份正在進行，您仍可一邊繼續操作一邊等待套件準備完成。",
+  "settings.backupsSection":
+    "建立可還原的 Scryer 備份套件。手動備份會在背景執行，因此即使自動備份正在進行，您仍可一邊繼續操作一邊等待套件準備完成。",
   "settings.backupsEmpty": "尚未建立任何備份。",
   "settings.backupsCreate": "建立備份",
   "settings.backupsCreateTitle": "建立備份套件",
-  "settings.backupsCreateDescription": "使用密碼保護此備份。還原時亦需要相同的密碼。",
-  "settings.backupsRequiredPassword": "必要的密碼保護",
+  "settings.backupsCreateDescription":
+    "使用密碼保護此備份。還原時亦需要相同的密碼。",
   "settings.backupsConfirmPassword": "確認密碼",
   "settings.backupsPasswordMismatch": "密碼不符",
-  "settings.backupsPasswordHelp": "完整備份套件包含實例密鑰，必須進行加密。",
   "settings.backupsQueued": "已在背景開始建立備份。",
   "settings.backupsDeleted": "已刪除備份。",
   "settings.backupsDeletedCount": "已刪除 {{count}} 個備份。",
@@ -3279,26 +3799,32 @@ const zh_HK: LocaleDictionary = {
   "settings.backupsAutomatic": "自動",
   "settings.backupsDownload": "下載",
   "settings.backupsDelete": "刪除",
-  "settings.backupsDeleteConfirm": "確定要從伺服器刪除此備份套件嗎？任何已下載的複本不受影響。",
+  "settings.backupsDeleteConfirm":
+    "確定要從伺服器刪除此備份套件嗎？任何已下載的複本不受影響。",
   "settings.backupsDeleteSelected": "刪除已選取項目",
-  "settings.backupsDeleteSelectedConfirm": "確定要從伺服器刪除 {{count}} 個所選的備份套件嗎？任何已下載的複本不受影響。",
+  "settings.backupsDeleteSelectedConfirm":
+    "確定要從伺服器刪除 {{count}} 個所選的備份套件嗎？任何已下載的複本不受影響。",
   "settings.backupsSelectedCount": "已選取 {{count}} 個",
   "settings.backupsSelect": "選取 {{name}}",
   "settings.backupsSelectAll": "全選備份",
   "settings.unsavedBackupChangesTitle": "未儲存的備份設定",
-  "settings.unsavedBackupChangesConfirm": "您有未儲存的備份設定變更。確定不儲存直接離開？",
+  "settings.unsavedBackupChangesConfirm":
+    "您有未儲存的備份設定變更。確定不儲存直接離開？",
   "settings.recycleBin": "垃圾桶",
   "settings.recycleBinEnabled": "啓用垃圾桶",
-  "settings.recycleBinEnabledHelp": "已刪除和已替換的媒體檔案會先移入垃圾桶，再永久移除。",
+  "settings.recycleBinEnabledHelp":
+    "已刪除和已替換的媒體檔案會先移入垃圾桶，再永久移除。",
   "settings.recycleBinEnabledReadonly": "垃圾桶狀態由可管理配置的用戶控制。",
   "settings.recycleBinSection": "管理回收的媒體檔案",
   "settings.recycleBinLibraryFilter": "媒體庫",
   "settings.recycleBinEmpty": "垃圾桶是空的。",
-  "settings.recycleBinNoManageableLibraries": "沒有可用於管理垃圾桶項目的媒體庫。",
+  "settings.recycleBinNoManageableLibraries":
+    "沒有可用於管理垃圾桶項目的媒體庫。",
   "settings.recycleBinRestore": "恢復",
   "settings.recycleBinDelete": "刪除",
   "settings.recycleBinEmptyAll": "清空垃圾桶",
-  "settings.recycleBinEmptyConfirm": "永久刪除當前垃圾桶視圖中的 {{count}} 個項目？此操作無法撤消。",
+  "settings.recycleBinEmptyConfirm":
+    "永久刪除當前垃圾桶視圖中的 {{count}} 個項目？此操作無法撤消。",
   "settings.recycleBinReason": "原因",
   "settings.recycleBinSize": "大小",
   "settings.recycleBinRecycled": "回收時間",
@@ -3317,23 +3843,34 @@ const zh_HK: LocaleDictionary = {
   "settings.recycleBinFileCountOne": "{{count}} 個文件",
   "settings.recycleBinFileCountOther": "{{count}} 個文件",
   "settings.recycleBinBatchLimit": "一次最多選取 {{count}} 個垃圾桶文件。",
-  "settings.recycleBinRestoreQueuedOne": "已將 {{count}} 個垃圾桶文件排入還原隊列。",
-  "settings.recycleBinRestoreQueuedOther": "已將 {{count}} 個垃圾桶文件排入還原隊列。",
-  "settings.recycleBinDeleteQueuedOne": "已將 {{count}} 個垃圾桶文件排入刪除隊列。",
-  "settings.recycleBinDeleteQueuedOther": "已將 {{count}} 個垃圾桶文件排入刪除隊列。",
+  "settings.recycleBinRestoreQueuedOne":
+    "已將 {{count}} 個垃圾桶文件排入還原隊列。",
+  "settings.recycleBinRestoreQueuedOther":
+    "已將 {{count}} 個垃圾桶文件排入還原隊列。",
+  "settings.recycleBinDeleteQueuedOne":
+    "已將 {{count}} 個垃圾桶文件排入刪除隊列。",
+  "settings.recycleBinDeleteQueuedOther":
+    "已將 {{count}} 個垃圾桶文件排入刪除隊列。",
   "settings.recycleBinRestoreSelectedTitle": "還原垃圾桶文件",
-  "settings.recycleBinRestoreOccupiedOne": "{{count}} 個目標位置已被佔用。請選擇是要保留這兩個文件，還是在還原前將現有文件移至垃圾桶。",
-  "settings.recycleBinRestoreOccupiedOther": "{{count}} 個目標位置已被佔用。請選擇是要保留這兩個文件，還是在還原前將現有文件移至垃圾桶。",
-  "settings.recycleBinRestoreDescriptionOne": "將 {{count}} 個已選取的文件還原至其原始路徑。",
-  "settings.recycleBinRestoreDescriptionOther": "將 {{count}} 個已選取的文件還原至其原始路徑。",
-  "settings.recycleBinDeleteSelectedConfirmOne": "永久刪除 {{count}} 個已選取的垃圾桶文件。此操作無法復原。",
-  "settings.recycleBinDeleteSelectedConfirmOther": "永久刪除 {{count}} 個已選取的垃圾桶文件。此操作無法復原。",
+  "settings.recycleBinRestoreOccupiedOne":
+    "{{count}} 個目標位置已被佔用。請選擇是要保留這兩個文件，還是在還原前將現有文件移至垃圾桶。",
+  "settings.recycleBinRestoreOccupiedOther":
+    "{{count}} 個目標位置已被佔用。請選擇是要保留這兩個文件，還是在還原前將現有文件移至垃圾桶。",
+  "settings.recycleBinRestoreDescriptionOne":
+    "將 {{count}} 個已選取的文件還原至其原始路徑。",
+  "settings.recycleBinRestoreDescriptionOther":
+    "將 {{count}} 個已選取的文件還原至其原始路徑。",
+  "settings.recycleBinDeleteSelectedConfirmOne":
+    "永久刪除 {{count}} 個已選取的垃圾桶文件。此操作無法復原。",
+  "settings.recycleBinDeleteSelectedConfirmOther":
+    "永久刪除 {{count}} 個已選取的垃圾桶文件。此操作無法復原。",
   "settings.recycleBinKeepBothAndRestore": "兩者皆保留並還原",
   "settings.recycleBinReplaceExistingAndRestore": "替換現有文件並還原",
   "settings.recycleBinKeepBoth": "保留兩者",
   "settings.recycleBinKeepBothDescription": "以 -restored 後綴還原衝突的文件。",
   "settings.recycleBinReplaceExisting": "替換現有文件",
-  "settings.recycleBinReplaceExistingDescription": "將各個現有文件移至垃圾桶，然後就地還原選取的文件。",
+  "settings.recycleBinReplaceExistingDescription":
+    "將各個現有文件移至垃圾桶，然後就地還原選取的文件。",
   "status.recycleBinEmptied": "垃圾桶已清空（{{count}} 項目已刪除）。",
   "status.recycleBinSettingsSaved": "垃圾桶設定已儲存。",
   "appUpgrade.title": "應用升級",
@@ -3363,9 +3900,12 @@ const zh_HK: LocaleDictionary = {
   "appUpgrade.eligibility.disabled_by_operator": "運維人員已禁用應用內升級。",
   "appUpgrade.eligibility.unsupported_layout": "不支援此安裝佈局。",
   "appUpgrade.eligibility.install_dir_not_writable": "安裝目錄不可寫。",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS 正在從臨時副本運行 Scryer。請將 Scryer 移動到應用程序資料夾後再打開。",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer 正在從只讀卷運行。請將 Scryer 拖到應用程序資料夾後再打開。",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "此應用不是由 Scryer 應用啓動的，因此升級後無法重新啓動。",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS 正在從臨時副本運行 Scryer。請將 Scryer 移動到應用程序資料夾後再打開。",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer 正在從只讀卷運行。請將 Scryer 拖到應用程序資料夾後再打開。",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "此應用不是由 Scryer 應用啓動的，因此升級後無法重新啓動。",
   "appUpgrade.eligibility.unknown": "無法獲取升級資格。",
   "appUpgrade.rebootRequired": "請重新啓動 Windows 以完成此次升級。",
   "appUpgrade.activeRun": "正在升級",
@@ -3423,7 +3963,8 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceSequenceSummaryTarget": "目標：{{target}}",
   "settings.maintenanceSequenceSummaryEffects": "效果：{{effects}}",
   "settings.maintenanceSequenceTargetTitle": "匹配條件的作品",
-  "settings.maintenanceSequenceTargetTitleDescendants": "匹配條件的作品、季與分集",
+  "settings.maintenanceSequenceTargetTitleDescendants":
+    "匹配條件的作品、季與分集",
   "settings.maintenanceSequenceTargetSeason": "匹配條件的季",
   "settings.maintenanceSequenceTargetSeasonDescendants": "匹配條件的季與分集",
   "settings.maintenanceSequenceTargetEpisode": "匹配條件的分集",
@@ -3433,23 +3974,29 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceSequenceAdd": "新增步驟",
   "settings.maintenanceSequencePreset": "順序預設集",
   "settings.maintenanceSequencePresetApply": "替換為預設集",
-  "settings.maintenanceSequencePresetProfileThenSearch": "變更設定檔，若有變更則搜尋",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete": "取消監控子項目，然後刪除文件",
+  "settings.maintenanceSequencePresetProfileThenSearch":
+    "變更設定檔，若有變更則搜尋",
+  "settings.maintenanceSequencePresetUnmonitorThenDelete":
+    "取消監控子項目，然後刪除文件",
   "settings.maintenanceSequenceTerminal": "終止步驟",
   "settings.maintenanceSequenceDependencies": "依賴：{{steps}}",
   "settings.maintenanceSequenceIncludeDescendants": "包含季與分集",
   "settings.maintenanceSequenceSearchCondition": "搜尋條件",
   "settings.maintenanceSequenceSearchUnconditional": "一律請求搜尋",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged": "僅在設定檔發生變更後",
-  "settings.maintenanceSequenceSearchRequested": "此步驟會請求搜尋，且僅在請求被接受後才記錄為已接受。後續的抓取與下載效果仍可被暫緩。",
+  "settings.maintenanceSequenceSearchPreviousProfileChanged":
+    "僅在設定檔發生變更後",
+  "settings.maintenanceSequenceSearchRequested":
+    "此步驟會請求搜尋，且僅在請求被接受後才記錄為已接受。後續的抓取與下載效果仍可被暫緩。",
   "settings.maintenanceSequenceHistoryWaiting": "正在等待較早的步驟",
   "settings.maintenanceSequenceHistorySearchRequested": "已請求搜尋",
   "settings.maintenanceSequenceHistorySearchAccepted": "已接受",
   "settings.maintenanceSequenceHistoryJob": "任務 {{id}}",
   "settings.maintenanceSequenceCompletionAccepted": "接受時即完成",
   "settings.maintenanceSequenceCompletionCompleted": "結束時才完成",
-  "settings.maintenanceSequenceStepUnavailable": "目前的目錄中無法使用此已儲存的步驟。在儲存或預覽前請先將其移除或還原相容的目錄。",
-  "settings.maintenanceSequenceCatalogUnavailable": "動作步驟目錄不可用。已儲存的步驟仍可見，但儲存與未儲存的預覽將暫停直至其載入完成。",
+  "settings.maintenanceSequenceStepUnavailable":
+    "目前的目錄中無法使用此已儲存的步驟。在儲存或預覽前請先將其移除或還原相容的目錄。",
+  "settings.maintenanceSequenceCatalogUnavailable":
+    "動作步驟目錄不可用。已儲存的步驟仍可見，但儲存與未儲存的預覽將暫停直至其載入完成。",
   "settings.maintenanceSequenceStepUnmonitor": "取消監控",
   "settings.maintenanceSequenceStepDeleteFiles": "刪除文件",
   "settings.maintenanceSequenceStepChangeQualityProfile": "變更質素設定檔",
@@ -3458,40 +4005,56 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceSequenceStepRemoveTags": "移除標籤",
   "settings.maintenanceSequenceStepDeleteTitleAndFiles": "刪除作品與文件",
   "settings.maintenanceRuleGraceDays": "寬限天數",
-  "settings.maintenanceRuleGraceDaysHelp": "規則首次匹配後、操作執行前的天數（目前不會執行任何操作）。",
+  "settings.maintenanceRuleGraceDaysHelp":
+    "規則首次匹配後、操作執行前的天數（目前不會執行任何操作）。",
   "settings.maintenanceRuleTargetProfile": "目標質素配置",
-  "settings.maintenanceRuleTargetProfileHelp": "此操作會將匹配的標題切換到的配置。",
+  "settings.maintenanceRuleTargetProfileHelp":
+    "此操作會將匹配的標題切換到的配置。",
   "settings.maintenanceRuleTargetProfileIdHelp": "質素配置 ID。",
   "settings.maintenanceRuleLibraries": "媒體庫範圍",
-  "settings.maintenanceRuleLibrariesHelp": "不勾選任何媒體庫時，規則將作用於整個收藏。",
+  "settings.maintenanceRuleLibrariesHelp":
+    "不勾選任何媒體庫時，規則將作用於整個收藏。",
   "settings.maintenanceRuleLibrariesAll": "所有媒體庫",
   "settings.maintenanceRuleStorageRoot": "儲存空間根目錄",
   "settings.maintenanceRuleStorageRootNone": "未選取儲存空間根目錄",
-  "settings.maintenanceRuleStorageRootHelp": "依據儲存空間容量評估規則，並將刪除效果限制在此根目錄下的文件。",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp": "依據儲存空間容量評估規則，但將取消監控套用至整個作品，即使其包含其他根目錄上的文件。",
+  "settings.maintenanceRuleStorageRootHelp":
+    "依據儲存空間容量評估規則，並將刪除效果限制在此根目錄下的文件。",
+  "settings.maintenanceRuleStorageRootUnmonitorHelp":
+    "依據儲存空間容量評估規則，但將取消監控套用至整個作品，即使其包含其他根目錄上的文件。",
   "settings.maintenanceRuleStorageRootClear": "清除根目錄選取",
-  "settings.maintenanceStorageRootFileSummary": "所選根目錄：{{count}} 個文件 · {{size}}",
+  "settings.maintenanceStorageRootFileSummary":
+    "所選根目錄：{{count}} 個文件 · {{size}}",
   "settings.maintenanceRuleCreate": "創建維護規則",
   "settings.maintenanceRuleUpdate": "更新維護規則",
   "settings.maintenanceRuleCopy": "複製為新規則",
   "settings.maintenanceRuleCreateNew": "新建維護規則",
-  "settings.maintenanceRuleValidationRequired": "名稱、匹配器源碼和操作為必填項。",
+  "settings.maintenanceRuleValidationRequired":
+    "名稱、匹配器源碼和操作為必填項。",
   "settings.maintenanceRuleConfirmDiscardTitle": "放棄未儲存的更改？",
-  "settings.maintenanceRuleConfirmDiscardDescription": "維護規則編輯器中有未儲存的更改，將會丟失。",
+  "settings.maintenanceRuleConfirmDiscardDescription":
+    "維護規則編輯器中有未儲存的更改，將會丟失。",
   "settings.maintenanceRuleDeleting": "刪除維護規則 {{name}}？",
   "settings.noMaintenanceRulesFound": "暫無維護規則。",
   "settings.maintenanceRuleRevision": "修訂版",
   "settings.maintenanceActionDoNothing": "不執行任何操作",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles": "取消監控該範圍，保留檔案",
+  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+    "取消監控該範圍，保留檔案",
   "settings.maintenanceActionDeleteTitleAndFiles": "刪除該標題及其檔案",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles": "取消監控該標題，刪除全部檔案",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles": "取消監控該分集，刪除現有檔案",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles": "取消監控該範圍，刪除其檔案",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty": "取消監控該季，刪除其檔案，若分集為空則刪除該分集",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty": "取消監控該季，若分集為空則取消監控該分集",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged": "更改質素配置，若發生變化則執行搜尋",
+  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+    "取消監控該標題，刪除全部檔案",
+  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+    "取消監控該分集，刪除現有檔案",
+  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+    "取消監控該範圍，刪除其檔案",
+  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+    "取消監控該季，刪除其檔案，若分集為空則刪除該分集",
+  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+    "取消監控該季，若分集為空則取消監控該分集",
+  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+    "更改質素配置，若發生變化則執行搜尋",
   "settings.maintenancePreviewTitle": "預覽",
-  "settings.maintenancePreviewSubtitle": "針對真實標題運行匹配器。預覽為只讀：僅報告哪些內容會匹配，不做任何更改。",
+  "settings.maintenancePreviewSubtitle":
+    "針對真實標題運行匹配器。預覽為只讀：僅報告哪些內容會匹配，不做任何更改。",
   "settings.maintenancePreviewSource": "匹配器",
   "settings.maintenancePreviewSourceStored": "已儲存的規則",
   "settings.maintenancePreviewSourceDraft": "編輯器草稿",
@@ -3519,10 +4082,14 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceArmingReversible": "可逆",
   "settings.maintenanceArmingDestructive": "破壞性",
   "settings.maintenanceArmDestructiveLoading": "正在統計該規則已持有的候選項…",
-  "settings.maintenanceArmDestructiveCount": "有 {{count}} 個候選項可能被處理。",
-  "settings.maintenanceArmDestructiveNoCandidates": "該規則目前沒有可被處理的候選項。",
-  "settings.maintenanceArmDestructiveCountChanged": "你閲讀期間數量發生了變化：該規則現在持有 {{count}} 個。請核對數字並再次確認。",
-  "settings.maintenanceArmDestructiveAcknowledge": "我明白該規則可能刪除 {{count}} 個標題的檔案。",
+  "settings.maintenanceArmDestructiveCount":
+    "有 {{count}} 個候選項可能被處理。",
+  "settings.maintenanceArmDestructiveNoCandidates":
+    "該規則目前沒有可被處理的候選項。",
+  "settings.maintenanceArmDestructiveCountChanged":
+    "你閲讀期間數量發生了變化：該規則現在持有 {{count}} 個。請核對數字並再次確認。",
+  "settings.maintenanceArmDestructiveAcknowledge":
+    "我明白該規則可能刪除 {{count}} 個標題的檔案。",
   "settings.maintenanceCandidatesFilterRule": "規則",
   "settings.maintenanceCandidatesFilterState": "狀態",
   "settings.maintenanceCandidatesFilterLibrary": "媒體庫",
@@ -3571,7 +4138,8 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRunColCounts": "計數",
   "settings.maintenanceRunColDuration": "耗時",
   "settings.maintenanceRunColError": "錯誤",
-  "settings.maintenanceRunCounts": "已評估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 錯誤 {{errors}}",
+  "settings.maintenanceRunCounts":
+    "已評估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 錯誤 {{errors}}",
   "settings.maintenanceRunDuration": "{{seconds}} 秒",
   "settings.maintenanceRunRevision": "修訂 {{revision}}",
   "settings.maintenanceRunStatusRunning": "運行中",
@@ -3583,7 +4151,8 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceActionRunColAttempt": "嘗試次數",
   "settings.maintenanceActionRunColHoldReason": "掛起原因",
   "settings.maintenanceExclusionsTitle": "排除項",
-  "settings.maintenanceExclusionsSubtitle": "維護規則絕不能處理的標題。全局排除對所有規則生效。",
+  "settings.maintenanceExclusionsSubtitle":
+    "維護規則絕不能處理的標題。全局排除對所有規則生效。",
   "settings.maintenanceExclusionsEmpty": "沒有排除項。",
   "settings.maintenanceExclusionColScope": "範圍",
   "settings.maintenanceExclusionColReason": "原因",
@@ -3593,7 +4162,8 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceExclusionRemoved": "已移除 {{title}} 的排除。",
   "settings.maintenanceExclusionRemoving": "要移除 {{title}} 的排除嗎？",
   "settings.maintenanceExcludeTitle": "從維護中排除",
-  "settings.maintenanceExcludeBody": "{{title}} 將從下一次評估起被排除，其候選項會轉為已排除。",
+  "settings.maintenanceExcludeBody":
+    "{{title}} 將從下一次評估起被排除，其候選項會轉為已排除。",
   "settings.maintenanceExcludeScope": "範圍",
   "settings.maintenanceExcludeScopeGlobal": "全部規則",
   "settings.maintenanceExcludeReason": "原因",
@@ -3602,16 +4172,23 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceExcluded": "已將 {{title}} 從維護中排除。",
   "settings.refMaintTitle": "維護輸入參考",
   "settings.refMaintSubtitle": "點擊以展開維護匹配器可讀取的所有事實。",
-  "settings.refMaintIntro": "每條維護規則每個主體會收到一個 input 對象：input.subject 標識正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
+  "settings.refMaintIntro":
+    "每條維護規則每個主體會收到一個 input 對象：input.subject 標識正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
   "settings.refMaintOutputTitle": "規則輸出",
-  "settings.refMaintOutputIntro": "匹配器最多定義三個名稱。包中的其他任何內容都會被忽略，若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
-  "settings.refMaintOutputMatch": "match — 布爾值。保持未定義表示該主體不符合條件。",
-  "settings.refMaintOutputUnknown": "unknown — 布爾值。當規則本身資訊不足無法決策時進行設定；unknown 永遠優先於 match。Scryer 無法觀察到的事實已為您自動處理，因此這僅用於您自己的判斷。",
-  "settings.refMaintOutputReasons": "reasons — 一組用於說明決策的簡短機器代碼。它們會儲存在候選項目上並顯示在預覽中。",
-  "settings.refMaintOutputNoPackage": "請勿撰寫 package 或 import 行。Scryer 在儲存規則時會自動新增這兩者，並在載入編輯器時將其去除。",
+  "settings.refMaintOutputIntro":
+    "匹配器最多定義三個名稱。包中的其他任何內容都會被忽略，若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
+  "settings.refMaintOutputMatch":
+    "match — 布爾值。保持未定義表示該主體不符合條件。",
+  "settings.refMaintOutputUnknown":
+    "unknown — 布爾值。當規則本身資訊不足無法決策時進行設定；unknown 永遠優先於 match。Scryer 無法觀察到的事實已為您自動處理，因此這僅用於您自己的判斷。",
+  "settings.refMaintOutputReasons":
+    "reasons — 一組用於說明決策的簡短機器代碼。它們會儲存在候選項目上並顯示在預覽中。",
+  "settings.refMaintOutputNoPackage":
+    "請勿撰寫 package 或 import 行。Scryer 在儲存規則時會自動新增這兩者，並在載入編輯器時將其去除。",
   "settings.refMaintSectionInput": "— 評估外層封裝",
   "settings.refMaintInputSchemaVersion": "此規則所依據撰寫的維護輸入文檔版本",
-  "settings.refMaintInputEvaluationTime": "每次執行捕獲一次的 RFC3339 時間戳，讓每個主體與相同的時鐘進行比較。請將其用於日期計算 — 雖然存在 time.now_ns()，但它會讓同一主體在重試時產生不同決策。",
+  "settings.refMaintInputEvaluationTime":
+    "每次執行捕獲一次的 RFC3339 時間戳，讓每個主體與相同的時鐘進行比較。請將其用於日期計算 — 雖然存在 time.now_ns()，但它會讓同一主體在重試時產生不同決策。",
   "settings.refMaintSectionSubject": "— 評估中的作品、季或分集",
   "settings.maintenanceFileSummary": "{{count}} 個文件 · {{size}}",
   "settings.maintenanceTestTitle": "測試主體",
@@ -3627,28 +4204,35 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceFileDeleted": "已刪除",
   "settings.maintenanceFilePending": "等待中",
   "settings.maintenanceFileResults": "文件結果",
-  "settings.maintenanceFileProgress": "已刪除 {{completed}} 個 · 剩餘 {{remaining}} 個",
+  "settings.maintenanceFileProgress":
+    "已刪除 {{completed}} 個 · 剩餘 {{remaining}} 個",
   "settings.refMaintSubjectId": "所選範圍的 Scryer 作品、合集或分集標識符",
   "settings.refMaintCollectionId": "季與分集主體所屬的季度合集 ID（若已知）",
-  "settings.refMaintSubjectKind": "評估中的細微程度：title（作品）、season（季）或 episode（分集）",
+  "settings.refMaintSubjectKind":
+    "評估中的細微程度：title（作品）、season（季）或 episode（分集）",
   "settings.refMaintSubjectTitleId": "主體所屬作品的 Scryer 標識符",
   "settings.refMaintSubjectSeasonNumber": "季與分集主體的季度編號（若已知）",
   "settings.refMaintSubjectEpisodeId": "分集標識符；僅存在於分集主體",
-  "settings.refMaintSubjectFacet": "作品的媒體面向（movie 電影、series 電視劇、anime 動漫）",
+  "settings.refMaintSubjectFacet":
+    "作品的媒體面向（movie 電影、series 電視劇、anime 動漫）",
   "settings.refMaintSubjectName": "作品、季或分集的顯示標籤",
   "settings.refMaintSubjectYear": "作品的發行年份（若已知）",
   "settings.refMaintSectionLibrary": "— 主體所屬的媒體庫",
   "settings.refMaintLibraryId": "容納該主體的媒體庫標識符",
   "settings.refMaintLibraryName": "該媒體庫的顯示名稱",
-  "settings.refMaintSectionFacts": "— 事實快照；每個事實為純值，當事實不存在或無法觀察到時，該字段會缺失",
+  "settings.refMaintSectionFacts":
+    "— 事實快照；每個事實為純值，當事實不存在或無法觀察到時，該字段會缺失",
   "settings.refMaintFactsMonitored": "該主體是否受到監控",
-  "settings.refMaintFactsTags": "繼承自主作品的用戶自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
+  "settings.refMaintFactsTags":
+    "繼承自主作品的用戶自訂標籤（小寫），來自管理員在「設定」中維護的標籤註冊表；排除保留的 scryer: 設定項目",
   "settings.refMaintFactsQualityProfileId": "繼承自主作品的質素設定檔",
   "settings.refMaintFactsAddedAt": "主體加入媒體庫的時間",
-  "settings.refMaintFactsAddedByUserId": "新增該主體的用戶；若由掃描或探索建立則缺失",
+  "settings.refMaintFactsAddedByUserId":
+    "新增該主體的用戶；若由掃描或探索建立則缺失",
   "settings.refMaintFactsAddedByUsername": "新增該主體的用戶名稱",
   "settings.refMaintFactsRequested": "媒體請求是否建立了該主體",
-  "settings.refMaintFactsRequestedByUserIds": "請求該主體的用戶：提交者加上任何其他請求者",
+  "settings.refMaintFactsRequestedByUserIds":
+    "請求該主體的用戶：提交者加上任何其他請求者",
   "settings.refMaintFactsRequestedByUsernames": "這些請求者的用戶名稱",
   "settings.refMaintFactsFirstImportedAt": "主體首次導入文件的時間",
   "settings.refMaintFactsLastUpgradedAt": "主體上次升級的時間",
@@ -3659,82 +4243,125 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintFactsEpisodeCount": "主體涵蓋多少分集",
   "settings.refMaintFactsEpisodeFileCount": "這些分集中有多少個具備文件",
   "settings.refMaintFactsMonitoredEpisodeCount": "這些分集中有多少個受到監控",
-  "settings.refMaintFactsEpisodePositionByAirDate": "分集在其節目中按播出日期的排名",
-  "settings.refMaintFactsSeasonPositionByAirDate": "依最新符合資格的已下載分集排名的季度順序",
-  "settings.refMaintFactsStorageRootId": "針對儲存容量與文件刪除所選取的配置根目錄",
+  "settings.refMaintFactsEpisodePositionByAirDate":
+    "分集在其節目中按播出日期的排名",
+  "settings.refMaintFactsSeasonPositionByAirDate":
+    "依最新符合資格的已下載分集排名的季度順序",
+  "settings.refMaintFactsStorageRootId":
+    "針對儲存容量與文件刪除所選取的配置根目錄",
   "settings.refMaintFactsStorageAvailableBytes": "所選根目錄上目前可用的字節數",
   "settings.refMaintFactsStorageTotalBytes": "所選根目錄的總容量字節數",
-  "settings.refMaintFactsStorageAvailablePercent": "所選根目錄目前可用容量的百分比",
+  "settings.refMaintFactsStorageAvailablePercent":
+    "所選根目錄目前可用容量的百分比",
   "settings.refMaintFactsActiveDownloads": "主體是否有正在進行中的下載",
-  "settings.refMaintFactsWatchedByUserIds": "觀看過此分集的用戶；對於季，相同用戶必須觀看過每一集已播出的分集（包括遺失的文件）。未來分集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
+  "settings.refMaintFactsWatchedByUserIds":
+    "觀看過此分集的用戶；對於季，相同用戶必須觀看過每一集已播出的分集（包括遺失的文件）。未來分集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
   "settings.refMaintFactsLastWatchedAt": "任何用戶上次播放該主體的時間",
-  "settings.refMaintFactsWatchedByAnyRequester": "主體的請求者中是否至少有一人播放過它",
-  "settings.refMaintFactsWatchedByAllRequesters": "主體的請求者是否每個人都播放過它",
-  "settings.refMaintFactsRequestLeaseState": "主體請求租約的聚合狀態：none、dormant、active 或 expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt": "主體最後一筆有效租約到期的時間",
+  "settings.refMaintFactsWatchedByAnyRequester":
+    "主體的請求者中是否至少有一人播放過它",
+  "settings.refMaintFactsWatchedByAllRequesters":
+    "主體的請求者是否每個人都播放過它",
+  "settings.refMaintFactsRequestLeaseState":
+    "主體請求租約的聚合狀態：none、dormant、active 或 expired",
+  "settings.refMaintFactsRequestLeaseExpiresAt":
+    "主體最後一筆有效租約到期的時間",
   "settings.refMaintFactsActiveRetentionClaims": "仍鎖定該主體的請求租約數量",
-  "settings.refMaintObsStatus": "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字符串。",
-  "settings.refMaintSectionObservations": "— 作為完整封裝的相同事實，適用於需要區分 absent 與 unknown 或讀取原因的規則。在此讀取事實會使該事實退出自動暫緩：您必須為三值邏輯的結果承擔責任。",
-  "settings.refMaintSectionObsFiles": "— input.observations.files.value 中每個文件對應一項",
+  "settings.refMaintObsStatus":
+    "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字符串。",
+  "settings.refMaintSectionObservations":
+    "— 作為完整封裝的相同事實，適用於需要區分 absent 與 unknown 或讀取原因的規則。在此讀取事實會使該事實退出自動暫緩：您必須為三值邏輯的結果承擔責任。",
+  "settings.refMaintSectionObsFiles":
+    "— input.observations.files.value 中每個文件對應一項",
   "settings.refMaintObsObservedAt": "觀察到該值的時間（若來源有記錄時間）",
-  "settings.refMaintObsReason": "穩定的機器代碼，說明事實為何為 unknown，或為何 absent 事實沒有值",
+  "settings.refMaintObsReason":
+    "穩定的機器代碼，說明事實為何為 unknown，或為何 absent 事實沒有值",
   "settings.refMaintFactsMonitoredValue": "主體受到監控時為 true",
-  "settings.refMaintFactsTagsValue": "來自管理員標籤註冊表的小寫用戶自訂標籤名稱；絕非保留的 scryer: 設定項目",
+  "settings.refMaintFactsTagsValue":
+    "來自管理員標籤註冊表的小寫用戶自訂標籤名稱；絕非保留的 scryer: 設定項目",
   "settings.refMaintFactsQualityProfileIdValue": "指派的質素設定檔標識符",
   "settings.refMaintFactsAddedAtValue": "主體加入時的 RFC3339 時間戳",
-  "settings.refMaintFactsAddedByUserIdValue": "新增該主體的用戶標識符；無人新增時原因為 title_added_by_system",
-  "settings.refMaintFactsAddedByUsernameValue": "該用戶的用戶名稱；若帳號已不存在則為 unknown，原因為 user_not_found",
-  "settings.refMaintFactsRequestedValue": "至少有一個媒體請求建立了該主體時為 true；否則為確認的 false",
-  "settings.refMaintFactsRequestedByUserIdsValue": "去除重複後的請求者標識符；若主體未被請求則為空清單",
-  "settings.refMaintFactsRequestedByUsernamesValue": "請求者用戶名稱；若其中任何帳號已不存在則為 unknown，原因為 user_not_found",
+  "settings.refMaintFactsAddedByUserIdValue":
+    "新增該主體的用戶標識符；無人新增時原因為 title_added_by_system",
+  "settings.refMaintFactsAddedByUsernameValue":
+    "該用戶的用戶名稱；若帳號已不存在則為 unknown，原因為 user_not_found",
+  "settings.refMaintFactsRequestedValue":
+    "至少有一個媒體請求建立了該主體時為 true；否則為確認的 false",
+  "settings.refMaintFactsRequestedByUserIdsValue":
+    "去除重複後的請求者標識符；若主體未被請求則為空清單",
+  "settings.refMaintFactsRequestedByUsernamesValue":
+    "請求者用戶名稱；若其中任何帳號已不存在則為 unknown，原因為 user_not_found",
   "settings.refMaintFactsFirstImportedAtValue": "首次導入時的 RFC3339 時間戳",
   "settings.refMaintFactsLastUpgradedAtValue": "上次升級時的 RFC3339 時間戳",
   "settings.refMaintFactsHasFileValue": "硬碟上至少有一個文件時為 true",
   "settings.refMaintFactsFileCountValue": "硬碟上的文件數量",
   "settings.refMaintFactsTotalFileSizeBytesValue": "這些文件的總大小（字節）",
-  "settings.refMaintFactsFilesValue": "每個文件對應一項；請參閱下方的 input.observations.files.value[]",
+  "settings.refMaintFactsFilesValue":
+    "每個文件對應一項；請參閱下方的 input.observations.files.value[]",
   "settings.refMaintFactsEpisodeCountValue": "範圍內的分集數量",
   "settings.refMaintFactsEpisodeFileCountValue": "這些分集中具有文件的數量",
-  "settings.refMaintFactsMonitoredEpisodeCountValue": "這些分集中受到監控的數量",
-  "settings.refMaintFactsEpisodePositionByAirDateValue": "第 1 名是最新符合資格已下載且已播出的非特別篇分集。播出日期相同時依季與分集編號排序，然後使用穩定 ID。",
-  "settings.refMaintFactsSeasonPositionByAirDateValue": "第 1 名是具有最新符合資格已下載且已播出非特別篇分集的季度。受保護的文件仍佔據排名。",
-  "settings.refMaintFactsStorageRootIdValue": "在此版本中選取的持久配置媒體庫根目錄標識符",
-  "settings.refMaintFactsStorageAvailableBytesValue": "從所選根目錄本身觀察到的可用容量（字節）",
-  "settings.refMaintFactsStorageTotalBytesValue": "從所選根目錄本身觀察到的總容量（字節）",
-  "settings.refMaintFactsStorageAvailablePercentValue": "可用容量除以總容量，介於 0 至 100",
+  "settings.refMaintFactsMonitoredEpisodeCountValue":
+    "這些分集中受到監控的數量",
+  "settings.refMaintFactsEpisodePositionByAirDateValue":
+    "第 1 名是最新符合資格已下載且已播出的非特別篇分集。播出日期相同時依季與分集編號排序，然後使用穩定 ID。",
+  "settings.refMaintFactsSeasonPositionByAirDateValue":
+    "第 1 名是具有最新符合資格已下載且已播出非特別篇分集的季度。受保護的文件仍佔據排名。",
+  "settings.refMaintFactsStorageRootIdValue":
+    "在此版本中選取的持久配置媒體庫根目錄標識符",
+  "settings.refMaintFactsStorageAvailableBytesValue":
+    "從所選根目錄本身觀察到的可用容量（字節）",
+  "settings.refMaintFactsStorageTotalBytesValue":
+    "從所選根目錄本身觀察到的總容量（字節）",
+  "settings.refMaintFactsStorageAvailablePercentValue":
+    "可用容量除以總容量，介於 0 至 100",
   "settings.refMaintFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
-  "settings.refMaintFactsWatchedByUserIdsValue": "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
-  "settings.refMaintFactsLastWatchedAtValue": "最近一次播放的 RFC3339 時間戳；若無人播放過則 absent，原因為 never_watched",
-  "settings.refMaintFactsWatchedByAnyRequesterValue": "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
-  "settings.refMaintFactsWatchedByAllRequestersValue": "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
-  "settings.refMaintFactsRequestLeaseStateValue": "從未為主體寫入請求租約時為 none，租約等待首次匯入時為 dormant，租約有效進行中時為 active，且所有租約皆已用盡時為 expired。已釋放或已轉換的租約視為撤回而非耗盡，因此不會使狀態變為 expired。過期是以評估時間為基準，因此租約在視窗關閉的瞬間即被視為過期。",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue": "有效租約中最新到期時間的 RFC3339 時間戳；無任何租約保留該主體時為 absent，原因為 no_live_lease",
-  "settings.refMaintFactsActiveRetentionClaimsValue": "仍保留該主體的租約數量，包含處於休眠 (dormant) 狀態的租約",
+  "settings.refMaintFactsWatchedByUserIdsValue":
+    "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
+  "settings.refMaintFactsLastWatchedAtValue":
+    "最近一次播放的 RFC3339 時間戳；若無人播放過則 absent，原因為 never_watched",
+  "settings.refMaintFactsWatchedByAnyRequesterValue":
+    "至少有一位請求者播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
+  "settings.refMaintFactsWatchedByAllRequestersValue":
+    "每一位請求者皆播放過時為 true；若無人請求該主體則 absent，原因為 title_not_requested；若請求者沒有關聯的媒體伺服器帳號則 unknown，原因為 requester_not_linked",
+  "settings.refMaintFactsRequestLeaseStateValue":
+    "從未為主體寫入請求租約時為 none，租約等待首次匯入時為 dormant，租約有效進行中時為 active，且所有租約皆已用盡時為 expired。已釋放或已轉換的租約視為撤回而非耗盡，因此不會使狀態變為 expired。過期是以評估時間為基準，因此租約在視窗關閉的瞬間即被視為過期。",
+  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+    "有效租約中最新到期時間的 RFC3339 時間戳；無任何租約保留該主體時為 absent，原因為 no_live_lease",
+  "settings.refMaintFactsActiveRetentionClaimsValue":
+    "仍保留該主體的租約數量，包含處於休眠 (dormant) 狀態的租約",
   "settings.refMaintSectionFiles": "— input.facts.files 中每個文件對應一項",
   "settings.refMaintFileSizeBytes": "文件大小字節數",
   "settings.refMaintFileQuality": "偵測到的文件質素（例如 2160P、1080P）",
   "settings.refMaintFileVideoCodec": "文件的影片編解碼器（例如 H.265、H.264）",
-  "settings.refMaintFileIs3d": "媒體元數據宣告 3D 影片時為 true。False 表示未偵測到，包含尚未分析的文件。",
+  "settings.refMaintFileIs3d":
+    "媒體元數據宣告 3D 影片時為 true。False 表示未偵測到，包含尚未分析的文件。",
   "settings.refMaintFileVideoWidth": "以像素為單位的影片寬度",
   "settings.refMaintFileVideoHeight": "以像素為單位的影片高度",
   "settings.refMaintFileAudioLanguages": "文件中存在的音訊語言",
   "settings.refMaintFileSubtitleLanguages": "文件中存在的字幕語言",
   "settings.refMaintFileAddedAt": "新增文件時的 RFC3339 時間戳",
-  "settings.refMaintFactsSeriesMovies": "連結至此節目時間軸的電影，各自具有其專屬標籤。僅存在於節目：電影主體完全缺少此字段，無連結電影的節目則確認為空。add_tags 與 remove_tags 絕不寫入這些項目；它們作用於主體作品。",
-  "settings.refMaintFactsSeriesMoviesValue": "每個連結電影對應一項；請參閱下方的 input.observations.series_movies.value[]",
-  "settings.refMaintSectionSeriesMovies": "— input.facts.series_movies 中每個連結電影對應一項",
-  "settings.refMaintSectionObsSeriesMovies": "— input.observations.series_movies.value 中每個連結電影對應一項",
+  "settings.refMaintFactsSeriesMovies":
+    "連結至此節目時間軸的電影，各自具有其專屬標籤。僅存在於節目：電影主體完全缺少此字段，無連結電影的節目則確認為空。add_tags 與 remove_tags 絕不寫入這些項目；它們作用於主體作品。",
+  "settings.refMaintFactsSeriesMoviesValue":
+    "每個連結電影對應一項；請參閱下方的 input.observations.series_movies.value[]",
+  "settings.refMaintSectionSeriesMovies":
+    "— input.facts.series_movies 中每個連結電影對應一項",
+  "settings.refMaintSectionObsSeriesMovies":
+    "— input.observations.series_movies.value 中每個連結電影對應一項",
   "settings.refMaintSeriesMovieLinkId": "電視劇-電影連結的標識符",
   "settings.refMaintSeriesMovieName": "連結電影的標題",
   "settings.refMaintSeriesMovieYear": "連結電影的發行年份（若已知）",
   "settings.refMaintSeriesMovieMonitored": "此連結電影是否已啟用獲取/抓取",
   "settings.refMaintSeriesMovieHasFile": "此連結電影在硬碟上是否有文件",
-  "settings.refMaintSeriesMovieTags": "此連結電影上的用戶自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
+  "settings.refMaintSeriesMovieTags":
+    "此連結電影上的用戶自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
   "settings.refMaintTagActionsTitle": "標籤操作",
-  "settings.refMaintTagActionsNote": "add_tags 與 remove_tags 在符合條件的作品上寫入用戶標籤。每個標籤都必須存在於管理員在「設定」中維護的標籤註冊表中，且標籤以小寫形式儲存 — 引用了後續已刪除標籤的規則將暫緩並顯示 tag_not_defined，而不是寫入它。",
-  "settings.refMaintTagOscillationNote": "對相同作品上的相同標籤寫入相反修補程式的兩條規則，會以 tag_patch_conflict 暫緩這兩個候選項目，而不是讓最後執行的規則勝出。新增標籤的規則與在稍後執行中移除標籤的另一條規則無法以這種方式被捕獲：這是一種撰寫錯誤，會使標籤永遠來回翻轉，因此請調整兩者的範圍使其無法同時符合條件。",
+  "settings.refMaintTagActionsNote":
+    "add_tags 與 remove_tags 在符合條件的作品上寫入用戶標籤。每個標籤都必須存在於管理員在「設定」中維護的標籤註冊表中，且標籤以小寫形式儲存 — 引用了後續已刪除標籤的規則將暫緩並顯示 tag_not_defined，而不是寫入它。",
+  "settings.refMaintTagOscillationNote":
+    "對相同作品上的相同標籤寫入相反修補程式的兩條規則，會以 tag_patch_conflict 暫緩這兩個候選項目，而不是讓最後執行的規則勝出。新增標籤的規則與在稍後執行中移除標籤的另一條規則無法以這種方式被捕獲：這是一種撰寫錯誤，會使標籤永遠來回翻轉，因此請調整兩者的範圍使其無法同時符合條件。",
   "settings.maintenanceTemplateGallery": "初學者範本",
-  "settings.maintenanceTemplateGalleryDescription": "將完整撰寫好的匹配器載入編輯器。在您審查並按下建立之前不會儲存任何內容。",
+  "settings.maintenanceTemplateGalleryDescription":
+    "將完整撰寫好的匹配器載入編輯器。在您審查並按下建立之前不會儲存任何內容。",
   "settings.maintenanceTemplateApply": "使用範本",
   "settings.maintenanceTemplateFacetMovie": "電影",
   "settings.maintenanceTemplateFacetShow": "電視劇",
@@ -3743,36 +4370,50 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceTemplateDestructiveBadge": "刪除文件",
   "settings.maintenanceTemplateNeedsProfileBadge": "挑選目標設定檔",
   "settings.maintenanceTemplateDeadWantedTitle": "失效的徵求中項目",
-  "settings.maintenanceTemplateDeadWantedDescription": "您仍在監控但從未取得任何文件的作品。事實是純值，因此 Scryer 無法獲知其監控或文件狀態的作品將會暫緩而非匹配條件。在 30 天寬限期過後，該範圍會被取消監控，而硬碟上既有的任何內容將不受影響。",
+  "settings.maintenanceTemplateDeadWantedDescription":
+    "您仍在監控但從未取得任何文件的作品。事實是純值，因此 Scryer 無法獲知其監控或文件狀態的作品將會暫緩而非匹配條件。在 30 天寬限期過後，該範圍會被取消監控，而硬碟上既有的任何內容將不受影響。",
   "settings.maintenanceTemplateLibraryAgingTitle": "媒體庫老化清理",
-  "settings.maintenanceTemplateLibraryAgingDescription": "注意：此範本會刪除作品及其文件。任何包含文件的項目都會老化淘汰，除非其帶有 \"keep\" 標籤。首先會執行 180 天的寬限期，且實例門檻以及此規則本身的授權必須一致同意，然後才會移除任何內容。",
+  "settings.maintenanceTemplateLibraryAgingDescription":
+    '注意：此範本會刪除作品及其文件。任何包含文件的項目都會老化淘汰，除非其帶有 "keep" 標籤。首先會執行 180 天的寬限期，且實例門檻以及此規則本身的授權必須一致同意，然後才會移除任何內容。',
   "settings.maintenanceTemplateAddedLongAgoTitle": "加入已超過 180 天",
-  "settings.maintenanceTemplateAddedLongAgoDescription": "真實日期計算：匹配器將評估時間減去作品的 added_at，並匹配超過 180 天的項目。該範圍會被取消監控，文件則保留。沒有 added_at 值的作品將被暫緩而非匹配條件。",
+  "settings.maintenanceTemplateAddedLongAgoDescription":
+    "真實日期計算：匹配器將評估時間減去作品的 added_at，並匹配超過 180 天的項目。該範圍會被取消監控，文件則保留。沒有 added_at 值的作品將被暫緩而非匹配條件。",
   "settings.maintenanceTemplateOversizedTitle": "超大體積發行版本",
-  "settings.maintenanceTemplateOversizedDescription": "文件總計超過 40 GB 的作品。將作品移至您選擇的質素設定檔，且僅在設定檔實際變更時才重新搜尋 — 在儲存前請在編輯器中挑選該目標設定檔。",
+  "settings.maintenanceTemplateOversizedDescription":
+    "文件總計超過 40 GB 的作品。將作品移至您選擇的質素設定檔，且僅在設定檔實際變更時才重新搜尋 — 在儲存前請在編輯器中挑選該目標設定檔。",
   "settings.maintenanceTemplateFourKPurgeTitle": "4K 清理",
-  "settings.maintenanceTemplateFourKPurgeDescription": "任何包含 2160p 文件的作品。在 7 天寬限期過後，將其移至您選擇的質素設定檔，並在設定檔變更時重新搜尋。儲存前請在編輯器中選取該目標設定檔。",
+  "settings.maintenanceTemplateFourKPurgeDescription":
+    "任何包含 2160p 文件的作品。在 7 天寬限期過後，將其移至您選擇的質素設定檔，並在設定檔變更時重新搜尋。儲存前請在編輯器中選取該目標設定檔。",
   "settings.maintenanceTemplateRequestedExpiryTitle": "請求的媒體到期",
-  "settings.maintenanceTemplateRequestedExpiryDescription": "注意：此範本會刪除作品及其文件。來自請求的作品會在 120 天後淘汰，除非帶有 \"keep\" 標籤。",
+  "settings.maintenanceTemplateRequestedExpiryDescription":
+    '注意：此範本會刪除作品及其文件。來自請求的作品會在 120 天後淘汰，除非帶有 "keep" 標籤。',
   "settings.maintenanceTemplateDepartedRequesterTitle": "已離職/離開的請求者",
-  "settings.maintenanceTemplateDepartedRequesterDescription": "注意：此範本會刪除作品及其文件。它匹配由指定用戶請求的作品 — 在儲存前請將匹配器中的 \"departed-user\" 預留位置編輯為您指定的名稱，否則將不匹配任何內容。",
+  "settings.maintenanceTemplateDepartedRequesterDescription":
+    '注意：此範本會刪除作品及其文件。它匹配由指定用戶請求的作品 — 在儲存前請將匹配器中的 "departed-user" 預留位置編輯為您指定的名稱，否則將不匹配任何內容。',
   "settings.maintenanceTemplateSystemAddedTitle": "系統新增清理",
-  "settings.maintenanceTemplateSystemAddedDescription": "由掃描發現而非由人員手動新增且包含文件的作品。在 60 天過後，該範圍會被取消監控，文件則保留在原處。",
+  "settings.maintenanceTemplateSystemAddedDescription":
+    "由掃描發現而非由人員手動新增且包含文件的作品。在 60 天過後，該範圍會被取消監控，文件則保留在原處。",
   "settings.maintenanceTemplateWatchedRequestedTitle": "所有發起請求者皆已觀看",
-  "settings.maintenanceTemplateWatchedRequestedDescription": "注意：此範本會刪除作品及其文件。在 30 天寬限期過後，匹配每位請求者皆已播放過的被請求電影。僅限電影：Scryer 針對每部電影與每一集分集記錄播放次數，從不按整部電視劇記錄，因此電視劇將暫緩而非匹配條件。當請求者沒有關聯的媒體伺服器帳號，或上次信號同步超過 48 小時前時，它也會暫緩 — 不完整的觀看狀況不足以作為刪除的依據。",
+  "settings.maintenanceTemplateWatchedRequestedDescription":
+    "注意：此範本會刪除作品及其文件。在 30 天寬限期過後，匹配每位請求者皆已播放過的被請求電影。僅限電影：Scryer 針對每部電影與每一集分集記錄播放次數，從不按整部電視劇記錄，因此電視劇將暫緩而非匹配條件。當請求者沒有關聯的媒體伺服器帳號，或上次信號同步超過 48 小時前時，它也會暫緩 — 不完整的觀看狀況不足以作為刪除的依據。",
   "settings.maintenanceTemplateExpiredLeasesTitle": "已過期的請求租約",
-  "settings.maintenanceTemplateExpiredLeasesDescription": "注意：此範本會刪除作品及其文件。在 7 天寬限期過後，它會匹配請求租約皆已到期的作品。尚未開始的租約（作品尚未導入）以及從未有租約的作品都將不受影響。",
+  "settings.maintenanceTemplateExpiredLeasesDescription":
+    "注意：此範本會刪除作品及其文件。在 7 天寬限期過後，它會匹配請求租約皆已到期的作品。尚未開始的租約（作品尚未導入）以及從未有租約的作品都將不受影響。",
   "settings.maintenanceTemplateNoProfileTitle": "無質素設定檔",
-  "settings.maintenanceTemplateNoProfileDescription": "未指派質素設定檔的作品。不採取任何行動：此項用於收集清單以便在決定處理方式前進行檢視。",
+  "settings.maintenanceTemplateNoProfileDescription":
+    "未指派質素設定檔的作品。不採取任何行動：此項用於收集清單以便在決定處理方式前進行檢視。",
   "settings.maintenanceTemplateNewestEpisodesTitle": "保留最新下載的 3 集分集",
-  "settings.maintenanceTemplateNewestEpisodesDescription": "注意：此分集範圍範本會取消監控並刪除依播出日期排名在最新三集之外的已下載分集。特別篇、未來分集、遺失的文件與未確定的日期不會獲得排名，因此不會匹配條件。受保護的分集仍會佔據前三名的名額。",
+  "settings.maintenanceTemplateNewestEpisodesDescription":
+    "注意：此分集範圍範本會取消監控並刪除依播出日期排名在最新三集之外的已下載分集。特別篇、未來分集、遺失的文件與未確定的日期不會獲得排名，因此不會匹配條件。受保護的分集仍會佔據前三名的名額。",
   "settings.maintenanceTemplateNewestSeasonsTitle": "保留最新下載的 2 季",
-  "settings.maintenanceTemplateNewestSeasonsDescription": "注意：此季度範圍範本會依各季最新符合資格的已下載分集，取消監控並刪除排名在最新兩季之外的季度文件。特別篇、未來分集、遺失的文件與未確定的日期不會獲得排名；受保護的季度仍會佔據名額。",
+  "settings.maintenanceTemplateNewestSeasonsDescription":
+    "注意：此季度範圍範本會依各季最新符合資格的已下載分集，取消監控並刪除排名在最新兩季之外的季度文件。特別篇、未來分集、遺失的文件與未確定的日期不會獲得排名；受保護的季度仍會佔據名額。",
   "settings.requestRules": "請求規則",
   "settings.noRequestRulesFound": "暫無請求規則。",
   "settings.requestRuleLibraries": "庫",
   "settings.requestRuleLibrariesAll": "所有庫",
-  "settings.requestRuleLibrariesHelp": "全部不勾選，則此規則適用於所有庫中的請求。",
+  "settings.requestRuleLibrariesHelp":
+    "全部不勾選，則此規則適用於所有庫中的請求。",
   "settings.requestRuleRevision": "修訂版",
   "settings.requestRuleDecisionCount": "決策數",
   "settings.requestRuleCopy": "複製規則",
@@ -3785,14 +4426,19 @@ const zh_HK: LocaleDictionary = {
   "settings.requestRuleDeleting": "刪除請求規則 {{name}}？它記錄的決策會保留。",
   "settings.requestRuleValidationRequired": "請求規則需要名稱和匹配器。",
   "settings.requestRuleConfirmDiscardTitle": "放棄未儲存的更改？",
-  "settings.requestRuleConfirmDiscardDescription": "編輯器中的匹配器尚未儲存，繼續將會替換它。",
+  "settings.requestRuleConfirmDiscardDescription":
+    "編輯器中的匹配器尚未儲存，繼續將會替換它。",
   "settings.requestRuleRequesters": "在此規則中指定人員",
-  "settings.requestRuleRequestersHelp": "勾選此規則針對的賬户並應用。編輯器中的匹配器會被改寫，您可以在儲存前先讀一遍。",
+  "settings.requestRuleRequestersHelp":
+    "勾選此規則針對的賬户並應用。編輯器中的匹配器會被改寫，您可以在儲存前先讀一遍。",
   "settings.requestRuleRequestersApply": "把這些名字寫入匹配器",
-  "settings.requestRuleRequestersUnavailable": "列出賬户需要本頁面不具備的權限，因此名字需要手動寫入匹配器。",
-  "settings.requestRuleRequestersNoTarget": "此匹配器沒有指定任何人，所選賬户無處寫入。請先添加 requesters 集合或用戶名比較。",
+  "settings.requestRuleRequestersUnavailable":
+    "列出賬户需要本頁面不具備的權限，因此名字需要手動寫入匹配器。",
+  "settings.requestRuleRequestersNoTarget":
+    "此匹配器沒有指定任何人，所選賬户無處寫入。請先添加 requesters 集合或用戶名比較。",
   "settings.requestPreviewTitle": "用一個請求試運行此規則",
-  "settings.requestPreviewSubtitle": "針對您描述的請求運行一個匹配器。不會提交任何內容，也不會留下記錄。",
+  "settings.requestPreviewSubtitle":
+    "針對您描述的請求運行一個匹配器。不會提交任何內容，也不會留下記錄。",
   "settings.requestPreviewSource": "匹配器",
   "settings.requestPreviewSourceStored": "已儲存的規則",
   "settings.requestPreviewSourceDraft": "編輯器草稿",
@@ -3812,12 +4458,14 @@ const zh_HK: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "運行預覽",
   "settings.requestPreviewRunning": "正在運行…",
-  "settings.requestPreviewEmpty": "描述一個請求並運行預覽，即可看到此規則會怎麼判斷。",
+  "settings.requestPreviewEmpty":
+    "描述一個請求並運行預覽，即可看到此規則會怎麼判斷。",
   "settings.requestPreviewMetadataPartial": "元數據不完整",
   "settings.requestPreviewShowInput": "顯示匹配器看到的輸入",
   "settings.requestPreviewHideInput": "隱藏輸入",
   "settings.requestPreviewInputUnavailable": "無法回讀輸入文檔。",
-  "settings.requestPreviewUndefinedTags": "在套用之前請先在「設定 › 標籤」中定義這些標籤。",
+  "settings.requestPreviewUndefinedTags":
+    "在套用之前請先在「設定 › 標籤」中定義這些標籤。",
   "settings.requestDecisionsTitle": "近期決策",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "任意結果",
@@ -3830,43 +4478,58 @@ const zh_HK: LocaleDictionary = {
   "settings.requestDecisionNoVotes": "沒有規則投票。",
   "settings.requestDecisionHeld": "已暫緩",
   "settings.requestTemplateGallery": "初學者規則",
-  "settings.requestTemplateGalleryDescription": "可載入編輯器的實用範例。套用範例會自動填入表單；您仍可閱讀、命名、設定範圍並儲存它。",
-  "settings.requestTemplateGalleryTagNote": "發出標籤的範本需要在「設定 › 標籤」中定義該標籤；決策請求時會捨棄未定義的標籤。",
+  "settings.requestTemplateGalleryDescription":
+    "可載入編輯器的實用範例。套用範例會自動填入表單；您仍可閱讀、命名、設定範圍並儲存它。",
+  "settings.requestTemplateGalleryTagNote":
+    "發出標籤的範本需要在「設定 › 標籤」中定義該標籤；決策請求時會捨棄未定義的標籤。",
   "settings.requestTemplateApply": "載入至編輯器",
   "settings.requestTemplatePersonTargetedBadge": "指定特定人員",
-  "settings.requestTemplateNamedRequestersTitle": "指定請求者，闔家觀賞分級媒體",
-  "settings.requestTemplateNamedRequestersDescription": "當分級為闔家觀賞級時，核准來自三位指定人員的請求，並為其中最適合家庭觀賞的作品加上標籤。這些姓名為預留位置：儲存前請使用帳號挑選器進行替換。",
+  "settings.requestTemplateNamedRequestersTitle":
+    "指定請求者，闔家觀賞分級媒體",
+  "settings.requestTemplateNamedRequestersDescription":
+    "當分級為闔家觀賞級時，核准來自三位指定人員的請求，並為其中最適合家庭觀賞的作品加上標籤。這些姓名為預留位置：儲存前請使用帳號挑選器進行替換。",
   "settings.requestTemplateShortLeaseTitle": "來自單一用戶的短期租約",
-  "settings.requestTemplateShortLeaseDescription": "當一位指定人員要求保留媒體兩週或更短時間時，核准其請求。要求永久保留的請求不包含天數，因此不會在此核准。",
+  "settings.requestTemplateShortLeaseDescription":
+    "當一位指定人員要求保留媒體兩週或更短時間時，核准其請求。要求永久保留的請求不包含天數，因此不會在此核准。",
   "settings.requestTemplateLowResolutionTitle": "低解像度請求",
-  "settings.requestTemplateLowResolutionDescription": "當一位指定人員所選的質素設定檔最高僅達 720p 或更低時，核准其請求。",
+  "settings.requestTemplateLowResolutionDescription":
+    "當一位指定人員所選的質素設定檔最高僅達 720p 或更低時，核准其請求。",
   "settings.requestTemplateDenyAdultTitle": "拒絕成人內容",
-  "settings.requestTemplateDenyAdultDescription": "拒絕元數據標記為成人內容的任何媒體請求，並記錄原因。未指定任何人，因此適用於每位請求者。",
+  "settings.requestTemplateDenyAdultDescription":
+    "拒絕元數據標記為成人內容的任何媒體請求，並記錄原因。未指定任何人，因此適用於每位請求者。",
   "settings.requestTemplateMonthlyQuotaTitle": "每月核准配額",
-  "settings.requestTemplateMonthlyQuotaDescription": "一旦請求者在過去三十天內已有五次獲准，即將請求送交人員審核。此規則從不直接拒絕；它要求人員介入檢視。",
+  "settings.requestTemplateMonthlyQuotaDescription":
+    "一旦請求者在過去三十天內已有五次獲准，即將請求送交人員審核。此規則從不直接拒絕；它要求人員介入檢視。",
   "settings.refReqTitle": "請求輸入參考",
   "settings.refReqSubtitle": "請求匹配器可讀取的所有值及其含義。",
-  "settings.refReqIntro": "請求規則讀取一份說明該請求、發起請求者、目標媒體庫以及 Scryer 對該媒體了解程度的文檔。事實是純值。Scryer 無法觀察到的事實會直接缺失，而讀取缺失事實的規則會將請求暫緩交由人員處理而非隨意猜測 — 您永遠不必自行撰寫該防護代碼。",
+  "settings.refReqIntro":
+    "請求規則讀取一份說明該請求、發起請求者、目標媒體庫以及 Scryer 對該媒體了解程度的文檔。事實是純值。Scryer 無法觀察到的事實會直接缺失，而讀取缺失事實的規則會將請求暫緩交由人員處理而非隨意猜測 — 您永遠不必自行撰寫該防護代碼。",
   "settings.refReqOutputTitle": "請求規則所定義的內容",
-  "settings.refReqOutputIntro": "必須定義其中至少一項，否則規則永遠無法投票，且 Scryer 會拒絕儲存它。",
-  "settings.refReqOutputApprove": "approve — 該請求可以在無人員審核的情況下獲准。",
+  "settings.refReqOutputIntro":
+    "必須定義其中至少一項，否則規則永遠無法投票，且 Scryer 會拒絕儲存它。",
+  "settings.refReqOutputApprove":
+    "approve — 該請求可以在無人員審核的情況下獲准。",
   "settings.refReqOutputDeny": "deny — 該請求被拒絕。拒絕票優先於任何其他票。",
-  "settings.refReqOutputManual": "manual — 無論其他規則如何投票，該請求都會轉交由人員處理。",
-  "settings.refReqOutputTags": "tags 包含 \"…\" — 媒體的標籤，僅在獲准時套用。",
-  "settings.refReqOutputReasons": "reasons 包含 \"…\" — 顯示給請求者的穩定代碼。",
-  "settings.refReqOutputNoPackage": "請勿撰寫 package 或 import 行。Scryer 會產生這兩者，並在將匹配器交給此編輯器時將其去除。",
+  "settings.refReqOutputManual":
+    "manual — 無論其他規則如何投票，該請求都會轉交由人員處理。",
+  "settings.refReqOutputTags": 'tags 包含 "…" — 媒體的標籤，僅在獲准時套用。',
+  "settings.refReqOutputReasons": 'reasons 包含 "…" — 顯示給請求者的穩定代碼。',
+  "settings.refReqOutputNoPackage":
+    "請勿撰寫 package 或 import 行。Scryer 會產生這兩者，並在將匹配器交給此編輯器時將其去除。",
   "search.keepFor": "保留時長",
   "search.keepForForever": "永久",
   "search.keepForDays": "{{count}} 天",
   "search.keepForCustom": "指定天數…",
   "search.keepForCustomLabel": "保留天數",
-  "search.keepForHelp": "Scryer 為您保留此媒體的時長。到期後維護規則可能會將其刪除；永久保留不會到期。",
+  "search.keepForHelp":
+    "Scryer 為您保留此媒體的時長。到期後維護規則可能會將其刪除；永久保留不會到期。",
   "requests.preflightAutoApprove": "這將被自動核准",
   "requests.preflightManualReview": "這需要人工審核",
   "requests.preflightDeny": "這將被拒絕：{{reasons}}",
   "requests.preflightTags": "將標記為 {{tags}}。",
   "requests.preflightReason": "原因：{{reason}}。",
-  "requests.preflightMetadataPartial": "Scryer 無法讀取此作品的完整中繼資料，因此將由人工決定。",
+  "requests.preflightMetadataPartial":
+    "Scryer 無法讀取此作品的完整中繼資料，因此將由人工決定。",
   "requests.leaseForever": "永久保留",
   "requests.leaseRequested": "請求保留 {{count}} 天",
   "requests.leaseDormant": "首次匯入起 {{count}} 天",
@@ -3874,7 +4537,8 @@ const zh_HK: LocaleDictionary = {
   "requests.leaseExpired": "保留期已過期",
   "requests.leaseReleased": "保留已釋放",
   "requests.decisionTitle": "決策依據",
-  "requests.decisionPolicySaid": "規則結果為 {{outcome}}；由其他條件做出了請求決策。",
+  "requests.decisionPolicySaid":
+    "規則結果為 {{outcome}}；由其他條件做出了請求決策。",
   "requests.decisionVotes": "規則投票",
   "requests.decisionNothingToShow": "沒有規則對此請求提出意見。",
   "requests.decisionOutcomeAutoApprove": "依規則核准",
@@ -3895,7 +4559,8 @@ const zh_HK: LocaleDictionary = {
   "requests.approvedLeaseKeepForever": "依請求永久保留",
   "requests.approvedLeaseKeepRequested": "依請求保留 {{count}} 天",
   "requests.approvedTags": "標籤",
-  "requests.approvedTagsHelp": "核准時套用於作品。已預先填入規則輸出的標籤；您可在「設定 > 標籤」中新增或移除管理員定義的任何標籤。",
+  "requests.approvedTagsHelp":
+    "核准時套用於作品。已預先填入規則輸出的標籤；您可在「設定 > 標籤」中新增或移除管理員定義的任何標籤。",
   "requests.approvedTagsNone": "不會套用任何標籤。",
   "requests.claimsShow": "保留權",
   "requests.claimsHide": "隱藏保留權",
@@ -3917,7 +4582,8 @@ const zh_HK: LocaleDictionary = {
   "requests.claimReleaseReason": "原因",
   "requests.claimReleaseReasonPlaceholder": "解除此持有的原因",
   "requests.claimReleaseReasonHelp": "原因為必填；將記錄於持有項目中。",
-  "status.requestApprovedClaimFailed": "已核准 {{name}}，但沒有任何項目持有它：{{error}}",
+  "status.requestApprovedClaimFailed":
+    "已核准 {{name}}，但沒有任何項目持有它：{{error}}",
   "status.claimExtended": "已延長持有期。",
   "status.claimMadePermanent": "此作品現已永久保留。",
   "status.claimReleased": "已釋放持有。",
@@ -3927,40 +4593,57 @@ const zh_HK: LocaleDictionary = {
   "settings.refReqSectionNow": "— 評估時的時鐘，適用於依賴請求送達時間的規則",
   "settings.refReqNowWeekday": "UTC 星期幾，小寫英文（monday … sunday）",
   "settings.refReqNowHourUtc": "UTC 一天中的小時，0 至 23",
-  "settings.refReqSectionRequester": "— 發起請求的人。讀取這些內容的匹配器需要權限管理授權才能儲存",
+  "settings.refReqSectionRequester":
+    "— 發起請求的人。讀取這些內容的匹配器需要權限管理授權才能儲存",
   "settings.refReqRequesterUserId": "發起請求的帳號標識符",
   "settings.refReqRequesterUsername": "發起請求的帳號用戶名稱",
-  "settings.refReqRequesterAccountKind": "該帳號的登入方式（例如 local 本地，或已關聯的提供者）",
+  "settings.refReqRequesterAccountKind":
+    "該帳號的登入方式（例如 local 本地，或已關聯的提供者）",
   "settings.refReqRequesterAppPermissions": "該帳號所擁有的全應用程式權限",
-  "settings.refReqRequesterLibraryPermissions": "該帳號在被請求媒體庫上所擁有的權限",
-  "settings.refReqRequesterLinkedProviders": "該帳號已關聯的媒體伺服器與身分識別提供者",
-  "settings.refReqRequesterCreatedAt": "帳號建立時間；缺失，因為 Scryer 尚未記錄它",
+  "settings.refReqRequesterLibraryPermissions":
+    "該帳號在被請求媒體庫上所擁有的權限",
+  "settings.refReqRequesterLinkedProviders":
+    "該帳號已關聯的媒體伺服器與身分識別提供者",
+  "settings.refReqRequesterCreatedAt":
+    "帳號建立時間；缺失，因為 Scryer 尚未記錄它",
   "settings.refReqSectionLibrary": "— 請求所針對的媒體庫",
   "settings.refReqLibraryId": "媒體庫標識符",
   "settings.refReqLibraryName": "媒體庫名稱",
-  "settings.refReqLibraryFacet": "媒體庫收錄的媒體類型（MOVIE 電影、SERIES 電視劇或 ANIME 動漫）",
-  "settings.refReqLibraryIsDefault": "此媒體庫為其所屬類型的預設媒體庫時為 true",
+  "settings.refReqLibraryFacet":
+    "媒體庫收錄的媒體類型（MOVIE 電影、SERIES 電視劇或 ANIME 動漫）",
+  "settings.refReqLibraryIsDefault":
+    "此媒體庫為其所屬類型的預設媒體庫時為 true",
   "settings.refReqSectionRequest": "— 請求的內容",
   "settings.refReqRequestOrigin": "請求來源（例如搜尋對話框）",
   "settings.refReqRequestTitle": "請求時讀取的作品標題",
   "settings.refReqRequestYear": "發行年份（若提供者已知）",
-  "settings.refReqRequestExternalIds": "提供者標識符；請參閱下方的 input.request.external_ids",
+  "settings.refReqRequestExternalIds":
+    "提供者標識符；請參閱下方的 input.request.external_ids",
   "settings.refReqRequestQualityProfileId": "請求者選取的質素設定檔標識符",
   "settings.refReqRequestQualityProfileName": "該設定檔的名稱",
-  "settings.refReqRequestMonitorType": "請求者要求的監控類型（例如 ALL_EPISODES）",
-  "settings.refReqRequestMonitorSelectionSeasonCount": "進階監控選擇所指定的季度數",
+  "settings.refReqRequestMonitorType":
+    "請求者要求的監控類型（例如 ALL_EPISODES）",
+  "settings.refReqRequestMonitorSelectionSeasonCount":
+    "進階監控選擇所指定的季度數",
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
-  "settings.refReqRequestLeaseDays": "請求者要求保留的天數；若要求永久保留則缺失",
-  "settings.refReqSectionExternalIds": "— input.request.external_ids 上的提供者標識符",
+  "settings.refReqRequestLeaseDays":
+    "請求者要求保留的天數；若要求永久保留則缺失",
+  "settings.refReqSectionExternalIds":
+    "— input.request.external_ids 上的提供者標識符",
   "settings.refReqExternalIdsTmdb": "TMDB 標識符（若提供者有提供）",
   "settings.refReqExternalIdsImdb": "IMDb 標識符（若提供者有提供）",
   "settings.refReqExternalIdsTvdb": "TVDB 標識符（若提供者有提供）",
-  "settings.refReqSectionFacts": "— Scryer 對媒體及此請求者歷史日誌的了解。Scryer 無法觀察到的事實將會缺失，讀取缺失的事實會將請求暫緩交由人員處理",
+  "settings.refReqSectionFacts":
+    "— Scryer 對媒體及此請求者歷史日誌的了解。Scryer 無法觀察到的事實將會缺失，讀取缺失的事實會將請求暫緩交由人員處理",
   "settings.refReqFactsAgeRating": "分級所隱含的最低年齡",
-  "settings.refReqFactsCertifications": "元數據所攜帶的每一項分級認證；請參閱下方的 input.facts.certifications[]",
-  "settings.refReqFactsCertificationLabel": "美國分級標籤（例如 G、PG、PG-13、R）",
-  "settings.refReqFactsCertificationRank": "該標籤的數值表示（數值越低越寬鬆），便於規則進行大小比較而非逐一列舉標籤",
-  "settings.refReqFactsCommonsenseRecommended": "Common Sense Media 是否推薦該作品適合其年齡層",
+  "settings.refReqFactsCertifications":
+    "元數據所攜帶的每一項分級認證；請參閱下方的 input.facts.certifications[]",
+  "settings.refReqFactsCertificationLabel":
+    "美國分級標籤（例如 G、PG、PG-13、R）",
+  "settings.refReqFactsCertificationRank":
+    "該標籤的數值表示（數值越低越寬鬆），便於規則進行大小比較而非逐一列舉標籤",
+  "settings.refReqFactsCommonsenseRecommended":
+    "Common Sense Media 是否推薦該作品適合其年齡層",
   "settings.refReqFactsGenres": "作品的類型名稱",
   "settings.refReqFactsCanonicalTagKeys": "Scryer 為該作品定義的規範標籤鍵",
   "settings.refReqFactsThemes": "作品的主題名稱",
@@ -3975,14 +4658,17 @@ const zh_HK: LocaleDictionary = {
   "settings.refReqFactsCountry": "出品國家/地區",
   "settings.refReqFactsNetwork": "播出此作品的電視網絡/串流網絡",
   "settings.refReqFactsStudio": "製作此作品的片廠/工作室",
-  "settings.refReqFactsContentStatus": "提供者的內容狀態（例如 Continuing 播出中、Ended 已完結）",
+  "settings.refReqFactsContentStatus":
+    "提供者的內容狀態（例如 Continuing 播出中、Ended 已完結）",
   "settings.refReqFactsReleaseDate": "電影的上映日期",
   "settings.refReqFactsFirstAired": "電視劇首播日期",
   "settings.refReqFactsReleaseAgeDays": "發行或首播至今的天數",
   "settings.refReqFactsAwardCount": "元數據記錄的得獎數量",
   "settings.refReqFactsQualityProfileTiers": "請求者所選質素設定檔中的層級名稱",
-  "settings.refReqFactsQualityProfileMaxResolution": "該設定檔允許的最高垂直解像度（像素）",
-  "settings.refReqFactsQualityProfileAllowsUpgrades": "該設定檔在首次抓取後是否持續升級",
+  "settings.refReqFactsQualityProfileMaxResolution":
+    "該設定檔允許的最高垂直解像度（像素）",
+  "settings.refReqFactsQualityProfileAllowsUpgrades":
+    "該設定檔在首次抓取後是否持續升級",
   "settings.refReqFactsExistsInLibraryIds": "已收錄此作品的媒體庫",
   "settings.refReqFactsPreviousRequestCount": "此請求者先前請求此作品的次數",
   "settings.refReqFactsPreviouslyDenied": "先前的請求中是否有一次被拒絕",
@@ -3992,28 +4678,41 @@ const zh_HK: LocaleDictionary = {
   "settings.refReqFactsDeniedLast30d": "過去三十天內被拒絕的數量",
   "settings.refReqFactsTotalApproved": "此請求者歷史上累計獲准的請求總數",
   "settings.refReqFactsActiveLeaseCount": "此請求者目前持有租約的作品數量",
-  "settings.refReqFactsDaysSinceLastRequest": "距離此請求者上次發起任何請求的天數",
+  "settings.refReqFactsDaysSinceLastRequest":
+    "距離此請求者上次發起任何請求的天數",
   "settings.refReqFactsLibraryTitleCount": "目標媒體庫包含的作品數量",
-  "settings.refReqSectionCertifications": "— input.facts.certifications 中每個分級認證對應一項",
+  "settings.refReqSectionCertifications":
+    "— input.facts.certifications 中每個分級認證對應一項",
   "settings.refReqCertCountry": "頒發分級認證的國家/地區",
   "settings.refReqCertValue": "分級認證本身（例如 PG-13）",
   "settings.refReqCertSource": "分級認證的來源",
-  "settings.refReqSectionObservations": "— 作為完整封裝的相同事實，適用於需要區分 absent 與 unknown 或讀取原因的規則。在此讀取事實會使該事實退出自動暫緩：您必須為三值邏輯的結果承擔責任。",
-  "settings.refReqObsStatus": "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字符串。",
+  "settings.refReqSectionObservations":
+    "— 作為完整封裝的相同事實，適用於需要區分 absent 與 unknown 或讀取原因的規則。在此讀取事實會使該事實退出自動暫緩：您必須為三值邏輯的結果承擔責任。",
+  "settings.refReqObsStatus":
+    "known、absent 或 unknown。absent 表示來源已回應且無值；unknown 表示 Scryer 無法查明。在讀取 value 之前請先測試此項 — unknown 事實絕不會強制轉型為 false、0 或空字符串。",
   "settings.refReqObsObservedAt": "觀察到該值的時間（若來源有記錄時間）",
-  "settings.refReqObsReason": "穩定的機器代碼，說明事實為何為 unknown，或為何 absent 事實沒有值",
-  "settings.refReqSectionObsCertifications": "— input.observations.certifications.value 中每個分級認證對應一項",
-  "settings.refReqFactsAgeRatingValue": "分級隱含的最低年齡；當元數據未提供任何分級時為 absent，原因為 no_certification",
-  "settings.refReqFactsCertificationsValue": "每個分級認證對應一項；請參閱下方的 input.observations.certifications.value[]",
-  "settings.refReqFactsCertificationLabelValue": "美國分級標籤；當元數據不包含美國分級時為 absent",
-  "settings.refReqFactsCertificationRankValue": "該標籤的數字表示（最低優先）；若該標籤非 Scryer 排名的標籤則為 absent",
-  "settings.refReqFactsCommonsenseRecommendedValue": "Common Sense Media 推薦該作品適合其年齡層時為 true",
-  "settings.refReqFactsGenresValue": "去重後的類型名稱；若元數據未指定任何類型則為空清單",
+  "settings.refReqObsReason":
+    "穩定的機器代碼，說明事實為何為 unknown，或為何 absent 事實沒有值",
+  "settings.refReqSectionObsCertifications":
+    "— input.observations.certifications.value 中每個分級認證對應一項",
+  "settings.refReqFactsAgeRatingValue":
+    "分級隱含的最低年齡；當元數據未提供任何分級時為 absent，原因為 no_certification",
+  "settings.refReqFactsCertificationsValue":
+    "每個分級認證對應一項；請參閱下方的 input.observations.certifications.value[]",
+  "settings.refReqFactsCertificationLabelValue":
+    "美國分級標籤；當元數據不包含美國分級時為 absent",
+  "settings.refReqFactsCertificationRankValue":
+    "該標籤的數字表示（最低優先）；若該標籤非 Scryer 排名的標籤則為 absent",
+  "settings.refReqFactsCommonsenseRecommendedValue":
+    "Common Sense Media 推薦該作品適合其年齡層時為 true",
+  "settings.refReqFactsGenresValue":
+    "去重後的類型名稱；若元數據未指定任何類型則為空清單",
   "settings.refReqFactsCanonicalTagKeysValue": "去重後的規範標籤鍵",
   "settings.refReqFactsThemesValue": "去重後的主題名稱",
   "settings.refReqFactsIsAdultValue": "元數據將作品標記為成人內容時為 true",
   "settings.refReqFactsRatingValue": "以數值表示的綜合評分",
-  "settings.refReqFactsRatingsBySourceValue": "以來源名稱為鍵的對象，每個值代表該來源的評分",
+  "settings.refReqFactsRatingsBySourceValue":
+    "以來源名稱為鍵的對象，每個值代表該來源的評分",
   "settings.refReqFactsTmdbVoteAverageValue": "以數值表示的 TMDB 平均評分",
   "settings.refReqFactsTmdbVoteCountValue": "構成該平均評分的總票數",
   "settings.refReqFactsPopularityValue": "以數值表示的熱門度分數",
@@ -4027,19 +4726,31 @@ const zh_HK: LocaleDictionary = {
   "settings.refReqFactsFirstAiredValue": "RFC3339 首播日期",
   "settings.refReqFactsReleaseAgeDaysValue": "上映或首播至今的完整天數",
   "settings.refReqFactsAwardCountValue": "記錄的得獎數量；若無則確認為零",
-  "settings.refReqFactsQualityProfileTiersValue": "所選設定檔中的層級名稱，依設定檔順序排列",
-  "settings.refReqFactsQualityProfileMaxResolutionValue": "設定檔允許的最高垂直解像度（像素）",
-  "settings.refReqFactsQualityProfileAllowsUpgradesValue": "設定檔在首次抓取後是否持續升級時為 true",
-  "settings.refReqFactsExistsInLibraryIdsValue": "已收錄此作品的媒體庫標識符；若無則為空清單",
-  "settings.refReqFactsPreviousRequestCountValue": "此請求者先前對此作品發起請求的次數",
-  "settings.refReqFactsPreviouslyDeniedValue": "先前請求中曾有一次被拒絕時為 true",
-  "settings.refReqFactsPreviouslyApprovedValue": "先前請求中曾有一次獲准時為 true",
-  "settings.refReqFactsPendingRequestCountValue": "此請求者仍在等待決定的請求數量",
-  "settings.refReqFactsApprovedLast30dValue": "過去三十天內獲准的數量（以評估時間計算）",
-  "settings.refReqFactsDeniedLast30dValue": "過去三十天內被拒絕的數量（以評估時間計算）",
+  "settings.refReqFactsQualityProfileTiersValue":
+    "所選設定檔中的層級名稱，依設定檔順序排列",
+  "settings.refReqFactsQualityProfileMaxResolutionValue":
+    "設定檔允許的最高垂直解像度（像素）",
+  "settings.refReqFactsQualityProfileAllowsUpgradesValue":
+    "設定檔在首次抓取後是否持續升級時為 true",
+  "settings.refReqFactsExistsInLibraryIdsValue":
+    "已收錄此作品的媒體庫標識符；若無則為空清單",
+  "settings.refReqFactsPreviousRequestCountValue":
+    "此請求者先前對此作品發起請求的次數",
+  "settings.refReqFactsPreviouslyDeniedValue":
+    "先前請求中曾有一次被拒絕時為 true",
+  "settings.refReqFactsPreviouslyApprovedValue":
+    "先前請求中曾有一次獲准時為 true",
+  "settings.refReqFactsPendingRequestCountValue":
+    "此請求者仍在等待決定的請求數量",
+  "settings.refReqFactsApprovedLast30dValue":
+    "過去三十天內獲准的數量（以評估時間計算）",
+  "settings.refReqFactsDeniedLast30dValue":
+    "過去三十天內被拒絕的數量（以評估時間計算）",
   "settings.refReqFactsTotalApprovedValue": "此請求者累計獲准的請求數量",
-  "settings.refReqFactsActiveLeaseCountValue": "此請求者目前持有租約的作品數量（包含休眠中租約）",
-  "settings.refReqFactsDaysSinceLastRequestValue": "自請求者前次請求以來的完整天數；若為首次請求則 absent，原因為 no_previous_request",
+  "settings.refReqFactsActiveLeaseCountValue":
+    "此請求者目前持有租約的作品數量（包含休眠中租約）",
+  "settings.refReqFactsDaysSinceLastRequestValue":
+    "自請求者前次請求以來的完整天數；若為首次請求則 absent，原因為 no_previous_request",
   "settings.refReqFactsLibraryTitleCountValue": "目標媒體庫中的作品數量",
   "move.dialogTitle": "移動標題",
   "move.dialogDescription": "在移動之前，請檢查所選 {{count}} 個標題的計劃。",
@@ -4047,46 +4758,65 @@ const zh_HK: LocaleDictionary = {
   "move.destinationRoot": "目標根目錄",
   "move.destinationRootPlaceholder": "選擇根目錄",
   "move.actionHeading": "移動到…",
-  "move.actionDescription": "將該標題的檔案移動到另一個根目錄，或移動到另一個庫。",
+  "move.actionDescription":
+    "將該標題的檔案移動到另一個根目錄，或移動到另一個庫。",
   "move.actionButton": "移動到…",
   "move.wizardKindDescription": "請選擇該標題的去向。",
   "move.kindRootHeading": "移動到另一個根目錄",
-  "move.kindRootHelp": "標題仍留在當前庫中，只把它的檔案移動到該庫的另一個根目錄。",
+  "move.kindRootHelp":
+    "標題仍留在當前庫中，只把它的檔案移動到該庫的另一個根目錄。",
   "move.kindLibraryHeading": "移動到另一個庫",
   "move.kindLibraryHelp": "將該標題轉移到另一個庫，放入該庫的某個根目錄。",
-  "move.noOtherRoots": "當前庫沒有其他可作為目標的根目錄。請為該庫添加根目錄，或把該標題移動到另一個庫。",
+  "move.noOtherRoots":
+    "當前庫沒有其他可作為目標的根目錄。請為該庫添加根目錄，或把該標題移動到另一個庫。",
   "move.back": "返回",
   "move.next": "下一步",
   "move.destinationRootHelp": "更改目標會打開移動流程，而不是儲存標題。",
   "move.destinationNoSelection": "未選擇任何標題。",
-  "move.destinationMixedSourceLibraries": "所選內容跨越多個庫；請一次移動一個庫。",
-  "move.destinationCrossLibraryNotice": "這些標題將離開當前庫，成為 {{library}} 的一部分。",
-  "move.destinationLibraryInMoveWorkflow": "選擇目標根目錄後，在移動流程中選擇其他庫。",
+  "move.destinationMixedSourceLibraries":
+    "所選內容跨越多個庫；請一次移動一個庫。",
+  "move.destinationCrossLibraryNotice":
+    "這些標題將離開當前庫，成為 {{library}} 的一部分。",
+  "move.destinationLibraryInMoveWorkflow":
+    "選擇目標根目錄後，在移動流程中選擇其他庫。",
   "move.transferIntoLibrary": "將轉移到 {{library}}。",
-  "move.sameNameWarning": "{{library}} 中已有名為“{{title}}”的標題。Scryer 從不按名稱合併，因此本次轉移後會保留兩個同名標題。",
-  "move.ambiguousDestinationHelp": "目標庫中有多個標題與此標題具有相同的標識，Scryer 不會替你猜測。請先在目標庫中理清標識，然後再移動此標題。",
+  "move.sameNameWarning":
+    "{{library}} 中已有名為“{{title}}”的標題。Scryer 從不按名稱合併，因此本次轉移後會保留兩個同名標題。",
+  "move.ambiguousDestinationHelp":
+    "目標庫中有多個標題與此標題具有相同的標識，Scryer 不會替你猜測。請先在目標庫中理清標識，然後再移動此標題。",
   "move.ambiguousCandidateShared": "共享 {{identities}}",
-  "move.mergeStatement": "將合併到“{{title}}”。兩者合為一個標題：此標題的標識被併入，並以“{{title}}”的設定為準。",
+  "move.mergeStatement":
+    "將合併到“{{title}}”。兩者合為一個標題：此標題的標識被併入，並以“{{title}}”的設定為準。",
   "move.mergeSummaryHeading": "這次合併會做什麼",
   "move.mergeNoDetails": "這次合併不會帶走其他內容。",
   "move.mergeBlockedHeading": "此合併無法執行：以下記錄無法遷移。",
-  "move.mergeCarried": "{{files}} 個媒體檔案和 {{history}} 條歷史記錄會一併帶過去。",
-  "move.mergeDropped": "被合併標題的其他 {{count}} 條記錄不會被接管，將隨其一併退役。",
+  "move.mergeCarried":
+    "{{files}} 個媒體檔案和 {{history}} 條歷史記錄會一併帶過去。",
+  "move.mergeDropped":
+    "被合併標題的其他 {{count}} 條記錄不會被接管，將隨其一併退役。",
   "move.mergeRoleChangesHeading": "{{demotions}} 個檔案將成為附加副本",
   "move.mergeRoleChangesHeadingPlain": "檔案角色",
-  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED": "“{{title}}”已有這些劇集的主檔案。傳入的檔案將作為附加副本保留，已有的檔案不會被替換。",
-  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE": "“{{title}}”已有主檔案。傳入的檔案將作為附加副本保留，已有的檔案不會被替換。",
-  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED": "本次移動中的另一個檔案已是這些劇集的主檔案，因此這些檔案將作為附加副本保留。",
-  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE": "本次移動中的另一個檔案已是主檔案，因此該檔案將作為附加副本保留。",
-  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES": "這些檔案在此處登記在兩個劇集下，而在目標處它們是同一劇集。在那裏每個檔案只登記一次。",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}”已有這些劇集的主檔案。傳入的檔案將作為附加副本保留，已有的檔案不會被替換。",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}”已有主檔案。傳入的檔案將作為附加副本保留，已有的檔案不會被替換。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "本次移動中的另一個檔案已是這些劇集的主檔案，因此這些檔案將作為附加副本保留。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "本次移動中的另一個檔案已是主檔案，因此該檔案將作為附加副本保留。",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "這些檔案在此處登記在兩個劇集下，而在目標處它們是同一劇集。在那裏每個檔案只登記一次。",
   "move.mergeRoleUnnamedFile": "檔案 {{id}}",
   "move.operationTransferNote": "這些標題正在移動到其他庫。",
   "move.modeHeading": "檔案應如何到達那裏？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移動",
   "move.mode.FILES_ALREADY_THERE": "檔案已經在那裏",
-  "move.modeHelp.MOVE_WITH_SCRYER": "Scryer 會移動或複製檔案，並在更改目錄前逐個校驗。",
-  "move.modeHelp.FILES_ALREADY_THERE": "Scryer 會掃描目標位置並接管你自己移動的檔案。",
-  "move.catalogOnlyFastPath": "這些標題在硬碟上沒有檔案，因此這只是目錄重新分配：不移動任何內容，也無需選擇模式。",
+  "move.modeHelp.MOVE_WITH_SCRYER":
+    "Scryer 會移動或複製檔案，並在更改目錄前逐個校驗。",
+  "move.modeHelp.FILES_ALREADY_THERE":
+    "Scryer 會掃描目標位置並接管你自己移動的檔案。",
+  "move.catalogOnlyFastPath":
+    "這些標題在硬碟上沒有檔案，因此這只是目錄重新分配：不移動任何內容，也無需選擇模式。",
   "move.selectDestinationPrompt": "選擇一個目標根目錄以查看計劃。",
   "move.previewLoading": "正在生成計劃…",
   "move.gatheringInfo": "正在收集所有資訊…",
@@ -4095,8 +4825,10 @@ const zh_HK: LocaleDictionary = {
   "move.manualLoading": "正在載入資料夾指引…",
   "move.manualInstructions": "移動檔案後，請返回此處並按「下一步」。",
   "move.changeDestination": "變更目的地",
-  "move.manualMappingChanged": "目錄位置已變更。在再次按「下一步」之前，請先檢查更新後的資料夾。",
-  "move.manualStructure": "請使用下方的目的地資料夾，保留檔案名稱與相對目錄結構。「下一步」將更新目錄並確認您已移動檔案；Scryer 不會檢查或變更這些檔案。",
+  "move.manualMappingChanged":
+    "目錄位置已變更。在再次按「下一步」之前，請先檢查更新後的資料夾。",
+  "move.manualStructure":
+    "請使用下方的目的地資料夾，保留檔案名稱與相對目錄結構。「下一步」將更新目錄並確認您已移動檔案；Scryer 不會檢查或變更這些檔案。",
   "move.manualSource": "目前資料夾",
   "move.manualDestination": "移至資料夾",
   "move.retryInstructions": "重新載入指引",
@@ -4116,11 +4848,15 @@ const zh_HK: LocaleDictionary = {
   "move.freeSpaceRequired": "目標需要 {{required}}；可用 {{available}}。",
   "move.freeSpaceUnknown": "未知",
   "move.freeSpaceInsufficient": "目標位置的可用空間不足。",
-  "move.startRefusedNoSpace": "目標位置的可用空間不足以完成此次移動。請釋放空間或減少要移動的作品數量後重試。",
+  "move.startRefusedNoSpace":
+    "目標位置的可用空間不足以完成此次移動。請釋放空間或減少要移動的作品數量後重試。",
   "move.freeSpaceNotProbed": "無法測量目標卷。",
-  "move.freeSpaceRecycleOtherVolume": "垃圾桶位於另一個捲上，需要 {{required}}。",
-  "move.verificationStatementFull": "全部 {{files}} 個檔案（{{bytes}}）都會被完整回讀並比對。",
-  "move.verificationStatementQuick": "全部 {{files}} 個檔案（{{bytes}}）都會按頭部、尾部和大小進行核對。",
+  "move.freeSpaceRecycleOtherVolume":
+    "垃圾桶位於另一個捲上，需要 {{required}}。",
+  "move.verificationStatementFull":
+    "全部 {{files}} 個檔案（{{bytes}}）都會被完整回讀並比對。",
+  "move.verificationStatementQuick":
+    "全部 {{files}} 個檔案（{{bytes}}）都會按頭部、尾部和大小進行核對。",
   "move.verificationNotApplicable": "沒有檔案移動，因此無需校驗。",
   "move.verificationStampFull": "已校驗（完整）",
   "move.verificationStampQuick": "已校驗（快速）",
@@ -4152,7 +4888,8 @@ const zh_HK: LocaleDictionary = {
   "move.transferVerificationBytes": "已驗證 {{done}} / {{total}}",
   "move.transferNoFiles": "此作品沒有檔案傳輸。",
   "move.transferFileState.QUEUED": "已排入隊列",
-  "move.transferFileState.WAITING_FOR_STORAGE": "等待儲存空間 · 每 2 分鐘檢查一次",
+  "move.transferFileState.WAITING_FOR_STORAGE":
+    "等待儲存空間 · 每 2 分鐘檢查一次",
   "move.transferFileState.DUPLICATE": "重複檔案 (未複製)",
   "move.transferFileState.MOVING": "移動中",
   "move.transferFileState.VERIFYING": "驗證中",
@@ -4206,26 +4943,39 @@ const zh_HK: LocaleDictionary = {
   "move.retryNotPossible": "此操作無法重試。",
   "move.retryFailed": "重試操作失敗。",
   "move.abandonAction": "放棄",
-  "move.abandonRequested": "已放棄。其作品與根目錄已釋放；已完成的作品保持不變，當儲存裝置恢復後可點擊「重試」以移動其餘部分。",
+  "move.abandonRequested":
+    "已放棄。其作品與根目錄已釋放；已完成的作品保持不變，當儲存裝置恢復後可點擊「重試」以移動其餘部分。",
   "move.abandonNotPossible": "此操作已停止。",
   "move.abandonFailed": "放棄操作失敗。",
   "move.stalledNoRunner": "無執行程序",
-  "move.stalledGuidance": "目前沒有執行程序處理此操作。若儲存裝置已恢復，請按「繼續」。若無法恢復，請按「放棄」以釋放其作品與根目錄；之後即可重試。",
+  "move.stalledGuidance":
+    "目前沒有執行程序處理此操作。若儲存裝置已恢復，請按「繼續」。若無法恢復，請按「放棄」以釋放其作品與根目錄；之後即可重試。",
   "move.planAgainAction": "重新規劃",
   "move.planAgainTitleAction": "重新規劃此作品",
   "move.planAgainFailed": "無法開啟移動對話方塊。",
-  "move.planAgainCatalogBlocked": "{{count}} 部作品未包含在「重新規劃」中，因為在驗證檔案後其目錄更新未完成；「重試」可完成這些更新。",
-  "move.reason.ownership_conflict": "另一個操作仍佔用部分作品或根目錄。請等待其完成 (或取消該操作)，然後重試。",
-  "move.reason.storage_error": "檔案無法讀取或寫入。未從來源端移除任何檔案。請解決儲存問題 (可用空間、權限、掛載)，然後重試；已通過驗證的檔案不會再次複製。",
-  "move.reason.verification_mismatch": "複製的檔案與來源不符。來源檔案未受影響且未信任複製的檔案。請重試；若相同檔案再次失敗，請檢查目的地磁碟。",
-  "move.reason.stale_plan": "取得預覽後，規劃底層的狀態已變更。已完成的作品狀態一致。請重新規劃移動以取得全新預覽。",
-  "move.reason.merge_unavailable": "此作品無法再合併至其目的地。請修復目的地作品 (或取消選取)，然後再次規劃移動。",
-  "move.reason.catalog_write_failed": "檔案已複製並通過驗證，但目錄更新失敗。未從來源端移除任何內容。請重試以完成目錄更新；在成功之前請勿為此作品規劃新的移動。",
-  "move.reason.source_cleanup_failed": "移動已完成，但無法移除舊副本。請重試以將其移除，或確認作品能從新位置播放後自行刪除舊資料夾。",
+  "move.planAgainCatalogBlocked":
+    "{{count}} 部作品未包含在「重新規劃」中，因為在驗證檔案後其目錄更新未完成；「重試」可完成這些更新。",
+  "move.reason.ownership_conflict":
+    "另一個操作仍佔用部分作品或根目錄。請等待其完成 (或取消該操作)，然後重試。",
+  "move.reason.storage_error":
+    "檔案無法讀取或寫入。未從來源端移除任何檔案。請解決儲存問題 (可用空間、權限、掛載)，然後重試；已通過驗證的檔案不會再次複製。",
+  "move.reason.verification_mismatch":
+    "複製的檔案與來源不符。來源檔案未受影響且未信任複製的檔案。請重試；若相同檔案再次失敗，請檢查目的地磁碟。",
+  "move.reason.stale_plan":
+    "取得預覽後，規劃底層的狀態已變更。已完成的作品狀態一致。請重新規劃移動以取得全新預覽。",
+  "move.reason.merge_unavailable":
+    "此作品無法再合併至其目的地。請修復目的地作品 (或取消選取)，然後再次規劃移動。",
+  "move.reason.catalog_write_failed":
+    "檔案已複製並通過驗證，但目錄更新失敗。未從來源端移除任何內容。請重試以完成目錄更新；在成功之前請勿為此作品規劃新的移動。",
+  "move.reason.source_cleanup_failed":
+    "移動已完成，但無法移除舊副本。請重試以將其移除，或確認作品能從新位置播放後自行刪除舊資料夾。",
   "move.reason.stranded": "此操作已接受但從未執行。請重試，或重新規劃移動。",
-  "move.reason.canceled": "已在作品邊界處取消。已完成的作品保持不變；請重試以移動其餘部分。",
-  "move.reason.abandoned": "已放棄。已完成的作品保持不變。待儲存裝置恢復後可重試。",
-  "move.reason.root_unavailable": "此操作所需的根資料夾不可用。請在重新掛載後繼續，或放棄操作以釋放其作品。",
+  "move.reason.canceled":
+    "已在作品邊界處取消。已完成的作品保持不變；請重試以移動其餘部分。",
+  "move.reason.abandoned":
+    "已放棄。已完成的作品保持不變。待儲存裝置恢復後可重試。",
+  "move.reason.root_unavailable":
+    "此操作所需的根資料夾不可用。請在重新掛載後繼續，或放棄操作以釋放其作品。",
   "move.class.ROOT_MOVE": "移動到目標根目錄",
   "move.class.CROSS_LIBRARY_TRANSFER": "轉移到其他庫",
   "move.class.CATALOG_ONLY": "僅目錄（硬碟上無檔案）",
@@ -4281,12 +5031,15 @@ const zh_HK: LocaleDictionary = {
   "rootChange.rowAction": "更改根目錄",
   "rootChange.unavailableWhileUnsaved": "請先儲存或放棄未儲存的根目錄改動。",
   "rootChange.dialogTitle": "更改根目錄",
-  "rootChange.dialogDescription": "{path} 上的所有內容都會移動。整根操作不能落下任何一個條目。",
+  "rootChange.dialogDescription":
+    "{path} 上的所有內容都會移動。整根操作不能落下任何一個條目。",
   "rootChange.destinationHeading": "這個根目錄去往何處",
   "rootChange.destinationNewPath": "一個新路徑",
-  "rootChange.destinationNewPathHelp": "根目錄保留其身份和條目歸屬，只有路徑會改變。",
+  "rootChange.destinationNewPathHelp":
+    "根目錄保留其身份和條目歸屬，只有路徑會改變。",
   "rootChange.destinationExistingRoot": "本媒體庫的另一個根目錄",
-  "rootChange.destinationExistingRootHelp": "這個根目錄會併入你選擇的根目錄，其配置隨後被停用。",
+  "rootChange.destinationExistingRootHelp":
+    "這個根目錄會併入你選擇的根目錄，其配置隨後被停用。",
   "rootChange.destinationNoOtherRoots": "本媒體庫沒有可供併入的其他根目錄。",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
   "rootChange.planChanged": "自你預覽以來計劃已發生變化。請在確認前重新預覽。",
@@ -4297,12 +5050,16 @@ const zh_HK: LocaleDictionary = {
   "rootChange.startFailed": "無法開始此次根目錄更改。",
   "rootChange.startedHeading": "根目錄更改已開始。可在活動中跟蹤。",
   "rootChange.viewInActivity": "在活動中查看",
-  "rootChange.identityKeepsRoot": "該根目錄保留其身份以及全部 {titles} 項條目歸屬。",
+  "rootChange.identityKeepsRoot":
+    "該根目錄保留其身份以及全部 {titles} 項條目歸屬。",
   "rootChange.identityKeepsDefault": "它仍然是本媒體庫的預設根目錄。",
   "rootChange.identityLosesDefault": "它不再是本媒體庫的預設根目錄。",
-  "rootChange.consolidationStatement": "該根目錄上的全部 {titles} 個條目都會移動到你選擇的根目錄。",
-  "rootChange.consolidationRetiresConfiguration": "源根目錄的配置會在所有內容落位、垃圾桶處理全部完成之後停用。",
-  "rootChange.defaultTransfers": "目標根目錄將成為本媒體庫的預設根目錄，新內容會儲存到那裏。",
+  "rootChange.consolidationStatement":
+    "該根目錄上的全部 {titles} 個條目都會移動到你選擇的根目錄。",
+  "rootChange.consolidationRetiresConfiguration":
+    "源根目錄的配置會在所有內容落位、垃圾桶處理全部完成之後停用。",
+  "rootChange.defaultTransfers":
+    "目標根目錄將成為本媒體庫的預設根目錄，新內容會儲存到那裏。",
   "rootChange.defaultStays": "本媒體庫的預設根目錄不變。",
   "rootChange.accountingHeading": "該根目錄上的每一個條目",
   "rootChange.accountingAssigned": "已歸屬",
@@ -4311,7 +5068,8 @@ const zh_HK: LocaleDictionary = {
   "rootChange.accountingBlocked": "受阻",
   "rootChange.accountingDoesNotClose": "各項數字與總數不符。請勿確認此計劃。",
   "rootChange.blockedTitlesHeading": "有 {count} 個條目無法進入本次操作。",
-  "rootChange.blockedTitlesNoExclude": "請在開始前修復。整根操作不能落下任何一個條目。",
+  "rootChange.blockedTitlesNoExclude":
+    "請在開始前修復。整根操作不能落下任何一個條目。",
   "rootChange.groupsHeading": "這次合併會做什麼",
   "rootChange.group.movingIntoUnusedFolders": "移入空閒資料夾",
   "rootChange.group.mergingWithDestinationTitles": "合併",
@@ -4327,47 +5085,75 @@ const zh_HK: LocaleDictionary = {
   "rootChange.contentCompanions": "附屬檔案",
   "rootChange.contentUnknown": "無法解釋",
   "rootChange.contentSampled": "此處僅列出前若干條。",
-  "rootChange.unknownContentHelp": "有 {bytes} 的內容不受任何跟蹤。它們不會被移動，也不會被刪除，因此舊位置會保留。",
+  "rootChange.unknownContentHelp":
+    "有 {bytes} 的內容不受任何跟蹤。它們不會被移動，也不會被刪除，因此舊位置會保留。",
   "rootChange.retirementHeading": "此後的舊位置",
-  "rootChange.retirementEmptyDirectoriesOnly": "只會刪除空目錄：共 {count} 個。",
-  "rootChange.retirementVerificationFirst": "在目標副本通過校驗之前，源端不會刪除任何內容。",
+  "rootChange.retirementEmptyDirectoriesOnly":
+    "只會刪除空目錄：共 {count} 個。",
+  "rootChange.retirementVerificationFirst":
+    "在目標副本通過校驗之前，源端不會刪除任何內容。",
   "rootChange.retirementRetainedHeading": "連同內容一併保留：",
   "rootChange.retirementBlockedHeading": "在下列問題解決之前，舊位置會保留：",
   "rootChange.retirementPermitted": "沒有任何因素阻止停用舊位置。",
-  "rootChange.verificationStatement": "在任何源檔案進入垃圾桶之前，會在目標端完整校驗 {files} 個檔案（{bytes}）。",
+  "rootChange.verificationStatement":
+    "在任何源檔案進入垃圾桶之前，會在目標端完整校驗 {files} 個檔案（{bytes}）。",
   "rootChange.insufficientSpace": "目標位置沒有本次所需的 {required} 空間。",
   "rootChange.typedConfirmationPrompt": "輸入該短語以確認",
-  "rootChange.reason.root_identity_retained": "根目錄保留其身份，只有路徑改變。",
-  "rootChange.reason.catalog_only_root_change": "沒有已跟蹤的檔案，因此這只是目錄記錄上的重新歸屬。",
-  "rootChange.reason.title_blocked_for_root_change": "該條目暫時無法進入根目錄更改。",
-  "rootChange.reason.unknown_root_content": "根目錄上沒有任何條目能解釋的內容。",
+  "rootChange.reason.root_identity_retained":
+    "根目錄保留其身份，只有路徑改變。",
+  "rootChange.reason.catalog_only_root_change":
+    "沒有已跟蹤的檔案，因此這只是目錄記錄上的重新歸屬。",
+  "rootChange.reason.title_blocked_for_root_change":
+    "該條目暫時無法進入根目錄更改。",
+  "rootChange.reason.unknown_root_content":
+    "根目錄上沒有任何條目能解釋的內容。",
   "rootChange.reason.source_retirement_blocked": "舊位置暫時無法停用。",
-  "rootChange.reason.file_outside_title_folder": "一個位於其條目資料夾之外的已跟蹤檔案。",
-  "rootChange.reason.hardlinked_source": "源檔案還有其他硬鏈接，它們不會隨移動一起走。",
-  "rootChange.reason.roots_consolidated": "該根目錄上的每個條目都會移動到目標根目錄。",
-  "rootChange.reason.default_root_transferred": "目標根目錄將成為本媒體庫的預設根目錄。",
+  "rootChange.reason.file_outside_title_folder":
+    "一個位於其條目資料夾之外的已跟蹤檔案。",
+  "rootChange.reason.hardlinked_source":
+    "源檔案還有其他硬鏈接，它們不會隨移動一起走。",
+  "rootChange.reason.roots_consolidated":
+    "該根目錄上的每個條目都會移動到目標根目錄。",
+  "rootChange.reason.default_root_transferred":
+    "目標根目錄將成為本媒體庫的預設根目錄。",
   "rootChange.reason.moves_into_unused_folder": "移入一個無人佔用的資料夾。",
-  "rootChange.reason.merges_with_destination_title": "與共享同一身份的目標條目合併。",
-  "rootChange.reason.folder_name_uniqued": "目標端的資料夾名已被佔用，因此此資料夾會改名。",
-  "rootChange.reason.catalog_only_consolidation": "沒有已跟蹤的檔案，因此這只是目錄記錄上的重新歸屬。",
+  "rootChange.reason.merges_with_destination_title":
+    "與共享同一身份的目標條目合併。",
+  "rootChange.reason.folder_name_uniqued":
+    "目標端的資料夾名已被佔用，因此此資料夾會改名。",
+  "rootChange.reason.catalog_only_consolidation":
+    "沒有已跟蹤的檔案，因此這只是目錄記錄上的重新歸屬。",
   "rootChange.reason.destination_folder_exists": "目標資料夾已存在。",
   "rootChange.retirementBlocker.blocked_titles": "有些條目無法進入本次操作。",
-  "rootChange.retirementBlocker.unexplained_source_content": "源端有無法解釋的內容。",
+  "rootChange.retirementBlocker.unexplained_source_content":
+    "源端有無法解釋的內容。",
   "rootChange.refusal.root_change_path_not_absolute": "請填寫絕對路徑。",
-  "rootChange.refusal.root_change_paths_overlap": "新路徑位於舊路徑之內，或者反過來。",
-  "rootChange.refusal.root_change_source_root_is_symlink": "該根目錄是符號鏈接。請先將其指向真實目錄。",
-  "rootChange.refusal.root_change_source_root_unavailable": "該根目錄當前不可讀，因此無法規劃其內容。",
-  "rootChange.refusal.root_change_destination_not_empty": "新路徑中已有內容。請選擇一個空目錄或新目錄。",
-  "rootChange.refusal.root_change_destination_parent_missing": "新路徑的上級目錄不存在。",
-  "rootChange.refusal.root_change_destination_is_configured_root": "該路徑已被配置為另一個媒體庫的根目錄。",
-  "rootChange.refusal.root_change_mode_not_supported": "更改根目錄總是移動檔案；此處不提供“檔案已就位”。",
+  "rootChange.refusal.root_change_paths_overlap":
+    "新路徑位於舊路徑之內，或者反過來。",
+  "rootChange.refusal.root_change_source_root_is_symlink":
+    "該根目錄是符號鏈接。請先將其指向真實目錄。",
+  "rootChange.refusal.root_change_source_root_unavailable":
+    "該根目錄當前不可讀，因此無法規劃其內容。",
+  "rootChange.refusal.root_change_destination_not_empty":
+    "新路徑中已有內容。請選擇一個空目錄或新目錄。",
+  "rootChange.refusal.root_change_destination_parent_missing":
+    "新路徑的上級目錄不存在。",
+  "rootChange.refusal.root_change_destination_is_configured_root":
+    "該路徑已被配置為另一個媒體庫的根目錄。",
+  "rootChange.refusal.root_change_mode_not_supported":
+    "更改根目錄總是移動檔案；此處不提供“檔案已就位”。",
   "rootChange.refusal.root_consolidation_path_not_absolute": "請填寫絕對路徑。",
   "rootChange.refusal.root_consolidation_same_root": "根目錄不能併入其自身。",
-  "rootChange.refusal.root_consolidation_paths_overlap": "這兩個根目錄中的一個位於另一個之內。",
-  "rootChange.refusal.root_consolidation_source_root_is_symlink": "該根目錄是符號鏈接。請先將其指向真實目錄。",
-  "rootChange.refusal.root_consolidation_source_root_unavailable": "該根目錄當前不可讀，因此無法規劃其內容。",
-  "rootChange.refusal.root_consolidation_destination_root_unavailable": "目標根目錄當前不可讀，因此無法針對其已有內容進行規劃。",
-  "rootChange.refusal.root_consolidation_mode_not_supported": "合併總是移動檔案；此處不提供“檔案已就位”。",
+  "rootChange.refusal.root_consolidation_paths_overlap":
+    "這兩個根目錄中的一個位於另一個之內。",
+  "rootChange.refusal.root_consolidation_source_root_is_symlink":
+    "該根目錄是符號鏈接。請先將其指向真實目錄。",
+  "rootChange.refusal.root_consolidation_source_root_unavailable":
+    "該根目錄當前不可讀，因此無法規劃其內容。",
+  "rootChange.refusal.root_consolidation_destination_root_unavailable":
+    "目標根目錄當前不可讀，因此無法針對其已有內容進行規劃。",
+  "rootChange.refusal.root_consolidation_mode_not_supported":
+    "合併總是移動檔案；此處不提供“檔案已就位”。",
   "indexerSearch.searchWithThisIndexer": "使用此索引器搜尋",
   "indexerSearch.queryPlaceholder": "在所有索引器中搜索發佈…",
   "indexerSearch.kindLabel": "類型",
@@ -4381,7 +5167,8 @@ const zh_HK: LocaleDictionary = {
   "indexerSearch.scope.indexersAllOption": "所有索引器",
   "indexerSearch.scope.categories": "分類",
   "indexerSearch.scope.categoriesDefault": "按類型預設",
-  "indexerSearch.scope.categoriesHelp": "以逗號分隔的 Newznab 分類 ID。留空則使用所選類型的預設分類。",
+  "indexerSearch.scope.categoriesHelp":
+    "以逗號分隔的 Newznab 分類 ID。留空則使用所選類型的預設分類。",
   "indexerSearch.advanced": "高級",
   "indexerSearch.advanced.minSize": "最小體積",
   "indexerSearch.advanced.maxSize": "最大體積",
@@ -4397,7 +5184,8 @@ const zh_HK: LocaleDictionary = {
   "indexerSearch.health.releases": "{{count}} 個發佈",
   "indexerSearch.health.indexers": "索引器 {{answered}}/{{total}}",
   "indexerSearch.health.elapsed": "{{seconds}} 秒",
-  "indexerSearch.health.stillSearching": "{{total}} 箇中有 {{count}} 個仍在搜尋",
+  "indexerSearch.health.stillSearching":
+    "{{total}} 箇中有 {{count}} 個仍在搜尋",
   "indexerSearch.health.failed": "失敗",
   "indexerSearch.health.coolingDown": "冷卻中",
   "indexerSearch.health.partial": "{{count}} · 部分",
@@ -4461,7 +5249,8 @@ const zh_HK: LocaleDictionary = {
   "indexerSearch.empty.noResults": "沒有匹配的發佈。",
   "grabDialog.title.one": "抓取發佈",
   "grabDialog.title.many": "抓取 {{count}} 個發佈",
-  "grabDialog.subtitle": "選擇本次抓取所屬的媒體庫標題。Scryer 會以該標題導入並重命名。",
+  "grabDialog.subtitle":
+    "選擇本次抓取所屬的媒體庫標題。Scryer 會以該標題導入並重命名。",
   "grabDialog.summary.mix": "混合",
   "grabDialog.summary.mixed": "已選擇 {{count}} 個發佈",
   "grabDialog.assign.label": "分配到標題",
@@ -4469,7 +5258,8 @@ const zh_HK: LocaleDictionary = {
   "grabDialog.assign.count": "{{total}} 個標題中的 {{shown}} 個",
   "grabDialog.assign.loading": "正在搜尋標題…",
   "grabDialog.assign.empty": "沒有匹配的媒體庫標題。",
-  "grabDialog.assign.unlinked": "不關聯直接抓取 — 直送下載客戶端，稍後在導入中匹配",
+  "grabDialog.assign.unlinked":
+    "不關聯直接抓取 — 直送下載客戶端，稍後在導入中匹配",
   "grabDialog.gap.missing": "缺少 {{count}} 集",
   "grabDialog.gap.complete": "已完整",
   "grabDialog.gap.wanted": "待獲取",
@@ -4503,7 +5293,8 @@ const zh_HK: LocaleDictionary = {
   "grabDialog.error.expired": "該發佈已不在進行中的搜尋裏，請重新搜尋。",
   "settings.titleTags": "標籤",
   "settings.titleTagsExisting": "已定義的標籤",
-  "settings.titleTagsHelp": "只有在這裏定義的標籤才能應用到條目上。重命名標籤會同時改寫帶有該標籤的所有條目和延遲配置；刪除標籤會將它從所有條目上移除。",
+  "settings.titleTagsHelp":
+    "只有在這裏定義的標籤才能應用到條目上。重命名標籤會同時改寫帶有該標籤的所有條目和延遲配置；刪除標籤會將它從所有條目上移除。",
   "settings.titleTagsNone": "尚未定義任何標籤。",
   "settings.titleTagsLoadError": "無法載入標籤。",
   "settings.titleTagLabelLabel": "標籤名",
@@ -4520,13 +5311,17 @@ const zh_HK: LocaleDictionary = {
   "settings.titleTagDeleteError": "無法刪除該標籤。",
   "settings.titleTagDeleted": "已從 {{count}} 個條目上刪除 {{label}}。",
   "settings.titleTagDeleteConfirmTitle": "刪除標籤",
-  "settings.titleTagDeleteConfirm": "{{label}} 位於 {{count}} 個條目上。刪除後會從這些條目以及以它篩選的延遲配置中移除。引用它的規則將不再匹配。",
+  "settings.titleTagDeleteConfirm":
+    "{{label}} 位於 {{count}} 個條目上。刪除後會從這些條目以及以它篩選的延遲配置中移除。引用它的規則將不再匹配。",
   "settings.titleTagLabelRequired": "請輸入標籤名。",
-  "settings.titleTagLabelReserved": "標籤名不能以 scryer: 開頭，該前綴保留給 Scryer 自行寫入的設定。",
+  "settings.titleTagLabelReserved":
+    "標籤名不能以 scryer: 開頭，該前綴保留給 Scryer 自行寫入的設定。",
   "settings.titleTagLabelTooLong": "標籤名最多 64 個字符。",
   "settings.titleTagLabelInvalid": "標籤名不能包含控制字符。",
-  "settings.titleTagRenameSummary": "已重命名為 {{label}}。改寫了 {{titles}} 個條目、{{seriesMovies}} 部劇集電影和 {{delayProfiles}} 個延遲配置。",
-  "settings.titleTagRenameWarning": "規則源永遠不會被改寫，因此仍有 {{count}} 處規則引用舊標籤 {{label}}，它們將不再匹配：{{references}}。",
+  "settings.titleTagRenameSummary":
+    "已重命名為 {{label}}。改寫了 {{titles}} 個條目、{{seriesMovies}} 部劇集電影和 {{delayProfiles}} 個延遲配置。",
+  "settings.titleTagRenameWarning":
+    "規則源永遠不會被改寫，因此仍有 {{count}} 處規則引用舊標籤 {{label}}，它們將不再匹配：{{references}}。",
   "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} 個維護規則集",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} 個發佈規則集",
   "settings.titleTagReferenceManagedTagFilters": "{{count}} 個託管標籤過濾器",
@@ -4536,7 +5331,8 @@ const zh_HK: LocaleDictionary = {
   "title.tagsAdd": "添加標籤…",
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "移除 {{label}}",
-  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsEmptyRegistry":
+    "No tags are defined yet. An administrator defines them in Settings > Tags.",
   "title.tagsNoneDefined": "尚未定義任何標籤",
   "title.tagsCreateMore": "建立更多標籤…",
   "title.bulkAddTags": "添加標籤",
@@ -4551,23 +5347,29 @@ const zh_HK: LocaleDictionary = {
   "title.catalogFilters.presenceMissing": "缺失",
   "title.catalogFilters.presenceMissingHint": "磁碟上完全沒有檔案。",
   "title.catalogFilters.presencePartial": "部分缺失",
-  "title.catalogFilters.presencePartialHint": "磁碟上有一些檔案，但部分已播出的監控單集缺少檔案。電影僅包含單一檔案，因此不會是部分缺失。",
+  "title.catalogFilters.presencePartialHint":
+    "磁碟上有一些檔案，但部分已播出的監控單集缺少檔案。電影僅包含單一檔案，因此不會是部分缺失。",
   "title.catalogFilters.presenceComplete": "完整",
-  "title.catalogFilters.presenceCompleteHint": "所有監控內容均在磁碟上：已播出的每個監控單集皆有檔案，或電影本身的檔案存在。",
+  "title.catalogFilters.presenceCompleteHint":
+    "所有監控內容均在磁碟上：已播出的每個監控單集皆有檔案，或電影本身的檔案存在。",
   "title.catalogFilters.needsAttention": "需要關注",
-  "title.catalogFilters.needsAttentionHint": "包含掃描失敗或需要審查的檔案，需人工處理後才可使用。",
+  "title.catalogFilters.needsAttentionHint":
+    "包含掃描失敗或需要審查的檔案，需人工處理後才可使用。",
   "settings.titleTagSeriesMovieCount": "分集電影",
   "settings.maintenanceActionAddTags": "添加標籤",
   "settings.maintenanceActionRemoveTags": "移除標籤",
   "settings.maintenanceRuleTags": "標籤",
   "settings.maintenanceRuleTagsNone": "尚未選擇標籤",
-  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceRuleTagsHelp":
+    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.maintenanceCandidatesTagPatchAdd": "添加 {{tags}}",
   "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "標記為待刪除",
-  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateTaggedForRemovalDescription":
+    'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.maintenanceTemplateFlagForReviewTitle": "標記待審核",
-  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+  "settings.maintenanceTemplateFlagForReviewDescription":
+    "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
   "mediaInfo.sectionFile": "File",
@@ -4626,7 +5428,8 @@ const zh_HK: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "該音軌沒有語言字段，因此根據音軌名稱推斷。",
+  "mediaInfo.inferredLanguageFootnote":
+    "該音軌沒有語言字段，因此根據音軌名稱推斷。",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -4639,8 +5442,10 @@ const zh_HK: LocaleDictionary = {
   "mediaInfo.roleOriginal": "Original",
   "episodeAssign.action": "重新指派",
   "episodeAssign.dialogTitle": "指派至劇集",
-  "episodeAssign.dialogDescription": "選擇 {{name}} 所屬的劇集。Scryer 會按該劇集重新命名檔案，並將其移至正確位置。",
-  "episodeAssign.pendingDescription": "Scryer 無法判斷 {{name}} 是哪一集。選擇劇集後，Scryer 會將其匯入至該劇集。",
+  "episodeAssign.dialogDescription":
+    "選擇 {{name}} 所屬的劇集。Scryer 會按該劇集重新命名檔案，並將其移至正確位置。",
+  "episodeAssign.pendingDescription":
+    "Scryer 無法判斷 {{name}} 是哪一集。選擇劇集後，Scryer 會將其匯入至該劇集。",
   "episodeAssign.unnamed": "此檔案",
   "episodeAssign.targetLabel": "劇集",
   "episodeAssign.loadingEpisodes": "正在載入劇集…",
@@ -4650,7 +5455,8 @@ const zh_HK: LocaleDictionary = {
   "episodeAssign.originalReleaseName": "原始發佈名稱",
   "episodeAssign.applying": "正在指派…",
   "episodeAssign.replaceTitle": "這一集已有檔案",
-  "episodeAssign.replaceDescription": "指派此檔案後，它會成為這一集的主要檔案。目前的檔案會作為額外檔案保留在磁碟上。",
+  "episodeAssign.replaceDescription":
+    "指派此檔案後，它會成為這一集的主要檔案。目前的檔案會作為額外檔案保留在磁碟上。",
   "episodeAssign.replaceApply": "取代並指派",
   "episodeAssign.success": "檔案已指派並重新命名。",
   "episodeAssign.failed": "無法指派檔案。",
@@ -4664,10 +5470,14 @@ const zh_HK: LocaleDictionary = {
   "episodeAssign.refusal.outsideTitle": "這一集屬於其他作品。",
   "episodeAssign.refusal.primaryConflict": "這一集已有主要檔案。",
   "episodeAssign.refusal.notEpisodic": "只有劇集和動畫檔案可以指派至劇集。",
-  "episodeAssign.refusal.unsupportedFile": "此檔案無法在劇集之間移動。系列電影檔案和光碟映像會保留在原位。",
-  "episodeAssign.refusal.destinationOccupied": "這一集產生的名稱已被另一個檔案使用。請移動或移除該檔案後再試。",
-  "episodeAssign.refusal.renameRefused": "Scryer 無法為這一集命名檔案。請檢查該作品的媒體庫資料夾和命名範本。",
-  "episodeAssign.refusal.renameFailed": "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
+  "episodeAssign.refusal.unsupportedFile":
+    "此檔案無法在劇集之間移動。系列電影檔案和光碟映像會保留在原位。",
+  "episodeAssign.refusal.destinationOccupied":
+    "這一集產生的名稱已被另一個檔案使用。請移動或移除該檔案後再試。",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer 無法為這一集命名檔案。請檢查該作品的媒體庫資料夾和命名範本。",
+  "episodeAssign.refusal.renameFailed":
+    "將檔案移至新名稱失敗。檔案及其劇集維持原狀。",
   "pendingImports.reason.anime_numbering_ambiguous": "劇集編號不明確",
 };
 

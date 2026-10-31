@@ -15,7 +15,12 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("plugin is not installed".into()))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::plugins::RESOURCE_NOT_FOUND,
+                    "plugin is not installed",
+                )
+            })
     }
 
     pub(crate) async fn stored_plugin_settings(
@@ -75,7 +80,12 @@ impl AppUseCase {
                 .settings
                 .iter()
                 .find(|field| field.field.key == key)
-                .ok_or_else(|| AppError::Validation("unknown plugin setting".into()))?;
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::plugins::SETTING_UNKNOWN,
+                        "unknown plugin setting",
+                    )
+                })?;
             match value {
                 Some(value) => {
                     values.insert(key, value);
@@ -110,7 +120,10 @@ impl AppUseCase {
 
 fn settings_descriptor(installation: &PluginInstallation) -> AppResult<PluginDescriptor> {
     serde_json::from_str(installation.descriptor_json.as_deref().unwrap_or("{}")).map_err(|_| {
-        AppError::Validation("installed plugin settings descriptor is unavailable".into())
+        AppError::validation_refused(
+            crate::error_reasons::plugins::INSTALLED_PLUGIN_SETTINGS_DESCRIPTOR_UNAVAILABLE,
+            "installed plugin settings descriptor is unavailable",
+        )
     })
 }
 
@@ -220,8 +233,9 @@ fn validated_effective_settings(
                 .get(&field.key)
                 .is_none_or(|value| value.trim().is_empty())
         {
-            return Err(AppError::Validation(
-                "required plugin setting is missing".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::REQUIRED_PLUGIN_SETTING_REQUIRED,
+                "required plugin setting is missing",
             ));
         }
         if let Some(value) = effective.get(&field.key) {
@@ -234,7 +248,10 @@ fn validated_effective_settings(
                 _ => true,
             };
             if !valid {
-                return Err(AppError::Validation("invalid plugin setting value".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::SETTING_VALUE_INVALID,
+                    "invalid plugin setting value",
+                ));
             }
         }
     }

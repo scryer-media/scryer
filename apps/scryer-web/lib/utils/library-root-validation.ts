@@ -20,7 +20,12 @@ function isWindowsDriveRoot(path: string): boolean {
 
 function isUncShareRoot(path: string): boolean {
   if (!/^[\\/]{2}[^\\/]/u.test(path)) return false;
-  return path.slice(2).split(/[\\/]+/u).filter(Boolean).length === 2;
+  return (
+    path
+      .slice(2)
+      .split(/[\\/]+/u)
+      .filter(Boolean).length === 2
+  );
 }
 
 export function trimLibraryRootPath(path: string): string {
@@ -40,7 +45,9 @@ export function normalizeComparableLibraryRootPath(
     ? storedPath.replace(/[\\/]+$/u, "")
     : storedPath;
   const normalizedPath = canonicalPath.replaceAll("\\", "/");
-  return pathStyle === "windows" ? normalizedPath.toLowerCase() : normalizedPath;
+  return pathStyle === "windows"
+    ? normalizedPath.toLowerCase()
+    : normalizedPath;
 }
 
 type LibraryRootDraftLike = {

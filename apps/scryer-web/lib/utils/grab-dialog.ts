@@ -20,7 +20,11 @@ export function titleGapLabel(title: TitleRecord): TitleGapLabel {
     const monitored = title.episodesMonitored ?? title.episodesTotal ?? 0;
     const missing = Math.max(0, monitored - (title.episodesOwned ?? 0));
     return missing > 0
-      ? { key: "grabDialog.gap.missing", params: { count: missing }, complete: false }
+      ? {
+          key: "grabDialog.gap.missing",
+          params: { count: missing },
+          complete: false,
+        }
       : { key: "grabDialog.gap.complete", complete: true };
   }
   return titleHoldsFile(title)
@@ -80,12 +84,18 @@ export function episodeSubjectInput(
 }
 
 /** True when an episode is filled without a season — the server rejects that. */
-export function episodeSubjectIncomplete(season: string, episode: string): boolean {
+export function episodeSubjectIncomplete(
+  season: string,
+  episode: string,
+): boolean {
   return season.trim().length === 0 && episode.trim().length > 0;
 }
 
 export type GrabAction = "UNLINKED" | "STANDARD" | "ADDITIONAL_FILE";
 
-export function grabActionAllowed(action: GrabAction, frozen: GrabAction | null): boolean {
+export function grabActionAllowed(
+  action: GrabAction,
+  frozen: GrabAction | null,
+): boolean {
   return frozen === null || frozen === action;
 }

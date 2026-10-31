@@ -75,15 +75,23 @@ export function ScoreLog({
   const heading = title === undefined ? t("nzb.scoringLog") : title;
 
   return (
-    <div id={id} data-ui="score-log" className={cn("bg-background/80 px-3 py-2", className)}>
+    <div
+      id={id}
+      data-ui="score-log"
+      className={cn("bg-background/80 px-3 py-2", className)}
+    >
       {heading ? (
-        <p className="mb-1 text-xs font-semibold text-muted-foreground">{heading}</p>
+        <p className="mb-1 text-xs font-semibold text-muted-foreground">
+          {heading}
+        </p>
       ) : null}
       <ScoreLogRows entries={entries} />
       {total != null ? (
         <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-[var(--font-code)] text-xs font-semibold">
           <span className="text-muted-foreground">{t("nzb.total")}</span>
-          <span className={scoreToneClassName(total)}>{formatScore(total)}</span>
+          <span className={scoreToneClassName(total)}>
+            {formatScore(total)}
+          </span>
         </div>
       ) : null}
     </div>
@@ -110,7 +118,10 @@ export function ScoreLogRows({
             className="flex justify-between gap-4 font-[var(--font-code)] text-xs"
           >
             <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
-              <span className="break-all" title={entry.label ? entry.code : undefined}>
+              <span
+                className="break-all"
+                title={entry.label ? entry.code : undefined}
+              >
                 {entry.label ?? entry.code}
               </span>
               {badgeKey ? (
@@ -124,7 +135,9 @@ export function ScoreLogRows({
                 </span>
               ) : null}
             </span>
-            <span className={cn("shrink-0", toneClassNames[scoreEntryTone(entry)])}>
+            <span
+              className={cn("shrink-0", toneClassNames[scoreEntryTone(entry)])}
+            >
               {scoringEntryText(entry, t)}
             </span>
           </div>
@@ -174,8 +187,12 @@ export function ScoreStat({
               event.stopPropagation();
               setExpanded((previous) => !previous);
             }}
+            id={id ? `${id}-toggle` : undefined}
+            data-ui="score-log-toggle"
             aria-expanded={expanded}
-            aria-label={expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")}
+            aria-label={
+              expanded ? t("nzb.hideScoringLog") : t("nzb.showScoringLog")
+            }
             className="underline-offset-2 hover:underline"
           >
             <ScoreValue score={score} />

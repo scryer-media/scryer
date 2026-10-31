@@ -414,7 +414,10 @@ impl AppUseCase {
             .get_by_id(connection_id.trim())
             .await?
             .ok_or_else(|| {
-                AppError::NotFound(format!("media server connection {connection_id}"))
+                AppError::not_found_reason(
+                    crate::error_reasons::media_servers::CONNECTION_NOT_FOUND,
+                    format!("media server connection {connection_id}"),
+                )
             })?;
         self.refresh_media_server_playback_mappings_for_connection(&connection)
             .await

@@ -938,6 +938,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "smg.clock_skew_notice",
+            data_type: "bool",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "smg.version_compatibility_notice",
             data_type: "json",
             default_value_json: "null",
@@ -1086,6 +1094,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_ACQUISITION,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "acquisition.convergence_hot_resume_after",
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "acquisition.rss_carry_over_title_ids",
             data_type: "json",
             default_value_json: "null",
             is_sensitive: false,
@@ -2245,6 +2261,7 @@ mod tests {
             "acquisition.convergence_seeded_at",
             "acquisition.convergence_resume_after",
             "acquisition.convergence_hot_resume_after",
+            "acquisition.rss_carry_over_title_ids",
         ] {
             let seed = seeds
                 .iter()

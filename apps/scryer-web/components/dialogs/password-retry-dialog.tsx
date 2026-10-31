@@ -4,7 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTranslate } from "@/lib/context/translate-context";
 
-export function PasswordRetryDialog({ open, jobLabel, onConfirm, onCancel, confirmLabel }: {
+export function PasswordRetryDialog({
+  open,
+  jobLabel,
+  onConfirm,
+  onCancel,
+  confirmLabel,
+}: {
   open: boolean;
   jobLabel: string;
   onConfirm: (password: string) => Promise<void>;
@@ -16,7 +22,10 @@ export function PasswordRetryDialog({ open, jobLabel, onConfirm, onCancel, confi
   const [revealed, setRevealed] = useState(false);
   const [isBusy, setBusy] = useState(false);
   const submitting = useRef(false);
-  const clear = () => { setPassword(""); setRevealed(false); };
+  const clear = () => {
+    setPassword("");
+    setRevealed(false);
+  };
   return (
     <ConfirmDialog
       open={open}
@@ -30,15 +39,24 @@ export function PasswordRetryDialog({ open, jobLabel, onConfirm, onCancel, confi
       confirmButtonVariant="default"
       confirmDisabled={password.length === 0}
       isBusy={isBusy}
-      onCancel={() => { if (!submitting.current) { clear(); onCancel(); } }}
+      onCancel={() => {
+        if (!submitting.current) {
+          clear();
+          onCancel();
+        }
+      }}
       onConfirm={async () => {
         if (password.length === 0 || submitting.current) return;
         submitting.current = true;
         setBusy(true);
         const replacement = password;
         clear();
-        try { await onConfirm(replacement); }
-        finally { submitting.current = false; setBusy(false); }
+        try {
+          await onConfirm(replacement);
+        } finally {
+          submitting.current = false;
+          setBusy(false);
+        }
       }}
     >
       <p className="mb-3 break-all text-sm">{jobLabel}</p>
@@ -52,8 +70,17 @@ export function PasswordRetryDialog({ open, jobLabel, onConfirm, onCancel, confi
           aria-label={t("importHistory.passwordPlaceholder")}
           autoComplete="new-password"
         />
-        <Button type="button" variant="outline" disabled={isBusy} onClick={() => setRevealed(!revealed)}>
-          {t(revealed ? "importHistory.hidePassword" : "importHistory.showPassword")}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isBusy}
+          onClick={() => setRevealed(!revealed)}
+        >
+          {t(
+            revealed
+              ? "importHistory.hidePassword"
+              : "importHistory.showPassword",
+          )}
         </Button>
       </div>
     </ConfirmDialog>

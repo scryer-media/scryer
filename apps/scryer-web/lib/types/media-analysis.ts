@@ -1,6 +1,13 @@
 // Typed fields shared by media-file queries and details views.
-export type MediaProvenance = "UNKNOWN" | "CONTAINER" | "BITSTREAM" | "OBSERVED" | "ESTIMATED" | "LEGACY";
-export type MediaProbeStatus = "UNKNOWN" | "COMPLETE" | "INCOMPLETE" | "UNSUPPORTED" | "ENCRYPTED" | "MALFORMED";
+export type MediaProvenance =
+  "UNKNOWN" | "CONTAINER" | "BITSTREAM" | "OBSERVED" | "ESTIMATED" | "LEGACY";
+export type MediaProbeStatus =
+  | "UNKNOWN"
+  | "COMPLETE"
+  | "INCOMPLETE"
+  | "UNSUPPORTED"
+  | "ENCRYPTED"
+  | "MALFORMED";
 export type MediaStreamKind = "VIDEO" | "AUDIO" | "SUBTITLE";
 export type MediaProbeReport = {
   status: MediaProbeStatus;
@@ -8,7 +15,7 @@ export type MediaProbeReport = {
   seeks: number | string;
   elapsedMs: number | string;
   budgetExhausted: boolean;
-  warnings: (MediaProbeWarning)[];
+  warnings: MediaProbeWarning[];
 };
 
 export type MediaAnalysisAttempt = {
@@ -164,7 +171,7 @@ export type MediaCaptionService = {
 export type MediaProgram = {
   id: number;
   name: string | null;
-  streamIds: (string)[];
+  streamIds: string[];
   durationSeconds: number | null;
 };
 
@@ -178,30 +185,30 @@ export type MediaDiscSegment = {
 
 export type MediaDiscTitle = {
   id: string;
-  aliases: (string)[];
+  aliases: string[];
   durationSeconds: number | null;
   angleCount: number;
-  segments: (MediaDiscSegment)[];
-  chapters: (MediaChapter)[];
-  streams: (MediaStreamDetail)[];
+  segments: MediaDiscSegment[];
+  chapters: MediaChapter[];
+  streams: MediaStreamDetail[];
   report: MediaProbeReport;
 };
 
 export type MediaDiscEpisodeMapping = {
   discTitleId: string;
-  episodeIds: (string)[];
+  episodeIds: string[];
 };
 
 export type MediaDiscSelection = {
   titleId: string | null;
-  episodeMappings: (MediaDiscEpisodeMapping)[];
+  episodeMappings: MediaDiscEpisodeMapping[];
 };
 
 export type MediaDiscMetadata = {
   discType: string;
   filesystem: string;
   volumeLabel: string | null;
-  titles: (MediaDiscTitle)[];
+  titles: MediaDiscTitle[];
   selectedTitleId: string | null;
   automaticSelection: boolean;
   selection: MediaDiscSelection;
@@ -215,11 +222,11 @@ export type MediaAnalysisDetails = {
   overallBitrateBps: number | string | null;
   selectedVideoId: string | null;
   selectedProgramId: number | null;
-  streams: (MediaStreamDetail)[];
-  programs: (MediaProgram)[];
-  chapters: (MediaChapter)[];
-  attachments: (MediaAttachment)[];
-  captionServices: (MediaCaptionService)[];
+  streams: MediaStreamDetail[];
+  programs: MediaProgram[];
+  chapters: MediaChapter[];
+  attachments: MediaAttachment[];
+  captionServices: MediaCaptionService[];
   disc: MediaDiscMetadata | null;
   report: MediaProbeReport;
 };

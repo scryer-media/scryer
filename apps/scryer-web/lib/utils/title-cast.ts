@@ -148,7 +148,7 @@ export function titleCastDubCreditsAlignedTo(
   });
 
   const aligned: TitleCastDisplayCredit[] = [];
-  for (let index = 0; index < original.length; ) {
+  for (let index = 0; index < original.length;) {
     const slot = original[index];
     const matched = matches[index];
     if (!matched) {
@@ -188,7 +188,11 @@ export function titleCastDubLanguages(
   const languages = new Set<string>();
   for (const credit of titleCastCredits(credits)) {
     const language = credit.language ?? "";
-    if (credit.kind === "voice_actor" && language.length > 0 && language !== "ja") {
+    if (
+      credit.kind === "voice_actor" &&
+      language.length > 0 &&
+      language !== "ja"
+    ) {
       languages.add(language);
     }
   }

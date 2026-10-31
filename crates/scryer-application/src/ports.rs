@@ -2020,8 +2020,9 @@ pub trait TitleRepository: Send + Sync {
         match matches.as_slice() {
             [] => Ok(None),
             [title] => Ok(Some(title.clone())),
-            _ => Err(AppError::Validation(
-                "multiple titles found for slug lookup".into(),
+            _ => Err(AppError::validation_refused(
+                crate::error_reasons::ports::MULTIPLE_TITLES_FOUND_SLUG_LOOKUP,
+                "multiple titles found for slug lookup",
             )),
         }
     }
@@ -3100,8 +3101,9 @@ pub trait ImageProxyCacheControl: Send + Sync {
 pub trait TitleImageProcessor: Send + Sync {
     /// A separate fast preset for disposable proxy artwork, on the configured pool.
     async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, _width: u32) -> AppResult<Vec<u8>> {
-        Err(AppError::Validation(
-            "cached JPEG encoding is unavailable".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::ports::CACHED_JPEG_ENCODING_UNAVAILABLE,
+            "cached JPEG encoding is unavailable",
         ))
     }
 
@@ -3376,6 +3378,19 @@ pub trait ShowRepository: Send + Sync {
 
 #[async_trait]
 pub trait UserRepository: Send + Sync {
+    async fn initial_authentication_state(
+        &self,
+    ) -> AppResult<Option<crate::initial_auth::SetupState>> {
+        Ok(None)
+    }
+    async fn complete_initial_authentication(&self, _user: User) -> AppResult<User> {
+        Err(AppError::Repository(
+            "initial authentication persistence is not configured".into(),
+        ))
+    }
+    async fn prepare_initial_authentication_recovery(&self, _id: &str) -> AppResult<Option<User>> {
+        Ok(None)
+    }
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
     async fn get_login_snapshot_by_username(
         &self,
@@ -3469,6 +3484,20 @@ pub trait UserUiSettingsRepository: Send + Sync {
         user_id: &str,
         update: UiCatalogViewUpdate,
     ) -> AppResult<UiSettings>;
+    /// Replaces the user's dashboard layout for the layout's breakpoint.
+    async fn set_dashboard_layout(
+        &self,
+        user_id: &str,
+        layout: UiDashboardLayout,
+    ) -> AppResult<UiSettings>;
+    /// Deletes the user's dashboard layout for one breakpoint, or for every
+    /// breakpoint when `breakpoint` is `None`. Returns `None` when the user has
+    /// no saved settings.
+    async fn reset_dashboard_layouts(
+        &self,
+        user_id: &str,
+        breakpoint: Option<UiDashboardBreakpoint>,
+    ) -> AppResult<Option<UiSettings>>;
 }
 
 #[async_trait]
@@ -4614,7 +4643,12 @@ pub trait IndexerConfigRepository: Send + Sync {
     async fn get_by_id(&self, id: &str) -> AppResult<Option<IndexerConfig>>;
     async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig>;
     async fn touch_last_error(&self, id: &str) -> AppResult<()>;
-    async fn record_last_error(&self, id: &str, _message: Option<String>) -> AppResult<()> {
+    async fn record_last_error(
+        &self,
+        id: &str,
+        _message: Option<String>,
+        _code: Option<String>,
+    ) -> AppResult<()> {
         self.touch_last_error(id).await
     }
     async fn clear_last_error(&self, _id: &str) -> AppResult<()> {
@@ -4625,6 +4659,7 @@ pub trait IndexerConfigRepository: Send + Sync {
         &self,
         expected: &IndexerConfig,
         message: Option<String>,
+        code: Option<String>,
     ) -> AppResult<bool> {
         let Some(current) = self.get_by_id(&expected.id).await? else {
             return Ok(false);
@@ -4632,12 +4667,13 @@ pub trait IndexerConfigRepository: Send + Sync {
         if current.updated_at != expected.updated_at
             || current.last_error_at != expected.last_error_at
             || current.last_error_message != expected.last_error_message
+            || current.last_error_code != expected.last_error_code
             || current.last_health_status != expected.last_health_status
         {
             return Ok(false);
         }
         if message.is_some() {
-            self.record_last_error(&expected.id, message).await?;
+            self.record_last_error(&expected.id, message, code).await?;
         } else {
             self.clear_last_error(&expected.id).await?;
         }
@@ -4661,13 +4697,16 @@ pub trait IndexerConfigRepository: Send + Sync {
         update: IndexerConfigUpdate,
         expected_updated_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<IndexerConfig> {
-        let current = self
-            .get_by_id(&update.id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("indexer configuration".into()))?;
+        let current = self.get_by_id(&update.id).await?.ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::ports::INDEXER_CONFIGURATION_NOT_FOUND,
+                "indexer configuration",
+            )
+        })?;
         if current.updated_at != expected_updated_at {
-            return Err(AppError::Validation(
-                "Indexer settings changed during validation; reload and try again".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ports::INDEXER_SETTINGS_CHANGED_DURING_VALIDATION,
+                "Indexer settings changed during validation; reload and try again",
             ));
         }
         self.update(update).await
@@ -4785,6 +4824,17 @@ pub trait IndexerCapsSnapshotRefresher: Send + Sync {
         _accounting: Option<&IndexerAccountingContext>,
     ) -> AppResult<Option<IndexerCapsSnapshot>> {
         self.fetch_for_config(config, proxy).await
+    }
+
+    async fn fetch_for_config_with_intent(
+        &self,
+        config: &IndexerConfig,
+        proxy: Option<&scryer_domain::ProxyConfig>,
+        accounting: Option<&IndexerAccountingContext>,
+        _intent: crate::SchedulerIntent,
+    ) -> AppResult<Option<IndexerCapsSnapshot>> {
+        self.fetch_for_config_with_accounting(config, proxy, accounting)
+            .await
     }
 }
 
@@ -5276,6 +5326,7 @@ pub struct IndexerSearchCandidateWrite {
 #[derive(Debug, Clone)]
 pub struct ReusableIndexerSearchCandidate {
     pub normalized: NormalizedIndexerSearchCandidate,
+    pub reusable_until: chrono::DateTime<chrono::Utc>,
 }
 
 /// A bounded replay batch, ordered by the opaque source ID.
@@ -5295,6 +5346,96 @@ pub struct ReusableIndexerSearchStrategy {
     pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Where an indexer's listings for one title live: the indexer, the identity
+/// it answered under, and the title's facet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerSearchListingScope {
+    pub indexer_id: String,
+    pub indexer_fingerprint: String,
+    pub title_id: String,
+    pub facet: String,
+}
+
+/// One background strategy of one search scope.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IndexerSearchListingStrategy {
+    pub scope_key: String,
+    pub query_signature: String,
+}
+
+/// A strategy found reading a listing it does not own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerSearchListingReader {
+    pub strategy: IndexerSearchListingStrategy,
+    /// The reader's episode-insensitive request signature.
+    pub strategy_family: String,
+    pub observed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// One listing of a title: the answer an indexer gives, identified by its
+/// first page, with the strategy whose page chain reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerSearchListing {
+    pub first_page_fingerprint: String,
+    pub owner: IndexerSearchListingStrategy,
+    pub owner_strategy_family: String,
+    /// Where the chain reads on. `None` with `finished` false means the chain
+    /// has its first page claimed but no page recorded yet.
+    pub page_cursor: Option<String>,
+    /// The chain read to the end of the listing.
+    pub finished: bool,
+    pub chain_started_at: chrono::DateTime<chrono::Utc>,
+    /// When the chain last recorded a page, or changed owner.
+    pub advanced_at: chrono::DateTime<chrono::Utc>,
+    pub readers: Vec<IndexerSearchListingReader>,
+    /// The runs whose pages the chain has read so far, oldest first.
+    pub run_ids: Vec<String>,
+}
+
+/// What a background strategy's first page says about its listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexerSearchListingClaim {
+    /// No other strategy reads this listing, or its chain was abandoned
+    /// before recording a page: the claimant owns a chain from page one.
+    Owner,
+    /// Another strategy's chain already reads this exact listing: the
+    /// indexer answers at title level, and the claimant is recorded as its
+    /// reader. `listing_open` while that chain has not read to the end.
+    SameListing {
+        owner: IndexerSearchListingStrategy,
+        listing_open: bool,
+    },
+}
+
+/// Every learning outcome one search observed from one indexer for one
+/// title, written together once the indexer's part of the search is done.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexerSearchLearningBatch {
+    pub indexer_id: String,
+    pub title_id: String,
+    pub facet: String,
+    /// Strategy outcomes as `(strategy_key, usable_hits)`, in the order the
+    /// search observed them. Each lands as one
+    /// [`IndexerSearchLearningRepository::record_outcome`] would.
+    pub strategy_outcomes: Vec<(String, u32)>,
+    /// Strategy keys marked suppressed after the outcomes land.
+    pub suppress: Vec<String>,
+    /// Facet outcomes in observation order, applied in one step as
+    /// [`IndexerSearchLearningRepository::record_facet_search_outcome`]
+    /// would apply them one by one.
+    pub facet_outcomes: Vec<IndexerFacetSearchOutcome>,
+    pub now: DateTime<Utc>,
+    pub facet_policy: IndexerFacetLearningPolicy,
+}
+
+impl IndexerSearchLearningBatch {
+    pub fn is_empty(&self) -> bool {
+        self.strategy_outcomes.is_empty()
+            && self.suppress.is_empty()
+            && self.facet_outcomes.is_empty()
+    }
+}
+
 #[async_trait]
 pub trait IndexerSearchLearningRepository: Send + Sync {
     async fn list_for_title(
@@ -5303,6 +5444,71 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         title_id: &str,
         facet: &str,
     ) -> AppResult<Vec<IndexerSearchLearningRecord>>;
+
+    /// The learning rows of one title for each listed indexer, keyed by
+    /// indexer. An indexer without rows maps to an empty list.
+    async fn list_for_title_by_indexer(
+        &self,
+        indexer_ids: &[String],
+        title_id: &str,
+        facet: &str,
+    ) -> AppResult<HashMap<String, Vec<IndexerSearchLearningRecord>>> {
+        let mut records = HashMap::with_capacity(indexer_ids.len());
+        for indexer_id in indexer_ids {
+            records.insert(
+                indexer_id.clone(),
+                self.list_for_title(indexer_id, title_id, facet).await?,
+            );
+        }
+        Ok(records)
+    }
+
+    /// Lands one indexer's learning outcomes from one search and reports the
+    /// facet transition of each facet outcome, in order.
+    async fn record_learning_batch(
+        &self,
+        batch: &IndexerSearchLearningBatch,
+    ) -> AppResult<Vec<IndexerFacetTransition>> {
+        for (strategy_key, usable_hits) in &batch.strategy_outcomes {
+            self.record_outcome(
+                &IndexerSearchLearningKey {
+                    indexer_id: batch.indexer_id.clone(),
+                    title_id: batch.title_id.clone(),
+                    facet: batch.facet.clone(),
+                    strategy_key: strategy_key.clone(),
+                },
+                *usable_hits,
+            )
+            .await?;
+        }
+        for strategy_key in &batch.suppress {
+            self.set_suppressed(
+                &IndexerSearchLearningKey {
+                    indexer_id: batch.indexer_id.clone(),
+                    title_id: batch.title_id.clone(),
+                    facet: batch.facet.clone(),
+                    strategy_key: strategy_key.clone(),
+                },
+                true,
+            )
+            .await?;
+        }
+        let mut transitions = Vec::with_capacity(batch.facet_outcomes.len());
+        for outcome in &batch.facet_outcomes {
+            transitions.push(
+                self.record_facet_search_outcome(
+                    &batch.indexer_id,
+                    &batch.facet,
+                    &batch.title_id,
+                    *outcome,
+                    batch.now,
+                    batch.facet_policy,
+                )
+                .await?,
+            );
+        }
+        Ok(transitions)
+    }
 
     async fn record_outcome(
         &self,
@@ -5398,6 +5604,82 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         Ok(None)
     }
 
+    /// The listings of a title whose chain advanced at or after
+    /// `fresh_after`, with their readers seen since then.
+    async fn list_search_listings(
+        &self,
+        _scope: &IndexerSearchListingScope,
+        _fresh_after: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Vec<IndexerSearchListing>> {
+        Ok(Vec::new())
+    }
+
+    /// Records a background strategy's first page. A fresh listing with that
+    /// page and another owner makes the claimant its reader, unless its chain
+    /// recorded no page and went idle before `idle_before`, which hands it to
+    /// the claimant. Otherwise the claimant owns the listing from page one.
+    /// Either way the claimant stops owning or reading any other listing.
+    #[allow(clippy::too_many_arguments)]
+    async fn claim_search_listing(
+        &self,
+        _scope: &IndexerSearchListingScope,
+        _first_page_fingerprint: &str,
+        _claimant: &IndexerSearchListingStrategy,
+        _strategy_family: &str,
+        _fresh_after: chrono::DateTime<chrono::Utc>,
+        _idle_before: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<IndexerSearchListingClaim> {
+        Ok(IndexerSearchListingClaim::Owner)
+    }
+
+    /// Records `reader` as reading the listing without having fetched it,
+    /// once the listing is known to cover its scope.
+    async fn join_search_listing(
+        &self,
+        _scope: &IndexerSearchListingScope,
+        _first_page_fingerprint: &str,
+        _reader: &IndexerSearchListingStrategy,
+        _strategy_family: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Adds a run's page to the listing's chain and moves the chain to
+    /// `next_cursor`; no cursor finishes the chain. Only the owner advances
+    /// it: `false` when `owner` no longer owns the listing.
+    #[allow(clippy::too_many_arguments)]
+    async fn link_search_listing_run(
+        &self,
+        _scope: &IndexerSearchListingScope,
+        _first_page_fingerprint: &str,
+        _owner: &IndexerSearchListingStrategy,
+        _run_id: &str,
+        _next_cursor: Option<&str>,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    /// Hands an idle listing's chain to one of its readers, which resumes it
+    /// from `expected_cursor`. The previous owner becomes a reader. `false`
+    /// when the chain moved, changed owner or advanced at or after
+    /// `idle_before` since the caller looked.
+    #[allow(clippy::too_many_arguments)]
+    async fn adopt_search_listing(
+        &self,
+        _scope: &IndexerSearchListingScope,
+        _first_page_fingerprint: &str,
+        _previous_owner: &IndexerSearchListingStrategy,
+        _adopter: &IndexerSearchListingStrategy,
+        _expected_cursor: &str,
+        _idle_before: chrono::DateTime<chrono::Utc>,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
     async fn cleanup_search_diagnostics(
         &self,
         _candidate_cutoff: chrono::DateTime<chrono::Utc>,
@@ -5429,6 +5711,211 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         key: &IndexerSearchLearningKey,
         stale_before: DateTime<Utc>,
     ) -> AppResult<bool>;
+
+    /// The learned facet state of each listed indexer that has one. An
+    /// indexer without a row is absent from the map.
+    async fn facet_learning_states(
+        &self,
+        _facet: &str,
+        _indexer_ids: &[String],
+    ) -> AppResult<HashMap<String, IndexerFacetLearningState>> {
+        Ok(HashMap::new())
+    }
+
+    /// Applies one search outcome for `title_id` to the indexer's state for
+    /// `facet` (see [`IndexerFacetLearningState::apply_outcome`]) and reports
+    /// what changed.
+    async fn record_facet_search_outcome(
+        &self,
+        _indexer_id: &str,
+        _facet: &str,
+        _title_id: &str,
+        _outcome: IndexerFacetSearchOutcome,
+        _now: DateTime<Utc>,
+        _policy: IndexerFacetLearningPolicy,
+    ) -> AppResult<IndexerFacetTransition> {
+        Ok(IndexerFacetTransition::Unchanged)
+    }
+
+    /// Claims the single re-probe of an indexer whose facet suppression has
+    /// expired. Only one caller gets `true` until the claim lands or lapses.
+    async fn try_claim_facet_reprobe(
+        &self,
+        _indexer_id: &str,
+        _facet: &str,
+        _now: DateTime<Utc>,
+        _policy: IndexerFacetLearningPolicy,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+}
+
+/// How an indexer is learned to carry nothing for a media facet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexerFacetLearningPolicy {
+    /// Distinct titles in a row whose background searches all came back
+    /// empty before background searches leave the indexer out of the facet.
+    pub empty_title_threshold: usize,
+    /// How long one suppression lasts.
+    pub suppression: chrono::Duration,
+    /// How long a claimed re-probe holds every other background search off
+    /// before another may claim it (the re-probe may error and land nothing).
+    pub reprobe_claim: chrono::Duration,
+}
+
+/// One search's answer from one indexer, as facet learning reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexerFacetSearchOutcome {
+    /// A background search the indexer answered completely with nothing usable.
+    Empty,
+    /// Any search the indexer answered with at least one usable result.
+    Usable,
+}
+
+/// What one recorded outcome did to an indexer's facet state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexerFacetTransition {
+    Unchanged,
+    /// Another distinct empty title, still under the threshold.
+    StreakAdvanced {
+        streak: usize,
+    },
+    /// The indexer is now left out of background searches for the facet.
+    Suppressed {
+        streak: usize,
+        until: DateTime<Utc>,
+    },
+    /// A usable result reset the streak and lifted any suppression.
+    Cleared {
+        streak: usize,
+        was_suppressed: bool,
+    },
+}
+
+/// One indexer's learned emptiness for one media facet.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexerFacetLearningState {
+    /// Distinct titles in a row whose background searches came back empty,
+    /// oldest first. Never longer than the policy threshold.
+    pub empty_title_ids: Vec<String>,
+    /// Set from the moment the threshold is reached until a usable result.
+    /// Background searches skip the indexer for the facet before this
+    /// instant; after it, one claimed re-probe may ask.
+    pub suppressed_until: Option<DateTime<Utc>>,
+    /// When the current re-probe was claimed.
+    pub reprobe_claimed_at: Option<DateTime<Utc>>,
+    /// Compare-and-set token for the stored row.
+    pub revision: i64,
+}
+
+impl IndexerFacetLearningState {
+    pub fn streak(&self) -> usize {
+        self.empty_title_ids.len()
+    }
+
+    /// Until when background searches leave the indexer out of the facet:
+    /// the suppression window, then a live re-probe claim. `None` once a
+    /// background search may ask.
+    pub fn held_until(
+        &self,
+        now: DateTime<Utc>,
+        policy: IndexerFacetLearningPolicy,
+    ) -> Option<DateTime<Utc>> {
+        let until = self.suppressed_until?;
+        if until > now {
+            return Some(until);
+        }
+        self.reprobe_claimed_at
+            .filter(|claimed_at| *claimed_at >= until)
+            .map(|claimed_at| claimed_at + policy.reprobe_claim)
+            .filter(|claim_until| *claim_until > now)
+    }
+
+    /// The state after claiming the re-probe, or `None` when the indexer is
+    /// not suppressed, its window is still open, or another claim is live.
+    pub fn claim_reprobe(
+        &self,
+        now: DateTime<Utc>,
+        policy: IndexerFacetLearningPolicy,
+    ) -> Option<Self> {
+        if self.suppressed_until.is_none() || self.held_until(now, policy).is_some() {
+            return None;
+        }
+        Some(Self {
+            reprobe_claimed_at: Some(now),
+            ..self.clone()
+        })
+    }
+
+    /// The state after one outcome for `title_id`, `None` when nothing
+    /// changes. A usable result clears everything. An empty one adds a
+    /// distinct title to the streak and suppresses at the threshold; once
+    /// suppressed, an empty answer after the window (the re-probe)
+    /// suppresses again for a full window.
+    pub fn apply_outcome(
+        &self,
+        title_id: &str,
+        outcome: IndexerFacetSearchOutcome,
+        now: DateTime<Utc>,
+        policy: IndexerFacetLearningPolicy,
+    ) -> (Option<Self>, IndexerFacetTransition) {
+        match outcome {
+            IndexerFacetSearchOutcome::Usable => {
+                if self.empty_title_ids.is_empty() && self.suppressed_until.is_none() {
+                    return (None, IndexerFacetTransition::Unchanged);
+                }
+                (
+                    Some(Self {
+                        revision: self.revision,
+                        ..Self::default()
+                    }),
+                    IndexerFacetTransition::Cleared {
+                        streak: self.streak(),
+                        was_suppressed: self.suppressed_until.is_some(),
+                    },
+                )
+            }
+            IndexerFacetSearchOutcome::Empty => {
+                if let Some(until) = self.suppressed_until {
+                    if until > now {
+                        return (None, IndexerFacetTransition::Unchanged);
+                    }
+                    let until = now + policy.suppression;
+                    return (
+                        Some(Self {
+                            suppressed_until: Some(until),
+                            reprobe_claimed_at: None,
+                            ..self.clone()
+                        }),
+                        IndexerFacetTransition::Suppressed {
+                            streak: self.streak(),
+                            until,
+                        },
+                    );
+                }
+                if self.empty_title_ids.iter().any(|id| id == title_id) {
+                    return (None, IndexerFacetTransition::Unchanged);
+                }
+                let mut next = self.clone();
+                next.empty_title_ids.push(title_id.to_string());
+                let streak = next.streak();
+                if streak >= policy.empty_title_threshold.max(1) {
+                    let until = now + policy.suppression;
+                    next.suppressed_until = Some(until);
+                    next.reprobe_claimed_at = None;
+                    (
+                        Some(next),
+                        IndexerFacetTransition::Suppressed { streak, until },
+                    )
+                } else {
+                    (
+                        Some(next),
+                        IndexerFacetTransition::StreakAdvanced { streak },
+                    )
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -5575,12 +6062,14 @@ pub trait DownloadRegistryRepository: Send + Sync {
     }
 
     /// Active bindings Scryer created by submitting a grab, created before
-    /// `created_before`, whose download no client listing has ever carried.
+    /// `created_before`, whose download has never been listed or is durably missing.
     ///
     /// The absence prune works from the in-memory tracker, and only a listed
     /// job is ever tracked. A job its client dropped before the first listing
     /// therefore never reaches the prune; this is the durable side of the same
-    /// question, so the poller can ask it of a client that answered.
+    /// question, so the poller can ask it of a client that answered. Previously
+    /// observed missing attempts also return here so partial transitions can
+    /// finish after restart without relying on the in-memory tracker.
     ///
     /// The default is empty so repositories with no durable bindings (the null
     /// repository, test fakes) need not implement it.
@@ -5622,6 +6111,27 @@ pub struct IdentityTrackedStateTarget<'a> {
     pub canonical_download_id: Option<&'a DownloadId>,
     pub identity: &'a DownloadSubmissionIdentity,
     pub source_identity: Option<&'a ClientJobLocator>,
+}
+
+/// An observation transition and its scope claims, committed under the canonical
+/// download lock. Expected values prevent stale observations reviving outcomes.
+#[derive(Clone)]
+pub struct ClientPresenceTransition {
+    pub download_id: DownloadId,
+    pub source: ClientJobLocator,
+    pub identity: DownloadSubmissionIdentity,
+    pub expected_state: Option<String>,
+    pub state: scryer_domain::TrackedDownloadState,
+    pub reason: Option<String>,
+    pub detail: Option<String>,
+    pub scopes: Vec<ClientPresenceScopeUpdate>,
+}
+
+#[derive(Clone)]
+pub struct ClientPresenceScopeUpdate {
+    pub previous: AcquisitionScopeState,
+    pub status: AcquisitionScopeStatus,
+    pub grabbed_release: String,
 }
 
 pub const DOWNLOAD_PASSWORD_RETRY_REASON: &str = "download_password_retry";
@@ -6067,6 +6577,17 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         )
         .await?;
         Ok(previous)
+    }
+
+    /// Atomically apply a missing/reappearance observation, including scope CAS
+    /// updates. False means another workflow outcome superseded the observation.
+    async fn transition_client_presence(
+        &self,
+        _transition: &ClientPresenceTransition,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "client presence transitions are unsupported by this repository".into(),
+        ))
     }
 
     /// Canonical-aware variant of the durable tracked-state upsert.
@@ -7664,8 +8185,9 @@ pub trait MediaAnalyzer: Send + Sync {
         _path: PathBuf,
         _selection: scryer_media_types::DiscSelection,
     ) -> AppResult<scryer_media_types::StructuralDiagnostics> {
-        Err(crate::AppError::Validation(
-            "structural diagnostics are unsupported by this analyzer".into(),
+        Err(crate::AppError::validation_refused(
+            crate::error_reasons::ports::STRUCTURAL_DIAGNOSTICS_UNSUPPORTED_ANALYZER,
+            "structural diagnostics are unsupported by this analyzer",
         ))
     }
     async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
@@ -7675,8 +8197,9 @@ pub trait MediaAnalyzer: Send + Sync {
         selection: scryer_media_types::DiscSelection,
     ) -> AppResult<MediaAnalysisOutcome> {
         if selection.title_id.is_some() || !selection.episode_mappings.is_empty() {
-            return Err(crate::AppError::Validation(
-                "disc title selection is unsupported by this analyzer".into(),
+            return Err(crate::AppError::validation_refused(
+                crate::error_reasons::ports::DISC_TITLE_SELECTION_UNSUPPORTED_ANALYZER,
+                "disc title selection is unsupported by this analyzer",
             ));
         }
         self.analyze_file(path).await
@@ -7807,6 +8330,21 @@ pub trait MediaFileRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>>;
+
+    /// Compact ownership/cutoff facts for live primary links. SQL stores select
+    /// only these columns; the default supports in-memory repositories.
+    async fn list_primary_file_cutoffs_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<crate::MediaFileCutoffSummary>> {
+        Ok(self
+            .list_media_files_for_title(title_id)
+            .await?
+            .iter()
+            .filter(|file| file.role.is_primary())
+            .map(crate::MediaFileCutoffSummary::from)
+            .collect())
+    }
 
     /// Batch-load media files for many titles. Returns a flat list (each file
     /// carries `title_id`); callers group by that field. The default fans out to
@@ -8444,6 +8982,29 @@ pub trait PendingReleaseRepository: Send + Sync {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<PendingRelease>>;
+    /// Fresh active rows for RSS decisions, plus explicitly replayed rows whose
+    /// frozen listing must survive a status change since feed intake. Every
+    /// returned row belongs to `title_id`, including replayed IDs.
+    async fn list_active_pending_releases_for_title(
+        &self,
+        title_id: &str,
+        replay_ids: &[String],
+    ) -> AppResult<Vec<PendingRelease>> {
+        Ok(self
+            .list_pending_releases_for_title(title_id)
+            .await?
+            .into_iter()
+            .filter(|pending| {
+                matches!(
+                    pending.status,
+                    PendingReleaseStatus::Waiting
+                        | PendingReleaseStatus::Standby
+                        | PendingReleaseStatus::Processing
+                        | PendingReleaseStatus::NeedsReview
+                ) || replay_ids.contains(&pending.id)
+            })
+            .collect())
+    }
     /// Return one page of `waiting` pending releases matching `query` plus the
     /// total number of matching rows. Filtering, ordering, limit/offset, and the
     /// count are all computed in storage.
@@ -9621,6 +10182,18 @@ pub trait IndexerClient: Send + Sync {
         Ok(std::collections::HashMap::new())
     }
 
+    /// Indexers among `indexer_ids` that background searches currently leave
+    /// out of `facet` because they were learned to carry nothing for it, with
+    /// the instant each may be asked again.
+    async fn facet_suppression_holds(
+        &self,
+        _facet: &str,
+        _indexer_ids: &[String],
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
     /// Which RSS-capable indexers are due for a background RSS poll now.
     ///
     /// The RSS worker asks before doing any of the work a cycle needs, so a
@@ -9761,12 +10334,19 @@ pub trait IndexerClient: Send + Sync {
     /// An operator's raw text search. The multi-indexer client dispatches it
     /// to each eligible indexer; a single-indexer adapter answers it itself,
     /// and this default asks [`Self::search`] for the bare query, which
-    /// cannot carry the page size.
+    /// cannot carry the page size or a source cursor. Adapters must explicitly
+    /// implement page reads rather than silently replaying the first page.
     async fn search_raw_text(
         &self,
         request: crate::RawTextSearchRequest,
         cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
+        if request.page.is_some() || request.nab.is_some() || request.recent_paging {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::RAW_SEARCH_PAGING_UNSUPPORTED,
+                "This indexer adapter does not support raw page reads",
+            ));
+        }
         self.search(
             request.query,
             std::collections::HashMap::new(),
@@ -10953,6 +11533,10 @@ pub struct DownloadCleanupRecord {
     pub attempts: u32,
     pub history_offset: usize,
     pub payload_checkpoint: Option<String>,
+    /// When the previous attempt ended in a retryable failure, the delay it
+    /// was rescheduled with; `None` after any other outcome. Lets the next
+    /// failure back off further without counting holds and deferrals.
+    pub previous_failure_retry_seconds: Option<i64>,
 }
 
 /// The catalog references one download submission holds, exactly as stored.
@@ -11129,15 +11713,19 @@ pub struct IndexerGrabSelection {
 impl IndexerGrabSelection {
     pub fn validate(&self) -> AppResult<()> {
         if self.client_id.trim().is_empty() {
-            return Err(AppError::Validation("select a download client".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ports::SELECT_DOWNLOAD_CLIENT,
+                "select a download client",
+            ));
         }
         if self
             .category
             .as_ref()
             .is_some_and(|category| category.len() > 255 || category.chars().any(char::is_control))
         {
-            return Err(AppError::Validation(
-                "category must be at most 255 bytes without control characters".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ports::CATEGORY_OUT_OF_RANGE,
+                "category must be at most 255 bytes without control characters",
             ));
         }
         Ok(())
@@ -11152,8 +11740,9 @@ pub trait DownloadClient: Send + Sync {
         _indexer_id: Option<&str>,
         _source_kind: DownloadSourceKind,
     ) -> AppResult<Vec<IndexerGrabClient>> {
-        Err(AppError::Validation(
-            "client routing discovery is unsupported".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::ports::CLIENT_ROUTING_DISCOVERY_UNSUPPORTED,
+            "client routing discovery is unsupported",
         ))
     }
 
@@ -11211,10 +11800,11 @@ pub trait DownloadClient: Send + Sync {
     /// the URL with.
     async fn fetch_release_artifact(
         &self,
-        _request: &DownloadClientAddRequest,
+        _request: &IndexerArtifactResolutionRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {
-        Err(AppError::Validation(
-            "artifact download is not supported by this client".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::ports::ARTIFACT_DOWNLOAD_UNSUPPORTED,
+            "artifact download is not supported by this client",
         ))
     }
 

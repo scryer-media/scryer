@@ -11,7 +11,10 @@ import {
 const VALID_TOKENS = new Set(["title", "season_order", "edition", "ext"]);
 const VALID_FOLDER_TOKENS = new Set(["title", "season"]);
 const VALID_MOVIE_FOLDER_TOKENS = new Set([
-  "title", "year", "title_with_article", "title_first_character",
+  "title",
+  "year",
+  "title_with_article",
+  "title_first_character",
 ]);
 const SAMPLE_VALUES = {
   title: "The Grey Harbor",
@@ -23,14 +26,23 @@ const SAMPLE_VALUES = {
 
 test("validateRenameTemplateSyntax accepts truncate filters", () => {
   assert.equal(
-    validateRenameTemplateSyntax("{title|truncate:8|space:_}.{ext}", VALID_TOKENS),
+    validateRenameTemplateSyntax(
+      "{title|truncate:8|space:_}.{ext}",
+      VALID_TOKENS,
+    ),
     null,
   );
 });
 
 test("validateRenameTemplateSyntax accepts optional groups and rejects unsupported branches", () => {
   const episodeTokens = new Set([
-    "title", "season_order", "episode", "absolute_episode", "episode_title", "quality", "ext",
+    "title",
+    "season_order",
+    "episode",
+    "absolute_episode",
+    "episode_title",
+    "quality",
+    "ext",
   ]);
   assert.equal(
     validateRenameTemplateSyntax(
@@ -40,32 +52,50 @@ test("validateRenameTemplateSyntax accepts optional groups and rejects unsupport
     null,
   );
   assert.equal(
-    validateRenameTemplateSyntax("{?edition:{{literal|else:edition}}}", VALID_TOKENS),
+    validateRenameTemplateSyntax(
+      "{?edition:{{literal|else:edition}}}",
+      VALID_TOKENS,
+    ),
     null,
   );
   assert.deepEqual(
-    validateRenameTemplateSyntax("{?title: {?edition: ({edition})}}", VALID_TOKENS),
+    validateRenameTemplateSyntax(
+      "{?title: {?edition: ({edition})}}",
+      VALID_TOKENS,
+    ),
     { kind: "nestedOptionalGroup" },
   );
   assert.deepEqual(
-    validateRenameTemplateSyntax("{?title: {title}|else: fallback}", VALID_TOKENS),
+    validateRenameTemplateSyntax(
+      "{?title: {title}|else: fallback}",
+      VALID_TOKENS,
+    ),
     { kind: "unsupportedOptionalFallback" },
   );
   assert.deepEqual(
-    validateRenameTemplateSyntax("{?title|truncate:8: ({title})}", VALID_TOKENS),
+    validateRenameTemplateSyntax(
+      "{?title|truncate:8: ({title})}",
+      VALID_TOKENS,
+    ),
     { kind: "invalidOptionalGroup" },
   );
 });
 
 test("validateRenameTemplateSyntax rejects invalid truncate filters", () => {
-  assert.deepEqual(validateRenameTemplateSyntax("{title|truncate:0}", VALID_TOKENS), {
-    kind: "invalidFilter",
-    filter: "truncate:0",
-  });
-  assert.deepEqual(validateRenameTemplateSyntax("{title|truncate:abc}", VALID_TOKENS), {
-    kind: "invalidFilter",
-    filter: "truncate:abc",
-  });
+  assert.deepEqual(
+    validateRenameTemplateSyntax("{title|truncate:0}", VALID_TOKENS),
+    {
+      kind: "invalidFilter",
+      filter: "truncate:0",
+    },
+  );
+  assert.deepEqual(
+    validateRenameTemplateSyntax("{title|truncate:abc}", VALID_TOKENS),
+    {
+      kind: "invalidFilter",
+      filter: "truncate:abc",
+    },
+  );
 });
 
 test("validateFolderTemplateSyntax accepts season padding and escaped braces", () => {
@@ -75,14 +105,21 @@ test("validateFolderTemplateSyntax accepts season padding and escaped braces", (
     "Season {season:2}",
     "{{S{season}}}",
   ]) {
-    assert.equal(validateFolderTemplateSyntax(template, VALID_FOLDER_TOKENS, "season"), null);
+    assert.equal(
+      validateFolderTemplateSyntax(template, VALID_FOLDER_TOKENS, "season"),
+      null,
+    );
   }
   assert.equal(
-    applyRenameTemplatePreview("Season {season:2}", VALID_FOLDER_TOKENS, { season: "3" }),
+    applyRenameTemplatePreview("Season {season:2}", VALID_FOLDER_TOKENS, {
+      season: "3",
+    }),
     "Season 03",
   );
   assert.equal(
-    applyRenameTemplatePreview("{{S{season}}}", VALID_FOLDER_TOKENS, { season: "3" }),
+    applyRenameTemplatePreview("{{S{season}}}", VALID_FOLDER_TOKENS, {
+      season: "3",
+    }),
     "{S3}",
   );
 });
@@ -94,15 +131,24 @@ test("validateFolderTemplateSyntax and preview support optional groups", () => {
     null,
   );
   assert.equal(
-    validateFolderTemplateSyntax("{?season:Season {season}}", folderTokens, "season"),
+    validateFolderTemplateSyntax(
+      "{?season:Season {season}}",
+      folderTokens,
+      "season",
+    ),
     null,
   );
   assert.equal(
-    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, { title: "Movie" }),
+    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, {
+      title: "Movie",
+    }),
     "Movie",
   );
   assert.equal(
-    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, { title: "Movie", year: "2004" }),
+    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, {
+      title: "Movie",
+      year: "2004",
+    }),
     "Movie (2004)",
   );
 });
@@ -113,19 +159,40 @@ test("validateFolderTemplateSyntax rejects malformed or excessive padding", () =
     ["Season {season:abc}", "abc"],
     ["Season {season:2x}", "2x"],
     ["Season {season:241}", "241"],
-    ["Season {season:999999999999999999999999999999999999999}", "999999999999999999999999999999999999999"],
+    [
+      "Season {season:999999999999999999999999999999999999999}",
+      "999999999999999999999999999999999999999",
+    ],
   ]) {
-    assert.deepEqual(validateFolderTemplateSyntax(template, VALID_FOLDER_TOKENS, "season"), {
-      kind: "invalidPadding",
-      padding,
-    });
+    assert.deepEqual(
+      validateFolderTemplateSyntax(template, VALID_FOLDER_TOKENS, "season"),
+      {
+        kind: "invalidPadding",
+        padding,
+      },
+    );
   }
 });
 
 test("validateFolderTemplateSyntax rejects illegal literal characters", () => {
-  for (const character of ["<", ">", ":", "\"", "/", "\\", "|", "?", "*", "\n"]) {
+  for (const character of [
+    "<",
+    ">",
+    ":",
+    '"',
+    "/",
+    "\\",
+    "|",
+    "?",
+    "*",
+    "\n",
+  ]) {
     assert.deepEqual(
-      validateFolderTemplateSyntax(`Season${character} {season}`, VALID_FOLDER_TOKENS, "season"),
+      validateFolderTemplateSyntax(
+        `Season${character} {season}`,
+        VALID_FOLDER_TOKENS,
+        "season",
+      ),
       { kind: "illegalCharacter", character },
     );
   }
@@ -134,7 +201,12 @@ test("validateFolderTemplateSyntax rejects illegal literal characters", () => {
 test("validateFolderTemplateSyntax supports safe nested movie folder components", () => {
   const template = "{title_first_character}/{title_with_article} ({year})";
   assert.equal(
-    validateFolderTemplateSyntax(template, VALID_MOVIE_FOLDER_TOKENS, undefined, true),
+    validateFolderTemplateSyntax(
+      template,
+      VALID_MOVIE_FOLDER_TOKENS,
+      undefined,
+      true,
+    ),
     null,
   );
   assert.equal(
@@ -146,10 +218,21 @@ test("validateFolderTemplateSyntax supports safe nested movie folder components"
   );
 
   for (const unsafeTemplate of [
-    "/A/{title}", "A//{title}", "../{title}", "A/../{title}", "{title}/ /{title}", "A/ .. /{title}", " . /{title}",
+    "/A/{title}",
+    "A//{title}",
+    "../{title}",
+    "A/../{title}",
+    "{title}/ /{title}",
+    "A/ .. /{title}",
+    " . /{title}",
   ]) {
     assert.deepEqual(
-      validateFolderTemplateSyntax(unsafeTemplate, VALID_MOVIE_FOLDER_TOKENS, undefined, true),
+      validateFolderTemplateSyntax(
+        unsafeTemplate,
+        VALID_MOVIE_FOLDER_TOKENS,
+        undefined,
+        true,
+      ),
       { kind: "illegalCharacter", character: "/" },
     );
   }
@@ -157,7 +240,12 @@ test("validateFolderTemplateSyntax supports safe nested movie folder components"
 
 test("validateFolderTemplateSyntax requires a title token in the last title folder", () => {
   const tokens = new Set([
-    "title", "title_with_year", "year", "title_first_character", "imdb_id", "tvdb_id",
+    "title",
+    "title_with_year",
+    "year",
+    "title_first_character",
+    "imdb_id",
+    "tvdb_id",
   ]);
   for (const template of [
     "{title_first_character}/{title_with_year}",
@@ -165,7 +253,11 @@ test("validateFolderTemplateSyntax requires a title token in the last title fold
     "{title_first_character}/[{tvdb_id}]",
     "{title}{?year: ({year})}",
   ]) {
-    assert.equal(validateFolderTemplateSyntax(template, tokens, undefined, true), null, template);
+    assert.equal(
+      validateFolderTemplateSyntax(template, tokens, undefined, true),
+      null,
+      template,
+    );
   }
   for (const template of [
     "{title_first_character}",
@@ -246,20 +338,36 @@ test("applyRenameTemplatePreview preserves escaped folder tokens as literals", (
 
 test("applyRenameTemplatePreview renders missing sample values as empty strings", () => {
   assert.equal(
-    applyRenameTemplatePreview("{title} - {season_order}.{ext}", VALID_TOKENS, SAMPLE_VALUES),
+    applyRenameTemplatePreview(
+      "{title} - {season_order}.{ext}",
+      VALID_TOKENS,
+      SAMPLE_VALUES,
+    ),
     "The Grey Harbor - .mkv",
   );
 });
 
 test("applyRenameTemplatePreview omits missing optional values and truncates present values", () => {
   const episodeTokens = new Set([
-    "title", "season_order", "episode", "absolute_episode", "episode_title", "quality", "ext",
+    "title",
+    "season_order",
+    "episode",
+    "absolute_episode",
+    "episode_title",
+    "quality",
+    "ext",
   ]);
-  const template = "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:8}} - {quality}.{ext}";
+  const template =
+    "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:8}} - {quality}.{ext}";
   assert.equal(
     applyRenameTemplatePreview(template, episodeTokens, {
-      title: "The Grey Harbor", season_order: "0", episode: "4", absolute_episode: "",
-      episode_title: "Harbor Signal Uprising", quality: "2160p", ext: "mkv",
+      title: "The Grey Harbor",
+      season_order: "0",
+      episode: "4",
+      absolute_episode: "",
+      episode_title: "Harbor Signal Uprising",
+      quality: "2160p",
+      ext: "mkv",
     }),
     "The Grey Harbor - S00E04 - Harbor S - 2160p.mkv",
   );
@@ -267,7 +375,10 @@ test("applyRenameTemplatePreview omits missing optional values and truncates pre
 
 test("splitRenameTemplateSegments highlights filtered token specs", () => {
   assert.deepEqual(
-    splitRenameTemplateSegments("{title|truncate:8|space:_}.{ext}", VALID_TOKENS),
+    splitRenameTemplateSegments(
+      "{title|truncate:8|space:_}.{ext}",
+      VALID_TOKENS,
+    ),
     [
       { text: "{title|truncate:8|space:_}", isToken: true },
       { text: ".", isToken: false },
@@ -278,7 +389,10 @@ test("splitRenameTemplateSegments highlights filtered token specs", () => {
 
 test("splitRenameTemplateSegments highlights valid optional groups", () => {
   assert.deepEqual(
-    splitRenameTemplateSegments("{title}{?edition: ({edition})}.{ext}", VALID_TOKENS),
+    splitRenameTemplateSegments(
+      "{title}{?edition: ({edition})}.{ext}",
+      VALID_TOKENS,
+    ),
     [
       { text: "{title}", isToken: true },
       { text: "{?edition: ({edition})}", isToken: true },
@@ -290,7 +404,10 @@ test("splitRenameTemplateSegments highlights valid optional groups", () => {
 
 test("splitRenameTemplateSegments leaves escaped literal braces unhighlighted", () => {
   assert.deepEqual(
-    splitRenameTemplateSegments("{title} ({{year}})", new Set(["title", "year"])),
+    splitRenameTemplateSegments(
+      "{title} ({{year}})",
+      new Set(["title", "year"]),
+    ),
     [
       { text: "{title}", isToken: true },
       { text: " ({{year}})", isToken: false },

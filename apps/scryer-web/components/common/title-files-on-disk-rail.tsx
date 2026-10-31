@@ -29,7 +29,9 @@ export function TitleFilesOnDiskRail({
           title={t("title.files")}
           action={action}
         />
-        <div className="border-t border-[var(--scry-line3)] pt-3">{children}</div>
+        <div className="border-t border-[var(--scry-line3)] pt-3">
+          {children}
+        </div>
         {footer}
       </TitleWorkspaceSectionCard>
     );

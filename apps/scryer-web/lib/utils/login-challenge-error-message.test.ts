@@ -16,10 +16,13 @@ function refusal(message: string, extensions: Record<string, unknown>) {
 }
 
 test("a named sign-in image refusal is shown in translation", () => {
-  const error = refusal("The indexer's sign-in challenge is a 'image/svg+xml' file", {
-    code: "VALIDATION_ERROR",
-    reason: "INDEXER_LOGIN_CHALLENGE_IMAGE_TYPE_UNSUPPORTED",
-  });
+  const error = refusal(
+    "The indexer's sign-in challenge is a 'image/svg+xml' file",
+    {
+      code: "VALIDATION_ERROR",
+      reason: "INDEXER_LOGIN_CHALLENGE_IMAGE_TYPE_UNSUPPORTED",
+    },
+  );
 
   assert.equal(
     loginChallengeRefusalKey(error),

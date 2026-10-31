@@ -76,7 +76,10 @@ pub(crate) fn native_download_client_http_client(
                 proxy_config,
                 &message,
             );
-            AppError::Validation(message)
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_TRANSPORT_PROXY_INVALID,
+                message,
+            )
         },
     )
 }
@@ -101,7 +104,10 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
         }
         let config = parse_download_client_config_json(config_json)?;
         let base_url = resolve_download_client_base_url(&config).ok_or_else(|| {
-            AppError::Validation("cannot compute base URL from config - host is required".into())
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_HOST_REQUIRED,
+                "cannot compute base URL from config - host is required",
+            )
         })?;
         validate_test_flight_url(&base_url)?;
         // The test has to dial the way live traffic will, or it proves nothing
@@ -122,8 +128,9 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
                 let username = read_config_string(&config, &["username"]);
                 let password = read_config_string(&config, &["password"]);
                 if api_key.is_none() && (username.is_none() || password.is_none()) {
-                    return Err(AppError::Validation(
-                        "sabnzbd requires an API key or username/password".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_SABNZBD_CREDENTIALS_REQUIRED,
+                        "sabnzbd requires an API key or username/password",
                     ));
                 }
                 SabnzbdDownloadClient::with_auth(base_url, api_key, username, password)
@@ -139,9 +146,10 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
                     .await?;
             }
             _ => {
-                return Err(AppError::Validation(format!(
-                    "test connection is not supported for client type '{client_type}'"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_CONNECTION_TEST_UNSUPPORTED,
+                    format!("test connection is not supported for client type '{client_type}'"),
+                ));
             }
         }
 
@@ -157,17 +165,28 @@ pub fn resolve_base_url_from_config_json(config_json: &str) -> Option<String> {
 }
 
 fn validate_test_flight_url(raw: &str) -> AppResult<()> {
-    let url = url::Url::parse(raw)
-        .map_err(|error| AppError::Validation(format!("invalid URL: {error}")))?;
+    let url = url::Url::parse(raw).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_URL_INVALID,
+            format!("invalid URL: {error}"),
+        )
+    })?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(AppError::Validation("URL must use http or https".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_URL_SCHEME_UNSUPPORTED,
+            "URL must use http or https",
+        ));
     }
     if url.host_str().is_none() {
-        return Err(AppError::Validation("URL must include a host".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_URL_HOST_REQUIRED,
+            "URL must include a host",
+        ));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(AppError::Validation(
-            "URL must not include embedded credentials".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_URL_CREDENTIALS_FORBIDDEN,
+            "URL must not include embedded credentials",
         ));
     }
     Ok(())
@@ -179,7 +198,10 @@ fn parse_download_client_config_json(raw: &str) -> AppResult<Value> {
         return Ok(json!({}));
     }
     serde_json::from_str::<Value>(trimmed).map_err(|error| {
-        AppError::Validation(format!("invalid download client config JSON: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_CONFIG_INVALID,
+            format!("invalid download client config JSON: {error}"),
+        )
     })
 }
 
@@ -484,21 +506,26 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             | Ok(Event::DocType(_)) => {}
             Ok(Event::Text(text)) if !saw_root => {
                 let text = quick_xml::escape::unescape(text.as_ref()).map_err(|err| {
-                    AppError::Validation(format!("nzb XML text decode failed: {err}"))
+                    AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_TEXT_DECODE_FAILED,
+                        format!("nzb XML text decode failed: {err}"),
+                    )
                 })?;
                 if !text
                     .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
                     .is_empty()
                 {
-                    return Err(AppError::Validation(
-                        "nzb download payload did not look like xml".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_PAYLOAD_NOT_XML,
+                        "nzb download payload did not look like xml",
                     ));
                 }
             }
             Ok(Event::Start(start)) if !saw_root => {
                 if !is_nzb_root_name(start.name().as_ref()) {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 saw_root = true;
@@ -506,8 +533,9 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             }
             Ok(Event::Empty(start)) if !saw_root => {
                 if !is_nzb_root_name(start.name().as_ref()) {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 saw_root = true;
@@ -521,22 +549,25 @@ fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>
             }
             Ok(Event::Eof) => {
                 if !saw_root {
-                    return Err(AppError::Validation(
-                        "nzb download payload root element must be <nzb>".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID,
+                        "nzb download payload root element must be <nzb>",
                     ));
                 }
                 if depth != 0 {
-                    return Err(AppError::Validation(
-                        "nzb download payload was not valid xml: unexpected end of file".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_NZB_XML_INVALID,
+                        "nzb download payload was not valid xml: unexpected end of file",
                     ));
                 }
                 return Ok(reader);
             }
             Ok(_) => {}
             Err(error) => {
-                return Err(AppError::Validation(format!(
-                    "nzb download payload was not valid xml: {error}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_NZB_XML_INVALID,
+                    format!("nzb download payload was not valid xml: {error}"),
+                ));
             }
         }
         event_buf.clear();
@@ -567,10 +598,10 @@ fn validate_nzb_xml(bytes: &[u8]) -> AppResult<()> {
     }
 
     if bytes.len() as u64 > MAX_NZB_BYTES {
-        return Err(AppError::Validation(format!(
-            "nzb download payload exceeded {} bytes",
-            MAX_NZB_BYTES
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_STAGED_PAYLOAD_TOO_LARGE,
+            format!("nzb download payload exceeded {} bytes", MAX_NZB_BYTES),
+        ));
     }
 
     let mut reader = Reader::from_reader(Cursor::new(bytes));
@@ -587,13 +618,17 @@ pub fn request_source_hint_for_nzb(request: &DownloadClientAddRequest) -> AppRes
             (!value.is_empty()).then_some(value)
         })
         .ok_or_else(|| {
-            AppError::Validation("source hint is required to queue a download".into())
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_SOURCE_REQUIRED,
+                "source hint is required to queue a download",
+            )
         })?;
 
     if !is_http_url(&source_hint) {
-        return Err(AppError::Validation(format!(
-            "source hint must be an NZB URL; got {source_hint}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_SOURCE_NOT_NZB_URL,
+            format!("source hint must be an NZB URL; got {source_hint}"),
+        ));
     }
 
     Ok(source_hint)
@@ -610,6 +645,7 @@ pub async fn stage_nzb_from_bytes(
 ) -> AppResult<StagedNzbLease> {
     if cancellation.is_cancelled() {
         return Err(AppError::TemporaryUnavailable {
+            reason: None,
             message: "nzb artifact resolution was cancelled".into(),
             retry_after: None,
             rate_limit_cooldown: scryer_application::RateLimitCooldownAction::None,
@@ -622,10 +658,13 @@ pub async fn stage_nzb_from_bytes(
     }
     if bytes.len() as u64 > MAX_NZB_BYTES {
         // A property of the artifact, not a storage fault: reported, not masked.
-        return Err(AppError::Validation(format!(
-            "resolved NZB download artifact exceeded {} bytes",
-            MAX_NZB_BYTES
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_NZB_ARTIFACT_TOO_LARGE,
+            format!(
+                "resolved NZB download artifact exceeded {} bytes",
+                MAX_NZB_BYTES
+            ),
+        ));
     }
     let probe_len = bytes.len().min(scryer_application::NZB_HEAD_PROBE_BYTES);
     if let Some(expected_facet) = expected_facet {
@@ -971,8 +1010,12 @@ mod tests {
             Ok(_) => panic!("anime NZB must not stage for a series"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("category_mismatch"));
-        assert!(matches!(error, scryer_application::AppError::Validation(_)));
+        assert_eq!(error.validation_reason(), Some("INDEXER_CATEGORY_MISMATCH"));
+        assert!(matches!(
+            error,
+            scryer_application::AppError::Validation(_)
+                | scryer_application::AppError::ValidationRefused { .. }
+        ));
     }
 
     #[tokio::test]

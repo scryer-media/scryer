@@ -23,8 +23,10 @@ export function compareHistoryEpisodes(
   }
 
   return (
-    episodeNumberValue(left.seasonNumber) - episodeNumberValue(right.seasonNumber) ||
-    episodeNumberValue(left.episodeNumber) - episodeNumberValue(right.episodeNumber) ||
+    episodeNumberValue(left.seasonNumber) -
+      episodeNumberValue(right.seasonNumber) ||
+    episodeNumberValue(left.episodeNumber) -
+      episodeNumberValue(right.episodeNumber) ||
     left.id.localeCompare(right.id)
   );
 }
@@ -41,7 +43,8 @@ export function formatHistoryEpisodeLabel(
   const seasonNumber = episodeNumberValue(episode.seasonNumber);
   const episodeNumber = episodeNumberValue(episode.episodeNumber);
   const numberedLabel =
-    seasonNumber !== Number.MAX_SAFE_INTEGER && episodeNumber !== Number.MAX_SAFE_INTEGER
+    seasonNumber !== Number.MAX_SAFE_INTEGER &&
+    episodeNumber !== Number.MAX_SAFE_INTEGER
       ? `S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`
       : null;
   const label = numberedLabel || episode.episodeLabel?.trim() || "Episode";

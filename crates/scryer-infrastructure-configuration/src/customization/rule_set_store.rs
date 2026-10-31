@@ -58,8 +58,8 @@ impl RuleSetRepository for RuleSetStore {
             "INSERT INTO rule_sets
                 (id, name, description, rego_source, enabled, priority,
                  applied_facets, created_at, updated_at, is_managed, managed_key,
-                 managed_tag_filter, evaluation_phase, exclusive_group, disabled_reason)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                 managed_tag_filter, evaluation_phase, exclusive_group, disabled_reason, disabled_reason_code)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             args,
         )
         .await
@@ -74,7 +74,7 @@ impl RuleSetRepository for RuleSetStore {
                 SET name = {}, description = {}, rego_source = {}, enabled = {},
                     priority = {}, applied_facets = {}, updated_at = {},
                     is_managed = {}, managed_key = {}, managed_tag_filter = {},
-                    evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}
+                    evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}, disabled_reason_code = {}
               WHERE id = {}",
             vec![
                 args[1].clone(),
@@ -90,6 +90,7 @@ impl RuleSetRepository for RuleSetStore {
                 args[12].clone(),
                 args[13].clone(),
                 args[14].clone(),
+                args[15].clone(),
                 args[0].clone(),
             ],
         )
@@ -340,7 +341,8 @@ impl RuleSetRepository for RuleSetStore {
         history: &[RuleSetHistoryChange],
     ) -> AppResult<bool> {
         if custom_rule_set.is_managed {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_RULE_COPY_SOURCE_NOT_USER_RULE,
                 "copied rule sets must be ordinary user rules".to_string(),
             ));
         }
@@ -389,7 +391,8 @@ impl RuleSetRepository for RuleSetStore {
                     )
                     .await?;
                     if disabled != 1 {
-                        return Err(AppError::Validation(
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::CONFIGURATION_RULE_PACK_OWNERSHIP_MISMATCH,
                             "rule set is not owned by the requested pack".to_string(),
                         ));
                     }
@@ -410,26 +413,26 @@ impl RuleSetRepository for RuleSetStore {
 
 const RULE_SET_COLUMNS: &str = "id, name, description, rego_source, enabled, priority,
     applied_facets, created_at, updated_at, is_managed, managed_key, managed_tag_filter,
-    evaluation_phase, exclusive_group, disabled_reason";
+    evaluation_phase, exclusive_group, disabled_reason, disabled_reason_code";
 
 const UPSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
     (id, name, description, rego_source, enabled, priority, applied_facets, created_at,
      updated_at, is_managed, managed_key, managed_tag_filter, evaluation_phase,
-     exclusive_group, disabled_reason)
- VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+     exclusive_group, disabled_reason, disabled_reason_code)
+ VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
  ON CONFLICT(id) DO UPDATE SET
     name = excluded.name, description = excluded.description, rego_source = excluded.rego_source,
     enabled = excluded.enabled, priority = excluded.priority, applied_facets = excluded.applied_facets,
     updated_at = excluded.updated_at, is_managed = excluded.is_managed,
     managed_key = excluded.managed_key, managed_tag_filter = excluded.managed_tag_filter,
     evaluation_phase = excluded.evaluation_phase, exclusive_group = excluded.exclusive_group,
-    disabled_reason = excluded.disabled_reason";
+    disabled_reason = excluded.disabled_reason, disabled_reason_code = excluded.disabled_reason_code";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
     (id, name, description, rego_source, enabled, priority, applied_facets, created_at,
      updated_at, is_managed, managed_key, managed_tag_filter, evaluation_phase,
-     exclusive_group, disabled_reason)
- VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     exclusive_group, disabled_reason, disabled_reason_code)
+ VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 async fn fetch_rule_sets(
     exec: SqlExec<'_, '_>,
@@ -488,6 +491,7 @@ fn rule_set_args(rule_set: &RuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(rule_set.evaluation_phase.as_storage_str().to_string()),
         SqlArg::OptText(rule_set.exclusive_group.clone()),
         SqlArg::OptText(rule_set.disabled_reason.clone()),
+        SqlArg::OptText(rule_set.disabled_reason_code.clone()),
     ])
 }
 
@@ -510,6 +514,7 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RuleSet> {
         evaluation_phase: evaluation_phase(row)?,
         exclusive_group: row.opt_text("exclusive_group")?,
         disabled_reason: row.opt_text("disabled_reason")?,
+        disabled_reason_code: row.opt_text("disabled_reason_code")?,
         applied_facets: applied_facets(row)?,
         created_at: timestamp_or_now(row, "created_at")?,
         updated_at: timestamp_or_now(row, "updated_at")?,
@@ -675,6 +680,12 @@ mod tests {
         for migration in RULE_SET_MIGRATIONS {
             apply_migration(&pool, migration).await;
         }
+        // This isolated fixture builds only rule tables. Include the rule-side
+        // column from 0312 without requiring unrelated indexer tables.
+        sqlx::query("ALTER TABLE rule_sets ADD COLUMN disabled_reason_code TEXT")
+            .execute(&pool)
+            .await
+            .expect("reason-code fixture column should exist");
         if with_metadata {
             apply_migration(&pool, METADATA_MIGRATION).await;
         }
@@ -690,6 +701,7 @@ mod tests {
     fn rule_set(source: &str) -> RuleSet {
         let now = Utc::now();
         RuleSet {
+            disabled_reason_code: Some("RULE_INPUT_RETIRED".into()),
             id: "rule-1".to_string(),
             name: "Managed rule".to_string(),
             description: "metadata fixture".to_string(),
@@ -760,6 +772,7 @@ mod tests {
         let mut updated = initial.clone();
         updated.rego_source = source_v2.to_string();
         updated.disabled_reason = None;
+        updated.disabled_reason_code = None;
         updated.updated_at = Utc::now();
         assert!(
             store
@@ -842,7 +855,7 @@ mod tests {
             .expect_err("unknown stored phase must not silently change evaluation order");
         assert!(matches!(
             error,
-            AppError::Repository(message) if message.contains("invalid rule set evaluation phase: future_phase")
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. } if message.contains("invalid rule set evaluation phase: future_phase")
         ));
     }
 }

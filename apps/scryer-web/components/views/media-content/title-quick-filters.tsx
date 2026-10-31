@@ -169,7 +169,10 @@ export function splitFilterSegmentClassName(
  * A standalone toggle in the filter panel, for a filter that is one question
  * rather than a set of states.
  */
-export function panelFilterButtonClassName(selected: boolean, fullWidth = false): string {
+export function panelFilterButtonClassName(
+  selected: boolean,
+  fullWidth = false,
+): string {
   return [
     "h-11 w-full justify-center rounded-[10px] border px-3",
     fullWidth ? "col-span-2" : "",
@@ -205,7 +208,9 @@ export function TitleQuickFilterBar({
   const allSelected = !hasActiveTitleQuickFilters(filters, view);
   const panelAppearance = appearance === "panel";
   const panelButtonClassName = (selected: boolean, fullWidth = false) =>
-    panelAppearance ? panelFilterButtonClassName(selected, fullWidth) : undefined;
+    panelAppearance
+      ? panelFilterButtonClassName(selected, fullWidth)
+      : undefined;
 
   return (
     <div
@@ -223,9 +228,40 @@ export function TitleQuickFilterBar({
               : "relative top-px flex min-h-10 min-w-0 max-w-full flex-1 flex-wrap items-center justify-start gap-x-5 gap-y-1 border-0 bg-transparent p-0 shadow-none"
           }
         >
-        {panelAppearance ? (
-          <div className="col-span-2 flex w-full justify-center">
-            <div className={SPLIT_FILTER_GROUP_CLASS_NAME}>
+          {panelAppearance ? (
+            <div className="col-span-2 flex w-full justify-center">
+              <div className={SPLIT_FILTER_GROUP_CLASS_NAME}>
+                <UnderlineFilterButton
+                  selected={filters.monitored}
+                  onClick={() => onToggleMonitoring("monitored")}
+                  icon={<Eye className="h-3.5 w-3.5" />}
+                  label={t("title.monitored")}
+                  count={counts?.monitored}
+                  tone="success"
+                  className={splitFilterSegmentClassName(filters.monitored)}
+                />
+                <UnderlineFilterButton
+                  selected={filters.unmonitored}
+                  onClick={() => onToggleMonitoring("unmonitored")}
+                  icon={<EyeOff className="h-3.5 w-3.5" />}
+                  label={t("search.monitorType.unmonitored")}
+                  count={counts?.unmonitored}
+                  tone="danger"
+                  className={splitFilterSegmentClassName(
+                    filters.unmonitored,
+                    true,
+                  )}
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <UnderlineFilterButton
+                selected={allSelected}
+                onClick={onClear}
+                label={t("activity.historyFilter.all")}
+                count={counts?.all}
+              />
               <UnderlineFilterButton
                 selected={filters.monitored}
                 onClick={() => onToggleMonitoring("monitored")}
@@ -233,7 +269,6 @@ export function TitleQuickFilterBar({
                 label={t("title.monitored")}
                 count={counts?.monitored}
                 tone="success"
-                className={splitFilterSegmentClassName(filters.monitored)}
               />
               <UnderlineFilterButton
                 selected={filters.unmonitored}
@@ -242,58 +277,31 @@ export function TitleQuickFilterBar({
                 label={t("search.monitorType.unmonitored")}
                 count={counts?.unmonitored}
                 tone="danger"
-                className={splitFilterSegmentClassName(filters.unmonitored, true)}
               />
-            </div>
-          </div>
-        ) : (
-          <>
-            <UnderlineFilterButton
-              selected={allSelected}
-              onClick={onClear}
-              label={t("activity.historyFilter.all")}
-              count={counts?.all}
-            />
-            <UnderlineFilterButton
-              selected={filters.monitored}
-              onClick={() => onToggleMonitoring("monitored")}
-              icon={<Eye className="h-3.5 w-3.5" />}
-              label={t("title.monitored")}
-              count={counts?.monitored}
-              tone="success"
-            />
-            <UnderlineFilterButton
-              selected={filters.unmonitored}
-              onClick={() => onToggleMonitoring("unmonitored")}
-              icon={<EyeOff className="h-3.5 w-3.5" />}
-              label={t("search.monitorType.unmonitored")}
-              count={counts?.unmonitored}
-              tone="danger"
-            />
-          </>
-        )}
-        {showStatusFilters ? (
-          <>
-            <UnderlineFilterButton
-              selected={filters.continuing}
-              onClick={() => onToggleStatus("continuing")}
-              icon={<Play className="h-3.5 w-3.5" />}
-              label={t("title.continuing")}
-              count={counts?.continuing}
-              tone="success"
-              className={panelButtonClassName(filters.continuing)}
-            />
-            <UnderlineFilterButton
-              selected={filters.ended}
-              onClick={() => onToggleStatus("ended")}
-              icon={<Square className="h-3.5 w-3.5" />}
-              label={t("title.ended")}
-              count={counts?.ended}
-              tone="muted"
-              className={panelButtonClassName(filters.ended)}
-            />
-          </>
-        ) : null}
+            </>
+          )}
+          {showStatusFilters ? (
+            <>
+              <UnderlineFilterButton
+                selected={filters.continuing}
+                onClick={() => onToggleStatus("continuing")}
+                icon={<Play className="h-3.5 w-3.5" />}
+                label={t("title.continuing")}
+                count={counts?.continuing}
+                tone="success"
+                className={panelButtonClassName(filters.continuing)}
+              />
+              <UnderlineFilterButton
+                selected={filters.ended}
+                onClick={() => onToggleStatus("ended")}
+                icon={<Square className="h-3.5 w-3.5" />}
+                label={t("title.ended")}
+                count={counts?.ended}
+                tone="muted"
+                className={panelButtonClassName(filters.ended)}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
       {trailingContent ? (

@@ -209,25 +209,34 @@ impl ExternalArrApiBucket {
                     self.expected_app_name()
                 )
             };
-            return Err(AppError::Validation(message));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::external_import::SOURCE_APPLICATION_MISMATCH,
+                message,
+            ));
         }
 
         let version = version.trim();
         let Some(version_major) = external_arr_version_major(version) else {
-            return Err(AppError::Validation(format!(
-                "could not determine {} version from '{}'",
-                self.expected_app_name(),
-                version
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::external_import::COULD_NOT_DETERMINE_VERSION,
+                format!(
+                    "could not determine {} version from '{}'",
+                    self.expected_app_name(),
+                    version
+                ),
+            ));
         };
 
         if version_major < self.minimum_supported_major() {
-            return Err(AppError::Validation(format!(
-                "unsupported {} version '{}'; expected major {} or newer",
-                self.expected_app_name(),
-                version,
-                self.minimum_supported_major()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::external_import::VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED,
+                format!(
+                    "unsupported {} version '{}'; expected major {} or newer",
+                    self.expected_app_name(),
+                    version,
+                    self.minimum_supported_major()
+                ),
+            ));
         }
 
         Ok(())
@@ -236,10 +245,10 @@ impl ExternalArrApiBucket {
     fn validate_api_prefix(self, api_prefix: &str) -> AppResult<()> {
         let api_prefix = api_prefix.trim().trim_matches('/').to_ascii_lowercase();
         if api_prefix.is_empty() {
-            return Err(AppError::Validation(format!(
-                "{} did not report an API version",
-                self.expected_app_name()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::external_import::DID_NOT_REPORT_API_VERSION,
+                format!("{} did not report an API version", self.expected_app_name()),
+            ));
         }
 
         if self
@@ -250,12 +259,15 @@ impl ExternalArrApiBucket {
             return Ok(());
         }
 
-        Err(AppError::Validation(format!(
-            "unsupported {} API version '{}'; expected one of {}",
-            self.expected_app_name(),
-            api_prefix,
-            self.supported_api_prefixes().join(", ")
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::external_import::API_VERSION_EXPECTED_ONE_UNSUPPORTED,
+            format!(
+                "unsupported {} API version '{}'; expected one of {}",
+                self.expected_app_name(),
+                api_prefix,
+                self.supported_api_prefixes().join(", ")
+            ),
+        ))
     }
 }
 
@@ -286,12 +298,17 @@ fn normalize_external_arr_base_url(
     label: &'static str,
 ) -> AppResult<ExternalArrBaseUrl> {
     let trimmed = raw.trim();
-    let url = validate_operator_http_url(trimmed, label)
-        .map_err(|error| AppError::Validation(error.to_string()))?;
+    let url = validate_operator_http_url(trimmed, label).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::external_import::SOURCE_URL_INVALID,
+            error.to_string(),
+        )
+    })?;
     if url.query().is_some() || url.fragment().is_some() {
-        return Err(AppError::Validation(format!(
-            "{label} must not include a query string or fragment"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::external_import::SOURCE_URL_QUERY_OR_FRAGMENT,
+            format!("{label} must not include a query string or fragment"),
+        ));
     }
 
     let configured = trimmed.trim_end_matches('/').to_string();
@@ -302,9 +319,12 @@ fn normalize_external_arr_base_url(
             .is_some_and(|host| host.eq_ignore_ascii_case("localhost"));
 
     if is_http_localhost {
-        effective_url
-            .set_host(Some("127.0.0.1"))
-            .map_err(|_| AppError::Validation(format!("{label} has an invalid host")))?;
+        effective_url.set_host(Some("127.0.0.1")).map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::external_import::INVALID_HOST,
+                format!("{label} has an invalid host"),
+            )
+        })?;
     }
 
     let effective = effective_url.as_str().trim_end_matches('/').to_string();

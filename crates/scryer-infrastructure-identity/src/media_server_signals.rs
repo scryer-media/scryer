@@ -274,8 +274,9 @@ impl MediaServerSignalSource for HttpMediaServerSignalSource {
             .ok_or_else(|| AppError::Repository("no credential stored".into()))?;
         let external_user_id = external_user_id.trim();
         if external_user_id.is_empty() {
-            return Err(AppError::Validation(
-                "a media-server signal read needs a provider user id".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED,
+                "a media-server signal read needs a provider user id",
             ));
         }
 
@@ -420,8 +421,12 @@ fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
 /// A stored base URL with a trailing slash, so `join` keeps its last path
 /// segment. Mirrors the handling in [`crate::media_server_playback`].
 fn jellyfin_base(base_url: &str) -> AppResult<Url> {
-    let mut base = Url::parse(base_url.trim())
-        .map_err(|_| AppError::Validation("media server base URL is invalid".into()))?;
+    let mut base = Url::parse(base_url.trim()).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_MEDIA_SERVER_BASE_URL_INVALID,
+            "media server base URL is invalid",
+        )
+    })?;
     if !base.path().ends_with('/') {
         base.set_path(&format!("{}/", base.path()));
     }
@@ -431,7 +436,12 @@ fn jellyfin_base(base_url: &str) -> AppResult<Url> {
 fn played_items_url(base: &Url, external_user_id: &str, start_index: usize) -> AppResult<Url> {
     let mut url = base
         .join(&format!("Users/{external_user_id}/Items"))
-        .map_err(|_| AppError::Validation("media server base URL is invalid".into()))?;
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_MEDIA_SERVER_BASE_URL_INVALID,
+                "media server base URL is invalid",
+            )
+        })?;
     url.query_pairs_mut()
         .append_pair("Recursive", "true")
         .append_pair("IsMissing", "false")
@@ -455,7 +465,12 @@ fn played_items_url(base: &Url, external_user_id: &str, start_index: usize) -> A
 fn series_lookup_url(base: &Url, external_user_id: &str, ids: &[String]) -> AppResult<Url> {
     let mut url = base
         .join(&format!("Users/{external_user_id}/Items"))
-        .map_err(|_| AppError::Validation("media server base URL is invalid".into()))?;
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_MEDIA_SERVER_BASE_URL_INVALID,
+                "media server base URL is invalid",
+            )
+        })?;
     url.query_pairs_mut()
         .append_pair("Recursive", "true")
         .append_pair("Ids", &ids.join(","))

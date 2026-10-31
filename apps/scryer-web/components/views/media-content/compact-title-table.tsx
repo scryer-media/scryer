@@ -193,57 +193,34 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
   const selectedPaneMode =
     selectedTitleId !== null && onSelectTitle !== undefined;
   const showActionsColumn = !selectedDrawerMode && visibleColumns.actions;
-  const showMonitoredColumn =
-    !selectedDrawerMode && visibleColumns.monitored;
+  const showMonitoredColumn = !selectedDrawerMode && visibleColumns.monitored;
   const showQualityColumn =
     !selectedDrawerMode && isMovieView && visibleColumns.quality;
-  const showProfileColumn =
-    !selectedDrawerMode && visibleColumns.profile;
+  const showProfileColumn = !selectedDrawerMode && visibleColumns.profile;
   const showEpisodesColumn =
-    !selectedDrawerMode &&
-    !isMovieView &&
-    visibleColumns.episodes;
-  const showSizeColumn =
-    !selectedDrawerMode && visibleColumns.size;
-  const showLibraryColumn =
-    !selectedDrawerMode && visibleColumns.library;
-  const showAddedColumn =
-    !selectedDrawerMode && visibleColumns.added;
+    !selectedDrawerMode && !isMovieView && visibleColumns.episodes;
+  const showSizeColumn = !selectedDrawerMode && visibleColumns.size;
+  const showLibraryColumn = !selectedDrawerMode && visibleColumns.library;
+  const showAddedColumn = !selectedDrawerMode && visibleColumns.added;
   const showYearColumn =
-    !selectedDrawerMode &&
-    isMovieView &&
-    visibleColumns.year;
-  const showRuntimeColumn =
-    !selectedDrawerMode && visibleColumns.runtime;
+    !selectedDrawerMode && isMovieView && visibleColumns.year;
+  const showRuntimeColumn = !selectedDrawerMode && visibleColumns.runtime;
   const showStatusColumn =
-    !selectedDrawerMode &&
-    !isMovieView &&
-    visibleColumns.status;
-  const showRootColumn =
-    !selectedDrawerMode && visibleColumns.root;
+    !selectedDrawerMode && !isMovieView && visibleColumns.status;
+  const showRootColumn = !selectedDrawerMode && visibleColumns.root;
   const showPopularityColumn =
-    !selectedDrawerMode &&
-    isMovieView &&
-    visibleColumns.popularity;
+    !selectedDrawerMode && isMovieView && visibleColumns.popularity;
   const showResolutionColumn =
-    !selectedDrawerMode &&
-    isMovieView &&
-    visibleColumns.resolution;
+    !selectedDrawerMode && isMovieView && visibleColumns.resolution;
   const showHdrColumn =
-    !selectedDrawerMode &&
-    isMovieView &&
-    visibleColumns.hdr;
+    !selectedDrawerMode && isMovieView && visibleColumns.hdr;
   const showAudioCodecColumn =
-    !selectedDrawerMode &&
-    isMovieView &&
-    visibleColumns.audioCodec;
+    !selectedDrawerMode && isMovieView && visibleColumns.audioCodec;
   const supportedRatingColumns =
     titleTableSupportedRatingColumnsForView(overviewTargetView);
   const showRatingColumns = selectedDrawerMode
     ? []
-    : supportedRatingColumns.filter(
-        (key) => visibleColumns[key],
-      );
+    : supportedRatingColumns.filter((key) => visibleColumns[key]);
   const titleTableMinWidthRem = selectedDrawerMode
     ? null
     : 3 +
@@ -389,14 +366,17 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
       const titleId = sortedTitles[index]?.id;
       return (
         compactTitleRowHeight +
-        (!selectedDrawerMode &&
-        titleId &&
-        expandedInteractiveRows.has(titleId)
+        (!selectedDrawerMode && titleId && expandedInteractiveRows.has(titleId)
           ? TITLE_TABLE_INTERACTIVE_PANEL_ESTIMATED_HEIGHT
           : 0)
       );
     },
-    [compactTitleRowHeight, expandedInteractiveRows, selectedDrawerMode, sortedTitles],
+    [
+      compactTitleRowHeight,
+      expandedInteractiveRows,
+      selectedDrawerMode,
+      sortedTitles,
+    ],
   );
   const getTitleTableMaxScrollTop = React.useCallback(
     (element: HTMLElement) =>
@@ -404,12 +384,9 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
       Math.max(0, element.scrollHeight - element.clientHeight),
     [],
   );
-  const restoreTitleTableScroll = React.useCallback(
-    (nextTop: number) => {
-      titleTableVirtualizerRef.current?.scrollToOffset(nextTop);
-    },
-    [],
-  );
+  const restoreTitleTableScroll = React.useCallback((nextTop: number) => {
+    titleTableVirtualizerRef.current?.scrollToOffset(nextTop);
+  }, []);
   useOverviewElementScrollRestoration({
     enabled: true,
     ready: titles.length > 0,
@@ -480,7 +457,12 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
         handleActivateTitle(item);
       }
     },
-    [handleActivateTitle, isInteractiveTitleRowTarget, onSelectTitle, selectionMode],
+    [
+      handleActivateTitle,
+      isInteractiveTitleRowTarget,
+      onSelectTitle,
+      selectionMode,
+    ],
   );
 
   const handleTitleRowKeyDown = React.useCallback(
@@ -499,7 +481,12 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
       event.preventDefault();
       handleActivateTitle(item);
     },
-    [handleActivateTitle, isInteractiveTitleRowTarget, onSelectTitle, selectionMode],
+    [
+      handleActivateTitle,
+      isInteractiveTitleRowTarget,
+      onSelectTitle,
+      selectionMode,
+    ],
   );
 
   const handleSort = React.useCallback(
@@ -649,7 +636,8 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
       interactiveSearchResultsByTitle[item.id] ?? [];
     const interactiveSearchLoading =
       interactiveSearchLoadingByTitle[item.id] === true;
-    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true || isSearching(item.id);
+    const autoQueueLoading =
+      autoQueueLoadingByTitle[item.id] === true || isSearching(item.id);
     const deleteLoading = isDeletingById[item.id] === true;
     const monitorToggleLoading = isTogglingMonitoredById?.[item.id] === true;
     const isSelected = selectedTitleId === item.id;
@@ -659,7 +647,9 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
     const addedLabel =
       formatTitleDate(item.createdAt, dateTimeFormat) ?? t("label.unknown");
 
-    const contextPanelControlsId = selectedPaneMode ? contextPanelId : undefined;
+    const contextPanelControlsId = selectedPaneMode
+      ? contextPanelId
+      : undefined;
     const selectedContextPanelControlsId = isSelected
       ? contextPanelControlsId
       : undefined;
@@ -667,7 +657,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
     if (selectedDrawerMode) {
       const posterUrl = selectPosterVariantUrl(item.posterUrl, "w70");
       const yearLabel = item.year ? String(item.year) : null;
-      const qualityLabel = resolveDisplayedQualityLabel(item, t("label.unknown"));
+      const qualityLabel = resolveDisplayedQualityLabel(
+        item,
+        t("label.unknown"),
+      );
       const subline = [yearLabel, qualityLabel].filter(Boolean).join(" · ");
       const libraryLabel = item.libraryName ?? item.libraryId ?? null;
 
@@ -740,9 +733,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
                   </span>
                 </span>
               </button>
-              {downloadActive ? (
-                <TitleDownloadActivityPill />
-              ) : null}
+              {downloadActive ? <TitleDownloadActivityPill /> : null}
             </div>
           </TableCell>
           <TableCell className="text-center align-middle">
@@ -818,9 +809,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
               >
                 <span className="block truncate">{item.name}</span>
               </button>
-              {downloadActive ? (
-                <TitleDownloadActivityPill />
-              ) : null}
+              {downloadActive ? <TitleDownloadActivityPill /> : null}
             </div>
           </TableCell>
           {showYearColumn ? (
@@ -918,7 +907,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ) : null}
           {showRootColumn ? (
             <TableCell className="overflow-hidden py-1.5 text-center align-middle text-[12px] text-[var(--scry-muted)]">
-              <span className="block truncate" title={item.rootFolderPath ?? ""}>
+              <span
+                className="block truncate"
+                title={item.rootFolderPath ?? ""}
+              >
                 {item.rootFolderPath ?? item.rootFolderId ?? "—"}
               </span>
             </TableCell>
@@ -1102,7 +1094,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
         {renderSortableHeader(
           "size",
           t("title.table.size"),
-          cn("whitespace-nowrap px-2 text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+          cn(
+            "whitespace-nowrap px-2 text-center",
+            TITLE_TABLE_HEADER_CELL_CLASS,
+          ),
           "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
         )}
       </TableRow>
@@ -1129,7 +1124,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "year",
               t("title.table.year"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1145,7 +1143,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "library",
               t("title.table.library"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1153,7 +1154,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "monitored",
               t("title.table.monitored"),
-              cn("text-center whitespace-nowrap", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "text-center whitespace-nowrap",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1161,7 +1165,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "quality",
               t("title.table.qualityTier"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1169,7 +1176,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "profile",
               t("title.table.profile"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1177,7 +1187,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "episodes",
               t("title.table.episodes"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1187,7 +1200,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
               isMovieView
                 ? t("title.table.runtime")
                 : t("title.table.avgRuntime"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1195,7 +1211,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "status",
               t("title.table.status"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1203,7 +1222,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "size",
               t("title.table.size"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1211,7 +1233,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "resolution",
               t("title.table.resolution"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1219,7 +1244,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "hdr",
               t("title.table.hdr"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1227,7 +1255,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "audioCodec",
               t("title.table.audioCodec"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1235,7 +1266,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "popularity",
               t("title.table.popularity"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1243,7 +1277,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "root",
               t("title.table.root"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1251,7 +1288,10 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
           ? renderSortableHeader(
               "added",
               t("title.contextAdded"),
-              cn("whitespace-nowrap text-center", TITLE_TABLE_HEADER_CELL_CLASS),
+              cn(
+                "whitespace-nowrap text-center",
+                TITLE_TABLE_HEADER_CELL_CLASS,
+              ),
               "justify-center text-center uppercase tracking-[0.05em] text-[var(--scry-faint2)]",
             )
           : null}
@@ -1316,43 +1356,43 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
                 : { minWidth: `${titleTableMinWidthRem}rem` }
             }
           >
-          {titleTableColGroup}
-          {titleTableHeader}
-          <VirtualizedTitleTableBody
-            ref={titleTableVirtualizerRef}
-            titles={sortedTitles}
-            scrollRef={titleTableScrollRef}
-            initialScrollOffset={initialScrollOffset}
-            estimateSize={estimateTitleRowSize}
-            overscan={8}
-            rebuildKey={`${sortKey}:${sortDirection}:${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
-            selectedTitleId={selectedTitleId}
-            selectedTitleScrollKey={selectedTitleScrollKey}
-            catalogPagingEnabled={catalogPagingEnabled}
-            catalogHasMoreTitles={catalogHasMoreTitles}
-            catalogLoadingMoreTitles={catalogLoadingMoreTitles}
-            onCatalogEndReached={onCatalogEndReached}
-            columnCount={columnCount}
-            renderRow={renderTitleRow}
-            emptyContent={
-              titleLoading ? (
-              <TitleTableLoadingState colSpan={columnCount} />
-              ) : (
-              <TitleTableEmptyState
-                colSpan={columnCount}
-                t={t}
-                showScanAction={showScanLibraryAction}
-                showConfigureRootsAction={showConfigureRootsAction}
-                configureRootsReason={configureRootsReason}
-                configureRootsHref={configureRootsHref}
-                onScan={onScanLibrary}
-                scanLoading={scanLibraryLoading}
-                scanDisabled={scanLibraryDisabled}
-                scanNotice={scanLibraryNotice}
-              />
-              )
-            }
-          />
+            {titleTableColGroup}
+            {titleTableHeader}
+            <VirtualizedTitleTableBody
+              ref={titleTableVirtualizerRef}
+              titles={sortedTitles}
+              scrollRef={titleTableScrollRef}
+              initialScrollOffset={initialScrollOffset}
+              estimateSize={estimateTitleRowSize}
+              overscan={8}
+              rebuildKey={`${sortKey}:${sortDirection}:${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
+              selectedTitleId={selectedTitleId}
+              selectedTitleScrollKey={selectedTitleScrollKey}
+              catalogPagingEnabled={catalogPagingEnabled}
+              catalogHasMoreTitles={catalogHasMoreTitles}
+              catalogLoadingMoreTitles={catalogLoadingMoreTitles}
+              onCatalogEndReached={onCatalogEndReached}
+              columnCount={columnCount}
+              renderRow={renderTitleRow}
+              emptyContent={
+                titleLoading ? (
+                  <TitleTableLoadingState colSpan={columnCount} />
+                ) : (
+                  <TitleTableEmptyState
+                    colSpan={columnCount}
+                    t={t}
+                    showScanAction={showScanLibraryAction}
+                    showConfigureRootsAction={showConfigureRootsAction}
+                    configureRootsReason={configureRootsReason}
+                    configureRootsHref={configureRootsHref}
+                    onScan={onScanLibrary}
+                    scanLoading={scanLibraryLoading}
+                    scanDisabled={scanLibraryDisabled}
+                    scanNotice={scanLibraryNotice}
+                  />
+                )
+              }
+            />
           </table>
         </TooltipProvider>
       </div>

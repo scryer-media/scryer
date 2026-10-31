@@ -10,7 +10,8 @@ test("connection feedback emits one terminal success message", async () => {
   const statuses: Array<[string, string | undefined]> = [];
 
   await runConnectionFeedback({
-    setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
+    setGlobalStatus: (status, options) =>
+      statuses.push([status, options?.level]),
     startMessage: "Testing",
     successMessage: "Connected",
     failureFallbackMessage: "Failed",
@@ -18,7 +19,10 @@ test("connection feedback emits one terminal success message", async () => {
   });
 
   // The progress note stays out of the toasts; the outcome states its level.
-  assert.deepEqual(statuses, [["Testing", undefined], ["Connected", "SUCCESS"]]);
+  assert.deepEqual(statuses, [
+    ["Testing", undefined],
+    ["Connected", "SUCCESS"],
+  ]);
 });
 
 test("connection feedback emits one terminal failure message", async () => {
@@ -26,7 +30,8 @@ test("connection feedback emits one terminal failure message", async () => {
 
   await assert.rejects(
     runConnectionFeedback({
-      setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
+      setGlobalStatus: (status, options) =>
+        statuses.push([status, options?.level]),
       successMessage: "Connected",
       failureFallbackMessage: "Failed",
       run: async () => {
@@ -41,10 +46,12 @@ test("connection feedback emits one terminal failure message", async () => {
 test("a plugin failure is reported in translation when a translator is given", async () => {
   const statuses: Array<[string, string | undefined]> = [];
   const pluginFailure = {
-    message: "[GraphQL] indexer connection test failed: plugin error AuthFailed: Login refused",
+    message:
+      "[GraphQL] indexer connection test failed: plugin error AuthFailed: Login refused",
     graphQLErrors: [
       {
-        message: "indexer connection test failed: plugin error AuthFailed: Login refused",
+        message:
+          "indexer connection test failed: plugin error AuthFailed: Login refused",
         extensions: { code: "PLUGIN_FAILED", reason: "PLUGIN_AUTH_FAILED" },
       },
     ],
@@ -52,7 +59,8 @@ test("a plugin failure is reported in translation when a translator is given", a
 
   await assert.rejects(
     runConnectionFeedback({
-      setGlobalStatus: (status, options) => statuses.push([status, options?.level]),
+      setGlobalStatus: (status, options) =>
+        statuses.push([status, options?.level]),
       successMessage: "Connected",
       failureFallbackMessage: "Failed",
       t: (key) => `translated:${key}`,
@@ -63,5 +71,7 @@ test("a plugin failure is reported in translation when a translator is given", a
     isReportedConnectionFeedbackError,
   );
 
-  assert.deepEqual(statuses, [["translated:plugins.failure.authFailed", "ERROR"]]);
+  assert.deepEqual(statuses, [
+    ["translated:plugins.failure.authFailed", "ERROR"],
+  ]);
 });

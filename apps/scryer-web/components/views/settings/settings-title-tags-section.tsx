@@ -17,7 +17,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
-import type { TitleTagDefinition, TitleTagDefinitionDraft } from "@/lib/types/title-tags";
+import type {
+  TitleTagDefinition,
+  TitleTagDefinitionDraft,
+} from "@/lib/types/title-tags";
 import { selectorId } from "@/lib/utils/dom-ids";
 
 type SettingsTitleTagsSectionProps = {
@@ -49,7 +52,8 @@ const TAG_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const TAG_PANEL_HEADER_CLASS =
   "border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3";
-const TAG_PANEL_TITLE_CLASS = "text-[15px] font-semibold text-[var(--scry-ink2)]";
+const TAG_PANEL_TITLE_CLASS =
+  "text-[15px] font-semibold text-[var(--scry-ink2)]";
 const TAG_PANEL_BODY_CLASS = "p-4 sm:p-5";
 const TAG_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 
@@ -97,7 +101,10 @@ export function SettingsTitleTagsSection({
           role="alert"
           className="flex items-start gap-2 rounded-[12px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-sm text-[var(--scry-warning-text)]"
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0"
+            aria-hidden="true"
+          />
           <span className="min-w-0 flex-1">{renameWarning}</span>
           <button
             id="settings-title-tag-rename-warning-dismiss"
@@ -112,18 +119,24 @@ export function SettingsTitleTagsSection({
 
       <section className={TAG_PANEL_CLASS}>
         <div className={TAG_PANEL_HEADER_CLASS}>
-          <h2 className={TAG_PANEL_TITLE_CLASS}>{t("settings.titleTagsExisting")}</h2>
+          <h2 className={TAG_PANEL_TITLE_CLASS}>
+            {t("settings.titleTagsExisting")}
+          </h2>
           <p className={`mt-1 text-[12.5px] ${TAG_MUTED_TEXT_CLASS}`}>
             {t("settings.titleTagsHelp")}
           </p>
         </div>
         <div>
           {loading ? (
-            <p className={`${TAG_PANEL_BODY_CLASS} text-sm ${TAG_MUTED_TEXT_CLASS}`}>
+            <p
+              className={`${TAG_PANEL_BODY_CLASS} text-sm ${TAG_MUTED_TEXT_CLASS}`}
+            >
               {t("label.loading")}
             </p>
           ) : definitions.length === 0 ? (
-            <p className={`${TAG_PANEL_BODY_CLASS} text-sm ${TAG_MUTED_TEXT_CLASS}`}>
+            <p
+              className={`${TAG_PANEL_BODY_CLASS} text-sm ${TAG_MUTED_TEXT_CLASS}`}
+            >
               {t("settings.titleTagsNone")}
             </p>
           ) : (
@@ -131,10 +144,14 @@ export function SettingsTitleTagsSection({
               <Table overflow="clip" layout="fixed" density="dense">
                 <TableHeader>
                   <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                    <TableHead className={`w-[26%] font-semibold ${TAG_MUTED_TEXT_CLASS}`}>
+                    <TableHead
+                      className={`w-[26%] font-semibold ${TAG_MUTED_TEXT_CLASS}`}
+                    >
                       {t("settings.titleTagLabelLabel")}
                     </TableHead>
-                    <TableHead className={`font-semibold ${TAG_MUTED_TEXT_CLASS}`}>
+                    <TableHead
+                      className={`font-semibold ${TAG_MUTED_TEXT_CLASS}`}
+                    >
                       {t("settings.titleTagDescriptionLabel")}
                     </TableHead>
                     <TableHead
@@ -178,7 +195,10 @@ export function SettingsTitleTagsSection({
                         <TableActionsCell className="w-24">
                           <div className="flex items-center justify-center gap-1">
                             <IconButton
-                              id={selectorId("settings-title-tag-edit", definition.id)}
+                              id={selectorId(
+                                "settings-title-tag-edit",
+                                definition.id,
+                              )}
                               label={t("label.edit")}
                               tone="edit"
                               onClick={() => loadDefinitionById(definition.id)}
@@ -187,7 +207,10 @@ export function SettingsTitleTagsSection({
                               <Edit className="h-4 w-4" />
                             </IconButton>
                             <IconButton
-                              id={selectorId("settings-title-tag-delete", definition.id)}
+                              id={selectorId(
+                                "settings-title-tag-delete",
+                                definition.id,
+                              )}
                               label={t("label.delete")}
                               tone="delete"
                               onClick={() => deleteDefinition(definition.id)}
@@ -212,19 +235,26 @@ export function SettingsTitleTagsSection({
           <section className={TAG_PANEL_CLASS}>
             <div className={TAG_PANEL_HEADER_CLASS}>
               <h2 className={TAG_PANEL_TITLE_CLASS}>
-                {isEditing ? t("settings.titleTagEdit") : t("settings.titleTagCreate")}
+                {isEditing
+                  ? t("settings.titleTagEdit")
+                  : t("settings.titleTagCreate")}
               </h2>
             </div>
             <div className={TAG_PANEL_BODY_CLASS}>
               <form onSubmit={saveDefinition} className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[var(--scry-ink2)]" htmlFor="title-tag-label">
+                  <Label
+                    className="text-[var(--scry-ink2)]"
+                    htmlFor="title-tag-label"
+                  >
                     {t("settings.titleTagLabelLabel")}
                   </Label>
                   <Input
                     id="title-tag-label"
                     value={draft.label}
-                    onChange={(event) => updateField("label", event.target.value)}
+                    onChange={(event) =>
+                      updateField("label", event.target.value)
+                    }
                     placeholder={t("settings.titleTagLabelPlaceholder")}
                     maxLength={64}
                   />
@@ -243,13 +273,19 @@ export function SettingsTitleTagsSection({
                   <Input
                     id="title-tag-description"
                     value={draft.description}
-                    onChange={(event) => updateField("description", event.target.value)}
+                    onChange={(event) =>
+                      updateField("description", event.target.value)
+                    }
                     placeholder={t("settings.titleTagDescriptionPlaceholder")}
                   />
                 </div>
 
                 <div className="flex flex-wrap gap-2 pt-2">
-                  <Button id="settings-title-tag-save" type="submit" disabled={saving}>
+                  <Button
+                    id="settings-title-tag-save"
+                    type="submit"
+                    disabled={saving}
+                  >
                     {saving
                       ? t("label.saving")
                       : isEditing

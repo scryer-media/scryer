@@ -130,6 +130,7 @@ async fn tracked_app() -> (
         priority: 17,
         evaluation_phase: scryer_domain::RuleEvaluationPhase::Additional,
         exclusive_group: None,
+        disabled_reason_code: None,
         disabled_reason: None,
         applied_facets: vec![MediaFacet::Movie],
         created_at: now,

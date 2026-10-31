@@ -151,8 +151,9 @@ pub fn compute_subtitle_file_hash(path: &std::path::Path) -> AppResult<String> {
         .len();
 
     if file_size < CHUNK_SIZE as u64 * 2 {
-        return Err(AppError::Validation(
-            "file too small for subtitle file hash".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::FILE_TOO_SMALL_SUBTITLE_FILE_HASH,
+            "file too small for subtitle file hash",
         ));
     }
 

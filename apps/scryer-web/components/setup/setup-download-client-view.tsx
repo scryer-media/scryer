@@ -9,12 +9,25 @@ import {
   SetupPrimaryButton,
   SetupStepHeader,
 } from "./setup-chrome";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { ConfigFieldDef } from "@/lib/types";
-import type { DownloadClientDraft, DownloadClientTypeOption } from "@/lib/types/download-clients";
+import type {
+  DownloadClientDraft,
+  DownloadClientTypeOption,
+} from "@/lib/types/download-clients";
 import {
   buildWeaverApiKeyUrl,
   downloadClientConfigFieldValue,
@@ -75,10 +88,10 @@ export function SetupDownloadClientView({
   saved,
   error,
 }: SetupDownloadClientViewProps) {
-  const [areRemotePathMappingsValid, setAreRemotePathMappingsValid] = React.useState(true);
-  const [isFilesystemPathMappingOpen, setIsFilesystemPathMappingOpen] = React.useState(() =>
-    draft.remotePathMappings.trim().length > 0,
-  );
+  const [areRemotePathMappingsValid, setAreRemotePathMappingsValid] =
+    React.useState(true);
+  const [isFilesystemPathMappingOpen, setIsFilesystemPathMappingOpen] =
+    React.useState(() => draft.remotePathMappings.trim().length > 0);
   const normalizedClientType = draft.clientType.trim().toLowerCase();
   const dynamicConfigFields = configFields.filter(
     (field) => !FIXED_DOWNLOAD_CLIENT_CONFIG_FIELD_KEYS.has(field.key),
@@ -98,13 +111,20 @@ export function SetupDownloadClientView({
       normalizedClientType === "sabnzbd");
   const showSabAlternativeAuth = normalizedClientType === "sabnzbd";
   const showDecypharrFilesystemHelp =
-    normalizedClientType === "sabnzbd" || normalizedClientType === "qbittorrent";
-  const weaverApiKeyUrl = normalizedClientType === "weaver" ? buildWeaverApiKeyUrl(draft) : "";
+    normalizedClientType === "sabnzbd" ||
+    normalizedClientType === "qbittorrent";
+  const weaverApiKeyUrl =
+    normalizedClientType === "weaver" ? buildWeaverApiKeyUrl(draft) : "";
   const selectedDownloadClientLabel =
-    downloadClientTypeOptions.find((option) => option.value === normalizedClientType)?.label ??
+    downloadClientTypeOptions.find(
+      (option) => option.value === normalizedClientType,
+    )?.label ??
     (draft.clientType.trim() || "Download client");
   React.useEffect(() => {
-    if (draft.remotePathMappings.trim().length > 0 || !areRemotePathMappingsValid) {
+    if (
+      draft.remotePathMappings.trim().length > 0 ||
+      !areRemotePathMappingsValid
+    ) {
       setIsFilesystemPathMappingOpen(true);
     } else {
       setIsFilesystemPathMappingOpen(false);
@@ -136,7 +156,10 @@ export function SetupDownloadClientView({
         </div>
         <div className="space-y-2">
           <Label htmlFor="setup-download-client-type">{t("label.type")}</Label>
-          <Select value={draft.clientType} onValueChange={(v) => onDraftChange({ clientType: v })}>
+          <Select
+            value={draft.clientType}
+            onValueChange={(v) => onDraftChange({ clientType: v })}
+          >
             <SelectTrigger id="setup-download-client-type" className="w-full">
               <SelectValue aria-label={selectedDownloadClientLabel}>
                 <DownloadClientTypeOptionContent
@@ -163,7 +186,9 @@ export function SetupDownloadClientView({
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_6rem] gap-2 md:col-span-2 md:grid-cols-[minmax(0,1fr)_8rem]">
           <div className="space-y-2">
-            <Label htmlFor="setup-download-client-host">{t("settings.host")}</Label>
+            <Label htmlFor="setup-download-client-host">
+              {t("settings.host")}
+            </Label>
             <Input
               id="setup-download-client-host"
               value={draft.host}
@@ -172,13 +197,17 @@ export function SetupDownloadClientView({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="setup-download-client-port">{t("settings.port")}</Label>
+            <Label htmlFor="setup-download-client-port">
+              {t("settings.port")}
+            </Label>
             <Input
               id="setup-download-client-port"
               {...integerInputProps}
               className="w-24"
               value={draft.port}
-              onChange={(e) => onDraftChange({ port: sanitizeDigits(e.target.value) })}
+              onChange={(e) =>
+                onDraftChange({ port: sanitizeDigits(e.target.value) })
+              }
               placeholder="8080"
             />
           </div>
@@ -187,13 +216,19 @@ export function SetupDownloadClientView({
           <Checkbox
             id="setup-download-client-ssl"
             checked={draft.useSsl}
-            onCheckedChange={(checked) => onDraftChange({ useSsl: checked === true })}
+            onCheckedChange={(checked) =>
+              onDraftChange({ useSsl: checked === true })
+            }
           />
-          <Label htmlFor="setup-download-client-ssl" className="text-sm">SSL</Label>
+          <Label htmlFor="setup-download-client-ssl" className="text-sm">
+            SSL
+          </Label>
         </div>
         {showApiKey && (
           <div className="space-y-2 md:col-span-2">
-            <Label htmlFor="setup-download-client-api-key">{t("settings.apiKey")}</Label>
+            <Label htmlFor="setup-download-client-api-key">
+              {t("settings.apiKey")}
+            </Label>
             <Input
               id="setup-download-client-api-key"
               type="password"
@@ -261,7 +296,9 @@ export function SetupDownloadClientView({
         {dynamicConfigFields.map((field) => (
           <div
             key={field.key}
-            className={field.fieldType === "MULTILINE" ? "md:col-span-2" : undefined}
+            className={
+              field.fieldType === "MULTILINE" ? "md:col-span-2" : undefined
+            }
           >
             <DownloadClientConfigField
               field={field}
@@ -309,7 +346,9 @@ export function SetupDownloadClientView({
               localPathStyle={localPathStyle}
               translate={t}
               onValidityChange={setAreRemotePathMappingsValid}
-              onChange={(_, value) => onDraftChange({ remotePathMappings: value })}
+              onChange={(_, value) =>
+                onDraftChange({ remotePathMappings: value })
+              }
             />
           </div>
         </details>
@@ -320,9 +359,7 @@ export function SetupDownloadClientView({
             onClick={onTestConnection}
             disabled={!canTest || testing || saving}
           >
-            {testing ? (
-              <LoadingMark className="mr-2 h-4 w-4" />
-            ) : null}
+            {testing ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
             {t("label.testConnection")}
           </Button>
           {testResult === "success" && (
@@ -342,9 +379,21 @@ export function SetupDownloadClientView({
             </span>
           )}
         </div>
-        {error && <p id="setup-download-client-error" className="text-sm text-destructive md:col-span-2">{error}</p>}
+        {error && (
+          <p
+            id="setup-download-client-error"
+            className="text-sm text-destructive md:col-span-2"
+          >
+            {error}
+          </p>
+        )}
         {saved && (
-          <p id="setup-download-client-saved" className="text-sm text-[var(--scry-success-text-soft)] md:col-span-2">{t("setup.saved")}</p>
+          <p
+            id="setup-download-client-saved"
+            className="text-sm text-[var(--scry-success-text-soft)] md:col-span-2"
+          >
+            {t("setup.saved")}
+          </p>
         )}
       </div>
       <div className="flex items-center justify-between pt-2">
@@ -353,11 +402,20 @@ export function SetupDownloadClientView({
         </SetupBackButton>
         <div className="flex items-center gap-3">
           {onSkip && (
-            <Button id="setup-download-client-skip" type="button" variant="link" onClick={onSkip}>
+            <Button
+              id="setup-download-client-skip"
+              type="button"
+              variant="link"
+              onClick={onSkip}
+            >
               {t("setup.skip")}
             </Button>
           )}
-          <SetupPrimaryButton id="setup-download-client-next" onClick={onNext} disabled={!canProceed || saving}>
+          <SetupPrimaryButton
+            id="setup-download-client-next"
+            onClick={onNext}
+            disabled={!canProceed || saving}
+          >
             {saving ? t("label.saving") : t("setup.next")}
           </SetupPrimaryButton>
         </div>

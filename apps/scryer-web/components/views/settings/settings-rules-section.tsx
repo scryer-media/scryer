@@ -99,7 +99,10 @@ type SettingsRulesSectionProps = {
     onOpenChange: (open: boolean) => void;
   }) => React.ReactNode;
   trackedRulePacks?: React.ReactNode;
-  installTrackedRulePack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  installTrackedRulePack: (
+    packId: string,
+    templateIds: string[],
+  ) => Promise<void> | void;
   installingRulePackId: string | null;
 };
 
@@ -112,12 +115,15 @@ type RefField = { field: string; type: string; descKey: string };
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = ruleInputContract.sections as RefSectionDef[];
 function adjustRuleValidationLocations(text: string, source: string): string {
-  return text.replace(/(\S+\.rego:)(\d+)(:\d+)/g, (_, prefix: string, lineText: string, suffix: string) => {
-    const line = Number.parseInt(lineText, 10);
-    return Number.isFinite(line)
-      ? `${prefix}${regoSourceLine(source, line)}${suffix}`
-      : `${prefix}${lineText}${suffix}`;
-  });
+  return text.replace(
+    /(\S+\.rego:)(\d+)(:\d+)/g,
+    (_, prefix: string, lineText: string, suffix: string) => {
+      const line = Number.parseInt(lineText, 10);
+      return Number.isFinite(line)
+        ? `${prefix}${regoSourceLine(source, line)}${suffix}`
+        : `${prefix}${lineText}${suffix}`;
+    },
+  );
 }
 
 function formatRuleValidationError(error: string, source: string): string {
@@ -148,12 +154,17 @@ function formatRuleValidationError(error: string, source: string): string {
   const columnMatch = location.match(/:(\d+):(\d+)(?:\D*$|$)/);
   const column = columnMatch ? Number.parseInt(columnMatch[2] ?? "", 10) : null;
   const hint = hintParts.join(" | ").trim();
-  const visibleLocation = adjustRuleValidationLocations(location.trim(), source);
+  const visibleLocation = adjustRuleValidationLocations(
+    location.trim(),
+    source,
+  );
   const locationMatch = visibleLocation.match(/^(.*?:)\s*(-->\s+.+)$/);
   const locationLines = locationMatch
     ? [locationMatch[1], locationMatch[2]]
     : [visibleLocation];
-  const pointerErrorMatch = hint.match(/^(\^+)\s+((?:error|warning|note):\s*.+)$/);
+  const pointerErrorMatch = hint.match(
+    /^(\^+)\s+((?:error|warning|note):\s*.+)$/,
+  );
   const pointerMarker = pointerErrorMatch?.[1] ?? hint;
   const trailingDiagnostic = pointerErrorMatch?.[2];
   const pointer =
@@ -167,7 +178,9 @@ function formatRuleValidationError(error: string, source: string): string {
     `${visibleLineNumber.padStart(gutterWidth)} | ${sourceText.trim()}`,
     `${" ".repeat(gutterWidth)} | ${pointer}`,
     trailingDiagnostic,
-  ].filter((line): line is string => Boolean(line)).join("\n");
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
 
 function RefFieldTable({ section }: { section: RefSectionDef }) {
@@ -175,10 +188,7 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
   return (
     <div>
       <h4 className="mb-1 font-semibold">
-        <code
-          data-code-font
-          className="rounded bg-muted px-1.5 py-0.5 text-xs"
-        >
+        <code data-code-font className="rounded bg-muted px-1.5 py-0.5 text-xs">
           {section.path}
         </code>{" "}
         <span className="text-muted-foreground font-normal">
@@ -521,7 +531,9 @@ function TrashLocalePacksCard({
             className="group flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <div className="min-w-0 flex-1">
-              <CardTitle className="text-base">{t("settings.trashPacksTitle")}</CardTitle>
+              <CardTitle className="text-base">
+                {t("settings.trashPacksTitle")}
+              </CardTitle>
             </div>
             <ChevronDown
               aria-hidden="true"
@@ -539,9 +551,12 @@ function TrashLocalePacksCard({
         <CollapsibleContent>
           <CardContent className="grid gap-2 md:grid-cols-2">
             {packs.map((record) => (
-                <div
+              <div
                 key={record.id}
-                id={selectorId("settings-trash-pack-row", record.managedKey ?? record.id)}
+                id={selectorId(
+                  "settings-trash-pack-row",
+                  record.managedKey ?? record.id,
+                )}
                 className="flex items-start gap-3 rounded-md border border-border p-3"
               >
                 <Checkbox
@@ -569,7 +584,7 @@ function TrashLocalePacksCard({
                     ariaLabel={record.name}
                   />
                 </div>
-                </div>
+              </div>
             ))}
           </CardContent>
         </CollapsibleContent>
@@ -603,7 +618,10 @@ function RuleLibrary({
 }: {
   onApply: (template: RuleTemplate) => void;
   defaultOpen?: boolean;
-  onInstallCommunityPack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  onInstallCommunityPack: (
+    packId: string,
+    templateIds: string[],
+  ) => Promise<void> | void;
   installingRulePackId: string | null;
   canManage: boolean;
 }) {
@@ -625,7 +643,9 @@ function RuleLibrary({
     [],
   );
   const [packLoading, setPackLoading] = React.useState(false);
-  const [selectedTemplateIds, setSelectedTemplateIds] = React.useState<string[]>([]);
+  const [selectedTemplateIds, setSelectedTemplateIds] = React.useState<
+    string[]
+  >([]);
 
   React.useEffect(() => {
     if (tab === "community" && !communityPacksLoaded) {
@@ -728,7 +748,10 @@ function RuleLibrary({
                     : categoryFilter === cat;
                   return (
                     <button
-                      id={selectorId("settings-rules-library-category", isAll ? "all" : cat)}
+                      id={selectorId(
+                        "settings-rules-library-category",
+                        isAll ? "all" : cat,
+                      )}
                       key={cat}
                       type="button"
                       className={cn(
@@ -777,48 +800,91 @@ function RuleLibrary({
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Choose the rules to enable after installation. Rules stay managed{selectedPack.customizable !== false ? " and can be copied individually for customization." : "."}
+                    Choose the rules to enable after installation. Rules stay
+                    managed
+                    {selectedPack.customizable !== false
+                      ? " and can be copied individually for customization."
+                      : "."}
                   </p>
-                  {selectedPack.customizable === false ? <p className="text-xs text-muted-foreground">Managed by the pack author.</p> : null}
+                  {selectedPack.customizable === false ? (
+                    <p className="text-xs text-muted-foreground">
+                      Managed by the pack author.
+                    </p>
+                  ) : null}
                   <p className="text-xs text-muted-foreground">
-                    Existing custom copies are not adopted or disabled when this pack is installed.
+                    Existing custom copies are not adopted or disabled when this
+                    pack is installed.
                   </p>
                   <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
                     {packTemplates.map((template) => {
                       const checked = selectedTemplateIds.includes(template.id);
-                      const checkboxId = selectorId("settings-rules-library-template-install", template.id);
+                      const checkboxId = selectorId(
+                        "settings-rules-library-template-install",
+                        template.id,
+                      );
                       return (
-                        <label key={template.id} className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3">
+                        <label
+                          key={template.id}
+                          className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3"
+                        >
                           <Checkbox
                             id={checkboxId}
                             checked={checked}
                             disabled={!canManage}
-                            onCheckedChange={(value) => setSelectedTemplateIds((current) => (
-                              value === true
-                                ? [...current, template.id]
-                                : current.filter((id) => id !== template.id)
-                            ))}
+                            onCheckedChange={(value) =>
+                              setSelectedTemplateIds((current) =>
+                                value === true
+                                  ? [...current, template.id]
+                                  : current.filter((id) => id !== template.id),
+                              )
+                            }
                           />
                           <span className="min-w-0">
-                            <span className="block text-sm font-medium">{template.title}</span>
-                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">{template.description}</span>
+                            <span className="block text-sm font-medium">
+                              {template.title}
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">
+                              {template.description}
+                            </span>
                             <span className="mt-2 flex flex-wrap gap-1">
-                              <Badge tone="neutral" className="text-[10px]">{template.category}</Badge>
-                              {template.appliedFacets.map((facet) => <Badge key={facet} tone="info" className="text-[10px]">{facet}</Badge>)}
+                              <Badge tone="neutral" className="text-[10px]">
+                                {template.category}
+                              </Badge>
+                              {template.appliedFacets.map((facet) => (
+                                <Badge
+                                  key={facet}
+                                  tone="info"
+                                  className="text-[10px]"
+                                >
+                                  {facet}
+                                </Badge>
+                              ))}
                             </span>
                           </span>
                         </label>
                       );
                     })}
                   </div>
-                  {canManage ? <Button
-                    id={selectorId("settings-rules-library-pack-install", selectedPack.id)}
-                    type="button"
-                    disabled={installingRulePackId === selectedPack.id}
-                    onClick={() => void onInstallCommunityPack(selectedPack.id, selectedTemplateIds)}
-                  >
-                    {installingRulePackId === selectedPack.id ? "Installing…" : "Install pack"}
-                  </Button> : null}
+                  {canManage ? (
+                    <Button
+                      id={selectorId(
+                        "settings-rules-library-pack-install",
+                        selectedPack.id,
+                      )}
+                      type="button"
+                      disabled={installingRulePackId === selectedPack.id}
+                      onClick={() =>
+                        void onInstallCommunityPack(
+                          selectedPack.id,
+                          selectedTemplateIds,
+                        )
+                      }
+                    >
+                      {installingRulePackId === selectedPack.id
+                        ? "Installing…"
+                        : "Install pack"}
+                    </Button>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -847,7 +913,11 @@ function RuleLibrary({
                     <Badge tone="info" className="text-[10px]">
                       {pack.author}
                     </Badge>
-                    {pack.customizable === false ? <Badge tone="neutral" className="text-[10px]">Managed</Badge> : null}
+                    {pack.customizable === false ? (
+                      <Badge tone="neutral" className="text-[10px]">
+                        Managed
+                      </Badge>
+                    ) : null}
                     <span className="text-[10px] text-muted-foreground">
                       v{pack.version}
                     </span>
@@ -936,8 +1006,8 @@ export function SettingsRulesSection({
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
   const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
-    () => regoDiagnostics(ruleSetDraft.regoSource, validationResult),
-    [ruleSetDraft.regoSource, validationResult],
+    () => regoDiagnostics(ruleSetDraft.regoSource, validationResult, t),
+    [ruleSetDraft.regoSource, validationResult, t],
   );
 
   return (
@@ -945,345 +1015,399 @@ export function SettingsRulesSection({
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
-      <div className="overflow-hidden rounded border border-border bg-card">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="text-base text-foreground">
-            {t("settings.rules")}
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            <RegoAiPromptDialog
-              id="settings-rules-ai-prompt"
-              ruleKind="scoring"
-              inputContract={ruleInputContract}
-              outputContract={'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'}
-            />
-            <TextActionButton
-              id="settings-rules-arr-custom-format-import"
-              tone="accentBright"
-              size="default"
-              onClick={() => setIsArrImportOpen(true)}
-              disabled={mutatingRuleSetId !== null}
-              leadingIcon={<FileInput className="h-4 w-4" />}
-              label={t("settings.arrImportAction")}
-            />
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("label.name")}</TableHead>
-                <TableHead>{t("settings.ruleDescription")}</TableHead>
-                <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                <TableHead className="text-center">
-                  {t("label.enabled")}
-                </TableHead>
-                <TableHead className="text-right">
-                  {t("label.actions")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
-                <TableRow
-                  data-ui="settings-table-row"
-                  key={record.id}
-                  id={selectorId("settings-rule-row", record.id)}
-                >
-                  <TableCell className="font-medium">
-                    <span id={selectorId("settings-rule-name", record.name)}>
-                      {record.name}
-                    </span>
-                    {record.disabledReason ? (
-                      <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
-                        {record.disabledReason}
-                      </p>
-                    ) : null}
-                    {record.isManaged && record.managedKey ? (
-                      <ManagedBadge managedKey={record.managedKey} />
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                    {record.description || "—"}
-                  </TableCell>
-                  <TableCell>
-                    <FacetTags values={record.appliedFacets} emptyLabel="Global" />
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <RenderBooleanIcon
-                      value={record.enabled}
-                      label={`${t("label.enabled")}: ${record.name}`}
-                    />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <IconButton
-                        id={selectorId("settings-rule-toggle", record.id)}
-                        label={
-                          record.enabled
-                            ? t("label.disable")
-                            : t("label.enable")
-                        }
-                        tone={record.enabled ? "disabled" : "enabled"}
-                        onClick={() => void toggleRuleSetEnabled(record)}
-                        disabled={mutatingRuleSetId === record.id || (!record.enabled && Boolean(record.disabledReason))}
+            <div className="overflow-hidden rounded border border-border bg-card">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <CardTitle className="text-base text-foreground">
+                  {t("settings.rules")}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <RegoAiPromptDialog
+                    id="settings-rules-ai-prompt"
+                    ruleKind="scoring"
+                    inputContract={ruleInputContract}
+                    outputContract={
+                      'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'
+                    }
+                  />
+                  <TextActionButton
+                    id="settings-rules-arr-custom-format-import"
+                    tone="accentBright"
+                    size="default"
+                    onClick={() => setIsArrImportOpen(true)}
+                    disabled={mutatingRuleSetId !== null}
+                    leadingIcon={<FileInput className="h-4 w-4" />}
+                    label={t("settings.arrImportAction")}
+                  />
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t("label.name")}</TableHead>
+                      <TableHead>{t("settings.ruleDescription")}</TableHead>
+                      <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
+                      <TableHead className="text-center">
+                        {t("label.enabled")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("label.actions")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
+                      <TableRow
+                        data-ui="settings-table-row"
+                        key={record.id}
+                        id={selectorId("settings-rule-row", record.id)}
                       >
-                        <Power className="h-4 w-4" />
-                      </IconButton>
-                      {record.isManaged ? (
-                        <IconButton
-                          id={selectorId("settings-rule-copy", record.id)}
-                          label={t("settings.ruleCopyAsCustom")}
-                          tone="neutral"
-                          onClick={() => copyRuleSet(record)}
+                        <TableCell className="font-medium">
+                          <span
+                            id={selectorId("settings-rule-name", record.name)}
+                          >
+                            {record.name}
+                          </span>
+                          {record.disabledReason ? (
+                            <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
+                              {record.disabledReason}
+                            </p>
+                          ) : null}
+                          {record.isManaged && record.managedKey ? (
+                            <ManagedBadge managedKey={record.managedKey} />
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="max-w-[200px] truncate text-muted-foreground">
+                          {record.description || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <FacetTags
+                            values={record.appliedFacets}
+                            emptyLabel="Global"
+                          />
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <RenderBooleanIcon
+                            value={record.enabled}
+                            label={`${t("label.enabled")}: ${record.name}`}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <IconButton
+                              id={selectorId("settings-rule-toggle", record.id)}
+                              label={
+                                record.enabled
+                                  ? t("label.disable")
+                                  : t("label.enable")
+                              }
+                              tone={record.enabled ? "disabled" : "enabled"}
+                              onClick={() => void toggleRuleSetEnabled(record)}
+                              disabled={
+                                mutatingRuleSetId === record.id ||
+                                (!record.enabled &&
+                                  Boolean(record.disabledReason))
+                              }
+                            >
+                              <Power className="h-4 w-4" />
+                            </IconButton>
+                            {record.isManaged ? (
+                              <IconButton
+                                id={selectorId("settings-rule-copy", record.id)}
+                                label={t("settings.ruleCopyAsCustom")}
+                                tone="neutral"
+                                onClick={() => copyRuleSet(record)}
+                              >
+                                <Copy className="h-4 w-4" />
+                              </IconButton>
+                            ) : isUserOwnedRuleSet(record) ? (
+                              <>
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-rule-edit",
+                                    record.id,
+                                  )}
+                                  label={t("label.edit")}
+                                  tone="edit"
+                                  onClick={() => editRuleSet(record)}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </IconButton>
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-rule-delete",
+                                    record.id,
+                                  )}
+                                  label={t("label.delete")}
+                                  tone="delete"
+                                  onClick={() => void deleteRuleSet(record)}
+                                  disabled={mutatingRuleSetId === record.id}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </IconButton>
+                              </>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {ruleSetRecords.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="text-muted-foreground"
                         >
-                          <Copy className="h-4 w-4" />
-                        </IconButton>
-                      ) : isUserOwnedRuleSet(record) ? (
-                        <>
-                          <IconButton
-                            id={selectorId("settings-rule-edit", record.id)}
-                            label={t("label.edit")}
-                            tone="edit"
-                            onClick={() => editRuleSet(record)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </IconButton>
-                          <IconButton
-                            id={selectorId("settings-rule-delete", record.id)}
-                            label={t("label.delete")}
-                            tone="delete"
-                            onClick={() => void deleteRuleSet(record)}
-                            disabled={mutatingRuleSetId === record.id}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </IconButton>
-                        </>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {ruleSetRecords.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
-                    {t("settings.noRulesFound")}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-
-      {isEditorOpen ? (
-        <>
-          <Card>
-            <CardHeader className="flex items-center justify-between gap-3">
-              <CardTitle className="text-base">
-                {editorMode === "copy"
-                  ? t("settings.ruleCopyAsCustom")
-                  : editingRuleSetId
-                  ? t("settings.ruleUpdate")
-                  : t("settings.ruleCreate")}
-              </CardTitle>
-              {/* A copy is always created enabled, so the toggle would be a
-                  control over nothing. */}
-              {editorMode !== "copy" ? (
-                <label className="flex shrink-0 items-center gap-3">
-                  <Checkbox
-                    id="settings-rule-enabled"
-                    size="large"
-                    checked={ruleSetDraft.enabled}
-                    onCheckedChange={(value) =>
-                      setRuleSetDraft((prev) => ({
-                        ...prev,
-                        enabled: value === true,
-                      }))
-                    }
-                  />
-                  <span className="text-sm">{t("label.enabled")}</span>
-                </label>
-              ) : null}
-            </CardHeader>
-            <CardContent>
-              <form id="settings-rule-form" className="space-y-3" onSubmit={submitRuleSet}>
-                {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason ? (
-                  <p role="status" className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400">
-                    {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason}
-                  </p>
-                ) : null}
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label>
-                    <Label className="mb-2 block">{t("label.name")}</Label>
-                    <Input
-                      id="settings-rule-name"
-                      value={ruleSetDraft.name}
-                      onChange={(e) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          name: e.target.value,
-                        }))
-                      }
-                      required
-                      placeholder="my_rule"
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.ruleDescription")}
-                    </Label>
-                    <Input
-                      id="settings-rule-description"
-                      value={ruleSetDraft.description}
-                      onChange={(e) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          description: e.target.value,
-                        }))
-                      }
-                      placeholder="Block releases over 100 GiB"
-                    />
-                  </label>
-                </div>
-
-                <div>
-                  <Label className="mb-2 block">
-                    {t("settings.ruleRegoSource")}
-                  </Label>
-                  {translationDiagnostics.length ? (
-                    <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
-                      <p className="font-medium">{t("settings.arrImportDiagnostics")}</p>
-                      <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
-                        {translationDiagnostics.map((diagnostic, index) => (
-                          <li key={index}>{diagnostic}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  <LazyRegoEditor
-                    ruleFamily="release"
-                    id="settings-rule-rego-source"
-                    autoFocus={focusEditor}
-                    onAutoFocus={onEditorFocused}
-                    value={ruleSetDraft.regoSource}
-                    onChange={(value) =>
-                      setRuleSetDraft((prev) => ({
-                        ...prev,
-                        regoSource: value,
-                      }))
-                    }
-                    diagnostics={validationDiagnostics}
-                    feedback={<EditorValidationStatus checking={validating} result={validationResult} formatError={(error) => formatRuleValidationError(error, ruleSetDraft.regoSource)} />}
-                    minLines={10}
-                    maxLines={35}
-                  />
-                </div>
-
-                <div>
-                  <Label className="mb-2 block">
-                    {t("settings.ruleAppliedFacets")}
-                  </Label>
-                  <p className="mb-2 text-xs text-muted-foreground">
-                    {t("settings.ruleAppliedFacetsHelp")}
-                  </p>
-                  <FacetSelect
-                    idPrefix="settings-rule-facet"
-                    values={LOWERCASE_FACET_IDS}
-                    selected={ruleSetDraft.appliedFacets}
-                    onChange={(next) => {
-                      setRuleSetDraft((prev) => ({
-                        ...prev,
-                        appliedFacets: next,
-                      }));
-                    }}
-                  />
-                </div>
-
-                <div className="flex gap-2">
-                  <Button
-                    id="settings-rule-save"
-                    type="submit"
-                    disabled={mutatingRuleSetId !== null || validating}
-                  >
-                    {mutatingRuleSetId !== null
-                      ? t("label.saving")
-                      : editorMode === "copy"
-                        ? t("settings.ruleCopyAsCustom")
-                      : editingRuleSetId
-                        ? t("settings.ruleUpdate")
-                        : t("settings.ruleCreate")}
-                  </Button>
-                  <Button
-                    id="settings-rule-validate"
-                    type="button"
-                    variant="secondary"
-                    onClick={() => void validateDraft()}
-                    disabled={validating || !ruleSetDraft.regoSource.trim()}
-                  >
-                    {validating
-                      ? t("settings.ruleValidating")
-                      : t("settings.ruleValidate")}
-                  </Button>
-                  {testScoring ? (
-                    <Button
-                      id="settings-rule-test"
-                      type="button"
-                      variant="secondary"
-                      onClick={() => setIsTestScoringOpen((open) => !open)}
-                    >
-                      Test
-                    </Button>
-                  ) : null}
-                  <Button
-                    id="settings-rule-cancel"
-                    type="button"
-                    variant="secondary"
-                    onClick={resetRuleSetDraft}
-                  >
-                    {t("label.cancel")}
-                  </Button>
-                </div>
-              </form>
-              {testScoring ? (
-                <div className="mt-3">
-                  {testScoring({
-                    open: isTestScoringOpen,
-                    onOpenChange: setIsTestScoringOpen,
-                  })}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-          {editorMode === "edit" ? (
-            <div className="flex justify-center">
-              <AddNewButton
-                id="settings-rule-create-new"
-                icon={Plus}
-                label={t("settings.ruleCreateNew")}
-                onClick={startCreateRuleSet}
-                disabled={mutatingRuleSetId !== null}
-              />
+                          {t("settings.noRulesFound")}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
-          ) : null}
-        </>
-      ) : (
-        <div className="flex justify-center">
-          <AddNewButton
-            id="settings-rule-create"
-            icon={Plus}
-            label={t("settings.ruleCreateNew")}
-            onClick={startCreateRuleSet}
-            disabled={mutatingRuleSetId !== null}
-          />
-        </div>
-      )}
-      <TrashLocalePacksCard
-        ruleSetRecords={ruleSetRecords}
-        mutatingRuleSetId={mutatingRuleSetId}
-        toggleRuleSetEnabled={toggleRuleSetEnabled}
-      />
-      {trackedRulePacks}
+
+            {isEditorOpen ? (
+              <>
+                <Card>
+                  <CardHeader className="flex items-center justify-between gap-3">
+                    <CardTitle className="text-base">
+                      {editorMode === "copy"
+                        ? t("settings.ruleCopyAsCustom")
+                        : editingRuleSetId
+                          ? t("settings.ruleUpdate")
+                          : t("settings.ruleCreate")}
+                    </CardTitle>
+                    {/* A copy is always created enabled, so the toggle would be a
+                  control over nothing. */}
+                    {editorMode !== "copy" ? (
+                      <label className="flex shrink-0 items-center gap-3">
+                        <Checkbox
+                          id="settings-rule-enabled"
+                          size="large"
+                          checked={ruleSetDraft.enabled}
+                          onCheckedChange={(value) =>
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              enabled: value === true,
+                            }))
+                          }
+                        />
+                        <span className="text-sm">{t("label.enabled")}</span>
+                      </label>
+                    ) : null}
+                  </CardHeader>
+                  <CardContent>
+                    <form
+                      id="settings-rule-form"
+                      className="space-y-3"
+                      onSubmit={submitRuleSet}
+                    >
+                      {ruleSetRecords.find(
+                        (record) => record.id === editingRuleSetId,
+                      )?.disabledReason ? (
+                        <p
+                          role="status"
+                          className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400"
+                        >
+                          {
+                            ruleSetRecords.find(
+                              (record) => record.id === editingRuleSetId,
+                            )?.disabledReason
+                          }
+                        </p>
+                      ) : null}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <label>
+                          <Label className="mb-2 block">
+                            {t("label.name")}
+                          </Label>
+                          <Input
+                            id="settings-rule-name"
+                            value={ruleSetDraft.name}
+                            onChange={(e) =>
+                              setRuleSetDraft((prev) => ({
+                                ...prev,
+                                name: e.target.value,
+                              }))
+                            }
+                            required
+                            placeholder="my_rule"
+                          />
+                        </label>
+                        <label>
+                          <Label className="mb-2 block">
+                            {t("settings.ruleDescription")}
+                          </Label>
+                          <Input
+                            id="settings-rule-description"
+                            value={ruleSetDraft.description}
+                            onChange={(e) =>
+                              setRuleSetDraft((prev) => ({
+                                ...prev,
+                                description: e.target.value,
+                              }))
+                            }
+                            placeholder="Block releases over 100 GiB"
+                          />
+                        </label>
+                      </div>
+
+                      <div>
+                        <Label className="mb-2 block">
+                          {t("settings.ruleRegoSource")}
+                        </Label>
+                        {translationDiagnostics.length ? (
+                          <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
+                            <p className="font-medium">
+                              {t("settings.arrImportDiagnostics")}
+                            </p>
+                            <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                              {translationDiagnostics.map(
+                                (diagnostic, index) => (
+                                  <li key={index}>{diagnostic}</li>
+                                ),
+                              )}
+                            </ul>
+                          </div>
+                        ) : null}
+                        <LazyRegoEditor
+                          ruleFamily="release"
+                          id="settings-rule-rego-source"
+                          autoFocus={focusEditor}
+                          onAutoFocus={onEditorFocused}
+                          value={ruleSetDraft.regoSource}
+                          onChange={(value) =>
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              regoSource: value,
+                            }))
+                          }
+                          diagnostics={validationDiagnostics}
+                          feedback={
+                            <EditorValidationStatus
+                              checking={validating}
+                              result={validationResult}
+                              formatError={(error) =>
+                                formatRuleValidationError(
+                                  error,
+                                  ruleSetDraft.regoSource,
+                                )
+                              }
+                            />
+                          }
+                          minLines={10}
+                          maxLines={35}
+                        />
+                      </div>
+
+                      <div>
+                        <Label className="mb-2 block">
+                          {t("settings.ruleAppliedFacets")}
+                        </Label>
+                        <p className="mb-2 text-xs text-muted-foreground">
+                          {t("settings.ruleAppliedFacetsHelp")}
+                        </p>
+                        <FacetSelect
+                          idPrefix="settings-rule-facet"
+                          values={LOWERCASE_FACET_IDS}
+                          selected={ruleSetDraft.appliedFacets}
+                          onChange={(next) => {
+                            setRuleSetDraft((prev) => ({
+                              ...prev,
+                              appliedFacets: next,
+                            }));
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button
+                          id="settings-rule-save"
+                          type="submit"
+                          disabled={mutatingRuleSetId !== null || validating}
+                        >
+                          {mutatingRuleSetId !== null
+                            ? t("label.saving")
+                            : editorMode === "copy"
+                              ? t("settings.ruleCopyAsCustom")
+                              : editingRuleSetId
+                                ? t("settings.ruleUpdate")
+                                : t("settings.ruleCreate")}
+                        </Button>
+                        <Button
+                          id="settings-rule-validate"
+                          type="button"
+                          variant="secondary"
+                          onClick={() => void validateDraft()}
+                          disabled={
+                            validating || !ruleSetDraft.regoSource.trim()
+                          }
+                        >
+                          {validating
+                            ? t("settings.ruleValidating")
+                            : t("settings.ruleValidate")}
+                        </Button>
+                        {testScoring ? (
+                          <Button
+                            id="settings-rule-test"
+                            type="button"
+                            variant="secondary"
+                            onClick={() =>
+                              setIsTestScoringOpen((open) => !open)
+                            }
+                          >
+                            Test
+                          </Button>
+                        ) : null}
+                        <Button
+                          id="settings-rule-cancel"
+                          type="button"
+                          variant="secondary"
+                          onClick={resetRuleSetDraft}
+                        >
+                          {t("label.cancel")}
+                        </Button>
+                      </div>
+                    </form>
+                    {testScoring ? (
+                      <div className="mt-3">
+                        {testScoring({
+                          open: isTestScoringOpen,
+                          onOpenChange: setIsTestScoringOpen,
+                        })}
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+                {editorMode === "edit" ? (
+                  <div className="flex justify-center">
+                    <AddNewButton
+                      id="settings-rule-create-new"
+                      icon={Plus}
+                      label={t("settings.ruleCreateNew")}
+                      onClick={startCreateRuleSet}
+                      disabled={mutatingRuleSetId !== null}
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="flex justify-center">
+                <AddNewButton
+                  id="settings-rule-create"
+                  icon={Plus}
+                  label={t("settings.ruleCreateNew")}
+                  onClick={startCreateRuleSet}
+                  disabled={mutatingRuleSetId !== null}
+                />
+              </div>
+            )}
+            <TrashLocalePacksCard
+              ruleSetRecords={ruleSetRecords}
+              mutatingRuleSetId={mutatingRuleSetId}
+              toggleRuleSetEnabled={toggleRuleSetEnabled}
+            />
+            {trackedRulePacks}
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">

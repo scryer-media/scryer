@@ -68,7 +68,11 @@ function isWindowsDrivePath(path: string): boolean {
 }
 
 function detectRemotePathStyle(path: string): "unix" | "windows" {
-  if (path.includes("\\") || isWindowsDrivePath(path) || path.startsWith("\\\\")) {
+  if (
+    path.includes("\\") ||
+    isWindowsDrivePath(path) ||
+    path.startsWith("\\\\")
+  ) {
     return "windows";
   }
 
@@ -90,10 +94,7 @@ function normalizeWindowsRemotePath(path: string): string {
   const replaced = path.replaceAll("\\", "/").toLowerCase();
 
   if (replaced.startsWith("//")) {
-    const segments = replaced
-      .slice(2)
-      .split("/")
-      .filter(Boolean);
+    const segments = replaced.slice(2).split("/").filter(Boolean);
 
     if (segments.length === 0) {
       return "//";
@@ -113,7 +114,9 @@ function normalizeWindowsRemotePath(path: string): string {
     const drive = replaced.slice(0, 2);
     const rest = replaced.slice(2).replace(/^\/+/, "");
     const segments = rest.split("/").filter(Boolean);
-    return segments.length === 0 ? `${drive}/` : `${drive}/${segments.join("/")}`;
+    return segments.length === 0
+      ? `${drive}/`
+      : `${drive}/${segments.join("/")}`;
   }
 
   const isAbsolute = replaced.startsWith("/");
@@ -156,7 +159,10 @@ function validateRows(
       );
     } else {
       const duplicateKey = normalizeRemotePathForDuplicateKey(remotePath);
-      duplicates.set(duplicateKey, [...(duplicates.get(duplicateKey) ?? []), index]);
+      duplicates.set(duplicateKey, [
+        ...(duplicates.get(duplicateKey) ?? []),
+        index,
+      ]);
     }
 
     if (!localPath) {
@@ -207,12 +213,18 @@ export function DownloadClientRemotePathMappingsField({
     () => translate ?? translateFromContext ?? ((key: string) => key),
     [translate, translateFromContext],
   );
-  const [rows, setRows] = React.useState<PathMappingRow[]>(() => parsePathMappings(value));
-  const [browseRowIndex, setBrowseRowIndex] = React.useState<number | null>(null);
+  const [rows, setRows] = React.useState<PathMappingRow[]>(() =>
+    parsePathMappings(value),
+  );
+  const [browseRowIndex, setBrowseRowIndex] = React.useState<number | null>(
+    null,
+  );
 
   React.useEffect(() => {
     setRows((currentRows) =>
-      serializePathMappings(currentRows) === value ? currentRows : parsePathMappings(value),
+      serializePathMappings(currentRows) === value
+        ? currentRows
+        : parsePathMappings(value),
     );
   }, [value]);
 
@@ -272,7 +284,9 @@ export function DownloadClientRemotePathMappingsField({
   );
 
   const browseInitialPath =
-    browseRowIndex == null ? "/" : (rows[browseRowIndex]?.localPath.trim() || "/");
+    browseRowIndex == null
+      ? "/"
+      : rows[browseRowIndex]?.localPath.trim() || "/";
 
   return (
     <div
@@ -352,8 +366,13 @@ export function DownloadClientRemotePathMappingsField({
               >
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                   <div className="space-y-1">
-                    <Label htmlFor={remoteInputId} className="text-xs font-medium md:sr-only">
-                      {t("settings.downloadClientRemotePathMappingsRemoteLabel")}
+                    <Label
+                      htmlFor={remoteInputId}
+                      className="text-xs font-medium md:sr-only"
+                    >
+                      {t(
+                        "settings.downloadClientRemotePathMappingsRemoteLabel",
+                      )}
                     </Label>
                     <p className="text-xs text-muted-foreground md:hidden">
                       {t("settings.downloadClientRemotePathMappingsRemoteHelp")}
@@ -369,12 +388,17 @@ export function DownloadClientRemotePathMappingsField({
                       className="font-[var(--font-code)] text-sm"
                     />
                     {hasRemoteError ? (
-                      <p className="text-xs text-destructive">{rowErrors.remotePath}</p>
+                      <p className="text-xs text-destructive">
+                        {rowErrors.remotePath}
+                      </p>
                     ) : null}
                   </div>
 
                   <div className="space-y-1">
-                    <Label htmlFor={localInputId} className="text-xs font-medium md:sr-only">
+                    <Label
+                      htmlFor={localInputId}
+                      className="text-xs font-medium md:sr-only"
+                    >
                       {t("settings.downloadClientRemotePathMappingsLocalLabel")}
                     </Label>
                     <p className="text-xs text-muted-foreground md:hidden">
@@ -403,7 +427,9 @@ export function DownloadClientRemotePathMappingsField({
                       </IconButton>
                     </div>
                     {hasLocalError ? (
-                      <p className="text-xs text-destructive">{rowErrors.localPath}</p>
+                      <p className="text-xs text-destructive">
+                        {rowErrors.localPath}
+                      </p>
                     ) : null}
                   </div>
 

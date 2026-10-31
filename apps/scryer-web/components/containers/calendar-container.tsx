@@ -1,4 +1,13 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useClient } from "urql";
 import { calendarEpisodesQuery, librariesQuery } from "@/lib/graphql/queries";
 import { facetById } from "@/lib/facets/registry";
@@ -13,7 +22,9 @@ import {
 } from "@/lib/utils/library-filter";
 
 const CalendarView = lazy(() =>
-  import("@/components/views/calendar-view").then((m) => ({ default: m.CalendarView })),
+  import("@/components/views/calendar-view").then((m) => ({
+    default: m.CalendarView,
+  })),
 );
 
 type CalendarContainerProps = {
@@ -25,7 +36,10 @@ type CalendarContainerProps = {
 };
 
 function sameStringArray(left: string[], right: string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 export const CalendarContainer = memo(function CalendarContainer({
@@ -34,12 +48,16 @@ export const CalendarContainer = memo(function CalendarContainer({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const client = useClient();
-  const [calendarEpisodes, setCalendarEpisodes] = useState<CalendarEpisodeItem[]>([]);
+  const [calendarEpisodes, setCalendarEpisodes] = useState<
+    CalendarEpisodeItem[]
+  >([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [libraries, setLibraries] = useState<LibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>([]);
-  const lastCalendarRangeRef = useRef<{ start: string; end: string } | null>(null);
+  const lastCalendarRangeRef = useRef<{ start: string; end: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -61,13 +79,20 @@ export const CalendarContainer = memo(function CalendarContainer({
         const nextLibraries = (data?.libraries ?? []) as LibraryRecord[];
         setLibraries(nextLibraries);
         setSelectedLibraryIds((current) => {
-          const normalized = normalizeLibraryFilterSelection(current, nextLibraries);
+          const normalized = normalizeLibraryFilterSelection(
+            current,
+            nextLibraries,
+          );
           return sameStringArray(current, normalized) ? current : normalized;
         });
       })
       .catch((error) => {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : t("status.failedToLoad");
+          const message = userFacingGraphQlErrorMessage(
+            error,
+            t("status.failedToLoad"),
+            t,
+          );
           setGlobalStatus(message, { level: "ERROR" });
         }
       })
@@ -96,7 +121,11 @@ export const CalendarContainer = memo(function CalendarContainer({
         if (error) throw error;
         setCalendarEpisodes(data?.calendarEpisodes ?? []);
       } catch (error) {
-        const message = error instanceof Error ? error.message : t("status.failedToLoad");
+        const message = userFacingGraphQlErrorMessage(
+          error,
+          t("status.failedToLoad"),
+          t,
+        );
         setGlobalStatus(message, { level: "ERROR" });
       } finally {
         setCalendarLoading(false);

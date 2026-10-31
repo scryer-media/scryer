@@ -1,13 +1,21 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { Search, X } from "lucide-react";
 import { useClient } from "urql";
 
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import { sectionLabelForFacet } from "@/lib/facets/helpers";
-import { titleAutocompleteSelectionQuery, titlesQuery } from "@/lib/graphql/queries";
+import {
+  titleAutocompleteSelectionQuery,
+  titlesQuery,
+} from "@/lib/graphql/queries";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -28,7 +36,10 @@ type TitleAutocompletePickerProps = {
   disabled?: boolean;
 };
 
-function formatTitleSecondaryLine(title: TitleRecord, facetLabel: string): string {
+function formatTitleSecondaryLine(
+  title: TitleRecord,
+  facetLabel: string,
+): string {
   return title.year ? `${facetLabel} • ${title.year}` : facetLabel;
 }
 
@@ -59,8 +70,12 @@ export function TitleAutocompletePicker({
   const [loading, setLoading] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
   const [searchPerformed, setSearchPerformed] = React.useState(false);
-  const [menuWidth, setMenuWidth] = React.useState<number | undefined>(undefined);
-  const [hydratedTitle, setHydratedTitle] = React.useState<TitleRecord | null>(null);
+  const [menuWidth, setMenuWidth] = React.useState<number | undefined>(
+    undefined,
+  );
+  const [hydratedTitle, setHydratedTitle] = React.useState<TitleRecord | null>(
+    null,
+  );
   const [hydrationResolved, setHydrationResolved] = React.useState(false);
 
   const normalizedSelectedTitleId = selectedTitleId?.trim() || null;
@@ -71,7 +86,9 @@ export function TitleAutocompletePicker({
         ? hydratedTitle
         : null;
   const unresolvedSelection =
-    normalizedSelectedTitleId !== null && !resolvedSelectedTitle && hydrationResolved;
+    normalizedSelectedTitleId !== null &&
+    !resolvedSelectedTitle &&
+    hydrationResolved;
 
   const refreshMenuWidth = React.useCallback(() => {
     if (anchorRef.current) {
@@ -84,7 +101,9 @@ export function TitleAutocompletePicker({
   }, [refreshMenuWidth, resolvedSelectedTitle, query]);
 
   React.useEffect(() => {
-    setActiveResultIndex((current) => (current >= results.length ? -1 : current));
+    setActiveResultIndex((current) =>
+      current >= results.length ? -1 : current,
+    );
   }, [results]);
 
   React.useEffect(() => {
@@ -177,7 +196,12 @@ export function TitleAutocompletePicker({
           if (error) {
             throw error;
           }
-          setResults(((data?.titles?.items ?? []) as TitleRecord[]).slice(0, MAX_RESULTS));
+          setResults(
+            ((data?.titles?.items ?? []) as TitleRecord[]).slice(
+              0,
+              MAX_RESULTS,
+            ),
+          );
           setOpen(true);
           refreshMenuWidth();
         })
@@ -186,7 +210,9 @@ export function TitleAutocompletePicker({
             return;
           }
           setResults([]);
-          setSearchError(error instanceof Error ? error.message : t("status.failedToLoad"));
+          setSearchError(
+            userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          );
           setOpen(true);
           refreshMenuWidth();
         })
@@ -292,7 +318,8 @@ export function TitleAutocompletePicker({
                     }
                     return;
                   }
-                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+                    return;
                   if (results.length === 0) return;
                   event.preventDefault();
                   setOpen(true);
@@ -331,7 +358,11 @@ export function TitleAutocompletePicker({
             style={menuWidth ? { width: menuWidth } : undefined}
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
-            <div id={listboxId} role="listbox" className="max-h-80 overflow-y-auto p-2">
+            <div
+              id={listboxId}
+              role="listbox"
+              className="max-h-80 overflow-y-auto p-2"
+            >
               {loading ? (
                 <div className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
                   <LoadingMark className="h-4 w-4" />
@@ -339,7 +370,9 @@ export function TitleAutocompletePicker({
                 </div>
               ) : null}
               {searchError ? (
-                <div className="px-2 py-3 text-sm text-[var(--scry-danger-text-soft)]">{searchError}</div>
+                <div className="px-2 py-3 text-sm text-[var(--scry-danger-text-soft)]">
+                  {searchError}
+                </div>
               ) : null}
               {shouldShowEmptyState ? (
                 <div className="px-2 py-3 text-sm text-muted-foreground">
@@ -381,7 +414,9 @@ export function TitleAutocompletePicker({
                           fallbackShowText={false}
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium text-foreground">{title.name}</div>
+                          <div className="truncate font-medium text-foreground">
+                            {title.name}
+                          </div>
                           <div className="truncate text-xs text-muted-foreground">
                             {formatTitleSecondaryLine(title, facetLabel)}
                           </div>

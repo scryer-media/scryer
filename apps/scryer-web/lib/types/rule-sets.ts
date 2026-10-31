@@ -28,4 +28,5 @@ export type RuleSetDraft = {
 export type RuleValidationResult = {
   valid: boolean;
   errors: string[];
+  diagnostics?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
 };

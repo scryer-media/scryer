@@ -25,7 +25,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -68,10 +74,14 @@ type SettingsMediaServersSectionProps = {
   testingConnectionId: string | null;
   isEditorOpen: boolean;
   editorMode: "create" | "edit";
-  submitConnection: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  submitConnection: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   editConnection: (connection: MediaServerConnection) => void;
   testConnection: (connection: MediaServerConnection) => Promise<void> | void;
-  toggleConnectionEnabled: (connection: MediaServerConnection) => Promise<void> | void;
+  toggleConnectionEnabled: (
+    connection: MediaServerConnection,
+  ) => Promise<void> | void;
   deleteConnection: (connection: MediaServerConnection) => Promise<void> | void;
   resetDraft: () => void;
   startCreateConnection: () => void;
@@ -103,10 +113,17 @@ const DEFAULT_NAME_BY_PROVIDER: Record<MediaServerProvider, string> = {
 };
 
 function providerLabel(provider: MediaServerProvider): string {
-  return PROVIDERS.find((candidate) => candidate.value === provider)?.label ?? provider;
+  return (
+    PROVIDERS.find((candidate) => candidate.value === provider)?.label ??
+    provider
+  );
 }
 
-function MediaServerProviderLogo({ provider }: { provider: MediaServerProvider }) {
+function MediaServerProviderLogo({
+  provider,
+}: {
+  provider: MediaServerProvider;
+}) {
   return (
     <img
       src={`/auth-providers/${provider.toLowerCase()}.svg`}
@@ -127,7 +144,9 @@ function updateLibraryGrant(
   permissions: string[],
 ): MediaServerDefaultLibraryGrant[] {
   const filtered = grants.filter((grant) => grant.libraryId !== libraryId);
-  const normalized = Array.from(new Set(permissions.map((permission) => permission.trim()).filter(Boolean)));
+  const normalized = Array.from(
+    new Set(permissions.map((permission) => permission.trim()).filter(Boolean)),
+  );
   return normalized.length > 0
     ? [...filtered, { libraryId, permissions: normalized }]
     : filtered;
@@ -162,7 +181,10 @@ function MediaServerActionButton({
   ...props
 }: Omit<React.ComponentProps<typeof IconButton>, "tone"> & {
   label: string;
-  tone: Extract<BoxedActionButtonTone, "edit" | "enabled" | "disabled" | "delete" | "neutral">;
+  tone: Extract<
+    BoxedActionButtonTone,
+    "edit" | "enabled" | "disabled" | "delete" | "neutral"
+  >;
 }) {
   return (
     <IconButton label={label} tone={tone} className={className} {...props}>
@@ -223,31 +245,48 @@ export function SettingsMediaServersSection({
           displayName: wasAutofilledName
             ? DEFAULT_NAME_BY_PROVIDER[provider]
             : previous.displayName,
-          baseUrl: previous.baseUrl.trim() || DEFAULT_BASE_URL_BY_PROVIDER[provider],
-          loginEnabled: providerSupportsAuth(provider) ? previous.loginEnabled : false,
-          linkingEnabled: providerSupportsAuth(provider) ? previous.linkingEnabled : false,
-          autoAddEnabled: providerSupportsAuth(provider) ? previous.autoAddEnabled : false,
+          baseUrl:
+            previous.baseUrl.trim() || DEFAULT_BASE_URL_BY_PROVIDER[provider],
+          loginEnabled: providerSupportsAuth(provider)
+            ? previous.loginEnabled
+            : false,
+          linkingEnabled: providerSupportsAuth(provider)
+            ? previous.linkingEnabled
+            : false,
+          autoAddEnabled: providerSupportsAuth(provider)
+            ? previous.autoAddEnabled
+            : false,
           defaultAppPermissions: providerSupportsAuth(provider)
             ? previous.defaultAppPermissions
             : [],
           defaultLibraryGrants: providerSupportsAuth(provider)
             ? previous.defaultLibraryGrants
             : [],
-          machineIdPresent: provider === "PLEX" ? previous.machineIdPresent : false,
+          machineIdPresent:
+            provider === "PLEX" ? previous.machineIdPresent : false,
           plexServerId: provider === "PLEX" ? previous.plexServerId : "",
           jellyfinCredentialMode:
-            provider === "JELLYFIN" ? "adminLogin" : previous.jellyfinCredentialMode,
-          embyConnectionMode: provider === "EMBY" ? "LOCAL" : previous.embyConnectionMode,
+            provider === "JELLYFIN"
+              ? "adminLogin"
+              : previous.jellyfinCredentialMode,
+          embyConnectionMode:
+            provider === "EMBY" ? "LOCAL" : previous.embyConnectionMode,
           embyLocalSetupMethod:
             provider === "EMBY" ? "API_KEY" : previous.embyLocalSetupMethod,
-          embyConnectEnabled: provider === "EMBY" ? false : previous.embyConnectEnabled,
+          embyConnectEnabled:
+            provider === "EMBY" ? false : previous.embyConnectEnabled,
           embyConnectUsernameOrEmail: "",
           embyConnectPassword: "",
           embyConnectServerId: "",
           embyDiscoveredServers: [],
-          apiKey: provider === "JELLYFIN" || provider === "EMBY" ? "" : previous.apiKey,
+          apiKey:
+            provider === "JELLYFIN" || provider === "EMBY"
+              ? ""
+              : previous.apiKey,
           clearApiKey:
-            provider === "JELLYFIN" || provider === "EMBY" ? false : previous.clearApiKey,
+            provider === "JELLYFIN" || provider === "EMBY"
+              ? false
+              : previous.clearApiKey,
         };
       });
     },
@@ -256,7 +295,10 @@ export function SettingsMediaServersSection({
 
   return (
     <div id="settings-media-servers-section" className="space-y-4 text-sm">
-      <div id="settings-media-servers-table-card" className="rounded border border-border">
+      <div
+        id="settings-media-servers-table-card"
+        className="rounded border border-border"
+      >
         <div className="overflow-x-auto">
           <Table id="settings-media-servers-table">
             <TableHeader>
@@ -267,7 +309,9 @@ export function SettingsMediaServersSection({
                 <TableHead>{t("label.enabled")}</TableHead>
                 <TableHead>{t("settings.capabilities")}</TableHead>
                 <TableHead>{t("settings.credentials")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -277,14 +321,18 @@ export function SettingsMediaServersSection({
                   key={connection.id}
                   id={selectorId("settings-media-server-row", connection.id)}
                 >
-                  <TableCell className="font-medium">{connection.displayName}</TableCell>
+                  <TableCell className="font-medium">
+                    {connection.displayName}
+                  </TableCell>
                   <TableCell>
                     <span className="flex items-center gap-2">
                       <MediaServerProviderLogo provider={connection.provider} />
                       {providerLabel(connection.provider)}
                     </span>
                   </TableCell>
-                  <TableCell className="max-w-72 truncate">{connection.baseUrl || "-"}</TableCell>
+                  <TableCell className="max-w-72 truncate">
+                    {connection.baseUrl || "-"}
+                  </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
                       value={connection.enabled}
@@ -293,8 +341,15 @@ export function SettingsMediaServersSection({
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1.5">
-                      {capabilityBadges(connection, effectiveFormLoginEnabled).map((badge) => (
-                        <Badge key={badge.label} tone={badge.tone} className="rounded-full">
+                      {capabilityBadges(
+                        connection,
+                        effectiveFormLoginEnabled,
+                      ).map((badge) => (
+                        <Badge
+                          key={badge.label}
+                          tone={badge.tone}
+                          className="rounded-full"
+                        >
                           {badge.label}
                         </Badge>
                       ))}
@@ -308,7 +363,9 @@ export function SettingsMediaServersSection({
                           {t("settings.plexServerSelected")}
                         </span>
                       ) : (
-                        <span className="text-muted-foreground">{t("settings.plexServerMissing")}</span>
+                        <span className="text-muted-foreground">
+                          {t("settings.plexServerMissing")}
+                        </span>
                       )
                     ) : connection.provider === "EMBY" ? (
                       <div className="space-y-1">
@@ -346,13 +403,18 @@ export function SettingsMediaServersSection({
                         {t("settings.apiKeyConfigured")}
                       </span>
                     ) : (
-                      <span className="text-muted-foreground">{t("settings.apiKeyMissing")}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.apiKeyMissing")}
+                      </span>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex items-center gap-2">
                       <MediaServerActionButton
-                        id={selectorId("settings-media-server-test", connection.id)}
+                        id={selectorId(
+                          "settings-media-server-test",
+                          connection.id,
+                        )}
                         label={t("label.testConnection")}
                         tone="neutral"
                         onClick={() => void testConnection(connection)}
@@ -365,8 +427,15 @@ export function SettingsMediaServersSection({
                         )}
                       </MediaServerActionButton>
                       <MediaServerActionButton
-                        id={selectorId("settings-media-server-toggle", connection.id)}
-                        label={connection.enabled ? t("label.disable") : t("label.enable")}
+                        id={selectorId(
+                          "settings-media-server-toggle",
+                          connection.id,
+                        )}
+                        label={
+                          connection.enabled
+                            ? t("label.disable")
+                            : t("label.enable")
+                        }
                         tone={connection.enabled ? "enabled" : "disabled"}
                         onClick={() => void toggleConnectionEnabled(connection)}
                         disabled={mutatingConnectionId === connection.id}
@@ -378,7 +447,10 @@ export function SettingsMediaServersSection({
                         )}
                       </MediaServerActionButton>
                       <MediaServerActionButton
-                        id={selectorId("settings-media-server-edit", connection.id)}
+                        id={selectorId(
+                          "settings-media-server-edit",
+                          connection.id,
+                        )}
                         label={t("label.edit")}
                         tone="edit"
                         onClick={() => editConnection(connection)}
@@ -386,7 +458,10 @@ export function SettingsMediaServersSection({
                         <Edit className="h-4 w-4" />
                       </MediaServerActionButton>
                       <MediaServerActionButton
-                        id={selectorId("settings-media-server-delete", connection.id)}
+                        id={selectorId(
+                          "settings-media-server-delete",
+                          connection.id,
+                        )}
                         label={t("label.delete")}
                         tone="delete"
                         onClick={() => void deleteConnection(connection)}
@@ -418,7 +493,10 @@ export function SettingsMediaServersSection({
         <>
           <Card>
             <CardHeader className="flex items-center justify-between gap-3">
-              <CardTitle id="settings-media-server-editor" className="text-base">
+              <CardTitle
+                id="settings-media-server-editor"
+                className="text-base"
+              >
                 {isEditing
                   ? t("settings.mediaServerUpdate")
                   : t("settings.mediaServerCreate")}
@@ -435,7 +513,9 @@ export function SettingsMediaServersSection({
                     }))
                   }
                 />
-                <span className="text-sm font-medium">{t("label.enabled")}</span>
+                <span className="text-sm font-medium">
+                  {t("label.enabled")}
+                </span>
               </label>
             </CardHeader>
             <CardContent>
@@ -446,25 +526,38 @@ export function SettingsMediaServersSection({
               >
                 <div className="grid gap-3 md:grid-cols-3">
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-media-server-provider">
+                    <Label
+                      className="mb-2 block"
+                      htmlFor="settings-media-server-provider"
+                    >
                       {t("settings.provider")}
                     </Label>
                     <Select
                       value={draft.provider}
-                      onValueChange={(value) => handleProviderChange(value as MediaServerProvider)}
+                      onValueChange={(value) =>
+                        handleProviderChange(value as MediaServerProvider)
+                      }
                     >
-                      <SelectTrigger id="settings-media-server-provider" className="w-full">
+                      <SelectTrigger
+                        id="settings-media-server-provider"
+                        className="w-full"
+                      >
                         <SelectValue aria-label={selectedProviderLabel} />
                       </SelectTrigger>
                       <SelectContent>
                         {PROVIDERS.map((provider) => (
                           <SelectItem
-                            id={selectorId("settings-media-server-provider", provider.value)}
+                            id={selectorId(
+                              "settings-media-server-provider",
+                              provider.value,
+                            )}
                             key={provider.value}
                             value={provider.value}
                           >
                             <span className="flex items-center gap-2">
-                              <MediaServerProviderLogo provider={provider.value} />
+                              <MediaServerProviderLogo
+                                provider={provider.value}
+                              />
                               {provider.label}
                             </span>
                           </SelectItem>
@@ -473,7 +566,10 @@ export function SettingsMediaServersSection({
                     </Select>
                   </label>
                   <label>
-                    <Label className="mb-2 block" htmlFor="settings-media-server-name">
+                    <Label
+                      className="mb-2 block"
+                      htmlFor="settings-media-server-name"
+                    >
                       {t("label.name")}
                     </Label>
                     <Input
@@ -493,7 +589,8 @@ export function SettingsMediaServersSection({
                     <Label
                       className="mb-2 block"
                       htmlFor={
-                        draft.provider === "EMBY" && draft.embyConnectionMode === "CONNECT"
+                        draft.provider === "EMBY" &&
+                        draft.embyConnectionMode === "CONNECT"
                           ? "settings-emby-connect-base-url"
                           : "settings-media-server-base-url"
                       }
@@ -502,7 +599,8 @@ export function SettingsMediaServersSection({
                     </Label>
                     <Input
                       id={
-                        draft.provider === "EMBY" && draft.embyConnectionMode === "CONNECT"
+                        draft.provider === "EMBY" &&
+                        draft.embyConnectionMode === "CONNECT"
                           ? "settings-emby-connect-base-url"
                           : "settings-media-server-base-url"
                       }
@@ -525,7 +623,10 @@ export function SettingsMediaServersSection({
 
                 {draft.provider !== "PLEX" ? (
                   <label className="block">
-                    <Label className="mb-2 block" htmlFor="settings-media-server-external-url">
+                    <Label
+                      className="mb-2 block"
+                      htmlFor="settings-media-server-external-url"
+                    >
                       {t("settings.externalUrl")}
                     </Label>
                     <Input
@@ -571,7 +672,10 @@ export function SettingsMediaServersSection({
                     </div>
                     {plexServerOptions.length > 0 ? (
                       <label className="block">
-                        <Label className="mb-2 block" htmlFor="settings-media-server-plex-server">
+                        <Label
+                          className="mb-2 block"
+                          htmlFor="settings-media-server-plex-server"
+                        >
                           {t("settings.plexServer")}
                         </Label>
                         <Select
@@ -583,13 +687,19 @@ export function SettingsMediaServersSection({
                             }))
                           }
                         >
-                          <SelectTrigger id="settings-media-server-plex-server" className="w-full">
+                          <SelectTrigger
+                            id="settings-media-server-plex-server"
+                            className="w-full"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             {plexServerOptions.map((server) => (
                               <SelectItem
-                                id={selectorId("settings-media-server-plex-server-option", server.id)}
+                                id={selectorId(
+                                  "settings-media-server-plex-server-option",
+                                  server.id,
+                                )}
                                 key={server.id}
                                 value={server.id}
                               >
@@ -611,7 +721,11 @@ export function SettingsMediaServersSection({
                           <Button
                             id="settings-emby-mode-local"
                             type="button"
-                            variant={draft.embyConnectionMode === "LOCAL" ? "default" : "ghost"}
+                            variant={
+                              draft.embyConnectionMode === "LOCAL"
+                                ? "default"
+                                : "ghost"
+                            }
                             size="sm"
                             onClick={() =>
                               setDraft((previous) => ({
@@ -629,7 +743,11 @@ export function SettingsMediaServersSection({
                           <Button
                             id="settings-emby-mode-connect"
                             type="button"
-                            variant={draft.embyConnectionMode === "CONNECT" ? "default" : "ghost"}
+                            variant={
+                              draft.embyConnectionMode === "CONNECT"
+                                ? "default"
+                                : "ghost"
+                            }
                             size="sm"
                             onClick={() =>
                               setDraft((previous) => ({
@@ -651,7 +769,11 @@ export function SettingsMediaServersSection({
                             <Button
                               id="settings-emby-setup-api-key"
                               type="button"
-                              variant={draft.embyLocalSetupMethod === "API_KEY" ? "default" : "ghost"}
+                              variant={
+                                draft.embyLocalSetupMethod === "API_KEY"
+                                  ? "default"
+                                  : "ghost"
+                              }
                               size="sm"
                               onClick={() =>
                                 setDraft((previous) => ({
@@ -668,7 +790,8 @@ export function SettingsMediaServersSection({
                               id="settings-emby-setup-admin-credentials"
                               type="button"
                               variant={
-                                draft.embyLocalSetupMethod === "ADMIN_CREDENTIALS"
+                                draft.embyLocalSetupMethod ===
+                                "ADMIN_CREDENTIALS"
                                   ? "default"
                                   : "ghost"
                               }
@@ -688,11 +811,15 @@ export function SettingsMediaServersSection({
                         ) : (
                           <div className="space-y-3 rounded border border-border bg-background/40 p-3">
                             <p className="text-xs text-muted-foreground">
-                              The selected Emby Connect user must be a local administrator for setup.
+                              The selected Emby Connect user must be a local
+                              administrator for setup.
                             </p>
                             <div className="grid gap-3 md:grid-cols-2">
                               <label>
-                                <Label className="mb-2 block" htmlFor="settings-emby-connect-username">
+                                <Label
+                                  className="mb-2 block"
+                                  htmlFor="settings-emby-connect-username"
+                                >
                                   Emby Connect username or email
                                 </Label>
                                 <Input
@@ -701,14 +828,18 @@ export function SettingsMediaServersSection({
                                   onChange={(event) =>
                                     setDraft((previous) => ({
                                       ...previous,
-                                      embyConnectUsernameOrEmail: event.target.value,
+                                      embyConnectUsernameOrEmail:
+                                        event.target.value,
                                     }))
                                   }
                                   autoComplete="off"
                                 />
                               </label>
                               <label>
-                                <Label className="mb-2 block" htmlFor="settings-emby-connect-password">
+                                <Label
+                                  className="mb-2 block"
+                                  htmlFor="settings-emby-connect-password"
+                                >
                                   Password
                                 </Label>
                                 <Input
@@ -733,23 +864,31 @@ export function SettingsMediaServersSection({
                               disabled={embyConnectBusy}
                               onClick={() => void discoverEmbyConnectServers()}
                             >
-                              {embyConnectBusy ? "Discovering…" : "Discover servers"}
+                              {embyConnectBusy
+                                ? "Discovering…"
+                                : "Discover servers"}
                             </Button>
                             {draft.embyDiscoveredServers.length > 0 ? (
                               <label>
-                                <Label className="mb-2 block" htmlFor="settings-emby-connect-server">
+                                <Label
+                                  className="mb-2 block"
+                                  htmlFor="settings-emby-connect-server"
+                                >
                                   Emby server
                                 </Label>
                                 <Select
                                   value={draft.embyConnectServerId}
                                   onValueChange={(value) => {
-                                    const selected = draft.embyDiscoveredServers.find(
-                                      (server) => server.serverId === value,
-                                    );
+                                    const selected =
+                                      draft.embyDiscoveredServers.find(
+                                        (server) => server.serverId === value,
+                                      );
                                     setDraft((previous) => ({
                                       ...previous,
                                       embyConnectServerId: value,
-                                      baseUrl: selected?.suggestedBaseUrl ?? previous.baseUrl,
+                                      baseUrl:
+                                        selected?.suggestedBaseUrl ??
+                                        previous.baseUrl,
                                     }));
                                   }}
                                 >
@@ -757,12 +896,19 @@ export function SettingsMediaServersSection({
                                     <SelectValue placeholder="Select a server" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    {draft.embyDiscoveredServers.map((server) => (
-                                      <SelectItem key={server.serverId} value={server.serverId}>
-                                        {server.name} · local {server.localStatus.toLowerCase()} · remote{" "}
-                                        {server.remoteStatus.toLowerCase()}
-                                      </SelectItem>
-                                    ))}
+                                    {draft.embyDiscoveredServers.map(
+                                      (server) => (
+                                        <SelectItem
+                                          key={server.serverId}
+                                          value={server.serverId}
+                                        >
+                                          {server.name} · local{" "}
+                                          {server.localStatus.toLowerCase()} ·
+                                          remote{" "}
+                                          {server.remoteStatus.toLowerCase()}
+                                        </SelectItem>
+                                      ),
+                                    )}
                                   </SelectContent>
                                 </Select>
                               </label>
@@ -781,7 +927,9 @@ export function SettingsMediaServersSection({
                               }))
                             }
                           />
-                          <span>Allow users to sign in through Emby Connect</span>
+                          <span>
+                            Allow users to sign in through Emby Connect
+                          </span>
                         </label>
                         {editingConnectionId && draft.embyConnectEnabled ? (
                           <Button
@@ -802,7 +950,11 @@ export function SettingsMediaServersSection({
                         <Button
                           id="settings-media-server-credential-admin-login"
                           type="button"
-                          variant={draft.jellyfinCredentialMode === "adminLogin" ? "default" : "ghost"}
+                          variant={
+                            draft.jellyfinCredentialMode === "adminLogin"
+                              ? "default"
+                              : "ghost"
+                          }
                           size="sm"
                           onClick={() =>
                             setDraft((previous) => ({
@@ -818,7 +970,11 @@ export function SettingsMediaServersSection({
                         <Button
                           id="settings-media-server-credential-api-key"
                           type="button"
-                          variant={draft.jellyfinCredentialMode === "apiKey" ? "default" : "ghost"}
+                          variant={
+                            draft.jellyfinCredentialMode === "apiKey"
+                              ? "default"
+                              : "ghost"
+                          }
                           size="sm"
                           onClick={() =>
                             setDraft((previous) => ({
@@ -834,7 +990,8 @@ export function SettingsMediaServersSection({
                       </div>
                     ) : null}
                     <div className="grid gap-3 md:grid-cols-2">
-                      {(draft.provider === "JELLYFIN" && draft.jellyfinCredentialMode === "apiKey") ||
+                      {(draft.provider === "JELLYFIN" &&
+                        draft.jellyfinCredentialMode === "apiKey") ||
                       (draft.provider === "EMBY" &&
                         draft.embyConnectionMode === "LOCAL" &&
                         draft.embyLocalSetupMethod === "API_KEY") ? (
@@ -869,7 +1026,8 @@ export function SettingsMediaServersSection({
                               ignorePasswordManagers
                             />
                           </label>
-                          {editingConnectionId && draft.provider === "JELLYFIN" ? (
+                          {editingConnectionId &&
+                          draft.provider === "JELLYFIN" ? (
                             <label className="flex items-end gap-2 pb-2">
                               <Checkbox
                                 checked={draft.clearApiKey}
@@ -880,14 +1038,17 @@ export function SettingsMediaServersSection({
                                   }))
                                 }
                               />
-                              <span className="text-sm">{t("settings.clearSavedApiKey")}</span>
+                              <span className="text-sm">
+                                {t("settings.clearSavedApiKey")}
+                              </span>
                             </label>
                           ) : null}
                         </>
-                      ) : (draft.provider === "JELLYFIN" ||
-                          (draft.provider === "EMBY" &&
-                            draft.embyConnectionMode === "LOCAL" &&
-                            draft.embyLocalSetupMethod === "ADMIN_CREDENTIALS")) ? (
+                      ) : draft.provider === "JELLYFIN" ||
+                        (draft.provider === "EMBY" &&
+                          draft.embyConnectionMode === "LOCAL" &&
+                          draft.embyLocalSetupMethod ===
+                            "ADMIN_CREDENTIALS") ? (
                         <>
                           <label>
                             <Label
@@ -972,7 +1133,9 @@ export function SettingsMediaServersSection({
 
                 {supportsAuth ? (
                   <div className="space-y-3 rounded border border-border bg-background/40 p-3">
-                    <div className="font-medium">{t("settings.mediaServerAuthCapabilities")}</div>
+                    <div className="font-medium">
+                      {t("settings.mediaServerAuthCapabilities")}
+                    </div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <label
                         className={cn(
@@ -983,12 +1146,15 @@ export function SettingsMediaServersSection({
                         <Checkbox
                           id="settings-media-server-login-enabled"
                           size="large"
-                          checked={effectiveFormLoginEnabled && draft.loginEnabled}
+                          checked={
+                            effectiveFormLoginEnabled && draft.loginEnabled
+                          }
                           disabled={!effectiveFormLoginEnabled}
                           onCheckedChange={(checked) =>
                             setDraft((previous) => ({
                               ...previous,
-                              loginEnabled: effectiveFormLoginEnabled && checked === true,
+                              loginEnabled:
+                                effectiveFormLoginEnabled && checked === true,
                             }))
                           }
                         />
@@ -1038,17 +1204,21 @@ export function SettingsMediaServersSection({
 
                     {draft.autoAddEnabled ? (
                       <div className="rounded border border-border bg-card/50 p-3">
-                        <Label className="mb-2 block">Default Permissions</Label>
+                        <Label className="mb-2 block">
+                          Default Permissions
+                        </Label>
                         <PermissionDropdowns
                           libraries={libraries}
                           idPrefix="settings-media-server-default-permissions"
                           selectedAppPermissions={draft.defaultAppPermissions}
-                          selectedLibraryPermissions={Object.fromEntries(
-                            draft.defaultLibraryGrants.map((grant) => [
-                              grant.libraryId,
-                              grant.permissions,
-                            ]),
-                          ) as LibraryPermissionDrafts}
+                          selectedLibraryPermissions={
+                            Object.fromEntries(
+                              draft.defaultLibraryGrants.map((grant) => [
+                                grant.libraryId,
+                                grant.permissions,
+                              ]),
+                            ) as LibraryPermissionDrafts
+                          }
                           onAppChange={(nextPermissions) =>
                             setDraft((previous) => ({
                               ...previous,
@@ -1058,9 +1228,15 @@ export function SettingsMediaServersSection({
                           onLibraryChange={(changes) =>
                             setDraft((previous) => ({
                               ...previous,
-                              defaultLibraryGrants: Object.entries(changes).reduce(
+                              defaultLibraryGrants: Object.entries(
+                                changes,
+                              ).reduce(
                                 (grants, [libraryId, permissions]) =>
-                                  updateLibraryGrant(grants, libraryId, permissions),
+                                  updateLibraryGrant(
+                                    grants,
+                                    libraryId,
+                                    permissions,
+                                  ),
                                 previous.defaultLibraryGrants,
                               ),
                             }))

@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { SettingsSaveGuard } from "@/lib/utils/settings-save-guard";
 
@@ -105,7 +106,9 @@ export function useIndexerRouting({
 
       // Preserve picker state when an invalidation returns identical records.
       setIndexers((previous) =>
-        JSON.stringify(previous) === JSON.stringify(indexerList) ? previous : indexerList,
+        JSON.stringify(previous) === JSON.stringify(indexerList)
+          ? previous
+          : indexerList,
       );
 
       const scopeDefaults = getDefaultIndexerRouting(activeQualityScopeId);
@@ -211,14 +214,16 @@ export function useIndexerRouting({
         if (saveError) throw saveError;
 
         const savedRouting = Object.fromEntries(
-          (saveData.updateIndexerRouting || []).map((entry: IndexerRoutingEntry) => [
-            entry.indexerId,
-            {
-              categories: entry.categories,
-              enabled: entry.enabled,
-              priority: entry.priority,
-            },
-          ]),
+          (saveData.updateIndexerRouting || []).map(
+            (entry: IndexerRoutingEntry) => [
+              entry.indexerId,
+              {
+                categories: entry.categories,
+                enabled: entry.enabled,
+                priority: entry.priority,
+              },
+            ],
+          ),
         ) as IndexerRoutingSettingsByIndexer;
         const normalizedSavedRouting: IndexerRoutingSettingsByIndexer = {};
         const scopeDefaults = getDefaultIndexerRouting(scopeId);
@@ -261,7 +266,9 @@ export function useIndexerRouting({
             [scopeId]: nextOrder,
           };
         });
-        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setIndexerRoutingByScope((previous) => ({
           ...previous,
@@ -272,7 +279,7 @@ export function useIndexerRouting({
           [scopeId]: indexerRoutingOrderByScope[scopeId],
         }));
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -295,28 +302,42 @@ export function useIndexerRouting({
     ],
   );
 
-  const refreshIndexerRouting = React.useCallback(async (background = false) => {
-    const guard = saveGuards[activeQualityScopeId];
-    const version = guard.readVersion();
-    if (version === null) return;
-    if (!background) setIndexerRoutingLoading(true);
-    try {
-      const { data, error } = await client
-        .query(indexerRoutingInitQuery, { scopeId: activeQualityScopeId }, { requestPolicy: "network-only" })
-        .toPromise();
-      if (error) throw error;
-      if (guard.accepts(version)) {
-        hydrateIndexerRouting(data.indexers || [], data.indexerRouting || []);
+  const refreshIndexerRouting = React.useCallback(
+    async (background = false) => {
+      const guard = saveGuards[activeQualityScopeId];
+      const version = guard.readVersion();
+      if (version === null) return;
+      if (!background) setIndexerRoutingLoading(true);
+      try {
+        const { data, error } = await client
+          .query(
+            indexerRoutingInitQuery,
+            { scopeId: activeQualityScopeId },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (error) throw error;
+        if (guard.accepts(version)) {
+          hydrateIndexerRouting(data.indexers || [], data.indexerRouting || []);
+        }
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        if (!background) setIndexerRoutingLoading(false);
       }
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
-        { level: "ERROR" },
-      );
-    } finally {
-      if (!background) setIndexerRoutingLoading(false);
-    }
-  }, [activeQualityScopeId, client, hydrateIndexerRouting, saveGuards, setGlobalStatus, t]);
+    },
+    [
+      activeQualityScopeId,
+      client,
+      hydrateIndexerRouting,
+      saveGuards,
+      setGlobalStatus,
+      t,
+    ],
+  );
 
   const updateIndexerRoutingForScope = React.useCallback(
     async (

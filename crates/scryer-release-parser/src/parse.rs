@@ -1228,7 +1228,7 @@ fn classify_token(
             strong_anchor: false,
         });
     }
-    if parse_version(normalized).is_some() {
+    if matches!(split_episode_revision(normalized), Some(("", _))) {
         roles.push(RoleCandidate {
             role: TokenRole::VersionMarker,
             confidence: 92,
@@ -5253,7 +5253,17 @@ fn parenthetical_title_split(tokens: &[Token], indices: &[usize]) -> Option<usiz
     let first = tokens.get(*alternate.first()?)?;
     let last = tokens.get(*alternate.last()?)?;
     let group = first.group_id?;
+    // A regional disambiguator or a dependent "featuring" phrase belongs
+    // to the primary title; it is not another name for the same work.
+    let regional_qualifier = alternate.len() == 1
+        && matches!(
+            first.normalized.as_str(),
+            "US" | "UK" | "GB" | "AU" | "CA" | "NZ"
+        );
+    let dependent_phrase = matches!(first.normalized.as_str(), "FT" | "FEAT" | "FEATURING");
     if primary.is_empty()
+        || regional_qualifier
+        || dependent_phrase
         || primary
             .iter()
             .any(|index| tokens[*index].group_id.is_some())
@@ -6524,6 +6534,9 @@ fn defused_episode_label(token: &str) -> Option<String> {
     None
 }
 
+/// The one splitter for a `vN` revision suffix: an episode token ("S01E02V2",
+/// "02V2"), or a standalone marker ("V2", empty episode part). The revision
+/// must be all digits and at least 1; "V0" is malformed everywhere.
 fn split_episode_revision(token: &str) -> Option<(&str, u32)> {
     let (episode, version) = token.rsplit_once('V')?;
     if version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -6614,7 +6627,10 @@ fn parse_season_keyword_episode_at(
     };
     let episode_token = tokens.get(episode_index)?;
     let episode = if episode_token.separator_before == SeparatorKind::Hyphen {
-        parse_numeric_token(episode_token.normalized.as_str())?
+        let normalized = episode_token.normalized.as_str();
+        parse_numeric_token(
+            split_episode_revision(normalized).map_or(normalized, |(episode, _)| episode),
+        )?
     } else {
         dot_split_episode_after_season(tokens, episode_index)?
     };
@@ -6841,20 +6857,24 @@ fn parse_hyphenated_standard_episode_range_at(
     }
     let endpoint = split_episode_revision(&next.normalized)
         .map_or(next.normalized.as_str(), |(episode, _)| episode);
+    let range_start = *episode_numbers.first()?;
     let range_end = parse_episode_component(endpoint)
-        .filter(|end| *end <= 999)
+        // A bare year after a short episode coordinate is release metadata.
+        // Four-digit episode coordinates and explicit E/SxxE endpoints remain
+        // valid; bound the number of members below instead of their values.
+        .filter(|end| {
+            !(range_start < 1000
+                && endpoint.len() == 4
+                && endpoint.bytes().all(|byte| byte.is_ascii_digit())
+                && (1900..=2099).contains(end))
+        })
         .or_else(|| {
             let (end_season, end_episodes) =
                 parse_standard_episode_token(next.normalized.as_str())?;
             let range_end = *end_episodes.first()?;
-            // Split episode ranges already limit their endpoint to three digits.
-            // Apply the same bound to the newly accepted repeated-standard form
-            // before materializing the inclusive range.
-            (end_season == season && end_episodes.len() == 1 && range_end <= 999)
-                .then_some(range_end)
+            (end_season == season && end_episodes.len() == 1).then_some(range_end)
         })?;
-    let range_start = *episode_numbers.first()?;
-    if range_end < range_start {
+    if range_end < range_start || range_end - range_start > 999 {
         return Some((season, episode_numbers, index));
     }
     Some((season, (range_start..=range_end).collect(), index + 1))
@@ -8391,7 +8411,9 @@ fn parse_anime_absolute_at(
             return Some((vec![number], None));
         }
     }
-    if let Some((number, version)) = parse_versioned_absolute(token) {
+    if let Some((number, version)) = split_episode_revision(token)
+        .and_then(|(number, version)| Some((parse_numeric_token(number)?, version)))
+    {
         return Some((vec![number], Some(version)));
     }
     None
@@ -8549,15 +8571,6 @@ fn parse_numeric_token(token: &str) -> Option<u32> {
     (!token.is_empty() && token.chars().all(|ch| ch.is_ascii_digit()))
         .then(|| token.parse::<u32>().ok())
         .flatten()
-}
-
-fn parse_version(token: &str) -> Option<u32> {
-    token.strip_prefix('V')?.parse::<u32>().ok()
-}
-
-fn parse_versioned_absolute(token: &str) -> Option<(u32, u32)> {
-    let (number, version) = token.split_once('V')?;
-    Some((number.parse::<u32>().ok()?, version.parse::<u32>().ok()?))
 }
 
 fn is_checksum(token: &str) -> bool {

@@ -1,13 +1,10 @@
+import * as React from "react";
+import { Tabs as TabsPrimitive } from "radix-ui";
 
-import * as React from "react"
-import { Tabs as TabsPrimitive } from "radix-ui"
+import { cn } from "@/lib/utils";
 
-import { cn } from "@/lib/utils"
-
-function Tabs({
-  ...props
-}: React.ComponentProps<typeof TabsPrimitive.Root>) {
-  return <TabsPrimitive.Root data-slot="tabs" {...props} />
+function Tabs({ ...props }: React.ComponentProps<typeof TabsPrimitive.Root>) {
+  return <TabsPrimitive.Root data-slot="tabs" {...props} />;
 }
 
 function TabsList({
@@ -23,7 +20,7 @@ function TabsList({
       )}
       {...props}
     />
-  )
+  );
 }
 
 function TabsTrigger({
@@ -43,7 +40,7 @@ function TabsTrigger({
       )}
       {...props}
     />
-  )
+  );
 }
 
 function TabsContent({
@@ -56,7 +53,7 @@ function TabsContent({
       className={cn("mt-2 focus-visible:outline-none", className)}
       {...props}
     />
-  )
+  );
 }
 
-export { Tabs, TabsList, TabsTrigger, TabsContent }
+export { Tabs, TabsList, TabsTrigger, TabsContent };

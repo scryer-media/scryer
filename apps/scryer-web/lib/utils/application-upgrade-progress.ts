@@ -55,7 +55,11 @@ export function normalizeApplicationUpgradeProgress(
   const rawPhase = nullableText(progress.phase);
   return {
     status: nullableText(progress.status),
-    phase: rawPhase ? (KNOWN_PHASES.has(rawPhase as ApplicationUpgradePhase) ? rawPhase as ApplicationUpgradePhase : "unknown") : null,
+    phase: rawPhase
+      ? KNOWN_PHASES.has(rawPhase as ApplicationUpgradePhase)
+        ? (rawPhase as ApplicationUpgradePhase)
+        : "unknown"
+      : null,
     downloadedBytes: nullableByteCount(progress.downloadedBytes),
     totalBytes: nullableByteCount(progress.totalBytes),
     targetVersion: nullableText(progress.targetVersion),

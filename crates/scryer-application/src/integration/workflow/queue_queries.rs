@@ -1,3 +1,7 @@
+use crate::integration::download_enrichment::{
+    CacheKey, CacheValue, DownloadEnrichmentPass, QueueAttribution, SubmissionProjection,
+    locator_key,
+};
 /// Rows of client history read per snapshot cycle.
 ///
 /// One page per tick serves both the queue view and the recent-completed
@@ -401,6 +405,8 @@ fn apply_import_record_to_queue_item(item: &mut DownloadQueueItem, record: &Impo
     item.import_error_message = error_message.clone();
     if let Some(error_message) = error_message {
         item.attention_reason = Some(error_message);
+        item.attention_reason_code =
+            error_code.map(|code| format!("IMPORT_{}", code.as_str().to_ascii_uppercase()));
     }
 }
 fn apply_delete_command_to_queue_item(
@@ -411,6 +417,7 @@ fn apply_delete_command_to_queue_item(
     item.delete_error_message = command.error_text.clone();
     if let Some(error_text) = command.error_text.as_ref() {
         item.attention_reason = Some(error_text.clone());
+        item.attention_reason_code = None;
     }
 }
 fn queue_item_import_state_eligible(item: &DownloadQueueItem) -> bool {
@@ -456,25 +463,25 @@ fn push_source_identity_candidate(
     }
 }
 fn push_submission_lookup_key(
-    keys: &mut Vec<(String, String, String)>,
-    seen: &mut HashSet<(String, String, String)>,
+    keys: &mut Vec<ClientJobLocator>,
+    seen: &mut HashSet<ClientJobLocator>,
     identity: &ClientJobLocator,
 ) {
     if identity.client_type.is_empty() || identity.item_id.is_empty() {
         return;
     }
 
-    let key = download_queue_identity_key(
-        identity.client_id.as_deref(),
-        &identity.client_type,
-        &identity.item_id,
-    );
+    let key = locator_key(identity);
     if seen.insert(key.clone()) {
         keys.push(key);
     }
 }
+#[cfg(test)]
 fn apply_submission_to_queue_item(item: &mut DownloadQueueItem, submission: &DownloadSubmission) {
-    if crate::import_parameters::submission_has_scryer_origin(submission) {
+    apply_submission_projection(item, &SubmissionProjection::from(submission));
+}
+fn apply_submission_projection(item: &mut DownloadQueueItem, submission: &SubmissionProjection) {
+    if submission.is_scryer_origin {
         item.is_scryer_origin = true;
     }
     // The submission remembers exactly which configured client the grab was
@@ -526,7 +533,7 @@ fn apply_submission_to_queue_item(item: &mut DownloadQueueItem, submission: &Dow
         item.title_id = Some(submission.title_id.clone());
     }
     if item.episode_id.is_none() {
-        item.episode_id = submission.scope.episode_id().map(ToString::to_string);
+        item.episode_id.clone_from(&submission.episode_id);
     }
     if item.facet.is_none() && !submission.facet.trim().is_empty() {
         item.facet = Some(submission.facet.clone());
@@ -536,13 +543,21 @@ pub async fn enrich_download_queue_items_from_submissions(
     app: &AppUseCase,
     items: &mut [DownloadQueueItem],
 ) {
-    enrich_download_queue_items_from_submissions_with_original_identities(app, items, None).await;
+    enrich_download_queue_items_from_submissions_with_original_identities(
+        app,
+        items,
+        None,
+        &mut DownloadEnrichmentPass::default(),
+    )
+    .await;
 }
-async fn enrich_download_queue_items_from_submissions_with_original_identities(
+pub(crate) async fn enrich_download_queue_items_from_submissions_with_original_identities(
     app: &AppUseCase,
     items: &mut [DownloadQueueItem],
     original_source_identities: Option<&[ClientJobLocator]>,
+    pass: &mut DownloadEnrichmentPass,
 ) {
+    pass.restore_invalidated(app, items);
     let mut client_items = Vec::new();
     let mut seen_client_items = HashSet::new();
     for (index, item) in items.iter().enumerate() {
@@ -574,110 +589,9 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
         }
     }
 
-    let submission_map = if client_items.is_empty() {
-        HashMap::new()
-    } else {
-        let submissions = match app
-            .services
-            .workflow
-            .download_submissions
-            .list_for_client_items(&client_items)
-            .await
-        {
-            Ok(submissions) => submissions,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to batch-load download submissions for queue enrichment"
-                );
-                Vec::new()
-            }
-        };
-
-        submissions
-            .into_iter()
-            .filter(|submission| !submission.title_id.trim().is_empty())
-            .map(|submission| {
-                (
-                    download_queue_identity_key(
-                        submission.download_client_id.as_deref(),
-                        &submission.download_client_type,
-                        &submission.download_client_item_id,
-                    ),
-                    submission,
-                )
-            })
-            .collect::<HashMap<_, _>>()
-    };
-
-    // Seeding goals are frozen on the submission row at grab time; the queue
-    // needs them beside the observed ratio/seed time so a row can show progress
-    // against what it was actually grabbed under.
-    let seed_goal_map = if client_items.is_empty() {
-        HashMap::new()
-    } else {
-        match app
-            .services
-            .workflow
-            .download_submissions
-            .list_seed_goals_for_client_items(&client_items)
-            .await
-        {
-            Ok(goals) => goals
-                .into_iter()
-                .map(|(identity, goals)| {
-                    (
-                        download_queue_identity_key(
-                            identity.client_id.as_deref(),
-                            &identity.client_type,
-                            &identity.item_id,
-                        ),
-                        goals,
-                    )
-                })
-                .collect::<HashMap<_, _>>(),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to batch-load seeding goals for queue enrichment"
-                );
-                HashMap::new()
-            }
-        }
-    };
-
-    let identity_tracked_state_map = if client_items.is_empty() {
-        HashMap::new()
-    } else {
-        match app
-            .services
-            .workflow
-            .download_submissions
-            .list_identity_tracked_states_for_client_items(&client_items)
-            .await
-        {
-            Ok(states) => states
-                .into_iter()
-                .map(|(identity, state)| {
-                    (
-                        download_queue_identity_key(
-                            identity.client_id.as_deref(),
-                            &identity.client_type,
-                            &identity.item_id,
-                        ),
-                        state,
-                    )
-                })
-                .collect::<HashMap<_, _>>(),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to batch-load durable tracked states for queue enrichment"
-                );
-                HashMap::new()
-            }
-        }
-    };
+    let client_items: Vec<_> = client_items.iter().map(locator_key).collect();
+    pass.load(app, &client_items).await;
+    pass.restore_invalidated(app, items);
 
     // One read for the whole pass: the by-download-id fallback below is the
     // path that adopts rows Scryer never submitted, and it must not adopt a
@@ -689,6 +603,7 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
     };
 
     for (index, item) in items.iter_mut().enumerate() {
+        let before = QueueAttribution::capture(item);
         let current = download_queue_item_source_identity(item);
         let original = original_source_identities.and_then(|identities| identities.get(index));
         let mut lookup_keys = Vec::new();
@@ -723,23 +638,27 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
         if is_history_download_state(&item.state)
             && lookup_keys
                 .iter()
-                .find_map(|key| identity_tracked_state_map.get(key))
+                .find_map(|key| pass.states.get(key).and_then(Option::as_ref))
                 .and_then(|state| TrackedDownloadState::from_str_opt(state))
                 == Some(TrackedDownloadState::Ignored)
         {
             item.tracked_state = Some(TrackedDownloadState::Ignored);
         }
 
-        if let Some(goals) = lookup_keys.iter().find_map(|key| seed_goal_map.get(key)) {
+        if let Some(goals) = lookup_keys
+            .iter()
+            .find_map(|key| pass.goals.get(key).and_then(Option::as_ref))
+        {
             apply_seed_goals_to_queue_item(item, goals);
         }
 
         if let Some(submission) = lookup_keys
             .iter()
-            .find_map(|key| submission_map.get(key))
+            .find_map(|key| pass.submissions.get(key).and_then(Option::as_ref))
             .cloned()
         {
-            apply_submission_to_queue_item(item, &submission);
+            apply_submission_projection(item, &submission);
+            pass.remember(item, before);
             continue;
         }
 
@@ -747,8 +666,9 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
             find_submission_for_queue_item_by_download_id(app, item, original, &adoption_scope)
                 .await
         {
-            apply_submission_to_queue_item(item, &submission);
+            apply_submission_projection(item, &submission);
         }
+        pass.remember(item, before);
     }
 
     // Rows served from the memo still owe their binding a `last_seen_at`
@@ -776,7 +696,7 @@ async fn find_submission_for_queue_item_by_download_id(
     adoption_scope: &Option<
         std::sync::Arc<crate::services::DownloadClientCategoryAdmissionSnapshot>,
     >,
-) -> Option<DownloadSubmission> {
+) -> Option<std::sync::Arc<SubmissionProjection>> {
     let download_id = item.download_id.as_deref().map(str::trim)?;
     if download_id.is_empty() {
         return None;
@@ -850,6 +770,32 @@ async fn find_submission_for_queue_item_by_download_id(
     }
 
     for (client_id, client_type) in candidates {
+        // Resolve above even on a hit: observation freshness and conflicts are
+        // registry responsibilities, never properties of the enrichment cache.
+        let cache = &app.runtime.acquisition.download_enrichment;
+        let _fill = cache.fill.lock().await;
+        let generation = app.runtime.acquisition.download_registry_generation();
+        let cache_key = canonical_download_id.map(|id| {
+            CacheKey::Fallback(
+                id,
+                ClientJobLocator::new(
+                    Some(client_id.as_str()).filter(|s| !s.is_empty()),
+                    &client_type,
+                    download_id,
+                ),
+            )
+        });
+        if let Some(key) = &cache_key
+            && let Some(CacheValue::Submission(Some(projection))) =
+                cache
+                    .state
+                    .lock()
+                    .await
+                    .get(generation, key, tokio::time::Instant::now())
+            && generation == app.runtime.acquisition.download_registry_generation()
+        {
+            return Some(projection);
+        }
         match app
             .services
             .workflow
@@ -867,7 +813,20 @@ async fn find_submission_for_queue_item_by_download_id(
                     .into_iter()
                     .find(|submission| !submission.title_id.trim().is_empty())
                 {
-                    return Some(submission);
+                    let projection = std::sync::Arc::new(SubmissionProjection::from(&submission));
+                    let mut shared = cache.state.lock().await;
+                    if let Some(key) = cache_key
+                        && generation == app.runtime.acquisition.download_registry_generation()
+                        && Some(projection.download_id) == canonical_download_id
+                    {
+                        shared.insert(
+                            generation,
+                            key,
+                            CacheValue::Submission(Some(projection.clone())),
+                            tokio::time::Instant::now(),
+                        );
+                    }
+                    return Some(projection);
                 }
             }
             Err(error) => {
@@ -956,6 +915,7 @@ impl AppUseCase {
         enabled_clients: &[DownloadClientConfig],
         mut items: Vec<DownloadQueueItem>,
         use_tracked_runtime_snapshot: bool,
+        pass: &mut DownloadEnrichmentPass,
     ) -> Vec<DownloadQueueItem> {
         let original_source_identities = items
             .iter()
@@ -966,6 +926,7 @@ impl AppUseCase {
             self,
             &mut items,
             Some(&original_source_identities),
+            pass,
         )
         .await;
         let primary_client = enabled_clients.first();
@@ -1014,7 +975,10 @@ impl AppUseCase {
         }
 
         canonicalize_download_queue_item_clients(&mut items, enabled_clients);
-        enrich_download_queue_items_from_submissions(self, &mut items).await;
+        enrich_download_queue_items_from_submissions_with_original_identities(
+            self, &mut items, None, pass,
+        )
+        .await;
         // Submission enrichment can have just restored a row's real configured
         // client id (a client-observed row only knows its provider type, and
         // with two same-type clients the unique-type pass above cannot pick
@@ -1093,12 +1057,31 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    #[cfg(test)]
     pub(crate) async fn collect_download_snapshot_items_excluding_client_types(
         &self,
         include_queue: bool,
         include_recent_history: bool,
         use_tracked_runtime_snapshot: bool,
         excluded_client_types: &[&str],
+    ) -> AppResult<crate::ports::DownloadClientSnapshotOutcome> {
+        self.collect_download_snapshot_with_enrichment(
+            include_queue,
+            include_recent_history,
+            use_tracked_runtime_snapshot,
+            excluded_client_types,
+            &mut DownloadEnrichmentPass::default(),
+        )
+        .await
+    }
+
+    async fn collect_download_snapshot_with_enrichment(
+        &self,
+        include_queue: bool,
+        include_recent_history: bool,
+        use_tracked_runtime_snapshot: bool,
+        excluded_client_types: &[&str],
+        pass: &mut DownloadEnrichmentPass,
     ) -> AppResult<crate::ports::DownloadClientSnapshotOutcome> {
         let enabled_clients = self.enabled_download_clients_by_priority().await?;
         if enabled_clients.is_empty() {
@@ -1153,6 +1136,7 @@ impl AppUseCase {
                 &enabled_clients,
                 snapshot.items,
                 use_tracked_runtime_snapshot,
+                pass,
             )
             .await;
         Ok(crate::ports::DownloadClientSnapshotOutcome {
@@ -1188,7 +1172,11 @@ fn password_retry_recovery_queue_item(submission: DownloadSubmission) -> Downloa
         queued_at: None,
         last_updated_at: None,
         attention_required: true,
-        attention_reason: Some(crate::DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+        attention_reason_code: Some(crate::DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+        attention_reason: Some(
+            "A download password retry is awaiting reconciliation. Remove this download if the client no longer has the job."
+                .into(),
+        ),
         download_client_item_id: submission.download_client_item_id,
         download_id: Some(submission.download_id.to_wire()),
         import_status: None,
@@ -1434,7 +1422,8 @@ impl AppUseCase {
             .into_iter()
             .collect::<HashSet<_>>();
         if allowed_library_ids.is_empty() {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::LIBRARY_ACCESS_DENIED,
                 "You do not have access to this library".to_string(),
             ));
         }
@@ -1542,7 +1531,8 @@ impl AppUseCase {
     ) -> AppResult<Option<DownloadQueueItem>> {
         let target_download_client_item_id = download_client_item_id.trim();
         if target_download_client_item_id.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::DOWNLOAD_CLIENT_ITEM_ID_REQUIRED,
                 "download client item id is required".to_string(),
             ));
         }
@@ -1637,7 +1627,8 @@ impl AppUseCase {
             return Ok(());
         }
 
-        Err(AppError::Validation(
+        Err(AppError::validation_refused(
+            crate::error_reasons::integration::DOWNLOAD_NOT_STATE_IMPORTED_HAND_RIGHT_NOW,
             "this download is not in a state that can be imported by hand right now".to_string(),
         ))
     }
@@ -1655,7 +1646,9 @@ impl AppUseCase {
             .await
         {
             Ok(()) => {}
-            Err(AppError::Unauthorized(_)) => return Ok(None),
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+                return Ok(None);
+            }
             Err(error) => return Err(error),
         }
         let Some(download_id) =
@@ -1682,7 +1675,12 @@ impl AppUseCase {
                 .await
             {
                 Ok(_) => {}
-                Err(AppError::Unauthorized(_) | AppError::NotFound(_)) => return Ok(None),
+                Err(
+                    AppError::Unauthorized(_)
+                    | AppError::UnauthorizedReason { .. }
+                    | AppError::NotFound(_)
+                    | AppError::NotFoundReason { .. },
+                ) => return Ok(None),
                 Err(error) => return Err(error),
             }
         }
@@ -1904,7 +1902,8 @@ impl AppUseCase {
             .into_iter()
             .collect::<HashSet<_>>();
         if allowed_library_ids.is_empty() {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::LIBRARY_ACCESS_DENIED,
                 "You do not have access to this library".to_string(),
             ));
         }
@@ -2112,6 +2111,7 @@ fn merge_download_queue_item(existing: &mut DownloadQueueItem, incoming: Downloa
     existing.attention_required |= incoming.attention_required;
     if existing.attention_reason.is_none() {
         existing.attention_reason = incoming.attention_reason.clone();
+        existing.attention_reason_code = incoming.attention_reason_code.clone();
     }
     if incoming.import_status.is_some() {
         existing.import_status = incoming.import_status;
@@ -2185,6 +2185,7 @@ mod queue_query_unit_tests {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "item-1".to_string(),
             download_id: None,
@@ -2225,6 +2226,21 @@ mod queue_query_unit_tests {
             scope,
             release_listing_json: None,
         }
+    }
+
+    #[test]
+    fn password_retry_recovery_exposes_a_localizable_reason_code() {
+        let item = password_retry_recovery_queue_item(submission(SubmissionScope::Title));
+
+        assert!(item.attention_required);
+        assert_eq!(
+            item.attention_reason_code.as_deref(),
+            Some(crate::DOWNLOAD_PASSWORD_RETRY_REASON),
+        );
+        assert!(item.attention_reason.as_deref().is_some_and(|reason| {
+            !reason.is_empty() && reason != crate::DOWNLOAD_PASSWORD_RETRY_REASON
+        }));
+        assert_eq!(item.tracked_state, Some(TrackedDownloadState::ImportBlocked));
     }
 
     #[test]

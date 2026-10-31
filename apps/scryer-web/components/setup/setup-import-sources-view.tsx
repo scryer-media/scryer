@@ -26,7 +26,9 @@ interface SetupImportSourcesViewProps {
 const DC_TYPES_REQUIRING_API_KEY = new Set(["sabnzbd", "weaver"]);
 
 /** Pill kind for a source key like "sonarr:http://host:8989" / "prowlarr:...". */
-function pillKindForSourceKey(sourceKey: string): ImportInstanceKind | "manual" {
+function pillKindForSourceKey(
+  sourceKey: string,
+): ImportInstanceKind | "manual" {
   const prefix = sourceKey.split(":", 1)[0]?.toLowerCase() ?? "";
   if (prefix === "sonarr") {
     return "SONARR";
@@ -62,7 +64,9 @@ function downloadClientSubtitle(dc: ExternalImportDownloadClient): string {
 }
 
 function indexerSubtitle(idx: ExternalImportIndexer): string {
-  return idx.baseUrl ? `${idx.implementation} @ ${idx.baseUrl}` : idx.implementation;
+  return idx.baseUrl
+    ? `${idx.implementation} @ ${idx.baseUrl}`
+    : idx.implementation;
 }
 
 function downloadClientNeedsApiKey(dc: ExternalImportDownloadClient): boolean {
@@ -316,7 +320,10 @@ export default function SetupImportSourcesView({
             return (
               <div key={idx.dedupKey}>
                 <label
-                  id={selectorId("setup-import-source-indexer-row", idx.dedupKey)}
+                  id={selectorId(
+                    "setup-import-source-indexer-row",
+                    idx.dedupKey,
+                  )}
                   className={cn(
                     "flex items-start gap-3 rounded px-2 py-2 text-sm",
                     idx.supported
@@ -370,7 +377,10 @@ export default function SetupImportSourcesView({
                           ignorePasswordManagers
                           value={idxApiKeyOverrides[idx.dedupKey] ?? ""}
                           onChange={(e) =>
-                            setIndexerApiKeyOverride(idx.dedupKey, e.target.value)
+                            setIndexerApiKeyOverride(
+                              idx.dedupKey,
+                              e.target.value,
+                            )
                           }
                           className="h-8 font-[var(--font-code)] text-xs"
                         />

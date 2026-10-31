@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -46,7 +47,8 @@ export function useTitleTagsManager() {
   const showStatus = useGlobalStatus();
   const { definitions, loading, error, reload } = useTitleTagDefinitions();
   const [saving, setSaving] = React.useState(false);
-  const [draft, setDraft] = React.useState<TitleTagDefinitionDraft>(emptyTitleTagDraft);
+  const [draft, setDraft] =
+    React.useState<TitleTagDefinitionDraft>(emptyTitleTagDraft);
   // The rename warning outlives the save, because it is the one piece of the
   // outcome the operator has to act on: rule sources still name the old label.
   const [renameWarning, setRenameWarning] = React.useState<string | null>(null);
@@ -57,7 +59,9 @@ export function useTitleTagsManager() {
 
   const loadDefinitionById = React.useCallback(
     (definitionId: string) => {
-      const found = definitions.find((definition) => definition.id === definitionId);
+      const found = definitions.find(
+        (definition) => definition.id === definitionId,
+      );
       if (found) {
         setDraft({
           id: found.id,
@@ -90,7 +94,11 @@ export function useTitleTagsManager() {
         const result = draft.id
           ? await client
               .mutation(updateTitleTagDefinitionMutation, {
-                input: { id: draft.id, label, description: description || null },
+                input: {
+                  id: draft.id,
+                  label,
+                  description: description || null,
+                },
               })
               .toPromise()
           : await client
@@ -99,11 +107,19 @@ export function useTitleTagsManager() {
               })
               .toPromise();
         if (result.error) {
-          showStatus(result.error.message || t("settings.titleTagSaveError"), { level: "ERROR" });
+          showStatus(
+            userFacingGraphQlErrorMessage(
+              result.error,
+              t("settings.titleTagSaveError"),
+              t,
+            ),
+            { level: "ERROR" },
+          );
           return false;
         }
         const payload =
-          result.data?.updateTitleTagDefinition ?? result.data?.createTitleTagDefinition;
+          result.data?.updateTitleTagDefinition ??
+          result.data?.createTitleTagDefinition;
         if (!payload) {
           showStatus(t("settings.titleTagSaveError"), { level: "ERROR" });
           return false;
@@ -115,7 +131,9 @@ export function useTitleTagsManager() {
 
         const renamed = Boolean(draft.id) && previousLabel !== saved.label;
         if (renamed) {
-          setRenameWarning(formatTitleTagRenameWarning(counts, previousLabel, t));
+          setRenameWarning(
+            formatTitleTagRenameWarning(counts, previousLabel, t),
+          );
           showStatus(formatTitleTagRenameSummary(counts, saved.label, t));
         } else {
           showStatus(t("settings.titleTagSaved"), { level: "SUCCESS" });
@@ -140,7 +158,14 @@ export function useTitleTagsManager() {
           .mutation(deleteTitleTagDefinitionMutation, { id: definitionId })
           .toPromise();
         if (result.error) {
-          showStatus(result.error.message || t("settings.titleTagDeleteError"), { level: "ERROR" });
+          showStatus(
+            userFacingGraphQlErrorMessage(
+              result.error,
+              t("settings.titleTagDeleteError"),
+              t,
+            ),
+            { level: "ERROR" },
+          );
           return false;
         }
         const payload = result.data?.deleteTitleTagDefinition;

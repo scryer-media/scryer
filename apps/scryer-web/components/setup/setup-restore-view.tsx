@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DatabaseBackup, LockKeyhole, RotateCcw, Upload } from "lucide-react";
+import { DatabaseBackup, RotateCcw, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   SetupBackButton,
@@ -22,10 +22,16 @@ import { getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath, getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
+import {
+  restoreErrorMessage,
+  restoreJobError,
+} from "@/lib/utils/restore-error-message";
 
 const INSPECT_RESTORE_BUNDLE_OPERATION = `
-  mutation InspectRestoreBundle($bundleUpload: Upload!, $password: String) {
-    inspectRestoreBundle(bundleUpload: $bundleUpload, password: $password) {
+  mutation InspectRestoreBundle($bundleUpload: Upload!, $password: String, $setupCode: String) {
+    inspectRestoreBundle: startInspectRestoreBundle(bundleUpload: $bundleUpload, password: $password, setupCode: $setupCode) {
+      id
+      phase
       uploadId
       summary {
         formatVersion
@@ -45,11 +51,9 @@ const INSPECT_RESTORE_BUNDLE_OPERATION = `
 `;
 
 const APPLY_RESTORE_BUNDLE_OPERATION = `
-  mutation ApplyRestoreBundle($uploadId: ID!, $password: String) {
-    applyRestoreBundle(uploadId: $uploadId, password: $password) {
-      summary {
-        formatVersion
-      }
+  mutation ApplyRestoreBundle($uploadId: ID!, $password: String, $setupCode: String) {
+    applyRestoreBundle: startApplyRestoreBundle(uploadId: $uploadId, password: $password, setupCode: $setupCode) {
+      id
     }
   }
 `;
@@ -68,29 +72,32 @@ type RestoreSummaryPayload = {
   totalRows: number;
 };
 
+type GraphQlErrorEntry = {
+  message: string;
+  extensions?: Record<string, unknown>;
+};
+
 type RestoreInspectResponse = {
   data?: {
     inspectRestoreBundle?: {
+      id: string;
+      phase: string;
       uploadId: string;
-      summary: RestoreSummaryPayload;
+      reason?: string | null;
+      message?: string | null;
+      summary: RestoreSummaryPayload | null;
     } | null;
   };
-  errors?: Array<{
-    message: string;
-  }>;
+  errors?: GraphQlErrorEntry[];
 };
 
 type RestoreApplyResponse = {
   data?: {
     applyRestoreBundle?: {
-      summary: {
-        formatVersion: string;
-      };
+      id: string;
     } | null;
   };
-  errors?: Array<{
-    message: string;
-  }>;
+  errors?: GraphQlErrorEntry[];
 };
 
 interface SetupRestoreViewProps {
@@ -99,7 +106,7 @@ interface SetupRestoreViewProps {
     values?: Record<string, string | number | boolean | null | undefined>,
   ) => string;
   onBack: () => void;
-  onBackendRestarting: () => void;
+  setupCode?: string | null;
 }
 
 function buildFrontendUrl(path: string): string {
@@ -123,19 +130,93 @@ function createAuthHeaders(init?: HeadersInit): Headers {
   return headers;
 }
 
-function graphqlErrorMessage(
-  payload: { errors?: Array<{ message: string }> } | undefined,
-): string | null {
-  return payload?.errors?.find((entry) => entry.message.trim())?.message.trim() ?? null;
+/**
+ * A failed request in the shape the shared GraphQL error translation reads, so
+ * its reason codes stay beside the server's sentence.
+ */
+function graphqlRequestError(
+  payload: { errors?: GraphQlErrorEntry[] } | undefined,
+  fallback: string,
+): Error {
+  const errors = payload?.errors?.filter((entry) => entry.message.trim()) ?? [];
+  const error = new Error(errors[0]?.message.trim() ?? fallback) as Error & {
+    graphQLErrors: GraphQlErrorEntry[];
+  };
+  error.graphQLErrors = errors;
+  return error;
 }
 
-async function parseJsonResponse<T>(response: Response): Promise<T | undefined> {
+async function parseJsonResponse<T>(
+  response: Response,
+): Promise<T | undefined> {
   const text = await response.text().catch(() => "");
   if (!text.trim()) {
     return undefined;
   }
 
   return JSON.parse(text) as T;
+}
+
+const INSPECTION_ATTEMPT_KEY = "scryer_restore_inspection_attempt";
+
+async function waitForInspection(
+  id: string,
+  fallback: string,
+  signal: AbortSignal,
+  setupCode?: string | null,
+) {
+  for (;;) {
+    signal.throwIfAborted();
+    const response = await scryerFetch(graphqlUrl(), {
+      method: "POST",
+      signal,
+      headers: createAuthHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        variables: { setupCode: setupCode ?? null },
+        query: `query RestoreInspectionStatus($setupCode: String) {
+        inspectRestoreBundle: restoreStatus(setupCode: $setupCode) {
+          id phase uploadId reason message
+          summary { formatVersion createdAt sourceScryerVersion sourceEngine sourceMigrationKey
+            encrypted totalRows rowCounts { table rowCount } }
+        }
+      }`,
+      }),
+    });
+    const payload = await parseJsonResponse<RestoreInspectResponse>(response);
+    if (!response.ok || payload?.errors?.length) {
+      throw graphqlRequestError(payload, fallback);
+    }
+    const job = payload?.data?.inspectRestoreBundle;
+    if (!job || job.id !== id) {
+      // The server no longer knows this attempt (or has started another), so
+      // a reload must not resume waiting for it.
+      sessionStorage.removeItem(INSPECTION_ATTEMPT_KEY);
+      throw restoreJobError(
+        { reason: "RESTORE_ATTEMPT_NOT_FOUND", message: null },
+        fallback,
+      );
+    }
+    if (["complete", "failed", "interrupted"].includes(job.phase)) {
+      sessionStorage.removeItem(INSPECTION_ATTEMPT_KEY);
+      if (job.phase === "complete" && job.summary) return job;
+      throw restoreJobError(
+        { reason: job.reason ?? null, message: job.message ?? null },
+        fallback,
+      );
+    }
+    await new Promise<void>((resolve, reject) => {
+      const cancel = () => {
+        window.clearTimeout(timer);
+        reject(signal.reason);
+      };
+      const timer = window.setTimeout(() => {
+        signal.removeEventListener("abort", cancel);
+        resolve();
+      }, 1000);
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) cancel();
+    });
+  }
 }
 
 function formatDateTime(value: string): string {
@@ -149,7 +230,7 @@ function formatDateTime(value: string): string {
 export function SetupRestoreView({
   t,
   onBack,
-  onBackendRestarting,
+  setupCode,
 }: SetupRestoreViewProps) {
   const [selectedBundle, setSelectedBundle] = React.useState<File | null>(null);
   const [password, setPassword] = React.useState("");
@@ -158,26 +239,70 @@ export function SetupRestoreView({
   const [applying, setApplying] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [uploadId, setUploadId] = React.useState<string | null>(null);
-  const [summary, setSummary] = React.useState<RestoreSummaryPayload | null>(null);
+  const [summary, setSummary] = React.useState<RestoreSummaryPayload | null>(
+    null,
+  );
   const [isDragActive, setIsDragActive] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const inspectionAbort = React.useRef<AbortController | null>(null);
 
-  const bundleLooksEncrypted
-    = selectedBundle?.name.toLowerCase().endsWith(".enc") ?? false;
+  React.useEffect(() => {
+    const controller = new AbortController();
+    inspectionAbort.current = controller;
+    const id = sessionStorage.getItem(INSPECTION_ATTEMPT_KEY);
+    if (id) {
+      setInspecting(true);
+      void waitForInspection(
+        id,
+        t("status.failedToLoad"),
+        controller.signal,
+        setupCode,
+      )
+        .then((job) => {
+          if (controller.signal.aborted) return;
+          setUploadId(job.uploadId);
+          setSummary(job.summary);
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted)
+            setError(restoreErrorMessage(error, t, t("status.failedToLoad")));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setInspecting(false);
+        });
+    }
+    return () => inspectionAbort.current?.abort();
+  }, [t, setupCode]);
+
+  const bundleLooksEncrypted =
+    selectedBundle?.name.toLowerCase().endsWith(".enc") ?? false;
   const requiresPassword = summary?.encrypted ?? bundleLooksEncrypted;
   const rowCounts = summary
-    ? [...summary.rowCounts].sort((left, right) => left.table.localeCompare(right.table))
+    ? [...summary.rowCounts].sort((left, right) =>
+        left.table.localeCompare(right.table),
+      )
     : [];
 
-  const handleBundleSelected = React.useCallback((file: File | null) => {
-    setError(null);
-    setSelectedBundle(file);
-    setUploadId(null);
-    setSummary(null);
-    if (!file?.name.toLowerCase().endsWith(".enc")) {
-      setPassword("");
-    }
-  }, []);
+  const handleBundleSelected = React.useCallback(
+    (file: File | null) => {
+      if (file && !file.name.toLowerCase().endsWith(".enc")) {
+        setError(t("setup.restoreDropTargetFormats"));
+        setSelectedBundle(null);
+        setUploadId(null);
+        setSummary(null);
+        setPassword("");
+        return;
+      }
+      setError(null);
+      setSelectedBundle(file);
+      setUploadId(null);
+      setSummary(null);
+      if (!file?.name.toLowerCase().endsWith(".enc")) {
+        setPassword("");
+      }
+    },
+    [t],
+  );
 
   const resetSelection = React.useCallback(() => {
     setSelectedBundle(null);
@@ -201,6 +326,9 @@ export function SetupRestoreView({
 
     setInspecting(true);
     setError(null);
+    inspectionAbort.current?.abort();
+    const controller = new AbortController();
+    inspectionAbort.current = controller;
     try {
       const formData = new FormData();
       formData.append(
@@ -210,10 +338,14 @@ export function SetupRestoreView({
           variables: {
             bundleUpload: null,
             password: password.length > 0 ? password : null,
+            setupCode: setupCode ?? null,
           },
         }),
       );
-      formData.append("map", JSON.stringify({ "0": ["variables.bundleUpload"] }));
+      formData.append(
+        "map",
+        JSON.stringify({ "0": ["variables.bundleUpload"] }),
+      );
       formData.append("0", selectedBundle, selectedBundle.name);
 
       const response = await scryerFetch(graphqlUrl(), {
@@ -222,28 +354,28 @@ export function SetupRestoreView({
         body: formData,
       });
       const payload = await parseJsonResponse<RestoreInspectResponse>(response);
-      if (!response.ok) {
-        throw new Error(
-          graphqlErrorMessage(payload) ?? t("status.failedToLoad"),
-        );
-      }
       const result = payload?.data?.inspectRestoreBundle;
-      if (!result) {
-        throw new Error(graphqlErrorMessage(payload) ?? t("status.failedToLoad"));
+      if (!response.ok || !result) {
+        throw graphqlRequestError(payload, t("status.failedToLoad"));
       }
 
-      setUploadId(result.uploadId);
-      setSummary(result.summary);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error && nextError.message.trim()
-          ? nextError.message.trim()
-          : t("status.failedToLoad"),
+      sessionStorage.setItem(INSPECTION_ATTEMPT_KEY, result.id);
+      const inspected = await waitForInspection(
+        result.id,
+        t("status.failedToLoad"),
+        controller.signal,
+        setupCode,
       );
+      if (controller.signal.aborted) return;
+      setUploadId(inspected.uploadId);
+      setSummary(inspected.summary);
+    } catch (nextError) {
+      if (controller.signal.aborted) return;
+      setError(restoreErrorMessage(nextError, t, t("status.failedToLoad")));
     } finally {
-      setInspecting(false);
+      if (!controller.signal.aborted) setInspecting(false);
     }
-  }, [password, requiresPassword, selectedBundle, t]);
+  }, [password, requiresPassword, selectedBundle, t, setupCode]);
 
   const handleApply = React.useCallback(async () => {
     if (!uploadId || !summary) {
@@ -263,170 +395,136 @@ export function SetupRestoreView({
           variables: {
             uploadId,
             password: summary.encrypted ? password : null,
+            setupCode: setupCode ?? null,
           },
         }),
       });
       const payload = await parseJsonResponse<RestoreApplyResponse>(response);
-      if (!response.ok) {
-        throw new Error(
-          graphqlErrorMessage(payload) ?? t("status.failedToUpdate"),
-        );
-      }
-      if (!payload?.data?.applyRestoreBundle) {
-        throw new Error(graphqlErrorMessage(payload) ?? t("status.failedToUpdate"));
+      if (!response.ok || !payload?.data?.applyRestoreBundle) {
+        throw graphqlRequestError(payload, t("status.failedToUpdate"));
       }
 
-      window.history.replaceState(null, "", buildFrontendUrl("/"));
-      onBackendRestarting();
+      window.location.replace(buildFrontendUrl("/"));
     } catch (nextError) {
       setApplying(false);
-      setError(
-        nextError instanceof Error && nextError.message.trim()
-          ? nextError.message.trim()
-          : t("status.failedToUpdate"),
-      );
+      setError(restoreErrorMessage(nextError, t, t("status.failedToUpdate")));
     }
-  }, [onBackendRestarting, password, summary, t, uploadId]);
+  }, [password, summary, t, uploadId, setupCode]);
 
   return (
     <SetupPanel className="w-full space-y-6 bg-[linear-gradient(180deg,rgba(12,18,35,0.82),rgba(8,13,26,0.72))]">
-      <SetupStepHeader
-        icon={DatabaseBackup}
-        title={t("setup.restoreTitle")}
-        subtitle={t("setup.restoreDescription")}
-      />
+      <SetupStepHeader icon={DatabaseBackup} title={t("setup.restoreTitle")} />
 
       {!summary ? (
-        <Card className="border-[var(--scry-border2)] bg-[rgba(10,17,32,0.55)] p-0 shadow-none">
-          <CardContent className="space-y-5 p-5 sm:p-6">
-            <div className="space-y-3 text-sm">
-              <span className="text-sm font-semibold text-[var(--scry-ink2)]">
-                {t("setup.restoreSelectBundle")}
-              </span>
-              <input
-                id="setup-restore-file-input"
-                key={fileInputKey}
-                ref={fileInputRef}
-                type="file"
-                accept=".tar.zst,.enc,.zst"
-                className="hidden"
-                onChange={(event) => {
-                  handleBundleSelected(event.target.files?.[0] ?? null);
-                }}
-                disabled={inspecting}
-              />
-              <div
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "copy";
-                  setIsDragActive(true);
-                }}
-                onDragLeave={(event) => {
-                  event.preventDefault();
-                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                    return;
-                  }
-                  setIsDragActive(false);
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setIsDragActive(false);
-                  handleBundleSelected(event.dataTransfer.files?.[0] ?? null);
-                }}
-                className={cn(
-                  "rounded-[16px] border border-dashed px-5 py-8 transition-colors",
-                  isDragActive
-                    ? "border-[var(--scry-accent-text)] bg-[rgba(var(--scry-accent-rgb),0.12)]"
-                    : "border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.045)] hover:border-[var(--scry-baccent)] hover:bg-[rgba(var(--scry-accent-rgb),0.075)]",
-                )}
-              >
-                <div className="mx-auto flex max-w-xl flex-col items-center gap-4 text-center">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-[14px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] text-[var(--scry-accent-text)]">
-                    <Upload className="h-5 w-5" />
-                  </div>
-                  <div className="space-y-1">
-                    <p
-                      className={cn(
-                        "break-all text-base font-semibold text-[var(--scry-ink2)]",
-                        selectedBundle ? "font-[var(--font-code)] text-sm" : null,
-                      )}
-                    >
-                      {selectedBundle
-                        ? selectedBundle.name
-                        : t("setup.restoreDropTargetTitle")}
-                    </p>
-                    <p className="text-sm leading-relaxed text-[var(--scry-muted)]">
-                      {selectedBundle
-                        ? bundleLooksEncrypted
-                          ? t("setup.restoreDropTargetEncryptedSelected")
-                          : t("setup.restoreDropTargetSelected")
-                        : t("setup.restoreDropTargetDescription")}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-center gap-3">
-                    <SetupPrimaryButton
-                      id="setup-restore-select-file"
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={inspecting}
-                    >
-                      {t("setup.restoreSelectFile")}
-                    </SetupPrimaryButton>
-                    {selectedBundle ? (
-                      <Button
-                        id="setup-restore-clear-file"
-                        type="button"
-                        variant="outline"
-                        onClick={resetSelection}
-                        disabled={inspecting}
-                        className="border-[var(--scry-danger-border)] text-[var(--scry-danger-text)] hover:bg-[var(--scry-danger-bg)] hover:text-[var(--scry-danger-text)]"
-                      >
-                        {t("setup.restoreClearFile")}
-                      </Button>
-                    ) : null}
-                  </div>
-                  <p className="text-xs text-[var(--scry-faint)]">
-                    {t("setup.restoreDropTargetFormats")}
+        <div className="space-y-5">
+          <div className="space-y-3 text-sm">
+            <input
+              id="setup-restore-file-input"
+              key={fileInputKey}
+              ref={fileInputRef}
+              type="file"
+              accept=".enc"
+              className="hidden"
+              onChange={(event) => {
+                handleBundleSelected(event.target.files?.[0] ?? null);
+              }}
+              disabled={inspecting}
+            />
+            <div
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setIsDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                if (
+                  event.currentTarget.contains(
+                    event.relatedTarget as Node | null,
+                  )
+                ) {
+                  return;
+                }
+                setIsDragActive(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragActive(false);
+                handleBundleSelected(event.dataTransfer.files?.[0] ?? null);
+              }}
+              className={cn(
+                "rounded-[16px] border border-dashed px-5 py-8 transition-colors",
+                isDragActive
+                  ? "border-[var(--scry-accent-text)] bg-[rgba(var(--scry-accent-rgb),0.12)]"
+                  : "border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.045)] hover:border-[var(--scry-baccent)] hover:bg-[rgba(var(--scry-accent-rgb),0.075)]",
+              )}
+            >
+              <div className="mx-auto flex max-w-xl flex-col items-center gap-4 text-center">
+                <div className="space-y-1">
+                  <p
+                    className={cn(
+                      "break-all text-base font-semibold text-[var(--scry-ink2)]",
+                      selectedBundle ? "font-[var(--font-code)] text-sm" : null,
+                    )}
+                  >
+                    {selectedBundle
+                      ? selectedBundle.name
+                      : t("setup.restoreDropTargetTitle")}
                   </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <SetupPrimaryButton
+                    id="setup-restore-select-file"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={inspecting}
+                  >
+                    {t("setup.restoreSelectFile")}
+                  </SetupPrimaryButton>
+                  {selectedBundle ? (
+                    <Button
+                      id="setup-restore-clear-file"
+                      type="button"
+                      variant="outline"
+                      onClick={resetSelection}
+                      disabled={inspecting}
+                      className="border-[var(--scry-danger-border)] text-[var(--scry-danger-text)] hover:bg-[var(--scry-danger-bg)] hover:text-[var(--scry-danger-text)]"
+                    >
+                      {t("setup.restoreClearFile")}
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
+          </div>
 
-            {requiresPassword ? (
-              <label className="block space-y-2 text-sm">
-                <span className="font-semibold text-[var(--scry-ink2)]">
-                  {t("settings.password")}
-                </span>
-                <Input
-                  id="setup-restore-password"
-                  type="password"
-                  ignorePasswordManagers
-                  value={password}
-                  onChange={(event) => {
-                    setError(null);
-                    setPassword(event.target.value);
-                  }}
-                  placeholder={t("settings.password")}
-                  disabled={inspecting}
-                  className="border-[var(--scry-border2)] bg-[var(--scry-page2)]"
-                />
-              </label>
-            ) : null}
+          {requiresPassword ? (
+            <label className="block space-y-2 text-sm">
+              <span className="font-semibold text-[var(--scry-ink2)]">
+                {t("settings.password")}
+              </span>
+              <Input
+                id="setup-restore-password"
+                type="password"
+                ignorePasswordManagers
+                value={password}
+                onChange={(event) => {
+                  setError(null);
+                  setPassword(event.target.value);
+                }}
+                placeholder={t("settings.password")}
+                disabled={inspecting}
+                className="border-[var(--scry-border2)] bg-[var(--scry-page2)]"
+              />
+            </label>
+          ) : null}
 
-            {requiresPassword ? (
-              <div className="rounded-[12px] border border-[var(--scry-border2)] bg-[rgba(10,17,32,0.48)] p-3 text-xs text-[var(--scry-muted)]">
-                <div className="flex items-center gap-2 text-[var(--scry-ink2)]">
-                  <LockKeyhole className="h-3.5 w-3.5" />
-                  <span>{t("setup.restorePasswordHelp")}</span>
-                </div>
-              </div>
-            ) : null}
-
-            {error ? (
-              <p id="setup-restore-error" className="text-sm text-destructive">{error}</p>
-            ) : null}
-          </CardContent>
-        </Card>
+          {error ? (
+            <p id="setup-restore-error" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <div className="space-y-4">
           <Card className="border-[var(--scry-border2)] bg-[rgba(10,17,32,0.55)] p-0 shadow-none">
@@ -530,7 +628,12 @@ export function SetupRestoreView({
               </p>
 
               {error ? (
-                <p id="setup-restore-error" className="text-sm text-destructive">{error}</p>
+                <p
+                  id="setup-restore-error"
+                  className="text-sm text-destructive"
+                >
+                  {error}
+                </p>
               ) : null}
             </CardContent>
           </Card>
@@ -581,9 +684,9 @@ export function SetupRestoreView({
               type="button"
               onClick={() => void handleInspect()}
               disabled={
-                inspecting
-                || !selectedBundle
-                || (requiresPassword && password.length === 0)
+                inspecting ||
+                !selectedBundle ||
+                (requiresPassword && password.length === 0)
               }
             >
               {inspecting ? (

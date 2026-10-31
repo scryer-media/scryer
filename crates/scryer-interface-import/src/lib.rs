@@ -219,9 +219,7 @@ where
 
         for chunk in chunks {
             if cancel_token.is_cancelled() {
-                return Err(AppError::Validation(
-                    EXTERNAL_IMPORT_APPLY_CANCELED_MESSAGE.to_string(),
-                ));
+                return Err(AppError::canceled(EXTERNAL_IMPORT_APPLY_CANCELED_MESSAGE));
             }
             after_chunk_index = Some(chunk.chunk_index);
             let mut chunk_entries = 0i32;
@@ -367,7 +365,10 @@ fn normalized_external_arr_source_key(
 ) -> scryer_application::AppResult<String> {
     let trimmed = base_url.trim().trim_end_matches('/').to_ascii_lowercase();
     if trimmed.is_empty() {
-        return Err(AppError::Validation("Arr base URL is required".into()));
+        return Err(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_IMPORT_URL_REQUIRED,
+            "Arr base URL is required",
+        ));
     }
     Ok(format!("{}:{trimmed}", kind.as_str()))
 }
@@ -1850,7 +1851,7 @@ impl ExternalImportMutations {
             let app_for_task = app.clone();
             let actor_for_task = actor.clone();
             let snapshot_for_task = begin.snapshot.clone();
-            tokio::spawn(async move {
+            app.restore_coordinator().spawn_task(async move {
                 run_external_import_arr_source_warmup_job(
                     app_for_task,
                     actor_for_task,
@@ -1901,7 +1902,7 @@ impl ExternalImportMutations {
             let actor_for_task = actor.clone();
             let snapshot_for_task = begin.snapshot.clone();
             let cancel_token = begin.cancel_token.clone();
-            tokio::spawn(async move {
+            app.restore_coordinator().spawn_task(async move {
                 run_external_import_prowlarr_warmup_job(
                     app_for_task,
                     actor_for_task,
@@ -2025,9 +2026,9 @@ impl ExternalImportMutations {
         maintain_external_import_source_sessions(&app, &actor).await?;
 
         if input.prowlarr_warmup_session_id.is_some() && input.prowlarr.is_some() {
-            return Err(to_gql_error(AppError::Validation(
-                "prowlarrWarmupSessionId and deprecated prowlarr input cannot both be provided"
-                    .to_string(),
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_IMPORT_PROWLARR_SOURCE_CONFLICT,
+                "prowlarrWarmupSessionId and deprecated prowlarr input cannot both be provided",
             )));
         }
 
@@ -2035,9 +2036,9 @@ impl ExternalImportMutations {
             && input.prowlarr_warmup_session_id.is_none()
             && input.prowlarr.is_none()
         {
-            return Err(to_gql_error(AppError::Validation(
-                "at least one Arr source warmup session or Prowlarr warmup session must be provided"
-                    .to_string(),
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_IMPORT_SOURCE_REQUIRED,
+                "at least one Arr source warmup session or Prowlarr warmup session must be provided",
             )));
         }
 
@@ -2232,9 +2233,10 @@ impl ExternalImportMutations {
                 .get_external_import_monitor_warmup_status(&actor, &session_id_string)
                 .await?;
             if snapshot.status != ExternalImportMonitorWarmupStatus::Completed {
-                return Err(to_gql_error(AppError::Validation(format!(
-                    "source warmup session {session_id_string} is not completed"
-                ))));
+                return Err(to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_IMPORT_SOURCE_NOT_READY,
+                    format!("source warmup session {session_id_string} is not completed"),
+                )));
             }
             let result = app
                 .external_import_arr_source_warmup_result(&actor, &session_id_string)
@@ -2242,8 +2244,9 @@ impl ExternalImportMutations {
             source_results.insert(session_id_string, result);
         }
         if source_results.is_empty() && input.mappings.is_empty() {
-            return Err(to_gql_error(AppError::Validation(
-                "at least one source warmup session or mapping is required".into(),
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_REQUIRED,
+                "at least one source warmup session or mapping is required",
             )));
         }
 
@@ -2273,21 +2276,27 @@ impl ExternalImportMutations {
             // roots (finalize never silently invents a library root).
             let library = app.external_import_library(&actor, &library_id).await?;
             if library.facet != facet {
-                return Err(to_gql_error(AppError::Validation(format!(
-                    "library {library_id} has facet {}, not {}",
-                    library.facet.as_str(),
-                    facet.as_str()
-                ))));
+                return Err(to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_IMPORT_LIBRARY_FACET_MISMATCH,
+                    format!(
+                        "library {library_id} has facet {}, not {}",
+                        library.facet.as_str(),
+                        facet.as_str()
+                    ),
+                )));
             }
             let scryer_root_key =
                 scryer_domain::normalize_library_root_path(mapping.scryer_root_path.as_str());
             if !library.roots.iter().any(|root| {
                 scryer_domain::normalize_library_root_path(&root.path) == scryer_root_key
             }) {
-                return Err(to_gql_error(AppError::Validation(format!(
-                    "root '{}' does not belong to library {library_id}",
-                    mapping.scryer_root_path
-                ))));
+                return Err(to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_IMPORT_ROOT_LIBRARY_MISMATCH,
+                    format!(
+                        "root '{}' does not belong to library {library_id}",
+                        mapping.scryer_root_path
+                    ),
+                )));
             }
 
             let dedup_key = match mapping.source_warmup_session_id.as_ref() {
@@ -2297,25 +2306,25 @@ impl ExternalImportMutations {
                 Some(session_id_raw) => {
                     let session_id = session_id_raw.to_string();
                     let Some(source_result) = source_results.get(&session_id) else {
-                        return Err(to_gql_error(AppError::Validation(format!(
+                        return Err(to_gql_error(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_SOURCE_UNSELECTED,format!(
                             "mapping references unselected source warmup session {session_id}"
                         ))));
                     };
                     let (Some(source_key), Some(kind_value)) =
                         (mapping.source_key.as_deref(), mapping.kind)
                     else {
-                        return Err(to_gql_error(AppError::Validation(format!(
+                        return Err(to_gql_error(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_SOURCE_INCOMPLETE,format!(
                             "sourced mapping for session {session_id} must include sourceKey and kind"
                         ))));
                     };
                     let kind = app_arr_source_kind(kind_value);
                     if kind != source_result.kind || source_key != source_result.source_key {
-                        return Err(to_gql_error(AppError::Validation(format!(
+                        return Err(to_gql_error(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_SOURCE_MISMATCH,format!(
                             "mapping for session {session_id} does not match warmed source"
                         ))));
                     }
                     let Some(known_roots) = source_roots.get(&session_id) else {
-                        return Err(to_gql_error(AppError::Validation(format!(
+                        return Err(to_gql_error(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_SOURCE_UNSELECTED,format!(
                             "mapping references unselected source warmup session {session_id}"
                         ))));
                     };
@@ -2324,17 +2333,20 @@ impl ExternalImportMutations {
                         .iter()
                         .any(|root| normalize_import_path_key(root) == mapping_root_key)
                     {
-                        return Err(to_gql_error(AppError::Validation(format!(
-                            "mapping references unknown source root '{}'",
-                            mapping.arr_root_path
-                        ))));
+                        return Err(to_gql_error(AppError::validation_refused(
+                            scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_ROOT_UNKNOWN,
+                            format!(
+                                "mapping references unknown source root '{}'",
+                                mapping.arr_root_path
+                            ),
+                        )));
                     }
                     match (kind, &facet) {
                         (AppArrSourceKind::Radarr, MediaFacet::Movie)
                         | (AppArrSourceKind::Sonarr, MediaFacet::Series)
                         | (AppArrSourceKind::Sonarr, MediaFacet::Anime) => {}
                         _ => {
-                            return Err(to_gql_error(AppError::Validation(format!(
+                            return Err(to_gql_error(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_FACET_MISMATCH,format!(
                                 "mapping facet {} is not compatible with {}",
                                 facet.as_str(),
                                 kind.as_str()
@@ -2366,8 +2378,9 @@ impl ExternalImportMutations {
                 )
                 .is_some()
             {
-                return Err(to_gql_error(AppError::Validation(
-                    "duplicate source root mapping".into(),
+                return Err(to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_DUPLICATE,
+                    "duplicate source root mapping",
                 )));
             }
         }
@@ -2376,10 +2389,13 @@ impl ExternalImportMutations {
             for root_path in source_roots.get(session_id).into_iter().flatten() {
                 let key = mapping_key(session_id, &source_result.source_key, root_path);
                 if !mappings.contains_key(&key) {
-                    return Err(to_gql_error(AppError::Validation(format!(
-                        "missing mapping for source {} root '{}'",
-                        source_result.source_key, root_path
-                    ))));
+                    return Err(to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_INCOMPLETE,
+                        format!(
+                            "missing mapping for source {} root '{}'",
+                            source_result.source_key, root_path
+                        ),
+                    )));
                 }
             }
         }
@@ -2434,7 +2450,7 @@ impl ExternalImportMutations {
             let session_for_task = finalize_session_id.clone();
             let cancel_token = begin.cancel_token.clone();
             let snapshot_for_task = begin.snapshot.clone();
-            tokio::spawn(async move {
+            app.restore_coordinator().spawn_task(async move {
                 run_external_import_finalize_job(
                     app_for_task,
                     actor_for_task,
@@ -3434,7 +3450,7 @@ async fn apply_external_import_finalize(
                                 &movie.root_folder_path,
                             );
                             let Some(mapping) = mappings.get(&key) else {
-                                return Err(AppError::Validation(format!(
+                                return Err(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_INCOMPLETE,format!(
                                     "missing mapping for source {} root '{}'",
                                     source_result.source_key, movie.root_folder_path
                                 )));
@@ -3496,7 +3512,7 @@ async fn apply_external_import_finalize(
                                 &series_entry.series.root_folder_path,
                             );
                             let Some(mapping) = mappings.get(&key) else {
-                                return Err(AppError::Validation(format!(
+                                return Err(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_IMPORT_MAPPING_INCOMPLETE,format!(
                                     "missing mapping for source {} root '{}'",
                                     source_result.source_key, series_entry.series.root_folder_path
                                 )));

@@ -18,7 +18,11 @@ export function canManageOverviewTitle(
   user: AuthUser | null,
   libraryId: string | null | undefined,
 ): boolean {
-  return hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles);
+  return hasLibraryPermission(
+    user,
+    libraryId,
+    LIBRARY_PERMISSIONS.manageTitles,
+  );
 }
 
 export function useCanManageOverviewTitle(

@@ -12,8 +12,11 @@ import { cn } from "@/lib/utils";
  * out to the full page.
  *
  * Purely a composition of `Card`, `Badge` and react-router's `Link` — it exists
- * so the seven panels share one header rhythm and any panel added later
- * inherits it, not because the app was missing a primitive.
+ * so the panels share one header rhythm and any panel added later inherits it,
+ * not because the app was missing a primitive.
+ *
+ * The shell fills its dashboard grid cell; the body takes the height left
+ * under the header, and `bodyClassName` decides how it scrolls.
  */
 export function DashboardPanel({
   icon: Icon,
@@ -41,10 +44,16 @@ export function DashboardPanel({
   return (
     <Card
       data-slot="dashboard-panel"
-      className={cn("flex min-w-0 flex-col gap-0 p-0", className)}
+      className={cn(
+        "flex h-full min-h-0 min-w-0 flex-col gap-0 p-0",
+        className,
+      )}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2">
-        <Icon className="h-4 w-4 shrink-0 text-[var(--scry-muted2)]" aria-hidden="true" />
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2">
+        <Icon
+          className="h-4 w-4 shrink-0 text-[var(--scry-muted2)]"
+          aria-hidden="true"
+        />
         <h2 className="min-w-0 truncate text-[13px] font-semibold text-[var(--scry-ink2)]">
           {title}
         </h2>
@@ -62,7 +71,9 @@ export function DashboardPanel({
           </Link>
         ) : null}
       </div>
-      <div className={cn("min-w-0 flex-1", bodyClassName)}>{children}</div>
+      <div className={cn("min-h-0 min-w-0 flex-1", bodyClassName)}>
+        {children}
+      </div>
     </Card>
   );
 }

@@ -34,7 +34,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { METADATA_LANGUAGES, getLanguageLabel } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRootRecord, MovieAvailabilityRecord } from "@/lib/types/titles";
+import type {
+  LibraryRootRecord,
+  MovieAvailabilityRecord,
+} from "@/lib/types/titles";
 
 const INHERIT_VALUE = "__inherit__";
 
@@ -100,10 +103,19 @@ type SettingsRowProps = {
   children: React.ReactNode;
 };
 
-function SettingsRow({ icon: Icon, label, help, effective, children }: SettingsRowProps) {
+function SettingsRow({
+  icon: Icon,
+  label,
+  help,
+  effective,
+  children,
+}: SettingsRowProps) {
   return (
     <tr className="border-b border-border/70 last:border-b-0">
-      <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
+      <th
+        scope="row"
+        className="w-[24%] px-4 py-3 text-left align-middle sm:px-5"
+      >
         <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <Icon aria-hidden="true" className="size-4 shrink-0" />
           {label}
@@ -182,7 +194,9 @@ export function TitleOptionsSettingsGrid({
   const currentMetadataLanguage =
     title.metadataLanguageOverride?.trim() || INHERIT_VALUE;
   const effectiveMetadataLanguage =
-    title.effectiveMetadataLanguage?.trim() || title.metadataLanguage?.trim() || "eng";
+    title.effectiveMetadataLanguage?.trim() ||
+    title.metadataLanguage?.trim() ||
+    "eng";
   const currentFillerPolicy = title.fillerPolicy?.trim() || INHERIT_VALUE;
   const currentRecapPolicy = title.recapPolicy?.trim() || INHERIT_VALUE;
   const currentReleaseNumbering = title.releaseNumbering?.trim() || "AUTO";
@@ -216,7 +230,7 @@ export function TitleOptionsSettingsGrid({
   );
   const rootFolderSelectValue = rootFolderById.has(currentRootFolderId)
     ? currentRootFolderId
-    : sortedRootFolders[0]?.id ?? "";
+    : (sortedRootFolders[0]?.id ?? "");
 
   const saveTitleOptions = async (options: TitleOptionUpdates) => {
     setSaving(true);
@@ -305,7 +319,9 @@ export function TitleOptionsSettingsGrid({
               label={t("settings.minAvailabilityLabel")}
               effective={
                 <div className="space-y-1">
-                  <div>{t(`settings.minAvailability.${currentMinAvailability}`)}</div>
+                  <div>
+                    {t(`settings.minAvailability.${currentMinAvailability}`)}
+                  </div>
                   <div className="text-xs text-muted-foreground">
                     {movieAvailabilityDetails}
                   </div>
@@ -319,13 +335,22 @@ export function TitleOptionsSettingsGrid({
                 }
                 disabled={saving}
               >
-                <SelectTrigger id={`${idPrefix}-minimum-availability`} className="ml-auto h-9 w-[70%]">
+                <SelectTrigger
+                  id={`${idPrefix}-minimum-availability`}
+                  className="ml-auto h-9 w-[70%]"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
-                  <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
-                  <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                  <SelectItem value="announced">
+                    {t("settings.minAvailability.announced")}
+                  </SelectItem>
+                  <SelectItem value="in_cinemas">
+                    {t("settings.minAvailability.in_cinemas")}
+                  </SelectItem>
+                  <SelectItem value="released">
+                    {t("settings.minAvailability.released")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </SettingsRow>
@@ -344,11 +369,16 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving || qualityProfiles.length === 0}
             >
-              <SelectTrigger id={`${idPrefix}-quality-profile`} className="ml-auto h-9 w-[70%]">
+              <SelectTrigger
+                id={`${idPrefix}-quality-profile`}
+                className="ml-auto h-9 w-[70%]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                <SelectItem value={INHERIT_VALUE}>
+                  {t("title.inheritDefault")}
+                </SelectItem>
                 {qualityProfiles.map((profile) => (
                   <SelectItem key={profile.id} value={profile.id}>
                     {profile.name}
@@ -362,7 +392,11 @@ export function TitleOptionsSettingsGrid({
             <SettingsRow
               icon={Database}
               label={t("title.changeFolderLibrary")}
-              effective={<span id={`${idPrefix}-library`}>{currentLibraryName?.trim() || "—"}</span>}
+              effective={
+                <span id={`${idPrefix}-library`}>
+                  {currentLibraryName?.trim() || "—"}
+                </span>
+              }
             >
               {onOpenMove ? (
                 <MoveTitleButton
@@ -389,16 +423,19 @@ export function TitleOptionsSettingsGrid({
           >
             {rootFolderReadOnly ? (
               onOpenMove ? (
-                <MoveTitleButton id={`${idPrefix}-move-to`} onOpen={onOpenMove} />
+                <MoveTitleButton
+                  id={`${idPrefix}-move-to`}
+                  onOpen={onOpenMove}
+                />
               ) : (
-                <span className="text-sm text-muted-foreground">
-                  —
-                </span>
+                <span className="text-sm text-muted-foreground">—</span>
               )
             ) : (
               <Select
                 value={rootFolderSelectValue}
-                onValueChange={(rootFolderId) => void saveTitleOptions({ rootFolderId })}
+                onValueChange={(rootFolderId) =>
+                  void saveTitleOptions({ rootFolderId })
+                }
                 disabled={saving || sortedRootFolders.length === 0}
               >
                 <SelectTrigger
@@ -412,7 +449,9 @@ export function TitleOptionsSettingsGrid({
                     <SelectItem key={rootFolder.id} value={rootFolder.id}>
                       {rootFolder.isDefault
                         ? t("title.defaultRootFolder", {
-                            path: folderLabel(rootFolder.path || defaultRootFolder),
+                            path: folderLabel(
+                              rootFolder.path || defaultRootFolder,
+                            ),
                           })
                         : folderLabel(rootFolder.path)}
                     </SelectItem>
@@ -442,13 +481,22 @@ export function TitleOptionsSettingsGrid({
                 }
                 disabled={saving}
               >
-                <SelectTrigger id={`${idPrefix}-season-folder`} className="ml-auto h-9 w-[70%]">
+                <SelectTrigger
+                  id={`${idPrefix}-season-folder`}
+                  className="ml-auto h-9 w-[70%]"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                  <SelectItem value="enabled">{t("search.seasonFolder.enabled")}</SelectItem>
-                  <SelectItem value="disabled">{t("search.seasonFolder.disabled")}</SelectItem>
+                  <SelectItem value={INHERIT_VALUE}>
+                    {t("title.inheritDefault")}
+                  </SelectItem>
+                  <SelectItem value="enabled">
+                    {t("search.seasonFolder.enabled")}
+                  </SelectItem>
+                  <SelectItem value="disabled">
+                    {t("search.seasonFolder.disabled")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </SettingsRow>
@@ -459,7 +507,10 @@ export function TitleOptionsSettingsGrid({
             label={t("title.requiredAudioLanguages")}
             effective={effectiveAudioLanguages}
           >
-            <div id={`${idPrefix}-required-audio-languages`} className="flex justify-end">
+            <div
+              id={`${idPrefix}-required-audio-languages`}
+              className="flex justify-end"
+            >
               <AudioLanguagePicker
                 value={requiredAudioLanguages}
                 onChange={(codes) => void handleRequiredAudioChange(codes)}
@@ -484,7 +535,9 @@ export function TitleOptionsSettingsGrid({
             <div className="space-y-2">
               <SearchLanguagePicker
                 value={searchLanguages}
-                onChange={(codes) => void saveTitleOptions({ searchLanguages: codes })}
+                onChange={(codes) =>
+                  void saveTitleOptions({ searchLanguages: codes })
+                }
                 disabled={saving}
               />
               <Button
@@ -509,7 +562,10 @@ export function TitleOptionsSettingsGrid({
               aria-label={t("settings.searchAliases")}
               placeholder={t("settings.searchAliasesHelp")}
               onBlur={(event) => {
-                const aliases = event.target.value.split(";").map((value) => value.trim()).filter(Boolean);
+                const aliases = event.target.value
+                  .split(";")
+                  .map((value) => value.trim())
+                  .filter(Boolean);
                 if (aliases.join("\n") !== searchAliases.join("\n")) {
                   void saveTitleOptions({ searchAliases: aliases });
                 }
@@ -531,11 +587,16 @@ export function TitleOptionsSettingsGrid({
               }
               disabled={saving}
             >
-              <SelectTrigger id={`${idPrefix}-metadata-language`} className="ml-auto h-9 w-[70%]">
+              <SelectTrigger
+                id={`${idPrefix}-metadata-language`}
+                className="ml-auto h-9 w-[70%]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
+                <SelectItem value={INHERIT_VALUE}>
+                  {t("title.inheritDefault")}
+                </SelectItem>
                 {METADATA_LANGUAGES.map((language) => (
                   <SelectItem key={language.code} value={language.code}>
                     {language.label}
@@ -565,10 +626,18 @@ export function TitleOptionsSettingsGrid({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="AUTO">{t("settings.releaseNumberingAuto")}</SelectItem>
-                  <SelectItem value="OFFICIAL">{t("settings.releaseNumberingOfficial")}</SelectItem>
-                  <SelectItem value="ALTERNATE">{t("settings.releaseNumberingAlternate")}</SelectItem>
-                  <SelectItem value="DVD">{t("settings.releaseNumberingDvd")}</SelectItem>
+                  <SelectItem value="AUTO">
+                    {t("settings.releaseNumberingAuto")}
+                  </SelectItem>
+                  <SelectItem value="OFFICIAL">
+                    {t("settings.releaseNumberingOfficial")}
+                  </SelectItem>
+                  <SelectItem value="ALTERNATE">
+                    {t("settings.releaseNumberingAlternate")}
+                  </SelectItem>
+                  <SelectItem value="DVD">
+                    {t("settings.releaseNumberingDvd")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </SettingsRow>
@@ -590,13 +659,22 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-filler-policy`} className="ml-auto h-9 w-[70%]">
+                  <SelectTrigger
+                    id={`${idPrefix}-filler-policy`}
+                    className="ml-auto h-9 w-[70%]"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                    <SelectItem value="DOWNLOAD_ALL">{t("settings.fillerPolicyDownloadAll")}</SelectItem>
-                    <SelectItem value="SKIP_FILLER">{t("settings.fillerPolicySkipFiller")}</SelectItem>
+                    <SelectItem value={INHERIT_VALUE}>
+                      {t("title.inheritDefault")}
+                    </SelectItem>
+                    <SelectItem value="DOWNLOAD_ALL">
+                      {t("settings.fillerPolicyDownloadAll")}
+                    </SelectItem>
+                    <SelectItem value="SKIP_FILLER">
+                      {t("settings.fillerPolicySkipFiller")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </SettingsRow>
@@ -615,13 +693,22 @@ export function TitleOptionsSettingsGrid({
                   }
                   disabled={saving}
                 >
-                  <SelectTrigger id={`${idPrefix}-recap-policy`} className="ml-auto h-9 w-[70%]">
+                  <SelectTrigger
+                    id={`${idPrefix}-recap-policy`}
+                    className="ml-auto h-9 w-[70%]"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={INHERIT_VALUE}>{t("title.inheritDefault")}</SelectItem>
-                    <SelectItem value="DOWNLOAD_ALL">{t("settings.recapPolicyDownloadAll")}</SelectItem>
-                    <SelectItem value="SKIP_RECAP">{t("settings.recapPolicySkipRecap")}</SelectItem>
+                    <SelectItem value={INHERIT_VALUE}>
+                      {t("title.inheritDefault")}
+                    </SelectItem>
+                    <SelectItem value="DOWNLOAD_ALL">
+                      {t("settings.recapPolicyDownloadAll")}
+                    </SelectItem>
+                    <SelectItem value="SKIP_RECAP">
+                      {t("settings.recapPolicySkipRecap")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </SettingsRow>
@@ -629,7 +716,10 @@ export function TitleOptionsSettingsGrid({
           ) : null}
 
           <tr className="border-b border-border/70 last:border-b-0">
-            <th scope="row" className="w-[24%] px-4 py-3 text-left align-middle sm:px-5">
+            <th
+              scope="row"
+              className="w-[24%] px-4 py-3 text-left align-middle sm:px-5"
+            >
               <span className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Tag aria-hidden="true" className="size-4 shrink-0" />
                 {t("title.tagsLabel")}
@@ -647,7 +737,9 @@ export function TitleOptionsSettingsGrid({
           </tr>
         </tbody>
       </table>
-      {footer ? <div className="border-t border-border/70">{footer}</div> : null}
+      {footer ? (
+        <div className="border-t border-border/70">{footer}</div>
+      ) : null}
     </div>
   );
 }

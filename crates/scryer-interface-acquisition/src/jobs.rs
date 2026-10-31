@@ -27,11 +27,13 @@ impl JobMutations {
             (JobKeyValue::CustomJob, Some(custom_job_id)) => {
                 app.trigger_custom_job(&actor, custom_job_id.as_str()).await
             }
-            (JobKeyValue::CustomJob, None) => Err(AppError::Validation(
-                "customJobId is required for CUSTOM_JOB".to_string(),
+            (JobKeyValue::CustomJob, None) => Err(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_CUSTOM_JOB_ID_REQUIRED,
+                "customJobId is required for CUSTOM_JOB",
             )),
-            (_, Some(_)) => Err(AppError::Validation(
-                "customJobId is only accepted with CUSTOM_JOB".to_string(),
+            (_, Some(_)) => Err(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_CUSTOM_JOB_ID_UNEXPECTED,
+                "customJobId is only accepted with CUSTOM_JOB",
             )),
             (job_key, None) => app.trigger_job(&actor, job_key.into_application()).await,
         }

@@ -201,20 +201,12 @@ fn validate_manual_queue_purpose(
 
     match scope {
         SubmissionScope::Title if title.facet == MediaFacet::Movie => Ok(()),
-        SubmissionScope::Title => Err(AppError::Validation(
-            "additional-file title queueing supports only movie titles".into(),
-        )),
+        SubmissionScope::Title => Err(AppError::validation_refused(crate::error_reasons::catalog::ADDITIONAL_FILE_TITLE_QUEUEING_SUPPORTS_ONLY_MOVIE_TITLES, "additional-file title queueing supports only movie titles")),
         SubmissionScope::Episode { .. } => Ok(()),
-        SubmissionScope::EpisodeSet { .. } => Err(AppError::Validation(
-            "additional-file queueing supports only title and single-episode scopes".into(),
-        )),
-        SubmissionScope::Collection { .. } => Err(AppError::Validation(
-            "additional-file queueing does not support collection scopes yet".into(),
-        )),
+        SubmissionScope::EpisodeSet { .. } => Err(AppError::validation_refused(crate::error_reasons::catalog::ADDITIONAL_FILE_QUEUEING_SUPPORTS_ONLY_TITLE_SINGLE_EPISODE_SCOPES, "additional-file queueing supports only title and single-episode scopes")),
+        SubmissionScope::Collection { .. } => Err(AppError::validation_refused(crate::error_reasons::catalog::ADDITIONAL_FILE_QUEUEING_DOES_NOT_SUPPORT_COLLECTION_SCOPES_YET, "additional-file queueing does not support collection scopes yet")),
         SubmissionScope::SeriesMovie { .. } => Ok(()),
-        SubmissionScope::Orphan => Err(AppError::Validation(
-            "additional-file queueing requires a title or episode scope".into(),
-        )),
+        SubmissionScope::Orphan => Err(AppError::validation_refused(crate::error_reasons::catalog::ADDITIONAL_FILE_QUEUEING_REQUIRES_TITLE_EPISODE_SCOPE, "additional-file queueing requires a title or episode scope")),
     }
 }
 /// `Warning` blocks like any other live state: the download is still in the
@@ -276,7 +268,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -316,7 +308,7 @@ impl AppUseCase {
             .blocklist_repo
             .get(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("blocklist entry {id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::BLOCKLIST_ENTRY_NOT_FOUND, format!("blocklist entry {id}")))?;
         self.require_title_permission(
             actor,
             &entry.title_id,
@@ -347,9 +339,7 @@ impl AppUseCase {
         // title-less grab bypasses the libraries and needs system settings.
         routing.validate()?;
         if purpose.is_additional_file() && replacement {
-            return Err(AppError::Validation(
-                "additional-file queueing cannot replace existing media".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::ADDITIONAL_FILE_QUEUEING_CANNOT_REPLACE_EXISTING_MEDIA, "additional-file queueing cannot replace existing media"));
         }
         let verified = self
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
@@ -358,9 +348,7 @@ impl AppUseCase {
         let http_release = verified.http_release;
         let (queued_release, scope) = (verified.selection, verified.scope);
         if announced_size_bytes.is_some_and(|size| queued_release.size_bytes != Some(size)) {
-            return Err(AppError::Validation(
-                "release size does not match the signed candidate".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::RELEASE_SIZE_DOES_NOT_MATCH_SIGNED_CANDIDATE, "release size does not match the signed candidate"));
         }
         let title = self
             .services
@@ -368,7 +356,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -377,7 +365,7 @@ impl AppUseCase {
         .await?;
         let source_kind = queued_release
             .source_kind
-            .ok_or_else(|| AppError::Validation("release has no protocol".into()))?;
+            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::catalog::RELEASE_NO_PROTOCOL, "release has no protocol"))?;
         let clients = self
             .services
             .integrations
@@ -388,7 +376,7 @@ impl AppUseCase {
             .iter()
             .find(|client| client.id == routing.client_id)
             .ok_or_else(|| {
-                AppError::Validation("selected download client is not eligible".into())
+                AppError::validation_refused(crate::error_reasons::catalog::DOWNLOAD_CLIENT_UNAVAILABLE, "selected download client is not eligible")
             })?;
         if routing.category.is_none() {
             routing.category = Some(match &selected.category {
@@ -525,6 +513,7 @@ impl AppUseCase {
         let download_id = scryer_domain::download_identity::DownloadId::new();
         let job_result = self
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                automatic: false,
                 http_release,
                 request: DownloadClientAddRequest {
                     http: None,
@@ -602,6 +591,12 @@ impl AppUseCase {
                     },
                     reused_existing: true,
                 }));
+            }
+            Ok(CanonicalDownloadSubmissionOutcome::Deferred) => {
+                return Err(AppError::validation_refused(
+                    scryer_domain::download_reason::CLIENT_ITEM_MISSING,
+                    "Automatic acquisition is deferred while a recent download is missing",
+                ));
             }
             Ok(CanonicalDownloadSubmissionOutcome::Conflict(conflict)) => {
                 return Ok(QueueDownloadOutcome::Conflict(conflict));
@@ -737,6 +732,42 @@ impl AppUseCase {
             .with_scoring(crate::quality::grab_scoring::from_listing(
                 release_listing_json.as_deref(),
             ));
+        if !purpose.is_additional_file() {
+            let grabbed_at = Utc::now().to_rfc3339();
+            let grabbed_release = serde_json::json!({
+                "title": source_title_for_attempt,
+                "score": release_facts.scoring.as_ref().map(|scoring| scoring.candidate_score),
+                "grabbed_at": grabbed_at,
+                "download_id": grab.download_id.unwrap_or(download_id),
+                "source": "manual",
+                "source_provider": source_provider_name,
+                "release_listing_json": release_listing_json,
+            })
+            .to_string();
+            let episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await?;
+            let states = &self.services.workflow.acquisition_scope_states;
+            for (mut candidate, _) in
+                wanted_item_candidates_for_submission_scope(&title.id, &scope, &episodes)
+            {
+                candidate.id = Id::new().0;
+                candidate.created_at = grabbed_at.clone();
+                candidate.updated_at = grabbed_at.clone();
+                let id = states.ensure_acquisition_scope_state(&candidate).await?;
+                let existing = states.get_acquisition_scope_state_by_id(&id).await?;
+                states
+                    .transition_acquisition_scope_to_grabbed(&AcquisitionScopeGrabTransition {
+                        id,
+                        last_search_at: existing.and_then(|state| state.last_search_at),
+                        grabbed_release: grabbed_release.clone(),
+                    })
+                    .await?;
+            }
+        }
         tracing::debug!(
             title_id = %title.id,
             download_client_item_id = %grab.job_id,
@@ -847,9 +878,7 @@ impl AppUseCase {
             )
             .await?;
         let QueueDownloadOutcome::Queued(queued) = queued else {
-            return Err(AppError::Validation(
-                "a download is already queued for this title".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::DOWNLOAD_ALREADY_QUEUED_TITLE, "a download is already queued for this title"));
         };
 
         Ok(AddTitleAndQueueDownloadOutcome {
@@ -952,7 +981,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1016,7 +1045,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1057,9 +1086,7 @@ impl AppUseCase {
         if let Some(announced_size_bytes) = announced_size_bytes
             && queued_release.size_bytes != Some(announced_size_bytes)
         {
-            return Err(AppError::Validation(
-                "release size does not match the signed candidate".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::RELEASE_SIZE_DOES_NOT_MATCH_SIGNED_CANDIDATE, "release size does not match the signed candidate"));
         }
         let outcome = self
             .queue_replacement_release_with_listing(
@@ -1200,9 +1227,7 @@ impl AppUseCase {
         if let Some(announced_size_bytes) = announced_size_bytes
             && queued_release.size_bytes != Some(announced_size_bytes)
         {
-            return Err(AppError::Validation(
-                "release size does not match the signed candidate".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::RELEASE_SIZE_DOES_NOT_MATCH_SIGNED_CANDIDATE, "release size does not match the signed candidate"));
         }
         let outcome = self
             .queue_existing_title_download_with_listing(
@@ -1245,7 +1270,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", title_id)))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1266,12 +1291,12 @@ impl AppUseCase {
                     .shows
                     .get_episode_by_id(episode_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("episode {}", episode_id)))?;
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::EPISODE_NOT_FOUND, format!("episode {}", episode_id)))?;
                 let season = episode.season_number.clone().ok_or_else(|| {
-                    AppError::Validation("episode is missing season number".into())
+                    AppError::validation_refused(crate::error_reasons::catalog::EPISODE_MISSING_SEASON_NUMBER, "episode is missing season number")
                 })?;
                 let episode_number = episode.episode_number.clone().ok_or_else(|| {
-                    AppError::Validation("episode is missing episode number".into())
+                    AppError::validation_refused(crate::error_reasons::catalog::EPISODE_MISSING_EPISODE_NUMBER, "episode is missing episode number")
                 })?;
                 (
                     title.clone(),
@@ -1284,14 +1309,10 @@ impl AppUseCase {
                 )
             }
             SubmissionScope::EpisodeSet { .. } => {
-                return Err(AppError::Validation(
-                    "best-release search is not supported for multi-episode scopes".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::BEST_RELEASE_SEARCH_UNSUPPORTED, "best-release search is not supported for multi-episode scopes"));
             }
             SubmissionScope::Collection { .. } => {
-                return Err(AppError::Validation(
-                    "best-release search is not supported for collection scopes".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::catalog::BEST_RELEASE_SEARCH_UNSUPPORTED, "best-release search is not supported for collection scopes"));
             }
             SubmissionScope::SeriesMovie {
                 series_movie_link_id,
@@ -1303,7 +1324,7 @@ impl AppUseCase {
                     .get_series_movie_link_by_id(series_movie_link_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("series movie link {}", series_movie_link_id))
+                        AppError::not_found_reason(crate::error_reasons::catalog::SERIES_MOVIE_LINK_NOT_FOUND, format!("series movie link {}", series_movie_link_id))
                     })?;
                 self.resolve_release_search_subject_for_series_movie(&title, &link)
                     .await?
@@ -1770,8 +1791,11 @@ mod grab_time_release_title_tests {
     async fn manual_queue_persists_the_indexer_release_title_on_the_submission_row() {
         let (base_app, user) = crate::lib_tests::bootstrap();
         let submissions = Arc::new(RecordingDownloadSubmissionRepo::default());
+        let scope_states = crate::lib_tests::in_memory_acquisition_scope_states();
         let app = base_app.with_test_overrides(|services| {
-            services.with_download_submissions(submissions.clone())
+            services
+                .with_download_submissions(submissions.clone())
+                .with_acquisition_scope_states(scope_states.clone())
         });
         let title = app
             .add_title(&user, movie_request("Paper Lantern"))
@@ -1808,6 +1832,17 @@ mod grab_time_release_title_tests {
             Some("Paper.Lantern.2012.1080p.WEB-DL-GRP"),
             "the indexer release title must be persisted (trimmed) at grab time"
         );
+        let grabbed = scope_states
+            .get_acquisition_scope_state_for_title(&title.id, None)
+            .await
+            .expect("read recorded grab")
+            .expect("manual submission records its scope");
+        assert_eq!(grabbed.status, crate::AcquisitionScopeStatus::Grabbed);
+        let record: serde_json::Value = serde_json::from_str(
+            grabbed.grabbed_release.as_deref().expect("recorded release"),
+        ).expect("parse recorded release");
+        assert_eq!(record["title"].as_str(), rows[0].source_title.as_deref());
+        assert_eq!(record["download_id"].as_str(), Some(rows[0].download_id.to_string().as_str()));
     }
 
     #[tokio::test]
@@ -1817,8 +1852,11 @@ mod grab_time_release_title_tests {
         // import degrades only the parsed name, see ReleaseEvidence).
         let (base_app, user) = crate::lib_tests::bootstrap();
         let submissions = Arc::new(RecordingDownloadSubmissionRepo::default());
+        let scope_states = crate::lib_tests::in_memory_acquisition_scope_states();
         let app = base_app.with_test_overrides(|services| {
-            services.with_download_submissions(submissions.clone())
+            services
+                .with_download_submissions(submissions.clone())
+                .with_acquisition_scope_states(scope_states.clone())
         });
 
         let (title, _job_id) = app
@@ -1847,5 +1885,16 @@ mod grab_time_release_title_tests {
         assert!(crate::import_parameters::submission_has_scryer_origin(
             &rows[0]
         ));
+        let grabbed = scope_states
+            .get_acquisition_scope_state_for_title(&title.id, None)
+            .await
+            .expect("read recorded grab")
+            .expect("source-only submission records its scope");
+        assert_eq!(grabbed.status, crate::AcquisitionScopeStatus::Grabbed);
+        let record: serde_json::Value = serde_json::from_str(
+            grabbed.grabbed_release.as_deref().expect("recorded release"),
+        ).expect("parse recorded release");
+        assert!(record.get("title").expect("title field is recorded").is_null());
+        assert_eq!(record["download_id"].as_str(), Some(rows[0].download_id.to_string().as_str()));
     }
 }

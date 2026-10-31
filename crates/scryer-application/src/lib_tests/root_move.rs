@@ -1907,7 +1907,7 @@ async fn abandoning_a_dead_operation_fails_it_releases_its_claims_and_leaves_ret
             .await
             .expect_err("a live operation must not be abandoned");
         assert!(
-            matches!(&refused, crate::AppError::Validation(message) if message.contains("cancel it instead")),
+            matches!(&refused, crate::AppError::Validation(message) | crate::AppError::ValidationRefused { message, .. } | crate::AppError::ValidationRefusedWithCount { message, .. } if message.contains("cancel it instead")),
             "{refused:?}"
         );
     }
@@ -2182,9 +2182,13 @@ async fn a_bulk_move_spanning_two_source_roots_owns_every_root_it_reads_from() {
             None,
         )
         .await;
-    let Err(crate::AppError::Validation(message)) = repointed else {
+    let Err(crate::AppError::ValidationRefused {
+        message, reason, ..
+    }) = repointed
+    else {
         panic!("retiring a held root must be refused: {repointed:?}");
     };
+    assert_eq!(reason, crate::error_reasons::location::OWNERSHIP_BUSY);
     assert!(
         message.contains(operation_id),
         "the refusal names the operation holding the ground: {message}"
@@ -2872,7 +2876,12 @@ async fn the_generic_job_trigger_still_refuses_to_start_a_location_operation() {
         .await
         .expect_err("the generic path refuses");
     assert!(
-        matches!(error, crate::AppError::Validation(_)),
+        matches!(
+            error,
+            crate::AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
         "refusing a manual trigger is a validation error, got {error:?}"
     );
 }

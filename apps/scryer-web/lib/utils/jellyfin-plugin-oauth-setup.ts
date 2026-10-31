@@ -40,7 +40,8 @@ export function normalizedPublicJellyfinBaseUrl(value: string): string | null {
       url.password ||
       url.search ||
       url.hash
-    ) return null;
+    )
+      return null;
     return url.toString().replace(/\/+$/, "");
   } catch {
     return null;
@@ -51,13 +52,15 @@ export function eligibleJellyfinConnectionBaseUrls(
   connections: JellyfinMediaServerConnection[],
 ): string[] {
   return connections.flatMap((connection) => {
-    const externalUrl = normalizedPublicJellyfinBaseUrl(connection.externalUrl ?? "");
-    return (
-      connection.enabled
-      && connection.linkingEnabled
-      && connection.apiKeyPresent
-      && externalUrl
-    ) ? [externalUrl] : [];
+    const externalUrl = normalizedPublicJellyfinBaseUrl(
+      connection.externalUrl ?? "",
+    );
+    return connection.enabled &&
+      connection.linkingEnabled &&
+      connection.apiKeyPresent &&
+      externalUrl
+      ? [externalUrl]
+      : [];
   });
 }
 
@@ -66,7 +69,9 @@ export function jellyfinConnectionBaseUrls(
   connections: JellyfinMediaServerConnection[],
 ): string[] {
   return connections.flatMap((connection) => {
-    const externalUrl = normalizedPublicJellyfinBaseUrl(connection.externalUrl ?? "");
+    const externalUrl = normalizedPublicJellyfinBaseUrl(
+      connection.externalUrl ?? "",
+    );
     return externalUrl ? [externalUrl] : [];
   });
 }
@@ -91,7 +96,11 @@ export function jellyfinConnectionIneligibilityReasons(
 ): JellyfinConnectionIneligibility[] {
   if (!publicBaseUrl || !connections) return [];
   return connections.flatMap((connection) => {
-    if (normalizedPublicJellyfinBaseUrl(connection.externalUrl ?? "") !== publicBaseUrl) return [];
+    if (
+      normalizedPublicJellyfinBaseUrl(connection.externalUrl ?? "") !==
+      publicBaseUrl
+    )
+      return [];
     const reason = !connection.enabled
       ? "is disabled"
       : !connection.linkingEnabled
@@ -107,9 +116,9 @@ export function automaticLinkingStatusForConnections(
   publicBaseUrl: string,
   connections: JellyfinMediaServerConnection[],
 ): "not-ready" | "ambiguous" | "ready" {
-  const matchingConnectionCount = eligibleJellyfinConnectionBaseUrls(connections).filter(
-    (externalUrl) => externalUrl === publicBaseUrl,
-  ).length;
+  const matchingConnectionCount = eligibleJellyfinConnectionBaseUrls(
+    connections,
+  ).filter((externalUrl) => externalUrl === publicBaseUrl).length;
   if (matchingConnectionCount === 1) return "ready";
   return matchingConnectionCount > 1 ? "ambiguous" : "not-ready";
 }
@@ -123,18 +132,27 @@ export function automaticLinkingStatus(
   return automaticLinkingStatusForConnections(publicBaseUrl, connections);
 }
 
-export function jellyfinPluginCallbackUrl(publicBaseUrl: string | null): string | null {
-  return publicBaseUrl ? `${publicBaseUrl}${JELLYFIN_PLUGIN_CALLBACK_PATH}` : null;
+export function jellyfinPluginCallbackUrl(
+  publicBaseUrl: string | null,
+): string | null {
+  return publicBaseUrl
+    ? `${publicBaseUrl}${JELLYFIN_PLUGIN_CALLBACK_PATH}`
+    : null;
 }
 
 /**
  * Recovers, for display only, the public Jellyfin base URL a stored callback was derived from.
  * A callback that does not decompose this way is still a perfectly valid callback.
  */
-export function jellyfinPublicBaseUrlFromCallback(callbackUrl: string): string | null {
+export function jellyfinPublicBaseUrlFromCallback(
+  callbackUrl: string,
+): string | null {
   if (!callbackUrl.endsWith(JELLYFIN_PLUGIN_CALLBACK_PATH)) return null;
   return normalizedPublicJellyfinBaseUrl(
-    callbackUrl.slice(0, callbackUrl.length - JELLYFIN_PLUGIN_CALLBACK_PATH.length),
+    callbackUrl.slice(
+      0,
+      callbackUrl.length - JELLYFIN_PLUGIN_CALLBACK_PATH.length,
+    ),
   );
 }
 
@@ -155,15 +173,23 @@ export function isJellyfinPluginClientRegistration(
  */
 export function jellyfinPluginClientRegistrations<
   TClient extends OAuthClientRegistrationForJellyfin,
->(clients: TClient[]): Array<TClient & { callbackUrl: string | null; publicBaseUrl: string | null }> {
+>(
+  clients: TClient[],
+): Array<
+  TClient & { callbackUrl: string | null; publicBaseUrl: string | null }
+> {
   return clients
-    .filter((registeredClient) => isJellyfinPluginClientRegistration(registeredClient))
+    .filter((registeredClient) =>
+      isJellyfinPluginClientRegistration(registeredClient),
+    )
     .map((registeredClient) => {
       const callbackUrl = registeredClient.redirectUris[0] ?? null;
       return {
         ...registeredClient,
         callbackUrl,
-        publicBaseUrl: callbackUrl ? jellyfinPublicBaseUrlFromCallback(callbackUrl) : null,
+        publicBaseUrl: callbackUrl
+          ? jellyfinPublicBaseUrlFromCallback(callbackUrl)
+          : null,
       };
     });
 }
@@ -174,9 +200,9 @@ export function isEligibleJellyfinPluginClient(
   callbackUrl: string,
 ): boolean {
   return (
-    isJellyfinPluginClientRegistration(registeredClient)
-    && registeredClient.enabled
-    && registeredClient.redirectUris.includes(callbackUrl)
+    isJellyfinPluginClientRegistration(registeredClient) &&
+    registeredClient.enabled &&
+    registeredClient.redirectUris.includes(callbackUrl)
   );
 }
 
@@ -184,7 +210,9 @@ export function jellyfinPluginClientCreateDecision(
   clients: OAuthClientRegistrationForJellyfin[],
   callbackUrl: string,
 ): "create" | "reuse" | "ambiguous" {
-  const matches = clients.filter((client) => isEligibleJellyfinPluginClient(client, callbackUrl));
+  const matches = clients.filter((client) =>
+    isEligibleJellyfinPluginClient(client, callbackUrl),
+  );
   if (matches.length > 1) return "ambiguous";
   return matches.length === 1 ? "reuse" : "create";
 }
@@ -194,10 +222,13 @@ export function reconcileCreatedJellyfinPluginClient(
   clients: OAuthClientRegistrationForJellyfin[],
 ): JellyfinPluginClient | null {
   if (!candidate) return null;
-  return clients.some((client) =>
-    client.clientId === candidate.clientId
-    && isEligibleJellyfinPluginClient(client, candidate.callbackUrl),
-  ) ? candidate : null;
+  return clients.some(
+    (client) =>
+      client.clientId === candidate.clientId &&
+      isEligibleJellyfinPluginClient(client, candidate.callbackUrl),
+  )
+    ? candidate
+    : null;
 }
 
 export function createdJellyfinPluginClientForCallback(
@@ -216,7 +247,9 @@ export function shouldApplyJellyfinPluginOAuthReload(
 }
 
 /** The panel has one mutation slot, so a second click cannot create a duplicate client. */
-export function canStartJellyfinPluginClientCreation(inFlightCallbackUrl: string | null): boolean {
+export function canStartJellyfinPluginClientCreation(
+  inFlightCallbackUrl: string | null,
+): boolean {
   return inFlightCallbackUrl === null;
 }
 

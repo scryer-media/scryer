@@ -78,6 +78,12 @@ pub(crate) struct HttpJobFile {
     /// The finished file. Bytes are written to an attempt-specific `.part`
     /// sibling and renamed here only once complete and verified.
     pub final_path: PathBuf,
+    /// The actual partial name, independent of a probed final extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_path: Option<PathBuf>,
+    /// Durable identity recorded before publishing the verified bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PublicationCheckpoint>,
     /// 1-based. A resume that cannot be trusted moves to the next attempt,
     /// which writes a fresh `.part` file; earlier partials are left in place.
     pub attempt: u32,
@@ -100,10 +106,21 @@ pub(crate) struct HttpJobFile {
     /// again and does not hold the job back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
 }
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PublicationCheckpoint {
+    pub attempt: u32,
+    pub partial_path: PathBuf,
+    pub final_path: PathBuf,
+    pub size: u64,
+    pub sha256: Vec<u8>,
 }
 
 fn is_zero_u64(value: &u64) -> bool {
@@ -125,7 +142,9 @@ pub(crate) struct RefusedVariant {
 impl HttpJobFile {
     /// `<final>.part` for the first attempt, `<final>.<n>.part` after it.
     pub(crate) fn part_path(&self) -> PathBuf {
-        part_path_for(&self.final_path, self.attempt)
+        self.partial_path
+            .clone()
+            .unwrap_or_else(|| part_path_for(&self.final_path, self.attempt))
     }
 }
 
@@ -160,6 +179,8 @@ pub(crate) struct HttpJob {
     pub state: HttpJobState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_size_bytes: Option<i64>,
     /// The running time the indexer stated, checked against the finished
@@ -417,10 +438,13 @@ impl HttpStateStore {
     pub(crate) async fn initialize(&self) -> AppResult<()> {
         let parent = self.state_dir()?;
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            AppError::Validation(format!(
-                "the download directory is not writable ({}): {error}",
-                parent.display()
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
+                format!(
+                    "the download directory is not writable ({}): {error}",
+                    parent.display()
+                ),
+            )
         })?;
         match tokio::fs::metadata(&self.path).await {
             Ok(_) => {
@@ -432,10 +456,13 @@ impl HttpStateStore {
                     .await
                     .map(|_| ())
                     .map_err(|error| {
-                        AppError::Validation(format!(
-                            "the HTTP downloader's queue at {} is not writable: {error}",
-                            self.path.display()
-                        ))
+                        AppError::validation_refused(
+                            crate::error_reasons::ACQUISITION_HTTP_QUEUE_NOT_WRITABLE,
+                            format!(
+                                "the HTTP downloader's queue at {} is not writable: {error}",
+                                self.path.display()
+                            ),
+                        )
                     })
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -445,10 +472,13 @@ impl HttpStateStore {
                 })
                 .await
             }
-            Err(error) => Err(AppError::Validation(format!(
-                "the HTTP downloader's queue at {} cannot be inspected: {error}",
-                self.path.display()
-            ))),
+            Err(error) => Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_HTTP_QUEUE_UNREADABLE,
+                format!(
+                    "the HTTP downloader's queue at {} cannot be inspected: {error}",
+                    self.path.display()
+                ),
+            )),
         }
     }
 

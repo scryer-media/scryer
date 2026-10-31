@@ -16,11 +16,7 @@ import { selectorId } from "@/lib/utils/dom-ids";
 import { buildViewPath } from "@/lib/utils/routing";
 
 export type FacetSettingsSectionId =
-  | "library"
-  | "general"
-  | "quality"
-  | "renaming"
-  | "routing";
+  "library" | "general" | "quality" | "renaming" | "routing";
 
 const SECTION_ORDER: FacetSettingsSectionId[] = [
   "library",
@@ -213,31 +209,31 @@ export function FacetSettingsSection({
           data-slot="facet-settings-scroll"
           className="min-h-0 flex-1 overflow-y-auto"
         >
-        <div
-          className={cn(
-            "mx-auto w-full px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
-            contentWidth === "reference"
-              ? "max-w-[1780px]"
-              : contentWidth === "full"
+          <div
+            className={cn(
+              "mx-auto w-full px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
+              contentWidth === "reference"
                 ? "max-w-[1780px]"
-                : contentWidth === "wide"
-                  ? "max-w-[1280px]"
-                  : "max-w-[920px]",
-          )}
-        >
-          {contentWidth === "reference" ? (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,920px)_minmax(28rem,1fr)] 2xl:grid-cols-[minmax(0,920px)_minmax(42rem,1fr)] xl:items-start">
-              <div className="min-w-0">{pageContent}</div>
-              <aside
-                id={FACET_REFERENCE_SLOT_ID}
-                data-slot="facet-reference"
-                className="min-w-0 xl:sticky xl:top-[26px]"
-              />
-            </div>
-          ) : (
-            pageContent
-          )}
-        </div>
+                : contentWidth === "full"
+                  ? "max-w-[1780px]"
+                  : contentWidth === "wide"
+                    ? "max-w-[1280px]"
+                    : "max-w-[920px]",
+            )}
+          >
+            {contentWidth === "reference" ? (
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,920px)_minmax(28rem,1fr)] 2xl:grid-cols-[minmax(0,920px)_minmax(42rem,1fr)] xl:items-start">
+                <div className="min-w-0">{pageContent}</div>
+                <aside
+                  id={FACET_REFERENCE_SLOT_ID}
+                  data-slot="facet-reference"
+                  className="min-w-0 xl:sticky xl:top-[26px]"
+                />
+              </div>
+            ) : (
+              pageContent
+            )}
+          </div>
         </div>
         {showSecondaryNav ? (
           <div id={LIBRARY_FOOTER_SLOT_ID} data-slot="facet-footer" />

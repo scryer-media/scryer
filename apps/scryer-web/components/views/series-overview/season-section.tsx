@@ -28,6 +28,11 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
+import {
+  ReleaseSearchLoader,
+  ReleaseSearchSummary,
+} from "@/components/common/release-search-status";
+import { deriveInteractiveSearchPresentation } from "@/lib/utils/interactive-search-presentation";
 import { TitleSearchDownloadClientNotice } from "@/components/common/title-search-download-client-notice";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
@@ -98,7 +103,10 @@ type SeasonSectionProps = {
   releaseBlocklistEntries: TitleReleaseBlocklistEntry[];
   clearingReleaseBlocklistEntryId?: string | null;
   searchResultsByEpisode: Record<string, Release[]>;
-  searchIndexerProgressByEpisode: Record<string, InteractiveSearchIndexerProgress[]>;
+  searchIndexerProgressByEpisode: Record<
+    string,
+    InteractiveSearchIndexerProgress[]
+  >;
   searchLoadingByEpisode: Record<string, boolean>;
   searchBlockedByEpisode: Record<string, boolean>;
   autoSearchLoadingByEpisode: Record<string, boolean>;
@@ -106,19 +114,35 @@ type SeasonSectionProps = {
   onRunEpisodeSearch?: (episode: CollectionEpisode) => void;
   onOpenEpisodeHistory?: (episode: CollectionEpisode) => void;
   onOpenSeasonHistory?: (collection: TitleCollection) => void;
-  onQueueFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
-  onQueueAdditionalFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
+  onQueueFromEpisodeSearch?: (
+    episode: CollectionEpisode,
+    release: Release,
+  ) => Promise<void> | void;
+  onQueueAdditionalFromEpisodeSearch?: (
+    episode: CollectionEpisode,
+    release: Release,
+  ) => Promise<void> | void;
   onAutoSearchEpisode?: (episode: CollectionEpisode) => void;
-  onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
-  onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
+  onSetCollectionMonitored?: (
+    collectionId: string,
+    monitored: boolean,
+  ) => Promise<void>;
+  onSetEpisodeMonitored?: (
+    episodeId: string,
+    monitored: boolean,
+  ) => Promise<void>;
   seasonSearchResults?: Release[];
   seasonSearchLoading?: boolean;
   searchBlocked?: boolean;
   onRunSeasonSearch?: () => void;
   seasonInteractiveSearchLoading?: boolean;
+  seasonSearchIndexerProgress?: InteractiveSearchIndexerProgress[];
   /** Interactive search of the whole season, listed under this header. */
   onRunSeasonInteractiveSearch?: () => void;
-  onQueueFromSeasonSearch?: (collection: TitleCollection, release: Release) => Promise<void> | void;
+  onQueueFromSeasonSearch?: (
+    collection: TitleCollection,
+    release: Release,
+  ) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   onAssignFileToEpisode?: (fileId: string) => void;
@@ -156,7 +180,10 @@ function sameSeasonSectionProps(
   for (const key of [
     ...new Set([...Object.keys(previous), ...Object.keys(next)]),
   ] as (keyof SeasonSectionProps)[]) {
-    if (!EPISODE_SCOPED_PROPS.has(key) && !Object.is(previous[key], next[key])) {
+    if (
+      !EPISODE_SCOPED_PROPS.has(key) &&
+      !Object.is(previous[key], next[key])
+    ) {
       return false;
     }
   }
@@ -168,12 +195,16 @@ function sameSeasonSectionProps(
         (next.activeDownloadEpisodeIds?.has(episodeId) ?? false) ||
       previous.autoSearchLoadingByEpisode[episodeId] !==
         next.autoSearchLoadingByEpisode[episodeId] ||
-      previous.mediaFilesByEpisode[episodeId] !== next.mediaFilesByEpisode[episodeId] ||
-      previous.searchBlockedByEpisode[episodeId] !== next.searchBlockedByEpisode[episodeId] ||
+      previous.mediaFilesByEpisode[episodeId] !==
+        next.mediaFilesByEpisode[episodeId] ||
+      previous.searchBlockedByEpisode[episodeId] !==
+        next.searchBlockedByEpisode[episodeId] ||
       previous.searchIndexerProgressByEpisode[episodeId] !==
         next.searchIndexerProgressByEpisode[episodeId] ||
-      previous.searchLoadingByEpisode[episodeId] !== next.searchLoadingByEpisode[episodeId] ||
-      previous.searchResultsByEpisode[episodeId] !== next.searchResultsByEpisode[episodeId] ||
+      previous.searchLoadingByEpisode[episodeId] !==
+        next.searchLoadingByEpisode[episodeId] ||
+      previous.searchResultsByEpisode[episodeId] !==
+        next.searchResultsByEpisode[episodeId] ||
       (previous.selectedEpisodeIds?.has(episodeId) ?? false) !==
         (next.selectedEpisodeIds?.has(episodeId) ?? false) ||
       (previous.pendingEpisodeIds?.has(episodeId) ?? false) !==
@@ -182,7 +213,8 @@ function sameSeasonSectionProps(
       return false;
     }
 
-    const previousQueueItem = previous.downloadQueueItemByEpisodeId?.[episodeId];
+    const previousQueueItem =
+      previous.downloadQueueItemByEpisodeId?.[episodeId];
     const nextQueueItem = next.downloadQueueItemByEpisodeId?.[episodeId];
     if (
       (previousQueueItem === undefined) !== (nextQueueItem === undefined) ||
@@ -233,6 +265,7 @@ function SeasonSectionImpl({
   searchBlocked = false,
   onRunSeasonSearch,
   seasonInteractiveSearchLoading = false,
+  seasonSearchIndexerProgress = EMPTY_INDEXER_PROGRESS,
   onRunSeasonInteractiveSearch,
   onQueueFromSeasonSearch,
   onDeleteFile,
@@ -245,6 +278,20 @@ function SeasonSectionImpl({
   onSetSeasonSelected,
 }: SeasonSectionProps) {
   const t = useTranslate();
+  const seasonSearchPresentation = React.useMemo(
+    () =>
+      deriveInteractiveSearchPresentation({
+        hasSnapshot: seasonSearchResults !== undefined,
+        loading: seasonInteractiveSearchLoading,
+        resultCount: seasonSearchResults?.length ?? 0,
+        indexers: seasonSearchIndexerProgress,
+      }),
+    [
+      seasonInteractiveSearchLoading,
+      seasonSearchIndexerProgress,
+      seasonSearchResults,
+    ],
+  );
   const canRefreshScores = useCanManageOverviewTitle(libraryId);
   const sectionRef = React.useRef<HTMLDivElement>(null);
   // The overview also renders inside a side panel, so the episode table
@@ -277,7 +324,9 @@ function SeasonSectionImpl({
     if (selectedCount === 0) {
       return false;
     }
-    return selectedCount === selectableEpisodeIds.length ? true : "indeterminate";
+    return selectedCount === selectableEpisodeIds.length
+      ? true
+      : "indeterminate";
   }, [selectableEpisodeIds, selectedEpisodeIds]);
 
   const handleToggleSeasonSelection = React.useCallback(() => {
@@ -310,7 +359,9 @@ function SeasonSectionImpl({
       return collection.monitored;
     }
 
-    const monitoredCount = episodes.filter((episode) => episode.monitored).length;
+    const monitoredCount = episodes.filter(
+      (episode) => episode.monitored,
+    ).length;
     if (monitoredCount === 0) {
       return false;
     }
@@ -338,7 +389,8 @@ function SeasonSectionImpl({
 
   const collectionMetrics = React.useMemo(() => {
     const aggregateTotalEpisodes =
-      typeof collection.episodesTotal === "number" && collection.episodesTotal >= 0
+      typeof collection.episodesTotal === "number" &&
+      collection.episodesTotal >= 0
         ? collection.episodesTotal
         : null;
     const aggregateMonitoredEpisodes =
@@ -347,7 +399,8 @@ function SeasonSectionImpl({
         ? collection.episodesMonitored
         : null;
     const aggregateOwnedEpisodes =
-      typeof collection.episodesOwned === "number" && collection.episodesOwned >= 0
+      typeof collection.episodesOwned === "number" &&
+      collection.episodesOwned >= 0
         ? collection.episodesOwned
         : null;
     let totalEpisodes = 0;
@@ -365,7 +418,8 @@ function SeasonSectionImpl({
         monitoredEpisodes += 1;
       }
 
-      const episodeFiles = mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES;
+      const episodeFiles =
+        mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES;
       if (episodeFiles.length > 0) {
         ownedEpisodes += 1;
       }
@@ -384,21 +438,18 @@ function SeasonSectionImpl({
     mediaFilesByEpisode,
   ]);
 
-  const collectionEpisodeProgress = React.useMemo(
-    () => {
-      if (!collectionMetrics || collectionMetrics.totalEpisodes <= 0) {
-        return null;
-      }
+  const collectionEpisodeProgress = React.useMemo(() => {
+    if (!collectionMetrics || collectionMetrics.totalEpisodes <= 0) {
+      return null;
+    }
 
-      return getCollectionEpisodeProgressPresentation({
-        ownedEpisodes: collectionMetrics.ownedEpisodes,
-        totalEpisodes: collectionMetrics.totalEpisodes,
-        monitoredEpisodes: collectionMetrics.monitoredEpisodes,
-        t,
-      });
-    },
-    [collectionMetrics, t],
-  );
+    return getCollectionEpisodeProgressPresentation({
+      ownedEpisodes: collectionMetrics.ownedEpisodes,
+      totalEpisodes: collectionMetrics.totalEpisodes,
+      monitoredEpisodes: collectionMetrics.monitoredEpisodes,
+      t,
+    });
+  }, [collectionMetrics, t]);
 
   const collectionSizeLabel = React.useMemo(() => {
     if (typeof collection.sizeBytes === "number" && collection.sizeBytes >= 0) {
@@ -423,21 +474,32 @@ function SeasonSectionImpl({
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent id={`season-details-dialog-${collection.id}`}>
           <DialogHeader>
-            <DialogTitle>{seasonHeading(collection, t)} — {t("episode.details")}</DialogTitle>
+            <DialogTitle>
+              {seasonHeading(collection, t)} — {t("episode.details")}
+            </DialogTitle>
           </DialogHeader>
           <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
-            <dt className="text-muted-foreground">{t("title.table.monitored")}</dt>
+            <dt className="text-muted-foreground">
+              {t("title.table.monitored")}
+            </dt>
             <dd>{t(collection.monitored ? "label.yes" : "label.no")}</dd>
-            <dt className="text-muted-foreground">{t("title.table.episodes")}</dt>
+            <dt className="text-muted-foreground">
+              {t("title.table.episodes")}
+            </dt>
             <dd>
-              {episodesReady || (collection.episodesTotal != null && collection.episodesOwned != null && collection.episodesMonitored != null)
+              {episodesReady ||
+              (collection.episodesTotal != null &&
+                collection.episodesOwned != null &&
+                collection.episodesMonitored != null)
                 ? t("title.table.episodeProgressTooltipWithTotal", {
                     owned: collectionMetrics.ownedEpisodes,
                     total: collectionMetrics.totalEpisodes,
                     monitored: collectionMetrics.monitoredEpisodes,
                   })
                 : t("label.unknown")}
-              {episodeRangeLabel ? <p className="text-muted-foreground">{episodeRangeLabel}</p> : null}
+              {episodeRangeLabel ? (
+                <p className="text-muted-foreground">{episodeRangeLabel}</p>
+              ) : null}
             </dd>
             <dt className="text-muted-foreground">{t("title.table.size")}</dt>
             <dd>{collectionSizeLabel ?? t("label.unknown")}</dd>
@@ -506,8 +568,9 @@ function SeasonSectionImpl({
 
                 setSeasonToggling(true);
                 const nextMonitored = seasonCheckedState !== true;
-                onSetCollectionMonitored(collection.id, nextMonitored)
-                  .finally(() => setSeasonToggling(false));
+                onSetCollectionMonitored(collection.id, nextMonitored).finally(
+                  () => setSeasonToggling(false),
+                );
               }}
             >
               {seasonCheckedState === false ? (
@@ -521,7 +584,11 @@ function SeasonSectionImpl({
               <p className="text-sm font-semibold text-foreground">
                 {seasonHeading(collection, t)}
               </p>
-              {episodeRangeLabel ? <p className="text-xs text-muted-foreground">{episodeRangeLabel}</p> : null}
+              {episodeRangeLabel ? (
+                <p className="text-xs text-muted-foreground">
+                  {episodeRangeLabel}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -619,7 +686,9 @@ function SeasonSectionImpl({
         </div>
       ) : null}
 
-      {searchBlocked && (onRunSeasonSearch || onRunSeasonInteractiveSearch) && showCollectionHeader ? (
+      {searchBlocked &&
+      (onRunSeasonSearch || onRunSeasonInteractiveSearch) &&
+      showCollectionHeader ? (
         <div className="border-t border-border bg-card/40 p-4">
           <TitleSearchDownloadClientNotice />
         </div>
@@ -635,156 +704,231 @@ function SeasonSectionImpl({
           })}
           description={t("series.interactiveSearchSeason")}
         >
-          {seasonInteractiveSearchLoading && !seasonSearchResults?.length ? (
-            <div className="flex flex-col items-center justify-center gap-4 py-16">
-              <LoadingMark className="h-10 w-10 text-[var(--scry-accent-text)]" />
-              <p className="text-lg text-muted-foreground">{t("label.searching")}</p>
-            </div>
+          <div className="mb-2 flex items-start gap-4">
+            <ReleaseSearchSummary
+              presentation={seasonSearchPresentation}
+              results={seasonSearchResults ?? EMPTY_RELEASES}
+              dataUi="season-release-search-summary"
+            />
+          </div>
+          {seasonSearchPresentation.showInitialLoader ? (
+            <ReleaseSearchLoader />
           ) : seasonSearchResults && seasonSearchResults.length > 0 ? (
             <SearchResultBuckets
               titleId={collection.titleId}
               ownedScope={{ collectionId: collection.id }}
               results={seasonSearchResults}
-              onQueue={(release) => onQueueFromSeasonSearch(collection, release)}
+              onQueue={(release) =>
+                onQueueFromSeasonSearch(collection, release)
+              }
               requireCandidateToken
             />
           ) : (
-            <p className="text-sm text-muted-foreground">{t("nzb.noResultsYet")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("nzb.noResultsYet")}
+            </p>
           )}
         </InteractiveSearchDialog>
       ) : null}
 
       {showSectionContent ? (
         <>
-            {!episodesReady ? (
-              <div
-                className={cn(
-                  showCollectionHeader && "border-t border-border",
-                  "flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground",
-                )}
-              >
-                <LoadingMark className="h-4 w-4" />
-                {t("label.loading")}
+          {!episodesReady ? (
+            <div
+              className={cn(
+                showCollectionHeader && "border-t border-border",
+                "flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground",
+              )}
+            >
+              <LoadingMark className="h-4 w-4" />
+              {t("label.loading")}
+            </div>
+          ) : episodes.length === 0 ? (
+            <div
+              className={cn(
+                showCollectionHeader && "border-t border-border",
+                "px-4 py-3 text-sm text-muted-foreground",
+              )}
+            >
+              {t("seasonSection.noEpisodeRecords")}
+            </div>
+          ) : isMobile ? (
+            <div
+              className={cn(
+                showCollectionHeader && "border-t border-border",
+                "p-2",
+              )}
+            >
+              <div className="space-y-2">
+                {episodes.map((episode) => (
+                  <EpisodeRow
+                    key={episode.id}
+                    autoSearching={
+                      autoSearchLoadingByEpisode[episode.id] === true
+                    }
+                    collection={collection}
+                    clearingReleaseBlocklistEntryId={
+                      clearingReleaseBlocklistEntryId
+                    }
+                    episode={episode}
+                    episodeFiles={
+                      mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES
+                    }
+                    episodeIndexerProgress={
+                      searchIndexerProgressByEpisode[episode.id] ??
+                      EMPTY_INDEXER_PROGRESS
+                    }
+                    episodeResults={
+                      searchResultsByEpisode[episode.id] ?? EMPTY_RELEASES
+                    }
+                    facet={facet}
+                    hasSearchResults={Object.prototype.hasOwnProperty.call(
+                      searchResultsByEpisode,
+                      episode.id,
+                    )}
+                    initiallyOpen={episode.id === initiallyOpenEpisodeId}
+                    isMobile={true}
+                    onLoadEpisodeDetail={onLoadEpisodeDetail}
+                    onAutoSearchEpisode={onAutoSearchEpisode}
+                    onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
+                    onDeleteFile={onDeleteFile}
+                    onMakePrimaryFile={onMakePrimaryFile}
+                    onAssignFileToEpisode={onAssignFileToEpisode}
+                    onOpenHistory={onOpenEpisodeHistory}
+                    onQueueFromEpisodeSearch={onQueueFromEpisodeSearch}
+                    onQueueAdditionalFromEpisodeSearch={
+                      onQueueAdditionalFromEpisodeSearch
+                    }
+                    onRefreshSubtitles={onRefreshSubtitles}
+                    onRunEpisodeSearch={onRunEpisodeSearch}
+                    onSetEpisodeMonitored={onSetEpisodeMonitored}
+                    onToggleSelected={onToggleEpisodeSelected}
+                    selected={selectedEpisodeIds?.has(episode.id) ?? false}
+                    selectionPending={
+                      pendingEpisodeIds?.has(episode.id) ?? false
+                    }
+                    downloadActive={
+                      activeDownloadEpisodeIds?.has(episode.id) ?? false
+                    }
+                    queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
+                    releaseBlocklistEntries={releaseBlocklistEntries}
+                    searchBlocked={searchBlockedByEpisode[episode.id] === true}
+                    searchLoading={searchLoadingByEpisode[episode.id] === true}
+                    subtitleDownloads={stableSubtitleDownloads}
+                    libraryId={libraryId}
+                    primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
+                  />
+                ))}
               </div>
-            ) : episodes.length === 0 ? (
-              <div className={cn(showCollectionHeader && "border-t border-border", "px-4 py-3 text-sm text-muted-foreground")}>
-                {t("seasonSection.noEpisodeRecords")}
-              </div>
-            ) : isMobile ? (
-              <div className={cn(showCollectionHeader && "border-t border-border", "p-2")}>
-                <div className="space-y-2">
+            </div>
+          ) : (
+            <div
+              className={cn(showCollectionHeader && "border-t border-border")}
+            >
+              <Table overflow="clip" layout="fixed" density="dense">
+                <TableHeader aria-hidden="true">
+                  <TableRow className="collapse">
+                    {selectionEnabled ? (
+                      <TableHead className="w-10 text-center">
+                        {t("seriesOverview.selectColumn")}
+                      </TableHead>
+                    ) : null}
+                    <TableHead className="w-10 text-center" />
+                    <TableHead className="w-12 text-center">
+                      {t("episode.numberLabel")}
+                    </TableHead>
+                    <TableHead>{t("label.title")}</TableHead>
+                    <TableHead className="w-32 text-center">
+                      {t("episode.airDate")}
+                    </TableHead>
+                    <TableHead className="w-16 text-center">
+                      {t("mediaInfo.size")}
+                    </TableHead>
+                    <TableHead className="w-32 text-center">
+                      {t("episode.quality")}
+                    </TableHead>
+                    <TableActionsHead className="w-28">
+                      {t("label.actions")}
+                    </TableActionsHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {episodes.map((episode) => (
                     <EpisodeRow
                       key={episode.id}
-                      autoSearching={autoSearchLoadingByEpisode[episode.id] === true}
-                      collection={collection}
-                      clearingReleaseBlocklistEntryId={clearingReleaseBlocklistEntryId}
-                      episode={episode}
-                      episodeFiles={mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES}
-                      episodeIndexerProgress={
-                        searchIndexerProgressByEpisode[episode.id] ?? EMPTY_INDEXER_PROGRESS
+                      autoSearching={
+                        autoSearchLoadingByEpisode[episode.id] === true
                       }
-                      episodeResults={searchResultsByEpisode[episode.id] ?? EMPTY_RELEASES}
+                      collection={collection}
+                      clearingReleaseBlocklistEntryId={
+                        clearingReleaseBlocklistEntryId
+                      }
+                      episode={episode}
+                      episodeFiles={
+                        mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES
+                      }
+                      episodeIndexerProgress={
+                        searchIndexerProgressByEpisode[episode.id] ??
+                        EMPTY_INDEXER_PROGRESS
+                      }
+                      episodeResults={
+                        searchResultsByEpisode[episode.id] ?? EMPTY_RELEASES
+                      }
                       facet={facet}
-                      hasSearchResults={Object.prototype.hasOwnProperty.call(searchResultsByEpisode, episode.id)}
+                      hasSearchResults={Object.prototype.hasOwnProperty.call(
+                        searchResultsByEpisode,
+                        episode.id,
+                      )}
                       initiallyOpen={episode.id === initiallyOpenEpisodeId}
-                      isMobile={true}
+                      isMobile={false}
                       onLoadEpisodeDetail={onLoadEpisodeDetail}
                       onAutoSearchEpisode={onAutoSearchEpisode}
-                      onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
+                      onClearReleaseBlocklistEntry={
+                        onClearReleaseBlocklistEntry
+                      }
                       onDeleteFile={onDeleteFile}
                       onMakePrimaryFile={onMakePrimaryFile}
                       onAssignFileToEpisode={onAssignFileToEpisode}
                       onOpenHistory={onOpenEpisodeHistory}
                       onQueueFromEpisodeSearch={onQueueFromEpisodeSearch}
-                      onQueueAdditionalFromEpisodeSearch={onQueueAdditionalFromEpisodeSearch}
+                      onQueueAdditionalFromEpisodeSearch={
+                        onQueueAdditionalFromEpisodeSearch
+                      }
                       onRefreshSubtitles={onRefreshSubtitles}
                       onRunEpisodeSearch={onRunEpisodeSearch}
                       onSetEpisodeMonitored={onSetEpisodeMonitored}
                       onToggleSelected={onToggleEpisodeSelected}
                       selected={selectedEpisodeIds?.has(episode.id) ?? false}
-                      selectionPending={pendingEpisodeIds?.has(episode.id) ?? false}
-                      downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
+                      selectionPending={
+                        pendingEpisodeIds?.has(episode.id) ?? false
+                      }
+                      downloadActive={
+                        activeDownloadEpisodeIds?.has(episode.id) ?? false
+                      }
                       queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                       releaseBlocklistEntries={releaseBlocklistEntries}
-                      searchBlocked={searchBlockedByEpisode[episode.id] === true}
-                      searchLoading={searchLoadingByEpisode[episode.id] === true}
+                      searchBlocked={
+                        searchBlockedByEpisode[episode.id] === true
+                      }
+                      searchLoading={
+                        searchLoadingByEpisode[episode.id] === true
+                      }
                       subtitleDownloads={stableSubtitleDownloads}
                       libraryId={libraryId}
                       primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
                     />
                   ))}
-                </div>
-              </div>
-            ) : (
-              <div className={cn(showCollectionHeader && "border-t border-border")}>
-                <Table overflow="clip" layout="fixed" density="dense">
-                  <TableHeader aria-hidden="true">
-                    <TableRow className="collapse">
-                      {selectionEnabled ? (
-                        <TableHead className="w-10 text-center">
-                          {t("seriesOverview.selectColumn")}
-                        </TableHead>
-                      ) : null}
-                      <TableHead className="w-10 text-center" />
-                      <TableHead className="w-12 text-center">{t("episode.numberLabel")}</TableHead>
-                      <TableHead>{t("label.title")}</TableHead>
-                      <TableHead className="w-32 text-center">{t("episode.airDate")}</TableHead>
-                      <TableHead className="w-16 text-center">{t("mediaInfo.size")}</TableHead>
-                      <TableHead className="w-32 text-center">{t("episode.quality")}</TableHead>
-                      <TableActionsHead className="w-28">{t("label.actions")}</TableActionsHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {episodes.map((episode) => (
-                      <EpisodeRow
-                        key={episode.id}
-                        autoSearching={autoSearchLoadingByEpisode[episode.id] === true}
-                        collection={collection}
-                        clearingReleaseBlocklistEntryId={clearingReleaseBlocklistEntryId}
-                        episode={episode}
-                        episodeFiles={mediaFilesByEpisode[episode.id] ?? EMPTY_EPISODE_FILES}
-                        episodeIndexerProgress={
-                          searchIndexerProgressByEpisode[episode.id] ?? EMPTY_INDEXER_PROGRESS
-                        }
-                        episodeResults={searchResultsByEpisode[episode.id] ?? EMPTY_RELEASES}
-                        facet={facet}
-                        hasSearchResults={Object.prototype.hasOwnProperty.call(searchResultsByEpisode, episode.id)}
-                        initiallyOpen={episode.id === initiallyOpenEpisodeId}
-                        isMobile={false}
-                        onLoadEpisodeDetail={onLoadEpisodeDetail}
-                        onAutoSearchEpisode={onAutoSearchEpisode}
-                        onClearReleaseBlocklistEntry={onClearReleaseBlocklistEntry}
-                        onDeleteFile={onDeleteFile}
-                        onMakePrimaryFile={onMakePrimaryFile}
-                        onAssignFileToEpisode={onAssignFileToEpisode}
-                        onOpenHistory={onOpenEpisodeHistory}
-                        onQueueFromEpisodeSearch={onQueueFromEpisodeSearch}
-                        onQueueAdditionalFromEpisodeSearch={onQueueAdditionalFromEpisodeSearch}
-                        onRefreshSubtitles={onRefreshSubtitles}
-                        onRunEpisodeSearch={onRunEpisodeSearch}
-                        onSetEpisodeMonitored={onSetEpisodeMonitored}
-                        onToggleSelected={onToggleEpisodeSelected}
-                        selected={selectedEpisodeIds?.has(episode.id) ?? false}
-                        selectionPending={pendingEpisodeIds?.has(episode.id) ?? false}
-                        downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
-                        queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
-                        releaseBlocklistEntries={releaseBlocklistEntries}
-                        searchBlocked={searchBlockedByEpisode[episode.id] === true}
-                        searchLoading={searchLoadingByEpisode[episode.id] === true}
-                        subtitleDownloads={stableSubtitleDownloads}
-                        libraryId={libraryId}
-                        primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </>
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
       ) : null}
     </div>
   );
 }
 
-export const SeasonSection = React.memo(SeasonSectionImpl, sameSeasonSectionProps);
+export const SeasonSection = React.memo(
+  SeasonSectionImpl,
+  sameSeasonSectionProps,
+);

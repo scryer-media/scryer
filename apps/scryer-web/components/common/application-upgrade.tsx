@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -46,7 +47,10 @@ function phaseLabelKey(phase: ApplicationUpgradePhase | null): string {
   return `appUpgrade.phase.${phase ?? "unknown"}`;
 }
 
-function runStatusLabel(run: JobRun, t: ReturnType<typeof useTranslate>): string {
+function runStatusLabel(
+  run: JobRun,
+  t: ReturnType<typeof useTranslate>,
+): string {
   return t(RUN_STATUS_KEYS[run.status]);
 }
 
@@ -106,7 +110,11 @@ export function ApplicationUpgradeAction({
       if (!latest) {
         throw new Error(t("appUpgrade.startFailed"));
       }
-      if (!canStartUpgrade(latest) || !latest.updateTag || !latest.updateVersion) {
+      if (
+        !canStartUpgrade(latest) ||
+        !latest.updateTag ||
+        !latest.updateVersion
+      ) {
         setOpen(false);
         onStatusChanged?.();
         toast.info(t("appUpgrade.targetChanged"));
@@ -137,11 +145,20 @@ export function ApplicationUpgradeAction({
       setOpen(false);
       onStatusChanged?.();
     } catch (error) {
-      toast.error(error instanceof Error && error.message ? error.message : t("appUpgrade.startFailed"));
+      toast.error(
+        userFacingGraphQlErrorMessage(error, t("appUpgrade.startFailed"), t),
+      );
     } finally {
       setBusy(false);
     }
-  }, [canStart, client, onStatusChanged, refreshStatus, registerInteractiveJobRun, t]);
+  }, [
+    canStart,
+    client,
+    onStatusChanged,
+    refreshStatus,
+    registerInteractiveJobRun,
+    t,
+  ]);
 
   return (
     <>
@@ -191,25 +208,34 @@ function OperatorGuidance({ status }: { status: ApplicationUpgradeStatus }) {
     return null;
   }
 
-  const commandKey = guidance === "winget"
-    ? "appUpgrade.guidance.wingetCommand"
-    : guidance === "homebrew"
-      ? "appUpgrade.guidance.homebrewCommand"
-      : null;
+  const commandKey =
+    guidance === "winget"
+      ? "appUpgrade.guidance.wingetCommand"
+      : guidance === "homebrew"
+        ? "appUpgrade.guidance.homebrewCommand"
+        : null;
 
   return (
     <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3 text-sm">
-      <p className="font-medium text-[var(--scry-ink2)]">{t("appUpgrade.operatorGuidance")}</p>
+      <p className="font-medium text-[var(--scry-ink2)]">
+        {t("appUpgrade.operatorGuidance")}
+      </p>
       <p className="mt-1 text-[var(--scry-muted3)]">
         {t(`appUpgrade.guidance.${guidance}`)}
       </p>
       {commandKey ? (
-        <code data-code-font className="mt-2 inline-block rounded bg-[var(--scry-soft)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+        <code
+          data-code-font
+          className="mt-2 inline-block rounded bg-[var(--scry-soft)] px-2 py-1 text-xs text-[var(--scry-ink2)]"
+        >
           {t(commandKey)}
         </code>
       ) : null}
       {guidance === "disabled" ? (
-        <code data-code-font className="mt-2 inline-block rounded bg-[var(--scry-soft)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+        <code
+          data-code-font
+          className="mt-2 inline-block rounded bg-[var(--scry-soft)] px-2 py-1 text-xs text-[var(--scry-ink2)]"
+        >
           {t("appUpgrade.guidance.disabledVariable")}
         </code>
       ) : null}
@@ -223,17 +249,26 @@ export function ApplicationUpgradeSection() {
   const { status, loading, refresh } = useApplicationUpgradeStatus();
   const activeRun = status?.activeRun ?? null;
   const latestRun = status?.latestRun ?? null;
-  const activeProgress = normalizeApplicationUpgradeProgress(activeRun?.progressJson);
-  const latestProgress = normalizeApplicationUpgradeProgress(latestRun?.progressJson);
+  const activeProgress = normalizeApplicationUpgradeProgress(
+    activeRun?.progressJson,
+  );
+  const latestProgress = normalizeApplicationUpgradeProgress(
+    latestRun?.progressJson,
+  );
   const rebootRequired =
-    activeProgress?.phase === "reboot_required" || latestProgress?.phase === "reboot_required";
+    activeProgress?.phase === "reboot_required" ||
+    latestProgress?.phase === "reboot_required";
 
   return (
     <section className="overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]">
       <div className="flex flex-col gap-3 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-[15px] font-semibold text-[var(--scry-ink2)]">{t("appUpgrade.title")}</h2>
-          <p className="mt-1 text-sm text-[var(--scry-muted3)]">{t("appUpgrade.subtitle")}</p>
+          <h2 className="text-[15px] font-semibold text-[var(--scry-ink2)]">
+            {t("appUpgrade.title")}
+          </h2>
+          <p className="mt-1 text-sm text-[var(--scry-muted3)]">
+            {t("appUpgrade.subtitle")}
+          </p>
         </div>
         {status?.eligible ? (
           <ApplicationUpgradeAction
@@ -245,21 +280,37 @@ export function ApplicationUpgradeSection() {
         ) : null}
       </div>
       <div className="space-y-4 p-4 sm:p-5">
-        {loading && !status ? <p className="text-sm text-[var(--scry-muted3)]">{t("appUpgrade.loading")}</p> : null}
+        {loading && !status ? (
+          <p className="text-sm text-[var(--scry-muted3)]">
+            {t("appUpgrade.loading")}
+          </p>
+        ) : null}
         {status ? (
           <>
             <dl className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3">
-                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.currentVersion")}</dt>
-                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{status.currentVersion || t("label.unknown")}</dd>
+                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">
+                  {t("appUpgrade.currentVersion")}
+                </dt>
+                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">
+                  {status.currentVersion || t("label.unknown")}
+                </dd>
               </div>
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3">
-                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.availableVersion")}</dt>
-                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{status.updateVersion ?? t("appUpgrade.noUpdate")}</dd>
+                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">
+                  {t("appUpgrade.availableVersion")}
+                </dt>
+                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">
+                  {status.updateVersion ?? t("appUpgrade.noUpdate")}
+                </dd>
               </div>
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3">
-                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.installationKind")}</dt>
-                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{t(INSTALLATION_KIND_KEYS[status.installationKind])}</dd>
+                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">
+                  {t("appUpgrade.installationKind")}
+                </dt>
+                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">
+                  {t(INSTALLATION_KIND_KEYS[status.installationKind])}
+                </dd>
               </div>
             </dl>
 
@@ -271,22 +322,31 @@ export function ApplicationUpgradeSection() {
 
             {activeRun ? (
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3 text-sm">
-                <p className="font-medium text-[var(--scry-ink2)]">{t("appUpgrade.activeRun")}</p>
+                <p className="font-medium text-[var(--scry-ink2)]">
+                  {t("appUpgrade.activeRun")}
+                </p>
                 <p className="mt-1 text-[var(--scry-muted3)]">
-                  {t("appUpgrade.runStatusLabel", { status: runStatusLabel(activeRun, t) })}
+                  {t("appUpgrade.runStatusLabel", {
+                    status: runStatusLabel(activeRun, t),
+                  })}
                   {" · "}
                   {t(phaseLabelKey(activeProgress?.phase ?? null))}
                 </p>
-                {activeProgress?.phase === "downloading" && activeProgress.downloadedBytes !== null ? (
+                {activeProgress?.phase === "downloading" &&
+                activeProgress.downloadedBytes !== null ? (
                   <p className="mt-1 text-[var(--scry-muted3)]">
                     {activeProgress.totalBytes !== null
                       ? t("appUpgrade.downloadProgress", {
-                        downloaded: formatByteCount(activeProgress.downloadedBytes),
-                        total: formatByteCount(activeProgress.totalBytes),
-                      })
+                          downloaded: formatByteCount(
+                            activeProgress.downloadedBytes,
+                          ),
+                          total: formatByteCount(activeProgress.totalBytes),
+                        })
                       : t("appUpgrade.downloadedBytes", {
-                        downloaded: formatByteCount(activeProgress.downloadedBytes),
-                      })}
+                          downloaded: formatByteCount(
+                            activeProgress.downloadedBytes,
+                          ),
+                        })}
                   </p>
                 ) : null}
               </div>
@@ -294,14 +354,22 @@ export function ApplicationUpgradeSection() {
 
             {latestRun ? (
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3 text-sm">
-                <p className="font-medium text-[var(--scry-ink2)]">{t("appUpgrade.latestRun")}</p>
+                <p className="font-medium text-[var(--scry-ink2)]">
+                  {t("appUpgrade.latestRun")}
+                </p>
                 <p className="mt-1 text-[var(--scry-muted3)]">
-                  {t("appUpgrade.runStatusLabel", { status: runStatusLabel(latestRun, t) })}
+                  {t("appUpgrade.runStatusLabel", {
+                    status: runStatusLabel(latestRun, t),
+                  })}
                   {` · ${formatUiDateTime(latestRun.completedAt ?? latestRun.startedAt, dateTimeFormat)}`}
                 </p>
-                {latestRun.errorText ?? latestProgress?.error ?? latestRun.summaryText ? (
+                {(latestRun.errorText ??
+                latestProgress?.error ??
+                latestRun.summaryText) ? (
                   <p className="mt-1 text-[var(--scry-muted3)]">
-                    {latestRun.errorText ?? latestProgress?.error ?? latestRun.summaryText}
+                    {latestRun.errorText ??
+                      latestProgress?.error ??
+                      latestRun.summaryText}
                   </p>
                 ) : null}
               </div>

@@ -42,8 +42,9 @@ impl AppUseCase {
                 .await?
             {
                 if existing_id.as_ref().is_some_and(|id| id != &existing.id) {
-                    return Err(AppError::Validation(
-                        "external ids map to multiple titles".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::media_requests::EXTERNAL_IDS_MAP_MULTIPLE_TITLES,
+                        "external ids map to multiple titles",
                     ));
                 }
                 existing_id = Some(existing.id);
@@ -59,7 +60,10 @@ impl AppUseCase {
             .try_acquire(&format!("maintenance-title:{}", title.id))
             .await
             .ok_or_else(|| {
-                AppError::Validation("title is being modified; retry approval".into())
+                AppError::validation_refused(
+                    crate::error_reasons::media_requests::TITLE_BEING_MODIFIED,
+                    "title is being modified; retry approval",
+                )
             })?;
         if existing_id.is_some()
             && self
@@ -70,8 +74,9 @@ impl AppUseCase {
                 .await?
                 .is_none()
         {
-            return Err(AppError::Validation(
-                "title changed during approval; retry".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::TITLE_CHANGED_DURING_APPROVAL,
+                "title changed during approval; retry",
             ));
         }
         Ok((title, guard))
@@ -229,21 +234,26 @@ impl AppUseCase {
     ) -> AppResult<CommittedMediaRequest> {
         let title = input.title.trim().to_string();
         if title.is_empty() {
-            return Err(AppError::Validation("request title is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::REQUEST_TITLE_REQUIRED,
+                "request title is required",
+            ));
         }
 
         let mut external_ids = normalize_media_request_external_ids(input.external_ids)?;
         if external_ids.is_empty() {
-            return Err(AppError::Validation(
-                "media requests must include SMG external identifiers".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::MEDIA_REQUESTS_INVALID,
+                "media requests must include SMG external identifiers",
             ));
         }
         if !external_ids
             .iter()
             .any(is_smg_request_correlation_external_id)
         {
-            return Err(AppError::Validation(
-                "media requests must include a searchable SMG identifier".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::MEDIA_REQUESTS_INVALID,
+                "media requests must include a searchable SMG identifier",
             ));
         }
 
@@ -253,12 +263,15 @@ impl AppUseCase {
             .libraries
             .get_by_id(input.library_id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound("library not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::LIBRARY_NOT_FOUND,
+                    "library not found",
+                )
+            })?;
 
         if library.facet != input.facet {
-            return Err(AppError::Validation(
-                "library facet does not match requested media facet".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_requests::LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET, "library facet does not match requested media facet"));
         }
 
         self.require_request_submission_permission(actor, &library.id, input.admission)
@@ -666,9 +679,7 @@ impl AppUseCase {
             && (approved_monitor_type.as_deref() != Some("advanced")
                 || approved_monitor_selection != request.requested_monitor_selection)
         {
-            return Err(AppError::Validation(
-                "a list movie approval must retain its selected movie".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_requests::LIST_MOVIE_APPROVAL_MUST_RETAIN_SELECTED_MOVIE, "a list movie approval must retain its selected movie"));
         }
         let mut new_title = media_request_to_new_title(
             &request,
@@ -852,7 +863,10 @@ impl AppUseCase {
     ) -> AppResult<MediaRequest> {
         let request_id = request_id.trim();
         if request_id.is_empty() {
-            return Err(AppError::Validation("media request id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::ID_REQUIRED,
+                "media request id is required",
+            ));
         }
         let request = self
             .services
@@ -860,7 +874,12 @@ impl AppUseCase {
             .media_requests
             .get(request_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::RESOURCE_NOT_FOUND,
+                    "media request not found",
+                )
+            })?;
         self.require_library_permission(
             actor,
             &request.library_id,
@@ -868,8 +887,9 @@ impl AppUseCase {
         )
         .await?;
         if request.status != MediaRequestStatus::Rejected {
-            return Err(AppError::Validation(
-                "only a dismissed media request can be reopened".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::ONLY_DISMISSED_MEDIA_REQUEST_REOPENED,
+                "only a dismissed media request can be reopened",
             ));
         }
         // A pending request for something the library already holds is
@@ -914,7 +934,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(&request.library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("library not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::LIBRARY_NOT_FOUND,
+                    "library not found",
+                )
+            })?;
         let profile_reference_guard = self
             .runtime
             .catalog
@@ -937,8 +962,9 @@ impl AppUseCase {
             && (requested_monitor_type.as_deref() != Some("advanced")
                 || requested_monitor_selection != request.requested_monitor_selection)
         {
-            return Err(AppError::Validation(
-                "a list movie request must retain its selected movie".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::LIST_MOVIE_REQUEST_MUST_RETAIN_SELECTED_MOVIE,
+                "a list movie request must retain its selected movie",
             ));
         }
         let requested_lease_days = crate::request_rules::validate_lease_days(
@@ -1014,7 +1040,12 @@ impl AppUseCase {
             .media_requests
             .get(&update.request.id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media request not found".into()))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::RESOURCE_NOT_FOUND,
+                    "media request not found",
+                )
+            })
     }
 
     pub async fn cancel_my_media_request(&self, actor: &User, request_id: &str) -> AppResult<u64> {
@@ -1074,15 +1105,24 @@ impl AppUseCase {
         // defined cannot fail the approval it just granted, and the row, the
         // event and the title all carry the same list.
 
-        let approved_quality_profile_id = request
-            .requested_quality_profile_id
-            .clone()
-            .ok_or_else(|| AppError::Validation("approved quality profile is required".into()))?;
+        let approved_quality_profile_id =
+            request
+                .requested_quality_profile_id
+                .clone()
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_REQUIRED,
+                        "approved quality profile is required",
+                    )
+                })?;
         let approved_quality_profile_name = request
             .requested_quality_profile_name
             .clone()
             .ok_or_else(|| {
-                AppError::Validation("approved quality profile name is required".into())
+                AppError::validation_refused(
+                    crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_NAME_REQUIRED,
+                    "approved quality profile name is required",
+                )
             })?;
         let approved_monitor_type = normalize_requested_monitor_type(
             &request.facet,
@@ -1406,7 +1446,12 @@ impl AppUseCase {
             .titles
             .get_by_id_without_external_ids(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("title not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::TITLE_NOT_FOUND,
+                    "title not found",
+                )
+            })?;
         self.require_library_permission(actor, &title.library_id, LibraryPermission::ManageTitles)
             .await?;
         self.services
@@ -1435,9 +1480,7 @@ impl AppUseCase {
                 .expires_at
                 .is_some_and(|current| expires_at <= current)
         {
-            return Err(AppError::Validation(
-                "claim extension must lengthen a finite lease into the future".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_requests::CLAIM_EXTENSION_MUST_LENGTHEN_FINITE_LEASE_INTO_FUTURE, "claim extension must lengthen a finite lease into the future"));
         }
         self.services
             .catalog
@@ -1477,7 +1520,8 @@ impl AppUseCase {
         let claim = self.require_manageable_claim(actor, claim_id).await?;
         let reason = reason.trim();
         if reason.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::RELEASE_REASON_REQUIRED,
                 "a release reason is required".to_string(),
             ));
         }
@@ -1500,7 +1544,12 @@ impl AppUseCase {
             .lifecycle_claims
             .get(claim_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("lifecycle claim not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::LIFECYCLE_CLAIM_NOT_FOUND,
+                    "lifecycle claim not found",
+                )
+            })?;
         self.require_library_permission(actor, &claim.library_id, LibraryPermission::ManageTitles)
             .await?;
         Ok(claim)
@@ -1512,7 +1561,12 @@ impl AppUseCase {
             .lifecycle_claims
             .get(claim_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("lifecycle claim not found".into()))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::LIFECYCLE_CLAIM_NOT_FOUND,
+                    "lifecycle claim not found",
+                )
+            })
     }
 
     pub async fn pending_media_request_counts(
@@ -1706,7 +1760,10 @@ impl AppUseCase {
     ) -> AppResult<MediaRequest> {
         let request_id = request_id.trim();
         if request_id.is_empty() {
-            return Err(AppError::Validation("media request id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::ID_REQUIRED,
+                "media request id is required",
+            ));
         }
 
         let request = self
@@ -1715,10 +1772,16 @@ impl AppUseCase {
             .media_requests
             .get(request_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::RESOURCE_NOT_FOUND,
+                    "media request not found",
+                )
+            })?;
         if request.status != MediaRequestStatus::Pending {
-            return Err(AppError::Validation(
-                "media request is no longer pending".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::NO_LONGER_PENDING,
+                "media request is no longer pending",
             ));
         }
 
@@ -1738,7 +1801,10 @@ impl AppUseCase {
     ) -> AppResult<MediaRequest> {
         let request_id = request_id.trim();
         if request_id.is_empty() {
-            return Err(AppError::Validation("media request id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::ID_REQUIRED,
+                "media request id is required",
+            ));
         }
 
         let request = self
@@ -1747,7 +1813,12 @@ impl AppUseCase {
             .media_requests
             .get(request_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_requests::RESOURCE_NOT_FOUND,
+                    "media request not found",
+                )
+            })?;
 
         self.require_own_request_permission(actor, &request.library_id)
             .await?;
@@ -1757,14 +1828,16 @@ impl AppUseCase {
             .iter()
             .any(|requester| requester.user_id == actor.id)
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::media_requests::DO_NOT_OWN_MEDIA_REQUEST,
                 "You do not own this media request".to_string(),
             ));
         }
 
         if request.status != MediaRequestStatus::Pending {
-            return Err(AppError::Validation(
-                "media request is no longer pending".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::NO_LONGER_PENDING,
+                "media request is no longer pending",
             ));
         }
 
@@ -1807,8 +1880,9 @@ impl AppUseCase {
                 )
                 .await?;
             if !existing.is_empty() {
-                return Err(AppError::Validation(
-                    "title already exists in the target library".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::media_requests::TITLE_ALREADY_EXISTS_TARGET_LIBRARY,
+                    "title already exists in the target library",
                 ));
             }
         }
@@ -1830,8 +1904,9 @@ impl AppUseCase {
             .iter()
             .any(|profile_id| profile_id == &requested_quality_profile_id)
         {
-            return Err(AppError::Validation(
-                "requested quality profile is not allowed for this library".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_requests::REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY,
+                "requested quality profile is not allowed for this library",
             ));
         }
 
@@ -1843,16 +1918,23 @@ impl AppUseCase {
         &self,
         quality_profile_id: &str,
     ) -> AppResult<(String, String)> {
-        let quality_profile_id =
-            normalized_optional_string(Some(quality_profile_id.to_string()))
-                .ok_or_else(|| AppError::Validation("quality profile id is required".into()))?;
+        let quality_profile_id = normalized_optional_string(Some(quality_profile_id.to_string()))
+            .ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::media_requests::QUALITY_PROFILE_ID_REQUIRED,
+                "quality profile id is required",
+            )
+        })?;
         let profile_settings = self.load_quality_profile_settings().await?;
         let profile = crate::settings::runtime::quality_profile_by_id(
             &profile_settings.profiles,
             &quality_profile_id,
         )?
         .ok_or_else(|| {
-            AppError::Validation(format!("unknown quality profile {quality_profile_id}"))
+            AppError::validation_refused(
+                crate::error_reasons::media_requests::QUALITY_PROFILE_UNKNOWN,
+                format!("unknown quality profile {quality_profile_id}"),
+            )
         })?;
         Ok((profile.id.clone(), profile.name.clone()))
     }
@@ -2200,7 +2282,7 @@ impl AppUseCase {
                             )
                         })
                         .ok_or_else(|| {
-                            AppError::NotFound("movie metadata response missing title".to_string())
+                            AppError::not_found_reason(crate::error_reasons::media_requests::MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND, "movie metadata response missing title".to_string())
                         }),
                     Err(error) => Err(error),
                 }
@@ -2436,9 +2518,7 @@ pub(crate) fn normalize_requested_monitor_type(
         .collect::<String>()
         .to_ascii_lowercase();
     match normalized.as_str() {
-        MONITOR_TYPE_ADVANCED if *facet == MediaFacet::Movie => Err(AppError::Validation(
-            "advanced monitoring is only valid for series and anime titles".into(),
-        )),
+        MONITOR_TYPE_ADVANCED if *facet == MediaFacet::Movie => Err(AppError::validation_refused(crate::error_reasons::media_requests::ADVANCED_MONITORING_ONLY_VALID_SERIES_ANIME_TITLES, "advanced monitoring is only valid for series and anime titles")),
         "monitored"
         | "unmonitored"
         | "futureepisodes"
@@ -2446,7 +2526,7 @@ pub(crate) fn normalize_requested_monitor_type(
         | "allepisodes"
         | "none"
         | MONITOR_TYPE_ADVANCED => Ok(Some(normalized)),
-        _ => Err(AppError::Validation(format!(
+        _ => Err(AppError::validation_refused(crate::error_reasons::media_requests::REQUEST_MONITOR_TYPE_UNSUPPORTED, format!(
             "unsupported request monitor type {value}"
         ))),
     }
@@ -2465,8 +2545,9 @@ pub(crate) fn normalize_requested_monitor_selection(
         .map(|selection| selection.normalized())
         .filter(|selection| !selection.is_empty())
         .ok_or_else(|| {
-            AppError::Validation(
-                "advanced monitoring requires at least one season or series movie".into(),
+            AppError::validation_refused(
+                crate::error_reasons::media_requests::MONITORING_TARGET_REQUIRED,
+                "advanced monitoring requires at least one season or series movie",
             )
         })?;
     Ok(Some(selection))

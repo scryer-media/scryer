@@ -289,20 +289,27 @@ pub(super) fn normalize_media_server_base_url(
         value
     };
     if value.is_empty() {
-        return Err(AppError::Validation(
-            "media server base URL is required".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::BASE_URL_REQUIRED,
+            "media server base URL is required",
         ));
     }
-    let parsed = url::Url::parse(value)
-        .map_err(|_| AppError::Validation("media server base URL is invalid".into()))?;
+    let parsed = url::Url::parse(value).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::media_servers::BASE_URL_INVALID,
+            "media server base URL is invalid",
+        )
+    })?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(AppError::Validation(
-            "media server base URL must be an HTTP or HTTPS URL".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::BASE_URL_INVALID,
+            "media server base URL must be an HTTP or HTTPS URL",
         ));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err(AppError::Validation(
-            "media server base URL must not include a query or fragment".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::BASE_URL_QUERY_OR_FRAGMENT,
+            "media server base URL must not include a query or fragment",
         ));
     }
     Ok(parsed.as_str().trim_end_matches('/').to_string())
@@ -314,21 +321,28 @@ pub(super) fn normalize_media_server_external_url(
     let Some(value) = normalize_optional_string(value) else {
         return Ok(None);
     };
-    let parsed = url::Url::parse(&value)
-        .map_err(|_| AppError::Validation("media server external URL is invalid".into()))?;
+    let parsed = url::Url::parse(&value).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::media_servers::EXTERNAL_URL_INVALID,
+            "media server external URL is invalid",
+        )
+    })?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(AppError::Validation(
-            "media server external URL must be an HTTP or HTTPS URL".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::EXTERNAL_URL_INVALID,
+            "media server external URL must be an HTTP or HTTPS URL",
         ));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(AppError::Validation(
-            "media server external URL must not include credentials".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::EXTERNAL_URL_CREDENTIALS_FORBIDDEN,
+            "media server external URL must not include credentials",
         ));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err(AppError::Validation(
-            "media server external URL must not include a query or fragment".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::media_servers::EXTERNAL_URL_QUERY_OR_FRAGMENT,
+            "media server external URL must not include a query or fragment",
         ));
     }
     Ok(Some(parsed.as_str().trim_end_matches('/').to_string()))
@@ -354,8 +368,9 @@ pub(super) fn normalize_path_mappings(
             .iter()
             .any(|existing: &MediaServerPathMapping| existing.source_path == source_path)
         {
-            return Err(AppError::Validation(
-                "media server path mappings must have unique source paths".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::PATH_MAPPINGS_INVALID,
+                "media server path mappings must have unique source paths",
             ));
         }
         normalized.push(MediaServerPathMapping {
@@ -404,7 +419,12 @@ mod tests {
             "https://admin:secret@media.example.test".into(),
         ));
 
-        assert!(matches!(result, Err(AppError::Validation(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
+        ));
     }
 
     #[test]

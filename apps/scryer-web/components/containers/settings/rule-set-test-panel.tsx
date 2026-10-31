@@ -120,7 +120,9 @@ function episodeLabel(episode: Episode, t: (key: string) => string): string {
     episode.episodeNumber ?? 0,
   ).padStart(2, "0")}`;
   const title = episode.title?.trim() || episode.episodeLabel?.trim();
-  return title?.startsWith(prefix) ? title : `${prefix} - ${episodeTitleOrTba(title, t)}`;
+  return title?.startsWith(prefix)
+    ? title
+    : `${prefix} - ${episodeTitleOrTba(title, t)}`;
 }
 
 const LISTING_TEXT_FIELDS = [
@@ -145,6 +147,7 @@ function listingFactLines(
         : String(listing.ageDays);
   return [
     [t("settings.ruleTestListingPublishedAt"), listing.publishedAt || unknown],
+    [t("settings.ruleTestListingProtocol"), listing.protocol || unknown],
     [t("settings.ruleTestResultAgeDays"), age],
     [
       t("settings.ruleTestListingThumbsUp"),
@@ -235,7 +238,9 @@ export function RuleSetTestPanel({
   const [releaseName, setReleaseName] = React.useState("");
   const [sizeGib, setSizeGib] = React.useState("");
   const [mode, setMode] = React.useState<RuleSetTestMode>("release");
-  const [storedFiles, setStoredFiles] = React.useState<RuleSetTestStoredFileRow[]>([]);
+  const [storedFiles, setStoredFiles] = React.useState<
+    RuleSetTestStoredFileRow[]
+  >([]);
   const [mediaFileId, setMediaFileId] = React.useState("");
   const [loadingFiles, setLoadingFiles] = React.useState(false);
   const [listingOpen, setListingOpen] = React.useState(false);
@@ -363,7 +368,9 @@ export function RuleSetTestPanel({
           .toPromise();
         if (filesError) throw filesError;
         if (!cancelled)
-          setStoredFiles((data?.title?.mediaFiles ?? []) as RuleSetTestStoredFileRow[]);
+          setStoredFiles(
+            (data?.title?.mediaFiles ?? []) as RuleSetTestStoredFileRow[],
+          );
       } catch {
         if (!cancelled) setError(t("settings.ruleTestStoredFileLoadFailed"));
       } finally {
@@ -391,7 +398,9 @@ export function RuleSetTestPanel({
 
   const test = async () => {
     if (!canTest || !selectedTitle) return;
-    const size = storedFileMode ? { value: undefined } : sizeBytesFromGib(sizeGib);
+    const size = storedFileMode
+      ? { value: undefined }
+      : sizeBytesFromGib(sizeGib);
     if ("error" in size) {
       setError(size.error);
       return;
@@ -592,10 +601,7 @@ export function RuleSetTestPanel({
           ) : (
             <>
               <div className="max-w-sm">
-                <Label
-                  htmlFor="settings-rule-test-size"
-                  className="mb-1 block"
-                >
+                <Label htmlFor="settings-rule-test-size" className="mb-1 block">
                   Size (GiB, optional)
                 </Label>
                 <Input
@@ -627,6 +633,45 @@ export function RuleSetTestPanel({
                     {t("settings.ruleTestListingFactsHelp")}
                   </p>
                   <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p
+                        id="settings-rule-test-listing-protocol"
+                        className="mb-1 block text-sm font-medium"
+                      >
+                        {t("settings.ruleTestListingProtocol")}
+                      </p>
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        value={listing.protocol || "unknown"}
+                        onValueChange={(value) =>
+                          updateListing(
+                            "protocol",
+                            value === "unknown" ? "" : value,
+                          )
+                        }
+                        aria-labelledby="settings-rule-test-listing-protocol"
+                      >
+                        <ToggleGroupItem
+                          value="unknown"
+                          variant="outline"
+                          size="sm"
+                        >
+                          {t("settings.ruleTestListingUnknown")}
+                        </ToggleGroupItem>
+                        {["usenet", "torrent", "http"].map((protocol) => (
+                          <ToggleGroupItem
+                            key={protocol}
+                            value={protocol}
+                            variant="outline"
+                            size="sm"
+                          >
+                            {protocol}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </div>
                     {LISTING_TEXT_FIELDS.map(([field, labelKey]) => (
                       <div key={field}>
                         <Label
@@ -678,13 +723,25 @@ export function RuleSetTestPanel({
                         }
                         aria-labelledby="settings-rule-test-listing-password-protected"
                       >
-                        <ToggleGroupItem value="unknown" variant="outline" size="sm">
+                        <ToggleGroupItem
+                          value="unknown"
+                          variant="outline"
+                          size="sm"
+                        >
                           {t("settings.ruleTestListingUnknown")}
                         </ToggleGroupItem>
-                        <ToggleGroupItem value="true" variant="outline" size="sm">
+                        <ToggleGroupItem
+                          value="true"
+                          variant="outline"
+                          size="sm"
+                        >
                           {t("settings.ruleTestListingYes")}
                         </ToggleGroupItem>
-                        <ToggleGroupItem value="false" variant="outline" size="sm">
+                        <ToggleGroupItem
+                          value="false"
+                          variant="outline"
+                          size="sm"
+                        >
                           {t("settings.ruleTestListingNo")}
                         </ToggleGroupItem>
                       </ToggleGroup>
@@ -831,9 +888,14 @@ export function RuleSetTestPanel({
                                 : ""}
                             </span>
                             {entry.matched ? (
-                              <ScoreValue className="shrink-0" score={entry.score ?? 0} />
+                              <ScoreValue
+                                className="shrink-0"
+                                score={entry.score ?? 0}
+                              />
                             ) : (
-                              <span className="shrink-0 text-muted-foreground">No match</span>
+                              <span className="shrink-0 text-muted-foreground">
+                                No match
+                              </span>
                             )}
                           </div>
                           {entry.entries?.length ? (
@@ -842,8 +904,13 @@ export function RuleSetTestPanel({
                               entries={entry.entries.map((scoreEntry) => ({
                                 code: scoreEntry.code,
                                 delta: scoreEntry.delta,
-                                ...(scoreEntry.kind ? { kind: scoreEntry.kind } : {}),
-                                label: previewEntryLabel(scoreEntry, result.parsed),
+                                ...(scoreEntry.kind
+                                  ? { kind: scoreEntry.kind }
+                                  : {}),
+                                label: previewEntryLabel(
+                                  scoreEntry,
+                                  result.parsed,
+                                ),
                               }))}
                             />
                           ) : null}

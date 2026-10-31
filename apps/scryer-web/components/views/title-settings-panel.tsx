@@ -11,7 +11,10 @@ import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { useTitleSettingsOptions } from "@/lib/hooks/use-title-settings-options";
 import { movieAvailabilityQuery } from "@/lib/graphql/queries";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRecord, MovieAvailabilityRecord } from "@/lib/types/titles";
+import type {
+  LibraryRecord,
+  MovieAvailabilityRecord,
+} from "@/lib/types/titles";
 
 export type TitleSettingsPanelTitle = InlineTitleSettingsTitle & {
   name: string;
@@ -63,9 +66,10 @@ export function TitleSettingsPanel({
   experimentalFeaturesEnabled?: boolean;
 }) {
   const client = useClient();
-  const [movieAvailability, setMovieAvailability] = React.useState<MovieAvailabilityRecord | null>(
-    title.movieAvailability ?? null,
-  );
+  const [movieAvailability, setMovieAvailability] =
+    React.useState<MovieAvailabilityRecord | null>(
+      title.movieAvailability ?? null,
+    );
   React.useEffect(() => {
     let current = true;
     setMovieAvailability(title.movieAvailability ?? null);
@@ -75,19 +79,28 @@ export function TitleSettingsPanel({
       };
     }
     void client
-      .query<{ title?: { movieAvailability?: MovieAvailabilityRecord | null } | null }>(
+      .query<{
+        title?: { movieAvailability?: MovieAvailabilityRecord | null } | null;
+      }>(
         movieAvailabilityQuery,
         { id: title.id },
         { requestPolicy: "network-only" },
       )
       .toPromise()
       .then(({ data }) => {
-        if (current) setMovieAvailability(data?.title?.movieAvailability ?? null);
+        if (current)
+          setMovieAvailability(data?.title?.movieAvailability ?? null);
       });
     return () => {
       current = false;
     };
-  }, [client, title.facet, title.id, title.minAvailability, title.movieAvailability]);
+  }, [
+    client,
+    title.facet,
+    title.id,
+    title.minAvailability,
+    title.movieAvailability,
+  ]);
 
   const { qualityProfiles, defaultRootFolder } = useTitleSettingsOptions(
     title.facet,
@@ -154,7 +167,9 @@ export function TitleSettingsPanel({
         idPrefix={idPrefix}
         currentLibraryName={currentLibraryName}
         rootFolderReadOnly
-        onOpenMove={experimentalFeaturesEnabled ? () => setMoveOpen(true) : undefined}
+        onOpenMove={
+          experimentalFeaturesEnabled ? () => setMoveOpen(true) : undefined
+        }
         footer={
           <>
             <div className="flex flex-wrap items-center justify-end gap-2 px-3 py-3">
@@ -175,7 +190,9 @@ export function TitleSettingsPanel({
               />
               {footerActions}
             </div>
-            {footerContent ? <div className="px-3 pb-3">{footerContent}</div> : null}
+            {footerContent ? (
+              <div className="px-3 pb-3">{footerContent}</div>
+            ) : null}
           </>
         }
       />

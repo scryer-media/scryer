@@ -132,6 +132,8 @@ fn revision_pack_rank_requires_every_incumbent_to_be_related() {
 #[test]
 fn revision_queue_comparison_uses_the_profile_policy() {
     let subject = occupied(&[], 0).with_queued(vec![crate::admission::QueuedRelease {
+        missing_history: false,
+        history_cutoff_reached: false,
         title: "Show.S01E01.1080p.REPACK2-GROUP".into(),
         covers: vec!["ep-1".into(), "ep-2".into()],
         tier_index: Some(0),

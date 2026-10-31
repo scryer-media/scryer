@@ -7,7 +7,9 @@ export function PageShellFallback() {
         <span className="flex h-9 w-9 items-center justify-center rounded-[9px] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-accent-ring)]">
           <LoadingMark className="h-4 w-4" />
         </span>
-        <span className="text-sm font-medium text-[var(--scry-muted)]">Loading...</span>
+        <span className="text-sm font-medium text-[var(--scry-muted)]">
+          Loading...
+        </span>
       </div>
     </div>
   );

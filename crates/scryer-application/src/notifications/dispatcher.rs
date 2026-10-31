@@ -2442,6 +2442,7 @@ mod tests {
                     client_name: None,
                     client_type: None,
                     quality: None,
+                    reason_code: None,
                     reason: Some("archive corrupt".to_string()),
                     episode_ids: Vec::new(),
                     collection_id: None,

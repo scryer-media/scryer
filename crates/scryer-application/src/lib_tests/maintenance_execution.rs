@@ -1169,7 +1169,13 @@ async fn destructive_arming_requires_system_settings_authority() {
         )
         .await
         .expect_err("destructive arming must demand system-settings authority");
-    assert!(matches!(refused, AppError::Unauthorized(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

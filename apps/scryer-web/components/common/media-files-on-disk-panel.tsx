@@ -20,17 +20,27 @@ import {
   type MediaInfoFile,
 } from "@/components/common/media-info-badges";
 import { MediaInfoButton } from "@/components/common/media-info-dialog";
-import { audioStreamsForFile, formatMediaFileSize } from "@/lib/utils/media-info-format";
+import {
+  audioStreamsForFile,
+  formatMediaFileSize,
+} from "@/lib/utils/media-info-format";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { useAuth } from "@/lib/hooks/use-auth";
-import { canManageLibrarySubtitles, hasLibraryPermission, LIBRARY_PERMISSIONS } from "@/lib/utils/permissions";
+import {
+  canManageLibrarySubtitles,
+  hasLibraryPermission,
+  LIBRARY_PERMISSIONS,
+} from "@/lib/utils/permissions";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
+import {
+  audioFormatPills,
+  hdrFormatPills,
+} from "@/lib/utils/media-format-pills";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -58,11 +68,17 @@ function selectedTitleResolutionLabel(file: MediaInfoFile): string | null {
 }
 
 function selectedTitleCodecLabel(file: MediaInfoFile): string | null {
-  return compactMediaValue(file.videoCodecParsed) ?? compactMediaValue(file.videoCodec);
+  return (
+    compactMediaValue(file.videoCodecParsed) ??
+    compactMediaValue(file.videoCodec)
+  );
 }
 
 function selectedTitleAudioLabel(file: MediaInfoFile): string | null {
-  return compactMediaValue(file.audioCodecParsed) ?? compactMediaValue(file.audioCodec);
+  return (
+    compactMediaValue(file.audioCodecParsed) ??
+    compactMediaValue(file.audioCodec)
+  );
 }
 
 type MediaFilesOnDiskPanelProps<TFile extends MediaFileOnDisk> = {
@@ -125,7 +141,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const { user } = useAuth();
-  const canRefreshScores = hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles);
+  const canRefreshScores = hasLibraryPermission(
+    user,
+    libraryId,
+    LIBRARY_PERMISSIONS.manageTitles,
+  );
   const [subtitleSearchTarget, setSubtitleSearchTarget] = React.useState<{
     mediaFileId: string;
     filePath: string;
@@ -162,7 +182,8 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
         .map((file, index) => ({ file, index }))
         .sort((left, right) => {
           const roleDelta =
-            mediaFileRoleSortRank(left.file.role) - mediaFileRoleSortRank(right.file.role);
+            mediaFileRoleSortRank(left.file.role) -
+            mediaFileRoleSortRank(right.file.role);
           return roleDelta !== 0 ? roleDelta : left.index - right.index;
         })
         .map(({ file }) => file),
@@ -172,10 +193,14 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   return (
     <div>
       {title ? (
-        <p className="mb-1 text-xs font-medium text-muted-foreground">{title}</p>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">
+          {title}
+        </p>
       ) : null}
       {orderedMediaFiles.length > 0 ? (
-        <div className={cn(selectedTitlePresentation ? "space-y-4" : "space-y-2")}>
+        <div
+          className={cn(selectedTitlePresentation ? "space-y-4" : "space-y-2")}
+        >
           {orderedMediaFiles.map((file, fileIndex) => {
             const downloads = subtitleDownloadsByMediaFile[file.id] ?? [];
             const role = file.role?.toLowerCase() ?? "";
@@ -183,8 +208,15 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
             const isPrimaryFile = role === "primary";
             const isPromotingFile = primaryFileUpdatingId === file.id;
             const isDeletingFile = deletingFileIds?.has(file.id) ?? false;
-            const discAnalysis = file.analysis && hasDiscInventory(file.analysis.disc, file.analysisAttempt) ? file.analysis : null;
-            const fileDate = formatMediaFileDate(file.createdAt, dateTimeFormat);
+            const discAnalysis =
+              file.analysis &&
+              hasDiscInventory(file.analysis.disc, file.analysisAttempt)
+                ? file.analysis
+                : null;
+            const fileDate = formatMediaFileDate(
+              file.createdAt,
+              dateTimeFormat,
+            );
             const PathIcon = selectedTitlePresentation ? FileIcon : HardDrive;
             const unknownLabel = t("label.unknown");
             const selectedTitleAudio = selectedTitleAudioLabel(file);
@@ -212,7 +244,12 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
               },
               // The parsed release label can already say "TrueHD Atmos".
               ...audioFormatPills(file)
-                .filter((pill) => !selectedTitleAudio?.toLowerCase().includes(pill.toLowerCase()))
+                .filter(
+                  (pill) =>
+                    !selectedTitleAudio
+                      ?.toLowerCase()
+                      .includes(pill.toLowerCase()),
+                )
                 .map(formatPill),
             ];
             const selectedTitleAudioStreams = audioStreamsForFile(file);
@@ -248,9 +285,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                     : "rounded-lg bg-card/55 px-4 py-4",
                 )}
               >
-                <div
-                  className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_auto]"
-                >
+                <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                   <div className="min-w-0 space-y-3">
                     {/* The path wraps, so the icon sits beside its first line. */}
                     <div className="flex items-start gap-2.5">
@@ -263,7 +298,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         )}
                       />
                       <p
-                        id={filePathIdPrefix ? selectorId(filePathIdPrefix, file.id) : undefined}
+                        id={
+                          filePathIdPrefix
+                            ? selectorId(filePathIdPrefix, file.id)
+                            : undefined
+                        }
                         title={file.filePath}
                         className={cn(
                           "min-w-0 leading-5",
@@ -285,7 +324,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                     >
                       {showPrimaryRoleBadge && isPrimaryFile ? (
                         <span
-                          id={selectorId(roleIdPrefix ?? fileRowIdPrefix, "primary", file.id)}
+                          id={selectorId(
+                            roleIdPrefix ?? fileRowIdPrefix,
+                            "primary",
+                            file.id,
+                          )}
                           className={cn(
                             selectedTitlePresentation
                               ? "rounded-[6px] bg-[var(--scry-success-bg)] px-2 py-0.5 text-[10.5px] font-bold text-[var(--scry-success-text)]"
@@ -297,7 +340,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                       ) : null}
                       {isAdditionalFile ? (
                         <span
-                          id={selectorId(roleIdPrefix ?? fileRowIdPrefix, "additional", file.id)}
+                          id={selectorId(
+                            roleIdPrefix ?? fileRowIdPrefix,
+                            "additional",
+                            file.id,
+                          )}
                           className={cn(
                             selectedTitlePresentation
                               ? "rounded-[6px] bg-[var(--scry-info-bg)] px-2 py-0.5 text-[10.5px] font-bold text-[var(--scry-info-text)]"
@@ -310,7 +357,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                       {fileDate ? <span>{fileDate}</span> : null}
                       {file.releaseGroup?.trim() ? (
                         <span
-                          id={selectorId(fileRowIdPrefix, "release-group", file.id)}
+                          id={selectorId(
+                            fileRowIdPrefix,
+                            "release-group",
+                            file.id,
+                          )}
                           title={t("mediaInfo.releaseGroup")}
                           className={cn(
                             selectedTitlePresentation
@@ -322,7 +373,12 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         </span>
                       ) : null}
                     </div>
-                    <FileScoreSummary idPrefix={selectorId(fileRowIdPrefix, "score", file.id)} evaluation={file.currentScoreEvaluation} acquisitionScore={file.acquisitionScore} scoringLog={file.scoringLog} />
+                    <FileScoreSummary
+                      idPrefix={selectorId(fileRowIdPrefix, "score", file.id)}
+                      evaluation={file.currentScoreEvaluation}
+                      acquisitionScore={file.acquisitionScore}
+                      scoringLog={file.scoringLog}
+                    />
                     {selectedTitlePresentation ? (
                       <div className="flex flex-wrap gap-1.5">
                         {selectedTitleBadges.map((badge, badgeIndex) => (
@@ -395,7 +451,12 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         {formatMediaFileSize(file.sizeBytes)}
                       </div>
                     </div>
-                    {(canSearchSubtitles || canRefreshScores || onMakePrimaryFile || onAssignFileToEpisode || onDeleteFile || discAnalysis) ? (
+                    {canSearchSubtitles ||
+                    canRefreshScores ||
+                    onMakePrimaryFile ||
+                    onAssignFileToEpisode ||
+                    onDeleteFile ||
+                    discAnalysis ? (
                       <div className="flex w-full flex-col items-stretch gap-2">
                         <div className="flex w-full flex-col items-stretch gap-2">
                           {canSearchSubtitles ? (
@@ -422,7 +483,11 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             <RefreshScoresButton
                               single
                               appearance="action"
-                              id={selectorId(fileRowIdPrefix, "refresh-score", file.id)}
+                              id={selectorId(
+                                fileRowIdPrefix,
+                                "refresh-score",
+                                file.id,
+                              )}
                               selection={{ fileIds: [file.id] }}
                               className={fileActionClassName}
                             />
@@ -461,7 +526,9 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                               onClick={() => onAssignFileToEpisode(file.id)}
                               title={t("episodeAssign.action")}
                               aria-label={t("episodeAssign.action")}
-                              leadingIcon={<ListOrdered className="h-3.5 w-3.5" />}
+                              leadingIcon={
+                                <ListOrdered className="h-3.5 w-3.5" />
+                              }
                             >
                               {t("episodeAssign.action")}
                             </TextActionButton>
@@ -470,7 +537,10 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         {discAnalysis ? (
                           <DiscTitleButton
                             id={selectorId(discTitleIdPrefix, file.id)}
-                            className={cn("w-full justify-center", selectedTitlePresentation ? "h-8" : undefined)}
+                            className={cn(
+                              "w-full justify-center",
+                              selectedTitlePresentation ? "h-8" : undefined,
+                            )}
                             file={{
                               id: file.id,
                               filePath: file.filePath,
@@ -488,12 +558,19 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             id={selectorId(deleteFileIdPrefix, file.id)}
                             disabled={isDeletingFile}
                             onClick={() => onDeleteFile(file.id)}
-                            className={cn("w-full justify-center", selectedTitlePresentation ? "h-8 rounded-[8px] text-[11.5px]" : undefined)}
-                            leadingIcon={isDeletingFile ? (
-                              <LoadingMark className="h-4 w-4" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
+                            className={cn(
+                              "w-full justify-center",
+                              selectedTitlePresentation
+                                ? "h-8 rounded-[8px] text-[11.5px]"
+                                : undefined,
                             )}
+                            leadingIcon={
+                              isDeletingFile ? (
+                                <LoadingMark className="h-4 w-4" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )
+                            }
                           >
                             {t("label.delete")}
                           </TextActionButton>
@@ -526,7 +603,9 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
           mediaFileId={subtitleSearchTarget.mediaFileId}
           libraryId={libraryId}
           filePath={subtitleSearchTarget.filePath}
-          downloads={subtitleDownloadsByMediaFile[subtitleSearchTarget.mediaFileId] ?? []}
+          downloads={
+            subtitleDownloadsByMediaFile[subtitleSearchTarget.mediaFileId] ?? []
+          }
           onChanged={() => {
             void onRefreshSubtitles();
           }}

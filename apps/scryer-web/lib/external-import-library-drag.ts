@@ -1,7 +1,4 @@
-export type ImportLibraryDropState =
-  | "idle"
-  | "compatible"
-  | "incompatible";
+export type ImportLibraryDropState = "idle" | "compatible" | "incompatible";
 
 export function shouldEnableNativeImportDrag(
   isNarrowViewport: boolean,

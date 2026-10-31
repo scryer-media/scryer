@@ -100,29 +100,19 @@ impl AppUseCase {
             .await?;
 
         if settings.same_tier_min_delta < 0 {
-            return Err(AppError::Validation(
-                "acquisition thresholds cannot be negative".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ACQUISITION_THRESHOLDS_CANNOT_NEGATIVE, "acquisition thresholds cannot be negative".to_string()));
         }
         if settings.poll_interval_seconds < 1 {
-            return Err(AppError::Validation(
-                "acquisition poll interval must be at least 1 second".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ACQUISITION_POLL_INTERVAL_OUT_OF_RANGE, "acquisition poll interval must be at least 1 second".to_string()));
         }
         if settings.walk_interval_seconds < 1 {
-            return Err(AppError::Validation(
-                "acquisition walk interval must be at least 1 second".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ACQUISITION_WALK_INTERVAL_OUT_OF_RANGE, "acquisition walk interval must be at least 1 second".to_string()));
         }
         if settings.long_tail_backfill_max_scopes_per_cycle < 1 {
-            return Err(AppError::Validation(
-                "convergence per-cycle scope ceiling must be at least 1".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CONVERGENCE_PER_CYCLE_SCOPE_CEILING_OUT_OF_RANGE, "convergence per-cycle scope ceiling must be at least 1".to_string()));
         }
         if settings.long_tail_reconverge_days < 0 {
-            return Err(AppError::Validation(
-                "re-converge backstop cannot be negative".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE, "re-converge backstop cannot be negative".to_string()));
         }
 
         self.upsert_system_setting_json(

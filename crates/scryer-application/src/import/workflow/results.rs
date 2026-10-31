@@ -11,10 +11,10 @@ pub async fn retry_failed_import(
         .imports
         .get_import_by_id(import_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("import {import_id}")))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::RESOURCE_NOT_FOUND, format!("import {import_id}")))?;
 
     if !matches!(record.status, ImportStatus::Failed | ImportStatus::Skipped) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED, format!(
             "import {} has status '{}', only failed or skipped imports can be retried",
             import_id,
             record.status.as_str()
@@ -73,7 +73,7 @@ pub async fn retry_failed_import(
             .titles
             .get_by_id(&title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         app.require_library_permission(
             actor,
             &title.library_id,
@@ -89,9 +89,7 @@ pub async fn retry_failed_import(
         .await?
         .is_empty()
     {
-        return Err(AppError::Unauthorized(
-            "You do not have access to this library".to_string(),
-        ));
+        return Err(AppError::unauthorized_reason(crate::error_reasons::import::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
     }
 
     let source_permit = app
@@ -100,25 +98,21 @@ pub async fn retry_failed_import(
         .execution_coordinator
         .try_acquire_source(&completed)
         .await
-        .ok_or_else(|| AppError::Validation("this download is already being imported".into()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_ALREADY_BEING_IMPORTED, "this download is already being imported"))?;
     let current = app
         .services
         .workflow
         .imports
         .get_import_by_id(import_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("import {import_id}")))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::RESOURCE_NOT_FOUND, format!("import {import_id}")))?;
     if current.updated_at != record.updated_at
         || !matches!(current.status, ImportStatus::Failed | ImportStatus::Skipped)
     {
-        return Err(AppError::Validation(
-            "the import changed while retry was requested; refresh its history".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::CHANGED_WHILE_RETRY_REQUESTED, "the import changed while retry was requested; refresh its history"));
     }
     if !std::path::Path::new(&completed.dest_dir).exists() {
-        return Err(AppError::Validation(
-            "the import source is no longer available; restore the download or correct its path before retrying".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
 
     let previous_password_failure = current
@@ -201,9 +195,7 @@ pub async fn retry_failed_import(
                 .await?
                 .is_claimed()
             {
-                return Err(AppError::Validation(
-                    "the download is busy or the import changed; refresh and retry".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_BUSY_IMPORT_CHANGED, "the download is busy or the import changed; refresh and retry"));
             }
             if let Some(handle) = handle.as_ref() {
                 handle
@@ -284,7 +276,7 @@ async fn execute_history_retry(
             // A refusal is recorded like any failed attempt so the claim is
             // reconciled, then surfaced to the requester instead of a result.
             let refusal = match &error {
-                AppError::Unauthorized(message) => Some(AppError::Unauthorized(message.clone())),
+                error @ (AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => Some(error.clone()),
                 _ => None,
             };
             let skip_reason = if crate::archive_extractor::is_password_required_error(&error) {
@@ -349,6 +341,7 @@ async fn retry_tracked_snapshot(
         queued_at: None,
         last_updated_at: None,
         attention_required: false,
+        attention_reason_code: None,
         attention_reason: None,
         download_client_item_id: completed.download_client_item_id.clone(),
         download_id: completed.download_id.clone(),
@@ -456,13 +449,13 @@ async fn compute_history_retry_state(
     } else {
         td.state = TrackedDownloadState::ImportBlocked;
         td.status = scryer_domain::TrackedDownloadStatus::Warning;
-        td.status_messages = vec![result.error_message.clone().unwrap_or_else(|| {
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(result.error_message.clone().unwrap_or_else(|| {
             if success {
                 "Import is incomplete; review the retained files and retry import".into()
             } else {
                 "Import could not complete; review the source and retry import".into()
             }
-        })];
+        }))];
     }
     Ok(())
 }
@@ -488,7 +481,7 @@ pub(crate) async fn reconcile_history_retry_result(
         td,
         td.state,
         reason,
-        td.status_messages.first().map(String::as_str),
+        td.status_messages.first().map(|message| message.text.as_str()),
     )
     .await
     {
@@ -799,7 +792,7 @@ async fn reconcile_terminal_download_cleanup(
         {
             Ok(payload) => Some(payload),
             Err(error) => {
-                if nzbget_retention_log_due(record) {
+                if cleanup_retry_log_due(record) {
                     tracing::warn!(
                         client_id,
                         download_client_item_id,
@@ -858,7 +851,7 @@ async fn reconcile_terminal_download_cleanup(
             }
             other => {
                 let error = other.err().unwrap_or_else(|| {
-                    AppError::NotFound(format!(
+                    AppError::not_found_reason(crate::error_reasons::import::DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND, format!(
                         "download client completed download {download_client_item_id} is unavailable for payload cleanup"
                     ))
                 });
@@ -942,7 +935,7 @@ async fn reconcile_terminal_download_cleanup(
     if let Some(payload) = nzbget_payload.as_ref()
         && let Err(error) = verify_nzbget_entry_cleanup(payload).await
     {
-        if nzbget_retention_log_due(record) {
+        if cleanup_retry_log_due(record) {
             tracing::warn!(client_id, download_client_item_id, error = %error,
                 "retaining NZBGet history because native deletion could bypass payload preservation");
         } else {
@@ -1045,6 +1038,9 @@ async fn reconcile_terminal_download_cleanup(
     )
     .await;
 
+    let client_delete_in_progress = delete_result.as_ref().is_err_and(|error| {
+        error.reason() == Some(crate::error_reasons::acquisition::DOWNLOAD_CLIENT_DELETE_IN_PROGRESS)
+    });
     let outcome = match delete_result {
         Ok(()) => {
             tracing::info!(
@@ -1088,7 +1084,20 @@ async fn reconcile_terminal_download_cleanup(
                         "failed to checkpoint the native removal attempt");
                 }
             }
-            if !remove_data
+            if client_delete_in_progress {
+                // The client is finishing an earlier delete of this entry.
+                // Nothing more is sent: the next attempt, after the long
+                // recheck, finds the entry gone or asks again.
+                tracing::debug!(
+                    client_id,
+                    client_type,
+                    download_client_item_id,
+                    state = state.as_str(),
+                    error = %error,
+                    "download client is still deleting this entry; rechecking later"
+                );
+                TerminalDownloadCleanupOutcome::RetryableFailure
+            } else if !remove_data
                 && !terminal_download_item_is_still_visible(
                     app,
                     client_id,
@@ -1108,14 +1117,25 @@ async fn reconcile_terminal_download_cleanup(
                 );
                 TerminalDownloadCleanupOutcome::AlreadyGone
             } else {
-                tracing::warn!(
-                    client_id,
-                    client_type,
-                    download_client_item_id,
-                    state = state.as_str(),
-                    error = %error,
-                    "failed to remove terminal download from client"
-                );
+                if cleanup_retry_log_due(record) {
+                    tracing::warn!(
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        error = %error,
+                        "failed to remove terminal download from client"
+                    );
+                } else {
+                    tracing::debug!(
+                        client_id,
+                        client_type,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        error = %error,
+                        "failed to remove terminal download from client"
+                    );
+                }
                 TerminalDownloadCleanupOutcome::RetryableFailure
             }
         }
@@ -1213,6 +1233,8 @@ async fn reconcile_terminal_download_cleanup(
         payload: payload_disposition,
         payload_requested: remove_data,
         client_payload,
+        client_delete_in_progress: client_delete_in_progress
+            && outcome == TerminalDownloadCleanupOutcome::RetryableFailure,
     }
 }
 
@@ -1464,7 +1486,7 @@ pub(crate) fn inventory_payload_directory_blocking(
                 .map_err(|error| io_error("read download payload directory", &directory, error))?;
             seen += 1;
             if seen > PAYLOAD_INVENTORY_MAX_ENTRIES {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY, format!(
                     "download payload directory {} has too many entries to inventory safely",
                     target.display()
                 )));
@@ -1572,7 +1594,7 @@ fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path:
     match std::fs::symlink_metadata(target) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
         Ok(_) => {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY, format!(
                 "download payload directory {} is no longer a real directory",
                 target.display()
             )));
@@ -1606,7 +1628,7 @@ fn remove_inventoried_payload_blocking(
     let mut retained = Vec::new();
     for entry in &inventory.entries {
         if !relative_payload_path_is_safe(&entry.path) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH, format!(
                 "download payload inventory entry {:?} is not a safe relative path",
                 entry.path
             )));
@@ -1744,9 +1766,7 @@ fn verify_nzbget_cleanup_identity(
             .and_then(scryer_domain::download_identity::DownloadId::from_wire)
             .is_some_and(|id| Some(&id) != download_id)
     {
-        return Err(AppError::Validation(
-            "NZBGet cleanup identity changed".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::NZBGET_CLEANUP_IDENTITY_CHANGED, "NZBGet cleanup identity changed"));
     }
     Ok(())
 }
@@ -1767,16 +1787,16 @@ async fn revalidate_nzbget_cleanup_state(
         .get_cleanup_payload_for_source(client_id.trim(), "nzbget", item_id)
         .await?
         .ok_or_else(|| {
-            AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
+            AppError::not_found_reason(crate::error_reasons::import::NZBGET_TERMINAL_CLEANUP_METADATA_NOT_FOUND, "NZBGet terminal cleanup metadata is unavailable")
         })?;
     verify_nzbget_cleanup_identity(&payload.download, canonical_download_id, item_id)?;
     Ok(payload)
 }
 
-/// Retained NZBGet cleanup retries every few minutes indefinitely: warn on the
-/// first attempt and then once per twelve, mirroring "terminal cleanup remains
-/// pending". Calls outside a durable claim (manual import) always warn.
-fn nzbget_retention_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool {
+/// Whether a repeating cleanup warning is due on this attempt: the first, then
+/// one in every twelve, mirroring "terminal cleanup remains pending". Calls
+/// outside a durable claim (manual import) always warn.
+fn cleanup_retry_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool {
     record.is_none_or(|record| record.attempts <= 1 || record.attempts.is_multiple_of(12))
 }
 
@@ -1794,9 +1814,7 @@ async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) ->
                 .components()
                 .any(|part| matches!(part, std::path::Component::ParentDir))
         {
-            return Err(AppError::Validation(
-                "NZBGet native deletion path is unverified".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::NZBGET_NATIVE_DELETION_PATH_UNVERIFIED, "NZBGet native deletion path is unverified"));
         }
         match tokio::fs::symlink_metadata(path).await {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1805,15 +1823,11 @@ async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) ->
                     .await
                     .is_ok_and(|metadata| metadata.is_dir())
                 {
-                    return Err(AppError::Validation(
-                        "NZBGet native deletion parent is unavailable".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::import::NZBGET_NATIVE_DELETION_PARENT_UNAVAILABLE, "NZBGet native deletion parent is unavailable"));
                 }
             }
             _ => {
-                return Err(AppError::Validation(
-                    "NZBGet history removal would delete retained or unverified data".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::NZBGET_HISTORY_REMOVAL_WOULD_DELETE_RETAINED_UNVERIFIED_DATA, "NZBGet history removal would delete retained or unverified data"));
             }
         }
     }
@@ -1931,9 +1945,7 @@ async fn run_host_payload_cleanup(
 ) -> AppResult<Option<HostPayloadStep>> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
-        return Err(AppError::Validation(
-            "download client payload cleanup requires a configured client id".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_REQUIRES_CONFIGURED_CLIENT_ID, "download client payload cleanup requires a configured client id".to_string()));
     }
 
     // A cleanup claim/checkpoint can outlive a client retry. Revalidate NZBGet's
@@ -2020,7 +2032,7 @@ async fn run_host_payload_cleanup(
         .download_client_configs
         .get_by_id(client_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("download client {client_id}")))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::DOWNLOAD_CLIENT_NOT_FOUND, format!("download client {client_id}")))?;
     let mappings = parse_download_client_remote_path_mappings(&config.config_json)?;
     apply_remote_path_mappings_to_completed_download(&mut completed, &mappings);
 
@@ -2038,7 +2050,7 @@ async fn run_host_payload_cleanup(
                     .components()
                     .any(|component| matches!(component, std::path::Component::ParentDir))
             {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PATH_MAPPING_UNUSABLE_LOCAL_ROOT, format!(
                     "download client path mapping has an unusable local root: {}",
                     root.display()
                 )));
@@ -2049,7 +2061,7 @@ async fn run_host_payload_cleanup(
 
     let target = std::path::PathBuf::from(completed.dest_dir.trim());
     if !target.is_absolute() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_PATH_INVALID, format!(
             "download client payload path must be absolute: {}",
             target.display()
         )));
@@ -2059,13 +2071,13 @@ async fn run_host_payload_cleanup(
         .any(|component| matches!(component, std::path::Component::ParentDir))
         || target.parent().is_none()
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::PAYLOAD_PATH_UNSAFE, format!(
             "download client payload path must not be a filesystem root or contain traversal: {}",
             target.display()
         )));
     }
     if roots.contains(&target) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::import::CLEANUP_TARGET_IS_OUTPUT_ROOT, format!(
             "refusing to delete download client output root {}",
             target.display()
         )));
@@ -2124,15 +2136,13 @@ async fn run_host_payload_cleanup(
         if recycle_roots.iter().any(|root| {
             crate::catalog_workflow::library_root_paths_overlap(candidate, &root.to_string_lossy())
         }) {
-            return Err(AppError::Validation(
-                "payload overlaps a recycle root".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::PAYLOAD_OVERLAPS_RECYCLE_ROOT, "payload overlaps a recycle root"));
         }
         if library_roots
             .iter()
             .any(|root| crate::catalog_workflow::library_root_paths_overlap(candidate, &root.path))
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT, format!(
                 "refusing to delete download client payload {} because it overlaps a configured library root",
                 target.display()
             )));
@@ -2226,18 +2236,14 @@ async fn run_host_payload_cleanup(
             // A single-file job: the client's path and name are not proof.
             // Require Scryer's persisted import result for this canonical job.
             if canonical_download_id.is_none() {
-                return Err(AppError::Validation(
-                    "file payload cleanup requires durable job ownership".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::FILE_PAYLOAD_CLEANUP_REQUIRES_DURABLE_JOB_OWNERSHIP, "file payload cleanup requires durable job ownership"));
             }
             if !imported_sources
                 .iter()
                 .any(|(source, _)| source.as_path() == target)
             {
-                return Err(AppError::Validation(
-                    "file payload ownership is unverified; retaining source and client entry"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::FILE_PAYLOAD_OWNERSHIP_UNVERIFIED, "file payload ownership is unverified; retaining source and client entry"
+                        ));
             }
             // The import record names the path, not whatever occupies it now.
             // A file replaced since the import (a re-download into the same
@@ -2259,9 +2265,7 @@ async fn run_host_payload_cleanup(
                     }
             });
             if !size_matches {
-                return Err(AppError::Validation(
-                    "file payload changed since import; retaining source and client entry".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::FILE_PAYLOAD_CHANGED_SINCE_IMPORT, "file payload changed since import; retaining source and client entry"));
             }
             let plan = persist_plan(serde_json::json!({
                 "completed": authoritative_completed, "payload_removed": false,
@@ -2460,14 +2464,12 @@ async fn run_host_payload_cleanup(
                     HostPayloadDisposition::PartiallyRetained
                 }
             } else {
-                return Err(AppError::Validation(
-                    "payload directory ownership is unverified; refusing shared-directory deletion"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::import::PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED, "payload directory ownership is unverified; refusing shared-directory deletion"
+                        ));
             }
         }
         Ok(_) => {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK, format!(
                 "download client payload path {} is not a file, directory, or symlink",
                 target.display()
             )));
@@ -2638,7 +2640,7 @@ async fn ensure_host_payload_cleanup_checkpoint(checkpoint: &std::path::Path) ->
                     ))
                 })?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY, format!(
                     "download client payload cleanup checkpoint {} is not a directory",
                     checkpoint.display()
                 )));
@@ -2668,7 +2670,7 @@ async fn ensure_payload_target_parents_are_not_symlinks(
     target: &std::path::Path,
 ) -> AppResult<()> {
     let relative = target.strip_prefix(root).map_err(|_| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT, format!(
             "download client payload path {} is outside output root {}",
             target.display(),
             root.display()
@@ -2685,7 +2687,7 @@ async fn ensure_payload_target_parents_are_not_symlinks(
         }
         match tokio::fs::symlink_metadata(&candidate).await {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK, format!(
                     "download client payload path {} traverses symlink {}",
                     target.display(),
                     candidate.display()
@@ -2971,8 +2973,7 @@ async fn finalize_deferred_import_source_cleanup(
 /// permanent and stay blocked for review. Two exceptions in each direction:
 /// a password-protected archive can never succeed without operator input, and
 /// disk-full / permission-denied skips are environmental and clear on their own.
-/// The message allowlist remains as belt-and-braces for Scryer's own transient
-/// markers that surface on non-`Failed` decisions.
+/// Source-change races carry their own skip reasons, regardless of wording.
 pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> bool {
     match result.decision {
         ImportDecision::Failed => !matches!(
@@ -2995,13 +2996,12 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
                 result.skip_reason,
                 Some(
                     ImportSkipReason::DownloadInProgress
+                        | ImportSkipReason::SourceChanged
+                        | ImportSkipReason::SourceUnavailable
                         | ImportSkipReason::DiskFull
                         | ImportSkipReason::PermissionDenied
                 )
-            ) || result
-                .error_message
-                .as_deref()
-                .is_some_and(completed_import_error_message_is_retryable)
+            )
         }
     }
 }

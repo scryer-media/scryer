@@ -44,14 +44,23 @@ export function DeletePreviewSummary({
     );
   }
 
-  if (error && errorReason === TITLE_FOLDER_UNKNOWN && onRemoveFromCatalogOnly) {
+  if (
+    error &&
+    errorReason === TITLE_FOLDER_UNKNOWN &&
+    onRemoveFromCatalogOnly
+  ) {
     return (
       <div className="space-y-2 rounded border border-border bg-muted/40 px-3 py-2">
         <p className="text-xs font-medium text-foreground">
           {t("deletePreview.folderUnknown")}
         </p>
         <p className="text-xs text-muted-foreground">{error}</p>
-        <Button type="button" size="sm" variant="secondary" onClick={onRemoveFromCatalogOnly}>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={onRemoveFromCatalogOnly}
+        >
           {t("deletePreview.removeFromCatalogOnly")}
         </Button>
       </div>
@@ -76,15 +85,30 @@ export function DeletePreviewSummary({
   return (
     <div className="space-y-3 rounded border border-border bg-muted/20 p-3">
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
-        <PreviewCount label={t("deletePreview.files")} value={preview.totalFileCount} />
-        <PreviewCount label={t("deletePreview.media")} value={preview.mediaCount} />
+        <PreviewCount
+          label={t("deletePreview.files")}
+          value={preview.totalFileCount}
+        />
+        <PreviewCount
+          label={t("deletePreview.media")}
+          value={preview.mediaCount}
+        />
         <PreviewCount
           label={t("deletePreview.subtitles")}
           value={preview.subtitleCount}
         />
-        <PreviewCount label={t("deletePreview.images")} value={preview.imageCount} />
-        <PreviewCount label={t("deletePreview.other")} value={preview.otherCount} />
-        <PreviewCount label={t("deletePreview.folders")} value={preview.directoryCount} />
+        <PreviewCount
+          label={t("deletePreview.images")}
+          value={preview.imageCount}
+        />
+        <PreviewCount
+          label={t("deletePreview.other")}
+          value={preview.otherCount}
+        />
+        <PreviewCount
+          label={t("deletePreview.folders")}
+          value={preview.directoryCount}
+        />
       </div>
       {preview.samplePaths.length > 0 ? (
         <div className="space-y-1">
@@ -93,7 +117,10 @@ export function DeletePreviewSummary({
           </p>
           <div className="space-y-1">
             {preview.samplePaths.map((path) => (
-              <p key={path} className="break-all font-[var(--font-code)] text-[11px] text-muted-foreground">
+              <p
+                key={path}
+                className="break-all font-[var(--font-code)] text-[11px] text-muted-foreground"
+              >
                 {path}
               </p>
             ))}
@@ -106,7 +133,8 @@ export function DeletePreviewSummary({
             id={typedConfirmationPromptId}
             className="text-xs font-medium text-foreground"
           >
-            {preview.typedConfirmationPrompt ?? t("deletePreview.confirmPrompt")}
+            {preview.typedConfirmationPrompt ??
+              t("deletePreview.confirmPrompt")}
           </p>
           <Input
             id={typedConfirmationInputId}
@@ -126,7 +154,9 @@ export function DeletePreviewSummary({
 function PreviewCount({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded border border-border bg-background/80 px-2 py-1.5">
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
       <p className="text-sm font-semibold">{value}</p>
     </div>
   );

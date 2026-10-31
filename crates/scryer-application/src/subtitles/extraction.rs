@@ -92,7 +92,10 @@ pub async fn normalize_downloaded_subtitle_with_passwords(
     .await
     .map_err(redact_subtitle_archive_error)?
     .ok_or_else(|| {
-        AppError::Validation("subtitle archive did not contain a supported subtitle file".into())
+        AppError::validation_refused(
+            crate::error_reasons::subtitles::ARCHIVE_SUBTITLE_NOT_FOUND,
+            "subtitle archive did not contain a supported subtitle file",
+        )
     })
 }
 
@@ -100,7 +103,35 @@ fn redact_subtitle_archive_error(error: AppError) -> AppError {
     use crate::import::archive_passwords::redact_archive_diagnostic;
     match error {
         AppError::Repository(message) => AppError::Repository(redact_archive_diagnostic(&message)),
+        AppError::RepositoryFailed { message, reason } => AppError::RepositoryFailed {
+            message: redact_archive_diagnostic(&message),
+            reason,
+        },
         AppError::Validation(message) => AppError::Validation(redact_archive_diagnostic(&message)),
+        AppError::ValidationRefused {
+            message,
+            reason,
+            facts,
+            diagnostics,
+        } => AppError::ValidationRefused {
+            message: redact_archive_diagnostic(&message),
+            reason,
+            facts,
+            diagnostics,
+        },
+        AppError::ValidationRefusedWithCount {
+            message,
+            reason,
+            current_count,
+        } => AppError::ValidationRefusedWithCount {
+            message: redact_archive_diagnostic(&message),
+            reason,
+            current_count,
+        },
+        AppError::RepositoryFailure { message, kind } => AppError::RepositoryFailure {
+            message: redact_archive_diagnostic(&message),
+            kind,
+        },
         AppError::ArchiveExtractionFailed { message } => AppError::ArchiveExtractionFailed {
             message: redact_archive_diagnostic(&message),
         },
@@ -117,8 +148,9 @@ async fn normalize_recursive(
     budget: &mut SubtitleArchiveBudget,
 ) -> AppResult<Option<SubtitleFile>> {
     if depth > MAX_RECURSION_DEPTH || file.content.len() > MAX_ARTIFACT_BYTES {
-        return Err(AppError::Validation(
-            "subtitle artifact exceeds nesting or input limits".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_ARTIFACT_EXCEEDS_NESTING_INPUT_LIMITS,
+            "subtitle artifact exceeds nesting or input limits",
         ));
     }
     let candidates = if let Some((kind, format)) = plugin_subtitle_archive_format(&file) {
@@ -172,8 +204,9 @@ async fn normalize_recursive(
         budget.expanded = checked_expanded_size(budget.expanded, candidate.file.content.len())?;
         budget.entries += 1;
         if budget.entries > MAX_ARCHIVE_FILES {
-            return Err(AppError::Validation(
-                "subtitle artifacts contain too many files".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_ARTIFACTS_CONTAIN_TOO_MANY_FILES,
+                "subtitle artifacts contain too many files",
             ));
         }
         let file = Box::pin(normalize_recursive(
@@ -336,9 +369,7 @@ fn handle_subtitle_archive_plugin_response(
 ) -> AppResult<()> {
     match response.status {
         ArchivePluginStatus::Ok => Ok(()),
-        ArchivePluginStatus::UnsupportedFormat => Err(AppError::Validation(
-            "archive plugin does not support this subtitle archive format".to_string(),
-        )),
+        ArchivePluginStatus::UnsupportedFormat => Err(AppError::validation_refused(crate::error_reasons::subtitles::ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_SUBTITLE_ARCHIVE_FORMAT, "archive plugin does not support this subtitle archive format".to_string())),
         ArchivePluginStatus::PasswordRequired => Err(AppError::ArchivePasswordRequired {
             message: "subtitle archive requires a password".to_string(),
         }),
@@ -361,13 +392,16 @@ fn handle_subtitle_archive_plugin_response(
 
 fn finalize_subtitle(mut file: SubtitleFile) -> AppResult<SubtitleFile> {
     let Some(format) = final_subtitle_format(&file) else {
-        return Err(AppError::Validation(format!(
-            "unsupported subtitle artifact format: {}",
-            file.filename
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or(file.format.as_str())
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_ARTIFACT_FORMAT_UNSUPPORTED,
+            format!(
+                "unsupported subtitle artifact format: {}",
+                file.filename
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(file.format.as_str())
+            ),
+        ));
     };
 
     if !file.content.iter().any(|byte| !byte.is_ascii_whitespace()) {
@@ -386,7 +420,8 @@ fn select_normalized_candidate(
     context: &SubtitleExtractionContext,
 ) -> AppResult<SubtitleFile> {
     if normalized.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::ARCHIVE_SUBTITLE_NOT_FOUND,
             "subtitle archive did not contain a supported subtitle file".to_string(),
         ));
     }
@@ -397,7 +432,7 @@ fn select_normalized_candidate(
         let first = candidate_rank(&normalized[0].0, &normalized[0].1, context);
         let second = candidate_rank(&normalized[1].0, &normalized[1].1, context);
         if first == second {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::subtitles::SUBTITLE_ARCHIVE_MULTIPLE_EQUALLY_RANKED_SUBTITLE_FILES, format!(
                 "subtitle archive has multiple equally ranked subtitle files: {}, {}",
                 normalized[0].0, normalized[1].0
             )));
@@ -458,7 +493,8 @@ fn extract_tar_candidates(content: Vec<u8>) -> AppResult<Vec<ArchiveCandidate>> 
     {
         entry_count += 1;
         if entry_count > MAX_ARCHIVE_FILES {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::subtitles::SUBTITLE_ARCHIVE_CONTAINS_TOO_MANY_FILES,
                 "subtitle archive contains too many files".to_string(),
             ));
         }
@@ -515,17 +551,21 @@ fn collect_plugin_output_candidates(output_dir: &Path) -> AppResult<Vec<ArchiveC
 
             entry_count += 1;
             if entry_count > MAX_ARCHIVE_FILES {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::subtitles::SUBTITLE_ARCHIVE_CONTAINS_TOO_MANY_FILES,
                     "subtitle archive contains too many files".to_string(),
                 ));
             }
 
             let path = entry.path();
             let relative = path.strip_prefix(output_dir).map_err(|_| {
-                AppError::Validation(format!(
-                    "archive plugin output escaped output root: {}",
-                    path.display()
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::subtitles::ARCHIVE_PLUGIN_OUTPUT_ESCAPED_OUTPUT_ROOT,
+                    format!(
+                        "archive plugin output escaped output root: {}",
+                        path.display()
+                    ),
+                )
             })?;
             let name = relative.to_string_lossy().to_string();
             if !is_safe_relative_path(&name) || !is_extractable_subtitle_artifact(&name) {
@@ -839,10 +879,13 @@ fn read_limited_with_context<R: Read>(reader: R, in_memory: bool) -> AppResult<V
 
 fn ensure_expanded_size(size: usize) -> AppResult<()> {
     if size > MAX_EXPANDED_BYTES {
-        return Err(AppError::Validation(format!(
-            "subtitle artifact expands beyond the {} byte limit",
-            MAX_EXPANDED_BYTES
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT,
+            format!(
+                "subtitle artifact expands beyond the {} byte limit",
+                MAX_EXPANDED_BYTES
+            ),
+        ));
     }
     Ok(())
 }

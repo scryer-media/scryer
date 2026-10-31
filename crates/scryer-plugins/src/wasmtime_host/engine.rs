@@ -291,6 +291,9 @@ fn archive_engine_config() -> Config {
     config.epoch_interruption(true);
     config.wasm_simd(true);
     config.wasm_relaxed_simd(true);
+    // Wasmtime 49 enabled this proposal by default. Preserve the Wasmtime 48
+    // guest feature surface until plugins explicitly require it.
+    config.wasm_wide_arithmetic(false);
     // Components use Wasmtime's cooperative async path for guest-directed
     // outbound HTTP fanout. This does not enable Wasm threads.
     config.wasm_component_model(true);
@@ -384,9 +387,27 @@ mod tests {
     }
 
     #[test]
+    fn engine_rejects_undeclared_wide_arithmetic() {
+        initialize_wasm_runtime_for_tests();
+        let wasm = wat::parse_str(
+            "(module (func (param i64 i64) (result i64 i64)
+                local.get 0 local.get 1 i64.mul_wide_u))",
+        )
+        .expect("wide arithmetic probe must assemble");
+        let mut config = archive_engine_config();
+        let engine = Engine::new(&config).expect("plugin engine must build");
+        assert!(wasmtime::Module::from_binary(&engine, &wasm).is_err());
+
+        config.wasm_wide_arithmetic(true);
+        let enabled = Engine::new(&config).expect("probe engine must build");
+        wasmtime::Module::from_binary(&enabled, &wasm)
+            .expect("probe must be valid when wide arithmetic is enabled");
+    }
+
+    #[test]
     fn engine_config_is_accepted_by_wasmtime() {
         // Proves the pinned, minimized feature surface still yields a valid
-        // Engine on the resolved wasmtime (46.0.1).
+        // Engine on the resolved Wasmtime version.
         initialize_wasm_runtime_for_tests();
         Engine::new(&archive_engine_config()).expect("archive engine config must build");
     }

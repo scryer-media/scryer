@@ -83,6 +83,7 @@ pub(crate) fn indexer_capabilities_to_domain(
     capabilities: &IndexerCapabilities,
 ) -> scryer_domain::IndexerProviderCapabilities {
     scryer_domain::IndexerProviderCapabilities {
+        raw_nab_search: capabilities.raw_nab_search,
         rss: capabilities.rss,
         supported_ids: capabilities.supported_ids.clone(),
         deduplicates_aliases: capabilities.deduplicates_aliases,
@@ -322,5 +323,6 @@ pub(crate) fn tagged_alias_to_sdk(alias: scryer_domain::TaggedAlias) -> TaggedAl
     TaggedAlias {
         name: alias.name,
         language: alias.language,
+        country: alias.country,
     }
 }

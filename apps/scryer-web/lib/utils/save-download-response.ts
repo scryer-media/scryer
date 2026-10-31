@@ -4,9 +4,7 @@
 // because the request carries an Authorization header.
 
 type SaveFilePickerWindow = Window & {
-  showSaveFilePicker?: (options: {
-    suggestedName: string;
-  }) => Promise<{
+  showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{
     createWritable: () => Promise<WritableStream<Uint8Array>>;
   }>;
 };
@@ -52,7 +50,7 @@ export async function readResponseErrorMessage(
 ): Promise<string> {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
-    const payload = await response.json().catch(() => null) as {
+    const payload = (await response.json().catch(() => null)) as {
       error?: string;
       error_id?: string;
     } | null;
@@ -71,9 +69,15 @@ export async function readResponseErrorMessage(
  * Stream the response to a file the operator picks, falling back to an
  * object-URL anchor where the File System Access API is unavailable.
  */
-export async function saveDownloadResponse(response: Response, filename: string): Promise<void> {
+export async function saveDownloadResponse(
+  response: Response,
+  filename: string,
+): Promise<void> {
   const windowWithPicker = window as SaveFilePickerWindow;
-  if (response.body && typeof windowWithPicker.showSaveFilePicker === "function") {
+  if (
+    response.body &&
+    typeof windowWithPicker.showSaveFilePicker === "function"
+  ) {
     try {
       const handle = await windowWithPicker.showSaveFilePicker({
         suggestedName: filename,

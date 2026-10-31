@@ -35,7 +35,6 @@ import {
   settledDestinationPick,
   isActiveWorkBlock,
   isAmbiguousDestinationBlock,
-  isBlockedSelectionMessage,
   isCrossLibraryDestination,
   isSameNameWarning,
   mergeDestinationTitleId,
@@ -45,8 +44,6 @@ import {
   mergeRoleGroupKey,
   mergeStatement,
   mergeSummaryPresentation,
-  isInsufficientSpaceMessage,
-  isStalePlanMessage,
   isTerminalOperationState,
   offersModeSelection,
   operationByteProgress,
@@ -292,7 +289,11 @@ function preview(
       sufficient: true,
     },
     verification: { depth: "FULL", files: 3, bytes: 300, applies: true },
-    confirmation: { requirement: "SIMPLE", typedPhrase: null, typedPrompt: null },
+    confirmation: {
+      requirement: "SIMPLE",
+      typedPhrase: null,
+      typedPrompt: null,
+    },
     warnings: [],
     blocksStart: false,
     ...overrides,
@@ -315,7 +316,11 @@ test("a plan with blocked items is not startable until they are deselected", () 
 test("a destination measured too small is not startable, but an unmeasured one is", () => {
   const withSpace = (sufficient: boolean | null) =>
     preview({
-      freeSpace: { ...preview().freeSpace, sufficient, probed: sufficient !== null },
+      freeSpace: {
+        ...preview().freeSpace,
+        sufficient,
+        probed: sufficient !== null,
+      },
     });
 
   // FR-080: the backend refuses a measured shortfall, so the confirm is
@@ -328,10 +333,10 @@ test("a destination measured too small is not startable, but an unmeasured one i
 });
 
 test("deselecting a title keeps the rest of the selection in submit order", () => {
-  assert.deepEqual(
-    remainingSelection(["a", "b", "c"], new Set(["b"])),
-    ["a", "c"],
-  );
+  assert.deepEqual(remainingSelection(["a", "b", "c"], new Set(["b"])), [
+    "a",
+    "c",
+  ]);
   assert.deepEqual(remainingSelection(["a", "b"], new Set()), ["a", "b"]);
   assert.deepEqual(remainingSelection(["a"], new Set(["a"])), []);
 });
@@ -377,7 +382,10 @@ test("the confirmed mode is read off the previewed plan, never off the control",
   );
   // A plan the server collapsed to catalog-only confirms as the managed move
   // it degrades into: CATALOG_ONLY is not a mode a client may ask for.
-  assert.equal(startModeInput(preview({ mode: "CATALOG_ONLY" })), "MOVE_WITH_SCRYER");
+  assert.equal(
+    startModeInput(preview({ mode: "CATALOG_ONLY" })),
+    "MOVE_WITH_SCRYER",
+  );
   assert.equal(startModeInput(null), "MOVE_WITH_SCRYER");
 });
 
@@ -423,7 +431,13 @@ test("plan-kind counts render in order and drop kinds the plan never produced", 
 
 test("plan sections sort into render order", () => {
   const sections = orderedPlanSections([
-    { kind: "WARNING", itemsTotal: 1, bytesTotal: 0, complete: true, items: [] },
+    {
+      kind: "WARNING",
+      itemsTotal: 1,
+      bytesTotal: 0,
+      complete: true,
+      items: [],
+    },
     { kind: "MOVE", itemsTotal: 2, bytesTotal: 20, complete: true, items: [] },
     { kind: "NO_OP", itemsTotal: 1, bytesTotal: 0, complete: true, items: [] },
     { kind: "RENAME", itemsTotal: 0, bytesTotal: 0, complete: true, items: [] },
@@ -469,10 +483,7 @@ test("byte progress falls back to title progress for a catalog-only plan", () =>
     0,
   );
   // A runner that over-counts never pushes the bar past full.
-  assert.equal(
-    operationByteProgress(counters({ bytesProcessed: 5000 })),
-    1,
-  );
+  assert.equal(operationByteProgress(counters({ bytesProcessed: 5000 })), 1);
   assert.equal(operationByteProgress(null), 0);
 });
 
@@ -565,17 +576,35 @@ test("plan again is offered for a stopped run with titles a fresh plan can selec
     ],
     catalogBlockedTitleIds: ["t-3"],
   };
-  assert.equal(canPlanAgainOperation(operation({ state: "FAILED" }), selection), true);
-  assert.equal(canPlanAgainOperation(operation({ state: "CANCELED" }), selection), true);
-  // A run that is still going, or one that finished, is not planned again.
-  assert.equal(canPlanAgainOperation(operation({ state: "MOVING" }), selection), false);
-  assert.equal(canPlanAgainOperation(operation({ state: "COMPLETED" }), selection), false);
-  // Nothing selectable — only catalog-blocked leftovers — means no button.
   assert.equal(
-    canPlanAgainOperation(operation({ state: "FAILED" }), { ...selection, titles: [] }),
+    canPlanAgainOperation(operation({ state: "FAILED" }), selection),
+    true,
+  );
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "CANCELED" }), selection),
+    true,
+  );
+  // A run that is still going, or one that finished, is not planned again.
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "MOVING" }), selection),
     false,
   );
-  assert.equal(canPlanAgainOperation(operation({ state: "FAILED" }), null), false);
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "COMPLETED" }), selection),
+    false,
+  );
+  // Nothing selectable — only catalog-blocked leftovers — means no button.
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "FAILED" }), {
+      ...selection,
+      titles: [],
+    }),
+    false,
+  );
+  assert.equal(
+    canPlanAgainOperation(operation({ state: "FAILED" }), null),
+    false,
+  );
 
   // The dialog gets the titles as refs, whole or scoped to one row.
   assert.deepEqual(retrySelectionTitleRefs(selection), [
@@ -604,7 +633,10 @@ test("abandon is offered exactly where resume is", () => {
   // A stopped run has nothing to release: it is retried, not abandoned.
   for (const state of ["FAILED", "CANCELED", "COMPLETED"] as const) {
     assert.equal(
-      canAbandonOperation(operation({ updatedAt, state }), updatedAtMs + 120_000),
+      canAbandonOperation(
+        operation({ updatedAt, state }),
+        updatedAtMs + 120_000,
+      ),
       false,
       state,
     );
@@ -718,12 +750,15 @@ test("a merged checkpoint names the surviving title, falling back to its id", ()
 
   // The surviving title was deleted after the merge, so the server could not
   // resolve a name. The row still states where the title went.
-  assert.deepEqual(checkpointMergeTarget(checkpoint({ mergedIntoTitleId: "title-99" })), {
-    titleId: "title-99",
-    name: null,
-    label: "title-99",
-    isIdFallback: true,
-  });
+  assert.deepEqual(
+    checkpointMergeTarget(checkpoint({ mergedIntoTitleId: "title-99" })),
+    {
+      titleId: "title-99",
+      name: null,
+      label: "title-99",
+      isIdFallback: true,
+    },
+  );
 
   // A blank name is not a name — it must not render as empty quotation marks.
   assert.deepEqual(
@@ -740,7 +775,10 @@ test("a merged checkpoint names the surviving title, falling back to its id", ()
 });
 
 test("blocked, failed, and warned checkpoints are the ones to read", () => {
-  assert.equal(checkpointNeedsAttention(checkpoint({ state: "BLOCKED" })), true);
+  assert.equal(
+    checkpointNeedsAttention(checkpoint({ state: "BLOCKED" })),
+    true,
+  );
   assert.equal(checkpointNeedsAttention(checkpoint({ state: "FAILED" })), true);
   assert.equal(
     checkpointNeedsAttention(checkpoint({ state: "COMPLETED_WITH_WARNINGS" })),
@@ -750,7 +788,10 @@ test("blocked, failed, and warned checkpoints are the ones to read", () => {
     checkpointNeedsAttention(checkpoint({ state: "COMPLETED" })),
     false,
   );
-  assert.equal(checkpointNeedsAttention(checkpoint({ state: "SKIPPED" })), false);
+  assert.equal(
+    checkpointNeedsAttention(checkpoint({ state: "SKIPPED" })),
+    false,
+  );
 });
 
 test("the verification stamp names the depth and any quick-check fallback", () => {
@@ -768,30 +809,6 @@ test("the verification stamp names the depth and any quick-check fallback", () =
   );
 });
 
-test("a refused confirmation is recognised as a stale plan, not a raw failure", () => {
-  assert.equal(
-    isStalePlanMessage(
-      "the preview no longer matches what is on disk or in the catalog; review a fresh preview before confirming",
-    ),
-    true,
-  );
-  assert.equal(isStalePlanMessage("stale_plan"), true);
-  assert.equal(isStalePlanMessage("something else went wrong"), false);
-  assert.equal(isStalePlanMessage(null), false);
-});
-
-test("a refused confirmation over blocked titles is recognised too", () => {
-  assert.equal(
-    isBlockedSelectionMessage(
-      "some selected titles still need a decision; resolve or remove them before starting",
-    ),
-    true,
-  );
-  assert.equal(isBlockedSelectionMessage("blocked_items"), true);
-  assert.equal(isBlockedSelectionMessage("disk full"), false);
-  assert.equal(isBlockedSelectionMessage(undefined), false);
-});
-
 test("the server's refusal code is preferred over the message prose", () => {
   const refused = (refusalCode: string) => ({
     graphQLErrors: [
@@ -802,7 +819,10 @@ test("the server's refusal code is preferred over the message prose", () => {
     ],
   });
 
-  assert.equal(recognizeStartRefusal(refused("stale_plan"), null), "stale_plan");
+  assert.equal(
+    recognizeStartRefusal(refused("stale_plan"), null),
+    "stale_plan",
+  );
   assert.equal(
     recognizeStartRefusal(refused("blocked_items"), null),
     "blocked_items",
@@ -811,18 +831,15 @@ test("the server's refusal code is preferred over the message prose", () => {
   // An unknown code is not silently promoted into a refusal.
   assert.equal(startRefusalCodeFromError(refused("something_new")), null);
 
-  // The prose stays the fallback for an error that carries no extensions.
+  // Prose without an attached code never decides how the dialog behaves.
   assert.equal(
     recognizeStartRefusal(
       { graphQLErrors: [{ message: "validation: boom" }] },
       "the preview no longer matches what is on disk or in the catalog",
     ),
-    "stale_plan",
+    null,
   );
-  assert.equal(
-    recognizeStartRefusal(new Error("boom"), "blocked_items"),
-    "blocked_items",
-  );
+  assert.equal(recognizeStartRefusal(new Error("boom"), "blocked_items"), null);
   assert.equal(recognizeStartRefusal(new Error("boom"), "disk full"), null);
 
   // Only the two re-previewable refusals send the dialog back for a fresh plan.
@@ -851,19 +868,18 @@ test("a refusal for free space is recognized and is not re-previewable", () => {
     "the new code is recognized rather than dropped as unknown",
   );
   assert.equal(recognizeStartRefusal(refused, null), "insufficient_space");
-  // The prose fallback, for a refusal that lost its extensions in transit.
+  // Uncoded sentences are unknown failures.
   assert.equal(
     recognizeStartRefusal(new Error("boom"), "insufficient_space"),
-    "insufficient_space",
+    null,
   );
   assert.equal(
     recognizeStartRefusal(
       new Error("boom"),
       "The destination does not have enough free space for this move.",
     ),
-    "insufficient_space",
+    null,
   );
-  assert.equal(isInsufficientSpaceMessage("the plan went stale"), false);
 
   // Re-previewing the same selection onto the same volume would only measure
   // the same shortfall again, so the dialog says so instead.
@@ -881,7 +897,10 @@ test("every classified title states where it lives now (FR-012)", () => {
     ["root-b", "/data/b"],
   ]);
   const planFolders = new Map([
-    ["moving", { source: "/data/a/stale-name", destination: "/data/b/Moving (2024)" }],
+    [
+      "moving",
+      { source: "/data/a/stale-name", destination: "/data/b/Moving (2024)" },
+    ],
   ]);
   const entry = (
     titleId: string,
@@ -1102,7 +1121,10 @@ test("an ambiguous identity names the candidates and what they share", () => {
   );
 
   // A blocked row is not a transfer statement: it never starts.
-  assert.equal(transferStatement({ ...entry, class: "NEEDS_RESOLUTION" }), null);
+  assert.equal(
+    transferStatement({ ...entry, class: "NEEDS_RESOLUTION" }),
+    null,
+  );
   assert.equal(sameNamedDestinationTitle(entry), null);
   assert.equal(mergeStatement(entry), null);
 });
@@ -1568,10 +1590,7 @@ test("a title's assets read out as renames first, then dedups (FR-091)", () => {
   assert.equal(lines[0].provenanceLabel, "Movies 4K");
   assert.equal(lines[1].provenanceLabel, null);
   assert.equal(assetLineTextKey("RENAME"), "move.assetRenamedAs");
-  assert.equal(
-    assetLineTextKey("DEDUP"),
-    "move.assetDeduplicatedAgainst",
-  );
+  assert.equal(assetLineTextKey("DEDUP"), "move.assetDeduplicatedAgainst");
   assert.deepEqual(assetLines(null), []);
   assert.deepEqual(assetLines(titleAssets({ renames: [], dedups: [] })), []);
 });
@@ -1580,9 +1599,7 @@ test("an unsettled title's assets stay planned, never history", () => {
   const pending = titleAssets({
     settled: false,
     checkpointState: "PENDING",
-    renames: [
-      { ...titleAssets().renames[0], done: false },
-    ],
+    renames: [{ ...titleAssets().renames[0], done: false }],
     dedups: [{ ...titleAssets().dedups[0], done: false }],
   });
 
@@ -1674,11 +1691,7 @@ test("a file the stored plan cannot fully name still says what it can", () => {
   assert.deepEqual(
     lines.map((line) => [line.kind, line.from, line.to]),
     [
-      [
-        "RENAME",
-        "/data/a/Arrival/Arrival.mkv",
-        "Arrival (from Movies 4K).mkv",
-      ],
+      ["RENAME", "/data/a/Arrival/Arrival.mkv", "Arrival (from Movies 4K).mkv"],
       ["DEDUP", "Arrival.nfo", null],
     ],
   );

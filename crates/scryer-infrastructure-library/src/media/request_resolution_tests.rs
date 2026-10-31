@@ -494,7 +494,13 @@ async fn reopening_a_rejected_request_clears_only_its_resolution() {
         .reopen_rejected(&original.id, reopened_event(&original))
         .await
         .expect_err("a pending request cannot be reopened");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_) | AppError::ValidationRefused { .. }
+        ),
+        "{error:?}"
+    );
     assert_eq!(
         reopen_event_actors(&store).await.len(),
         1,

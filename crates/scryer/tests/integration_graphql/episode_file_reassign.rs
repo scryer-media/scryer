@@ -138,6 +138,154 @@ const REASSIGN_MUTATION: &str = r#"
     }
 "#;
 
+struct GatedReassignRenamer {
+    title_id: String,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl scryer_application::LibraryRenamer for GatedReassignRenamer {
+    async fn validate_targets(
+        &self,
+        plan: &scryer_application::RenamePlan,
+    ) -> scryer_application::AppResult<()> {
+        if plan.title_id.as_deref() == Some(self.title_id.as_str()) {
+            self.entered.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(60), self.release.notified())
+                .await
+                .expect("test releases the exact blocked title");
+        }
+        Err(scryer_application::AppError::Repository(
+            "synthetic rename refusal".into(),
+        ))
+    }
+
+    async fn apply_plan(
+        &self,
+        _: &scryer_application::RenamePlan,
+        _: &scryer_application::ImportFilePermissions,
+    ) -> scryer_application::AppResult<Vec<scryer_application::RenameApplyItemResult>> {
+        panic!("validation refuses before any file is moved")
+    }
+
+    async fn rollback(
+        &self,
+        _: &[scryer_application::RenameApplyItemResult],
+    ) -> scryer_application::AppResult<Vec<scryer_application::RenameApplyItemResult>> {
+        Ok(vec![])
+    }
+}
+
+// Sonarr 465b5192, EpisodeImport/Manual/ManualImportService.cs preserves the
+// operator's chosen episode assignment. A failed rename cannot undo a peer's
+// successful assignment: serialize the title through compensation.
+#[tokio::test]
+async fn reassign_episode_file_serializes_different_files_through_compensation() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let ctx = TestContext::new().await;
+        let fixture = reassign_fixture(&ctx, "Concurrent Fixture", "97107").await;
+        let (first, first_path) = seed_primary_file(
+            &ctx,
+            &fixture,
+            "Concurrent.Fixture.S01E01.1080p.WEB-DL.mkv",
+            &fixture.episodes[0],
+        )
+        .await;
+        let (second, second_path) = seed_primary_file(
+            &ctx,
+            &fixture,
+            "Concurrent.Fixture.S01E02.1080p.WEB-DL.mkv",
+            &fixture.episodes[1],
+        )
+        .await;
+        let (other_title, other_episodes) =
+            series_with_three_episodes(&ctx, "Independent Fixture", "97108").await;
+        let other_root = tempfile::tempdir_in(fixture._media_root.path()).unwrap();
+        let other_season = other_root.path().join("Season 1");
+        std::fs::create_dir_all(&other_season).unwrap();
+        set_title_folder_path(&ctx, &other_title.id, other_root.path()).await;
+        let other = ReassignFixture {
+            _media_root: other_root,
+            title: other_title,
+            episodes: other_episodes,
+            season_dir: other_season,
+        };
+        let (other_file, other_path) = seed_primary_file(
+            &ctx,
+            &other,
+            "Independent.Fixture.S01E01.1080p.WEB-DL.mkv",
+            &other.episodes[0],
+        )
+        .await;
+        let renamer = std::sync::Arc::new(GatedReassignRenamer {
+            title_id: fixture.title.id.clone(),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let app = ctx
+            .app
+            .with_test_overrides(|builder| builder.with_library_renamer(renamer.clone()));
+        let actor = app.find_or_create_default_user().await.unwrap();
+        let target = vec![fixture.episodes[1].id.clone()];
+        let first_request = app.reassign_episode_file(&actor, &first, &target, true);
+        tokio::pin!(first_request);
+        tokio::select! {
+            result = &mut first_request => panic!("rename was not gated: {result:?}"),
+            () = renamer.entered.notified() => {}
+        }
+        let error = app
+            .reassign_episode_file(
+                &actor,
+                &second,
+                std::slice::from_ref(&fixture.episodes[2].id),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            scryer_application::AppError::LocationOperationBusy(_)
+        ));
+        let independent = app
+            .reassign_episode_file(
+                &actor,
+                &other_file,
+                std::slice::from_ref(&other.episodes[1].id),
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            independent.validation_reason(),
+            Some("EPISODE_FILE_REASSIGN_RENAME_FAILED"),
+            "another title reaches rename validation while the first is guarded"
+        );
+        assert!(other_path.exists());
+        assert_eq!(
+            file_links(&ctx, &other.title.id, &other_file).await,
+            vec![(other.episodes[0].id.clone(), "primary".into())]
+        );
+        renamer.release.notify_one();
+        let error = first_request.await.unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some("EPISODE_FILE_REASSIGN_RENAME_FAILED")
+        );
+        assert_eq!(
+            file_links(&ctx, &fixture.title.id, &first).await,
+            vec![(fixture.episodes[0].id.clone(), "primary".into())]
+        );
+        assert_eq!(
+            file_links(&ctx, &fixture.title.id, &second).await,
+            vec![(fixture.episodes[1].id.clone(), "primary".into())]
+        );
+        assert!(first_path.exists() && second_path.exists());
+    })
+    .await
+    .expect("reassignment and compensation finish");
+}
+
 #[tokio::test]
 async fn reassign_episode_file_renames_the_file_on_disk_and_records_history() {
     let ctx = TestContext::new().await;

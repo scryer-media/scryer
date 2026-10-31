@@ -81,7 +81,7 @@ fn optimized_avi_batches_preserve_invalid_ids_tails_and_saturation() {
     for alignment in 0..32 {
         let mut storage = vec![0_u8; alignment + 16 * 33 + 15];
         let data = &mut storage[alignment..];
-        for (index, entry) in data.chunks_exact_mut(16).enumerate() {
+        for (index, entry) in data.as_chunks_mut::<16>().0.iter_mut().enumerate() {
             entry[..4].copy_from_slice(&ids[index % ids.len()]);
             entry[12..].copy_from_slice(&(u32::MAX - index as u32).to_le_bytes());
         }
@@ -181,7 +181,7 @@ fn benchmark_optimized_probe_scans() {
     eprintln!("audio signatures bytes=65536: scalar={before:.3}us optimized={after:.3}us");
     for streams in [1, 4, 100] {
         let mut data = vec![0_u8; 256 * 1024];
-        for (i, entry) in data.chunks_exact_mut(16).enumerate() {
+        for (i, entry) in data.as_chunks_mut::<16>().0.iter_mut().enumerate() {
             let id = i % streams;
             entry[0] = b'0' + (id / 10) as u8;
             entry[1] = b'0' + (id % 10) as u8;

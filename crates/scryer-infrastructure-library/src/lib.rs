@@ -27,3 +27,5 @@ pub(crate) mod title_images {
 }
 
 pub(crate) use scryer_infrastructure_workflow as workflow;
+
+mod error_reasons;

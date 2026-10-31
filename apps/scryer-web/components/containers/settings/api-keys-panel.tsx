@@ -1,3 +1,5 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
+import { applyApiKeyLoadRefusal } from "../../../lib/utils/api-key-load.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 import {
@@ -9,7 +11,13 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { TotpCodeForm } from "@/components/auth/totp-code-form";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +42,12 @@ type MyApiKeysQueryResult = {
   myApiKeys: ApiKeySummary[];
 };
 
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
+function errorMessage(
+  error: unknown,
+  fallback: string,
+  translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
+) {
+  return userFacingGraphQlErrorMessage(error, fallback, translate);
 }
 
 function apiKeyStatus(key: ApiKeySummary, canCreate: boolean) {
@@ -55,8 +67,14 @@ function formatTimestamp(value: string, dateTimeFormat: UiDateTimeFormat) {
   return formatUiDateTime(value, dateTimeFormat, { fallback: value });
 }
 
-export function ApiKeysPanel({ adoptSession }: {
-  adoptSession: (token: string, user: AuthUser | null, persistSession?: boolean) => void;
+export function ApiKeysPanel({
+  adoptSession,
+}: {
+  adoptSession: (
+    token: string,
+    user: AuthUser | null,
+    persistSession?: boolean,
+  ) => void;
 }) {
   const client = useClient();
   const t = useTranslate();
@@ -70,7 +88,9 @@ export function ApiKeysPanel({ adoptSession }: {
   const [revealedCopied, setRevealedCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
-  const [pendingRevoke, setPendingRevoke] = useState<ApiKeySummary | null>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<ApiKeySummary | null>(
+    null,
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [mfaOpen, setMfaOpen] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
@@ -78,17 +98,24 @@ export function ApiKeysPanel({ adoptSession }: {
   const [mfaError, setMfaError] = useState<string | null>(null);
   const verificationRef = useRef<((token: string | null) => void) | null>(null);
 
-  useEffect(() => () => {
-    verificationRef.current?.(null);
-    verificationRef.current = null;
-  }, []);
+  useEffect(
+    () => () => {
+      verificationRef.current?.(null);
+      verificationRef.current = null;
+    },
+    [],
+  );
 
-  const requestMfa = useCallback(() => new Promise<string | null>((resolve) => {
-    verificationRef.current = resolve;
-    setMfaCode("");
-    setMfaError(null);
-    setMfaOpen(true);
-  }), []);
+  const requestMfa = useCallback(
+    () =>
+      new Promise<string | null>((resolve) => {
+        verificationRef.current = resolve;
+        setMfaCode("");
+        setMfaError(null);
+        setMfaOpen(true);
+      }),
+    [],
+  );
 
   const cancelMfa = useCallback(() => {
     if (mfaBusy) return;
@@ -104,9 +131,15 @@ export function ApiKeysPanel({ adoptSession }: {
     setMfaBusy(true);
     setMfaError(null);
     try {
-      const result = await client.mutation<{
-        mfaVerifyStepUp?: { token: string; user: AuthUser | null; persistSession: boolean };
-      }>(mfaVerifyStepUpMutation, { input: { code: mfaCode } }).toPromise();
+      const result = await client
+        .mutation<{
+          mfaVerifyStepUp?: {
+            token: string;
+            user: AuthUser | null;
+            persistSession: boolean;
+          };
+        }>(mfaVerifyStepUpMutation, { input: { code: mfaCode } })
+        .toPromise();
       if (!verificationRef.current) return;
       const session = result.data?.mfaVerifyStepUp;
       if (result.error || !session) {
@@ -128,25 +161,34 @@ export function ApiKeysPanel({ adoptSession }: {
 
   const load = useCallback(async () => {
     const result = await client
-      .query<MyApiKeysQueryResult>(myApiKeysQuery, {}, { requestPolicy: "network-only" })
+      .query<MyApiKeysQueryResult>(
+        myApiKeysQuery,
+        {},
+        { requestPolicy: "network-only" },
+      )
       .toPromise();
     if (result.error || !result.data) {
-      if (errorMessage(result.error, "").includes("interactive session is required")) {
-        setKeys([]);
-        setCanCreate(false);
-        setLoaded(true);
-        setStatus(null);
+      if (
+        applyApiKeyLoadRefusal(result.error, {
+          setKeys,
+          setCanCreate,
+          setLoaded,
+          setStatus,
+        })
+      ) {
         return;
       }
       setLoaded(true);
-      setStatus(errorMessage(result.error, "Unable to load API keys."));
+      setStatus(
+        errorMessage(result.error, t("error.fallback.unableToLoadAPIKeys"), t),
+      );
       return;
     }
     setKeys(result.data.myApiKeys);
     setCanCreate(result.data.canCreateMyApiKeys);
     setLoaded(true);
     setStatus(null);
-  }, [client]);
+  }, [client, t]);
 
   useEffect(() => {
     void load();
@@ -162,17 +204,35 @@ export function ApiKeysPanel({ adoptSession }: {
     setBusy(true);
     setStatus(null);
     try {
-      const result = await withMfaStepUp((verifiedToken) => client
-        .mutation<{ createMyApiKey?: { apiKey: string; key: ApiKeySummary } }>(
-          createMyApiKeyMutation,
-          { input: { label: trimmedLabel, expiry } },
-          verifiedToken ? { fetchOptions: { headers: { Authorization: `Bearer ${verifiedToken}` } } } : undefined,
-        )
-        .toPromise(), requestMfa);
+      const result = await withMfaStepUp(
+        (verifiedToken) =>
+          client
+            .mutation<{
+              createMyApiKey?: { apiKey: string; key: ApiKeySummary };
+            }>(
+              createMyApiKeyMutation,
+              { input: { label: trimmedLabel, expiry } },
+              verifiedToken
+                ? {
+                    fetchOptions: {
+                      headers: { Authorization: `Bearer ${verifiedToken}` },
+                    },
+                  }
+                : undefined,
+            )
+            .toPromise(),
+        requestMfa,
+      );
       if (!result) return;
       const created = result.data?.createMyApiKey;
       if (result.error || !created) {
-        setStatus(errorMessage(result.error, "Unable to create API key."));
+        setStatus(
+          errorMessage(
+            result.error,
+            t("error.fallback.unableToCreateAPIKey"),
+            t,
+          ),
+        );
         return;
       }
       setRevealed(created.apiKey);
@@ -180,11 +240,13 @@ export function ApiKeysPanel({ adoptSession }: {
       setLabel("");
       await load();
     } catch (error) {
-      setStatus(errorMessage(error, "Unable to create API key."));
+      setStatus(
+        errorMessage(error, t("error.fallback.unableToCreateAPIKey"), t),
+      );
     } finally {
       setBusy(false);
     }
-  }, [busy, client, expiry, label, load, requestMfa]);
+  }, [busy, client, expiry, label, load, requestMfa, t]);
 
   const copyRevealedKey = useCallback(async () => {
     if (!revealed) {
@@ -198,33 +260,53 @@ export function ApiKeysPanel({ adoptSession }: {
       setRevealedCopied(true);
       setStatus(null);
     } catch (error) {
-      setStatus(errorMessage(error, "Unable to copy the API key."));
+      setStatus(
+        errorMessage(error, t("error.fallback.unableToCopyTheAPIKey"), t),
+      );
     }
-  }, [revealed]);
+  }, [revealed, t]);
 
-  const revoke = useCallback(async (id: string) => {
-    setPendingRevoke(null);
-    setRevokingId(id);
-    setStatus(null);
-    try {
-      const result = await client.mutation(revokeMyApiKeyMutation, { id }).toPromise();
-      if (result.error || !result.data?.revokeMyApiKey?.revoked) {
-        setStatus(errorMessage(result.error, "Unable to revoke API key."));
-        return;
+  const revoke = useCallback(
+    async (id: string) => {
+      setPendingRevoke(null);
+      setRevokingId(id);
+      setStatus(null);
+      try {
+        const result = await client
+          .mutation(revokeMyApiKeyMutation, { id })
+          .toPromise();
+        if (result.error || !result.data?.revokeMyApiKey?.revoked) {
+          setStatus(
+            errorMessage(
+              result.error,
+              t("error.fallback.unableToRevokeAPIKey"),
+              t,
+            ),
+          );
+          return;
+        }
+        await load();
+      } finally {
+        setRevokingId(null);
       }
-      await load();
-    } finally {
-      setRevokingId(null);
-    }
-  }, [client, load]);
+    },
+    [client, load, t],
+  );
 
   return (
     <>
-      <Dialog open={mfaOpen} onOpenChange={(open) => { if (!open) cancelMfa(); }}>
+      <Dialog
+        open={mfaOpen}
+        onOpenChange={(open) => {
+          if (!open) cancelMfa();
+        }}
+      >
         <DialogContent onInteractOutside={(event) => event.preventDefault()}>
           <DialogHeader>
             <DialogTitle>{t("profile.apiKeyMfaTitle")}</DialogTitle>
-            <DialogDescription>{t("profile.apiKeyMfaDescription")}</DialogDescription>
+            <DialogDescription>
+              {t("profile.apiKeyMfaDescription")}
+            </DialogDescription>
           </DialogHeader>
           <TotpCodeForm
             id="api-key-mfa-form"
@@ -241,7 +323,11 @@ export function ApiKeysPanel({ adoptSession }: {
             onSubmit={verifyMfa}
             onCancel={cancelMfa}
           />
-          {mfaError ? <p role="alert" className="text-sm text-destructive">{mfaError}</p> : null}
+          {mfaError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {mfaError}
+            </p>
+          ) : null}
         </DialogContent>
       </Dialog>
       <section
@@ -290,6 +376,7 @@ export function ApiKeysPanel({ adoptSession }: {
                 readOnly
                 value={revealed}
                 size={revealed.length + 2}
+                id="settings-profile-api-key-revealed"
                 aria-label="New API key"
                 className="h-10 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
@@ -316,6 +403,7 @@ export function ApiKeysPanel({ adoptSession }: {
               <Button
                 type="button"
                 variant="outline"
+                id="settings-profile-api-key-dismiss"
                 onClick={() => setRevealed(null)}
               >
                 Dismiss
@@ -371,22 +459,22 @@ export function ApiKeysPanel({ adoptSession }: {
                 Action
               </span>
               <Button
+                id="settings-profile-api-key-create"
                 type="submit"
                 disabled={busy || label.trim().length === 0}
                 className="h-10 w-full sm:w-auto"
               >
-                {busy ? (
-                  <LoadingMark />
-                ) : (
-                  <KeyRound aria-hidden="true" />
-                )}
+                {busy ? <LoadingMark /> : <KeyRound aria-hidden="true" />}
                 {busy ? "Creating…" : "Create API key"}
               </Button>
             </div>
           </form>
         ) : loaded ? (
           <div className="flex items-start gap-2 rounded-[12px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-4 text-sm text-[var(--scry-warning-text)]">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <ShieldAlert
+              className="mt-0.5 h-4 w-4 shrink-0"
+              aria-hidden="true"
+            />
             API key creation is disabled by the current security policy.
           </div>
         ) : null}

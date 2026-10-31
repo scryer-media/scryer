@@ -686,7 +686,7 @@ fn apply_idx1_stream_sizes<T: Read + Seek>(
                 track.index_bytes += stream_sizes[track.stream_number];
             }
         } else {
-            for entry in buf[..read_len].chunks_exact(16) {
+            for entry in buf[..read_len].as_chunks::<16>().0 {
                 let Some(stream_number) = parse_idx1_stream_number(&entry[..2]) else {
                     continue;
                 };

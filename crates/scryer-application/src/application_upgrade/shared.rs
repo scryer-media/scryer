@@ -46,15 +46,15 @@ mod tests {
     fn core_errors_map_onto_the_same_application_variants() {
         assert!(matches!(
             map_updater_error(application_updater::Error::Validation("v".to_string())),
-            AppError::Validation(message) if message == "v"
+            AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message == "v"
         ));
         assert!(matches!(
             map_updater_error(application_updater::Error::Repository("r".to_string())),
-            AppError::Repository(message) if message == "r"
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message == "r"
         ));
         assert!(matches!(
             map_updater_error(application_updater::Error::NotFound("n".to_string())),
-            AppError::NotFound(message) if message == "n"
+            AppError::NotFound(message) | AppError::NotFoundReason { message, .. } if message == "n"
         ));
     }
 }

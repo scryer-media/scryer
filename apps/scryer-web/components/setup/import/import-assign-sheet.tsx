@@ -1,11 +1,5 @@
 import type { CSSProperties } from "react";
-import {
-  Check,
-  ChevronRight,
-  FolderMinus,
-  Library,
-  Plus,
-} from "lucide-react";
+import { Check, ChevronRight, FolderMinus, Library, Plus } from "lucide-react";
 
 import {
   SheetContent,

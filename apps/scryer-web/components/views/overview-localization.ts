@@ -6,7 +6,10 @@ function isFacet(value: string): value is Facet {
   return value === "movie" || value === "series" || value === "anime";
 }
 
-export function localizedFacetLabel(t: Translate, facet: Facet | string): string {
+export function localizedFacetLabel(
+  t: Translate,
+  facet: Facet | string,
+): string {
   if (isFacet(facet)) {
     return sectionLabelForFacet(t, facet);
   }
@@ -58,4 +61,3 @@ export function localizedWantedStatus(
       return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   }
 }
-

@@ -1,5 +1,15 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useLocation } from "react-router";
 import { useClient } from "urql";
 import {
@@ -28,9 +38,13 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { INDEXER_SETTINGS_TAB_ITEMS } from "@/components/views/settings/indexer-settings-tabs";
 import { UnderlineTabLink } from "@/components/common/underline-filter-button";
 import { Button } from "@/components/ui/button";
-import { GutterPanel, GutterPanelButton } from "@/components/common/gutter-panel";
+import {
+  GutterPanel,
+  GutterPanelButton,
+} from "@/components/common/gutter-panel";
 import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import type {
   IndexerSettingsTab,
@@ -41,14 +55,17 @@ import type {
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
-import { type GutterPanelSize, useGutterPanel } from "@/lib/hooks/use-gutter-panel";
+import {
+  type GutterPanelSize,
+  useGutterPanel,
+} from "@/lib/hooks/use-gutter-panel";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   buildIndexerSettingsPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
-  indexerSettingsTabs as allIndexerSettingsTabs,
+  INDEXER_SETTINGS_TABS,
   maintenanceRulesSectionFromPath,
   rulesSectionFromPath,
   rulesSectionsFor,
@@ -71,73 +88,124 @@ import {
 } from "@/lib/utils/indexer-download-client-mapping";
 
 const SettingsOverviewContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-overview-container")).SettingsOverviewContainer,
+  default: (
+    await import("@/components/containers/settings/settings-overview-container")
+  ).SettingsOverviewContainer,
 }));
 const SettingsSecurityContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-security-container")).SettingsSecurityContainer,
+  default: (
+    await import("@/components/containers/settings/settings-security-container")
+  ).SettingsSecurityContainer,
 }));
 const SettingsUsersContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-users-container")).SettingsUsersContainer,
+  default: (
+    await import("@/components/containers/settings/settings-users-container")
+  ).SettingsUsersContainer,
 }));
 const SettingsIndexersContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-indexers-container")).SettingsIndexersContainer,
+  default: (
+    await import("@/components/containers/settings/settings-indexers-container")
+  ).SettingsIndexersContainer,
 }));
 const SettingsIndexerSearchContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-indexer-search-container")).SettingsIndexerSearchContainer,
+  default: (
+    await import("@/components/containers/settings/settings-indexer-search-container")
+  ).SettingsIndexerSearchContainer,
+}));
+const SettingsIndexerClientsContainer = lazy(async () => ({
+  default: (
+    await import("@/components/containers/settings/settings-indexer-clients-container")
+  ).SettingsIndexerClientsContainer,
 }));
 const SettingsMediaServersContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-media-servers-container")).SettingsMediaServersContainer,
+  default: (
+    await import("@/components/containers/settings/settings-media-servers-container")
+  ).SettingsMediaServersContainer,
 }));
 const SettingsDownloadClientsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-download-clients-container")).SettingsDownloadClientsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-download-clients-container")
+  ).SettingsDownloadClientsContainer,
 }));
 const SettingsAcquisitionContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-acquisition-container")).SettingsAcquisitionContainer,
+  default: (
+    await import("@/components/containers/settings/settings-acquisition-container")
+  ).SettingsAcquisitionContainer,
 }));
 const SettingsDelayProfilesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-delay-profiles-container")).SettingsDelayProfilesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-delay-profiles-container")
+  ).SettingsDelayProfilesContainer,
 }));
 const SettingsTitleTagsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-title-tags-container")).SettingsTitleTagsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-title-tags-container")
+  ).SettingsTitleTagsContainer,
 }));
 const SettingsSeedingProfilesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-seeding-profiles-container")).SettingsSeedingProfilesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-seeding-profiles-container")
+  ).SettingsSeedingProfilesContainer,
 }));
 const SettingsQualityProfilesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-quality-profiles-container")).SettingsQualityProfilesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-quality-profiles-container")
+  ).SettingsQualityProfilesContainer,
 }));
 const SettingsProfileContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-profile-container")).SettingsProfileContainer,
+  default: (
+    await import("@/components/containers/settings/settings-profile-container")
+  ).SettingsProfileContainer,
 }));
 const SettingsRulesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-rules-container")).SettingsRulesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-rules-container")
+  ).SettingsRulesContainer,
 }));
 const SettingsMaintenanceRulesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-maintenance-rules-container")).SettingsMaintenanceRulesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-maintenance-rules-container")
+  ).SettingsMaintenanceRulesContainer,
 }));
 const SettingsRequestRulesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-request-rules-container")).SettingsRequestRulesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-request-rules-container")
+  ).SettingsRequestRulesContainer,
 }));
 const SettingsPluginsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-plugins-container")).SettingsPluginsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-plugins-container")
+  ).SettingsPluginsContainer,
 }));
 const SettingsScriptsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-scripts-container")).SettingsScriptsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-scripts-container")
+  ).SettingsScriptsContainer,
 }));
 const SettingsNotificationsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-notifications-container")).SettingsNotificationsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-notifications-container")
+  ).SettingsNotificationsContainer,
 }));
 const SettingsProxiesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-proxies-container")).SettingsProxiesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-proxies-container")
+  ).SettingsProxiesContainer,
 }));
 const SettingsPostProcessingContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-post-processing-container")).SettingsPostProcessingContainer,
+  default: (
+    await import("@/components/containers/settings/settings-post-processing-container")
+  ).SettingsPostProcessingContainer,
 }));
 const SettingsSubtitlesContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-subtitles-container")).SettingsSubtitlesContainer,
+  default: (
+    await import("@/components/containers/settings/settings-subtitles-container")
+  ).SettingsSubtitlesContainer,
 }));
 const SettingsBackupsContainer = lazy(async () => ({
-  default: (await import("@/components/containers/settings/settings-backups-container")).SettingsBackupsContainer,
+  default: (
+    await import("@/components/containers/settings/settings-backups-container")
+  ).SettingsBackupsContainer,
 }));
 
 /** DOM id of the right reference rail. Inline plugin managers are portaled here
@@ -161,22 +229,14 @@ const INDEXERS_FILTERED_PLUGIN_CONTENT_WIDTH = 1460;
 // keeps the wider pane it had before it carried the plugins rail.
 const INDEXER_SEARCH_FILTERED_PLUGIN_CONTENT_WIDTH = 1640;
 
-const INDEXER_SETTINGS_TAB_LABEL_KEYS: Record<IndexerSettingsTab, string> = {
-  indexers: "settings.indexers",
-  search: "settings.indexerSearch",
-  seedingProfiles: "settings.seedingProfiles",
-};
-
 /// Pane tabs for the Indexers page. An indexer and the seeding profile it
 /// applies are two views of the same subject, so they share a page instead of
 /// scattering across the settings nav. Same shape as the Lists page's tabs.
 function IndexerSettingsTabs({
   activeTab,
-  tabs,
   t,
 }: {
   activeTab: IndexerSettingsTab;
-  tabs: IndexerSettingsTab[];
   t: ReturnType<typeof useTranslate>;
 }) {
   return (
@@ -187,16 +247,20 @@ function IndexerSettingsTabs({
         aria-label={t("settings.indexers")}
         className="relative top-px flex min-h-12 flex-wrap gap-x-2"
       >
-        {tabs.map((tab) => (
-          <UnderlineTabLink
-            key={tab}
-            id={selectorId("settings-indexers-subnav", tab)}
-            to={buildIndexerSettingsPath(tab)}
-            selected={activeTab === tab}
-            label={t(INDEXER_SETTINGS_TAB_LABEL_KEYS[tab])}
-            badge={tab === "search" ? t("settings.pluginBeta") : undefined}
-          />
-        ))}
+        {INDEXER_SETTINGS_TABS.map((tab) => {
+          const item = INDEXER_SETTINGS_TAB_ITEMS[tab];
+          return (
+            <UnderlineTabLink
+              key={tab}
+              id={selectorId("settings-indexers-subnav", tab)}
+              to={buildIndexerSettingsPath(tab)}
+              selected={activeTab === tab}
+              icon={<item.icon className="h-4 w-4" />}
+              label={t(item.labelKey)}
+              badge={item.beta ? t("settings.pluginBeta") : undefined}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -222,7 +286,11 @@ const MAINTENANCE_RULES_SECTIONS: {
     labelKey: "settings.maintenanceCandidatesTitle",
     icon: ListChecks,
   },
-  { section: "history", labelKey: "settings.maintenanceNavHistory", icon: History },
+  {
+    section: "history",
+    labelKey: "settings.maintenanceNavHistory",
+    icon: History,
+  },
 ];
 
 /// Kind switcher for the Rules page. Scoring and maintenance rules are two
@@ -288,7 +356,10 @@ function RulesSubnav({
                           "settings-maintenance-rules-subnav",
                           maintenanceItem.section,
                         )}
-                        to={buildRulesPath("maintenance", maintenanceItem.section)}
+                        to={buildRulesPath(
+                          "maintenance",
+                          maintenanceItem.section,
+                        )}
                         aria-current={maintenanceActive ? "page" : undefined}
                         className={cn(
                           "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
@@ -299,7 +370,8 @@ function RulesSubnav({
                         <MaintenanceIcon
                           className={cn(
                             "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                            maintenanceActive && "text-[var(--scry-accent-text)]",
+                            maintenanceActive &&
+                              "text-[var(--scry-accent-text)]",
                           )}
                         />
                         <span className="whitespace-nowrap">
@@ -364,21 +436,21 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection === "requestRules" && !experimentalFeaturesEnabled;
   const effectiveRulesSection =
     maintenanceRulesHidden || requestRulesHidden ? "scoring" : rulesSection;
-  // Indexer search is in beta rather than experimental: the pane is always
-  // offered, and the page header carries the notice.
-  const indexerSettingsTabs = allIndexerSettingsTabs();
-  const effectiveIndexerSettingsTab = indexerSettingsTabs.includes(indexerSettingsTab)
-    ? indexerSettingsTab
-    : "indexers";
-  const [indexerDownloadClientMappingCatalogResource, setIndexerDownloadClientMappingCatalogResource] =
-    useState<IndexerDownloadClientMappingCatalogResource>({
-      catalog: null,
-      status: "idle",
-      error: null,
-    });
+  const [
+    indexerDownloadClientMappingCatalogResource,
+    setIndexerDownloadClientMappingCatalogResource,
+  ] = useState<IndexerDownloadClientMappingCatalogResource>({
+    catalog: null,
+    status: "idle",
+    error: null,
+  });
   const indexerMappingCatalogRequestRef = useRef(0);
   const updateIndexerDownloadClientMappingCatalog = useCallback(
-    (updater: (catalog: IndexerDownloadClientMappingCatalog) => IndexerDownloadClientMappingCatalog) => {
+    (
+      updater: (
+        catalog: IndexerDownloadClientMappingCatalog,
+      ) => IndexerDownloadClientMappingCatalog,
+    ) => {
       setIndexerDownloadClientMappingCatalogResource((previous) =>
         previous.catalog
           ? { ...previous, catalog: updater(previous.catalog) }
@@ -402,10 +474,13 @@ export const SettingsContainer = memo(function SettingsContainer({
         )
         .toPromise();
       if (error) throw error;
-      if (!isLatestIndexerDownloadClientCatalogRequest(
-        requestSequence,
-        indexerMappingCatalogRequestRef.current,
-      )) return;
+      if (
+        !isLatestIndexerDownloadClientCatalogRequest(
+          requestSequence,
+          indexerMappingCatalogRequestRef.current,
+        )
+      )
+        return;
       setIndexerDownloadClientMappingCatalogResource(
         completeIndexerDownloadClientCatalogRequest(
           normalizeIndexerDownloadClientMappingCatalog(
@@ -414,14 +489,17 @@ export const SettingsContainer = memo(function SettingsContainer({
         ),
       );
     } catch (error) {
-      if (!isLatestIndexerDownloadClientCatalogRequest(
-        requestSequence,
-        indexerMappingCatalogRequestRef.current,
-      )) return;
+      if (
+        !isLatestIndexerDownloadClientCatalogRequest(
+          requestSequence,
+          indexerMappingCatalogRequestRef.current,
+        )
+      )
+        return;
       setIndexerDownloadClientMappingCatalogResource((previous) =>
         failIndexerDownloadClientCatalogRequest(
           previous,
-          error instanceof Error ? error.message : t("status.failedToLoad"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         ),
       );
     }
@@ -463,7 +541,7 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection === "subtitles";
   const referenceContentWidth = showReferenceRail
     ? settingsSection === "indexers"
-      ? effectiveIndexerSettingsTab === "search"
+      ? indexerSettingsTab === "search"
         ? INDEXER_SEARCH_FILTERED_PLUGIN_CONTENT_WIDTH
         : INDEXERS_FILTERED_PLUGIN_CONTENT_WIDTH
       : STANDARD_FILTERED_PLUGIN_CONTENT_WIDTH
@@ -503,33 +581,33 @@ export const SettingsContainer = memo(function SettingsContainer({
                     ? t("settings.downloadClients")
                     : settingsSection === "proxies"
                       ? t("settings.proxies")
-                    : settingsSection === "rules"
-                      ? t("settings.rulesScoring")
-                      : settingsSection === "maintenanceRules"
-                        ? maintenanceRulesHidden
-                          ? t("settings.rulesScoring")
-                          : t("settings.maintenanceRules")
-                      : settingsSection === "requestRules"
-                        ? requestRulesHidden
-                          ? t("settings.rulesScoring")
-                          : t("settings.requestRules")
-                      : settingsSection === "plugins"
-                        ? t("settings.plugins")
-                        : settingsSection === "scripts"
-                          ? t("settings.scripts")
-                        : settingsSection === "notifications"
-                          ? t("settings.notifications")
-                          : settingsSection === "post-processing"
-                            ? t("settings.postProcessing")
-                            : settingsSection === "subtitles"
-                              ? t("settings.subtitles")
-                              : settingsSection === "delayProfiles"
-                                ? t("settings.delayProfiles")
-                                : settingsSection === "titleTags"
-                                  ? t("settings.titleTags")
-                                : settingsSection === "acquisition"
-                                  ? t("settings.acquisition")
-                                  : t("settings.qualityProfiles");
+                      : settingsSection === "rules"
+                        ? t("settings.rulesScoring")
+                        : settingsSection === "maintenanceRules"
+                          ? maintenanceRulesHidden
+                            ? t("settings.rulesScoring")
+                            : t("settings.maintenanceRules")
+                          : settingsSection === "requestRules"
+                            ? requestRulesHidden
+                              ? t("settings.rulesScoring")
+                              : t("settings.requestRules")
+                            : settingsSection === "plugins"
+                              ? t("settings.plugins")
+                              : settingsSection === "scripts"
+                                ? t("settings.scripts")
+                                : settingsSection === "notifications"
+                                  ? t("settings.notifications")
+                                  : settingsSection === "post-processing"
+                                    ? t("settings.postProcessing")
+                                    : settingsSection === "subtitles"
+                                      ? t("settings.subtitles")
+                                      : settingsSection === "delayProfiles"
+                                        ? t("settings.delayProfiles")
+                                        : settingsSection === "titleTags"
+                                          ? t("settings.titleTags")
+                                          : settingsSection === "acquisition"
+                                            ? t("settings.acquisition")
+                                            : t("settings.qualityProfiles");
   const primarySettingsNav = [
     {
       section: "profile" as const,
@@ -590,7 +668,8 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection === "proxies" ||
     settingsSection === "mediaServers" ||
     settingsSection === "notifications";
-  const usesAccessHeader = settingsSection === "security" || settingsSection === "users";
+  const usesAccessHeader =
+    settingsSection === "security" || settingsSection === "users";
   const usesSystemHeader = usesAccessHeader || settingsSection === "backups";
   const SettingsSectionIcon = (() => {
     switch (settingsSection) {
@@ -624,8 +703,8 @@ export const SettingsContainer = memo(function SettingsContainer({
         return Archive;
       default:
         return (
-          primarySettingsNav.find((item) => item.section === settingsSection)?.icon ??
-          Settings2
+          primarySettingsNav.find((item) => item.section === settingsSection)
+            ?.icon ?? Settings2
         );
     }
   })();
@@ -644,14 +723,13 @@ export const SettingsContainer = memo(function SettingsContainer({
   const activePane = activeMaintenancePane;
   const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
   const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
-  const breadcrumbRootLabel =
-    usesAutomationHeader
-      ? t("nav.group.automation")
-      : usesIntegrationsHeader
-        ? t("nav.group.integrations")
-        : usesSystemHeader
-          ? t("nav.group.system")
-      : t("nav.settings");
+  const breadcrumbRootLabel = usesAutomationHeader
+    ? t("nav.group.automation")
+    : usesIntegrationsHeader
+      ? t("nav.group.integrations")
+      : usesSystemHeader
+        ? t("nav.group.system")
+        : t("nav.settings");
 
   useProviderCatalogSubscription(
     useCallback((families: ProviderCatalogFamily[]) => {
@@ -701,7 +779,11 @@ export const SettingsContainer = memo(function SettingsContainer({
       >
         <div
           ref={settingsPaneRef}
-          style={referenceContentWidth ? { maxWidth: referenceContentWidth } : undefined}
+          style={
+            referenceContentWidth
+              ? { maxWidth: referenceContentWidth }
+              : undefined
+          }
           className={cn(
             "mx-auto w-full px-4 py-5 pb-[calc(env(safe-area-inset-bottom)+5rem)] sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
             showReferenceRail
@@ -718,185 +800,208 @@ export const SettingsContainer = memo(function SettingsContainer({
         >
           <div className="contents">
             <div className={showReferenceRail ? "min-w-0" : "contents"}>
-          <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
-            <span>{breadcrumbRootLabel}</span>
-            <ChevronRight className="h-3.5 w-3.5" />
-            {activePane ? (
-              <>
-                <Link
-                  to={buildRulesPath("maintenance")}
-                  className="transition hover:text-[var(--scry-ink2)]"
-                >
-                  {settingsSectionLabel}
-                </Link>
+              <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
+                <span>{breadcrumbRootLabel}</span>
                 <ChevronRight className="h-3.5 w-3.5" />
-              </>
-            ) : null}
-            <span className="font-semibold text-[var(--scry-accent-text)]">{pageLabel}</span>
-          </div>
-          <div
-            className={cn(
-              "mb-6 flex gap-3",
-              // The plugins button is small enough to share the title's row
-              // on any screen; other header actions stack below it on phones.
-              showReferenceRail
-                ? "flex-row items-center justify-between"
-                : "flex-col sm:flex-row sm:items-center sm:justify-between",
-            )}
-          >
-            <div className="flex min-w-0 items-center gap-4">
-              <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),0.35),rgba(123,91,255,0.22))] text-[var(--scry-accent-text)]">
-                <PageIcon className="h-[23px] w-[23px]" />
-              </div>
-              <div className="min-w-0">
-                <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
+                {activePane ? (
+                  <>
+                    <Link
+                      to={buildRulesPath("maintenance")}
+                      className="transition hover:text-[var(--scry-ink2)]"
+                    >
+                      {settingsSectionLabel}
+                    </Link>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </>
+                ) : null}
+                <span className="font-semibold text-[var(--scry-accent-text)]">
                   {pageLabel}
-                </h1>
-                {settingsSection === "indexers" && effectiveIndexerSettingsTab === "search" ? (
-                  <p
-                    id="settings-indexer-search-beta-notice"
-                    className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]"
+                </span>
+              </div>
+              <div
+                className={cn(
+                  "mb-6 flex gap-3",
+                  // The plugins button is small enough to share the title's row
+                  // on any screen; other header actions stack below it on phones.
+                  showReferenceRail
+                    ? "flex-row items-center justify-between"
+                    : "flex-col sm:flex-row sm:items-center sm:justify-between",
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),0.35),rgba(123,91,255,0.22))] text-[var(--scry-accent-text)]">
+                    <PageIcon className="h-[23px] w-[23px]" />
+                  </div>
+                  <div className="min-w-0">
+                    <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
+                      {pageLabel}
+                    </h1>
+                    {!usesAutomationHeader &&
+                    !usesIntegrationsHeader &&
+                    !usesSystemHeader &&
+                    settingsSection !== "profile" &&
+                    settingsSection !== "general" &&
+                    settingsSection !== "qualityProfiles" &&
+                    settingsSection !== "delayProfiles" &&
+                    settingsSection !== "titleTags" &&
+                    settingsSection !== "plugins" &&
+                    settingsSection !== "scripts" ? (
+                      <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
+                        {t("settings.sectionTitle", {
+                          section: settingsSectionLabel,
+                        })}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                {showReferenceRail ? (
+                  <GutterPanelButton
+                    panelId={SETTINGS_PLUGINS_PANEL_ID}
+                    label={t("settings.plugins")}
+                    icon={<Puzzle className="h-4 w-4" />}
+                    open={referencePanel.open}
+                    onOpenChange={setReferencePanelOpen}
+                  />
+                ) : settingsSection === "plugins" ? (
+                  <div
+                    id={SETTINGS_HEADER_ACTIONS_SLOT_ID}
+                    className="flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-2 sm:min-w-[29rem]"
+                  />
+                ) : showPluginsShortcut ? (
+                  <Button
+                    asChild
+                    variant="primary"
+                    className="h-10 shrink-0 rounded-[10px] px-3 text-[13px]"
                   >
-                    {t("settings.indexerSearchBetaNotice")}
-                  </p>
-                ) : null}
-                {!usesAutomationHeader &&
-                !usesIntegrationsHeader &&
-                !usesSystemHeader &&
-                settingsSection !== "profile" &&
-                settingsSection !== "general" &&
-                settingsSection !== "qualityProfiles" &&
-                settingsSection !== "delayProfiles" &&
-                settingsSection !== "titleTags" &&
-                settingsSection !== "plugins" &&
-                settingsSection !== "scripts" ? (
-                  <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
-                    {t("settings.sectionTitle", { section: settingsSectionLabel })}
-                  </p>
+                    <Link to="/settings/plugins">{t("settings.plugins")}</Link>
+                  </Button>
                 ) : null}
               </div>
-            </div>
-            {showReferenceRail ? (
-              <GutterPanelButton
-                panelId={SETTINGS_PLUGINS_PANEL_ID}
-                label={t("settings.plugins")}
-                icon={<Puzzle className="h-4 w-4" />}
-                open={referencePanel.open}
-                onOpenChange={setReferencePanelOpen}
-              />
-            ) : settingsSection === "plugins" ? (
-              <div
-                id={SETTINGS_HEADER_ACTIONS_SLOT_ID}
-                className="flex min-h-10 shrink-0 flex-wrap items-center justify-end gap-2 sm:min-w-[29rem]"
-              />
-            ) : showPluginsShortcut ? (
-              <Button asChild variant="primary" className="h-10 shrink-0 rounded-[10px] px-3 text-[13px]">
-                <Link to="/settings/plugins">{t("settings.plugins")}</Link>
-              </Button>
-            ) : null}
-          </div>
-          {settingsSection === "indexers" ? (
-            <IndexerSettingsTabs
-              activeTab={effectiveIndexerSettingsTab}
-              tabs={indexerSettingsTabs}
-              t={t}
-            />
-          ) : null}
-          <GutterPanelContext.Provider value={showReferenceRail ? referencePanelContext : null}>
-          <Suspense fallback={<div className="py-6 text-sm text-[var(--scry-muted3)]">{t("label.loading")}</div>}>
-          {settingsSection === "profile" ? (
-            <SettingsProfileContainer
-              userId={userId}
-              username={username}
-            />
-          ) : settingsSection === "general" ? (
-            <SettingsOverviewContainer
-              availableLanguages={availableLanguages}
-              selectedLanguage={selectedLanguage}
-              uiLanguage={uiLanguage}
-              onSelectLanguage={onSelectLanguage}
-            />
-          ) : settingsSection === "backups" ? (
-            <SettingsBackupsContainer />
-          ) : settingsSection === "security" ? (
-            <SettingsSecurityContainer />
-          ) : settingsSection === "users" ? (
-            <SettingsUsersContainer />
-          ) : settingsSection === "mediaServers" ? (
-            <SettingsMediaServersContainer />
-          ) : settingsSection === "indexers" ? (
-            <>
-              {effectiveIndexerSettingsTab === "seedingProfiles" ? (
-                <SettingsSeedingProfilesContainer />
-              ) : effectiveIndexerSettingsTab === "search" ? (
-                <SettingsIndexerSearchContainer />
-              ) : (
-                <SettingsIndexersContainer
-                  indexerSettingsTab={effectiveIndexerSettingsTab}
-                  providerCatalogVersion={providerCatalogVersions.INDEXER}
-                  indexerDownloadClientMappingCatalogResource={
-                    indexerDownloadClientMappingCatalogResource
+              {settingsSection === "indexers" ? (
+                <IndexerSettingsTabs activeTab={indexerSettingsTab} t={t} />
+              ) : null}
+              <GutterPanelContext.Provider
+                value={showReferenceRail ? referencePanelContext : null}
+              >
+                <Suspense
+                  fallback={
+                    <div className="py-6 text-sm text-[var(--scry-muted3)]">
+                      {t("label.loading")}
+                    </div>
                   }
-                  updateIndexerDownloadClientMappingCatalog={
-                    updateIndexerDownloadClientMappingCatalog
-                  }
-                  refreshIndexerDownloadClientMappingCatalog={
-                    refreshIndexerDownloadClientMappingCatalog
-                  }
-                />
-              )}
-            </>
-          ) : settingsSection === "downloadClients" ? (
-            <SettingsDownloadClientsContainer
-              providerCatalogVersion={
-                providerCatalogVersions.DOWNLOAD_CLIENT
-                + providerCatalogVersions.ARCHIVE_EXTRACTOR
-              }
-              onDownloadClientsChanged={refreshIndexerDownloadClientMappingCatalog}
-            />
-          ) : settingsSection === "rules" ? (
-            <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
-          ) : settingsSection === "maintenanceRules" ? (
-            maintenanceRulesHidden ? (
-              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
-            ) : (
-              <SettingsMaintenanceRulesContainer section={maintenanceRulesSection} />
-            )
-          ) : settingsSection === "requestRules" ? (
-            requestRulesHidden ? (
-              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
-            ) : (
-              <SettingsRequestRulesContainer />
-            )
-          ) : settingsSection === "plugins" ? (
-            <SettingsPluginsContainer />
-          ) : settingsSection === "scripts" ? (
-            <SettingsScriptsContainer />
-          ) : settingsSection === "proxies" ? (
-            <SettingsProxiesContainer />
-          ) : settingsSection === "notifications" ? (
-            <SettingsNotificationsContainer
-              providerCatalogVersion={providerCatalogVersions.NOTIFICATION}
-            />
-          ) : settingsSection === "post-processing" ? (
-            <SettingsPostProcessingContainer />
-          ) : settingsSection === "subtitles" ? (
-            <SettingsSubtitlesContainer
-              providerCatalogVersion={providerCatalogVersions.SUBTITLE}
-            />
-          ) : settingsSection === "delayProfiles" ? (
-            <SettingsDelayProfilesContainer />
-          ) : settingsSection === "titleTags" ? (
-            <SettingsTitleTagsContainer
-              canManageCatalogSettings={canManageCatalogSettings}
-            />
-          ) : settingsSection === "acquisition" ? (
-            <SettingsAcquisitionContainer />
-          ) : (
-            <SettingsQualityProfilesContainer />
-          )}
-          </Suspense>
-          </GutterPanelContext.Provider>
+                >
+                  {settingsSection === "profile" ? (
+                    <SettingsProfileContainer
+                      userId={userId}
+                      username={username}
+                    />
+                  ) : settingsSection === "general" ? (
+                    <SettingsOverviewContainer
+                      availableLanguages={availableLanguages}
+                      selectedLanguage={selectedLanguage}
+                      uiLanguage={uiLanguage}
+                      onSelectLanguage={onSelectLanguage}
+                    />
+                  ) : settingsSection === "backups" ? (
+                    <SettingsBackupsContainer />
+                  ) : settingsSection === "security" ? (
+                    <SettingsSecurityContainer />
+                  ) : settingsSection === "users" ? (
+                    <SettingsUsersContainer />
+                  ) : settingsSection === "mediaServers" ? (
+                    <SettingsMediaServersContainer />
+                  ) : settingsSection === "indexers" ? (
+                    <>
+                      {indexerSettingsTab === "seedingProfiles" ? (
+                        <SettingsSeedingProfilesContainer />
+                      ) : indexerSettingsTab === "search" ? (
+                        <SettingsIndexerSearchContainer />
+                      ) : indexerSettingsTab === "clients" ? (
+                        <SettingsIndexerClientsContainer />
+                      ) : (
+                        <SettingsIndexersContainer
+                          indexerSettingsTab={indexerSettingsTab}
+                          providerCatalogVersion={
+                            providerCatalogVersions.INDEXER
+                          }
+                          indexerDownloadClientMappingCatalogResource={
+                            indexerDownloadClientMappingCatalogResource
+                          }
+                          updateIndexerDownloadClientMappingCatalog={
+                            updateIndexerDownloadClientMappingCatalog
+                          }
+                          refreshIndexerDownloadClientMappingCatalog={
+                            refreshIndexerDownloadClientMappingCatalog
+                          }
+                        />
+                      )}
+                    </>
+                  ) : settingsSection === "downloadClients" ? (
+                    <SettingsDownloadClientsContainer
+                      providerCatalogVersion={
+                        providerCatalogVersions.DOWNLOAD_CLIENT +
+                        providerCatalogVersions.ARCHIVE_EXTRACTOR
+                      }
+                      onDownloadClientsChanged={
+                        refreshIndexerDownloadClientMappingCatalog
+                      }
+                    />
+                  ) : settingsSection === "rules" ? (
+                    <SettingsRulesContainer
+                      canManageCatalogSettings={canManageCatalogSettings}
+                      canManageSystemSettings={canManageSystemSettings}
+                    />
+                  ) : settingsSection === "maintenanceRules" ? (
+                    maintenanceRulesHidden ? (
+                      <SettingsRulesContainer
+                        canManageCatalogSettings={canManageCatalogSettings}
+                        canManageSystemSettings={canManageSystemSettings}
+                      />
+                    ) : (
+                      <SettingsMaintenanceRulesContainer
+                        section={maintenanceRulesSection}
+                      />
+                    )
+                  ) : settingsSection === "requestRules" ? (
+                    requestRulesHidden ? (
+                      <SettingsRulesContainer
+                        canManageCatalogSettings={canManageCatalogSettings}
+                        canManageSystemSettings={canManageSystemSettings}
+                      />
+                    ) : (
+                      <SettingsRequestRulesContainer />
+                    )
+                  ) : settingsSection === "plugins" ? (
+                    <SettingsPluginsContainer />
+                  ) : settingsSection === "scripts" ? (
+                    <SettingsScriptsContainer />
+                  ) : settingsSection === "proxies" ? (
+                    <SettingsProxiesContainer />
+                  ) : settingsSection === "notifications" ? (
+                    <SettingsNotificationsContainer
+                      providerCatalogVersion={
+                        providerCatalogVersions.NOTIFICATION
+                      }
+                    />
+                  ) : settingsSection === "post-processing" ? (
+                    <SettingsPostProcessingContainer />
+                  ) : settingsSection === "subtitles" ? (
+                    <SettingsSubtitlesContainer
+                      providerCatalogVersion={providerCatalogVersions.SUBTITLE}
+                    />
+                  ) : settingsSection === "delayProfiles" ? (
+                    <SettingsDelayProfilesContainer />
+                  ) : settingsSection === "titleTags" ? (
+                    <SettingsTitleTagsContainer
+                      canManageCatalogSettings={canManageCatalogSettings}
+                    />
+                  ) : settingsSection === "acquisition" ? (
+                    <SettingsAcquisitionContainer />
+                  ) : (
+                    <SettingsQualityProfilesContainer />
+                  )}
+                </Suspense>
+              </GutterPanelContext.Provider>
             </div>
             {showReferenceRail ? (
               <GutterPanel

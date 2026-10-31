@@ -67,14 +67,17 @@ function metadataResultForDiscoveryItem(
 ): MetadataTvdbSearchItem {
   const externalIds = externalIdsForDiscoveryItem(item);
   return {
-    smgId: Number(
-      externalIds.find((externalId) => externalId.source === "smg")?.value,
-    ) || null,
+    smgId:
+      Number(
+        externalIds.find((externalId) => externalId.source === "smg")?.value,
+      ) || null,
     tvdbId:
-      externalIds.find((externalId) => externalId.source === "tvdb")?.value ?? "",
-    tmdbId: Number(
-      externalIds.find((externalId) => externalId.source === "tmdb")?.value,
-    ) || null,
+      externalIds.find((externalId) => externalId.source === "tvdb")?.value ??
+      "",
+    tmdbId:
+      Number(
+        externalIds.find((externalId) => externalId.source === "tmdb")?.value,
+      ) || null,
     name: discoveryItemDisplayTitle(item),
     imdbId:
       externalIds.find((externalId) => externalId.source === "imdb")?.value ??
@@ -137,11 +140,12 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   );
   const [home, setHome] = useState<DiscoveryHomePayload | null>(null);
   const [filters, setFilters] = useState<DiscoveryHomeFilters>({});
-  const [filterOptions, setFilterOptions] = useState<DiscoveryHomeFilterOptions>({
-    genres: [],
-    themes: [],
-    studioSlugs: [],
-  });
+  const [filterOptions, setFilterOptions] =
+    useState<DiscoveryHomeFilterOptions>({
+      genres: [],
+      themes: [],
+      studioSlugs: [],
+    });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<DiscoveryItem | null>(null);
@@ -188,7 +192,11 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
   const refresh = useCallback(async () => {
     const requestId = refreshRequestIdRef.current + 1;
     refreshRequestIdRef.current = requestId;
-    const scopeKey = JSON.stringify({ userId, uiLanguage, authorizationSignature });
+    const scopeKey = JSON.stringify({
+      userId,
+      uiLanguage,
+      authorizationSignature,
+    });
     const sameScope = scopeKeyRef.current === scopeKey;
     scopeKeyRef.current = scopeKey;
     if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
@@ -213,7 +221,9 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
       if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
         return;
       }
-      setHome((data?.discoveryHomeCards ?? null) as DiscoveryHomePayload | null);
+      setHome(
+        (data?.discoveryHomeCards ?? null) as DiscoveryHomePayload | null,
+      );
     } catch (caught) {
       if (!mountedRef.current || refreshRequestIdRef.current !== requestId) {
         return;
@@ -278,9 +288,7 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           return;
         }
         const nextOptions = data?.discoveryHomeFilterOptions as
-          | DiscoveryHomeFilterOptions
-          | null
-          | undefined;
+          DiscoveryHomeFilterOptions | null | undefined;
         if (nextOptions) {
           setFilterOptions(nextOptions);
         }
@@ -340,7 +348,8 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
         if (detailError) {
           throw detailError;
         }
-        const detail = data?.discoveryItemDetail as DiscoveryItem | null | undefined;
+        const detail = data?.discoveryItemDetail as
+          DiscoveryItem | null | undefined;
         if (!detail) {
           throw new Error(t("status.permissionDenied"));
         }
@@ -432,7 +441,9 @@ export const DiscoveryContainer = memo(function DiscoveryContainer({
           onOpenChange={handleRequestDialogOpenChange}
           result={selectedResult}
           facet={selectedFacet}
-          requestableLibraries={requestableLibrariesByFacet[selectedFacet] ?? []}
+          requestableLibraries={
+            requestableLibrariesByFacet[selectedFacet] ?? []
+          }
           qualityProfileOptions={catalogQualityProfileOptions}
           onRequest={async (result, facet, options) => {
             const accepted = await requestMetadataSearchResult(

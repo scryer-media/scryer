@@ -11,6 +11,124 @@ use scryer_domain::{PluginHostBindingId, SubtitleProviderConfig};
 
 const FAILING_PROVIDER: &str = "brokensubs";
 const HEALTHY_PROVIDER: &str = "steadysubs";
+/// Every search runs into the plugin deadline.
+const SLOW_SEARCH_PROVIDER: &str = "slowsubs";
+/// Searches answer at once; every download runs into the plugin deadline.
+const SLOW_DOWNLOAD_PROVIDER: &str = "lagsubs";
+/// Offers one archive for every title, and that archive is gone.
+const DEAD_FILE_PROVIDER: &str = "packsubs";
+
+/// The subtitle plugin deadline a timing-out call waits out before failing.
+const PLUGIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The error the plugin host raises when a subtitle call hits its deadline.
+fn plugin_deadline_error(provider: &str, operation: &str) -> AppError {
+    AppError::Repository(format!(
+        "subtitle provider plugin {provider}@1.0.0 timed out during {operation} after {PLUGIN_DEADLINE:?}: epoch deadline exceeded"
+    ))
+}
+
+fn offered_match(
+    provider: &str,
+    provider_file_id: String,
+    query: &SubtitleQuery,
+) -> crate::subtitles::SubtitleMatch {
+    crate::subtitles::SubtitleMatch {
+        provider: provider.to_string(),
+        provider_file_id,
+        language: query
+            .languages
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "eng".to_string()),
+        release_info: Some("Synthetic.Release.Group".to_string()),
+        score: 90,
+        score_percent: 90,
+        hearing_impaired: false,
+        forced: false,
+        ai_translated: false,
+        machine_translated: false,
+        uploader: None,
+        download_count: None,
+        hash_matched: false,
+    }
+}
+
+/// How a scripted provider answers.
+#[derive(Clone, Copy)]
+enum Script {
+    SlowSearch,
+    SlowDownload,
+    DeadFile,
+}
+
+struct ScriptedSubtitleClient {
+    script: Script,
+    name: &'static str,
+    searches: Arc<AtomicUsize>,
+    downloads: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl crate::SubtitleProviderClient for ScriptedSubtitleClient {
+    async fn search(
+        &self,
+        query: &SubtitleQuery,
+    ) -> AppResult<Vec<crate::subtitles::SubtitleMatch>> {
+        let call = self.searches.fetch_add(1, Ordering::SeqCst);
+        match self.script {
+            Script::SlowSearch => {
+                tokio::time::sleep(PLUGIN_DEADLINE).await;
+                Err(plugin_deadline_error(self.name, "Search"))
+            }
+            Script::SlowDownload => Ok(vec![offered_match(
+                self.name,
+                format!("lag-file-{call}"),
+                query,
+            )]),
+            Script::DeadFile => Ok(vec![offered_match(
+                self.name,
+                "season-pack-archive".to_string(),
+                query,
+            )]),
+        }
+    }
+
+    async fn download(&self, _provider_file_id: &str) -> AppResult<SubtitleFile> {
+        self.downloads.fetch_add(1, Ordering::SeqCst);
+        match self.script {
+            Script::SlowDownload => {
+                tokio::time::sleep(PLUGIN_DEADLINE).await;
+                Err(plugin_deadline_error(self.name, "Download"))
+            }
+            Script::DeadFile => Err(AppError::plugin_failed(
+                &scryer_plugin_sdk::PluginError {
+                    code: scryer_plugin_sdk::PluginErrorCode::from(
+                        crate::plugin_codes::ITEM_NOT_FOUND,
+                    ),
+                    public_message: "synthetic archive is gone".to_string(),
+                    debug_message: None,
+                    retry_after_seconds: None,
+                    details: None,
+                },
+                "subtitle_download",
+            )),
+            Script::SlowSearch => Err(AppError::Repository(
+                "the slow-search provider never offers a download".to_string(),
+            )),
+        }
+    }
+
+    async fn validate_connection(&self) -> AppResult<crate::SubtitleProviderValidationResult> {
+        Err(AppError::Repository(
+            "validation is not used here".to_string(),
+        ))
+    }
+
+    fn name(&self) -> &str {
+        self.name
+    }
+}
 
 /// A provider whose every search fails the way a hard plugin error does.
 struct FailingSubtitleClient {
@@ -117,7 +235,17 @@ struct ProviderCalls {
     failing_searches: Arc<AtomicUsize>,
     healthy_searches: Arc<AtomicUsize>,
     healthy_downloads: Arc<AtomicUsize>,
+    scripted_searches: Arc<AtomicUsize>,
+    scripted_downloads: Arc<AtomicUsize>,
 }
+
+const ALL_PROVIDERS: [&str; 5] = [
+    FAILING_PROVIDER,
+    HEALTHY_PROVIDER,
+    SLOW_SEARCH_PROVIDER,
+    SLOW_DOWNLOAD_PROVIDER,
+    DEAD_FILE_PROVIDER,
+];
 
 struct CircuitPluginProvider {
     healthy_offers_match: bool,
@@ -139,16 +267,29 @@ impl crate::SubtitlePluginProvider for CircuitPluginProvider {
                 searches: Arc::clone(&self.calls.healthy_searches),
                 downloads: Arc::clone(&self.calls.healthy_downloads),
             })),
-            _ => None,
+            other => {
+                let (script, name) = match other {
+                    SLOW_SEARCH_PROVIDER => (Script::SlowSearch, SLOW_SEARCH_PROVIDER),
+                    SLOW_DOWNLOAD_PROVIDER => (Script::SlowDownload, SLOW_DOWNLOAD_PROVIDER),
+                    DEAD_FILE_PROVIDER => (Script::DeadFile, DEAD_FILE_PROVIDER),
+                    _ => return None,
+                };
+                Some(Arc::new(ScriptedSubtitleClient {
+                    script,
+                    name,
+                    searches: Arc::clone(&self.calls.scripted_searches),
+                    downloads: Arc::clone(&self.calls.scripted_downloads),
+                }))
+            }
         }
     }
 
     fn available_provider_types(&self) -> Vec<String> {
-        vec![FAILING_PROVIDER.to_string(), HEALTHY_PROVIDER.to_string()]
+        ALL_PROVIDERS.iter().map(|name| name.to_string()).collect()
     }
 
     fn supports_catalog_search_for_provider(&self, provider_type: &str) -> bool {
-        [FAILING_PROVIDER, HEALTHY_PROVIDER].contains(&provider_type)
+        ALL_PROVIDERS.contains(&provider_type)
     }
 
     fn recommended_facets_for_provider(&self, _provider_type: &str) -> Vec<String> {
@@ -232,6 +373,21 @@ async fn circuit_fixture(
     movies: usize,
     healthy_offers_match: bool,
 ) -> (AppUseCase, ProviderCalls, tempfile::TempDir) {
+    circuit_fixture_with(
+        movies,
+        healthy_offers_match,
+        &[FAILING_PROVIDER, HEALTHY_PROVIDER],
+    )
+    .await
+}
+
+/// `movies` monitored movies, each with one file and no subtitles, searched
+/// for English by the named providers.
+async fn circuit_fixture_with(
+    movies: usize,
+    healthy_offers_match: bool,
+    providers: &[&str],
+) -> (AppUseCase, ProviderCalls, tempfile::TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let movie_root = tempdir.path().join("movies");
     std::fs::create_dir_all(&movie_root).expect("create movie root");
@@ -250,10 +406,7 @@ async fn circuit_fixture(
     let app = app.with_test_overrides(|services| {
         services
             .with_subtitle_provider_configs(Arc::new(CircuitProviderConfigs {
-                configs: vec![
-                    provider_config(FAILING_PROVIDER),
-                    provider_config(HEALTHY_PROVIDER),
-                ],
+                configs: providers.iter().map(|name| provider_config(name)).collect(),
             }))
             .with_subtitle_plugin_provider(plugin_provider)
     });
@@ -387,5 +540,63 @@ async fn a_tripped_provider_does_not_stop_downloads_from_a_healthy_one() {
         calls.healthy_downloads.load(Ordering::SeqCst),
         4,
         "every title still gets its subtitle from the healthy provider"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn searches_that_run_into_the_plugin_deadline_trip_the_circuit() {
+    let (app, calls, _tempdir) =
+        circuit_fixture_with(5, false, &[SLOW_SEARCH_PROVIDER, HEALTHY_PROVIDER]).await;
+
+    app.run_subtitle_search_job()
+        .await
+        .expect("subtitle cycle runs");
+
+    assert_eq!(
+        calls.scripted_searches.load(Ordering::SeqCst),
+        3,
+        "three searches in a row hit the deadline, then the provider sits out"
+    );
+    assert_eq!(calls.healthy_searches.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test(start_paused = true)]
+async fn downloads_that_run_into_the_plugin_deadline_trip_the_circuit() {
+    // The searches answer every time, so only the downloads can trip it.
+    let (app, calls, _tempdir) = circuit_fixture_with(6, false, &[SLOW_DOWNLOAD_PROVIDER]).await;
+
+    app.run_subtitle_search_job()
+        .await
+        .expect("subtitle cycle runs");
+
+    assert_eq!(
+        calls.scripted_downloads.load(Ordering::SeqCst),
+        3,
+        "three downloads in a row hit the deadline, then the provider sits out"
+    );
+    assert_eq!(
+        calls.scripted_searches.load(Ordering::SeqCst),
+        3,
+        "an open circuit stops the provider's searches too"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_file_the_provider_says_is_gone_is_not_fetched_again_this_cycle() {
+    let (app, calls, _tempdir) = circuit_fixture_with(4, false, &[DEAD_FILE_PROVIDER]).await;
+
+    app.run_subtitle_search_job()
+        .await
+        .expect("subtitle cycle runs");
+
+    assert_eq!(
+        calls.scripted_downloads.load(Ordering::SeqCst),
+        1,
+        "every title is offered the same archive; once it is gone it is skipped"
+    );
+    assert_eq!(
+        calls.scripted_searches.load(Ordering::SeqCst),
+        4,
+        "a missing file is not the provider failing: it keeps being searched"
     );
 }

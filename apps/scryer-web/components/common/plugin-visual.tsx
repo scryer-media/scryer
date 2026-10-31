@@ -16,9 +16,7 @@ import {
   type PluginVisualIdentity,
 } from "@/lib/utils/plugin-logos";
 
-export function getPluginFallbackIcon(
-  pluginType?: string | null,
-): LucideIcon {
+export function getPluginFallbackIcon(pluginType?: string | null): LucideIcon {
   const normalizedType = pluginType?.trim().toLowerCase() ?? "";
   if (normalizedType === "download_client") {
     return Download;

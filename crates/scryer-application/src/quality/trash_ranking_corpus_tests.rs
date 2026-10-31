@@ -151,6 +151,7 @@ fn evaluate_locale_pack(
         &profile,
         &decision,
         ReleaseRuntimeInfo {
+            protocol: None,
             size_bytes: Some(4_000_000_000),
             age_days: None,
             thumbs_up: None,

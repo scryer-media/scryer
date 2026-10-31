@@ -17,11 +17,13 @@ fn preview_matcher(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRule
             rule_set_id: String::from(rule_set_id),
         }),
         (None, Some(rego_source)) => Ok(RequestRulePreviewMatcher::Inline { rego_source }),
-        (Some(_), Some(_)) => Err(to_gql_error(AppError::Validation(
-            "preview accepts either 'ruleSetId' or 'regoSource', not both".to_string(),
+        (Some(_), Some(_)) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_CONFLICT,
+            "preview accepts either 'ruleSetId' or 'regoSource', not both",
         ))),
-        (None, None) => Err(to_gql_error(AppError::Validation(
-            "preview requires either 'ruleSetId' or 'regoSource'".to_string(),
+        (None, None) => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_REQUIRED,
+            "preview requires either 'ruleSetId' or 'regoSource'",
         ))),
     }
 }
@@ -172,6 +174,17 @@ impl RequestRuleMutations {
             .map_err(to_gql_error)?;
 
         Ok(RequestRuleValidationPayload {
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| RuleValidationDiagnosticPayload {
+                    code: diagnostic.code.into(),
+                    message: diagnostic.message,
+                    line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
+                    column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
+                    path: diagnostic.path,
+                })
+                .collect(),
             valid: result.valid,
             errors: result.errors,
         })
@@ -201,7 +214,7 @@ impl RequestRuleMutations {
             RequestRulePreviewMatcher::Inline { .. } => None,
         };
         let sample = crate::mappers::request_rule_sample_into_application(input.sample)
-            .map_err(|message| to_gql_error(AppError::Validation(message)))?;
+            .map_err(to_gql_error)?;
 
         let result = app
             .preview_request_rule(

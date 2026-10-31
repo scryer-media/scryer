@@ -10,7 +10,8 @@ const SCRIPTS_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const SCRIPTS_PANEL_HEADER_CLASS =
   "border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0))] px-4 py-3";
-const SCRIPTS_PANEL_TITLE_CLASS = "text-[15px] font-semibold text-[var(--scry-ink2)]";
+const SCRIPTS_PANEL_TITLE_CLASS =
+  "text-[15px] font-semibold text-[var(--scry-ink2)]";
 const SCRIPTS_PANEL_BODY_CLASS = "p-4 sm:p-5";
 const SCRIPTS_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 
@@ -40,7 +41,10 @@ export function SettingsScriptInterpretersSection({
   const t = useTranslate();
   return (
     <div id="settings-scripts-section" className="space-y-4 text-sm">
-      <section id="settings-script-interpreters" className={SCRIPTS_PANEL_CLASS}>
+      <section
+        id="settings-script-interpreters"
+        className={SCRIPTS_PANEL_CLASS}
+      >
         <div className={SCRIPTS_PANEL_HEADER_CLASS}>
           <h2 className={SCRIPTS_PANEL_TITLE_CLASS}>
             {t("settings.scriptInterpreters.title")}
@@ -63,14 +67,20 @@ export function SettingsScriptInterpretersSection({
                 const inputId = `settings-script-interpreter-${key}`;
                 return (
                   <div key={key} className="space-y-1.5">
-                    <Label className="text-[var(--scry-ink2)]" htmlFor={inputId}>
+                    <Label
+                      className="text-[var(--scry-ink2)]"
+                      htmlFor={inputId}
+                    >
                       {t(`settings.scriptInterpreters.${key}`)}
                     </Label>
                     <Input
                       id={inputId}
                       value={draft[key]}
                       onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, [key]: event.target.value }))
+                        setDraft((prev) => ({
+                          ...prev,
+                          [key]: event.target.value,
+                        }))
                       }
                       className="font-[var(--font-code)]"
                       placeholder={placeholder}

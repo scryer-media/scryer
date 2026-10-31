@@ -32,13 +32,16 @@ pub async fn normalize_downloaded_subtitle_with_archive_provider(
     _archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> AppResult<SubtitleFile> {
     let format = final_subtitle_format(&file).ok_or_else(|| {
-        AppError::Validation(format!(
-            "unsupported subtitle artifact format: {}",
-            file.filename
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or(file.format.as_str())
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::subtitles::SUBTITLE_ARTIFACT_FORMAT_UNSUPPORTED,
+            format!(
+                "unsupported subtitle artifact format: {}",
+                file.filename
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(file.format.as_str())
+            ),
+        )
     })?;
     file.format = format;
     Ok(file)

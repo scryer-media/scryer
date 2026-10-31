@@ -45,9 +45,7 @@ impl AppUseCase {
                     )
                     .await?;
                 if pack.registry.digest != candidate.digest {
-                    return Err(AppError::Validation(
-                        "rule pack catalog changed during download".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD, "rule pack catalog changed during download"));
                 }
                 self.apply_verified_tracked_pack_update(&actor, &pack, installation.revision, true)
                     .await?;

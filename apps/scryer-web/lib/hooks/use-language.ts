@@ -9,7 +9,10 @@ import {
   t as translate,
 } from "@/lib/i18n";
 import type { LocaleCode } from "@/lib/i18n";
-import { recognizedLanguageCode, resolveUiLanguage } from "@/lib/i18n/ui-language";
+import {
+  recognizedLanguageCode,
+  resolveUiLanguage,
+} from "@/lib/i18n/ui-language";
 import { URL_PARAM_LANGUAGE } from "@/lib/constants/settings";
 import {
   isSignedOutLoginSurface,
@@ -50,16 +53,22 @@ type StorageArea = "session" | "local";
 
 function readStorageItem(area: StorageArea, key: string): string | null {
   try {
-    const storage = area === "session" ? window.sessionStorage : window.localStorage;
+    const storage =
+      area === "session" ? window.sessionStorage : window.localStorage;
     return storage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeStorageItem(area: StorageArea, key: string, value: string | null) {
+function writeStorageItem(
+  area: StorageArea,
+  key: string,
+  value: string | null,
+) {
   try {
-    const storage = area === "session" ? window.sessionStorage : window.localStorage;
+    const storage =
+      area === "session" ? window.sessionStorage : window.localStorage;
     if (value === null) {
       storage.removeItem(key);
     } else {
@@ -82,7 +91,9 @@ export function isLocaleSupported(code: string): code is LocaleCode {
  * browser saw. The signed-out login page has no profile and keeps the choice
  * made in this browser, then the tab and browser languages.
  */
-export function readStoredLanguageCode(profileLanguage?: string | null): LocaleCode {
+export function readStoredLanguageCode(
+  profileLanguage?: string | null,
+): LocaleCode {
   if (typeof window === "undefined") {
     return DEFAULT_LANGUAGE;
   }
@@ -117,10 +128,18 @@ type UseLanguageOptions = {
   onLanguageSet?: (code: LocaleCode, label: string) => void;
 };
 
-export function useLanguage(searchParams: URLSearchParams, options: UseLanguageOptions = {}) {
+export function useLanguage(
+  searchParams: URLSearchParams,
+  options: UseLanguageOptions = {},
+) {
   const onLanguageSet = options.onLanguageSet;
-  const { uiSettings, uiSettingsLoaded, uiSettingsLoadError, setUiSettings, saveUiSettings } =
-    useUiSettings();
+  const {
+    uiSettings,
+    uiSettingsLoaded,
+    uiSettingsLoadError,
+    setUiSettings,
+    saveUiSettings,
+  } = useUiSettings();
   // Undefined while the signed-in profile is loading. A failed load has no
   // profile language to wait for, so the last one this browser saw stops
   // standing in for it.
@@ -137,7 +156,9 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     }
 
     const stored = readStoredLanguageCode(profileLanguage);
-    return isLocaleSupported(stored) && isLocaleLoaded(stored) ? stored : DEFAULT_LANGUAGE;
+    return isLocaleSupported(stored) && isLocaleLoaded(stored)
+      ? stored
+      : DEFAULT_LANGUAGE;
   })();
 
   const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -145,13 +166,17 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
   const [uiLanguage, setUiLanguage] = useState<LocaleCode>(initialLanguage);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const t = useCallback(
-    (key: string, values?: Record<string, string | number | boolean | null | undefined>) =>
-      translate(key, uiLanguage, values),
+    (
+      key: string,
+      values?: Record<string, string | number | boolean | null | undefined>,
+    ) => translate(key, uiLanguage, values),
     [uiLanguage],
   );
 
   const selectedLanguage = useMemo(
-    () => AVAILABLE_LANGUAGES.find((language) => language.code === uiLanguage) ?? AVAILABLE_LANGUAGES[0],
+    () =>
+      AVAILABLE_LANGUAGES.find((language) => language.code === uiLanguage) ??
+      AVAILABLE_LANGUAGES[0],
     [uiLanguage],
   );
 
@@ -162,19 +187,20 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
       setUiSettings({ ...uiSettings, language: code });
       // The other fields come from the settings as they stand when the save
       // runs, so a theme or density save still in flight is not undone.
-      void saveUiSettings((latest) => uiSettingsInputFromSettings(latest, code))
-        .then((result) => {
-          if (saveSequence !== profileLanguageSaveSequence) {
-            return;
+      void saveUiSettings((latest) =>
+        uiSettingsInputFromSettings(latest, code),
+      ).then((result) => {
+        if (saveSequence !== profileLanguageSaveSequence) {
+          return;
+        }
+        if (result.error || !result.data?.setMyUiSettings) {
+          if (reportFailure) {
+            toast.error(translate("status.languageSaveFailed", code));
           }
-          if (result.error || !result.data?.setMyUiSettings) {
-            if (reportFailure) {
-              toast.error(translate("status.languageSaveFailed", code));
-            }
-            return;
-          }
-          setUiSettings(result.data.setMyUiSettings);
-        });
+          return;
+        }
+        setUiSettings(result.data.setMyUiSettings);
+      });
     },
     [saveUiSettings, setUiSettings, uiSettings],
   );
@@ -222,7 +248,9 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
           if (requestId !== languageRequestRef.current) {
             return;
           }
-          toast.error(`Failed to load ${getLanguageLabel(normalized)} translations.`);
+          toast.error(
+            `Failed to load ${getLanguageLabel(normalized)} translations.`,
+          );
         });
     },
     [onLanguageSet],
@@ -293,21 +321,27 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     if (uiSettings.language?.trim()) {
       return;
     }
-    const choice = recognizedLanguageCode(readStorageItem("local", UI_LANGUAGE_CHOICE_KEY));
+    const choice = recognizedLanguageCode(
+      readStorageItem("local", UI_LANGUAGE_CHOICE_KEY),
+    );
     if (choice) {
       saveProfileLanguage(choice, false);
     }
   }, [saveProfileLanguage, uiSettings.language, uiSettingsLoaded]);
 
   useEffect(() => {
-    const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
+    const queryLang = parseLanguageFromParam(
+      searchParams.get(URL_PARAM_LANGUAGE),
+    );
     if (!queryLang) {
       setLanguageFallback();
     }
   }, [searchParams, setLanguageFallback]);
 
   useEffect(() => {
-    const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
+    const queryLang = parseLanguageFromParam(
+      searchParams.get(URL_PARAM_LANGUAGE),
+    );
     if (queryLang) {
       writeStorageItem("session", UI_LANGUAGE_URL_OVERRIDE_KEY, queryLang);
       if (queryLang !== uiLanguage) {

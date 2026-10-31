@@ -23,7 +23,10 @@ export function ProfileListAccounts() {
   const client = useClient();
   const t = useTranslate();
   const user = useSessionUser();
-  const canManagePlugins = hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
+  const canManagePlugins = hasAppPermission(
+    user,
+    APP_PERMISSIONS.manageSystemSettings,
+  );
   const [providers, setProviders] = useState<ListProviderManifest[]>([]);
   const [accounts, setAccounts] = useState<ListAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,13 +35,18 @@ export function ProfileListAccounts() {
   // Only the newest read may land: a refresh started by a live event can race
   // the first read or an earlier refresh.
   const [accountReads] = useState(latestRead);
-  const loadAccounts = useCallback(async (isCurrent: () => boolean) => {
-    const isNewest = accountReads.begin();
-    const result = await client.query(myListAccountsQuery, {}, { requestPolicy: "network-only" }).toPromise();
-    if (!isCurrent() || !isNewest()) return;
-    if (result.error) throw result.error;
-    setAccounts((result.data?.myListAccounts ?? []) as ListAccount[]);
-  }, [accountReads, client]);
+  const loadAccounts = useCallback(
+    async (isCurrent: () => boolean) => {
+      const isNewest = accountReads.begin();
+      const result = await client
+        .query(myListAccountsQuery, {}, { requestPolicy: "network-only" })
+        .toPromise();
+      if (!isCurrent() || !isNewest()) return;
+      if (result.error) throw result.error;
+      setAccounts((result.data?.myListAccounts ?? []) as ListAccount[]);
+    },
+    [accountReads, client],
+  );
   const accountLink = useListAccountLink(loadAccounts);
   // An account linked or unlinked in another session is read again here.
   useListsReactiveRefresh(listAccountsChanged, () => {
@@ -48,7 +56,9 @@ export function ProfileListAccounts() {
   });
   const refreshProviders = useCallback(async () => {
     const [result] = await Promise.all([
-      client.query(listProvidersQuery, {}, { requestPolicy: "network-only" }).toPromise(),
+      client
+        .query(listProvidersQuery, {}, { requestPolicy: "network-only" })
+        .toPromise(),
       loadAccounts(() => true),
     ]);
     if (result.error) throw result.error;
@@ -61,18 +71,28 @@ export function ProfileListAccounts() {
     setLoading(true);
     setError(null);
     void Promise.all([
-      client.query(listProvidersQuery, {}, { requestPolicy: "network-only" }).toPromise(),
+      client
+        .query(listProvidersQuery, {}, { requestPolicy: "network-only" })
+        .toPromise(),
       loadAccounts(() => !cancelled),
-    ]).then(([result]) => {
-      if (cancelled) return;
-      if (result.error) throw result.error;
-      setProviders((result.data?.listProviders ?? []) as ListProviderManifest[]);
-    }).catch((reason) => {
-      if (!cancelled) setError(listErrorMessage(reason, t, t("status.failedToLoad")));
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
+    ])
+      .then(([result]) => {
+        if (cancelled) return;
+        if (result.error) throw result.error;
+        setProviders(
+          (result.data?.listProviders ?? []) as ListProviderManifest[],
+        );
+      })
+      .catch((reason) => {
+        if (!cancelled)
+          setError(listErrorMessage(reason, t, t("status.failedToLoad")));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [client, loadAccounts, retry, t]);
 
   const personalProviders = providers.filter((provider) =>
@@ -80,46 +100,77 @@ export function ProfileListAccounts() {
   );
   return (
     <div className="space-y-4 pt-4 text-sm text-[var(--scry-body)]">
-    <SettingsProfileCard
-      id="settings-profile-list-accounts"
-      title={t("profile.listAccounts")}
-      action={
-        <Button asChild size="sm" variant="link">
-          <Link to={buildListsPath("personal")}>{t("nav.lists")}</Link>
-        </Button>
-      }
-    >
-      {personalProviders.length > 0 ? <p className="text-sm text-[var(--scry-muted3)]">{t("lists.accounts.copy")}</p> : null}
-      {loading ? (
-        <p role="status" className="flex items-center gap-2 text-sm"><LoadingMark className="h-4 w-4" />{t("label.loading")}</p>
-      ) : error ? (
-        <div role="alert" className="space-y-2">
-          <p className="text-sm text-[var(--scry-danger-text)]">{error}</p>
-          <Button size="sm" variant="outline" onClick={() => setRetry((value) => value + 1)}>{t("lists.action.retry")}</Button>
-        </div>
-      ) : personalProviders.length === 0 ? <ListProviderSetup /> : (
-        <PersonalAccountConnections
-          providers={personalProviders}
-          accounts={accounts}
-          linkingProvider={accountLink.provider}
-          onLink={(provider, memberKey) => void accountLink.start(provider, memberKey)}
+      <SettingsProfileCard
+        id="settings-profile-list-accounts"
+        title={t("profile.listAccounts")}
+        action={
+          <Button asChild size="sm" variant="link">
+            <Link to={buildListsPath("personal")}>{t("nav.lists")}</Link>
+          </Button>
+        }
+      >
+        {personalProviders.length > 0 ? (
+          <p className="text-sm text-[var(--scry-muted3)]">
+            {t("lists.accounts.copy")}
+          </p>
+        ) : null}
+        {loading ? (
+          <p role="status" className="flex items-center gap-2 text-sm">
+            <LoadingMark className="h-4 w-4" />
+            {t("label.loading")}
+          </p>
+        ) : error ? (
+          <div role="alert" className="space-y-2">
+            <p className="text-sm text-[var(--scry-danger-text)]">{error}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              {t("lists.action.retry")}
+            </Button>
+          </div>
+        ) : personalProviders.length === 0 ? (
+          <ListProviderSetup />
+        ) : (
+          <PersonalAccountConnections
+            providers={personalProviders}
+            accounts={accounts}
+            linkingProvider={accountLink.provider}
+            onLink={(provider, memberKey) =>
+              void accountLink.start(provider, memberKey)
+            }
+          />
+        )}
+        {accountLink.error ? (
+          <p role="alert" className="text-sm text-[var(--scry-danger-text)]">
+            {accountLink.error}
+          </p>
+        ) : null}
+        {accountLink.provider ? (
+          <div
+            role="status"
+            className="flex flex-wrap items-center gap-2 text-sm"
+          >
+            <LoadingMark className="h-4 w-4" />
+            {t(
+              accountLink.checkingKey
+                ? "lists.accounts.key.checking"
+                : "lists.accounts.waiting",
+            )}
+            <Button size="sm" variant="outline" onClick={accountLink.cancel}>
+              {t("label.cancel")}
+            </Button>
+          </div>
+        ) : null}
+      </SettingsProfileCard>
+      {canManagePlugins ? (
+        <FilteredPluginList
+          family="LIST"
+          title={t("lists.plugins.heading")}
+          refreshProviderOptions={refreshProviders}
         />
-      )}
-      {accountLink.error ? <p role="alert" className="text-sm text-[var(--scry-danger-text)]">{accountLink.error}</p> : null}
-      {accountLink.provider ? (
-        <div role="status" className="flex flex-wrap items-center gap-2 text-sm">
-          <LoadingMark className="h-4 w-4" />{t(accountLink.checkingKey ? "lists.accounts.key.checking" : "lists.accounts.waiting")}
-          <Button size="sm" variant="outline" onClick={accountLink.cancel}>{t("label.cancel")}</Button>
-        </div>
       ) : null}
-    </SettingsProfileCard>
-    {canManagePlugins ? (
-      <FilteredPluginList
-        family="LIST"
-        title={t("lists.plugins.heading")}
-        refreshProviderOptions={refreshProviders}
-      />
-    ) : null}
     </div>
   );
 }

@@ -26,3 +26,5 @@ pub mod queries {
     pub use crate::indexers::db as indexer;
     pub use scryer_infrastructure_sql::runtime as sql_runtime;
 }
+
+mod error_reasons;

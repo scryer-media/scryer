@@ -46,9 +46,7 @@ const UNAVAILABLE_CLIENT_STATUSES = new Set([
 ]);
 
 export type IndexerDownloadClientMappingInvalidReason =
-  | "missing"
-  | "incompatible"
-  | "unavailable";
+  "missing" | "incompatible" | "unavailable";
 
 export type IndexerDownloadClientMappingOption = {
   id: string;
@@ -77,11 +75,19 @@ export type IndexerDownloadClientMappingViewModel = {
 };
 
 function normalizedStatus(value: string | null | undefined): string {
-  return value?.trim().replace(/[-\s]+/g, "_").toUpperCase() ?? "";
+  return (
+    value
+      ?.trim()
+      .replace(/[-\s]+/g, "_")
+      .toUpperCase() ?? ""
+  );
 }
 
 export function isDownloadClientUnavailable(
-  client: Pick<IndexerDownloadClientMappingClient, "isEnabled" | "healthStatus">,
+  client: Pick<
+    IndexerDownloadClientMappingClient,
+    "isEnabled" | "healthStatus"
+  >,
 ): boolean {
   if (!client.isEnabled) {
     return false;
@@ -126,19 +132,24 @@ function buildIndexerDownloadClientMappingViewModel(
   isNotApplicable: boolean,
   catalog: IndexerDownloadClientMappingCatalog,
 ): IndexerDownloadClientMappingViewModel {
-  const clientsById = new Map(catalog.clients.map((client) => [client.id, client]));
+  const clientsById = new Map(
+    catalog.clients.map((client) => [client.id, client]),
+  );
   const compatibleIds = new Set(compatibleClientIds);
   const compatibleClients = catalog.clients
     .filter((client) => compatibleIds.has(client.id))
     .map((client) => toOption(client, currentDownloadClientId, compatibleIds));
   const currentClient = currentDownloadClientId
-    ? clientsById.get(currentDownloadClientId) ?? null
+    ? (clientsById.get(currentDownloadClientId) ?? null)
     : null;
 
   let invalidReason: IndexerDownloadClientMappingInvalidReason | null = null;
   if (currentDownloadClientId && currentClient === null) {
     invalidReason = "missing";
-  } else if (currentDownloadClientId && !compatibleIds.has(currentDownloadClientId)) {
+  } else if (
+    currentDownloadClientId &&
+    !compatibleIds.has(currentDownloadClientId)
+  ) {
     invalidReason = "incompatible";
   } else if (currentClient && isDownloadClientUnavailable(currentClient)) {
     invalidReason = "unavailable";
@@ -147,12 +158,15 @@ function buildIndexerDownloadClientMappingViewModel(
   const currentOption = currentDownloadClientId
     ? toOption(currentClient, currentDownloadClientId, compatibleIds)
     : null;
-  const options = currentOption && invalidReason !== null
-    ? [
-        currentOption,
-        ...compatibleClients.filter((option) => option.id !== currentOption.id),
-      ]
-    : compatibleClients;
+  const options =
+    currentOption && invalidReason !== null
+      ? [
+          currentOption,
+          ...compatibleClients.filter(
+            (option) => option.id !== currentOption.id,
+          ),
+        ]
+      : compatibleClients;
 
   return {
     indexerId,
@@ -169,7 +183,10 @@ function buildIndexerDownloadClientMappingViewModel(
 }
 
 export function getIndexerDownloadClientMappingViewModel(
-  indexer: Pick<IndexerRecord, "id" | "isManaged" | "supportsManagedChildrenSync"> & {
+  indexer: Pick<
+    IndexerRecord,
+    "id" | "isManaged" | "supportsManagedChildrenSync"
+  > & {
     downloadClientId?: string | null;
   },
   catalog: IndexerDownloadClientMappingCatalog,
@@ -177,7 +194,7 @@ export function getIndexerDownloadClientMappingViewModel(
   const mapping = catalog.indexers.find((entry) => entry.id === indexer.id);
   return buildIndexerDownloadClientMappingViewModel(
     indexer.id,
-    mapping ? mapping.downloadClientId : indexer.downloadClientId ?? null,
+    mapping ? mapping.downloadClientId : (indexer.downloadClientId ?? null),
     mapping?.compatibleClientIds ?? [],
     isManagementOnlyIndexer(indexer) || mapping?.supportsMapping === false,
     catalog,
@@ -191,7 +208,8 @@ export function getIndexerDownloadClientDraftMappingViewModel(
 ): IndexerDownloadClientMappingViewModel {
   const normalizedProviderType = providerType.trim().toLowerCase();
   const compatibility = catalog.providerCompatibility.find(
-    (entry) => entry.providerType.trim().toLowerCase() === normalizedProviderType,
+    (entry) =>
+      entry.providerType.trim().toLowerCase() === normalizedProviderType,
   );
   return buildIndexerDownloadClientMappingViewModel(
     "draft",

@@ -72,7 +72,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
+      'package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.has_file\n\tnot "keep" in input.facts.tags\n}\n',
   },
   {
     id: "added-over-180-days-ago",
@@ -119,7 +119,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
+      'package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tnot "keep" in input.facts.tags\n}\n',
   },
   {
     id: "departed-requester",
@@ -131,7 +131,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
+      'package rules\nimport rego.v1\n\nmatch if {\n\t"departed-user" in input.facts.requested_by_usernames\n}\n',
   },
   {
     id: "system-added-cleanup",
@@ -166,7 +166,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
+      'package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == "expired"\n}\n',
   },
   {
     id: "tagged-for-removal",
@@ -178,7 +178,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     subjectFacets: ["movie", "show"],
     destructive: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nmatch if {\n\t\"remove\" in input.facts.tags\n}\n",
+      'package rules\nimport rego.v1\n\nmatch if {\n\t"remove" in input.facts.tags\n}\n',
   },
   {
     id: "flag-for-review",

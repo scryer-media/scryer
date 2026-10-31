@@ -134,13 +134,14 @@ pub fn chart_items_to_plugin_items(
 /// A gateway failure, in the list's plain words. Nothing about the gateway's
 /// own error text reaches the subscription.
 fn gateway_failure(provider: &str, error: &crate::AppError) -> ListFailure {
-    let text = error.to_string().to_ascii_lowercase();
-    let class = if text.contains("not found") {
-        ListFailureClass::NotFound
-    } else if text.contains("unknown chart") {
-        ListFailureClass::Failed
-    } else {
-        ListFailureClass::Unavailable
+    let class = match error {
+        crate::AppError::NotFound(_) | crate::AppError::NotFoundReason { .. } => {
+            ListFailureClass::NotFound
+        }
+        crate::AppError::TemporaryUnavailable { .. } => ListFailureClass::Unavailable,
+        // SMG currently supplies no structured chart-not-found condition. An
+        // unknown failure stays failed; its sentence never changes membership.
+        _ => ListFailureClass::Failed,
     };
     ListFailure::new(class, provider)
 }
@@ -541,3 +542,27 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod reason_code_tests {
+    use super::*;
+    #[test]
+    fn gateway_failure_uses_typed_not_found_and_keeps_unknown_sentences_failed() {
+        assert_eq!(
+            gateway_failure(
+                "fixture",
+                &crate::AppError::not_found_reason("LIST_SOURCE_NOT_OFFERED", "translated")
+            )
+            .class,
+            ListFailureClass::NotFound
+        );
+        assert_eq!(
+            gateway_failure(
+                "fixture",
+                &crate::AppError::Repository("not found: unknown chart".into())
+            )
+            .class,
+            ListFailureClass::Failed
+        );
+    }
+}

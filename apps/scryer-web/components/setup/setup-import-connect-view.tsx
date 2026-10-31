@@ -93,7 +93,11 @@ export function SetupImportConnectView({
   };
 
   return (
-    <div id="setup-import-connect-view" data-slot="import-connect-view" className="w-full">
+    <div
+      id="setup-import-connect-view"
+      data-slot="import-connect-view"
+      className="w-full"
+    >
       {wizard.secretDraftOwnedByOther ? (
         <div
           role="status"

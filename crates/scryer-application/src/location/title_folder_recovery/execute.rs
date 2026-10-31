@@ -91,7 +91,7 @@ impl AppUseCase {
             }
             let work = plan.work();
             let now = Utc::now();
-            let json = serde_json::to_string(&plan).map_err(|e| fail(e.to_string()))?;
+            let json = serde_json::to_string(&plan).map_err(|e| relay_failure(e.to_string()))?;
             let operation = LocationOperation {
                 id: plan.operation_id(),
                 operation_type: LocationOperationType::TitleFolderRecovery,
@@ -160,7 +160,10 @@ impl AppUseCase {
         operation: &LocationOperation,
     ) -> AppResult<RecoveryPlan> {
         if self.runtime.library.location_runners.is_live(&operation.id) {
-            return Err(fail("Recovery is already running"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_ALREADY_RUNNING,
+                "Recovery is already running",
+            ));
         }
         let mut plan = self.read_title_folder_recovery_plan(operation).await?;
         if matches!(
@@ -180,9 +183,15 @@ impl AppUseCase {
                     .titles
                     .get_by_id(&plan.title.id)
                     .await?
-                    .ok_or_else(|| fail("Title no longer exists"))?;
+                    .ok_or_else(|| {
+                        fail(
+                            crate::error_reasons::location::RECOVERY_TITLE_NOT_FOUND,
+                            "Title no longer exists",
+                        )
+                    })?;
                 plan = self.plan_title_folder_recovery(&title).await?;
-                let json = serde_json::to_string(&plan).map_err(|e| fail(e.to_string()))?;
+                let json =
+                    serde_json::to_string(&plan).map_err(|e| relay_failure(e.to_string()))?;
                 self.services
                     .library
                     .location_operations
@@ -208,13 +217,22 @@ impl AppUseCase {
             .location_operations
             .get_location_operation_plan_json(&operation.id)
             .await?
-            .ok_or_else(|| fail("Recovery plan is missing"))?;
-        let plan: RecoveryPlan = serde_json::from_str(&json).map_err(|e| fail(e.to_string()))?;
+            .ok_or_else(|| {
+                fail(
+                    crate::error_reasons::location::RECOVERY_PLAN_NOT_FOUND,
+                    "Recovery plan is missing",
+                )
+            })?;
+        let plan: RecoveryPlan =
+            serde_json::from_str(&json).map_err(|e| relay_failure(e.to_string()))?;
         if plan.version != RECOVERY_VERSION
             || plan.operation_id() != operation.id
             || operation.mode != LocationExecutionMode::CopyPreserveSources
         {
-            return Err(fail("Unsupported recovery plan"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_PLAN_UNSUPPORTED,
+                "Unsupported recovery plan",
+            ));
         }
         Ok(plan)
     }
@@ -233,7 +251,7 @@ impl AppUseCase {
         guard: LiveRunnerGuard,
     ) {
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().clone().spawn_worker(async move {
             let _guard = guard;
             if let Err(error) = app.run_title_folder_recovery(&operation_id, &plan).await {
                 tracing::warn!(operation_id, %error, "Title folder recovery stopped; original files preserved");
@@ -336,18 +354,20 @@ struct RecoveryExecution<'a> {
 
 impl RecoveryExecution<'_> {
     async fn revalidate_folder_identity(&self) -> AppResult<()> {
-        let root = self
-            .plan
-            .destination_root
-            .as_ref()
-            .ok_or_else(|| fail("Recovery root missing"))?;
+        let root = self.plan.destination_root.as_ref().ok_or_else(|| {
+            fail(
+                crate::error_reasons::location::RECOVERY_ROOT_NOT_FOUND,
+                "Recovery root missing",
+            )
+        })?;
         inspect_path(&stored_path_to_path_buf(&root.path), false).await?;
-        let destination = stored_path_to_path_buf(
-            self.plan
-                .destination
-                .as_deref()
-                .ok_or_else(|| fail("Recovery destination missing"))?,
-        );
+        let destination =
+            stored_path_to_path_buf(self.plan.destination.as_deref().ok_or_else(|| {
+                fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_NOT_FOUND,
+                    "Recovery destination missing",
+                )
+            })?);
         inspect_path(&destination, !self.plan.files.is_empty()).await?;
         self.app
             .validate_generated_recovery_destination(self.plan)
@@ -355,6 +375,7 @@ impl RecoveryExecution<'_> {
         let matched = folder_identity_matches(&self.plan.title, &destination, true).await?;
         if self.plan.files.is_empty() && !matched {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_FOLDER_IDENTITY_CHANGED,
                 "Exact folder identity changed; ownership remains unresolved",
             ));
         }
@@ -423,6 +444,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
             .await?
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_COMMIT_RECEIPT_REQUIRED,
                 "Recovery already committed; a missing receipt cannot authorize another copy",
             ));
         }
@@ -431,14 +453,22 @@ impl TitleFileMover for RecoveryExecution<'_> {
             .files
             .iter()
             .find(|f| Some(&f.media.id) == request.file.media_file_id.as_ref())
-            .ok_or_else(|| fail("Recovery file is not in the persisted plan"))?;
+            .ok_or_else(|| {
+                fail(
+                    crate::error_reasons::location::RECOVERY_FILE_NOT_IN_PLAN,
+                    "Recovery file is not in the persisted plan",
+                )
+            })?;
         let source = &request.file.source_path;
         let destination = &request.file.destination_path;
         inspect_path(destination, true).await?;
         if file.source_version.is_some() {
             inspect_path(source, false).await?;
             if Some(recovery_file_version(source).await?) != file.source_version {
-                return Err(fail("Source changed before copying"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+                    "Source changed before copying",
+                ));
             }
         }
         if tokio::fs::symlink_metadata(destination)
@@ -446,11 +476,17 @@ impl TitleFileMover for RecoveryExecution<'_> {
             .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
         {
             if file.source_version.is_none() {
-                return Err(fail("Both source and destination are missing"));
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_SOURCE_AND_DESTINATION_NOT_FOUND,
+                    "Both source and destination are missing",
+                ));
             }
-            let parent = destination
-                .parent()
-                .ok_or_else(|| fail("Destination has no parent"))?;
+            let parent = destination.parent().ok_or_else(|| {
+                fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_PARENT_REQUIRED,
+                    "Destination has no parent",
+                )
+            })?;
             create_recovery_destination_directories(parent, &self.permissions).await?;
             // Each attempt gets its own durably recorded staging name. An
             // interrupted attempt is never mistaken for permission to delete it.
@@ -477,7 +513,7 @@ impl TitleFileMover for RecoveryExecution<'_> {
             crate::fs_safety::promote_recovery_staged_file(&staging, destination)
                 .await
                 .map_err(|e| {
-                    fail(format!(
+                    fail(crate::error_reasons::location::RECOVERY_DESTINATION_CLAIM_FAILED, format!(
                         "Destination could not be claimed; original and staged files preserved: {e}"
                     ))
                 })?;
@@ -507,14 +543,22 @@ async fn create_recovery_destination_directories(
     loop {
         match tokio::fs::symlink_metadata(current).await {
             Ok(metadata) if metadata.is_dir() => break,
-            Ok(_) => return Err(fail("Recovery destination parent is not a directory")),
+            Ok(_) => {
+                return Err(fail(
+                    crate::error_reasons::location::RECOVERY_DESTINATION_PARENT_NOT_DIRECTORY,
+                    "Recovery destination parent is not a directory",
+                ));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 missing.push(current.to_path_buf());
-                current = current
-                    .parent()
-                    .ok_or_else(|| fail("Recovery destination has no existing ancestor"))?;
+                current = current.parent().ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_DESTINATION_ANCESTOR_NOT_FOUND,
+                        "Recovery destination has no existing ancestor",
+                    )
+                })?;
             }
-            Err(error) => return Err(fail(error.to_string())),
+            Err(error) => return Err(relay_failure(error.to_string())),
         }
     }
     for directory in missing.into_iter().rev() {
@@ -527,13 +571,16 @@ async fn create_recovery_destination_directories(
                 inspect_path(&directory, false).await?;
                 if !tokio::fs::symlink_metadata(&directory)
                     .await
-                    .map_err(|e| fail(e.to_string()))?
+                    .map_err(|e| relay_failure(e.to_string()))?
                     .is_dir()
                 {
-                    return Err(fail("Recovery destination parent is not a directory"));
+                    return Err(fail(
+                        crate::error_reasons::location::RECOVERY_DESTINATION_PARENT_NOT_DIRECTORY,
+                        "Recovery destination parent is not a directory",
+                    ));
                 }
             }
-            Err(error) => return Err(fail(error.to_string())),
+            Err(error) => return Err(relay_failure(error.to_string())),
         }
     }
     inspect_path(parent, false).await
@@ -569,27 +616,38 @@ pub(super) async fn prove_file(
         if !folder_paths_match(&file.media.file_path, &file.destination) && *version == dest_before
         {
             return Err(fail(
+                crate::error_reasons::location::RECOVERY_INDEPENDENT_COPY_REQUIRED,
                 "Recovery requires an independent destination copy, not a hardlink",
             ));
         }
         if recovery_file_version(&source).await? != *version {
-            return Err(fail("Source changed during recovery"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+                "Source changed during recovery",
+            ));
         }
         let hashes = hash_existing_file_with_progress(&source, progress).await?;
         if recovery_file_version(&source).await? != *version {
-            return Err(fail("Source changed while verifying"));
+            return Err(fail(
+                crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
+                "Source changed while verifying",
+            ));
         }
         hashes.full_blake3
     } else {
-        file.expected_hash
-            .clone()
-            .ok_or_else(|| fail("Missing source has no full-content proof"))?
+        file.expected_hash.clone().ok_or_else(|| {
+            fail(
+                crate::error_reasons::location::RECOVERY_SOURCE_CONTENT_PROOF_REQUIRED,
+                "Missing source has no full-content proof",
+            )
+        })?
     };
     if destination_hash.full_blake3 != expected
         || destination_hash.size_bytes != file.media.size_bytes.max(0) as u64
         || recovery_file_version(&destination).await? != dest_before
     {
         return Err(fail(
+            crate::error_reasons::location::RECOVERY_DESTINATION_CONTENT_MISMATCH,
             "Destination content does not match; both files preserved",
         ));
     }
@@ -618,9 +676,15 @@ impl TitleReconciler for RecoveryExecution<'_> {
                 .titles
                 .get_by_id(&self.plan.title.id)
                 .await?
-                .ok_or_else(|| fail("Title no longer exists"))?;
+                .ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_TITLE_NOT_FOUND,
+                        "Title no longer exists",
+                    )
+                })?;
             if current != self.plan.title {
                 return Err(fail(
+                    crate::error_reasons::location::RECOVERY_TITLE_CHANGED,
                     "Title changed during recovery; original mappings preserved",
                 ));
             }
@@ -635,7 +699,12 @@ impl TitleReconciler for RecoveryExecution<'_> {
                 .plan
                 .destination_root
                 .as_ref()
-                .ok_or_else(|| fail("Recovery root missing"))?
+                .ok_or_else(|| {
+                    fail(
+                        crate::error_reasons::location::RECOVERY_ROOT_NOT_FOUND,
+                        "Recovery root missing",
+                    )
+                })?
                 .id
                 .clone();
             let mut event = new_title_domain_event(

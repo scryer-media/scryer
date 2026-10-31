@@ -37,7 +37,10 @@ test("only a location job run with a written operation id names an operation", (
     null,
   );
   assert.equal(
-    locationOperationIdFromJobRun({ jobKey: "LOCATION_OPERATION", progressJson: null }),
+    locationOperationIdFromJobRun({
+      jobKey: "LOCATION_OPERATION",
+      progressJson: null,
+    }),
     null,
   );
 });

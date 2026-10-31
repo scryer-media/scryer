@@ -72,20 +72,24 @@ export function TitleHistoryModal({
       setError(null);
       try {
         const result = await client
-          .query<{ titleHistory: TitleHistoryPage }>(titleHistoryQuery, {
-            filter: {
-              eventTypes:
-                eventTypes.length > 0
-                  ? eventTypes.map((value) => value.toUpperCase())
-                  : null,
-              titleIds: [titleId],
-              episodeId: episodeId ?? null,
-              collectionId: activeCollection?.collectionId ?? null,
-              groupByEvent: episodeId == null,
-              limit: PAGE_SIZE,
-              offset: pageOffset,
+          .query<{ titleHistory: TitleHistoryPage }>(
+            titleHistoryQuery,
+            {
+              filter: {
+                eventTypes:
+                  eventTypes.length > 0
+                    ? eventTypes.map((value) => value.toUpperCase())
+                    : null,
+                titleIds: [titleId],
+                episodeId: episodeId ?? null,
+                collectionId: activeCollection?.collectionId ?? null,
+                groupByEvent: episodeId == null,
+                limit: PAGE_SIZE,
+                offset: pageOffset,
+              },
             },
-          }, { requestPolicy: "network-only" })
+            { requestPolicy: "network-only" },
+          )
           .toPromise();
 
         if (sequence !== requestSequence.current) return;
@@ -94,15 +98,14 @@ export function TitleHistoryModal({
             userFacingGraphQlErrorMessage(
               result.error,
               t("history.loadError"),
+              t,
             ),
           );
           return;
         }
         if (result.data?.titleHistory) {
           const page = result.data.titleHistory;
-          setEvents((prev) =>
-            append ? [...prev, ...page.items] : page.items,
-          );
+          setEvents((prev) => (append ? [...prev, ...page.items] : page.items));
           setTotalCount(page.totalCount);
         } else {
           setError(t("history.loadError"));
@@ -113,6 +116,7 @@ export function TitleHistoryModal({
           userFacingGraphQlErrorMessage(
             requestError,
             t("history.loadError"),
+            t,
           ),
         );
       } finally {
@@ -137,7 +141,9 @@ export function TitleHistoryModal({
         activeScopedEpisode?.episodeId ?? null,
       );
     }
-    return () => { requestSequence.current += 1; };
+    return () => {
+      requestSequence.current += 1;
+    };
   }, [open, activeFilters, activeScopedEpisode?.episodeId, fetchHistory]);
 
   const loadMore = React.useCallback(() => {
@@ -161,7 +167,6 @@ export function TitleHistoryModal({
     );
   }, [activeFilters, activeScopedEpisode?.episodeId, fetchHistory]);
 
-
   const clearScopedEpisode = React.useCallback(() => {
     setOffset(0);
     setEvents([]);
@@ -177,7 +182,9 @@ export function TitleHistoryModal({
         className="flex h-[min(56rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] min-w-0 max-w-[90rem] flex-col overflow-hidden p-4 sm:max-w-[90rem] sm:p-6"
       >
         <DialogHeader className="min-w-0 shrink-0 gap-3 text-left lg:flex-row lg:items-center lg:justify-between lg:pr-8">
-          <DialogTitle className="min-w-0 break-words pr-8 lg:pr-0">{titleName} — {t("history.title")}</DialogTitle>
+          <DialogTitle className="min-w-0 break-words pr-8 lg:pr-0">
+            {titleName} — {t("history.title")}
+          </DialogTitle>
           <HistoryEventTypeMultiSelect
             id="title-history-event-types"
             eventTypes={TITLE_HISTORY_FILTERS}
@@ -189,17 +196,20 @@ export function TitleHistoryModal({
 
         {activeScopedEpisode || activeCollection ? (
           <div className="flex shrink-0 flex-wrap items-center gap-2 pb-2">
-            <span className="text-xs text-muted-foreground">{t("label.filter")}</span>
+            <span className="text-xs text-muted-foreground">
+              {t("label.filter")}
+            </span>
             <Button
               type="button"
               size="sm"
               variant="secondary"
               onClick={clearScopedEpisode}
-              aria-label={`${t("label.remove")} ${(activeScopedEpisode?.episodeLabel ?? activeCollection?.collectionLabel)}`}
+              aria-label={`${t("label.remove")} ${activeScopedEpisode?.episodeLabel ?? activeCollection?.collectionLabel}`}
               className="h-auto min-h-7 min-w-0 max-w-full gap-1.5 px-2 py-1 text-xs"
             >
               <span className="min-w-0 max-w-[32rem] whitespace-normal break-words text-left">
-                {(activeScopedEpisode?.episodeLabel ?? activeCollection?.collectionLabel)}
+                {activeScopedEpisode?.episodeLabel ??
+                  activeCollection?.collectionLabel}
               </span>
               <X className="h-3 w-3 shrink-0" />
             </Button>
@@ -248,9 +258,7 @@ export function TitleHistoryModal({
                     disabled={loading}
                     onClick={loadMore}
                   >
-                    {loading ? (
-                      <LoadingMark className="mr-2 h-4 w-4" />
-                    ) : null}
+                    {loading ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                     {t("history.loadMore")}
                   </Button>
                 </div>

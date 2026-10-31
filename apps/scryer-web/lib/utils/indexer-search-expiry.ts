@@ -7,11 +7,15 @@ export function indexerSearchExpiresAt(snapshot: {
 }): number {
   // Partial results may outlive polling (cancel, disconnect). Using the start
   // time until completion is known expires conservatively in those cases.
-  const timestamp = Date.parse(snapshot.completedAt ?? snapshot.startedAt ?? "");
+  const timestamp = Date.parse(
+    snapshot.completedAt ?? snapshot.startedAt ?? "",
+  );
   return Number.isFinite(timestamp) ? timestamp + RESULT_LIFETIME_MS : 0;
 }
 
-export function earliestSearchExpiry(deadlines: ReadonlyMap<string, number>): number | null {
+export function earliestSearchExpiry(
+  deadlines: ReadonlyMap<string, number>,
+): number | null {
   return deadlines.size ? Math.min(...deadlines.values()) : null;
 }
 

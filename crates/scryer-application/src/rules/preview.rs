@@ -49,6 +49,7 @@ pub struct RuleSetTestRequest {
 /// Indexer listing facts supplied to the tester for a release name.
 #[derive(Clone, Debug, Default)]
 pub struct RuleSetTestListingInput {
+    pub protocol: Option<scryer_rules::ReleaseProtocol>,
     /// Publish time, in any form a live listing's is kept in: RFC 2822
     /// (a newznab `pubDate`) or RFC 3339.
     pub published_at: Option<String>,
@@ -63,6 +64,7 @@ pub struct RuleSetTestListingInput {
 impl RuleSetTestListingInput {
     fn is_empty(&self) -> bool {
         self.published_at.is_none()
+            && self.protocol.is_none()
             && self.thumbs_up.is_none()
             && self.thumbs_down.is_none()
             && self.is_password_protected.is_none()
@@ -84,6 +86,7 @@ impl RuleSetTestListingInput {
             })
             .unwrap_or_default();
         ReleaseListingSnapshot {
+            protocol: self.protocol,
             grab_scoring: None,
             published_at: self
                 .published_at
@@ -102,6 +105,7 @@ impl RuleSetTestListingInput {
 /// The listing facts a preview scored with, and the age rules saw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuleSetTestListingFacts {
+    pub protocol: Option<scryer_rules::ReleaseProtocol>,
     pub published_at: Option<String>,
     /// `input.release.age_days`: the age at `captured_at` for a stored file,
     /// the age now for a tested release name.
@@ -119,6 +123,7 @@ impl RuleSetTestListingFacts {
         let snapshot = &facts.snapshot;
         Self {
             published_at: snapshot.published_at.clone(),
+            protocol: snapshot.protocol,
             age_days: snapshot.age_days(facts.anchor),
             thumbs_up: snapshot.thumbs_up,
             thumbs_down: snapshot.thumbs_down,
@@ -259,7 +264,12 @@ impl AppUseCase {
         let title = self
             .get_title(actor, &request.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", request.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", request.title_id),
+                )
+            })?;
         let now = self.runtime.environment.now();
 
         // A stored file is loaded only through the title the actor was just
@@ -283,14 +293,18 @@ impl AppUseCase {
                 episode_ids.sort();
                 episode_ids.dedup();
                 let file = rows.into_iter().next().ok_or_else(|| {
-                    AppError::NotFound(format!("media file {media_file_id} of title {}", title.id))
+                    AppError::not_found_reason(
+                        crate::error_reasons::rules::MEDIA_FILE_NOT_FOUND,
+                        format!("media file {media_file_id} of title {}", title.id),
+                    )
                 })?;
                 if let Some(episode_id) = request.episode_id.as_deref()
                     && !episode_ids.iter().any(|id| id == episode_id)
                 {
-                    return Err(AppError::Validation(format!(
-                        "media file {media_file_id} does not cover episode {episode_id}"
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::rules::MEDIA_FILE_DOES_NOT_COVER_EPISODE,
+                        format!("media file {media_file_id} does not cover episode {episode_id}"),
+                    ));
                 }
                 Some((file, episode_ids))
             }
@@ -312,20 +326,26 @@ impl AppUseCase {
                     .shows
                     .get_episode_by_id(episode_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("episode {episode_id}")))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::rules::EPISODE_NOT_FOUND,
+                            format!("episode {episode_id}"),
+                        )
+                    })?;
                 if episode.title_id != title.id {
-                    return Err(AppError::Validation(format!(
-                        "episode {episode_id} does not belong to title {}",
-                        title.id
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::rules::EPISODE_DOES_NOT_BELONG_TITLE,
+                        format!("episode {episode_id} does not belong to title {}", title.id),
+                    ));
                 }
                 Some(episode)
             }
             None => None,
         };
         if title.facet == MediaFacet::Movie && episode.is_some() {
-            return Err(AppError::Validation(
-                "an episode cannot be selected when testing a movie rule".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::EPISODE_CANNOT_SELECTED_WHEN_TESTING_MOVIE_RULE,
+                "an episode cannot be selected when testing a movie rule",
             ));
         }
         // A stored file bound to no episode is scored over the whole file.
@@ -333,8 +353,9 @@ impl AppUseCase {
             && episode.is_none()
             && stored_file.is_none()
         {
-            return Err(AppError::Validation(
-                "an episode is required when testing a series or anime rule".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::EPISODE_REQUIRED_WHEN_TESTING_SERIES_ANIME_RULE,
+                "an episode is required when testing a series or anime rule",
             ));
         }
 
@@ -344,23 +365,24 @@ impl AppUseCase {
                 || request.copy_source_rule_set_id.is_some()
                 || request.copy_disables_source)
         {
-            return Err(AppError::Validation(
-                "testing a saved rule cannot include a draft, edit, or copy context".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::rules::TESTING_SAVED_RULE_CANNOT_INCLUDE_DRAFT_EDIT_COPY_CONTEXT, "testing a saved rule cannot include a draft, edit, or copy context"));
         }
         if request.test_rule_set_id.is_none() && request.draft.is_none() {
-            return Err(AppError::Validation(
-                "a preview requires either a draft or a saved rule set".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PREVIEW_REQUIRES_EITHER_DRAFT_SAVED_RULE_SET,
+                "a preview requires either a draft or a saved rule set",
             ));
         }
         if request.edit_rule_set_id.is_some() && request.copy_source_rule_set_id.is_some() {
-            return Err(AppError::Validation(
-                "a preview cannot edit and copy a rule at the same time".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::PREVIEW_CANNOT_EDIT_COPY_RULE_SAME_TIME,
+                "a preview cannot edit and copy a rule at the same time",
             ));
         }
         if request.copy_disables_source && request.copy_source_rule_set_id.is_none() {
-            return Err(AppError::Validation(
-                "copy_disables_source requires a copy source rule set".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::COPY_DISABLES_SOURCE_REQUIRES_COPY_SOURCE_RULE_SET,
+                "copy_disables_source requires a copy source rule set",
             ));
         }
         // Take one consistent policy snapshot while mutations are excluded.
@@ -406,8 +428,9 @@ impl AppUseCase {
                     .await?
                     .is_some();
                 if source.is_managed || tracked {
-                    return Err(AppError::Validation(
-                        "managed or tracked rules must be copied before editing".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::rules::MANAGED_TRACKED_RULES_INVALID,
+                        "managed or tracked rules must be copied before editing",
                     ));
                 }
             }
@@ -433,14 +456,16 @@ impl AppUseCase {
                     .find_rule_pack_installation_by_rule_set_id(&source.id)
                     .await?;
                 if tracked.as_ref().is_some_and(|pack| !pack.customizable) {
-                    return Err(AppError::Validation(
-                        "rules from this pack cannot be copied".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::rules::RULES_PACK_CANNOT_COPIED,
+                        "rules from this pack cannot be copied",
                     ));
                 }
                 let tracked = tracked.is_some();
                 if tracked && !request.copy_disables_source {
-                    return Err(AppError::Validation(
-                        "copying a tracked rule requires disabling its source".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::rules::COPYING_TRACKED_RULE_REQUIRES_DISABLING_SOURCE,
+                        "copying a tracked rule requires disabling its source",
                     ));
                 }
                 if tracked && request.copy_disables_source {
@@ -543,9 +568,9 @@ impl AppUseCase {
                 &compute_draft_id,
             );
             let retired = scryer_rules::validation::retired_release_input_fields(&rewritten_source)
-                .map_err(|error| AppError::Validation(format!("rule validation error: {error}")))?;
+                .map_err(|error| AppError::validation_refused(crate::error_reasons::rules::VALIDATION_ERROR, format!("rule validation error: {error}")))?;
             if !retired.is_empty() {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::rules::SOURCE_USES_RETIRED_FIELDS, format!(
                     "Rule source uses retired fields: {}. Update the source before testing or enabling it.",
                     retired.join(", ")
                 )));
@@ -553,10 +578,10 @@ impl AppUseCase {
             let validation =
                 scryer_rules::validation::validate_user_rule(&rewritten_source, &compute_draft_id)
                     .map_err(|error| {
-                        AppError::Validation(format!("rule validation error: {error}"))
+                        AppError::validation_refused(crate::error_reasons::rules::VALIDATION_ERROR, format!("rule validation error: {error}"))
                     })?;
             if !validation.valid {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::rules::VALIDATION_FAILED, format!(
                     "Rule validation failed:\n- {}",
                     validation.errors.join("\n- ")
                 )));
@@ -574,6 +599,7 @@ impl AppUseCase {
                     priority: compute_draft.priority,
                     evaluation_phase: draft_phase,
                     exclusive_group: draft_exclusive_group,
+                    disabled_reason_code: None,
                     disabled_reason: None,
                     applied_facets: compute_draft.applied_facets.clone(),
                     created_at: now,
@@ -806,7 +832,12 @@ impl AppUseCase {
             .rule_sets
             .get_rule_set(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("rule set {id}")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::rules::SET_NOT_FOUND,
+                    format!("rule set {id}"),
+                )
+            })
     }
 }
 
@@ -825,7 +856,10 @@ fn validate_preview_request(request: &RuleSetTestRequest) -> AppResult<()> {
     const MAX_INDEXER_LANGUAGES: usize = 64;
     const MAX_INDEXER_LANGUAGE_BYTES: usize = 64;
     if request.title_id.trim().is_empty() {
-        return Err(AppError::Validation("a title is required".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::TITLE_REQUIRED,
+            "a title is required",
+        ));
     }
     let release_name = request
         .release_name
@@ -837,44 +871,54 @@ fn validate_preview_request(request: &RuleSetTestRequest) -> AppResult<()> {
         .filter(|id| !id.trim().is_empty());
     match (release_name, media_file_id) {
         (Some(_), Some(_)) => {
-            return Err(AppError::Validation(
-                "test either a release name or a stored media file, not both".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TEST_EITHER_RELEASE_NAME_STORED_MEDIA_FILE_NOT_BOTH,
+                "test either a release name or a stored media file, not both",
             ));
         }
         (None, None) => {
-            return Err(AppError::Validation(
-                "title and either a release name or a stored media file are required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::TITLE_EITHER_RELEASE_NAME_STORED_MEDIA_FILE_REQUIRED,
+                "title and either a release name or a stored media file are required",
             ));
         }
         (Some(name), None) if name.len() > MAX_RELEASE_NAME_BYTES => {
-            return Err(AppError::Validation(
-                "release name is too large for a scoring preview".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::RELEASE_NAME_TOO_LARGE_SCORING_PREVIEW,
+                "release name is too large for a scoring preview",
             ));
         }
         (None, Some(_)) if request.size_bytes.is_some() || !request.listing.is_empty() => {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::rules::STORED_MEDIA_FILE_SCORED_OWN_SIZE_LISTING_FACTS,
                 "a stored media file is scored from its own size and listing facts; \
-                 size and listing inputs apply only to a release name"
-                    .into(),
+                 size and listing inputs apply only to a release name",
             ));
         }
         _ => {}
     }
     if request.size_bytes.is_some_and(|size| size < 0) {
-        return Err(AppError::Validation("size bytes cannot be negative".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::SIZE_BYTES_CANNOT_NEGATIVE,
+            "size bytes cannot be negative",
+        ));
     }
     let listing = &request.listing;
     if let Some(raw) = listing.published_at.as_deref()
         && crate::quality_profile::parse_published_at(raw.trim()).is_none()
     {
-        return Err(AppError::Validation(format!(
-            "published at must be an RFC 2822 or RFC 3339 timestamp, got {raw:?}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::PUBLISHED_INVALID,
+            format!("published at must be an RFC 2822 or RFC 3339 timestamp, got {raw:?}"),
+        ));
     }
     if listing.thumbs_up.is_some_and(|votes| votes < 0)
         || listing.thumbs_down.is_some_and(|votes| votes < 0)
     {
-        return Err(AppError::Validation("votes cannot be negative".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::VOTES_CANNOT_NEGATIVE,
+            "votes cannot be negative",
+        ));
     }
     if let Some(languages) = listing.indexer_languages.as_ref()
         && (languages.len() > MAX_INDEXER_LANGUAGES
@@ -882,8 +926,9 @@ fn validate_preview_request(request: &RuleSetTestRequest) -> AppResult<()> {
                 .iter()
                 .any(|language| language.len() > MAX_INDEXER_LANGUAGE_BYTES))
     {
-        return Err(AppError::Validation(
-            "indexer languages are too large for a scoring preview".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::rules::INDEXER_LANGUAGES_TOO_LARGE_SCORING_PREVIEW,
+            "indexer languages are too large for a scoring preview",
         ));
     }
     Ok(())

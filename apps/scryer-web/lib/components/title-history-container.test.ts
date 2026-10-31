@@ -48,14 +48,18 @@ function mountContainer() {
       deps === undefined ||
       previous.deps === undefined ||
       deps.length !== previous.deps.length ||
-      deps.some((value, position) => !Object.is(value, previous.deps?.[position]))
+      deps.some(
+        (value, position) => !Object.is(value, previous.deps?.[position]),
+      )
     );
   };
   const react = {
     useState(initial: unknown) {
       const index = cursor++;
       if (!(index in slots)) {
-        slots[index] = { value: typeof initial === "function" ? initial() : initial };
+        slots[index] = {
+          value: typeof initial === "function" ? initial() : initial,
+        };
       }
       const slot = slots[index] as { value: unknown };
       return [
@@ -99,7 +103,9 @@ function mountContainer() {
   const client = {
     query(query: string, variables: Deferred["variables"]) {
       if (query === "libraries") {
-        return { toPromise: () => Promise.resolve({ data: { libraries: [] } }) };
+        return {
+          toPromise: () => Promise.resolve({ data: { libraries: [] } }),
+        };
       }
       return {
         toPromise: () =>
@@ -112,9 +118,14 @@ function mountContainer() {
   const overrides: Record<string, unknown> = {
     react,
     urql: { useClient: () => client },
-    "@/lib/graphql/queries": { librariesQuery: "libraries", titleHistoryQuery: "titleHistory" },
+    "@/lib/graphql/queries": {
+      librariesQuery: "libraries",
+      titleHistoryQuery: "titleHistory",
+    },
     "@/lib/graphql/mutations": { retryImportMutation: "retryImport" },
-    "@/lib/context/global-status-context": { useGlobalStatus: () => setGlobalStatus },
+    "@/lib/context/global-status-context": {
+      useGlobalStatus: () => setGlobalStatus,
+    },
     "@/lib/context/translate-context": { useTranslate: () => translate },
     "@/components/common/title-history-event-meta": {
       WANTED_HISTORY_FILTERS: ["grabbed"],
@@ -129,10 +140,13 @@ function mountContainer() {
       }),
     },
     "@/lib/reactive/domain-event-feed": { forEventTypes: () => () => true },
-    "@/components/views/title-history-view": { TitleHistoryView: "title-history-view" },
+    "@/components/views/title-history-view": {
+      TitleHistoryView: "title-history-view",
+    },
     "@/lib/utils/library-filter": {
       normalizeLibraryFilterSelection: (current: string[]) => current,
-      selectedLibraryIdsToQueryValue: (ids: string[]) => (ids.length > 0 ? ids : null),
+      selectedLibraryIdsToQueryValue: (ids: string[]) =>
+        ids.length > 0 ? ids : null,
     },
   };
   const file = new URL(
@@ -140,11 +154,16 @@ function mountContainer() {
     import.meta.url,
   );
   const code = ts.transpileModule(readFileSync(file, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
   }).outputText;
   const module = {
     exports: {} as {
-      TitleHistoryContainer: (props: object) => { props: TitleHistoryViewProps };
+      TitleHistoryContainer: (props: object) => {
+        props: TitleHistoryViewProps;
+      };
     },
   };
   new Function("require", "module", "exports", code)(
@@ -189,7 +208,9 @@ test("an older history response never replaces the rows for a newer title", asyn
   view.onSelectedTitleChange(titleRecord("title-b"));
   screen.render();
   assert.equal(screen.historyRequests.length, 2);
-  assert.deepEqual(screen.historyRequests[1].variables.filter.titleIds, ["title-b"]);
+  assert.deepEqual(screen.historyRequests[1].variables.filter.titleIds, [
+    "title-b",
+  ]);
 
   screen.historyRequests[1].resolve(historyPage(["row-for-title-b"]));
   await settle();
@@ -197,7 +218,10 @@ test("an older history response never replaces the rows for a newer title", asyn
   await settle();
 
   view = screen.render();
-  assert.deepEqual(view.events.map((event) => event.id), ["row-for-title-b"]);
+  assert.deepEqual(
+    view.events.map((event) => event.id),
+    ["row-for-title-b"],
+  );
   assert.equal(view.loading, false);
 });
 
@@ -215,19 +239,33 @@ test("a live-event refetch keeps the current rows without showing the loading st
   screen.liveRefresh();
   assert.equal(screen.historyRequests.length, 2);
   view = screen.render();
-  assert.equal(view.loading, false, "a background refetch does not flash the list");
-  assert.deepEqual(view.events.map((event) => event.id), ["first-row"]);
+  assert.equal(
+    view.loading,
+    false,
+    "a background refetch does not flash the list",
+  );
+  assert.deepEqual(
+    view.events.map((event) => event.id),
+    ["first-row"],
+  );
 
   screen.historyRequests[1].resolve(historyPage(["first-row", "live-row"]));
   await settle();
   view = screen.render();
-  assert.deepEqual(view.events.map((event) => event.id), ["first-row", "live-row"]);
+  assert.deepEqual(
+    view.events.map((event) => event.id),
+    ["first-row", "live-row"],
+  );
 
   view.onNextPage();
   screen.render();
   assert.equal(screen.historyRequests.length, 3);
   view = screen.render();
-  assert.equal(view.loading, true, "a page change the user made still shows the loading state");
+  assert.equal(
+    view.loading,
+    true,
+    "a page change the user made still shows the loading state",
+  );
 });
 
 test("a live-event refetch that overtakes a user load still clears the loading state", async (t) => {
@@ -243,5 +281,8 @@ test("a live-event refetch that overtakes a user load still clears the loading s
 
   const view = screen.render();
   assert.equal(view.loading, false);
-  assert.deepEqual(view.events.map((event) => event.id), ["live-row"]);
+  assert.deepEqual(
+    view.events.map((event) => event.id),
+    ["live-row"],
+  );
 });

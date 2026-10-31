@@ -54,9 +54,12 @@ export function GrabbedReleaseToastListener({
       shownEventIdsRef.current.add(activity.id);
 
       void client
-        .query<{ title?: TitleRecord | null }>(titleAutocompleteSelectionQuery, {
-          id: titleId,
-        })
+        .query<{ title?: TitleRecord | null }>(
+          titleAutocompleteSelectionQuery,
+          {
+            id: titleId,
+          },
+        )
         .toPromise()
         .then(({ data, error }) => {
           const title = data?.title;
@@ -82,12 +85,16 @@ export function GrabbedReleaseToastListener({
             dismissLabel: t("label.dismiss"),
             onView: onOpenOverview
               ? () =>
-                  onOpenOverview(viewFromFacet(title.facet), {
-                    id: title.id,
-                    slug: title.slug,
-                    libraryId: title.libraryId,
-                    librarySlug: title.librarySlug,
-                  }, episodeId)
+                  onOpenOverview(
+                    viewFromFacet(title.facet),
+                    {
+                      id: title.id,
+                      slug: title.slug,
+                      libraryId: title.libraryId,
+                      librarySlug: title.librarySlug,
+                    },
+                    episodeId,
+                  )
               : undefined,
           });
         });

@@ -32,14 +32,20 @@ test("the attachment filename comes from the header, preferring filename*", () =
   );
 
   assert.equal(
-    filenameFromContentDisposition("attachment; filename=bundle.tar.gz", FALLBACK),
+    filenameFromContentDisposition(
+      "attachment; filename=bundle.tar.gz",
+      FALLBACK,
+    ),
     "bundle.tar.gz",
   );
 });
 
 test("a missing or unusable disposition header falls back", () => {
   assert.equal(filenameFromContentDisposition(null, FALLBACK), FALLBACK);
-  assert.equal(filenameFromContentDisposition("attachment", FALLBACK), FALLBACK);
+  assert.equal(
+    filenameFromContentDisposition("attachment", FALLBACK),
+    FALLBACK,
+  );
   assert.equal(
     filenameFromContentDisposition(`attachment; filename=""`, FALLBACK),
     FALLBACK,

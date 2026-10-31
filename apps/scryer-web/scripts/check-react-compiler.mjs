@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 import { transformFileAsync } from "@babel/core";
 import reactCompiler from "babel-plugin-react-compiler";
 
-const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const appRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const tableModules = [
   {
     file: "components/views/media-content/compact-title-table.tsx",
@@ -41,14 +44,15 @@ for (const { file, component } of tableModules) {
   });
 
   const diagnostics = events.filter(({ event }) =>
-    ["CompileError", "CompileDiagnostic", "PipelineError"].includes(
-      event.kind,
-    ),
+    ["CompileError", "CompileDiagnostic", "PipelineError"].includes(event.kind),
   );
   if (diagnostics.length > 0) {
     failures.push(
       `${file} emitted compiler diagnostics:\n${diagnostics
-        .map(({ event }) => `- ${event.kind}: ${JSON.stringify(event.detail ?? event.data)}`)
+        .map(
+          ({ event }) =>
+            `- ${event.kind}: ${JSON.stringify(event.detail ?? event.data)}`,
+        )
         .join("\n")}`,
     );
   }

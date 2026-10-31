@@ -1,10 +1,5 @@
 import * as React from "react";
-import {
-  ChevronDown,
-  ChevronUp,
-  Download,
-  FileWarning,
-} from "lucide-react";
+import { ChevronDown, ChevronUp, Download, FileWarning } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -69,7 +64,11 @@ function downloadResponseBody(
   URL.revokeObjectURL(url);
 }
 
-function IndexerErrorResponseDetail({ detail }: { detail: IndexerErrorDetail }) {
+function IndexerErrorResponseDetail({
+  detail,
+}: {
+  detail: IndexerErrorDetail;
+}) {
   const t = useTranslate();
   if (detail.response == null) {
     return (
@@ -79,7 +78,9 @@ function IndexerErrorResponseDetail({ detail }: { detail: IndexerErrorDetail }) 
     );
   }
 
-  return <IndexerHttpResponseDetail detail={detail} response={detail.response} />;
+  return (
+    <IndexerHttpResponseDetail detail={detail} response={detail.response} />
+  );
 }
 
 function IndexerHttpResponseDetail({
@@ -91,20 +92,23 @@ function IndexerHttpResponseDetail({
 }) {
   const t = useTranslate();
   const presentation = React.useMemo(
-    () => presentIndexerErrorBody(response.bodyBase64, detail.error.contentType),
+    () =>
+      presentIndexerErrorBody(response.bodyBase64, detail.error.contentType),
     [detail.error.contentType, response.bodyBase64],
   );
   const [showFormatted, setShowFormatted] = React.useState(
     presentation.formattedText != null,
   );
-  const displayedText = showFormatted && presentation.formattedText != null
-    ? presentation.formattedText
-    : presentation.rawText;
-  const editorLanguage = presentation.format === "json"
-    ? "javascript"
-    : presentation.format === "xml"
-      ? "xml"
-      : "plain";
+  const displayedText =
+    showFormatted && presentation.formattedText != null
+      ? presentation.formattedText
+      : presentation.rawText;
+  const editorLanguage =
+    presentation.format === "json"
+      ? "javascript"
+      : presentation.format === "xml"
+        ? "xml"
+        : "plain";
 
   return (
     <div className="space-y-4 rounded-lg border border-border/60 bg-background/60 p-4">
@@ -134,7 +138,9 @@ function IndexerHttpResponseDetail({
           {t("indexerErrors.headers")}
         </h5>
         {response.headers.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("indexerErrors.noHeaders")}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("indexerErrors.noHeaders")}
+          </p>
         ) : (
           <div className="overflow-hidden rounded-md border border-border/60">
             {response.headers.map((header, index) => {
@@ -150,7 +156,8 @@ function IndexerHttpResponseDetail({
                   <span className="break-all font-mono text-muted-foreground">
                     {sensitive
                       ? t("indexerErrors.redacted")
-                      : header.value ?? `${t("indexerErrors.base64Value")}: ${header.valueBase64}`}
+                      : (header.value ??
+                        `${t("indexerErrors.base64Value")}: ${header.valueBase64}`)}
                   </span>
                 </div>
               );
@@ -189,7 +196,9 @@ function IndexerHttpResponseDetail({
         </div>
         {presentation.truncated ? (
           <p className="mb-2 text-xs text-muted-foreground">
-            {t("indexerErrors.previewTruncated", { size: formatByteCount(presentation.byteLength) })}
+            {t("indexerErrors.previewTruncated", {
+              size: formatByteCount(presentation.byteLength),
+            })}
           </p>
         ) : null}
         {displayedText != null ? (
@@ -202,11 +211,15 @@ function IndexerHttpResponseDetail({
             height="360px"
           />
         ) : presentation.byteLength === 0 ? (
-          <p className="text-sm text-muted-foreground">{t("indexerErrors.emptyBody")}</p>
+          <p className="text-sm text-muted-foreground">
+            {t("indexerErrors.emptyBody")}
+          </p>
         ) : (
           <div className="flex items-center gap-2 rounded-md border border-border/60 p-3 text-sm text-muted-foreground">
             <FileWarning className="h-4 w-4" />
-            {t("indexerErrors.binaryBody", { size: formatByteCount(presentation.byteLength) })}
+            {t("indexerErrors.binaryBody", {
+              size: formatByteCount(presentation.byteLength),
+            })}
           </div>
         )}
       </div>
@@ -236,11 +249,14 @@ export function IndexerErrorTable({
   const [expandedRowId, setExpandedRowId] = React.useState<string | null>(null);
   const columnCount = showIndexer ? 8 : 7;
 
-  const toggleExpanded = React.useCallback((id: string) => {
-    const expanded = expandedRowId !== id;
-    setExpandedRowId(expanded ? id : null);
-    onToggleDetail(id, expanded);
-  }, [expandedRowId, onToggleDetail]);
+  const toggleExpanded = React.useCallback(
+    (id: string) => {
+      const expanded = expandedRowId !== id;
+      setExpandedRowId(expanded ? id : null);
+      onToggleDetail(id, expanded);
+    },
+    [expandedRowId, onToggleDetail],
+  );
 
   if (items.length === 0) {
     return <p className="py-8 text-sm text-muted-foreground">{emptyMessage}</p>;
@@ -252,13 +268,27 @@ export function IndexerErrorTable({
         <TableHeader>
           <TableRow>
             <TableHead className="w-10 text-center" />
-            <TableHead className="w-36">{t("indexerErrors.occurred")}</TableHead>
-            {showIndexer ? <TableHead className="w-48">{t("indexerErrors.indexer")}</TableHead> : null}
-            <TableHead className="w-40">{t("indexerErrors.operation")}</TableHead>
-            <TableHead className="w-20 text-center">{t("indexerErrors.http")}</TableHead>
-            <TableHead className="w-48">{t("indexerErrors.classification")}</TableHead>
+            <TableHead className="w-36">
+              {t("indexerErrors.occurred")}
+            </TableHead>
+            {showIndexer ? (
+              <TableHead className="w-48">
+                {t("indexerErrors.indexer")}
+              </TableHead>
+            ) : null}
+            <TableHead className="w-40">
+              {t("indexerErrors.operation")}
+            </TableHead>
+            <TableHead className="w-20 text-center">
+              {t("indexerErrors.http")}
+            </TableHead>
+            <TableHead className="w-48">
+              {t("indexerErrors.classification")}
+            </TableHead>
             <TableHead>{t("indexerErrors.message")}</TableHead>
-            <TableHead className="w-40">{t("indexerErrors.contentType")}</TableHead>
+            <TableHead className="w-40">
+              {t("indexerErrors.contentType")}
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -277,10 +307,21 @@ export function IndexerErrorTable({
                       className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card/80 text-muted-foreground transition hover:text-foreground"
                       onClick={() => toggleExpanded(item.id)}
                       aria-expanded={expanded}
-                      aria-controls={selectorId("indexer-error-detail", item.id)}
-                      aria-label={expanded ? t("indexerErrors.collapse") : t("indexerErrors.expand")}
+                      aria-controls={selectorId(
+                        "indexer-error-detail",
+                        item.id,
+                      )}
+                      aria-label={
+                        expanded
+                          ? t("indexerErrors.collapse")
+                          : t("indexerErrors.expand")
+                      }
                     >
-                      {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      {expanded ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
                     </button>
                   </TableCell>
                   <TableCell className="align-top text-sm">
@@ -293,12 +334,17 @@ export function IndexerErrorTable({
                   </TableCell>
                   {showIndexer ? (
                     <TableCell className="align-top">
-                      <div className="truncate text-sm font-medium" title={item.indexerName}>
+                      <div
+                        className="truncate text-sm font-medium"
+                        title={item.indexerName}
+                      >
                         {item.indexerName}
                       </div>
                     </TableCell>
                   ) : null}
-                  <TableCell className="align-top text-sm">{humanizeEnum(item.operation)}</TableCell>
+                  <TableCell className="align-top text-sm">
+                    {humanizeEnum(item.operation)}
+                  </TableCell>
                   <TableCodeCell className="align-top text-center text-sm">
                     {item.httpStatus ?? "—"}
                   </TableCodeCell>
@@ -306,7 +352,9 @@ export function IndexerErrorTable({
                     <div>{humanizeEnum(item.classification)}</div>
                     {item.providerErrorCode != null ? (
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {t("indexerErrors.providerCode", { code: item.providerErrorCode })}
+                        {t("indexerErrors.providerCode", {
+                          code: item.providerErrorCode,
+                        })}
                       </div>
                     ) : null}
                   </TableCell>
@@ -333,9 +381,19 @@ export function IndexerErrorTable({
                           {t("indexerErrors.loadingResponse")}
                         </div>
                       ) : detailErrors[item.id] ? (
-                        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-[var(--scry-danger-text)]">
-                          <span className="min-w-0 flex-1">{detailErrors[item.id]}</span>
-                          <Button type="button" size="sm" variant="secondary" onClick={() => onToggleDetail(item.id, true)}>
+                        <div
+                          role="alert"
+                          className="flex flex-wrap items-center gap-3 text-sm text-[var(--scry-danger-text)]"
+                        >
+                          <span className="min-w-0 flex-1">
+                            {detailErrors[item.id]}
+                          </span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => onToggleDetail(item.id, true)}
+                          >
                             {t("indexerErrors.retry")}
                           </Button>
                         </div>

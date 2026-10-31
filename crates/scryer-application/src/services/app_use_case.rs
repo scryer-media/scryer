@@ -14,6 +14,16 @@ pub struct AppUseCase {
 }
 
 impl AppUseCase {
+    /// Shared restore ownership for host admission and background processing.
+    pub fn restore_coordinator(&self) -> &Arc<crate::RestoreCoordinator> {
+        &self.runtime.jobs.restore
+    }
+
+    /// Install startup-recovered ownership before sharing this application.
+    pub fn install_restore_coordinator(&mut self, coordinator: Arc<crate::RestoreCoordinator>) {
+        self.runtime.jobs.restore = coordinator;
+    }
+
     /// Install the executable-host restart callback used by application upgrades.
     pub fn set_application_upgrade_restart_handle(
         &self,
@@ -51,7 +61,12 @@ impl AppUseCase {
             .system_maintenance_lock
             .clone()
             .try_lock_owned()
-            .map_err(|_| AppError::Validation("maintenance operation in progress".to_string()))
+            .map_err(|_| {
+                AppError::validation_refused(
+                    crate::error_reasons::services::MAINTENANCE_OPERATION_PROGRESS,
+                    "maintenance operation in progress".to_string(),
+                )
+            })
     }
 
     pub async fn upstream_scheduler_snapshot(
@@ -493,7 +508,8 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::services::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ));
         }
@@ -708,7 +724,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(actor, &title.library_id, permission)
             .await
     }
@@ -723,7 +744,8 @@ impl AppUseCase {
             .await?
             .is_empty()
         {
-            Err(AppError::Unauthorized(
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::services::LIBRARY_ACCESS_DENIED,
                 "You do not have access to this library".to_string(),
             ))
         } else {
@@ -744,7 +766,12 @@ impl AppUseCase {
             .get_by_id(&wanted.title_id)
             .await?
             .map(|title| title.library_id)
-            .ok_or_else(|| AppError::NotFound(format!("title {}", wanted.title_id)))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", wanted.title_id),
+                )
+            })
     }
 
     /// Retain only the acquisition scope states whose owning library the actor
@@ -921,17 +948,21 @@ impl AppUseCase {
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
         {
-            return Err(AppError::Validation("a title identity is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::services::TITLE_IDENTITY_REQUIRED,
+                "a title identity is required",
+            ));
         }
 
         let result = self
             .get_movie_titles_for_current_release_market(std::slice::from_ref(movie_ref), language)
             .await?;
-        result
-            .by_ref_index
-            .get(&0)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound("movie metadata response missing title".into()))
+        result.by_ref_index.get(&0).cloned().ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::services::MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND,
+                "movie metadata response missing title",
+            )
+        })
     }
 
     /// Fetch one series by whichever identity the caller holds, in the order
@@ -958,14 +989,20 @@ impl AppUseCase {
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
         {
-            return Err(AppError::Validation("a title identity is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::services::TITLE_IDENTITY_REQUIRED,
+                "a title identity is required",
+            ));
         }
         if [series_ref.smg_id, series_ref.tvdb_id, series_ref.tmdb_id]
             .into_iter()
             .flatten()
             .any(|id| id <= 0)
         {
-            return Err(AppError::Validation("title ids must be positive".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::services::TITLE_IDS_OUT_OF_RANGE,
+                "title ids must be positive",
+            ));
         }
         crate::catalog_workflow::fetch_series_by_ref(
             self.services.library.metadata_gateway.as_ref(),
@@ -989,7 +1026,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1015,7 +1057,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1128,7 +1175,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -1258,14 +1310,16 @@ impl AppUseCase {
             .await?
             .is_empty()
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::services::LIBRARY_ACCESS_DENIED,
                 "You do not have access to this library".to_string(),
             ));
         }
         let download_client_item_id = download_client_item_id.trim();
         if download_client_item_id.is_empty() {
-            return Err(AppError::Validation(
-                "download client item id is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::services::DOWNLOAD_CLIENT_ITEM_ID_REQUIRED,
+                "download client item id is required",
             ));
         }
 
@@ -1277,7 +1331,10 @@ impl AppUseCase {
             .into_iter()
             .find(|download| download.download_client_item_id == download_client_item_id)
             .ok_or_else(|| {
-                AppError::NotFound(format!("completed download {download_client_item_id}"))
+                AppError::not_found_reason(
+                    crate::error_reasons::services::COMPLETED_DOWNLOAD_NOT_FOUND,
+                    format!("completed download {download_client_item_id}"),
+                )
             })
     }
 
@@ -1333,16 +1390,19 @@ impl AppUseCase {
             .get_by_id(id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::services::DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND, format!(
                     "download client {} references proxy configuration {id}, which was not found",
                     config.id
                 ))
             })?;
         if !proxy.is_enabled {
-            return Err(AppError::Validation(format!(
-                "download client {} is assigned proxy {id}, which is disabled",
-                config.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::services::DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED,
+                format!(
+                    "download client {} is assigned proxy {id}, which is disabled",
+                    config.id
+                ),
+            ));
         }
         Ok(Some(proxy))
     }

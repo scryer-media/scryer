@@ -166,18 +166,23 @@ async fn build_pending_import_library_file(
 ) -> AppResult<LibraryFile> {
     let item_path = item.item_path.trim();
     if item_path.is_empty() {
-        return Err(AppError::Validation(
-            "pending import path is missing or invalid".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PENDING_IMPORT_PATH_INVALID,
+            "pending import path is missing or invalid",
         ));
     }
 
     let path = stored_path_to_path_buf(item_path);
     let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
-        AppError::Validation(format!("pending import file is unavailable: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::library::PENDING_IMPORT_FILE_UNAVAILABLE,
+            format!("pending import file is unavailable: {error}"),
+        )
     })?;
     if !metadata.is_file() {
-        return Err(AppError::Validation(
-            "pending import path is not a file".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PENDING_IMPORT_PATH_NOT_FILE,
+            "pending import path is not a file",
         ));
     }
 
@@ -363,13 +368,15 @@ fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool 
 
 fn reject_folder_ownership_conflict_resolution(item: &LibraryScanUnmatchedItem) -> AppResult<()> {
     if item.reason_code == crate::library_scan_unmatched::LIBRARY_SCAN_INVALID_TITLE_BOUNDARY {
-        return Err(AppError::Validation(
-            "this folder is not a title boundary; select an individual title folder through Change folder".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::FOLDER_NOT_TITLE_BOUNDARY,
+            "this folder is not a title boundary; select an individual title folder through Change folder",
         ));
     }
     if pending_import_item_is_folder_ownership_item(item) {
-        return Err(AppError::Validation(
-            "folder ownership conflicts cannot be bound or adopted".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::FOLDER_OWNERSHIP_CONFLICT,
+            "folder ownership conflicts cannot be bound or adopted",
         ));
     }
     Ok(())
@@ -398,9 +405,10 @@ impl AppUseCase {
             .lock()
             .map_err(|_| AppError::Repository("pending import resolution lock poisoned".into()))?;
         if !locks.insert(pending_import_id.to_string()) {
-            return Err(AppError::Validation(format!(
-                "pending import {pending_import_id} is already being resolved"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ALREADY_BEING_RESOLVED,
+                format!("pending import {pending_import_id} is already being resolved"),
+            ));
         }
 
         Ok(PendingImportResolutionGuard {
@@ -431,12 +439,10 @@ impl AppUseCase {
                 .await?;
         }
 
-        Ok(AppError::Validation(
-            "pending import path is a folder, not a file, so it cannot be bound to episodes; \
+        Ok(AppError::validation_refused(crate::error_reasons::library::PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES, "pending import path is a folder, not a file, so it cannot be bound to episodes; \
              its stale title link was cleared, so reload pending imports and attach the folder \
              to a title again"
-                .into(),
-        ))
+                ))
     }
 
     pub async fn pending_import_counts(&self, actor: &User) -> AppResult<PendingImportCounts> {
@@ -602,7 +608,8 @@ impl AppUseCase {
                 item.title_name = Some(title_name.clone());
                 item.title_slug = title_slug.clone();
                 item.title_folder_path = title_folder_path.clone();
-                if item.reason == "title_already_owns_another_folder"
+                if item.reason
+                    == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
                     && invalid_ownership.contains(title_id)
                 {
                     item.reason = "invalid_title_folder_ownership".into();
@@ -620,7 +627,10 @@ impl AppUseCase {
     ) -> AppResult<IgnorePendingImportResult> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
-            return Err(AppError::Validation("pending import id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                "pending import id is required",
+            ));
         }
         let _pending_import_resolution_guard =
             self.acquire_pending_import_resolution_guard(pending_import_id)?;
@@ -631,7 +641,12 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .get_library_scan_unmatched_item(pending_import_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("pending import {pending_import_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                    format!("pending import {pending_import_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &item.library_id,
@@ -664,7 +679,10 @@ impl AppUseCase {
     ) -> AppResult<ResolvePendingImportResult> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
-            return Err(AppError::Validation("pending import id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                "pending import id is required",
+            ));
         }
         let _pending_import_resolution_guard =
             self.acquire_pending_import_resolution_guard(pending_import_id)?;
@@ -675,7 +693,12 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .get_library_scan_unmatched_item(pending_import_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("pending import {pending_import_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                    format!("pending import {pending_import_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &item.library_id,
@@ -684,8 +707,9 @@ impl AppUseCase {
         .await?;
         reject_folder_ownership_conflict_resolution(&item)?;
         if item.title_id.is_some() {
-            return Err(AppError::Validation(
-                "pending import requires explicit episode binding".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_REQUIRES_EXPLICIT_EPISODE_BINDING,
+                "pending import requires explicit episode binding",
             ));
         }
 
@@ -698,7 +722,10 @@ impl AppUseCase {
         let target_identities =
             pending_import_target_identities(&item.facet, &request.external_ids);
         if target_identities.is_empty() {
-            return Err(AppError::Validation("a title identity is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TITLE_IDENTITY_REQUIRED,
+                "a title identity is required",
+            ));
         }
 
         let mut existing_match = None;
@@ -721,8 +748,9 @@ impl AppUseCase {
         }
         if let Some(existing_title) = existing_match {
             if !attach_to_existing_title {
-                return Err(AppError::Validation(
-                    "title already exists in this library".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::TITLE_ALREADY_EXISTS_LIBRARY,
+                    "title already exists in this library",
                 ));
             }
 
@@ -751,8 +779,9 @@ impl AppUseCase {
             // insert. The create-and-bind store call leaves the pending import
             // untouched whenever it reuses a title, so bind it here.
             if !attach_to_existing_title {
-                return Err(AppError::Validation(
-                    "title already exists in this library".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::TITLE_ALREADY_EXISTS_LIBRARY,
+                    "title already exists in this library",
                 ));
             }
 
@@ -807,7 +836,10 @@ impl AppUseCase {
             let mut title = title.clone();
             let item_path = stored_path_to_path_buf(item.item_path.trim());
             let metadata = tokio::fs::metadata(&item_path).await.map_err(|error| {
-                AppError::Validation(format!("pending import path is unavailable: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::library::PENDING_IMPORT_PATH_UNAVAILABLE,
+                    format!("pending import path is unavailable: {error}"),
+                )
             })?;
             let discovered_files = if metadata.is_file() {
                 vec![build_pending_import_library_file(item).await?]
@@ -818,14 +850,13 @@ impl AppUseCase {
                     .scan_library(path_to_stored_string(&item_path).as_str())
                     .await?
             } else {
-                return Err(AppError::Validation(
-                    "pending import path is not a file or directory".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::PENDING_IMPORT_PATH_NOT_FILE_DIRECTORY,
+                    "pending import path is not a file or directory",
                 ));
             };
             if discovered_files.is_empty() {
-                return Err(AppError::Validation(
-                    "pending import directory contains no files to attach".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH, "pending import directory contains no files to attach"));
             }
             let entry_path = pending_import_movie_entry_path(item);
             if metadata.is_dir()
@@ -845,7 +876,10 @@ impl AppUseCase {
                 .await?;
             } else if title.folder_path.is_some() {
                 let parent = item_path.parent().ok_or_else(|| {
-                    AppError::Validation("pending import path has no parent folder".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::library::PENDING_IMPORT_PATH_NO_PARENT_FOLDER,
+                        "pending import path has no parent folder",
+                    )
                 })?;
                 crate::folder_ownership::ensure_folder_available_to_title(self, &title, parent)
                     .await?;
@@ -867,8 +901,9 @@ impl AppUseCase {
                 .map(|media_file| media_file.file_path)
                 .collect::<HashSet<_>>();
             if !expected_paths.is_subset(&attached_paths) {
-                return Err(AppError::Validation(
-                    "failed to attach pending import file to selected movie".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::FAILED_ATTACH_PENDING_IMPORT_FILE_SELECTED_MOVIE,
+                    "failed to attach pending import file to selected movie",
                 ));
             }
             self.services
@@ -902,9 +937,7 @@ impl AppUseCase {
                 .scan_library(path_to_stored_string(&item_path).as_str())
                 .await?;
             if discovered_files.is_empty() {
-                return Err(AppError::Validation(
-                    "pending import directory contains no files to attach".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH, "pending import directory contains no files to attach"));
             }
             refuse_library_root_as_title_folder(self, &item_path).await?;
             crate::folder_ownership::claim_title_folder_if_missing(self, &mut title, &item_path)
@@ -949,7 +982,10 @@ impl AppUseCase {
     ) -> AppResult<Vec<PendingImportTitleSearchItem>> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
-            return Err(AppError::Validation("pending import id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                "pending import id is required",
+            ));
         }
 
         let query = query.trim();
@@ -963,7 +999,12 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .get_library_scan_unmatched_item(pending_import_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("pending import {pending_import_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                    format!("pending import {pending_import_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &item.library_id,
@@ -1073,7 +1114,10 @@ impl AppUseCase {
     ) -> AppResult<PendingImportBindingPreview> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
-            return Err(AppError::Validation("pending import id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                "pending import id is required",
+            ));
         }
 
         let item = self
@@ -1082,7 +1126,12 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .get_library_scan_unmatched_item(pending_import_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("pending import {pending_import_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                    format!("pending import {pending_import_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &item.library_id,
@@ -1094,7 +1143,10 @@ impl AppUseCase {
             return Err(self.release_stale_directory_title_binding(&item).await?);
         }
         let title_id = item.title_id.as_deref().ok_or_else(|| {
-            AppError::Validation("pending import does not have a known title".into())
+            AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_DOES_NOT_KNOWN_TITLE,
+                "pending import does not have a known title",
+            )
         })?;
         let title = self
             .services
@@ -1102,7 +1154,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
 
         let available_episodes = list_pending_import_title_episodes(self, &title.id).await?;
         let parse_raw_name = pending_import_parse_raw_name(&item);
@@ -1152,7 +1209,10 @@ impl AppUseCase {
     ) -> AppResult<ResolvePendingImportResult> {
         let pending_import_id = pending_import_id.trim();
         if pending_import_id.is_empty() {
-            return Err(AppError::Validation("pending import id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                "pending import id is required",
+            ));
         }
         let _pending_import_resolution_guard =
             self.acquire_pending_import_resolution_guard(pending_import_id)?;
@@ -1163,7 +1223,12 @@ impl AppUseCase {
             .library_scan_unmatched_items
             .get_library_scan_unmatched_item(pending_import_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("pending import {pending_import_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                    format!("pending import {pending_import_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &item.library_id,
@@ -1175,7 +1240,10 @@ impl AppUseCase {
             return Err(self.release_stale_directory_title_binding(&item).await?);
         }
         let title_id = item.title_id.as_deref().ok_or_else(|| {
-            AppError::Validation("pending import does not have a known title".into())
+            AppError::validation_refused(
+                crate::error_reasons::library::PENDING_IMPORT_DOES_NOT_KNOWN_TITLE,
+                "pending import does not have a known title",
+            )
         })?;
         let title = self
             .services
@@ -1183,7 +1251,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         let available_episodes = list_pending_import_title_episodes(self, &title.id).await?;
 
         let target_episodes = if let Some(collection_id) = collection_id
@@ -1196,10 +1269,13 @@ impl AppUseCase {
                 .cloned()
                 .collect::<Vec<_>>();
             if episodes.is_empty() {
-                return Err(AppError::Validation(format!(
-                    "collection {collection_id} does not belong to title {}",
-                    title.id
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::COLLECTION_DOES_NOT_BELONG_TITLE,
+                    format!(
+                        "collection {collection_id} does not belong to title {}",
+                        title.id
+                    ),
+                ));
             }
             episodes
         } else {
@@ -1209,8 +1285,9 @@ impl AppUseCase {
                 .filter(|value| !value.is_empty())
                 .collect::<HashSet<_>>();
             if requested_ids.is_empty() {
-                return Err(AppError::Validation(
-                    "at least one episode must be selected".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::EPISODE_SELECTION_REQUIRED,
+                    "at least one episode must be selected",
                 ));
             }
             let episodes = available_episodes
@@ -1219,9 +1296,7 @@ impl AppUseCase {
                 .cloned()
                 .collect::<Vec<_>>();
             if episodes.len() != requested_ids.len() {
-                return Err(AppError::Validation(
-                    "one or more selected episodes do not belong to the target title".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::library::ONE_MORE_SELECTED_EPISODES_DO_NOT_BELONG_TARGET_TITLE, "one or more selected episodes do not belong to the target title"));
             }
             episodes
         };
@@ -1280,8 +1355,9 @@ impl AppUseCase {
         .await;
 
         if !library_scan_summary_has_pending_import_success(&summary) {
-            return Err(AppError::Validation(
-                "failed to bind pending import file to selected episodes".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::FAILED_BIND_PENDING_IMPORT_FILE_SELECTED_EPISODES,
+                "failed to bind pending import file to selected episodes",
             ));
         }
 
@@ -1320,16 +1396,22 @@ async fn refuse_library_root_as_title_folder(
 ) -> AppResult<()> {
     let folder_path = path_to_stored_string(folder_path);
     if crate::title_folder_rules::path_has_dot_segments(&folder_path) {
-        return Err(AppError::Validation(format!(
-            "{} must not contain . or .. components",
-            crate::stored_paths::stored_path_to_display_string(&folder_path)
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PATH_COMPONENT_INVALID,
+            format!(
+                "{} must not contain . or .. components",
+                crate::stored_paths::stored_path_to_display_string(&folder_path)
+            ),
+        ));
     }
     if crate::folder_ownership::folder_spans_a_library_root(app, &folder_path).await? {
-        return Err(AppError::Validation(format!(
-            "{} is a library root, not a title folder",
-            crate::stored_paths::stored_path_to_display_string(&folder_path)
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::FOLDER_NOT_TITLE_BOUNDARY,
+            format!(
+                "{} is a library root, not a title folder",
+                crate::stored_paths::stored_path_to_display_string(&folder_path)
+            ),
+        ));
     }
     Ok(())
 }

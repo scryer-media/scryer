@@ -475,3 +475,68 @@ async fn graphql_one_shot_search_releases_requires_a_title() {
         "unexpected error: {body}"
     );
 }
+
+#[tokio::test]
+async fn graphql_create_folder_creates_and_refuses_with_reasons() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let limited = ctx
+        .app
+        .create_user(
+            &admin,
+            "create_folder_limited".to_string(),
+            "limited-pass1".to_string(),
+            AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .expect("create limited user");
+    let catalog_user = ctx
+        .app
+        .create_user(
+            &admin,
+            "create_folder_catalog".to_string(),
+            "catalog-pass1".to_string(),
+            AppPermissionMask::from_permission(scryer_domain::AppPermission::ManageCatalogSettings),
+            vec![],
+        )
+        .await
+        .expect("create catalog user");
+
+    let root = tempfile::tempdir().expect("create folder root");
+    let parent_json =
+        serde_json::to_string(&root.path().to_string_lossy()).expect("serialize parent path");
+    let create = |name: &str| {
+        format!(
+            "mutation {{ createFolder(parentPath: {parent_json}, name: {}) {{ name path isDirectory }} }}",
+            serde_json::to_string(name).expect("serialize name")
+        )
+    };
+
+    let created = schema_exec(&ctx, &create(" Season Packs "), Some(catalog_user.clone())).await;
+    assert_no_errors(&created);
+    assert_eq!(created["data"]["createFolder"]["name"], "Season Packs");
+    assert_eq!(created["data"]["createFolder"]["isDirectory"], true);
+    assert!(root.path().join("Season Packs").is_dir());
+
+    for (name, reason) in [
+        ("Season Packs", "FOLDER_CREATE_ALREADY_EXISTS"),
+        ("a/b", "FOLDER_CREATE_NAME_INVALID_CHARACTERS"),
+        ("", "FOLDER_CREATE_NAME_REQUIRED"),
+    ] {
+        let body = schema_exec(&ctx, &create(name), Some(catalog_user.clone())).await;
+        let (_, code) = first_graphql_error_message_and_code(&body);
+        assert_eq!(code, "VALIDATION_ERROR", "{name:?}: {body}");
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"], reason,
+            "{name:?}: {body}"
+        );
+    }
+
+    let denied = schema_exec(&ctx, &create("Denied"), Some(limited)).await;
+    assert!(
+        denied["errors"].is_array(),
+        "limited user must be refused: {denied}"
+    );
+    assert!(!root.path().join("Denied").exists());
+}

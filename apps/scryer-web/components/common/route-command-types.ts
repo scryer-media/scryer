@@ -30,7 +30,9 @@ function routeCommandSearchRank(
   const keywords = (item.keywords ?? [])
     .map(normalizeRouteCommandSearchText)
     .filter(Boolean);
-  const searchableValues = [label, description, groupLabel, ...keywords].filter(Boolean);
+  const searchableValues = [label, description, groupLabel, ...keywords].filter(
+    Boolean,
+  );
   const searchable = searchableValues.join(" ");
 
   if (!terms.every((term) => searchable.includes(term))) {
@@ -74,12 +76,19 @@ export function filterRouteCommandItems(
       index,
       rank: routeCommandSearchRank(item, terms, normalizedQuery),
     }))
-    .filter((match): match is { item: RouteCommandItem; index: number; rank: number } => match.rank !== null)
+    .filter(
+      (
+        match,
+      ): match is { item: RouteCommandItem; index: number; rank: number } =>
+        match.rank !== null,
+    )
     .sort((a, b) => a.rank - b.rank || a.index - b.index)
     .map((match) => match.item);
 }
 
-export function groupRouteCommandItems(items: RouteCommandItem[]): RouteCommandGroup[] {
+export function groupRouteCommandItems(
+  items: RouteCommandItem[],
+): RouteCommandGroup[] {
   const groups: RouteCommandGroup[] = [];
   const groupIndices = new Map<string, number>();
 

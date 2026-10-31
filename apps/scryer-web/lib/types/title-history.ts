@@ -1,8 +1,16 @@
 export type TitleHistoryEvent = {
   scoring?: {
-    candidateScore: number; previousScore: number | null; delta: number | null; decisionCode: string;
+    candidateScore: number;
+    previousScore: number | null;
+    delta: number | null;
+    decisionCode: string;
     entries: import("./file-score").ScoreEntry[];
-    comparisons: { fileId: string; episodeIds: string[]; previousScore: number; delta: number }[];
+    comparisons: {
+      fileId: string;
+      episodeIds: string[];
+      previousScore: number;
+      delta: number;
+    }[];
   } | null;
   id: string;
   // Null for an event with no catalog title behind it: an unlinked grab is
@@ -14,7 +22,7 @@ export type TitleHistoryEvent = {
   episodeIds: string[];
   collectionId: string | null;
   eventType: string;
-  actorKind: 'USER' | 'ANONYMOUS' | 'SYSTEM' | null;
+  actorKind: "USER" | "ANONYMOUS" | "SYSTEM" | null;
   actorUserId: string | null;
   actorDisplayName: string | null;
   sourceTitle: string | null;
@@ -30,6 +38,7 @@ export type TitleHistoryEvent = {
   importId: string | null;
   skipReason: string | null;
   retryRequiresPassword: boolean;
+  failureReasonCode?: string | null;
   failureReason: string | null;
   blocklistReason: string | null;
   sourcePath: string | null;

@@ -7,7 +7,9 @@ const LOADING_MARK_STILL_SRC = `${import.meta.env.BASE_URL}scryer-loading-still.
 // shown while the backend restarts can still draw it with no server to fetch
 // it from.
 const preloadedLoadingMark =
-  typeof Image === "undefined" ? null : Object.assign(new Image(), { src: LOADING_MARK_SRC });
+  typeof Image === "undefined"
+    ? null
+    : Object.assign(new Image(), { src: LOADING_MARK_SRC });
 void preloadedLoadingMark;
 
 /**

@@ -1011,6 +1011,13 @@ pub async fn persist_version_compatibility_notice(
     persist_setting_json(db, SMG_VERSION_COMPATIBILITY_NOTICE_KEY, &notice).await
 }
 
+pub async fn persist_clock_skew_notice(
+    db: &dyn SettingsRepository,
+    active: bool,
+) -> Result<(), String> {
+    persist_setting_json(db, "smg.clock_skew_notice", &active).await
+}
+
 pub async fn persist_scryer_update_notice(
     db: &dyn SettingsRepository,
     notice: Option<&SmgScryerUpdateNotice>,

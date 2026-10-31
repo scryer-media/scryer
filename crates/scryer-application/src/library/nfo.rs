@@ -2122,10 +2122,12 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
             scryer_domain::TaggedAlias {
                 name: "Kamiandon".into(),
                 language: "ja".into(),
+                country: None,
             },
             scryer_domain::TaggedAlias {
                 name: "Lanterne de Papier".into(),
                 language: "fr".into(),
+                country: None,
             },
         ];
         title.tags = vec![
@@ -3071,6 +3073,7 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         title.tagged_aliases = vec![scryer_domain::TaggedAlias {
             name: "Paper Lantern".into(),
             language: "ja".into(),
+            country: None,
         }];
         let xml = render_movie_nfo(&title, &NfoContext::default());
         assert!(!xml.contains("<originaltitle>"), "{xml}");

@@ -1,5 +1,13 @@
+import { graphQlRuleValidationResult } from "@/lib/utils/rego-diagnostics";
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useRegoValidation } from "@/lib/hooks/use-rego-validation";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -113,21 +121,28 @@ export function SettingsMaintenanceRulesContainer({
   const t = useTranslate();
   const client = useClient();
 
-  const [ruleSetRecords, setRuleSetRecords] = useState<MaintenanceRuleSetRecord[]>([]);
+  const [ruleSetRecords, setRuleSetRecords] = useState<
+    MaintenanceRuleSetRecord[]
+  >([]);
   const [actionDescriptors, setActionDescriptors] = useState<
     MaintenanceActionDescriptor[]
   >([]);
   const [actionStepDescriptors, setActionStepDescriptors] = useState<
     MaintenanceActionStepDescriptor[]
   >([]);
-  const [actionStepDescriptorsLoaded, setActionStepDescriptorsLoaded] = useState(false);
+  const [actionStepDescriptorsLoaded, setActionStepDescriptorsLoaded] =
+    useState(false);
   const [libraries, setLibraries] = useState<MaintenanceLibraryOption[]>([]);
-  const [storageRoots, setStorageRoots] = useState<MaintenanceStorageRootOption[]>([]);
+  const [storageRoots, setStorageRoots] = useState<
+    MaintenanceStorageRootOption[]
+  >([]);
   const [qualityProfiles, setQualityProfiles] = useState<
     MaintenanceQualityProfileOption[]
   >([]);
 
-  const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(null);
+  const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(
+    null,
+  );
   const [editingRuleSetId, setEditingRuleSetId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [pendingDeleteRuleSet, setPendingDeleteRuleSet] =
@@ -140,16 +155,23 @@ export function SettingsMaintenanceRulesContainer({
   const [ruleSetDraftBaseline, setRuleSetDraftBaseline] =
     useState<MaintenanceRuleSetDraft>(initialMaintenanceRuleDraft);
   const { validating, validationResult, setValidationResult, validateDraft } =
-    useRegoValidation("maintenance", ruleSetDraft.regoSource, editingRuleSetId, isEditorOpen);
+    useRegoValidation(
+      "maintenance",
+      ruleSetDraft.regoSource,
+      editingRuleSetId,
+      isEditorOpen,
+    );
 
-  const [previewSource, setPreviewSource] = useState<MaintenancePreviewSource>("stored");
+  const [previewSource, setPreviewSource] =
+    useState<MaintenancePreviewSource>("stored");
   const [previewRuleSetId, setPreviewRuleSetId] = useState("");
   const [previewLibraryId, setPreviewLibraryId] = useState("");
-  const [previewLimit, setPreviewLimit] = useState(MAINTENANCE_PREVIEW_LIMIT_DEFAULT);
-  const [previewing, setPreviewing] = useState(false);
-  const [previewResult, setPreviewResult] = useState<MaintenancePreviewResult | null>(
-    null,
+  const [previewLimit, setPreviewLimit] = useState(
+    MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
   );
+  const [previewing, setPreviewing] = useState(false);
+  const [previewResult, setPreviewResult] =
+    useState<MaintenancePreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewRequest = useRef(0);
 
@@ -158,42 +180,55 @@ export function SettingsMaintenanceRulesContainer({
   /// system-settings management, and a reader without it must still get a
   /// working page rather than a failed section.
   const [gatesLocked, setGatesLocked] = useState(false);
-  const [savingSwitch, setSavingSwitch] = useState<MaintenanceGateKey | null>(null);
+  const [savingSwitch, setSavingSwitch] = useState<MaintenanceGateKey | null>(
+    null,
+  );
   const [pendingUnpause, setPendingUnpause] = useState(false);
 
   const [candidates, setCandidates] = useState<MaintenanceCandidate[]>([]);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidatesError, setCandidatesError] = useState<string | null>(null);
-  const [candidateRuleFilter, setCandidateRuleFilter] =
-    useState(MAINTENANCE_FILTER_ALL);
-  const [candidateStateFilter, setCandidateStateFilter] =
-    useState(MAINTENANCE_FILTER_ALL);
-  const [candidateLibraryFilter, setCandidateLibraryFilter] =
-    useState(MAINTENANCE_FILTER_ALL);
+  const [candidateRuleFilter, setCandidateRuleFilter] = useState(
+    MAINTENANCE_FILTER_ALL,
+  );
+  const [candidateStateFilter, setCandidateStateFilter] = useState(
+    MAINTENANCE_FILTER_ALL,
+  );
+  const [candidateLibraryFilter, setCandidateLibraryFilter] = useState(
+    MAINTENANCE_FILTER_ALL,
+  );
 
-  const [evaluationRuns, setEvaluationRuns] = useState<MaintenanceEvaluationRun[]>([]);
+  const [evaluationRuns, setEvaluationRuns] = useState<
+    MaintenanceEvaluationRun[]
+  >([]);
   const [actionRuns, setActionRuns] = useState<MaintenanceActionRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
-  const [runScopeRuleSetId, setRunScopeRuleSetId] = useState(MAINTENANCE_FILTER_ALL);
+  const [runScopeRuleSetId, setRunScopeRuleSetId] = useState(
+    MAINTENANCE_FILTER_ALL,
+  );
   const [evaluationTriggering, setEvaluationTriggering] = useState(false);
   const [actionTriggering, setActionTriggering] = useState(false);
 
   const [exclusions, setExclusions] = useState<MaintenanceExclusion[]>([]);
   const [exclusionsError, setExclusionsError] = useState<string | null>(null);
-  const [removingExclusionId, setRemovingExclusionId] = useState<string | null>(null);
-  const [pendingRemoveExclusion, setPendingRemoveExclusion] =
-    useState<MaintenanceExclusion | null>(null);
-  const [pendingExclusion, setPendingExclusion] = useState<PendingExclusion | null>(
+  const [removingExclusionId, setRemovingExclusionId] = useState<string | null>(
     null,
   );
+  const [pendingRemoveExclusion, setPendingRemoveExclusion] =
+    useState<MaintenanceExclusion | null>(null);
+  const [pendingExclusion, setPendingExclusion] =
+    useState<PendingExclusion | null>(null);
   const [excluding, setExcluding] = useState(false);
 
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
   const sequenceCatalogResolved =
     actionStepDescriptorsLoaded &&
-    !sequenceHasUnresolvedSteps(ruleSetDraft.actionSequence, actionStepDescriptors);
+    !sequenceHasUnresolvedSteps(
+      ruleSetDraft.actionSequence,
+      actionStepDescriptors,
+    );
 
   const closeEditor = useCallback(() => {
     const next = initialMaintenanceRuleDraft();
@@ -230,7 +265,7 @@ export function SettingsMaintenanceRulesContainer({
         return detail;
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToLoad"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
           { level: "ERROR" },
         );
         return null;
@@ -368,23 +403,25 @@ export function SettingsMaintenanceRulesContainer({
       setRuleSetRecords(data?.maintenanceRuleSets ?? []);
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         { level: "ERROR" },
       );
     }
   }, [client, setGlobalStatus, t]);
 
-
   const refreshCatalogs = useCallback(async () => {
     try {
-      const [descriptors, stepDescriptors, libraryList, profiles] = await Promise.all([
-        client.query(maintenanceActionDescriptorsQuery, {}).toPromise(),
-        client.query(maintenanceActionStepDescriptorsQuery, {}).toPromise(),
-        client.query(librariesQuery, {}).toPromise(),
-        client.query(qualityProfileOptionsQuery, {}).toPromise(),
-      ]);
+      const [descriptors, stepDescriptors, libraryList, profiles] =
+        await Promise.all([
+          client.query(maintenanceActionDescriptorsQuery, {}).toPromise(),
+          client.query(maintenanceActionStepDescriptorsQuery, {}).toPromise(),
+          client.query(librariesQuery, {}).toPromise(),
+          client.query(qualityProfileOptionsQuery, {}).toPromise(),
+        ]);
       if (!descriptors.error) {
-        setActionDescriptors(descriptors.data?.maintenanceActionDescriptors ?? []);
+        setActionDescriptors(
+          descriptors.data?.maintenanceActionDescriptors ?? [],
+        );
       }
       if (!stepDescriptors.error) {
         setActionStepDescriptors(
@@ -397,12 +434,10 @@ export function SettingsMaintenanceRulesContainer({
       if (!libraryList.error) {
         const catalogLibraries = libraryList.data?.libraries ?? [];
         setLibraries(
-          catalogLibraries.map(
-            (library: { id: string; name: string }) => ({
-              id: library.id,
-              name: library.name,
-            }),
-          ),
+          catalogLibraries.map((library: { id: string; name: string }) => ({
+            id: library.id,
+            name: library.name,
+          })),
         );
         setStorageRoots(
           catalogLibraries.flatMap(
@@ -426,7 +461,7 @@ export function SettingsMaintenanceRulesContainer({
       }
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         { level: "ERROR" },
       );
     }
@@ -438,10 +473,15 @@ export function SettingsMaintenanceRulesContainer({
   const refreshGates = useCallback(async () => {
     try {
       const { data, error } = await client
-        .query(maintenanceInstanceGatesQuery, {}, { requestPolicy: "network-only" })
+        .query(
+          maintenanceInstanceGatesQuery,
+          {},
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       if (error) throw error;
-      const next = (data?.maintenanceInstanceGates as MaintenanceInstanceGates) ?? null;
+      const next =
+        (data?.maintenanceInstanceGates as MaintenanceInstanceGates) ?? null;
       setGates(next);
       setGatesLocked(next === null);
     } catch {
@@ -469,16 +509,24 @@ export function SettingsMaintenanceRulesContainer({
         )
         .toPromise();
       if (error) throw error;
-      setCandidates((data?.maintenanceCandidates as MaintenanceCandidate[]) ?? []);
+      setCandidates(
+        (data?.maintenanceCandidates as MaintenanceCandidate[]) ?? [],
+      );
     } catch (error) {
       setCandidates([]);
       setCandidatesError(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
       );
     } finally {
       setCandidatesLoading(false);
     }
-  }, [candidateLibraryFilter, candidateRuleFilter, candidateStateFilter, client, t]);
+  }, [
+    candidateLibraryFilter,
+    candidateRuleFilter,
+    candidateStateFilter,
+    client,
+    t,
+  ]);
 
   const refreshRuns = useCallback(async () => {
     setRunsLoading(true);
@@ -502,14 +550,17 @@ export function SettingsMaintenanceRulesContainer({
       ]);
       if (evaluation.error) throw evaluation.error;
       setEvaluationRuns(
-        (evaluation.data?.maintenanceEvaluationRuns as MaintenanceEvaluationRun[]) ?? [],
+        (evaluation.data
+          ?.maintenanceEvaluationRuns as MaintenanceEvaluationRun[]) ?? [],
       );
       if (actions.error) throw actions.error;
       setActionRuns(
         (actions.data?.maintenanceActionRuns as MaintenanceActionRun[]) ?? [],
       );
     } catch (error) {
-      setRunsError(error instanceof Error ? error.message : t("status.failedToLoad"));
+      setRunsError(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+      );
     } finally {
       setRunsLoading(false);
     }
@@ -526,11 +577,13 @@ export function SettingsMaintenanceRulesContainer({
         )
         .toPromise();
       if (error) throw error;
-      setExclusions((data?.maintenanceExclusions as MaintenanceExclusion[]) ?? []);
+      setExclusions(
+        (data?.maintenanceExclusions as MaintenanceExclusion[]) ?? [],
+      );
     } catch (error) {
       setExclusions([]);
       setExclusionsError(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
       );
     }
   }, [candidateRuleFilter, client, t]);
@@ -594,7 +647,6 @@ export function SettingsMaintenanceRulesContainer({
     pendingEditorAction,
   ]);
 
-
   const deleteRuleSet = async (record: MaintenanceRuleSetRecord) => {
     setPendingDeleteRuleSet(record);
   };
@@ -608,7 +660,10 @@ export function SettingsMaintenanceRulesContainer({
         .mutation(deleteMaintenanceRuleSetMutation, { id: record.id })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("settings.maintenanceRuleDeleted", { name: record.name }), { level: "SUCCESS" });
+      setGlobalStatus(
+        t("settings.maintenanceRuleDeleted", { name: record.name }),
+        { level: "SUCCESS" },
+      );
       if (editingRuleSetId === record.id) {
         closeEditor();
       }
@@ -619,7 +674,7 @@ export function SettingsMaintenanceRulesContainer({
       await refreshRuleSets();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -668,79 +723,95 @@ export function SettingsMaintenanceRulesContainer({
         if (matcher.error) throw matcher.error;
         const metadata = await client
           .mutation(updateMaintenanceRuleMetadataMutation, {
-            input: updateMaintenanceRuleMetadataInput(editingRuleSetId, ruleSetDraft),
+            input: updateMaintenanceRuleMetadataInput(
+              editingRuleSetId,
+              ruleSetDraft,
+            ),
           })
           .toPromise();
         if (metadata.error) throw metadata.error;
-        setGlobalStatus(t("settings.maintenanceRuleUpdated"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.maintenanceRuleUpdated"), {
+          level: "SUCCESS",
+        });
       } else {
         const { error } = await client
           .mutation(createMaintenanceRuleSetMutation, {
-            input: createMaintenanceRuleSetInput(ruleSetDraft, actionDescriptors),
+            input: createMaintenanceRuleSetInput(
+              ruleSetDraft,
+              actionDescriptors,
+            ),
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.maintenanceRuleCreated"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.maintenanceRuleCreated"), {
+          level: "SUCCESS",
+        });
       }
       closeEditor();
       await refreshRuleSets();
     } catch (error) {
-      const message = error instanceof Error ? error.message : null;
-      setValidationResult({
-        valid: false,
-        errors: [message || t("status.failedToUpdate")],
-      });
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToUpdate"),
+        t,
+      );
+      setValidationResult(graphQlRuleValidationResult(error, message));
     } finally {
       setMutatingRuleSetId(null);
     }
   };
 
-  const runPreview = useCallback(async (subject?: MaintenanceTestSubject) => {
-    if (previewSource === "draft" && !sequenceCatalogResolved) {
-      setPreviewResult(null);
-      setPreviewError(t("settings.maintenanceSequenceCatalogUnavailable"));
-      return;
-    }
-    const request = ++previewRequest.current;
-    setPreviewing(true);
-    setPreviewError(null);
-    try {
-      const { data, error } = await client
-        .mutation(previewMaintenanceRuleMutation, {
-          input: maintenancePreviewInput({
-            ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
-            draft: previewSource === "draft" ? ruleSetDraft : undefined,
-            descriptors: actionDescriptors,
-            titleIds: subject ? [subject.titleId] : undefined,
-            subjectIds: subject ? [subject.subjectId] : undefined,
-            libraryId: previewLibraryId,
-            limit: previewLimit,
-          }),
-        })
-        .toPromise();
-      if (request !== previewRequest.current) return;
-      if (error) throw error;
-      setPreviewResult(data.previewMaintenanceRule as MaintenancePreviewResult);
-    } catch (error) {
-      if (request !== previewRequest.current) return;
-      setPreviewResult(null);
-      setPreviewError(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
-      );
-    } finally {
-      if (request === previewRequest.current) setPreviewing(false);
-    }
-  }, [
-    actionDescriptors,
-    sequenceCatalogResolved,
-    client,
-    previewLibraryId,
-    previewLimit,
-    previewRuleSetId,
-    previewSource,
-    ruleSetDraft,
-    t,
-  ]);
+  const runPreview = useCallback(
+    async (subject?: MaintenanceTestSubject) => {
+      if (previewSource === "draft" && !sequenceCatalogResolved) {
+        setPreviewResult(null);
+        setPreviewError(t("settings.maintenanceSequenceCatalogUnavailable"));
+        return;
+      }
+      const request = ++previewRequest.current;
+      setPreviewing(true);
+      setPreviewError(null);
+      try {
+        const { data, error } = await client
+          .mutation(previewMaintenanceRuleMutation, {
+            input: maintenancePreviewInput({
+              ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
+              draft: previewSource === "draft" ? ruleSetDraft : undefined,
+              descriptors: actionDescriptors,
+              titleIds: subject ? [subject.titleId] : undefined,
+              subjectIds: subject ? [subject.subjectId] : undefined,
+              libraryId: previewLibraryId,
+              limit: previewLimit,
+            }),
+          })
+          .toPromise();
+        if (request !== previewRequest.current) return;
+        if (error) throw error;
+        setPreviewResult(
+          data.previewMaintenanceRule as MaintenancePreviewResult,
+        );
+      } catch (error) {
+        if (request !== previewRequest.current) return;
+        setPreviewResult(null);
+        setPreviewError(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        );
+      } finally {
+        if (request === previewRequest.current) setPreviewing(false);
+      }
+    },
+    [
+      actionDescriptors,
+      sequenceCatalogResolved,
+      client,
+      previewLibraryId,
+      previewLimit,
+      previewRuleSetId,
+      previewSource,
+      ruleSetDraft,
+      t,
+    ],
+  );
 
   // Results and sample targets belong to the matcher and library that produced
   // them. Discard late responses when the operator changes those inputs.
@@ -766,10 +837,12 @@ export function SettingsMaintenanceRulesContainer({
           })
           .toPromise();
         if (error) throw error;
-        setGlobalStatus(t("settings.maintenanceSwitchesUpdated"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.maintenanceSwitchesUpdated"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -838,7 +911,7 @@ export function SettingsMaintenanceRulesContainer({
       await refreshCandidates();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -862,13 +935,14 @@ export function SettingsMaintenanceRulesContainer({
         .toPromise();
       if (error) throw error;
       announceTrigger(
-        (data?.runMaintenanceActionHandlerNow as MaintenanceTriggerResult) ?? null,
+        (data?.runMaintenanceActionHandlerNow as MaintenanceTriggerResult) ??
+          null,
       );
       await refreshRuns();
       await refreshCandidates();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -888,8 +962,12 @@ export function SettingsMaintenanceRulesContainer({
   const excludeCandidate = useCallback((candidate: MaintenanceCandidate) => {
     setPendingExclusion({
       titleId: candidate.titleId,
-      subjectKind: candidate.subjectKind, subjectId: candidate.subjectId,
-      titleName: candidate.subjectKind === "title" ? candidate.titleName : `${candidate.titleName} · ${candidate.subjectLabel}`,
+      subjectKind: candidate.subjectKind,
+      subjectId: candidate.subjectId,
+      titleName:
+        candidate.subjectKind === "title"
+          ? candidate.titleName
+          : `${candidate.titleName} · ${candidate.subjectLabel}`,
       /// Defaults to the rule the candidate came from rather than to a global
       /// exclusion: excluding a title from every maintenance rule at once is a
       /// bigger decision than the row the operator clicked.
@@ -906,22 +984,26 @@ export function SettingsMaintenanceRulesContainer({
         .mutation(excludeMaintenanceSubjectMutation, {
           input: excludeMaintenanceSubjectInput({
             titleId: pendingExclusion.titleId,
-            subjectKind: pendingExclusion.subjectKind, subjectId: pendingExclusion.subjectId,
-            ruleSetId: maintenanceFilterArgument(pendingExclusion.ruleSetId) ?? null,
+            subjectKind: pendingExclusion.subjectKind,
+            subjectId: pendingExclusion.subjectId,
+            ruleSetId:
+              maintenanceFilterArgument(pendingExclusion.ruleSetId) ?? null,
             reason: pendingExclusion.reason,
           }),
         })
         .toPromise();
       if (error) throw error;
       setGlobalStatus(
-        t("settings.maintenanceExcluded", { title: pendingExclusion.titleName }),
+        t("settings.maintenanceExcluded", {
+          title: pendingExclusion.titleName,
+        }),
       );
       setPendingExclusion(null);
       await refreshExclusions();
       await refreshCandidates();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -946,13 +1028,15 @@ export function SettingsMaintenanceRulesContainer({
         .toPromise();
       if (error) throw error;
       setGlobalStatus(
-        t("settings.maintenanceExclusionRemoved", { title: exclusion.titleName }),
+        t("settings.maintenanceExclusionRemoved", {
+          title: exclusion.titleName,
+        }),
       );
       await refreshExclusions();
       await refreshCandidates();
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -999,7 +1083,9 @@ export function SettingsMaintenanceRulesContainer({
         previewLibraryId={previewLibraryId}
         setPreviewLibraryId={setPreviewLibraryId}
         previewLimit={previewLimit}
-        setPreviewLimit={(limit) => setPreviewLimit(clampMaintenancePreviewLimit(limit))}
+        setPreviewLimit={(limit) =>
+          setPreviewLimit(clampMaintenancePreviewLimit(limit))
+        }
         runPreview={runPreview}
         previewing={previewing}
         previewResult={previewResult}

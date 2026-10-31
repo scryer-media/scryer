@@ -8,7 +8,11 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   type SelectChrome,
   type SelectSize,
@@ -151,7 +155,9 @@ export function FilterableSelect({
               <CommandItem
                 key={option.value}
                 id={
-                  optionIdPrefix ? `${optionIdPrefix}-${option.value}` : undefined
+                  optionIdPrefix
+                    ? `${optionIdPrefix}-${option.value}`
+                    : undefined
                 }
                 // Both halves are searchable: operators look for a tracker by
                 // name, but paste an id at least as often.

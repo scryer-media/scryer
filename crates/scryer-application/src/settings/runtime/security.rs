@@ -243,7 +243,7 @@ impl AppUseCase {
             .read_setting_json_value::<Option<Vec<String>>>(TRUSTED_PROXIES_KEY, None)
             .await?
             .flatten();
-        let policy = TrustedProxyPolicy::new(environment, saved).map_err(AppError::Validation)?;
+        let policy = TrustedProxyPolicy::new(environment, saved).map_err(|message| AppError::validation_refused(crate::error_reasons::settings::TRUSTED_PROXY_POLICY_INVALID, message))?;
         self.runtime.security.trusted_proxies.replace(policy);
         Ok(())
     }
@@ -403,9 +403,7 @@ impl AppUseCase {
             .session_duration_days
             .unwrap_or(current.session_duration_days);
         if !(1..=365).contains(&session_duration_days) {
-            return Err(AppError::Validation(
-                "session duration must be between 1 and 365 days".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SESSION_DURATION_OUT_OF_RANGE, "session duration must be between 1 and 365 days"));
         }
         let api_keys_restrict_to_system_settings_users = input
             .api_keys_restrict_to_system_settings_users
@@ -415,7 +413,7 @@ impl AppUseCase {
             .unwrap_or(current.totp_require_emby_login);
 
         if input.password_min_length < PASSWORD_MIN_LENGTH_MIN as i32 {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::settings::PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE, format!(
                 "password minimum length must be at least {PASSWORD_MIN_LENGTH_MIN}"
             )));
         }
@@ -440,15 +438,11 @@ impl AppUseCase {
                 .existing_default_admin_uses_bootstrap_password()
                 .await?
             {
-                return Err(AppError::Validation(
-                    "change the default admin password before enabling form login".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::settings::CHANGE_DEFAULT_ADMIN_PASSWORD_BEFORE_ENABLING_FORM_LOGIN, "change the default admin password before enabling form login"));
             }
             if !self.usable_admin_login_exists().await? {
-                return Err(AppError::Validation(
-                    "configure an enabled full administrator login before enabling form login"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::settings::CONFIGURE_ENABLED_FULL_ADMINISTRATOR_LOGIN_BEFORE_ENABLING_FORM_LOGIN, "configure an enabled full administrator login before enabling form login"
+                        ));
             }
         }
 
@@ -459,7 +453,7 @@ impl AppUseCase {
                 .default_admin_disabled
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
-                return Err(AppError::Validation("form login cannot be turned off while SCRYER_DISABLE_DEFAULT_ADMIN is true, because running without login uses the default admin account; remove that setting and restart first".into()));
+                return Err(AppError::validation_refused(crate::error_reasons::settings::FORM_LOGIN_REQUIRED_DEFAULT_ADMIN_DISABLED, "form login cannot be turned off while SCRYER_DISABLE_DEFAULT_ADMIN is true, because running without login uses the default admin account; remove that setting and restart first"));
             }
             self.find_or_create_default_user().await?;
         }
@@ -575,9 +569,7 @@ impl AppUseCase {
         use crate::rate_limit_proxy_policy::{TRUSTED_PROXIES_KEY, TrustedProxyPolicy};
         let _guard = self.runtime.security.service_settings_lock.lock().await;
         if input.reset_trusted_proxy_ips && input.trusted_proxy_ips.is_some() {
-            return Err(AppError::Validation(
-                "cannot save and reset trusted proxies together".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::CANNOT_SAVE_RESET_TRUSTED_PROXIES_TOGETHER, "cannot save and reset trusted proxies together"));
         }
         let policy = if input.reset_trusted_proxy_ips || input.trusted_proxy_ips.is_some() {
             let saved = input.trusted_proxy_ips.map(|values| {
@@ -596,7 +588,7 @@ impl AppUseCase {
                         .clone(),
                     saved,
                 )
-                .map_err(AppError::Validation)?,
+                .map_err(|message| AppError::validation_refused(crate::error_reasons::settings::TRUSTED_PROXY_POLICY_INVALID, message))?,
             )
         } else {
             None

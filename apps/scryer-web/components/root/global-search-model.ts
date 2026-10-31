@@ -73,10 +73,12 @@ export function normalizeGlobalSearchFilterSelection(
   availableTabs?: readonly GlobalSearchTab[],
 ): GlobalSearchFilterKey[] {
   const availableKeys = new Set<GlobalSearchFilterKey>(
-    (availableTabs?.map((tab) => tab.key) ?? [
-      "all",
-      ...GLOBAL_SEARCH_FILTER_ORDER,
-    ]).filter(isGlobalSearchFilterKey),
+    (
+      availableTabs?.map((tab) => tab.key) ?? [
+        "all",
+        ...GLOBAL_SEARCH_FILTER_ORDER,
+      ]
+    ).filter(isGlobalSearchFilterKey),
   );
   const selected = new Set(
     selectedFilters.filter((key) => availableKeys.has(key)),

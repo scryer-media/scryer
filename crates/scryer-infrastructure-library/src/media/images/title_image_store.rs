@@ -410,7 +410,12 @@ async fn upsert_title_image_source_result_tx(
         &[SqlArg::Text(title_id.to_string())],
     )
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?
+    .ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::TITLE_NOT_FOUND,
+            format!("title {title_id}"),
+        )
+    })?
     .opt_text("source_url")?;
     let Some(current_source) = current_source else {
         return Ok(None);
@@ -623,7 +628,10 @@ async fn update_title_local_image_path_tx(
     )
     .await?;
     if rows == 0 {
-        return Err(AppError::NotFound(format!("title {title_id}")));
+        return Err(AppError::not_found_reason(
+            crate::error_reasons::TITLE_NOT_FOUND,
+            format!("title {title_id}"),
+        ));
     }
     Ok(())
 }

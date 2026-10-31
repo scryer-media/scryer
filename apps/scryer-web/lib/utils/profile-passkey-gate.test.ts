@@ -12,10 +12,16 @@ const enabled = {
 
 test("Passkey loading waits for enabled form authentication", () => {
   assert.equal(shouldLoadProfilePasskeys(enabled), true);
-  assert.equal(shouldLoadProfilePasskeys({ ...enabled, authLoading: true }), false);
+  assert.equal(
+    shouldLoadProfilePasskeys({ ...enabled, authLoading: true }),
+    false,
+  );
   assert.equal(
     shouldLoadProfilePasskeys({ ...enabled, effectiveFormLoginEnabled: false }),
     false,
   );
-  assert.equal(shouldLoadProfilePasskeys({ ...enabled, passkeyEnabled: false }), false);
+  assert.equal(
+    shouldLoadProfilePasskeys({ ...enabled, passkeyEnabled: false }),
+    false,
+  );
 });

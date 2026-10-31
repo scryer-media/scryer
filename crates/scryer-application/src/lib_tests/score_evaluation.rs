@@ -207,7 +207,7 @@ async fn score_evaluation_selection_limits_and_cancellation_are_owner_scoped() {
     other.id = "other-operator".into();
     assert!(matches!(
         app.cancel_file_score_refresh(&other, &run.id).await,
-        Err(AppError::Unauthorized(_))
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
     ));
     assert!(app.cancel_file_score_refresh(&user, &run.id).await.unwrap());
     assert_eq!(terminal(&app, &run.id).await.status, JobRunStatus::Warning);

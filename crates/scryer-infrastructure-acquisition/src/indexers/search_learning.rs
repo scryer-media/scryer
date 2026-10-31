@@ -4,18 +4,23 @@ use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use scryer_application::{
     AppError, AppResult, BackgroundIndexerSearchStrategyState, HashDomain,
-    IndexerSearchCandidateWrite, IndexerSearchLearningKey, IndexerSearchLearningRecord,
-    IndexerSearchLearningRepository, IndexerSearchRunWrite, NormalizedIndexerSearchCandidate,
-    ReusableIndexerSearchCandidate, ReusableIndexerSearchCandidatePage,
-    ReusableIndexerSearchStrategy, SEARCH_STRATEGY_CONTAINED, SEARCH_STRATEGY_CONVERGED,
-    blake3_identity_hex,
+    IndexerFacetLearningPolicy, IndexerFacetLearningState, IndexerFacetSearchOutcome,
+    IndexerFacetTransition, IndexerSearchCandidateWrite, IndexerSearchLearningBatch,
+    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerSearchListing, IndexerSearchListingClaim, IndexerSearchListingReader,
+    IndexerSearchListingScope, IndexerSearchListingStrategy, IndexerSearchRunWrite,
+    NormalizedIndexerSearchCandidate, ReusableIndexerSearchCandidate,
+    ReusableIndexerSearchCandidatePage, ReusableIndexerSearchStrategy, SEARCH_STRATEGY_CONTAINED,
+    SEARCH_STRATEGY_CONVERGED, blake3_identity_hex,
 };
 use scryer_infrastructure_crypto::{
     EncryptionKey,
     config::{current_encryption_key, decrypt_optional_value, encrypt_optional_value},
 };
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+};
 
 /// Strategy-key prefix of title-text learning rows. One row exists per
 /// distinct query text (`v3:freetext:<query digest>`), so a localized name and
@@ -93,8 +98,14 @@ impl IndexerSearchLearningStore {
         let key = current_encryption_key(&self.encryption_key)?;
         let mut order = Vec::with_capacity(rows.len());
         let mut candidates = HashMap::with_capacity(rows.len());
+        let mut reuse_deadlines = HashMap::with_capacity(rows.len());
         for row in &rows {
             let id = row.text("id")?;
+            reuse_deadlines.insert(
+                id.clone(),
+                row.timestamp("reusable_until")?
+                    .min(row.timestamp("expires_at")?),
+            );
             order.push(id.clone());
             candidates.insert(
                 id,
@@ -189,10 +200,48 @@ impl IndexerSearchLearningStore {
 
         Ok(order
             .into_iter()
-            .filter_map(|id| candidates.remove(&id))
-            .map(|normalized| ReusableIndexerSearchCandidate { normalized })
+            .filter_map(|id| {
+                candidates
+                    .remove(&id)
+                    .map(|normalized| ReusableIndexerSearchCandidate {
+                        normalized,
+                        reusable_until: reuse_deadlines[&id],
+                    })
+            })
             .collect())
     }
+}
+
+/// The arguments naming one title's listings on one indexer, in column order
+/// `indexer_id, indexer_fingerprint, title_id, facet`.
+fn listing_scope_args(scope: &IndexerSearchListingScope) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(scope.indexer_id.clone()),
+        SqlArg::Text(scope.indexer_fingerprint.clone()),
+        SqlArg::Text(scope.title_id.clone()),
+        SqlArg::Text(scope.facet.clone()),
+    ]
+}
+
+/// Records a listing reader from arguments in column order: the listing
+/// scope, then `scope_key, query_signature, strategy_family,
+/// first_page_fingerprint, observed_at`.
+async fn upsert_listing_reader(tx: &mut SqlTx<'_>, args: &[SqlArg]) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO indexer_search_listing_readers (
+            indexer_id, indexer_fingerprint, title_id, facet, scope_key, query_signature,
+            strategy_family, first_page_fingerprint, observed_at
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})
+         ON CONFLICT(indexer_id, indexer_fingerprint, title_id, facet, scope_key, query_signature)
+         DO UPDATE SET
+            strategy_family = excluded.strategy_family,
+            first_page_fingerprint = excluded.first_page_fingerprint,
+            observed_at = excluded.observed_at",
+        args,
+    )
+    .await?;
+    Ok(())
 }
 
 #[async_trait]
@@ -220,142 +269,108 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         rows.iter().map(row_to_learning_record).collect()
     }
 
+    async fn list_for_title_by_indexer(
+        &self,
+        indexer_ids: &[String],
+        title_id: &str,
+        facet: &str,
+    ) -> AppResult<HashMap<String, Vec<IndexerSearchLearningRecord>>> {
+        let mut records = indexer_ids
+            .iter()
+            .map(|indexer_id| (indexer_id.clone(), Vec::new()))
+            .collect::<HashMap<_, _>>();
+        if indexer_ids.is_empty() {
+            return Ok(records);
+        }
+        let placeholders = std::iter::repeat_n("{}", indexer_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = vec![
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(facet.to_string()),
+        ];
+        args.extend(indexer_ids.iter().cloned().map(SqlArg::Text));
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT indexer_id, title_id, facet, strategy_key, attempts, empty_successes,
+                        usable_successes, last_attempt_at, last_usable_at, suppressed, updated_at
+                   FROM indexer_search_learning
+                  WHERE title_id = {{}} AND facet = {{}} AND indexer_id IN ({placeholders})"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &rows {
+            let record = row_to_learning_record(row)?;
+            records
+                .entry(record.key.indexer_id.clone())
+                .or_default()
+                .push(record);
+        }
+        Ok(records)
+    }
+
+    async fn record_learning_batch(
+        &self,
+        batch: &IndexerSearchLearningBatch,
+    ) -> AppResult<Vec<IndexerFacetTransition>> {
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        let batch = batch.clone();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_indexer_search_learning_batch",
+            move |tx| {
+                let batch = batch.clone();
+                Box::pin(async move {
+                    for (strategy_key, usable_hits) in &batch.strategy_outcomes {
+                        let key = IndexerSearchLearningKey {
+                            indexer_id: batch.indexer_id.clone(),
+                            title_id: batch.title_id.clone(),
+                            facet: batch.facet.clone(),
+                            strategy_key: strategy_key.clone(),
+                        };
+                        record_learning_outcome_in_tx(tx, &key, *usable_hits).await?;
+                    }
+                    for strategy_key in &batch.suppress {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            SET_LEARNING_SUPPRESSED_SQL,
+                            &[
+                                SqlArg::Bool(true),
+                                SqlArg::Timestamp(Utc::now()),
+                                SqlArg::Text(batch.indexer_id.clone()),
+                                SqlArg::Text(batch.title_id.clone()),
+                                SqlArg::Text(batch.facet.clone()),
+                                SqlArg::Text(strategy_key.clone()),
+                            ],
+                        )
+                        .await?;
+                    }
+                    apply_facet_outcomes_in_tx(tx, &batch).await
+                })
+            },
+        )
+        .await
+    }
+
     async fn record_outcome(
         &self,
         key: &IndexerSearchLearningKey,
         usable_hits: u32,
     ) -> AppResult<IndexerSearchLearningRecord> {
-        match &self.datastore {
-            StoreDatastore::Sqlite { .. } => {
-                let key = key.clone();
-                SqlRuntime::run_serialized_sqlite(
-                    &self.datastore,
-                    "record_indexer_search_learning_outcome",
-                    move |pool| {
-                        let key = key.clone();
-                        async move {
-                            let mut tx = pool.begin().await.map_err(repo_err)?;
-                            sqlx::query(
-                                "INSERT INTO indexer_search_learning (
-                                    indexer_id, title_id, facet, strategy_key, attempts,
-                                    empty_successes, usable_successes, last_attempt_at,
-                                    last_usable_at, suppressed, updated_at
-                                 )
-                                 VALUES (
-                                    ?, ?, ?, ?, 1,
-                                    CASE WHEN ? = 0 THEN 1 ELSE 0 END,
-                                    CASE WHEN ? > 0 THEN 1 ELSE 0 END,
-                                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                                    CASE WHEN ? > 0 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END,
-                                    0,
-                                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                                 )
-                                 ON CONFLICT(indexer_id, title_id, facet, strategy_key)
-                                 DO UPDATE SET
-                                    attempts = indexer_search_learning.attempts + 1,
-                                    empty_successes = indexer_search_learning.empty_successes
-                                        + CASE WHEN excluded.usable_successes = 0 THEN 1 ELSE 0 END,
-                                    usable_successes = indexer_search_learning.usable_successes
-                                        + CASE WHEN excluded.usable_successes > 0 THEN 1 ELSE 0 END,
-                                    last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                                    last_usable_at = CASE
-                                        WHEN excluded.usable_successes > 0 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                                        ELSE indexer_search_learning.last_usable_at
-                                    END,
-                                    suppressed = CASE
-                                        WHEN excluded.usable_successes > 0 THEN 0
-                                        ELSE indexer_search_learning.suppressed
-                                    END,
-                                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-                            )
-                            .bind(&key.indexer_id)
-                            .bind(&key.title_id)
-                            .bind(&key.facet)
-                            .bind(&key.strategy_key)
-                            .bind(usable_hits as i64)
-                            .bind(usable_hits as i64)
-                            .bind(usable_hits as i64)
-                            .execute(&mut *tx)
-                            .await
-                            .map_err(repo_err)?;
-                            if key.strategy_key.starts_with(FREETEXT_LEARNING_KEY_PREFIX) {
-                                sqlx::query(SQLITE_EVICT_FREETEXT_LEARNING_SQL)
-                                    .bind(&key.indexer_id)
-                                    .bind(&key.title_id)
-                                    .bind(&key.facet)
-                                    .bind(&key.indexer_id)
-                                    .bind(&key.title_id)
-                                    .bind(&key.facet)
-                                    .bind(&key.strategy_key)
-                                    .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
-                                    .execute(&mut *tx)
-                                    .await
-                                    .map_err(repo_err)?;
-                            }
-                            tx.commit().await.map_err(repo_err)?;
-                            Ok(())
-                        }
-                    },
-                )
-                .await?;
-            }
-            StoreDatastore::Postgres { pool } => {
-                let mut tx = pool.begin().await.map_err(repo_err)?;
-                sqlx::query(
-                    "INSERT INTO indexer_search_learning (
-                        indexer_id, title_id, facet, strategy_key, attempts,
-                        empty_successes, usable_successes, last_attempt_at,
-                        last_usable_at, suppressed, updated_at
-                     )
-                     VALUES (
-                        $1, $2, $3, $4, 1,
-                        CASE WHEN $5 = 0 THEN 1 ELSE 0 END,
-                        CASE WHEN $5 > 0 THEN 1 ELSE 0 END,
-                        NOW(),
-                        CASE WHEN $5 > 0 THEN NOW() ELSE NULL END,
-                        FALSE,
-                        NOW()
-                     )
-                     ON CONFLICT(indexer_id, title_id, facet, strategy_key)
-                     DO UPDATE SET
-                        attempts = indexer_search_learning.attempts + 1,
-                        empty_successes = indexer_search_learning.empty_successes
-                            + CASE WHEN EXCLUDED.usable_successes = 0 THEN 1 ELSE 0 END,
-                        usable_successes = indexer_search_learning.usable_successes
-                            + CASE WHEN EXCLUDED.usable_successes > 0 THEN 1 ELSE 0 END,
-                        last_attempt_at = NOW(),
-                        last_usable_at = CASE
-                            WHEN EXCLUDED.usable_successes > 0 THEN NOW()
-                            ELSE indexer_search_learning.last_usable_at
-                        END,
-                        suppressed = CASE
-                            WHEN EXCLUDED.usable_successes > 0 THEN FALSE
-                            ELSE indexer_search_learning.suppressed
-                        END,
-                        updated_at = NOW()",
-                )
-                .bind(&key.indexer_id)
-                .bind(&key.title_id)
-                .bind(&key.facet)
-                .bind(&key.strategy_key)
-                .bind(usable_hits as i64)
-                .execute(&mut *tx)
-                .await
-                .map_err(repo_err)?;
-                if key.strategy_key.starts_with(FREETEXT_LEARNING_KEY_PREFIX) {
-                    sqlx::query(POSTGRES_EVICT_FREETEXT_LEARNING_SQL)
-                        .bind(&key.indexer_id)
-                        .bind(&key.title_id)
-                        .bind(&key.facet)
-                        .bind(&key.strategy_key)
-                        .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(repo_err)?;
-                }
-                tx.commit().await.map_err(repo_err)?;
-            }
-        }
+        let outcome_key = key.clone();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_indexer_search_learning_outcome",
+            move |tx| {
+                let key = outcome_key.clone();
+                Box::pin(async move { record_learning_outcome_in_tx(tx, &key, usable_hits).await })
+            },
+        )
+        .await?;
 
         self.get_record(key).await?.ok_or_else(|| {
             AppError::Repository("indexer search learning outcome was not persisted".to_string())
@@ -627,6 +642,9 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                                 .join(", ")
                         )
                     };
+                    // A run that reads a shared listing keeps every result:
+                    // other scopes of the title are scored from it, and what
+                    // this scope rejected may be theirs.
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         &format!(
@@ -637,6 +655,10 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                                       FROM indexer_search_candidate_sources s
                                       JOIN indexer_search_candidates c ON c.id = s.candidate_id
                                      WHERE 1 = 1{rejected_clause}
+                                )
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM indexer_search_listing_runs lr
+                                     WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
                                 )"
                         ),
                         &args,
@@ -698,7 +720,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     s.response_tmdb_id, s.response_imdb_id, s.season, s.episode,
                     s.absolute_episode, s.release_group, s.provider_source, c.info_hash,
                     s.seeders, s.peers, s.download_volume_factor,
-                    s.upload_volume_factor, s.protected
+                    s.upload_volume_factor, s.protected, s.reusable_until, s.expires_at
              FROM indexer_search_candidate_sources s
              JOIN indexer_search_candidates c ON c.id = s.candidate_id
              JOIN indexer_search_run_candidate_sources rc ON rc.source_id = s.id
@@ -725,8 +747,14 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         let key = current_encryption_key(&self.encryption_key)?;
         let mut order = Vec::with_capacity(rows.len());
         let mut candidates = HashMap::with_capacity(rows.len());
+        let mut reuse_deadlines = HashMap::with_capacity(rows.len());
         for row in &rows {
             let id = row.text("id")?;
+            reuse_deadlines.insert(
+                id.clone(),
+                row.timestamp("reusable_until")?
+                    .min(row.timestamp("expires_at")?),
+            );
             order.push(id.clone());
             candidates.insert(
                 id,
@@ -820,8 +848,14 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
 
         Ok(order
             .into_iter()
-            .filter_map(|id| candidates.remove(&id))
-            .map(|normalized| ReusableIndexerSearchCandidate { normalized })
+            .filter_map(|id| {
+                candidates
+                    .remove(&id)
+                    .map(|normalized| ReusableIndexerSearchCandidate {
+                        normalized,
+                        reusable_until: reuse_deadlines[&id],
+                    })
+            })
             .collect())
     }
 
@@ -853,7 +887,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     s.response_tmdb_id, s.response_imdb_id, s.season, s.episode,
                     s.absolute_episode, s.release_group, s.provider_source, c.info_hash,
                     s.seeders, s.peers, s.download_volume_factor,
-                    s.upload_volume_factor, s.protected
+                    s.upload_volume_factor, s.protected, s.reusable_until, s.expires_at
              FROM indexer_search_candidate_sources s
              JOIN indexer_search_candidates c ON c.id = s.candidate_id
              WHERE s.id IN (
@@ -1071,6 +1105,445 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         Ok(hold_until)
     }
 
+    async fn list_search_listings(
+        &self,
+        scope: &IndexerSearchListingScope,
+        fresh_after: DateTime<Utc>,
+    ) -> AppResult<Vec<IndexerSearchListing>> {
+        let args = || {
+            let mut args = listing_scope_args(scope);
+            args.push(SqlArg::Timestamp(fresh_after));
+            args
+        };
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT first_page_fingerprint, owner_scope_key, owner_query_signature,
+                    owner_strategy_family, page_cursor, finished, chain_started_at, advanced_at
+               FROM indexer_search_listings
+              WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {} AND facet = {}
+                AND advanced_at >= {}
+              ORDER BY chain_started_at ASC, first_page_fingerprint ASC",
+            &args(),
+        )
+        .await?;
+        let mut listings = Vec::with_capacity(rows.len());
+        for row in &rows {
+            listings.push(IndexerSearchListing {
+                first_page_fingerprint: row.text("first_page_fingerprint")?,
+                owner: IndexerSearchListingStrategy {
+                    scope_key: row.text("owner_scope_key")?,
+                    query_signature: row.text("owner_query_signature")?,
+                },
+                owner_strategy_family: row.text("owner_strategy_family")?,
+                page_cursor: row.opt_text("page_cursor")?,
+                finished: row.bool("finished")?,
+                chain_started_at: row.timestamp("chain_started_at")?,
+                advanced_at: row.timestamp("advanced_at")?,
+                readers: Vec::new(),
+                run_ids: Vec::new(),
+            });
+        }
+        if listings.is_empty() {
+            return Ok(listings);
+        }
+        let readers = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT scope_key, query_signature, strategy_family, first_page_fingerprint, observed_at
+               FROM indexer_search_listing_readers
+              WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {} AND facet = {}
+                AND observed_at >= {}
+              ORDER BY observed_at ASC, scope_key ASC, query_signature ASC",
+            &args(),
+        )
+        .await?;
+        for row in &readers {
+            let fingerprint = row.text("first_page_fingerprint")?;
+            let Some(listing) = listings
+                .iter_mut()
+                .find(|listing| listing.first_page_fingerprint == fingerprint)
+            else {
+                continue;
+            };
+            listing.readers.push(IndexerSearchListingReader {
+                strategy: IndexerSearchListingStrategy {
+                    scope_key: row.text("scope_key")?,
+                    query_signature: row.text("query_signature")?,
+                },
+                strategy_family: row.text("strategy_family")?,
+                observed_at: row.timestamp("observed_at")?,
+            });
+        }
+        let runs = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT lr.run_id, lr.first_page_fingerprint
+               FROM indexer_search_listing_runs lr
+               JOIN indexer_search_listings l
+                 ON l.indexer_id = lr.indexer_id
+                AND l.indexer_fingerprint = lr.indexer_fingerprint
+                AND l.title_id = lr.title_id
+                AND l.facet = lr.facet
+                AND l.first_page_fingerprint = lr.first_page_fingerprint
+              WHERE l.indexer_id = {} AND l.indexer_fingerprint = {} AND l.title_id = {}
+                AND l.facet = {}
+                AND l.advanced_at >= {}
+                AND lr.created_at >= l.chain_started_at
+              ORDER BY lr.created_at ASC, lr.run_id ASC",
+            &args(),
+        )
+        .await?;
+        for row in &runs {
+            let fingerprint = row.text("first_page_fingerprint")?;
+            if let Some(listing) = listings
+                .iter_mut()
+                .find(|listing| listing.first_page_fingerprint == fingerprint)
+            {
+                listing.run_ids.push(row.text("run_id")?);
+            }
+        }
+        Ok(listings)
+    }
+
+    async fn claim_search_listing(
+        &self,
+        scope: &IndexerSearchListingScope,
+        first_page_fingerprint: &str,
+        claimant: &IndexerSearchListingStrategy,
+        strategy_family: &str,
+        fresh_after: DateTime<Utc>,
+        idle_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<IndexerSearchListingClaim> {
+        let scope = scope.clone();
+        let fingerprint = first_page_fingerprint.to_string();
+        let claimant = claimant.clone();
+        let family = strategy_family.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "claim_indexer_search_listing", move |tx| {
+            let scope = scope.clone();
+            let fingerprint = fingerprint.clone();
+            let claimant = claimant.clone();
+            let family = family.clone();
+            Box::pin(async move {
+                let listing_args = || {
+                    let mut args = listing_scope_args(&scope);
+                    args.push(SqlArg::Text(fingerprint.clone()));
+                    args
+                };
+                let existing = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT owner_scope_key, owner_query_signature, page_cursor, finished,
+                            advanced_at
+                       FROM indexer_search_listings
+                      WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {}
+                        AND facet = {} AND first_page_fingerprint = {}",
+                    &listing_args(),
+                )
+                .await?;
+                let shared = match existing {
+                    Some(row) => {
+                        let owner = IndexerSearchListingStrategy {
+                            scope_key: row.text("owner_scope_key")?,
+                            query_signature: row.text("owner_query_signature")?,
+                        };
+                        let page_cursor = row.opt_text("page_cursor")?;
+                        let finished = row.bool("finished")?;
+                        let advanced_at = row.timestamp("advanced_at")?;
+                        // A chain that claimed its first page and recorded
+                        // nothing before going idle was abandoned.
+                        let abandoned =
+                            page_cursor.is_none() && !finished && advanced_at < idle_before;
+                        (owner != claimant && advanced_at >= fresh_after && !abandoned)
+                            .then_some((owner, !finished))
+                    }
+                    None => None,
+                };
+                let mut strategy_args = listing_scope_args(&scope);
+                strategy_args.push(SqlArg::Text(claimant.scope_key.clone()));
+                strategy_args.push(SqlArg::Text(claimant.query_signature.clone()));
+                let claim = match shared {
+                    Some((owner, listing_open)) => {
+                        let mut args = listing_scope_args(&scope);
+                        args.extend([
+                            SqlArg::Text(claimant.scope_key.clone()),
+                            SqlArg::Text(claimant.query_signature.clone()),
+                            SqlArg::Text(family.clone()),
+                            SqlArg::Text(fingerprint.clone()),
+                            SqlArg::Timestamp(now),
+                        ]);
+                        upsert_listing_reader(tx, &args).await?;
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "DELETE FROM indexer_search_listings
+                              WHERE indexer_id = {} AND indexer_fingerprint = {}
+                                AND title_id = {} AND facet = {}
+                                AND owner_scope_key = {} AND owner_query_signature = {}",
+                            &strategy_args,
+                        )
+                        .await?;
+                        IndexerSearchListingClaim::SameListing {
+                            owner,
+                            listing_open,
+                        }
+                    }
+                    None => {
+                        let mut args = listing_args();
+                        args.extend([
+                            SqlArg::Text(claimant.scope_key.clone()),
+                            SqlArg::Text(claimant.query_signature.clone()),
+                            SqlArg::Text(family.clone()),
+                            SqlArg::Timestamp(now),
+                            SqlArg::Timestamp(now),
+                        ]);
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO indexer_search_listings (
+                                indexer_id, indexer_fingerprint, title_id, facet,
+                                first_page_fingerprint, owner_scope_key, owner_query_signature,
+                                owner_strategy_family, page_cursor, finished, chain_started_at,
+                                advanced_at
+                             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, NULL, FALSE, {}, {})
+                             ON CONFLICT(indexer_id, indexer_fingerprint, title_id, facet,
+                                         first_page_fingerprint) DO UPDATE SET
+                                owner_scope_key = excluded.owner_scope_key,
+                                owner_query_signature = excluded.owner_query_signature,
+                                owner_strategy_family = excluded.owner_strategy_family,
+                                page_cursor = NULL,
+                                finished = FALSE,
+                                chain_started_at = excluded.chain_started_at,
+                                advanced_at = excluded.advanced_at",
+                            &args,
+                        )
+                        .await?;
+                        // A listing the claimant owned under another first
+                        // page is no longer what the indexer answers it.
+                        let mut stale_args = strategy_args.clone();
+                        stale_args.push(SqlArg::Text(fingerprint.clone()));
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "DELETE FROM indexer_search_listings
+                              WHERE indexer_id = {} AND indexer_fingerprint = {}
+                                AND title_id = {} AND facet = {}
+                                AND owner_scope_key = {} AND owner_query_signature = {}
+                                AND first_page_fingerprint <> {}",
+                            &stale_args,
+                        )
+                        .await?;
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "DELETE FROM indexer_search_listing_readers
+                              WHERE indexer_id = {} AND indexer_fingerprint = {}
+                                AND title_id = {} AND facet = {}
+                                AND scope_key = {} AND query_signature = {}",
+                            &strategy_args,
+                        )
+                        .await?;
+                        IndexerSearchListingClaim::Owner
+                    }
+                };
+                Ok(claim)
+            })
+        })
+        .await
+    }
+
+    async fn join_search_listing(
+        &self,
+        scope: &IndexerSearchListingScope,
+        first_page_fingerprint: &str,
+        reader: &IndexerSearchListingStrategy,
+        strategy_family: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut args = listing_scope_args(scope);
+        args.extend([
+            SqlArg::Text(reader.scope_key.clone()),
+            SqlArg::Text(reader.query_signature.clone()),
+            SqlArg::Text(strategy_family.to_string()),
+            SqlArg::Text(first_page_fingerprint.to_string()),
+            SqlArg::Timestamp(now),
+        ]);
+        SqlRuntime::run_in_transaction(&self.datastore, "join_indexer_search_listing", move |tx| {
+            let args = args.clone();
+            Box::pin(async move { upsert_listing_reader(tx, &args).await })
+        })
+        .await
+    }
+
+    async fn link_search_listing_run(
+        &self,
+        scope: &IndexerSearchListingScope,
+        first_page_fingerprint: &str,
+        owner: &IndexerSearchListingStrategy,
+        run_id: &str,
+        next_cursor: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let scope = scope.clone();
+        let fingerprint = first_page_fingerprint.to_string();
+        let owner = owner.clone();
+        let run_id = run_id.to_string();
+        let next_cursor = next_cursor.map(str::to_string);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "link_indexer_search_listing_run",
+            move |tx| {
+                let scope = scope.clone();
+                let fingerprint = fingerprint.clone();
+                let owner = owner.clone();
+                let run_id = run_id.clone();
+                let next_cursor = next_cursor.clone();
+                Box::pin(async move {
+                    let mut args = vec![
+                        SqlArg::OptText(next_cursor.clone()),
+                        SqlArg::Bool(next_cursor.is_none()),
+                        SqlArg::Timestamp(now),
+                    ];
+                    args.extend(listing_scope_args(&scope));
+                    args.extend([
+                        SqlArg::Text(fingerprint.clone()),
+                        SqlArg::Text(owner.scope_key.clone()),
+                        SqlArg::Text(owner.query_signature.clone()),
+                    ]);
+                    let advanced = SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE indexer_search_listings
+                        SET page_cursor = {}, finished = {}, advanced_at = {}
+                      WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {}
+                        AND facet = {} AND first_page_fingerprint = {}
+                        AND owner_scope_key = {} AND owner_query_signature = {}",
+                        &args,
+                    )
+                    .await?;
+                    if advanced == 0 {
+                        return Ok(false);
+                    }
+                    let mut args = vec![SqlArg::Text(run_id.clone())];
+                    args.extend(listing_scope_args(&scope));
+                    args.extend([SqlArg::Text(fingerprint.clone()), SqlArg::Timestamp(now)]);
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO indexer_search_listing_runs (
+                        run_id, indexer_id, indexer_fingerprint, title_id, facet,
+                        first_page_fingerprint, created_at
+                     ) VALUES ({}, {}, {}, {}, {}, {}, {})
+                     ON CONFLICT(run_id) DO NOTHING",
+                        &args,
+                    )
+                    .await?;
+                    Ok(true)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn adopt_search_listing(
+        &self,
+        scope: &IndexerSearchListingScope,
+        first_page_fingerprint: &str,
+        previous_owner: &IndexerSearchListingStrategy,
+        adopter: &IndexerSearchListingStrategy,
+        expected_cursor: &str,
+        idle_before: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let scope = scope.clone();
+        let fingerprint = first_page_fingerprint.to_string();
+        let previous_owner = previous_owner.clone();
+        let adopter = adopter.clone();
+        let expected_cursor = expected_cursor.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "adopt_indexer_search_listing", move |tx| {
+            let scope = scope.clone();
+            let fingerprint = fingerprint.clone();
+            let previous_owner = previous_owner.clone();
+            let adopter = adopter.clone();
+            let expected_cursor = expected_cursor.clone();
+            Box::pin(async move {
+                let mut chain_args = listing_scope_args(&scope);
+                chain_args.extend([
+                    SqlArg::Text(fingerprint.clone()),
+                    SqlArg::Text(previous_owner.scope_key.clone()),
+                    SqlArg::Text(previous_owner.query_signature.clone()),
+                    SqlArg::Text(expected_cursor.clone()),
+                    SqlArg::Bool(false),
+                    SqlArg::Timestamp(idle_before),
+                ]);
+                const IDLE_CHAIN: &str = "indexer_id = {} AND indexer_fingerprint = {}
+                    AND title_id = {} AND facet = {} AND first_page_fingerprint = {}
+                    AND owner_scope_key = {} AND owner_query_signature = {}
+                    AND page_cursor = {} AND finished = {} AND advanced_at < {}";
+                let Some(row) = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    &format!(
+                        "SELECT owner_strategy_family FROM indexer_search_listings WHERE {IDLE_CHAIN}"
+                    ),
+                    &chain_args,
+                )
+                .await?
+                else {
+                    return Ok(false);
+                };
+                let previous_family = row.text("owner_strategy_family")?;
+                let mut adopter_args = listing_scope_args(&scope);
+                adopter_args.extend([
+                    SqlArg::Text(adopter.scope_key.clone()),
+                    SqlArg::Text(adopter.query_signature.clone()),
+                ]);
+                let adopter_family = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT strategy_family FROM indexer_search_listing_readers
+                      WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {}
+                        AND facet = {} AND scope_key = {} AND query_signature = {}",
+                    &adopter_args,
+                )
+                .await?
+                .map(|row| row.text("strategy_family"))
+                .transpose()?
+                .unwrap_or_else(|| previous_family.clone());
+                let mut args = vec![
+                    SqlArg::Text(adopter.scope_key.clone()),
+                    SqlArg::Text(adopter.query_signature.clone()),
+                    SqlArg::Text(adopter_family),
+                    SqlArg::Timestamp(now),
+                ];
+                args.extend(chain_args.iter().cloned());
+                let adopted = SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    &format!(
+                        "UPDATE indexer_search_listings
+                            SET owner_scope_key = {{}}, owner_query_signature = {{}},
+                                owner_strategy_family = {{}}, advanced_at = {{}}
+                          WHERE {IDLE_CHAIN}"
+                    ),
+                    &args,
+                )
+                .await?;
+                if adopted == 0 {
+                    return Ok(false);
+                }
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM indexer_search_listing_readers
+                      WHERE indexer_id = {} AND indexer_fingerprint = {} AND title_id = {}
+                        AND facet = {} AND scope_key = {} AND query_signature = {}",
+                    &adopter_args,
+                )
+                .await?;
+                // The strategy that left the chain reads it from here on.
+                let mut args = listing_scope_args(&scope);
+                args.extend([
+                    SqlArg::Text(previous_owner.scope_key.clone()),
+                    SqlArg::Text(previous_owner.query_signature.clone()),
+                    SqlArg::Text(previous_family),
+                    SqlArg::Text(fingerprint.clone()),
+                    SqlArg::Timestamp(now),
+                ]);
+                upsert_listing_reader(tx, &args).await?;
+                Ok(true)
+            })
+        })
+        .await
+    }
+
     async fn cleanup_search_diagnostics(
         &self,
         candidate_cutoff: DateTime<Utc>,
@@ -1104,6 +1577,29 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             vec![],
         )
         .await?;
+        // A listing whose pages can no longer be replayed is read afresh.
+        for (op_name, sql) in [
+            (
+                "cleanup_indexer_search_listing_runs",
+                "DELETE FROM indexer_search_listing_runs WHERE created_at < {}",
+            ),
+            (
+                "cleanup_indexer_search_listing_readers",
+                "DELETE FROM indexer_search_listing_readers WHERE observed_at < {}",
+            ),
+            (
+                "cleanup_indexer_search_listings",
+                "DELETE FROM indexer_search_listings WHERE advanced_at < {}",
+            ),
+        ] {
+            SqlRuntime::execute_write(
+                &self.datastore,
+                op_name,
+                sql,
+                vec![SqlArg::Timestamp(candidate_cutoff)],
+            )
+            .await?;
+        }
         let deleted_runs = SqlRuntime::execute_write(
             &self.datastore,
             "cleanup_indexer_search_runs",
@@ -1135,7 +1631,22 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             vec![SqlArg::I64(i64::from(limit.max(1)))],
         )
         .await?;
-        Ok(deleted.min(u64::from(u32::MAX)) as u32)
+        let deleted_facet_rows = SqlRuntime::execute_write(
+            &self.datastore,
+            "prune_orphaned_indexer_facet_learning",
+            "DELETE FROM indexer_facet_learning
+              WHERE (indexer_id, facet) IN (
+                  SELECT f.indexer_id, f.facet
+                    FROM indexer_facet_learning f
+                   WHERE NOT EXISTS (SELECT 1 FROM indexers i WHERE i.id = f.indexer_id)
+                   LIMIT {}
+              )",
+            vec![SqlArg::I64(i64::from(limit.max(1)))],
+        )
+        .await?;
+        Ok(deleted
+            .saturating_add(deleted_facet_rows)
+            .min(u64::from(u32::MAX)) as u32)
     }
 
     async fn prune_indexer(&self, indexer_id: &str) -> AppResult<()> {
@@ -1143,6 +1654,13 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             &self.datastore,
             "prune_indexer_search_learning",
             "DELETE FROM indexer_search_learning WHERE indexer_id = {}",
+            vec![SqlArg::Text(indexer_id.to_string())],
+        )
+        .await?;
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "prune_indexer_facet_learning",
+            "DELETE FROM indexer_facet_learning WHERE indexer_id = {}",
             vec![SqlArg::Text(indexer_id.to_string())],
         )
         .await?;
@@ -1157,9 +1675,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         SqlRuntime::execute_write(
             &self.datastore,
             "set_indexer_search_learning_suppressed",
-            "UPDATE indexer_search_learning
-             SET suppressed = {}, updated_at = {}
-             WHERE indexer_id = {} AND title_id = {} AND facet = {} AND strategy_key = {}",
+            SET_LEARNING_SUPPRESSED_SQL,
             vec![
                 SqlArg::Bool(suppressed),
                 SqlArg::Timestamp(Utc::now()),
@@ -1236,6 +1752,379 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
 
         Ok(rows > 0)
     }
+
+    async fn facet_learning_states(
+        &self,
+        facet: &str,
+        indexer_ids: &[String],
+    ) -> AppResult<HashMap<String, IndexerFacetLearningState>> {
+        if indexer_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = std::iter::repeat_n("{}", indexer_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args = vec![SqlArg::Text(facet.to_string())];
+        args.extend(indexer_ids.iter().cloned().map(SqlArg::Text));
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT indexer_id, empty_title_ids, suppressed_until, reprobe_claimed_at, revision
+                   FROM indexer_facet_learning
+                  WHERE facet = {{}} AND indexer_id IN ({placeholders})"
+            ),
+            &args,
+        )
+        .await?;
+        rows.iter()
+            .map(|row| Ok((row.text("indexer_id")?, row_to_facet_learning_state(row)?)))
+            .collect()
+    }
+
+    async fn record_facet_search_outcome(
+        &self,
+        indexer_id: &str,
+        facet: &str,
+        title_id: &str,
+        outcome: IndexerFacetSearchOutcome,
+        now: DateTime<Utc>,
+        policy: IndexerFacetLearningPolicy,
+    ) -> AppResult<IndexerFacetTransition> {
+        for _ in 0..FACET_LEARNING_WRITE_ATTEMPTS {
+            let current = self.facet_learning_state(indexer_id, facet).await?;
+            let (next, transition) = current
+                .clone()
+                .unwrap_or_default()
+                .apply_outcome(title_id, outcome, now, policy);
+            let Some(next) = next else {
+                return Ok(transition);
+            };
+            if self
+                .compare_and_set_facet_learning(indexer_id, facet, current.as_ref(), &next, now)
+                .await?
+            {
+                return Ok(transition);
+            }
+        }
+        Err(AppError::Repository(
+            "indexer facet learning kept changing under a concurrent writer".to_string(),
+        ))
+    }
+
+    async fn try_claim_facet_reprobe(
+        &self,
+        indexer_id: &str,
+        facet: &str,
+        now: DateTime<Utc>,
+        policy: IndexerFacetLearningPolicy,
+    ) -> AppResult<bool> {
+        let Some(current) = self.facet_learning_state(indexer_id, facet).await? else {
+            return Ok(false);
+        };
+        let Some(next) = current.claim_reprobe(now, policy) else {
+            return Ok(false);
+        };
+        // Losing the compare-and-set means another search changed the row
+        // first, most likely by claiming this same re-probe.
+        self.compare_and_set_facet_learning(indexer_id, facet, Some(&current), &next, now)
+            .await
+    }
+}
+
+/// Compare-and-set rounds a facet learning write gets before it gives up.
+/// Writers are the searches of one indexer for one facet, so a conflict is
+/// rare and a second round almost always lands.
+const FACET_LEARNING_WRITE_ATTEMPTS: usize = 5;
+
+impl IndexerSearchLearningStore {
+    async fn facet_learning_state(
+        &self,
+        indexer_id: &str,
+        facet: &str,
+    ) -> AppResult<Option<IndexerFacetLearningState>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            FACET_LEARNING_STATE_SQL,
+            &[
+                SqlArg::Text(indexer_id.to_string()),
+                SqlArg::Text(facet.to_string()),
+            ],
+        )
+        .await?;
+        row.as_ref().map(row_to_facet_learning_state).transpose()
+    }
+
+    /// Writes `next` only if the row still is `current` (`None`: still
+    /// absent). Returns whether the write landed.
+    async fn compare_and_set_facet_learning(
+        &self,
+        indexer_id: &str,
+        facet: &str,
+        current: Option<&IndexerFacetLearningState>,
+        next: &IndexerFacetLearningState,
+        now: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let (template, args) = facet_learning_write(indexer_id, facet, current, next, now)?;
+        let op_name = if current.is_some() {
+            "update_indexer_facet_learning"
+        } else {
+            "insert_indexer_facet_learning"
+        };
+        let rows = SqlRuntime::execute_write(&self.datastore, op_name, template, args).await?;
+        Ok(rows > 0)
+    }
+}
+
+fn row_to_facet_learning_state(row: &SqlRow) -> AppResult<IndexerFacetLearningState> {
+    let empty_title_ids = serde_json::from_str::<Vec<String>>(&row.text("empty_title_ids")?)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "indexer_facet_learning.empty_title_ids is not a title list: {error}"
+            ))
+        })?;
+    Ok(IndexerFacetLearningState {
+        empty_title_ids,
+        suppressed_until: row.opt_timestamp("suppressed_until")?,
+        reprobe_claimed_at: row.opt_timestamp("reprobe_claimed_at")?,
+        revision: row.i64("revision")?,
+    })
+}
+
+const SET_LEARNING_SUPPRESSED_SQL: &str = "UPDATE indexer_search_learning
+             SET suppressed = {}, updated_at = {}
+             WHERE indexer_id = {} AND title_id = {} AND facet = {} AND strategy_key = {}";
+
+const SQLITE_RECORD_LEARNING_OUTCOME_SQL: &str = "INSERT INTO indexer_search_learning (
+        indexer_id, title_id, facet, strategy_key, attempts,
+        empty_successes, usable_successes, last_attempt_at,
+        last_usable_at, suppressed, updated_at
+     )
+     VALUES (
+        ?, ?, ?, ?, 1,
+        CASE WHEN ? = 0 THEN 1 ELSE 0 END,
+        CASE WHEN ? > 0 THEN 1 ELSE 0 END,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        CASE WHEN ? > 0 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END,
+        0,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     )
+     ON CONFLICT(indexer_id, title_id, facet, strategy_key)
+     DO UPDATE SET
+        attempts = indexer_search_learning.attempts + 1,
+        empty_successes = indexer_search_learning.empty_successes
+            + CASE WHEN excluded.usable_successes = 0 THEN 1 ELSE 0 END,
+        usable_successes = indexer_search_learning.usable_successes
+            + CASE WHEN excluded.usable_successes > 0 THEN 1 ELSE 0 END,
+        last_attempt_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        last_usable_at = CASE
+            WHEN excluded.usable_successes > 0 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ELSE indexer_search_learning.last_usable_at
+        END,
+        suppressed = CASE
+            WHEN excluded.usable_successes > 0 THEN 0
+            ELSE indexer_search_learning.suppressed
+        END,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+
+const POSTGRES_RECORD_LEARNING_OUTCOME_SQL: &str = "INSERT INTO indexer_search_learning (
+        indexer_id, title_id, facet, strategy_key, attempts,
+        empty_successes, usable_successes, last_attempt_at,
+        last_usable_at, suppressed, updated_at
+     )
+     VALUES (
+        $1, $2, $3, $4, 1,
+        CASE WHEN $5 = 0 THEN 1 ELSE 0 END,
+        CASE WHEN $5 > 0 THEN 1 ELSE 0 END,
+        NOW(),
+        CASE WHEN $5 > 0 THEN NOW() ELSE NULL END,
+        FALSE,
+        NOW()
+     )
+     ON CONFLICT(indexer_id, title_id, facet, strategy_key)
+     DO UPDATE SET
+        attempts = indexer_search_learning.attempts + 1,
+        empty_successes = indexer_search_learning.empty_successes
+            + CASE WHEN EXCLUDED.usable_successes = 0 THEN 1 ELSE 0 END,
+        usable_successes = indexer_search_learning.usable_successes
+            + CASE WHEN EXCLUDED.usable_successes > 0 THEN 1 ELSE 0 END,
+        last_attempt_at = NOW(),
+        last_usable_at = CASE
+            WHEN EXCLUDED.usable_successes > 0 THEN NOW()
+            ELSE indexer_search_learning.last_usable_at
+        END,
+        suppressed = CASE
+            WHEN EXCLUDED.usable_successes > 0 THEN FALSE
+            ELSE indexer_search_learning.suppressed
+        END,
+        updated_at = NOW()";
+
+/// Counts one strategy outcome into its learning row and keeps the title's
+/// text rows within [`FREETEXT_LEARNING_ROWS_PER_TITLE`].
+async fn record_learning_outcome_in_tx(
+    tx: &mut SqlTx<'_>,
+    key: &IndexerSearchLearningKey,
+    usable_hits: u32,
+) -> AppResult<()> {
+    let evicts_text = key.strategy_key.starts_with(FREETEXT_LEARNING_KEY_PREFIX);
+    match tx {
+        SqlTx::Sqlite(tx) => {
+            sqlx::query(SQLITE_RECORD_LEARNING_OUTCOME_SQL)
+                .bind(&key.indexer_id)
+                .bind(&key.title_id)
+                .bind(&key.facet)
+                .bind(&key.strategy_key)
+                .bind(usable_hits as i64)
+                .bind(usable_hits as i64)
+                .bind(usable_hits as i64)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_err)?;
+            if evicts_text {
+                sqlx::query(SQLITE_EVICT_FREETEXT_LEARNING_SQL)
+                    .bind(&key.indexer_id)
+                    .bind(&key.title_id)
+                    .bind(&key.facet)
+                    .bind(&key.indexer_id)
+                    .bind(&key.title_id)
+                    .bind(&key.facet)
+                    .bind(&key.strategy_key)
+                    .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(repo_err)?;
+            }
+        }
+        SqlTx::Postgres(tx) => {
+            sqlx::query(POSTGRES_RECORD_LEARNING_OUTCOME_SQL)
+                .bind(&key.indexer_id)
+                .bind(&key.title_id)
+                .bind(&key.facet)
+                .bind(&key.strategy_key)
+                .bind(usable_hits as i64)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_err)?;
+            if evicts_text {
+                sqlx::query(POSTGRES_EVICT_FREETEXT_LEARNING_SQL)
+                    .bind(&key.indexer_id)
+                    .bind(&key.title_id)
+                    .bind(&key.facet)
+                    .bind(&key.strategy_key)
+                    .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(repo_err)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Applies a batch's facet outcomes in order to the indexer's facet state in
+/// one compare-and-set, as one-by-one writes with no other writer between
+/// them would leave it.
+async fn apply_facet_outcomes_in_tx(
+    tx: &mut SqlTx<'_>,
+    batch: &IndexerSearchLearningBatch,
+) -> AppResult<Vec<IndexerFacetTransition>> {
+    if batch.facet_outcomes.is_empty() {
+        return Ok(Vec::new());
+    }
+    for _ in 0..FACET_LEARNING_WRITE_ATTEMPTS {
+        let current = SqlRuntime::fetch_optional(
+            SqlExec::Tx(tx),
+            FACET_LEARNING_STATE_SQL,
+            &[
+                SqlArg::Text(batch.indexer_id.clone()),
+                SqlArg::Text(batch.facet.clone()),
+            ],
+        )
+        .await?
+        .as_ref()
+        .map(row_to_facet_learning_state)
+        .transpose()?;
+        let mut state = current.clone().unwrap_or_default();
+        let mut changed = false;
+        let mut transitions = Vec::with_capacity(batch.facet_outcomes.len());
+        for outcome in &batch.facet_outcomes {
+            let (next, transition) =
+                state.apply_outcome(&batch.title_id, *outcome, batch.now, batch.facet_policy);
+            transitions.push(transition);
+            if let Some(next) = next {
+                state = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(transitions);
+        }
+        let (template, args) = facet_learning_write(
+            &batch.indexer_id,
+            &batch.facet,
+            current.as_ref(),
+            &state,
+            batch.now,
+        )?;
+        if SqlRuntime::execute(SqlExec::Tx(tx), template, &args).await? > 0 {
+            return Ok(transitions);
+        }
+    }
+    Err(AppError::Repository(
+        "indexer facet learning kept changing under a concurrent writer".to_string(),
+    ))
+}
+
+const FACET_LEARNING_STATE_SQL: &str =
+    "SELECT empty_title_ids, suppressed_until, reprobe_claimed_at, revision
+       FROM indexer_facet_learning
+      WHERE indexer_id = {} AND facet = {}";
+
+/// The compare-and-set write of `next` over `current` (`None`: the row is
+/// still absent).
+fn facet_learning_write(
+    indexer_id: &str,
+    facet: &str,
+    current: Option<&IndexerFacetLearningState>,
+    next: &IndexerFacetLearningState,
+    now: DateTime<Utc>,
+) -> AppResult<(&'static str, Vec<SqlArg>)> {
+    let empty_title_ids = serde_json::to_string(&next.empty_title_ids).map_err(|error| {
+        AppError::Repository(format!("failed to encode facet learning titles: {error}"))
+    })?;
+    Ok(match current {
+        None => (
+            "INSERT INTO indexer_facet_learning (
+                indexer_id, facet, empty_title_ids, suppressed_until,
+                reprobe_claimed_at, revision, updated_at
+             )
+             VALUES ({}, {}, {}, {}, {}, 1, {})
+             ON CONFLICT (indexer_id, facet) DO NOTHING",
+            vec![
+                SqlArg::Text(indexer_id.to_string()),
+                SqlArg::Text(facet.to_string()),
+                SqlArg::Text(empty_title_ids),
+                SqlArg::OptTimestamp(next.suppressed_until),
+                SqlArg::OptTimestamp(next.reprobe_claimed_at),
+                SqlArg::Timestamp(now),
+            ],
+        ),
+        Some(current) => (
+            "UPDATE indexer_facet_learning
+                SET empty_title_ids = {}, suppressed_until = {},
+                    reprobe_claimed_at = {}, revision = revision + 1,
+                    updated_at = {}
+              WHERE indexer_id = {} AND facet = {} AND revision = {}",
+            vec![
+                SqlArg::Text(empty_title_ids),
+                SqlArg::OptTimestamp(next.suppressed_until),
+                SqlArg::OptTimestamp(next.reprobe_claimed_at),
+                SqlArg::Timestamp(now),
+                SqlArg::Text(indexer_id.to_string()),
+                SqlArg::Text(facet.to_string()),
+                SqlArg::I64(current.revision),
+            ],
+        ),
+    })
 }
 
 /// Drops the title-text rows of one (indexer, title, facet) beyond
@@ -1301,13 +2190,201 @@ fn i64_to_u32(value: i64, column: &str) -> AppResult<u32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use scryer_application::SEARCH_STRATEGY_OPEN;
+    use std::collections::HashSet;
 
     use sqlx::sqlite::SqlitePoolOptions;
 
-    async fn sqlite_store() -> (IndexerSearchLearningStore, sqlx::SqlitePool) {
+    const POSTGRES_TEST_FACET_LEARNING_TABLE: &str = "CREATE TEMP TABLE indexer_facet_learning (
+            indexer_id TEXT NOT NULL,
+            facet TEXT NOT NULL,
+            empty_title_ids TEXT NOT NULL DEFAULT '[]',
+            suppressed_until TIMESTAMPTZ,
+            reprobe_claimed_at TIMESTAMPTZ,
+            revision BIGINT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (indexer_id, facet)
+        ) ON COMMIT PRESERVE ROWS";
+
+    const FACET_POLICY: IndexerFacetLearningPolicy = IndexerFacetLearningPolicy {
+        empty_title_threshold: 5,
+        suppression: chrono::Duration::hours(24),
+        reprobe_claim: chrono::Duration::hours(1),
+    };
+
+    #[tokio::test]
+    async fn sqlite_store_suppresses_a_facet_after_distinct_empty_titles_and_clears_on_a_hit() {
+        let (store, _pool) = sqlite_store().await;
+        let now = DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&Utc);
+        let record = |title: &'static str, outcome, at| {
+            let store = store.clone();
+            async move {
+                store
+                    .record_facet_search_outcome(
+                        "idx-general",
+                        "anime",
+                        title,
+                        outcome,
+                        at,
+                        FACET_POLICY,
+                    )
+                    .await
+                    .expect("facet outcome should persist")
+            }
+        };
+
+        for (index, title) in ["title-a", "title-b", "title-c", "title-d"]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                record(title, IndexerFacetSearchOutcome::Empty, now).await,
+                IndexerFacetTransition::StreakAdvanced { streak: index + 1 }
+            );
+        }
+        assert_eq!(
+            record("title-b", IndexerFacetSearchOutcome::Empty, now).await,
+            IndexerFacetTransition::Unchanged,
+            "a repeated title is not a new one"
+        );
+        let until = now + FACET_POLICY.suppression;
+        assert_eq!(
+            record("title-e", IndexerFacetSearchOutcome::Empty, now).await,
+            IndexerFacetTransition::Suppressed { streak: 5, until }
+        );
+
+        let ids = vec!["idx-general".to_string(), "idx-other".to_string()];
+        let states = store
+            .facet_learning_states("anime", &ids)
+            .await
+            .expect("facet states should load");
+        assert_eq!(states.len(), 1);
+        let state = &states["idx-general"];
+        assert_eq!(state.streak(), 5);
+        assert_eq!(state.held_until(now, FACET_POLICY), Some(until));
+        assert!(
+            store
+                .facet_learning_states("series", &ids)
+                .await
+                .expect("facet states should load")
+                .is_empty(),
+            "another facet is untouched"
+        );
+        assert!(
+            !store
+                .try_claim_facet_reprobe("idx-general", "anime", now, FACET_POLICY)
+                .await
+                .expect("claim"),
+            "no re-probe inside the window"
+        );
+
+        // After the window exactly one re-probe is claimed.
+        let after = until + chrono::Duration::minutes(1);
+        assert!(
+            store
+                .try_claim_facet_reprobe("idx-general", "anime", after, FACET_POLICY)
+                .await
+                .expect("claim")
+        );
+        assert!(
+            !store
+                .try_claim_facet_reprobe("idx-general", "anime", after, FACET_POLICY)
+                .await
+                .expect("claim")
+        );
+        let claimed = &store
+            .facet_learning_states("anime", &ids)
+            .await
+            .expect("facet states should load")["idx-general"];
+        assert_eq!(
+            claimed.held_until(after, FACET_POLICY),
+            Some(after + FACET_POLICY.reprobe_claim),
+            "the claimed re-probe holds the walk off"
+        );
+
+        // An empty re-probe suppresses for another full window.
+        assert_eq!(
+            record("title-f", IndexerFacetSearchOutcome::Empty, after).await,
+            IndexerFacetTransition::Suppressed {
+                streak: 5,
+                until: after + FACET_POLICY.suppression,
+            }
+        );
+
+        // Any usable hit clears the streak and the suppression.
+        assert_eq!(
+            record("title-g", IndexerFacetSearchOutcome::Usable, after).await,
+            IndexerFacetTransition::Cleared {
+                streak: 5,
+                was_suppressed: true,
+            }
+        );
+        let cleared = &store
+            .facet_learning_states("anime", &ids)
+            .await
+            .expect("facet states should load")["idx-general"];
+        assert_eq!(cleared.streak(), 0);
+        assert_eq!(cleared.held_until(after, FACET_POLICY), None);
+        assert_eq!(
+            record("title-g", IndexerFacetSearchOutcome::Usable, after).await,
+            IndexerFacetTransition::Unchanged
+        );
+
+        store
+            .prune_indexer("idx-general")
+            .await
+            .expect("prune should succeed");
+        assert!(
+            store
+                .facet_learning_states("anime", &ids)
+                .await
+                .expect("facet states should load")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_lapsed_reprobe_claim_can_be_claimed_again() {
+        let (store, _pool) = sqlite_store().await;
+        let now = DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&Utc);
+        for title in ["t1", "t2", "t3", "t4", "t5"] {
+            store
+                .record_facet_search_outcome(
+                    "idx-general",
+                    "anime",
+                    title,
+                    IndexerFacetSearchOutcome::Empty,
+                    now,
+                    FACET_POLICY,
+                )
+                .await
+                .expect("facet outcome should persist");
+        }
+        let after = now + FACET_POLICY.suppression;
+        assert!(
+            store
+                .try_claim_facet_reprobe("idx-general", "anime", after, FACET_POLICY)
+                .await
+                .expect("claim")
+        );
+        // The re-probe errored and landed nothing; once its claim lapses
+        // another background search may try.
+        let lapsed = after + FACET_POLICY.reprobe_claim;
+        assert!(
+            store
+                .try_claim_facet_reprobe("idx-general", "anime", lapsed, FACET_POLICY)
+                .await
+                .expect("claim")
+        );
+    }
+
+    pub(crate) async fn sqlite_store() -> (IndexerSearchLearningStore, sqlx::SqlitePool) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1440,6 +2517,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("search candidate value table should be created");
+        sqlx::query(include_str!(
+            "../../../scryer/src/db/migrations/0313_indexer_facet_learning.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("facet learning table should be created");
+        sqlx::query(include_str!(
+            "../../../scryer/src/db/migrations/0314_indexer_search_listings.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("search listing table should be created");
         for table in ["titles", "indexers"] {
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "CREATE TABLE {table} (id TEXT PRIMARY KEY)"
@@ -1460,6 +2549,136 @@ mod tests {
         );
 
         (store, pool)
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_learning_batch_lands_as_the_same_outcomes_one_by_one() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let text_key = format!("{FREETEXT_LEARNING_KEY_PREFIX}digest-1");
+        let strategy_outcomes = vec![
+            ("v2:ids_sxex".to_string(), 2),
+            ("v2:ids_abs".to_string(), 0),
+            (text_key.clone(), 0),
+            ("v2:ids_abs".to_string(), 0),
+            ("v2:ids_sxex".to_string(), 0),
+        ];
+        let facet_outcomes = vec![
+            IndexerFacetSearchOutcome::Empty,
+            IndexerFacetSearchOutcome::Empty,
+            IndexerFacetSearchOutcome::Usable,
+            IndexerFacetSearchOutcome::Empty,
+        ];
+        let suppress = vec!["v2:ids_abs".to_string()];
+
+        let one_by_one = "idx-sequential";
+        let mut sequential_transitions = Vec::new();
+        for (strategy_key, usable_hits) in &strategy_outcomes {
+            store
+                .record_outcome(
+                    &IndexerSearchLearningKey {
+                        indexer_id: one_by_one.into(),
+                        title_id: "title-1".into(),
+                        facet: "anime".into(),
+                        strategy_key: strategy_key.clone(),
+                    },
+                    *usable_hits,
+                )
+                .await
+                .expect("outcome");
+        }
+        for strategy_key in &suppress {
+            store
+                .set_suppressed(
+                    &IndexerSearchLearningKey {
+                        indexer_id: one_by_one.into(),
+                        title_id: "title-1".into(),
+                        facet: "anime".into(),
+                        strategy_key: strategy_key.clone(),
+                    },
+                    true,
+                )
+                .await
+                .expect("suppression");
+        }
+        for outcome in &facet_outcomes {
+            sequential_transitions.push(
+                store
+                    .record_facet_search_outcome(
+                        one_by_one,
+                        "anime",
+                        "title-1",
+                        *outcome,
+                        now,
+                        FACET_POLICY,
+                    )
+                    .await
+                    .expect("facet outcome"),
+            );
+        }
+
+        let batched = "idx-batched";
+        let batch_transitions = store
+            .record_learning_batch(&IndexerSearchLearningBatch {
+                indexer_id: batched.into(),
+                title_id: "title-1".into(),
+                facet: "anime".into(),
+                strategy_outcomes: strategy_outcomes.clone(),
+                suppress: suppress.clone(),
+                facet_outcomes: facet_outcomes.clone(),
+                now,
+                facet_policy: FACET_POLICY,
+            })
+            .await
+            .expect("batch should land");
+        assert_eq!(batch_transitions, sequential_transitions);
+
+        let by_indexer = store
+            .list_for_title_by_indexer(
+                &[
+                    one_by_one.to_string(),
+                    batched.to_string(),
+                    "idx-unseen".to_string(),
+                ],
+                "title-1",
+                "anime",
+            )
+            .await
+            .expect("one read for every indexer");
+        assert_eq!(by_indexer.get("idx-unseen"), Some(&Vec::new()));
+        let counts = |indexer_id: &str| {
+            let mut rows = by_indexer[indexer_id]
+                .iter()
+                .map(|record| {
+                    (
+                        record.key.strategy_key.clone(),
+                        record.attempts,
+                        record.empty_successes,
+                        record.usable_successes,
+                        record.suppressed,
+                        record.last_usable_at.is_some(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            rows.sort();
+            rows
+        };
+        assert_eq!(counts(batched), counts(one_by_one));
+        assert_eq!(counts(batched).len(), 3);
+
+        let facets = store
+            .facet_learning_states("anime", &[one_by_one.to_string(), batched.to_string()])
+            .await
+            .expect("facet states");
+        let shape = |state: &IndexerFacetLearningState| {
+            (
+                state.empty_title_ids.clone(),
+                state.suppressed_until,
+                state.reprobe_claimed_at,
+            )
+        };
+        assert_eq!(shape(&facets[batched]), shape(&facets[one_by_one]));
+        assert_eq!(facets[batched].empty_title_ids, vec!["title-1".to_string()]);
     }
 
     #[tokio::test]
@@ -1971,6 +3190,7 @@ mod tests {
             ) ON COMMIT PRESERVE ROWS",
             "CREATE TEMP TABLE titles (id TEXT PRIMARY KEY) ON COMMIT PRESERVE ROWS",
             "CREATE TEMP TABLE indexers (id TEXT PRIMARY KEY) ON COMMIT PRESERVE ROWS",
+            POSTGRES_TEST_FACET_LEARNING_TABLE,
         ] {
             sqlx::query(statement)
                 .execute(&pool)
@@ -2132,6 +3352,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.candidates.len(), 1);
+        assert_eq!(
+            first.candidates[0].reusable_until.timestamp(),
+            candidate.reusable_until.timestamp()
+        );
         let second = store
             .list_search_run_candidates(
                 std::slice::from_ref(&run.id),
@@ -2360,6 +3584,10 @@ mod tests {
         .execute(&pool)
         .await
         .map_err(repo_err)?;
+        sqlx::query(POSTGRES_TEST_FACET_LEARNING_TABLE)
+            .execute(&pool)
+            .await
+            .map_err(repo_err)?;
         sqlx::query(
             "CREATE TEMP TABLE indexer_search_candidates (
                 id TEXT PRIMARY KEY,
@@ -2393,6 +3621,16 @@ mod tests {
         .execute(&pool)
         .await
         .map_err(repo_err)?;
+        // Cleanup also retires listing state; keep its production schema local
+        // to this fixture's single connection.
+        let listing_schema = include_str!(
+            "../../../scryer/src/db/postgres/migrations/0314_indexer_search_listings.sql"
+        )
+        .replace("CREATE TABLE", "CREATE TEMP TABLE");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(listing_schema.as_str()))
+            .execute(&pool)
+            .await
+            .map_err(repo_err)?;
         sqlx::query(
             "INSERT INTO indexer_search_learning (indexer_id)
              VALUES ('idx-pruned'), ('idx-pruned'), ('idx-kept')",
@@ -2484,5 +3722,469 @@ mod tests {
         assert_eq!(sources, 0, "every expired source is eventually swept");
 
         Ok(())
+    }
+
+    pub(crate) fn listing_scope() -> IndexerSearchListingScope {
+        IndexerSearchListingScope {
+            indexer_id: "idx-1".into(),
+            indexer_fingerprint: "fingerprint-1".into(),
+            title_id: "title-1".into(),
+            facet: "series".into(),
+        }
+    }
+
+    fn listing_strategy(scope_key: &str, query_signature: &str) -> IndexerSearchListingStrategy {
+        IndexerSearchListingStrategy {
+            scope_key: scope_key.into(),
+            query_signature: query_signature.into(),
+        }
+    }
+
+    const LISTING_SCOPE_S1E1: &str = "title-1:series:episode:1:1:-";
+    const LISTING_SCOPE_S1E2: &str = "title-1:series:episode:1:2:-";
+    const LISTING_SCOPE_S2E1: &str = "title-1:series:episode:2:1:-";
+    const LISTING_SCOPE_S2E2: &str = "title-1:series:episode:2:2:-";
+
+    async fn claim(
+        store: &IndexerSearchLearningStore,
+        fingerprint: &str,
+        claimant: &IndexerSearchListingStrategy,
+        now: DateTime<Utc>,
+    ) -> IndexerSearchListingClaim {
+        store
+            .claim_search_listing(
+                &listing_scope(),
+                fingerprint,
+                claimant,
+                "family-sxex",
+                now - chrono::Duration::hours(24),
+                now - chrono::Duration::hours(1),
+                now,
+            )
+            .await
+            .expect("claim should record")
+    }
+
+    async fn listings(store: &IndexerSearchLearningStore) -> Vec<IndexerSearchListing> {
+        store
+            .list_search_listings(&listing_scope(), Utc::now() - chrono::Duration::hours(24))
+            .await
+            .expect("listings should read")
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_records_readers_of_a_listing_another_strategy_owns() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let owner = listing_strategy(LISTING_SCOPE_S1E1, "sig-e1");
+        let reader = listing_strategy(LISTING_SCOPE_S1E2, "sig-e2");
+
+        assert_eq!(
+            claim(&store, "page-a", &owner, now).await,
+            IndexerSearchListingClaim::Owner
+        );
+        assert_eq!(
+            claim(&store, "page-a", &owner, now).await,
+            IndexerSearchListingClaim::Owner,
+            "the owner reading its own first page again keeps the listing"
+        );
+        assert_eq!(
+            claim(&store, "page-a", &reader, now).await,
+            IndexerSearchListingClaim::SameListing {
+                owner: owner.clone(),
+                listing_open: true,
+            }
+        );
+        let found = listings(&store).await;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].owner, owner);
+        assert_eq!(
+            found[0]
+                .readers
+                .iter()
+                .map(|reader| reader.strategy.clone())
+                .collect::<Vec<_>>(),
+            vec![reader.clone()]
+        );
+
+        // Only the owner advances the chain.
+        let scope = listing_scope();
+        assert!(
+            !store
+                .link_search_listing_run(&scope, "page-a", &reader, "run-x", Some("p2"), now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .link_search_listing_run(&scope, "page-a", &owner, "run-1", Some("p2"), now)
+                .await
+                .unwrap()
+        );
+        let found = listings(&store).await;
+        assert_eq!(found[0].page_cursor.as_deref(), Some("p2"));
+        assert!(!found[0].finished);
+        assert_eq!(found[0].run_ids, vec!["run-1".to_string()]);
+        assert!(
+            store
+                .link_search_listing_run(&scope, "page-a", &owner, "run-2", None, now)
+                .await
+                .unwrap()
+        );
+        let found = listings(&store).await;
+        assert!(found[0].finished);
+        assert_eq!(found[0].run_ids.len(), 2);
+        assert_eq!(
+            claim(
+                &store,
+                "page-a",
+                &listing_strategy(LISTING_SCOPE_S2E1, "sig-s2"),
+                now
+            )
+            .await,
+            IndexerSearchListingClaim::SameListing {
+                owner: owner.clone(),
+                listing_open: false,
+            },
+            "a reader of a finished chain is answered in full"
+        );
+
+        // Another indexer identity never sees the listing.
+        let mut other = listing_scope();
+        other.indexer_fingerprint = "fingerprint-2".into();
+        assert!(
+            store
+                .list_search_listings(&other, now - chrono::Duration::hours(24))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_keeps_one_listing_per_first_page() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let season_one = listing_strategy(LISTING_SCOPE_S1E1, "sig-s1e1");
+        let season_two = listing_strategy(LISTING_SCOPE_S2E1, "sig-s2e1");
+        claim(&store, "page-s1", &season_one, now).await;
+        claim(&store, "page-s2", &season_two, now).await;
+        claim(
+            &store,
+            "page-s1",
+            &listing_strategy(LISTING_SCOPE_S1E2, "sig-s1e2"),
+            now,
+        )
+        .await;
+        claim(
+            &store,
+            "page-s2",
+            &listing_strategy(LISTING_SCOPE_S2E2, "sig-s2e2"),
+            now,
+        )
+        .await;
+
+        let found = listings(&store).await;
+        let owners = found
+            .iter()
+            .map(|listing| {
+                (
+                    listing.first_page_fingerprint.clone(),
+                    listing.owner.clone(),
+                    listing.readers.len(),
+                )
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            owners,
+            HashSet::from([
+                ("page-s1".to_string(), season_one.clone(), 1),
+                ("page-s2".to_string(), season_two.clone(), 1),
+            ]),
+            "a season-sensitive indexer keeps a listing per season"
+        );
+
+        // An owner whose first page changed no longer owns the old listing.
+        claim(&store, "page-s1-new", &season_one, now).await;
+        let pages = listings(&store)
+            .await
+            .into_iter()
+            .map(|listing| listing.first_page_fingerprint)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            pages,
+            HashSet::from(["page-s1-new".to_string(), "page-s2".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_listing_expires_with_the_reuse_window() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let stale = now - chrono::Duration::hours(25);
+        let owner = listing_strategy(LISTING_SCOPE_S1E1, "sig-e1");
+        claim(&store, "page-a", &owner, stale).await;
+        assert!(listings(&store).await.is_empty());
+        assert_eq!(
+            claim(
+                &store,
+                "page-a",
+                &listing_strategy(LISTING_SCOPE_S1E2, "sig-e2"),
+                now
+            )
+            .await,
+            IndexerSearchListingClaim::Owner,
+            "an expired listing is read afresh by whoever reads it next"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_hands_an_idle_chain_to_a_reader() {
+        let (store, _pool) = sqlite_store().await;
+        let now = Utc::now();
+        let earlier = now - chrono::Duration::hours(2);
+        let idle_before = now - chrono::Duration::hours(1);
+        let scope = listing_scope();
+        let owner = listing_strategy(LISTING_SCOPE_S1E1, "sig-e1");
+        let reader = listing_strategy(LISTING_SCOPE_S1E2, "sig-e2");
+        claim(&store, "page-a", &owner, earlier).await;
+        store
+            .link_search_listing_run(&scope, "page-a", &owner, "run-1", Some("p3"), earlier)
+            .await
+            .unwrap();
+        claim(&store, "page-a", &reader, earlier).await;
+
+        assert!(
+            !store
+                .adopt_search_listing(&scope, "page-a", &owner, &reader, "p2", idle_before, now)
+                .await
+                .unwrap(),
+            "a chain that moved since it was read is not taken over"
+        );
+        assert!(
+            !store
+                .adopt_search_listing(&scope, "page-a", &owner, &reader, "p3", earlier, now)
+                .await
+                .unwrap(),
+            "a chain still moving is not taken over"
+        );
+        assert!(
+            store
+                .adopt_search_listing(&scope, "page-a", &owner, &reader, "p3", idle_before, now)
+                .await
+                .unwrap()
+        );
+        let found = listings(&store).await;
+        assert_eq!(found[0].owner, reader);
+        assert_eq!(found[0].page_cursor.as_deref(), Some("p3"));
+        assert_eq!(
+            found[0]
+                .readers
+                .iter()
+                .map(|reader| reader.strategy.clone())
+                .collect::<Vec<_>>(),
+            vec![owner.clone()],
+            "the strategy that left the chain reads it from here on"
+        );
+        assert!(
+            !store
+                .link_search_listing_run(&scope, "page-a", &owner, "run-x", None, now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .link_search_listing_run(&scope, "page-a", &reader, "run-2", Some("p4"), now)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            listings(&store).await[0].run_ids,
+            vec!["run-1".to_string(), "run-2".to_string()],
+            "the chain keeps the pages its first owner read"
+        );
+
+        // A chain that claimed its first page and recorded nothing is read
+        // again from page one by the next strategy that reaches it.
+        let abandoned_owner = listing_strategy(LISTING_SCOPE_S2E1, "sig-s2e1");
+        claim(&store, "page-b", &abandoned_owner, earlier).await;
+        assert_eq!(
+            claim(
+                &store,
+                "page-b",
+                &listing_strategy(LISTING_SCOPE_S2E2, "sig-s2e2"),
+                now
+            )
+            .await,
+            IndexerSearchListingClaim::Owner
+        );
+    }
+
+    pub(crate) fn listing_candidate(
+        run: &IndexerSearchRunWrite,
+        reference: &str,
+        now: DateTime<Utc>,
+    ) -> IndexerSearchCandidateWrite {
+        IndexerSearchCandidateWrite {
+            id: format!("candidate-{reference}"),
+            run_id: run.id.clone(),
+            search_session_id: run.search_session_id.clone(),
+            indexer_id: run.indexer_id.clone(),
+            scope_key: run.scope_key.clone(),
+            query_signature: run.query_signature.clone(),
+            session_identity_hash: format!("hash-{reference}"),
+            normalized: NormalizedIndexerSearchCandidate {
+                provider_ref: Some(reference.into()),
+                source: "newznab".into(),
+                title: format!("Synthetic.Show.{reference}.1080p"),
+                download_url: Some(format!("https://example.invalid/get?id={reference}")),
+                download_url_credential_keys: Vec::new(),
+                link_url: None,
+                link_url_credential_keys: Vec::new(),
+                size_bytes: Some(123),
+                published_at: None,
+                source_kind: Some("nzb_url".into()),
+                thumbs_up: None,
+                thumbs_down: None,
+                grabs: None,
+                grab_current: None,
+                grab_max: None,
+                languages: Vec::new(),
+                subtitles: Vec::new(),
+                response_tvdb_id: None,
+                response_tmdb_id: None,
+                response_imdb_id: None,
+                response_categories: Vec::new(),
+                extra_categories: Vec::new(),
+                season: None,
+                episode: None,
+                absolute_episode: None,
+                series_names: Vec::new(),
+                release_group: None,
+                provider_source: None,
+                info_hash: None,
+                seeders: None,
+                peers: None,
+                download_volume_factor: None,
+                upload_volume_factor: None,
+                protected: None,
+                tags: Vec::new(),
+                provider_categories: Vec::new(),
+                release_listing_json: None,
+            },
+            created_at: now,
+            reusable_until: now + chrono::Duration::hours(24),
+            expires_at: now + chrono::Duration::days(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_finalize_keeps_every_result_of_a_listing_run() {
+        let (store, pool) = sqlite_store().await;
+        let now = Utc::now();
+        let mut owner_run = background_run(
+            "run-owner",
+            "session-1",
+            "sig-owner",
+            Some(SEARCH_STRATEGY_OPEN),
+            None,
+            now,
+        );
+        owner_run.scope_key = LISTING_SCOPE_S1E1.into();
+        let mut other_run = background_run(
+            "run-other",
+            "session-1",
+            "sig-other",
+            Some(SEARCH_STRATEGY_OPEN),
+            None,
+            now,
+        );
+        other_run.scope_key = LISTING_SCOPE_S1E1.into();
+        store
+            .record_search_diagnostics(
+                &owner_run,
+                &[
+                    listing_candidate(&owner_run, "E01", now),
+                    listing_candidate(&owner_run, "E02", now),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .record_search_diagnostics(
+                &other_run,
+                &[
+                    listing_candidate(&other_run, "E03", now),
+                    listing_candidate(&other_run, "E04", now),
+                ],
+            )
+            .await
+            .unwrap();
+        let owner = listing_strategy(LISTING_SCOPE_S1E1, "sig-owner");
+        claim(&store, "page-a", &owner, now).await;
+        store
+            .link_search_listing_run(&listing_scope(), "page-a", &owner, "run-owner", None, now)
+            .await
+            .unwrap();
+        let admissible = vec!["hash-E01".to_string(), "hash-E03".to_string()];
+        store
+            .finalize_search_session("session-1", &admissible)
+            .await
+            .unwrap();
+
+        let kept = |run_id: &str| {
+            let store = &store;
+            let run_id = run_id.to_string();
+            async move {
+                store
+                    .list_search_run_candidates(std::slice::from_ref(&run_id), None, 100)
+                    .await
+                    .unwrap()
+                    .candidates
+                    .len()
+            }
+        };
+        assert_eq!(
+            kept("run-owner").await,
+            2,
+            "a listing run keeps the whole listing"
+        );
+        assert_eq!(
+            kept("run-other").await,
+            1,
+            "other runs keep what their scope admitted"
+        );
+
+        // The listing exemption is a primary-key probe per link, not a scan.
+        let plan = sqlx::query_as::<_, (i64, i64, i64, String)>(
+            "EXPLAIN QUERY PLAN
+             DELETE FROM indexer_search_run_candidate_sources
+              WHERE search_session_id = ?
+                AND source_id IN (
+                    SELECT s.id
+                      FROM indexer_search_candidate_sources s
+                      JOIN indexer_search_candidates c ON c.id = s.candidate_id
+                     WHERE 1 = 1 AND c.fingerprint NOT IN (?)
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM indexer_search_listing_runs lr
+                     WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
+                )",
+        )
+        .bind("session-1")
+        .bind("hash-E01")
+        .fetch_all(&pool)
+        .await
+        .expect("query plan should explain");
+        let listing_steps = plan
+            .iter()
+            .map(|(_, _, _, detail)| detail.as_str())
+            .filter(|detail| detail.contains("lr"))
+            .collect::<Vec<_>>();
+        assert!(!listing_steps.is_empty(), "plan: {plan:?}");
+        assert!(
+            listing_steps.iter().all(|detail| detail.contains("INDEX")),
+            "plan: {plan:?}"
+        );
     }
 }

@@ -69,14 +69,20 @@ impl HttpClientSettings {
     fn from_config(config: &Value) -> AppResult<Self> {
         let download_dir = read_config_string(config, &["download_dir", "downloadDir"])
             .ok_or_else(|| {
-                AppError::Validation("the HTTP downloader needs a download directory".into())
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_REQUIRED,
+                    "the HTTP downloader needs a download directory",
+                )
             })?;
         let download_dir = PathBuf::from(download_dir);
         if !download_dir.is_absolute() {
-            return Err(AppError::Validation(format!(
-                "the HTTP downloader's download directory must be an absolute path, not {}",
-                download_dir.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_ABSOLUTE,
+                format!(
+                    "the HTTP downloader's download directory must be an absolute path, not {}",
+                    download_dir.display()
+                ),
+            ));
         }
         let max_concurrent_downloads = read_bounded(
             config,
@@ -97,9 +103,10 @@ impl HttpClientSettings {
                 None | Some(0) => None,
                 Some(value) if value > 0 => Some(value as u64),
                 Some(value) => {
-                    return Err(AppError::Validation(format!(
-                        "bandwidth_limit_kbps must be zero or more, not {value}"
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_BANDWIDTH_LIMIT_NEGATIVE,
+                        format!("bandwidth_limit_kbps must be zero or more, not {value}"),
+                    ));
                 }
             };
         Ok(Self {
@@ -130,9 +137,10 @@ fn read_bounded(
     match read_i64(config, keys) {
         None => Ok(default_value),
         Some(value) if value >= 1 && value as usize <= max => Ok(value as usize),
-        Some(value) => Err(AppError::Validation(format!(
-            "{label} must be between 1 and {max}, not {value}"
-        ))),
+        Some(value) => Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_HTTP_SETTING_OUT_OF_RANGE,
+            format!("{label} must be between 1 and {max}, not {value}"),
+        )),
     }
 }
 
@@ -289,7 +297,10 @@ fn egress_key(proxy_config: Option<&ProxyConfig>) -> AppResult<String> {
     let endpoint =
         scryer_application::transport_proxy::proxy_egress_url(proxy).map_err(|message| {
             scryer_application::transport_proxy::record_transport_proxy_failure(proxy, &message);
-            AppError::Validation(message)
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_TRANSPORT_PROXY_INVALID,
+                message,
+            )
         })?;
     Ok(format!(
         "{}|{endpoint}",
@@ -316,7 +327,10 @@ fn egress_for(proxy_config: Option<&ProxyConfig>) -> AppResult<Egress> {
     .map(Egress::Proxied)
     .map_err(|message| {
         scryer_application::transport_proxy::record_transport_proxy_failure(proxy, &message);
-        AppError::Validation(message)
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_TRANSPORT_PROXY_INVALID,
+            message,
+        )
     })
 }
 
@@ -332,10 +346,13 @@ pub(crate) async fn test_http_download_dir(config_json: &str) -> AppResult<()> {
     tokio::fs::create_dir_all(&state_dir)
         .await
         .map_err(|error| {
-            AppError::Validation(format!(
-                "the download directory {} is not writable: {error}",
-                settings.download_dir.display()
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
+                format!(
+                    "the download directory {} is not writable: {error}",
+                    settings.download_dir.display()
+                ),
+            )
         })?;
     let marker = state_dir.join(WRITE_CHECK_FILE_NAME);
     tokio::fs::OpenOptions::new()
@@ -346,10 +363,13 @@ pub(crate) async fn test_http_download_dir(config_json: &str) -> AppResult<()> {
         .await
         .map(|_| ())
         .map_err(|error| {
-            AppError::Validation(format!(
-                "the download directory {} is not writable: {error}",
-                settings.download_dir.display()
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_WRITABLE,
+                format!(
+                    "the download directory {} is not writable: {error}",
+                    settings.download_dir.display()
+                ),
+            )
         })
 }
 
@@ -357,16 +377,22 @@ const WRITE_CHECK_FILE_NAME: &str = "write-check";
 
 async fn check_download_dir(dir: &Path) -> AppResult<()> {
     let metadata = tokio::fs::metadata(dir).await.map_err(|error| {
-        AppError::Validation(format!(
-            "the download directory {} is not reachable: {error}",
-            dir.display()
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_UNREACHABLE,
+            format!(
+                "the download directory {} is not reachable: {error}",
+                dir.display()
+            ),
+        )
     })?;
     if !metadata.is_dir() {
-        return Err(AppError::Validation(format!(
-            "the download directory {} is not a directory",
-            dir.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_DIRECTORY_NOT_DIRECTORY,
+            format!(
+                "the download directory {} is not a directory",
+                dir.display()
+            ),
+        ));
     }
     Ok(())
 }
@@ -380,13 +406,15 @@ impl DownloadClient for HttpDownloadClient {
         if let Some(kind) = request.source_kind
             && kind != DownloadSourceKind::HttpResource
         {
-            return Err(AppError::Validation(format!(
-                "the HTTP downloader only accepts HTTP resources, not {kind:?}"
-            )));
+            return Err(AppError::validation_refused(
+                scryer_application::http_release_refusal::UNSUPPORTED_TRANSPORT,
+                format!("the HTTP downloader only accepts HTTP resources, not {kind:?}"),
+            ));
         }
         let source = request.http.as_ref().ok_or_else(|| {
-            AppError::Validation(
-                "the HTTP downloader needs the release's HTTP resources; none were sent".into(),
+            AppError::validation_refused(
+                scryer_application::http_release_refusal::DETAILS_UNAVAILABLE,
+                "the HTTP downloader needs the release's HTTP resources; none were sent",
             )
         })?;
         check_download_dir(&self.engine.download_dir).await?;
@@ -396,23 +424,29 @@ impl DownloadClient for HttpDownloadClient {
             mut media_fallbacks,
         } = selection::plan_download(source, &self.engine.download_dir)?;
         if let Some(file) = planned.iter().find(|file| file.resource.auth_ref.is_some()) {
-            return Err(AppError::Validation(format!(
-                "unsupported_auth: {} needs the provider's own sign-in, which the HTTP downloader cannot supply",
-                file.final_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            )));
+            return Err(AppError::validation_refused(
+                scryer_application::http_release_refusal::UNSUPPORTED_AUTH,
+                format!(
+                    "{} needs the provider's own sign-in, which the HTTP downloader cannot supply",
+                    file.final_path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ),
+            ));
         }
         for file in &planned {
             if tokio::fs::try_exists(&file.final_path)
                 .await
                 .unwrap_or(false)
             {
-                return Err(AppError::Validation(format!(
-                    "{} already exists; the HTTP downloader does not overwrite files",
-                    file.final_path.display()
-                )));
+                return Err(AppError::validation_refused(
+                    scryer_application::http_release_refusal::DESTINATION_EXISTS,
+                    format!(
+                        "{} already exists; the HTTP downloader does not overwrite files",
+                        file.final_path.display()
+                    ),
+                ));
             }
         }
 
@@ -457,6 +491,8 @@ impl DownloadClient for HttpDownloadClient {
                     role: file.role,
                     resource: file.resource,
                     final_path: file.final_path,
+                    partial_path: None,
+                    publication: None,
                     attempt: 1,
                     bytes_done: 0,
                     total_bytes: None,
@@ -465,10 +501,12 @@ impl DownloadClient for HttpDownloadClient {
                     language: file.language,
                     forbidden_answers: 0,
                     skipped_error: None,
+                    skipped_reason: None,
                 })
                 .collect(),
             state: HttpJobState::Queued,
             error: None,
+            error_reason: None,
             expected_size_bytes: source.policy.expected_size_bytes,
             expected_duration_seconds: source.policy.expected_duration_seconds,
             verify: source.policy.verify.clone(),
@@ -636,6 +674,11 @@ fn job_to_queue_item(job: &HttpJob, live: Option<LiveSnapshot>) -> DownloadQueue
     };
     let failed = job.state == HttpJobState::Failed;
     DownloadQueueItem {
+        attention_reason_code: if failed {
+            job.error_reason.clone()
+        } else {
+            None
+        },
         id: job.id.clone(),
         title_id: Some(job.title_id.clone()).filter(|id| !id.is_empty()),
         episode_id: None,
@@ -671,7 +714,11 @@ fn job_to_queue_item(job: &HttpJob, live: Option<LiveSnapshot>) -> DownloadQueue
         source_provider: None,
         tracked_state: None,
         tracked_status: None,
-        tracked_status_messages: Vec::new(),
+        tracked_status_messages: if failed && job.error_reason.is_some() {
+            job.error.iter().cloned().collect()
+        } else {
+            Vec::new()
+        },
         tracked_match_type: None,
         seeding: None,
     }

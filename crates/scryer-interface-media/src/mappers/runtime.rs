@@ -666,14 +666,15 @@ pub fn from_title_history_record(
         skip_reason: record.skip_reason,
         retry_requires_password: record.retry_requires_password,
         failure_reason: record.failure_reason,
+        failure_reason_code: record.failure_reason_code,
         blocklist_reason: record.blocklist_reason,
         source_path: record.source_path,
         dest_path: record.dest_path,
         data_json: record.data_json.map(json_string_to_value),
         occurred_at: parse_datetime(&record.occurred_at, "title history occurred_at")
-            .map_err(scryer_application::AppError::Validation)?,
+            .map_err(scryer_application::AppError::Repository)?,
         created_at: parse_datetime(&record.created_at, "title history created_at")
-            .map_err(scryer_application::AppError::Validation)?,
+            .map_err(scryer_application::AppError::Repository)?,
     })
 }
 

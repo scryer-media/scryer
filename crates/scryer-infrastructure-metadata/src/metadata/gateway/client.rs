@@ -493,6 +493,7 @@ pub struct MetadataGatewayClient {
     last_reenrollment: tokio::sync::Mutex<Option<Instant>>,
     pq_rotation: tokio::sync::Mutex<()>,
     compatibility_refresh: tokio::sync::Mutex<()>,
+    clock_skew_notice: tokio::sync::Mutex<Option<bool>>,
     version_incompatible: tokio::sync::Mutex<Option<smg_enrollment::VersionIncompatible>>,
     search_hash: String,
     search_rich_hash: String,
@@ -579,6 +580,7 @@ impl MetadataGatewayClient {
             last_reenrollment: tokio::sync::Mutex::new(None),
             pq_rotation: tokio::sync::Mutex::new(()),
             compatibility_refresh: tokio::sync::Mutex::new(()),
+            clock_skew_notice: tokio::sync::Mutex::new(None),
             version_incompatible: tokio::sync::Mutex::new(None),
             enrollment_store: Some(enrollment_store),
             mtls_state: tokio::sync::RwLock::new(MtlsState::NotAttempted),
@@ -652,6 +654,7 @@ impl MetadataGatewayClient {
             last_reenrollment: tokio::sync::Mutex::new(None),
             pq_rotation: tokio::sync::Mutex::new(()),
             compatibility_refresh: tokio::sync::Mutex::new(()),
+            clock_skew_notice: tokio::sync::Mutex::new(None),
             version_incompatible: tokio::sync::Mutex::new(None),
             enrollment_store: None,
             mtls_state: tokio::sync::RwLock::new(MtlsState::NotAttempted),
@@ -1191,9 +1194,13 @@ impl MetadataGatewayClient {
 
                 // Check for PersistedQueryNotFound before caching
                 if let Some(ref errors) = parsed.errors {
-                    let is_not_found = errors
-                        .iter()
-                        .any(|e| e.message.contains("PersistedQueryNotFound"));
+                    let is_not_found = errors.iter().any(|e| {
+                        e.extensions
+                            .as_ref()
+                            .and_then(|extensions| extensions.get("code"))
+                            .and_then(serde_json::Value::as_str)
+                            == Some("PERSISTED_QUERY_NOT_FOUND")
+                    });
                     if is_not_found {
                         debug!(hash, "APQ cache miss, registering via POST");
                         return self
@@ -1774,7 +1781,10 @@ impl MetadataGatewayClient {
                     );
                     tokio::time::sleep(retry_after).await;
                 }
-                Ok(resp) => return Ok(resp),
+                Ok(resp) => {
+                    self.observe_gateway_clock(&resp).await?;
+                    return Ok(resp);
+                }
                 Err(OutboundRequestError::Build(error)) => return Err(error),
                 Err(OutboundRequestError::Http(error)) => {
                     return Err(map_metadata_gateway_outbound_error(request_label, error));
@@ -1785,6 +1795,35 @@ impl MetadataGatewayClient {
         Err(AppError::Repository(format!(
             "{request_label} exhausted retries"
         )))
+    }
+
+    async fn observe_gateway_clock(&self, response: &reqwest::Response) -> AppResult<()> {
+        let skew = super::clock_skew::clock_skew_from_response(response, chrono::Utc::now());
+        let state = skew.or_else(|| response.status().is_success().then_some(false));
+        if let Some(active) = state {
+            // Persist transitions only; normal metadata traffic does not write settings.
+            // None ensures the first healthy response also clears a notice from a prior run.
+            let mut previous = self.clock_skew_notice.lock().await;
+            if *previous != Some(active) {
+                if let Some(db) = self.enrollment_store.as_ref() {
+                    match smg_enrollment::persist_clock_skew_notice(&**db, active).await {
+                        Ok(()) => *previous = Some(active),
+                        Err(error) => {
+                            warn!(error, "failed to persist metadata gateway clock notice")
+                        }
+                    }
+                } else {
+                    *previous = Some(active);
+                }
+            }
+        }
+        if skew == Some(true) {
+            return Err(AppError::validation_refused(
+                scryer_application::error_reasons::metadata_gateway::CLOCK_SKEW,
+                "The system clock differs from the metadata gateway by more than five minutes. Synchronize the system clock and restart Scryer.",
+            ));
+        }
+        Ok(())
     }
 
     fn request_policy(&self, request_label: &'static str) -> RequestPolicy {
@@ -2349,6 +2388,7 @@ fn movie_metadata_from_item_for_release_market(
     MovieMetadata {
         target_key: None,
         smg_id: m.id.or(m.title_id),
+        external_ids: external_ids_from_gateway(m.external_ids),
         primary_source,
         tvdb_id: m.tvdb_id,
         name: m.name,
@@ -2394,6 +2434,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
     SeriesMetadata {
         target_key: None,
         smg_id: s.id,
+        external_ids: external_ids_from_gateway(s.external_ids),
         primary_source,
         tvdb_id: s.tvdb_id.unwrap_or_default(),
         tmdb_id: s.tmdb_id,
@@ -2418,6 +2459,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
             .map(|ta| scryer_domain::TaggedAlias {
                 name: ta.name,
                 language: ta.language,
+                country: ta.country,
             })
             .collect(),
         seasons: s
@@ -2542,16 +2584,20 @@ fn build_bulk_artwork_url_query(movie_ids: &[i64], series_ids: &[i64], language:
 }
 
 #[cfg(test)]
+#[path = "client_clock_skew_tests.rs"]
+mod clock_skew_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         ArtworkItem, InstanceAuth, MetadataExternalIdItem, MetadataGatewayClient,
         MetadataSearchQuery, MovieItem, MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED,
         OP_GET_MOVIE, OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI,
         OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem, SeriesTitleRef,
-        SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
-        build_bulk_artwork_url_query, build_search_tvdb_batch_query, canonical_request_host,
-        canonical_request_path_and_query, compatibility_poll_phase, enrollment_retry_delay,
-        external_ids_from_gateway, is_version_incompatible_response,
+        SmgEnrollmentConfig, TaggedAliasItem, apply_instance_auth_headers_with_nonce,
+        apq_cache_key, apq_hash, build_bulk_artwork_url_query, build_search_tvdb_batch_query,
+        canonical_request_host, canonical_request_path_and_query, compatibility_poll_phase,
+        enrollment_retry_delay, external_ids_from_gateway, is_version_incompatible_response,
         map_metadata_gateway_outbound_error, movie_metadata_from_item,
         next_version_compatibility_poll_delay_at, normalize_artwork_url,
         normalize_optional_artwork_url, parse_version_compatibility_incompatible,
@@ -2975,7 +3021,7 @@ mod tests {
         json!({
             "errors": [
                 {
-                    "message": "PersistedQueryNotFound"
+                    "message": "wording is irrelevant", "extensions": {"code": "PERSISTED_QUERY_NOT_FOUND"}
                 }
             ]
         })
@@ -3217,12 +3263,33 @@ mod tests {
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("metadataBulk"));
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("external_ratings"));
         assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases"));
+        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country }"));
+        assert!(graphql_docs::METADATA_BULK_QUERY.contains("tagged_aliases"));
+        assert!(graphql_docs::METADATA_BULK_QUERY.contains("    country\n  }"));
         assert!(
             queries
                 .iter()
                 .all(|query| query.contains("original_language"))
         );
         assert!(queries.iter().all(|query| !query.contains("target_key")));
+    }
+
+    #[test]
+    fn tagged_alias_country_is_optional_in_gateway_payloads() {
+        let with_country: TaggedAliasItem = serde_json::from_value(serde_json::json!({
+            "name": "Nombre alternativo",
+            "language": "es",
+            "country": "ES"
+        }))
+        .expect("gateway alias country should deserialize");
+        assert_eq!(with_country.country.as_deref(), Some("ES"));
+
+        let legacy: TaggedAliasItem = serde_json::from_value(serde_json::json!({
+            "name": "Nombre alternativo",
+            "language": "es"
+        }))
+        .expect("older gateway aliases without country should deserialize");
+        assert_eq!(legacy.country, None);
     }
 
     /// The request rule surface reads these groups (plan §3.2). If a selection is dropped from a
@@ -3251,6 +3318,32 @@ mod tests {
             assert!(query.contains("tmdb_vote_average"));
             assert!(query.contains("tmdb_vote_count"));
         }
+    }
+
+    #[test]
+    fn metadata_items_preserve_all_gateway_external_ids() {
+        let ids = json!([
+            {"source": "tvdb", "kind": "series", "id": "4242"},
+            {"source": "tmdb", "kind": "series", "id": "136315"},
+            {"source": "tmdb", "kind": "movie", "id": "9001"},
+            {"source": "imdb", "kind": "series", "id": "tt1234567"},
+            {"source": "trakt", "kind": "series", "id": "123"},
+            {"source": "custom-provider", "kind": "", "id": "opaque-id"}
+        ]);
+        let expected = external_ids_from_gateway(serde_json::from_value(ids.clone()).unwrap());
+        let mut movie = minimal_movie_item_fields();
+        movie["external_ids"] = ids.clone();
+        let mut series = minimal_series_item_fields();
+        series["external_ids"] = ids;
+
+        assert_eq!(
+            super::movie_metadata_from_item(serde_json::from_value(movie).unwrap()).external_ids,
+            expected
+        );
+        assert_eq!(
+            super::series_metadata_from_item(serde_json::from_value(series).unwrap()).external_ids,
+            expected
+        );
     }
 
     fn minimal_movie_item_fields() -> serde_json::Value {
@@ -3964,7 +4057,7 @@ mod tests {
             .expect_err("an auth rejection must not fall back to an anonymous request");
         assert!(matches!(
             error,
-            AppError::Repository(message)
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. }
                 if message == "SMG instance auth enrollment failed: SMG enrollment persistence is not implemented for this datastore engine"
         ));
 
@@ -4003,7 +4096,7 @@ mod tests {
             .expect_err("public discovery must require configured instance auth");
         assert!(matches!(
             error,
-            AppError::Repository(message)
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. }
                 if message == "metadata gateway discovery requests require configured instance auth enrollment"
         ));
         assert!(
@@ -5648,6 +5741,8 @@ struct GraphqlResponse<T> {
 #[derive(Deserialize)]
 struct GraphqlError {
     message: String,
+    #[serde(default)]
+    extensions: Option<serde_json::Value>,
 }
 
 // --- Discovery types ---
@@ -6163,6 +6258,8 @@ struct TitleRefFetch<T> {
 #[derive(Deserialize)]
 struct MovieItem {
     #[serde(default)]
+    external_ids: Vec<MetadataExternalIdItem>,
+    #[serde(default)]
     id: Option<i64>,
     #[serde(default)]
     title_id: Option<i64>,
@@ -6550,6 +6647,8 @@ struct ArtworkItem {
 struct TaggedAliasItem {
     name: String,
     language: String,
+    #[serde(default)]
+    country: Option<String>,
 }
 
 fn pick_artwork_url(artworks: &[ArtworkItem], kind: &str) -> Option<String> {
@@ -6677,6 +6776,8 @@ struct ArtworkEpisodeItem {
 
 #[derive(Deserialize)]
 struct SeriesItem {
+    #[serde(default)]
+    external_ids: Vec<MetadataExternalIdItem>,
     /// SMG's title id; only the `titles` operation selects it.
     #[serde(default)]
     id: Option<i64>,

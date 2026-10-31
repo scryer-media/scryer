@@ -8,7 +8,11 @@ import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { CheckboxField } from "@/components/ui/checkbox";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
@@ -117,17 +121,26 @@ export function SettingsDelayProfilesSection({
     () =>
       draft.applies_to_facets.length === 0
         ? libraries
-        : libraries.filter((library) => draft.applies_to_facets.includes(library.facet)),
+        : libraries.filter((library) =>
+            draft.applies_to_facets.includes(library.facet),
+          ),
     [draft.applies_to_facets, libraries],
   );
   const libraryLabel = (libraryIds: string[]) =>
     libraryIds.length === 0
       ? t("libraryFilter.all")
       : libraryIds
-          .map((libraryId) => libraryNameById.get(libraryId) ?? t("settings.delayProfileUnknownLibrary"))
+          .map(
+            (libraryId) =>
+              libraryNameById.get(libraryId) ??
+              t("settings.delayProfileUnknownLibrary"),
+          )
           .join(", ");
 
-  function updateField<K extends keyof DelayProfileDraft>(field: K, value: DelayProfileDraft[K]) {
+  function updateField<K extends keyof DelayProfileDraft>(
+    field: K,
+    value: DelayProfileDraft[K],
+  ) {
     setDraft((prev) => ({ ...prev, [field]: value }));
   }
 
@@ -150,15 +163,21 @@ export function SettingsDelayProfilesSection({
 
       <section className={DELAY_PANEL_CLASS}>
         <div className={DELAY_PANEL_HEADER_CLASS}>
-          <h2 className={DELAY_PANEL_TITLE_CLASS}>{t("settings.delayProfileExisting")}</h2>
+          <h2 className={DELAY_PANEL_TITLE_CLASS}>
+            {t("settings.delayProfileExisting")}
+          </h2>
         </div>
         <div>
           {loading ? (
-            <p className={`${DELAY_PANEL_BODY_CLASS} text-sm ${DELAY_MUTED_TEXT_CLASS}`}>
+            <p
+              className={`${DELAY_PANEL_BODY_CLASS} text-sm ${DELAY_MUTED_TEXT_CLASS}`}
+            >
               {t("label.loading")}
             </p>
           ) : profiles.length === 0 ? (
-            <p className={`${DELAY_PANEL_BODY_CLASS} text-sm ${DELAY_MUTED_TEXT_CLASS}`}>
+            <p
+              className={`${DELAY_PANEL_BODY_CLASS} text-sm ${DELAY_MUTED_TEXT_CLASS}`}
+            >
               {t("settings.delayProfileNone")}
             </p>
           ) : (
@@ -166,17 +185,59 @@ export function SettingsDelayProfilesSection({
               <Table overflow="clip" layout="fixed" density="dense">
                 <TableHeader>
                   <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                    <TableHead className={`w-[14%] font-semibold ${DELAY_MUTED_TEXT_CLASS}`}>{t("settings.delayProfileNameLabel")}</TableHead>
-                    <TableHead className={`w-28 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileUsenetDelay")}</TableHead>
-                    <TableHead className={`w-28 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileTorrentDelay")}</TableHead>
-                    <TableHead className={`w-32 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileProtocolModeLabel")}</TableHead>
-                    <TableHead className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileMinAge")}</TableHead>
-                    <TableHead className={`w-32 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileBypassLabel")}</TableHead>
-                    <TableHead className={`w-[14%] ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileFacetsLabel")}</TableHead>
-                    <TableHead className={`w-[14%] ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileLibrariesLabel")}</TableHead>
-                    <TableHead className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfilePriorityLabel")}</TableHead>
-                    <TableHead className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}>{t("settings.delayProfileEnabledLabel")}</TableHead>
-                    <TableActionsHead className="w-24">{t("label.actions")}</TableActionsHead>
+                    <TableHead
+                      className={`w-[14%] font-semibold ${DELAY_MUTED_TEXT_CLASS}`}
+                    >
+                      {t("settings.delayProfileNameLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-28 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileUsenetDelay")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-28 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileTorrentDelay")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-32 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileProtocolModeLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileMinAge")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-32 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileBypassLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-[14%] ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileFacetsLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-[14%] ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileLibrariesLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfilePriorityLabel")}
+                    </TableHead>
+                    <TableHead
+                      className={`w-24 ${DELAY_TABLE_HEADER_CELL_CLASS}`}
+                    >
+                      {t("settings.delayProfileEnabledLabel")}
+                    </TableHead>
+                    <TableActionsHead className="w-24">
+                      {t("label.actions")}
+                    </TableActionsHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -187,13 +248,31 @@ export function SettingsDelayProfilesSection({
                       id={selectorId("settings-delay-profile-row", profile.id)}
                       className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                     >
-                      <TableCell className="truncate font-medium text-[var(--scry-ink2)]">{profile.name}</TableCell>
-                      <TableCell className={`text-center ${DELAY_MUTED_TEXT_CLASS}`}>{profile.usenet_delay_minutes}m</TableCell>
-                      <TableCell className={`text-center ${DELAY_MUTED_TEXT_CLASS}`}>{profile.torrent_delay_minutes}m</TableCell>
-                      <TableCell className="text-center text-[var(--scry-ink2)]">
-                        {t(protocolModeLabelKey(delayProfileProtocolMode(profile)))}
+                      <TableCell className="truncate font-medium text-[var(--scry-ink2)]">
+                        {profile.name}
                       </TableCell>
-                      <TableCell className="text-center">{profile.min_age_minutes > 0 ? `${profile.min_age_minutes}m` : "—"}</TableCell>
+                      <TableCell
+                        className={`text-center ${DELAY_MUTED_TEXT_CLASS}`}
+                      >
+                        {profile.usenet_delay_minutes}m
+                      </TableCell>
+                      <TableCell
+                        className={`text-center ${DELAY_MUTED_TEXT_CLASS}`}
+                      >
+                        {profile.torrent_delay_minutes}m
+                      </TableCell>
+                      <TableCell className="text-center text-[var(--scry-ink2)]">
+                        {t(
+                          protocolModeLabelKey(
+                            delayProfileProtocolMode(profile),
+                          ),
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {profile.min_age_minutes > 0
+                          ? `${profile.min_age_minutes}m`
+                          : "—"}
+                      </TableCell>
                       <TableCell className="text-center">
                         {profile.bypass_score_threshold != null
                           ? `≥ ${profile.bypass_score_threshold}`
@@ -206,10 +285,15 @@ export function SettingsDelayProfilesSection({
                           emptyLabel={t("settings.delayProfileAllFacets")}
                         />
                       </TableCell>
-                      <TableCell className={`truncate text-center ${DELAY_MUTED_TEXT_CLASS}`} title={libraryLabel(profile.library_ids)}>
+                      <TableCell
+                        className={`truncate text-center ${DELAY_MUTED_TEXT_CLASS}`}
+                        title={libraryLabel(profile.library_ids)}
+                      >
                         {libraryLabel(profile.library_ids)}
                       </TableCell>
-                      <TableCell className="text-center">{profile.priority}</TableCell>
+                      <TableCell className="text-center">
+                        {profile.priority}
+                      </TableCell>
                       <TableCell className="text-center">
                         <RenderBooleanIcon
                           value={profile.enabled}
@@ -219,7 +303,10 @@ export function SettingsDelayProfilesSection({
                       <TableActionsCell className="w-24">
                         <div className="flex items-center justify-center gap-1">
                           <IconButton
-                            id={selectorId("settings-delay-profile-edit", profile.id)}
+                            id={selectorId(
+                              "settings-delay-profile-edit",
+                              profile.id,
+                            )}
                             label={t("label.edit")}
                             tone="edit"
                             onClick={() => loadProfileById(profile.id)}
@@ -228,7 +315,10 @@ export function SettingsDelayProfilesSection({
                             <Edit className="h-4 w-4" />
                           </IconButton>
                           <IconButton
-                            id={selectorId("settings-delay-profile-delete", profile.id)}
+                            id={selectorId(
+                              "settings-delay-profile-delete",
+                              profile.id,
+                            )}
                             label={t("label.delete")}
                             tone="delete"
                             onClick={() => deleteProfile(profile.id)}
@@ -259,267 +349,296 @@ export function SettingsDelayProfilesSection({
             </div>
             <div className={DELAY_PANEL_BODY_CLASS}>
               <form onSubmit={saveProfile} className="space-y-4">
-            {/* Name */}
-            <div className="space-y-1.5">
-              <Label className="text-[var(--scry-ink2)]" htmlFor="dp-name">{t("settings.delayProfileNameLabel")}</Label>
-              <Input
-                id="dp-name"
-                value={draft.name}
-                onChange={(e) => updateField("name", e.target.value)}
-                placeholder={t("settings.delayProfileNamePlaceholder")}
-              />
-            </div>
-
-            {/* Protocol delays */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              {draft.enable_usenet ? (
+                {/* Name */}
                 <div className="space-y-1.5">
-                  <DelayProfileHelpLabel
-                    htmlFor="dp-usenet-delay"
-                    label={t("settings.delayProfileUsenetDelay")}
-                    help={t("settings.delayProfileUsenetDelayHelp")}
-                  />
+                  <Label className="text-[var(--scry-ink2)]" htmlFor="dp-name">
+                    {t("settings.delayProfileNameLabel")}
+                  </Label>
                   <Input
-                    id="dp-usenet-delay"
-                    {...integerInputProps}
-                    value={draft.usenet_delay_minutes}
-                    onChange={(e) =>
-                      updateField(
-                        "usenet_delay_minutes",
-                        parseIntegerInput(e.target.value),
-                      )
-                    }
+                    id="dp-name"
+                    value={draft.name}
+                    onChange={(e) => updateField("name", e.target.value)}
+                    placeholder={t("settings.delayProfileNamePlaceholder")}
                   />
                 </div>
-              ) : null}
-              {draft.enable_torrent ? (
+
+                {/* Protocol delays */}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {draft.enable_usenet ? (
+                    <div className="space-y-1.5">
+                      <DelayProfileHelpLabel
+                        htmlFor="dp-usenet-delay"
+                        label={t("settings.delayProfileUsenetDelay")}
+                        help={t("settings.delayProfileUsenetDelayHelp")}
+                      />
+                      <Input
+                        id="dp-usenet-delay"
+                        {...integerInputProps}
+                        value={draft.usenet_delay_minutes}
+                        onChange={(e) =>
+                          updateField(
+                            "usenet_delay_minutes",
+                            parseIntegerInput(e.target.value),
+                          )
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  {draft.enable_torrent ? (
+                    <div className="space-y-1.5">
+                      <DelayProfileHelpLabel
+                        htmlFor="dp-torrent-delay"
+                        label={t("settings.delayProfileTorrentDelay")}
+                        help={t("settings.delayProfileTorrentDelayHelp")}
+                      />
+                      <Input
+                        id="dp-torrent-delay"
+                        {...integerInputProps}
+                        value={draft.torrent_delay_minutes}
+                        onChange={(e) =>
+                          updateField(
+                            "torrent_delay_minutes",
+                            parseIntegerInput(e.target.value),
+                          )
+                        }
+                      />
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Protocol mode */}
                 <div className="space-y-1.5">
                   <DelayProfileHelpLabel
-                    htmlFor="dp-torrent-delay"
-                    label={t("settings.delayProfileTorrentDelay")}
-                    help={t("settings.delayProfileTorrentDelayHelp")}
+                    label={t("settings.delayProfileProtocolModeLabel")}
+                    help={t("settings.delayProfileProtocolModeHelp")}
                   />
-                  <Input
-                    id="dp-torrent-delay"
-                    {...integerInputProps}
-                    value={draft.torrent_delay_minutes}
-                    onChange={(e) =>
-                      updateField(
-                        "torrent_delay_minutes",
-                        parseIntegerInput(e.target.value),
-                      )
+                  <RadioGroup
+                    className="flex flex-wrap gap-4"
+                    value={delayProfileProtocolMode(draft)}
+                    onValueChange={(value) =>
+                      updateProtocolMode(value as DelayProfileProtocolMode)
                     }
-                  />
-                </div>
-              ) : null}
-            </div>
-
-            {/* Protocol mode */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                label={t("settings.delayProfileProtocolModeLabel")}
-                help={t("settings.delayProfileProtocolModeHelp")}
-              />
-              <RadioGroup
-                className="flex flex-wrap gap-4"
-                value={delayProfileProtocolMode(draft)}
-                onValueChange={(value) => updateProtocolMode(value as DelayProfileProtocolMode)}
-              >
-                {DELAY_PROFILE_PROTOCOL_MODES.map((mode) => (
-                  <label
-                    key={mode}
-                    htmlFor={selectorId(
-                      "settings-delay-profile-preferred",
-                      mode,
-                    )}
-                    className="flex items-center gap-2 text-sm text-[var(--scry-ink2)]"
                   >
-                    <RadioGroupItem
-                      id={selectorId("settings-delay-profile-preferred", mode)}
-                      value={mode}
+                    {DELAY_PROFILE_PROTOCOL_MODES.map((mode) => (
+                      <label
+                        key={mode}
+                        htmlFor={selectorId(
+                          "settings-delay-profile-preferred",
+                          mode,
+                        )}
+                        className="flex items-center gap-2 text-sm text-[var(--scry-ink2)]"
+                      >
+                        <RadioGroupItem
+                          id={selectorId(
+                            "settings-delay-profile-preferred",
+                            mode,
+                          )}
+                          value={mode}
+                        />
+                        {t(protocolModeLabelKey(mode))}
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                {/* Minimum age (usenet) */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    htmlFor="dp-min-age"
+                    label={t("settings.delayProfileMinAge")}
+                    help={t("settings.delayProfileMinAgeHelp")}
+                  />
+                  <Input
+                    id="dp-min-age"
+                    {...integerInputProps}
+                    value={draft.min_age_minutes}
+                    onChange={(e) =>
+                      updateField(
+                        "min_age_minutes",
+                        parseIntegerInput(e.target.value),
+                      )
+                    }
+                  />
+                </div>
+
+                <CheckboxField
+                  id="settings-delay-profile-bypass-highest-quality"
+                  checked={draft.bypass_if_highest_quality}
+                  onCheckedChange={(checked) =>
+                    updateField("bypass_if_highest_quality", checked === true)
+                  }
+                  label={t("settings.delayProfileBypassHighestQualityLabel")}
+                  labelAccessory={
+                    <InfoHelp
+                      text={t("settings.delayProfileBypassHighestQualityHelp")}
+                      ariaLabel={t(
+                        "settings.delayProfileBypassHighestQualityHelp",
+                      )}
                     />
-                    {t(protocolModeLabelKey(mode))}
-                  </label>
-                ))}
-              </RadioGroup>
-            </div>
-
-            {/* Minimum age (usenet) */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                htmlFor="dp-min-age"
-                label={t("settings.delayProfileMinAge")}
-                help={t("settings.delayProfileMinAgeHelp")}
-              />
-              <Input
-                id="dp-min-age"
-                {...integerInputProps}
-                value={draft.min_age_minutes}
-                onChange={(e) => updateField("min_age_minutes", parseIntegerInput(e.target.value))}
-              />
-            </div>
-
-            <CheckboxField
-              id="settings-delay-profile-bypass-highest-quality"
-              checked={draft.bypass_if_highest_quality}
-              onCheckedChange={(checked) =>
-                updateField("bypass_if_highest_quality", checked === true)
-              }
-              label={t("settings.delayProfileBypassHighestQualityLabel")}
-              labelAccessory={
-                <InfoHelp
-                  text={t("settings.delayProfileBypassHighestQualityHelp")}
-                  ariaLabel={t("settings.delayProfileBypassHighestQualityHelp")}
+                  }
+                  className="items-start text-[var(--scry-ink2)]"
+                  checkboxClassName="mt-0.5"
                 />
-              }
-              className="items-start text-[var(--scry-ink2)]"
-              checkboxClassName="mt-0.5"
-            />
 
-            {/* Bypass score threshold */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                htmlFor="dp-bypass"
-                label={t("settings.delayProfileBypassLabel")}
-                help={t("settings.delayProfileBypassHelp")}
-              />
-              <Input
-                id="dp-bypass"
-                {...integerInputProps}
-                value={draft.bypass_score_threshold ?? ""}
-                onChange={(e) => {
-                  const val = sanitizeDigits(e.target.value);
-                  updateField(
-                    "bypass_score_threshold",
-                    val === "" ? null : Number(val),
-                  );
-                }}
-                placeholder={t("settings.delayProfileBypassPlaceholder")}
+                {/* Bypass score threshold */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    htmlFor="dp-bypass"
+                    label={t("settings.delayProfileBypassLabel")}
+                    help={t("settings.delayProfileBypassHelp")}
+                  />
+                  <Input
+                    id="dp-bypass"
+                    {...integerInputProps}
+                    value={draft.bypass_score_threshold ?? ""}
+                    onChange={(e) => {
+                      const val = sanitizeDigits(e.target.value);
+                      updateField(
+                        "bypass_score_threshold",
+                        val === "" ? null : Number(val),
+                      );
+                    }}
+                    placeholder={t("settings.delayProfileBypassPlaceholder")}
+                  />
+                </div>
+
+                {/* Applies to facets */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    label={t("settings.delayProfileFacetsLabel")}
+                    help={t("settings.delayProfileFacetsHelp")}
+                  />
+                  <FacetSelect
+                    idPrefix="settings-delay-profile-facet"
+                    values={FACET_OPTIONS}
+                    selected={draft.applies_to_facets}
+                    onChange={(next) => {
+                      setDraft((prev) => ({
+                        ...prev,
+                        applies_to_facets: next,
+                        library_ids:
+                          next.length === 0
+                            ? prev.library_ids
+                            : prev.library_ids.filter((libraryId) => {
+                                const library = libraries.find(
+                                  (entry) => entry.id === libraryId,
+                                );
+                                return library
+                                  ? next.includes(library.facet)
+                                  : false;
+                              }),
+                      }));
+                    }}
+                  />
+                </div>
+
+                {/* Libraries */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    htmlFor="dp-libraries"
+                    label={t("settings.delayProfileLibrariesLabel")}
+                    help={t("settings.delayProfileLibrariesHelp")}
+                  />
+                  <LibraryMultiSelect
+                    triggerId="dp-libraries"
+                    allLibrariesButtonId="dp-libraries-all"
+                    libraries={pickableLibraries}
+                    selectedLibraryIds={draft.library_ids}
+                    onSelectedLibraryIdsChange={(next) => {
+                      setDraft((prev) => ({ ...prev, library_ids: next }));
+                    }}
+                    triggerClassName="w-full justify-between"
+                  />
+                </div>
+
+                {/* Tags */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    htmlFor="dp-tags"
+                    label={t("settings.delayProfileTagsLabel")}
+                    help={t("settings.delayProfileTagsHelp")}
+                  />
+                  <Input
+                    id="dp-tags"
+                    value={draft.tags.join(", ")}
+                    onChange={(e) =>
+                      updateField(
+                        "tags",
+                        e.target.value
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      )
+                    }
+                    placeholder={t("settings.delayProfileTagsPlaceholder")}
+                  />
+                </div>
+
+                {/* Priority */}
+                <div className="space-y-1.5">
+                  <DelayProfileHelpLabel
+                    htmlFor="dp-priority"
+                    label={t("settings.delayProfilePriorityLabel")}
+                    help={t("settings.delayProfilePriorityHelp")}
+                  />
+                  <Input
+                    id="dp-priority"
+                    {...integerInputProps}
+                    value={draft.priority}
+                    onChange={(e) =>
+                      updateField("priority", parseIntegerInput(e.target.value))
+                    }
+                  />
+                </div>
+
+                {/* Enabled */}
+                <CheckboxField
+                  id="settings-delay-profile-enabled"
+                  checked={draft.enabled}
+                  onCheckedChange={(checked) =>
+                    updateField("enabled", checked === true)
+                  }
+                  label={t("settings.delayProfileEnabledLabel")}
+                  className="items-center text-[var(--scry-ink2)]"
+                  checkboxClassName="mt-0"
+                />
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button
+                    id="settings-delay-profile-save"
+                    type="submit"
+                    disabled={saving}
+                  >
+                    {saving
+                      ? t("label.saving")
+                      : isEditing
+                        ? t("label.save")
+                        : t("settings.delayProfileCreate")}
+                  </Button>
+                  <Button
+                    id="settings-delay-profile-cancel"
+                    type="button"
+                    variant="outline"
+                    onClick={resetDraft}
+                  >
+                    {t("label.cancel")}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </section>
+          {editorMode === "edit" ? (
+            <div className="flex justify-center">
+              <AddNewButton
+                id="settings-delay-profile-create-new"
+                icon={Plus}
+                label={t("settings.delayProfileCreateNew")}
+                onClick={startCreateProfile}
+                disabled={saving}
               />
             </div>
-
-            {/* Applies to facets */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                label={t("settings.delayProfileFacetsLabel")}
-                help={t("settings.delayProfileFacetsHelp")}
-              />
-              <FacetSelect
-                idPrefix="settings-delay-profile-facet"
-                values={FACET_OPTIONS}
-                selected={draft.applies_to_facets}
-                onChange={(next) => {
-                  setDraft((prev) => ({
-                    ...prev,
-                    applies_to_facets: next,
-                    library_ids:
-                      next.length === 0
-                        ? prev.library_ids
-                        : prev.library_ids.filter((libraryId) => {
-                            const library = libraries.find((entry) => entry.id === libraryId);
-                            return library ? next.includes(library.facet) : false;
-                          }),
-                  }));
-                }}
-              />
-            </div>
-
-            {/* Libraries */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                htmlFor="dp-libraries"
-                label={t("settings.delayProfileLibrariesLabel")}
-                help={t("settings.delayProfileLibrariesHelp")}
-              />
-              <LibraryMultiSelect
-                triggerId="dp-libraries"
-                allLibrariesButtonId="dp-libraries-all"
-                libraries={pickableLibraries}
-                selectedLibraryIds={draft.library_ids}
-                onSelectedLibraryIdsChange={(next) => {
-                  setDraft((prev) => ({ ...prev, library_ids: next }));
-                }}
-                triggerClassName="w-full justify-between"
-              />
-            </div>
-
-            {/* Tags */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                htmlFor="dp-tags"
-                label={t("settings.delayProfileTagsLabel")}
-                help={t("settings.delayProfileTagsHelp")}
-              />
-              <Input
-                id="dp-tags"
-                value={draft.tags.join(", ")}
-                onChange={(e) =>
-                  updateField(
-                    "tags",
-                    e.target.value
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  )
-                }
-                placeholder={t("settings.delayProfileTagsPlaceholder")}
-              />
-            </div>
-
-            {/* Priority */}
-            <div className="space-y-1.5">
-              <DelayProfileHelpLabel
-                htmlFor="dp-priority"
-                label={t("settings.delayProfilePriorityLabel")}
-                help={t("settings.delayProfilePriorityHelp")}
-              />
-              <Input
-                id="dp-priority"
-                {...integerInputProps}
-                value={draft.priority}
-                onChange={(e) => updateField("priority", parseIntegerInput(e.target.value))}
-              />
-            </div>
-
-            {/* Enabled */}
-            <CheckboxField
-              id="settings-delay-profile-enabled"
-              checked={draft.enabled}
-              onCheckedChange={(checked) =>
-                updateField("enabled", checked === true)
-              }
-              label={t("settings.delayProfileEnabledLabel")}
-              className="items-center text-[var(--scry-ink2)]"
-              checkboxClassName="mt-0"
-            />
-
-            {/* Actions */}
-            <div className="flex flex-wrap gap-2 pt-2">
-              <Button id="settings-delay-profile-save" type="submit" disabled={saving}>
-                {saving
-                  ? t("label.saving")
-                  : isEditing
-                    ? t("label.save")
-                    : t("settings.delayProfileCreate")}
-              </Button>
-              <Button id="settings-delay-profile-cancel" type="button" variant="outline" onClick={resetDraft}>
-                {t("label.cancel")}
-              </Button>
-            </div>
-          </form>
-        </div>
-      </section>
-      {editorMode === "edit" ? (
-        <div className="flex justify-center">
-          <AddNewButton
-            id="settings-delay-profile-create-new"
-            icon={Plus}
-            label={t("settings.delayProfileCreateNew")}
-            onClick={startCreateProfile}
-            disabled={saving}
-          />
-        </div>
-      ) : null}
+          ) : null}
         </>
       ) : (
         <div className="flex justify-center">

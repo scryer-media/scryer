@@ -250,6 +250,12 @@ enum DownloadFeedbackReadKind {
     RecentCompletedDownloads,
 }
 
+type FeedbackReadBackoffKey = (
+    String,
+    DownloadFeedbackReadKind,
+    chrono::DateTime<chrono::Utc>,
+);
+
 #[derive(Clone, Copy, Debug)]
 struct FeedbackReadBackoffState {
     consecutive_failures: u32,
@@ -324,8 +330,7 @@ pub struct PrioritizedDownloadClientRouter {
     seeding_profiles: Option<Arc<dyn SeedingProfileRepository>>,
     feedback_read_timeout: Duration,
     category_snapshot_store: DownloadClientCategorySnapshotStore,
-    feedback_read_backoff:
-        Arc<Mutex<HashMap<(String, DownloadFeedbackReadKind), FeedbackReadBackoffState>>>,
+    feedback_read_backoff: Arc<Mutex<HashMap<FeedbackReadBackoffKey, FeedbackReadBackoffState>>>,
     /// Durable per-client failure record. `None` routes without it, which is
     /// the pre-status behaviour.
     download_client_status: Option<Arc<dyn DownloadClientStatusRepository>>,
@@ -1064,7 +1069,7 @@ impl PrioritizedDownloadClientRouter {
 
     fn feedback_backoff_remaining(
         &self,
-        client_id: &str,
+        config: &DownloadClientConfig,
         kind: DownloadFeedbackReadKind,
     ) -> Option<Duration> {
         if Self::feedback_read_bypasses_backoff(kind) {
@@ -1075,8 +1080,11 @@ impl PrioritizedDownloadClientRouter {
             .feedback_read_backoff
             .lock()
             .expect("feedback read backoff mutex");
-        let key = (client_id.to_string(), kind);
+        // A read started with older credentials may finish after a save. Its
+        // cooldown belongs only to that configuration revision.
+        let key = (config.id.clone(), kind, config.updated_at);
         let now = Instant::now();
+        backoff.retain(|_, state| state.blocked_until > now);
         match backoff.get(&key).copied() {
             Some(state) if state.blocked_until > now => {
                 Some(state.blocked_until.saturating_duration_since(now))
@@ -1158,7 +1166,7 @@ impl PrioritizedDownloadClientRouter {
                     skipped_client_ids.push(config.id.clone());
                     return None;
                 }
-                if let Some(remaining) = self.feedback_backoff_remaining(&config.id, read_kind) {
+                if let Some(remaining) = self.feedback_backoff_remaining(&config, read_kind) {
                     debug!(
                         client_id = %config.id,
                         client = %config.name,
@@ -1258,7 +1266,7 @@ impl PrioritizedDownloadClientRouter {
         for (config, elapsed, result) in reads {
             match result {
                 Ok(mut items) => {
-                    self.record_feedback_read_success(&config.id, read_kind);
+                    self.record_feedback_read_success(&config, read_kind);
                     read_summary.record_success();
                     for item in &mut items {
                         item.client_id = config.id.clone();
@@ -1267,7 +1275,7 @@ impl PrioritizedDownloadClientRouter {
                     listing.items.extend(items);
                 }
                 Err(error) => {
-                    self.record_feedback_read_failure(&config.id, read_kind, elapsed);
+                    self.record_feedback_read_failure(&config, read_kind, elapsed);
                     read_summary.record_error(&error);
                     listing.unreadable_client_ids.push(config.id.clone());
                     match read_kind {
@@ -1315,17 +1323,21 @@ impl PrioritizedDownloadClientRouter {
         .await
     }
 
-    fn record_feedback_read_success(&self, client_id: &str, kind: DownloadFeedbackReadKind) {
+    fn record_feedback_read_success(
+        &self,
+        config: &DownloadClientConfig,
+        kind: DownloadFeedbackReadKind,
+    ) {
         let mut backoff = self
             .feedback_read_backoff
             .lock()
             .expect("feedback read backoff mutex");
-        backoff.remove(&(client_id.to_string(), kind));
+        backoff.remove(&(config.id.clone(), kind, config.updated_at));
     }
 
     fn record_feedback_read_failure(
         &self,
-        client_id: &str,
+        config: &DownloadClientConfig,
         kind: DownloadFeedbackReadKind,
         failed_read_elapsed: Duration,
     ) {
@@ -1333,7 +1345,9 @@ impl PrioritizedDownloadClientRouter {
             .feedback_read_backoff
             .lock()
             .expect("feedback read backoff mutex");
-        let key = (client_id.to_string(), kind);
+        // A read started with older credentials may finish after a save. Its
+        // cooldown belongs only to that configuration revision.
+        let key = (config.id.clone(), kind, config.updated_at);
         let failures = backoff
             .get(&key)
             .map(|state| state.consecutive_failures.saturating_add(1))
@@ -1991,25 +2005,31 @@ impl PrioritizedDownloadClientRouter {
             return Ok(None);
         };
         let Some(proxy_configs) = self.proxy_configs.as_ref() else {
-            return Err(AppError::Validation(format!(
-                "download client {} is assigned a proxy but the proxy repository is not wired",
-                config.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_PROXY_REPOSITORY_UNAVAILABLE,
+                format!(
+                    "download client {} is assigned a proxy but the proxy repository is not wired",
+                    config.id
+                ),
+            ));
         };
         let proxy_config = proxy_configs
             .get_by_id(proxy_config_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::ACQUISITION_DOWNLOAD_PROXY_NOT_FOUND, format!(
                     "download client {} references proxy configuration {proxy_config_id}, which was not found",
                     config.id
                 ))
             })?;
         if !proxy_config.is_enabled {
-            return Err(AppError::Validation(format!(
-                "download client {} is assigned proxy {proxy_config_id}, which is disabled",
-                config.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_PROXY_DISABLED,
+                format!(
+                    "download client {} is assigned proxy {proxy_config_id}, which is disabled",
+                    config.id
+                ),
+            ));
         }
         Ok(Some(proxy_config))
     }
@@ -2039,10 +2059,10 @@ impl PrioritizedDownloadClientRouter {
                 let parsed_config = parse_download_client_config_json(&config.config_json)?;
                 let base_url =
                     resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
-                        AppError::Validation(format!(
-                            "download client {} has no valid base URL",
-                            config.id
-                        ))
+                        AppError::validation_refused(
+                            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_BASE_URL_INVALID,
+                            format!("download client {} has no valid base URL", config.id),
+                        )
                     })?;
                 let username = read_config_string(&parsed_config, &["username"]);
                 let password = read_config_string(&parsed_config, &["password"]);
@@ -2063,19 +2083,22 @@ impl PrioritizedDownloadClientRouter {
                 let parsed_config = parse_download_client_config_json(&config.config_json)?;
                 let base_url =
                     resolve_download_client_base_url(&parsed_config).ok_or_else(|| {
-                        AppError::Validation(format!(
-                            "download client {} has no valid base URL",
-                            config.id
-                        ))
+                        AppError::validation_refused(
+                            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_BASE_URL_INVALID,
+                            format!("download client {} has no valid base URL", config.id),
+                        )
                     })?;
                 let api_key = read_config_string(&parsed_config, &["api_key", "apiKey", "apikey"]);
                 let username = read_config_string(&parsed_config, &["username"]);
                 let password = read_config_string(&parsed_config, &["password"]);
                 if api_key.is_none() && (username.is_none() || password.is_none()) {
-                    return Err(AppError::Validation(format!(
-                        "download client {} (sabnzbd) requires an API key or username/password",
-                        config.id
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_CREDENTIALS_REQUIRED,
+                        format!(
+                            "download client {} (sabnzbd) requires an API key or username/password",
+                            config.id
+                        ),
+                    ));
                 }
                 let client = SabnzbdDownloadClient::with_auth_and_staged_nzb_store(
                     base_url,
@@ -2102,10 +2125,13 @@ impl PrioritizedDownloadClientRouter {
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
-                return Err(AppError::Validation(format!(
-                    "unsupported download client type '{}' for config {}",
-                    config.client_type, config.id
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_TYPE_UNSUPPORTED,
+                    format!(
+                        "unsupported download client type '{}' for config {}",
+                        config.client_type, config.id
+                    ),
+                ));
             }
         };
 
@@ -2195,9 +2221,10 @@ impl PrioritizedDownloadClientRouter {
             return Ok(Some(Arc::clone(&clients[0].1)));
         }
 
-        Err(AppError::Validation(format!(
-            "download client item not found: {id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND,
+            format!("download client item not found: {id}"),
+        ))
     }
 
     async fn resolve_client_for_id(
@@ -2271,7 +2298,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         let client = self
             .resolve_client_for_id(client_id)
             .await?
-            .ok_or_else(|| AppError::Validation("download client is missing or disabled".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_UNAVAILABLE,
+                    "download client is missing or disabled",
+                )
+            })?;
         client.discover_categories(client_id).await
     }
 
@@ -2281,18 +2313,22 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         indexer_id: Option<&str>,
         source_kind: DownloadSourceKind,
     ) -> AppResult<Vec<scryer_application::IndexerGrabClient>> {
-        let indexer =
-            if let Some(id) = indexer_id {
-                let repository = self
-                    .indexer_configs
-                    .as_ref()
-                    .ok_or_else(|| AppError::Validation("indexer routing is unavailable".into()))?;
-                Some(repository.get_by_id(id).await?.ok_or_else(|| {
-                    AppError::Validation(format!("indexer {id} no longer exists"))
-                })?)
-            } else {
-                None
-            };
+        let indexer = if let Some(id) = indexer_id {
+            let repository = self.indexer_configs.as_ref().ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_INDEXER_ROUTING_UNAVAILABLE,
+                    "indexer routing is unavailable",
+                )
+            })?;
+            Some(repository.get_by_id(id).await?.ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_INDEXER_NOT_FOUND,
+                    format!("indexer {id} no longer exists"),
+                )
+            })?)
+        } else {
+            None
+        };
         let mapped = indexer
             .as_ref()
             .and_then(|value| value.download_client_id.as_deref())
@@ -2322,7 +2358,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             });
         }
         if eligible.is_empty() {
-            return Err(AppError::Validation(match mapped {
+            return Err(AppError::validation_refused(crate::error_reasons::ACQUISITION_NO_ROUTABLE_DOWNLOAD_CLIENT, match mapped {
                 Some(id) => format!("Indexer mapping requires client {id}, which is missing, disabled, incompatible, or excluded by routing. Update the indexer mapping or client routing."),
                 None => "No enabled compatible download client is allowed by routing. Configure a download client or update routing.".into(),
             }));
@@ -2340,33 +2376,22 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     /// knows the release title to name in the message.
     async fn fetch_release_artifact(
         &self,
-        request: &DownloadClientAddRequest,
+        request: &IndexerArtifactResolutionRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {
         let Some(resolver) = self.indexer_artifact_resolver.as_ref() else {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_ARTIFACT_RESOLVER_UNAVAILABLE,
                 "artifact download is not supported: no indexer artifact resolver is wired"
                     .to_string(),
             ));
         };
-        let source_url = request
-            .source_hint
-            .as_deref()
-            .map(str::trim)
-            .filter(|source| !source.is_empty())
-            .ok_or_else(|| {
-                AppError::Validation("release has no download artifact to fetch".to_string())
-            })?;
-        let prepared = resolver
-            .resolve_artifact(&IndexerArtifactResolutionRequest {
-                indexer_id: request.indexer_id.clone(),
-                source_url: source_url.to_string(),
-                source_kind: request.source_kind,
-                info_hash_hint: request.info_hash_hint.clone(),
-                title_id: None,
-                search_facet: request.search_facet.clone(),
-                cancellation: tokio_util::sync::CancellationToken::new(),
-            })
-            .await?;
+        if request.source_url.trim().is_empty() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_DOWNLOAD_ARTIFACT_REQUIRED,
+                "release has no download artifact to fetch".to_string(),
+            ));
+        }
+        let prepared = resolver.resolve_artifact(request).await?;
         match prepared {
             PreparedIndexerArtifact::Resolved(artifact) => Ok(artifact),
             PreparedIndexerArtifact::StagedNzb(lease) => {
@@ -2422,7 +2447,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             DownloadFeedbackReadKind::Queue,
             DownloadFeedbackReadKind::History,
         ] {
-            if self.feedback_backoff_remaining(&config.id, kind).is_some() {
+            if self.feedback_backoff_remaining(config, kind).is_some() {
                 return Ok(DownloadClientObservation::Unknown {
                     reason: "original download client is in feedback backoff".into(),
                     next_history_offset: offset,
@@ -2443,7 +2468,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             Ok(observation) => observation,
             Err(error) => {
                 self.record_feedback_read_failure(
-                    &config.id,
+                    config,
                     DownloadFeedbackReadKind::History,
                     started.elapsed(),
                 );
@@ -2464,15 +2489,18 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     ) -> AppResult<DownloadGrabResult> {
         if let Some(client_id) = request.pinned_download_client_id.as_deref() {
             let source_kind = request.source_kind.ok_or_else(|| {
-                AppError::Validation("a selected client requires a release protocol".into())
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_RELEASE_PROTOCOL_REQUIRED,
+                    "a selected client requires a release protocol",
+                )
             })?;
             let eligible = self
                 .indexer_grab_clients(&request.title, request.indexer_id.as_deref(), source_kind)
                 .await?;
             if !eligible.iter().any(|client| client.id == client_id) {
-                return Err(AppError::Validation(
-                    "Selected download client is no longer eligible. Refresh routing and retry."
-                        .into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_ROUTING_STALE,
+                    "Selected download client is no longer eligible. Refresh routing and retry.",
                 ));
             }
         }
@@ -2495,8 +2523,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             mapped_client_id,
         ) && selected != mapped
         {
-            return Err(AppError::Validation(
-                "indexer mapping changed; refresh routing and retry".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_MAPPING_CHANGED,
+                "indexer mapping changed; refresh routing and retry",
             ));
         }
         let request = match self
@@ -2594,17 +2623,18 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             else {
                 self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_missing")
                     .await;
-                return Err(AppError::Validation(format!(
-                    "download client {pinned_client_id} does not exist"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_NOT_FOUND,
+                    format!("download client {pinned_client_id} does not exist"),
+                ));
             };
             if !config.is_enabled {
                 self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_disabled")
                     .await;
-                return Err(AppError::Validation(format!(
-                    "download client {} is disabled",
-                    config.name
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_DISABLED,
+                    format!("download client {} is disabled", config.name),
+                ));
             }
             vec![config.clone()]
         } else if let Some(mapped_client_id) = mapped_client_id {
@@ -3124,7 +3154,9 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                     }
                     let should_failover = matches!(
                         error,
-                        AppError::Repository(_) | AppError::DownloadSubmitUnavailable(_)
+                        AppError::Repository(_)
+                            | AppError::RepositoryFailure { .. }
+                            | AppError::DownloadSubmitUnavailable(_)
                     );
                     warn!(
                         client_id = config.id.as_str(),
@@ -3215,7 +3247,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::TitleQueue,
                     );
                     read_summary.record_success();
@@ -3227,7 +3259,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::TitleQueue,
                         elapsed,
                     );
@@ -3289,7 +3321,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentActivity,
                     );
                     read_summary.record_success();
@@ -3302,7 +3334,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentActivity,
                         elapsed,
                     );
@@ -3355,7 +3387,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             queue_read_outcomes.push((download_client_metric_labels(&config), read_ok));
             match result {
                 Ok(mut items) => {
-                    self.record_feedback_read_success(&config.id, DownloadFeedbackReadKind::Queue);
+                    self.record_feedback_read_success(&config, DownloadFeedbackReadKind::Queue);
                     any_client_read_succeeded = true;
                     queue_successes.insert(config.id.clone());
                     for item in &mut items {
@@ -3366,7 +3398,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::Queue,
                         elapsed,
                     );
@@ -3416,7 +3448,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 match result {
                     Ok((mut items, completed)) => {
                         self.record_feedback_read_success(
-                            &config.id,
+                            &config,
                             DownloadFeedbackReadKind::RecentActivity,
                         );
                         any_client_read_succeeded = true;
@@ -3468,7 +3500,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                     }
                     Err(error) => {
                         self.record_feedback_read_failure(
-                            &config.id,
+                            &config,
                             DownloadFeedbackReadKind::RecentActivity,
                             elapsed,
                         );
@@ -3541,7 +3573,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::TitleRecentActivity,
                     );
                     read_summary.record_success();
@@ -3554,7 +3586,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::TitleRecentActivity,
                         elapsed,
                     );
@@ -3607,10 +3639,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             client_priorities.insert(config.id.clone(), config.client_priority);
             match result {
                 Ok(mut items) => {
-                    self.record_feedback_read_success(
-                        &config.id,
-                        DownloadFeedbackReadKind::History,
-                    );
+                    self.record_feedback_read_success(&config, DownloadFeedbackReadKind::History);
                     read_summary.record_success();
                     for item in &mut items {
                         item.client_id = config.id.clone();
@@ -3620,7 +3649,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::History,
                         elapsed,
                     );
@@ -3672,7 +3701,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentCompletedDownloads,
                     );
                     tracing::debug!(
@@ -3696,7 +3725,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentCompletedDownloads,
                         elapsed,
                     );
@@ -3799,7 +3828,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentCompletedDownloads,
                     );
                     let raw_count = items.len();
@@ -3829,7 +3858,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
                 Err(error) => {
                     self.record_feedback_read_failure(
-                        &config.id,
+                        &config,
                         DownloadFeedbackReadKind::RecentCompletedDownloads,
                         elapsed,
                     );
@@ -3939,7 +3968,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         {
             Ok(item) => {
                 self.record_feedback_read_success(
-                    &config.id,
+                    config,
                     DownloadFeedbackReadKind::RecentCompletedDownloads,
                 );
                 Ok(item.map(|mut item| {
@@ -3965,7 +3994,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             }
             Err(error) => {
                 self.record_feedback_read_failure(
-                    &config.id,
+                    config,
                     DownloadFeedbackReadKind::RecentCompletedDownloads,
                     started_at.elapsed(),
                 );
@@ -3992,36 +4021,40 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         if let Some(client) = self.resolve_client_for_queue_action(id, false).await? {
             return client.pause_queue_item(id).await;
         }
-        Err(AppError::Validation(format!(
-            "download client item not found: {id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND,
+            format!("download client item not found: {id}"),
+        ))
     }
 
     async fn pause_queue_item_for_client(&self, client_id: &str, id: &str) -> AppResult<()> {
         if let Some(client) = self.resolve_client_for_id(client_id).await? {
             return client.pause_queue_item(id).await;
         }
-        Err(AppError::Validation(format!(
-            "download client not found: {client_id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ROUTED_DOWNLOAD_CLIENT_NOT_FOUND,
+            format!("download client not found: {client_id}"),
+        ))
     }
 
     async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
         if let Some(client) = self.resolve_client_for_queue_action(id, false).await? {
             return client.resume_queue_item(id).await;
         }
-        Err(AppError::Validation(format!(
-            "download client item not found: {id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND,
+            format!("download client item not found: {id}"),
+        ))
     }
 
     async fn resume_queue_item_for_client(&self, client_id: &str, id: &str) -> AppResult<()> {
         if let Some(client) = self.resolve_client_for_id(client_id).await? {
             return client.resume_queue_item(id).await;
         }
-        Err(AppError::Validation(format!(
-            "download client not found: {client_id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ROUTED_DOWNLOAD_CLIENT_NOT_FOUND,
+            format!("download client not found: {client_id}"),
+        ))
     }
 
     async fn retry_failed_job_for_client(
@@ -4049,9 +4082,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         if let Some(client) = self.resolve_client_for_queue_action(id, is_history).await? {
             return client.delete_queue_item(id, is_history, remove_data).await;
         }
-        Err(AppError::Validation(format!(
-            "download client item not found: {id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND,
+            format!("download client item not found: {id}"),
+        ))
     }
 
     async fn delete_queue_item_for_client_id(
@@ -4064,9 +4098,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         if let Some(client) = self.resolve_client_for_id(client_id).await? {
             return client.delete_queue_item(id, is_history, remove_data).await;
         }
-        Err(AppError::Validation(format!(
-            "download client not found: {client_id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ROUTED_DOWNLOAD_CLIENT_NOT_FOUND,
+            format!("download client not found: {client_id}"),
+        ))
     }
 
     async fn mark_imported_non_destructive_for_client_id(
@@ -4077,9 +4112,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         if let Some(client) = self.resolve_client_for_id(client_id).await? {
             return client.mark_imported_non_destructive(request).await;
         }
-        Err(AppError::Validation(format!(
-            "download client not found: {client_id}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_ROUTED_DOWNLOAD_CLIENT_NOT_FOUND,
+            format!("download client not found: {client_id}"),
+        ))
     }
 
     async fn delete_queue_item_for_client(
@@ -4092,9 +4128,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         if let Some(client) = self.resolve_client_for_type(client_type).await? {
             return client.delete_queue_item(id, is_history, remove_data).await;
         }
-        Err(AppError::Validation(format!(
-            "download client not found for type: {client_type}"
-        )))
+        Err(AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_TYPE_NOT_FOUND,
+            format!("download client not found for type: {client_type}"),
+        ))
     }
 
     async fn get_client_status_for_client_id(
@@ -4103,7 +4140,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
     ) -> AppResult<DownloadClientStatus> {
         let client_id = client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::Validation("client id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_CLIENT_ID_REQUIRED,
+                "client id is required",
+            ));
         }
 
         let config = self
@@ -4111,7 +4151,10 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             .get_by_id(client_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!("download client not found: {client_id}"))
+                AppError::validation_refused(
+                    crate::error_reasons::ACQUISITION_ROUTED_DOWNLOAD_CLIENT_NOT_FOUND,
+                    format!("download client not found: {client_id}"),
+                )
             })?;
         let proxy_config = self.proxy_for_download_client(&config).await?;
         let client = Self::client_from_config(
@@ -4348,6 +4391,7 @@ mod tests {
     fn test_indexer_config(base_url: &str) -> scryer_domain::IndexerConfig {
         let now = Utc::now();
         scryer_domain::IndexerConfig {
+            last_error_code: None,
             id: "indexer-1".to_string(),
             name: "Indexer".to_string(),
             provider_type: "torznab".to_string(),
@@ -5757,7 +5801,7 @@ mod tests {
         request.pinned_download_client_id = Some("other".into());
         assert!(matches!(
             router.submit_download(&request).await,
-            Err(AppError::Validation(_))
+            Err(AppError::Validation(_) | AppError::ValidationRefused { .. })
         ));
     }
 
@@ -5972,7 +6016,10 @@ mod tests {
                 .await
                 .expect_err("an unusable pinned client must not fall back");
             assert!(
-                matches!(error, AppError::Validation(_)),
+                matches!(
+                    error,
+                    AppError::Validation(_) | AppError::ValidationRefused { .. }
+                ),
                 "{pinned}: {error:?}"
             );
         }
@@ -6504,6 +6551,7 @@ mod tests {
 
     fn test_queue_item(id: &str) -> DownloadQueueItem {
         DownloadQueueItem {
+            attention_reason_code: None,
             id: format!("queue-{id}"),
             title_id: None,
             episode_id: None,
@@ -6674,15 +6722,18 @@ mod tests {
         ));
         assert!(matches!(
             router.pause_queue_item("job-1").await,
-            Err(AppError::Validation(message)) if message.contains("download client item not found")
+            Err(AppError::ValidationRefused { reason, .. })
+                if reason == crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND
         ));
         assert!(matches!(
             router.resume_queue_item("job-1").await,
-            Err(AppError::Validation(message)) if message.contains("download client item not found")
+            Err(AppError::ValidationRefused { reason, .. })
+                if reason == crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND
         ));
         assert!(matches!(
             router.delete_queue_item("job-1", false, false).await,
-            Err(AppError::Validation(message)) if message.contains("download client item not found")
+            Err(AppError::ValidationRefused { reason, .. })
+                if reason == crate::error_reasons::ACQUISITION_DOWNLOAD_CLIENT_ITEM_NOT_FOUND
         ));
     }
 
@@ -7043,7 +7094,7 @@ mod tests {
             .expect_err("an anime-categorized nzb must not be submitted for a series subject");
 
         assert!(
-            matches!(&error, AppError::Validation(message) if message.contains("category_mismatch")),
+            error.validation_reason() == Some("INDEXER_CATEGORY_MISMATCH"),
             "expected a definitive category_mismatch veto, got {error:?}"
         );
         assert!(
@@ -7769,6 +7820,7 @@ mod tests {
         .with_indexer_config_repositories(
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![scryer_domain::IndexerConfig {
+                    last_error_code: None,
                     seeding_profile_id: Some("indexer-profile".to_string()),
                     ..test_indexer_config("https://indexer.invalid")
                 }],
@@ -9440,6 +9492,37 @@ mod tests {
             parse_download_client_feedback_timeout(Some("invalid"), default),
             default
         );
+    }
+
+    #[test]
+    fn feedback_cooldown_is_scoped_to_the_saved_configuration_revision() {
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: Vec::new(),
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            None,
+        );
+        let old = test_config("repair-client", "Repair Fixture", "nzbget", 0);
+        let mut repaired = old.clone();
+        repaired.updated_at += chrono::Duration::nanoseconds(1);
+        let kind = DownloadFeedbackReadKind::Queue;
+        router.record_feedback_read_failure(&old, kind, Duration::ZERO);
+        assert!(router.feedback_backoff_remaining(&old, kind).is_some());
+        assert!(router.feedback_backoff_remaining(&repaired, kind).is_none());
+        // A read using the previous credentials can finish after the save.
+        router.record_feedback_read_failure(&old, kind, Duration::ZERO);
+        assert!(router.feedback_backoff_remaining(&repaired, kind).is_none());
+        router.record_feedback_read_failure(&repaired, kind, Duration::ZERO);
+        router.record_feedback_read_success(&old, kind);
+        assert!(
+            router.feedback_backoff_remaining(&repaired, kind).is_some(),
+            "an old success must not erase a current failure"
+        );
+        router.record_feedback_read_success(&repaired, kind);
+        assert!(router.feedback_backoff_remaining(&repaired, kind).is_none());
     }
 
     #[test]

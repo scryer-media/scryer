@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -103,28 +104,41 @@ export function SettingsRecycleBinContainer() {
   const t = useTranslate();
   const client = useClient();
   const { user } = useAuth();
-  const canManageConfig = hasAnyAppPermission(user, [APP_PERMISSIONS.manageSystemSettings]);
+  const canManageConfig = hasAnyAppPermission(user, [
+    APP_PERMISSIONS.manageSystemSettings,
+  ]);
   const canManageLibraryItems = useCallback(
     (libraryId: string) =>
       hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageTitles),
     [user],
   );
-  const canManageItems = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles);
+  const canManageItems = hasAnyLibraryPermission(
+    user,
+    LIBRARY_PERMISSIONS.manageTitles,
+  );
   const [items, setItems] = useState<RecycledItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [itemsRefreshRevision, setItemsRefreshRevision] = useState(0);
   const [settings, setSettings] = useState<RecycleBinSettings | null>(null);
-  const [relocation, setRelocation] = useState<RecycleBinRelocation | null>(null);
+  const [relocation, setRelocation] = useState<RecycleBinRelocation | null>(
+    null,
+  );
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [libraries, setLibraries] = useState<LibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<string[]>([]);
-  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(() => new Set());
-  const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(() => new Set());
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [pendingItemIds, setPendingItemIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [mutatingId, setMutatingId] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(
+    null,
+  );
   const jobUnregistersRef = useRef(new Set<() => void>());
   const { registerInteractiveJobRun } = useJobRunToasts();
 
@@ -141,7 +155,10 @@ export function SettingsRecycleBinContainer() {
       setSettings(data.recycleBinSettings);
     } catch (error) {
       setSettings(null);
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setSettingsLoading(false);
     }
@@ -175,10 +192,16 @@ export function SettingsRecycleBinContainer() {
           canManageLibraryItems(library.id),
         );
         setLibraries(nextLibraries);
-        setSelectedLibraryIds((current) => normalizeLibraryFilterSelection(current, nextLibraries));
+        setSelectedLibraryIds((current) =>
+          normalizeLibraryFilterSelection(current, nextLibraries),
+        );
       })
       .catch((error) => {
-        if (!cancelled) setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+        if (!cancelled)
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+            { level: "ERROR" },
+          );
       })
       .finally(() => {
         if (!cancelled) setLibrariesLoading(false);
@@ -211,13 +234,27 @@ export function SettingsRecycleBinContainer() {
       const nextIds = new Set(nextItems.map((item) => item.id));
       setItems(nextItems);
       setTotalCount(data?.recycledItems?.totalCount ?? 0);
-      setSelectedItemIds((current) => new Set(Array.from(current).filter((id) => nextIds.has(id))));
+      setSelectedItemIds(
+        (current) =>
+          new Set(Array.from(current).filter((id) => nextIds.has(id))),
+      );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setItemsLoading(false);
     }
-  }, [canManageItems, client, selectedLibraryIds, setGlobalStatus, settings?.enabled, settingsLoading, t]);
+  }, [
+    canManageItems,
+    client,
+    selectedLibraryIds,
+    setGlobalStatus,
+    settings?.enabled,
+    settingsLoading,
+    t,
+  ]);
 
   useEffect(() => {
     void fetchItems();
@@ -228,9 +265,12 @@ export function SettingsRecycleBinContainer() {
     setSettingsSaving(true);
     try {
       const { data, error } = await client
-        .mutation<UpdateRecycleBinSettingsResult>(updateRecycleBinSettingsMutation, {
-          input: buildRecycleBinSettingsInput(changes),
-        })
+        .mutation<UpdateRecycleBinSettingsResult>(
+          updateRecycleBinSettingsMutation,
+          {
+            input: buildRecycleBinSettingsInput(changes),
+          },
+        )
         .toPromise();
       if (error) throw error;
       const saved = data?.updateRecycleBinSettings;
@@ -252,7 +292,10 @@ export function SettingsRecycleBinContainer() {
         { level: "SUCCESS" },
       );
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setSettingsSaving(false);
     }
@@ -287,13 +330,18 @@ export function SettingsRecycleBinContainer() {
     [],
   );
 
-  const validateBatchItems = (requested: RecycledItem[]): RecycledItem[] | null => {
+  const validateBatchItems = (
+    requested: RecycledItem[],
+  ): RecycledItem[] | null => {
     const targets = uniqueItems(requested).filter(
-      (item) => canManageLibraryItems(item.libraryId) && !pendingItemIds.has(item.id),
+      (item) =>
+        canManageLibraryItems(item.libraryId) && !pendingItemIds.has(item.id),
     );
     if (targets.length === 0) return null;
     if (targets.length > RECYCLE_BATCH_MAX_ITEMS) {
-      setGlobalStatus(t("settings.recycleBinBatchLimit", { count: RECYCLE_BATCH_MAX_ITEMS }));
+      setGlobalStatus(
+        t("settings.recycleBinBatchLimit", { count: RECYCLE_BATCH_MAX_ITEMS }),
+      );
       return null;
     }
     return targets;
@@ -319,11 +367,15 @@ export function SettingsRecycleBinContainer() {
         type: "restore",
         items: targets,
         fingerprint: preview.fingerprint,
-        occupiedCount: preview.items.filter((item) => item.destinationOccupied).length,
+        occupiedCount: preview.items.filter((item) => item.destinationOccupied)
+          .length,
         conflictPolicy: "KEEP_BOTH",
       });
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingId(null);
     }
@@ -340,16 +392,15 @@ export function SettingsRecycleBinContainer() {
     setMutatingId("__batch__");
     try {
       const { data, error } = await client
-        .mutation<{ restoreRecycledItems?: { ids?: string[]; jobRun?: unknown } }>(
-          restoreRecycledItemsMutation,
-          {
-            input: {
-              ids: pendingAction.items.map((item) => item.id),
-              conflictPolicy: pendingAction.conflictPolicy,
-              previewFingerprint: pendingAction.fingerprint,
-            },
+        .mutation<{
+          restoreRecycledItems?: { ids?: string[]; jobRun?: unknown };
+        }>(restoreRecycledItemsMutation, {
+          input: {
+            ids: pendingAction.items.map((item) => item.id),
+            conflictPolicy: pendingAction.conflictPolicy,
+            previewFingerprint: pendingAction.fingerprint,
           },
-        )
+        })
         .toPromise();
       if (error) throw error;
       const payload = data?.restoreRecycledItems;
@@ -365,7 +416,10 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingId(null);
     }
@@ -376,10 +430,11 @@ export function SettingsRecycleBinContainer() {
     setMutatingId("__batch__");
     try {
       const { data, error } = await client
-        .mutation<{ deleteRecycledItems?: { ids?: string[]; jobRun?: unknown } }>(
-          deleteRecycledItemsMutation,
-          { input: { ids: pendingAction.items.map((item) => item.id) } },
-        )
+        .mutation<{
+          deleteRecycledItems?: { ids?: string[]; jobRun?: unknown };
+        }>(deleteRecycledItemsMutation, {
+          input: { ids: pendingAction.items.map((item) => item.id) },
+        })
         .toPromise();
       if (error) throw error;
       const payload = data?.deleteRecycledItems;
@@ -395,7 +450,10 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingId(null);
     }
@@ -428,7 +486,10 @@ export function SettingsRecycleBinContainer() {
       );
       setPendingAction(null);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setMutatingId(null);
     }
@@ -471,7 +532,11 @@ export function SettingsRecycleBinContainer() {
         {t("label.loading")}
       </div>
     ) : (
-      <p id="settings-recycle-bin-load-error" role="alert" className="text-sm text-[var(--scry-danger-text)]">
+      <p
+        id="settings-recycle-bin-load-error"
+        role="alert"
+        className="text-sm text-[var(--scry-danger-text)]"
+      >
         {t("status.failedToLoad")}
       </p>
     );
@@ -524,7 +589,12 @@ export function SettingsRecycleBinContainer() {
         contentId="settings-recycle-bin-confirm-dialog"
         confirmButtonId="settings-recycle-bin-confirm"
         cancelButtonId="settings-recycle-bin-confirm-cancel"
-        confirmButtonVariant={pendingAction?.type === "restore" && pendingAction.conflictPolicy === "KEEP_BOTH" ? "default" : "destructive"}
+        confirmButtonVariant={
+          pendingAction?.type === "restore" &&
+          pendingAction.conflictPolicy === "KEEP_BOTH"
+            ? "default"
+            : "destructive"
+        }
         isBusy={mutatingId !== null}
         onConfirm={
           pendingAction?.type === "restore"
@@ -535,14 +605,21 @@ export function SettingsRecycleBinContainer() {
         }
         onCancel={() => setPendingAction(null)}
       >
-        {pendingAction?.type === "restore" && pendingAction.occupiedCount > 0 ? (
+        {pendingAction?.type === "restore" &&
+        pendingAction.occupiedCount > 0 ? (
           <div className="space-y-2 text-sm">
             <label className="flex cursor-pointer items-start gap-2">
               <input
+                id="settings-recycle-bin-conflict-keep-both"
                 type="radio"
                 name="settings-recycle-bin-conflict-policy"
                 checked={pendingAction.conflictPolicy === "KEEP_BOTH"}
-                onChange={() => setPendingAction({ ...pendingAction, conflictPolicy: "KEEP_BOTH" })}
+                onChange={() =>
+                  setPendingAction({
+                    ...pendingAction,
+                    conflictPolicy: "KEEP_BOTH",
+                  })
+                }
               />
               <span>
                 <strong>{t("settings.recycleBinKeepBoth")}</strong>
@@ -554,10 +631,16 @@ export function SettingsRecycleBinContainer() {
             </label>
             <label className="flex cursor-pointer items-start gap-2">
               <input
+                id="settings-recycle-bin-conflict-replace-existing"
                 type="radio"
                 name="settings-recycle-bin-conflict-policy"
                 checked={pendingAction.conflictPolicy === "REPLACE_EXISTING"}
-                onChange={() => setPendingAction({ ...pendingAction, conflictPolicy: "REPLACE_EXISTING" })}
+                onChange={() =>
+                  setPendingAction({
+                    ...pendingAction,
+                    conflictPolicy: "REPLACE_EXISTING",
+                  })
+                }
               />
               <span>
                 <strong>{t("settings.recycleBinReplaceExisting")}</strong>

@@ -464,7 +464,9 @@ fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
             return Err(parse_error("invalid ASF metadata name length"));
         }
         let named = |expected: &str| {
-            name.chunks_exact(2)
+            name.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .eq(expected.encode_utf16())
         };
@@ -576,7 +578,9 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
         }
         let raw = r.take(byte_len)?;
         let utf16 = raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
             .collect::<Vec<_>>();
         let original_language = String::from_utf16_lossy(&utf16)
@@ -624,7 +628,9 @@ fn parse_markers(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError
         let description = marker.take(description_bytes)?;
         if state.markers.len() < 4096 {
             let units = description
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect::<Vec<_>>();
             let title = match String::from_utf16(&units) {

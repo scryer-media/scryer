@@ -129,7 +129,7 @@ async fn import_completed_download_with_identity_policy_for_download(
         .execution_coordinator
         .try_acquire_source(completed)
         .await
-        .ok_or_else(|| AppError::Validation("this download is already being imported".into()))?;
+        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_ALREADY_BEING_IMPORTED, "this download is already being imported"))?;
     let source = completed_download_identity(completed);
     let canonical = match canonical_download_id {
         Some(id) => Some(*id),
@@ -150,9 +150,7 @@ async fn import_completed_download_with_identity_policy_for_download(
             .await?
             .is_some()
     {
-        return Err(AppError::Validation(
-            "this download is awaiting import retry reconciliation".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_AWAITING_IMPORT_RETRY_RECONCILIATION, "this download is awaiting import retry reconciliation"));
     }
     let request = match prepare_completed_import_request(
         app,

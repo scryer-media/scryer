@@ -92,7 +92,7 @@ async fn indexer_mapping_set_clear_idempotence_and_compatibility_contract() {
         .await
         .expect_err("Usenet indexer must reject torrent-only client");
     assert!(
-        matches!(incompatible, AppError::Validation(message) if message.contains("does not support"))
+        matches!(incompatible, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("does not support"))
     );
 
     let unknown_protocol = app
@@ -100,7 +100,7 @@ async fn indexer_mapping_set_clear_idempotence_and_compatibility_contract() {
         .await
         .expect_err("unknown protocol indexer must reject mapping");
     assert!(
-        matches!(unknown_protocol, AppError::Validation(message) if message.contains("does not declare"))
+        matches!(unknown_protocol, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("does not declare"))
     );
 
     let parent = app
@@ -108,7 +108,7 @@ async fn indexer_mapping_set_clear_idempotence_and_compatibility_contract() {
         .await
         .expect_err("Prowlarr management parent must reject mapping");
     assert!(
-        matches!(parent, AppError::Validation(message) if message.contains("management parents"))
+        matches!(parent, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("management parents"))
     );
 
     let catalog = app
@@ -220,7 +220,12 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
         )
         .await
         .expect_err("torrent provider must reject a Usenet-only client");
-    assert!(matches!(incompatible, AppError::Validation(_)));
+    assert!(matches!(
+        incompatible,
+        AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. }
+    ));
     let unchanged = app
         .get_indexer_config(&admin, "idx")
         .await
@@ -561,7 +566,15 @@ async fn managed_child_rate_limits_are_operator_owned_and_survive_sync() {
         )
         .await
         .expect_err("a zero budget is refused on a managed child as it is elsewhere");
-    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+    assert!(
+        matches!(
+            refused,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{refused:?}"
+    );
 
     let cleared = app
         .update_indexer_config(
@@ -617,7 +630,15 @@ async fn managed_child_rejects_edits_beyond_its_local_fields() {
         )
         .await
         .expect_err("a rename mixed into a managed child update must be refused");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     let unchanged = app
         .services
         .integrations
@@ -651,7 +672,10 @@ async fn indexer_mapping_requires_system_settings_permission() {
         .set_indexer_download_client_mapping(&actor, "idx-usenet", Some("sab"))
         .await
         .expect_err("mapping requires system settings permission");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
 }
 
 #[tokio::test]
@@ -691,7 +715,7 @@ async fn indexer_query_budget_is_refused_on_a_managed_children_parent() {
         .await
         .expect_err("a parent that syncs managed children takes no budget");
     assert!(
-        matches!(&refused_create, AppError::Validation(message) if message.contains("set on each managed indexer")),
+        matches!(&refused_create, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("set on each managed indexer")),
         "unexpected error: {refused_create:?}"
     );
 
@@ -707,7 +731,7 @@ async fn indexer_query_budget_is_refused_on_a_managed_children_parent() {
         .await
         .expect_err("a parent that syncs managed children takes no budget");
     assert!(
-        matches!(&refused_update, AppError::Validation(message) if message.contains("set on each managed indexer")),
+        matches!(&refused_update, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("set on each managed indexer")),
         "unexpected error: {refused_update:?}"
     );
     let unchanged = app

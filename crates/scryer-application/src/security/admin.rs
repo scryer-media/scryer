@@ -39,11 +39,15 @@ impl AppUseCase {
 
     fn reserved_local_username_error(username: &str) -> AppError {
         if Self::normalize_local_username(username).eq_ignore_ascii_case(ANONYMOUS_AUDIT_USERNAME) {
-            AppError::Validation("anonymous is reserved for authless audit attribution".into())
+            AppError::validation_refused(
+                crate::error_reasons::security::ANONYMOUS_RESERVED_AUTHLESS_AUDIT_ATTRIBUTION,
+                "anonymous is reserved for authless audit attribution",
+            )
         } else {
-            AppError::Validation(format!(
-                "{RECOVERY_ADMIN_USERNAME} is reserved for instance recovery"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::security::RESERVED_INSTANCE_RECOVERY,
+                format!("{RECOVERY_ADMIN_USERNAME} is reserved for instance recovery"),
+            )
         }
     }
 
@@ -161,11 +165,14 @@ impl AppUseCase {
     pub fn subscribe_events(&self) -> broadcast::Receiver<HistoryEvent> {
         let (tx, rx) = broadcast::channel(128);
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let mut wake_rx = app.runtime.events.domain_event_broadcast.subscribe();
             let mut cursor = 0_i64;
 
             loop {
+                if app.restore_coordinator().shutdown_workers.is_cancelled() {
+                    break;
+                }
                 let events = match app
                     .services
                     .events
@@ -174,7 +181,10 @@ impl AppUseCase {
                     .await
                 {
                     Ok(events) if !events.is_empty() => events,
-                    Ok(_) => match wake_rx.recv().await {
+                    Ok(_) => match tokio::select! {
+                        _ = app.restore_coordinator().shutdown_workers.cancelled() => break,
+                        event = wake_rx.recv() => event,
+                    } {
                         Ok(sequence) => {
                             if sequence > cursor {
                                 cursor = sequence.saturating_sub(1);
@@ -211,13 +221,19 @@ impl AppUseCase {
     pub async fn ensure_default_admin(&self, username: &str, password: &str) -> AppResult<User> {
         let username = Self::normalize_local_username(username);
         if username.is_empty() {
-            return Err(AppError::Validation("admin username is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::ADMIN_USERNAME_REQUIRED,
+                "admin username is required",
+            ));
         }
         if Self::is_reserved_local_username(username) {
             return Err(Self::reserved_local_username_error(username));
         }
         if password.is_empty() {
-            return Err(AppError::Validation("admin password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::ADMIN_PASSWORD_REQUIRED,
+                "admin password is required",
+            ));
         }
         if let Some(mut found) = self
             .services
@@ -275,7 +291,10 @@ impl AppUseCase {
             .default_admin_disabled
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            return Err(AppError::Validation("admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before using the default administrator".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::ADMIN_DISABLED_SCRYER_DISABLE_DEFAULT_ADMIN,
+                "admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before using the default administrator",
+            ));
         }
         let username = DEFAULT_ADMIN_USERNAME;
         if let Some(found) = self
@@ -357,18 +376,17 @@ impl AppUseCase {
         let select_account = username.is_some() || password.is_some() || reset;
         let username = Self::normalize_local_username(username.unwrap_or(DEFAULT_ADMIN_USERNAME));
         if username.is_empty() || Self::is_reserved_local_username(username) {
-            return Err(AppError::Validation(
-                "SCRYER_ADMIN_USERNAME must name a non-reserved local administrator".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::SCRYER_ADMIN_USERNAME_MUST_NAME_NON_RESERVED_LOCAL_ADMINISTRATOR, "SCRYER_ADMIN_USERNAME must name a non-reserved local administrator"));
         }
         if reset && password.is_none() {
-            return Err(AppError::Validation("SCRYER_ADMIN_PASSWORD_RESET requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::ADMIN_RESET_PASSWORD_REQUIRED,
+                "SCRYER_ADMIN_PASSWORD_RESET requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE",
+            ));
         }
         if select_account && disable_default && Self::is_default_admin_username(username) {
-            return Err(AppError::Validation(
-                "cannot provision or select admin while SCRYER_DISABLE_DEFAULT_ADMIN is true"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::CANNOT_PROVISION_SELECT_ADMIN_WHILE_SCRYER_DISABLE_DEFAULT_ADMIN_TRUE, "cannot provision or select admin while SCRYER_DISABLE_DEFAULT_ADMIN is true"
+                    ));
         }
         let users = self.services.identity.users.list_all().await?;
         let matches: Vec<_> = users
@@ -383,7 +401,10 @@ impl AppUseCase {
                     .first()
                     .is_some_and(|user| user.username != username))
         {
-            return Err(AppError::Validation("SCRYER_ADMIN_USERNAME conflicts with an existing username; use its exact stored spelling".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::SCRYER_ADMIN_USERNAME_CONFLICTS_EXISTING_USERNAME,
+                "SCRYER_ADMIN_USERNAME conflicts with an existing username; use its exact stored spelling",
+            ));
         }
         let existing = matches.first().copied();
         let initialize_seed = if select_account && password.is_some() {
@@ -406,10 +427,13 @@ impl AppUseCase {
                         .bootstrap_admin_eligible(user, password.is_none())
                         .await?
                 {
-                    return Err(AppError::Validation("selected bootstrap account must already be an enabled local full administrator; use recovery for lockouts".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::security::SELECTED_BOOTSTRAP_ACCOUNT_MUST_ALREADY_ENABLED_LOCAL_FULL_ADMINISTRATOR, "selected bootstrap account must already be an enabled local full administrator; use recovery for lockouts"));
                 }
             } else if password.is_none() {
-                return Err(AppError::Validation("new bootstrap administrator requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BOOTSTRAP_ADMIN_PASSWORD_REQUIRED,
+                    "new bootstrap administrator requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE",
+                ));
             }
             if reset || existing.is_none_or(|user| user.password_hash.is_none()) {
                 self.validate_new_local_password(password.unwrap_or_default())
@@ -428,7 +452,10 @@ impl AppUseCase {
                 }
             }
             if alternate.is_none() && !select_account {
-                return Err(AppError::Validation("SCRYER_DISABLE_DEFAULT_ADMIN requires another enabled local full administrator with a usable password".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::ALTERNATIVE_LOCAL_ADMIN_REQUIRED,
+                    "SCRYER_DISABLE_DEFAULT_ADMIN requires another enabled local full administrator with a usable password",
+                ));
             }
         }
         let changes_credentials =
@@ -527,8 +554,9 @@ impl AppUseCase {
                 user
             };
             if !self.bootstrap_admin_eligible(&user, true).await? {
-                return Err(AppError::Validation(
-                    "bootstrap administrator has no usable credentials".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BOOTSTRAP_ADMINISTRATOR_NO_USABLE_CREDENTIALS,
+                    "bootstrap administrator has no usable credentials",
                 ));
             }
             if !Self::is_default_admin_username(&user.username) {
@@ -537,9 +565,7 @@ impl AppUseCase {
         }
         if disable_default {
             alternate.ok_or_else(|| {
-                AppError::Validation(
-                    "cannot disable admin without another usable administrator".into(),
-                )
+                AppError::validation_refused(crate::error_reasons::security::CANNOT_DISABLE_ADMIN_WITHOUT_ANOTHER_USABLE_ADMINISTRATOR, "cannot disable admin without another usable administrator")
             })?;
             if let Some(admin) = self.find_default_user().await? {
                 self.set_user_login_enabled_internal(None, &admin.id, false, true)
@@ -605,10 +631,8 @@ impl AppUseCase {
             .await?
         {
             if !existing.account_kind.allows_local_credentials() {
-                return Err(AppError::Validation(
-                    "recovery admin user is externally managed and cannot be repaired for local login"
-                        .into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::security::RECOVERY_ADMIN_USER_EXTERNALLY_MANAGED_CANNOT_REPAIRED_LOCAL_LOGIN, "recovery admin user is externally managed and cannot be repaired for local login"
+                        ));
             }
             self.update_user_password_hash(&existing, &existing.id, password.to_string(), false)
                 .await?
@@ -695,6 +719,23 @@ impl AppUseCase {
                 )
                 .await?;
         }
+        if let Some(pending_admin) = self
+            .services
+            .identity
+            .users
+            .prepare_initial_authentication_recovery(&recovery_admin.id)
+            .await?
+        {
+            recovery_admin = pending_admin;
+            self.services.config.settings.invalidate_cache();
+            self.emit_configuration_changed_event(
+                None,
+                "initial_authentication",
+                Some(recovery_admin.id.clone()),
+                ConfigurationChangeAction::Updated,
+            )
+            .await;
+        }
         self.refresh_cached_jwt_signing_key(&recovery_admin).await?;
         Ok(recovery_admin)
     }
@@ -759,12 +800,13 @@ impl AppUseCase {
                 .default_admin_disabled
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
-            return Err(AppError::Validation(
-                "cannot create admin while SCRYER_DISABLE_DEFAULT_ADMIN is true".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::CANNOT_CREATE_ADMIN_WHILE_SCRYER_DISABLE_DEFAULT_ADMIN_TRUE, "cannot create admin while SCRYER_DISABLE_DEFAULT_ADMIN is true"));
         }
         if username.is_empty() {
-            return Err(AppError::Validation("username is required".to_string()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::USERNAME_REQUIRED,
+                "username is required".to_string(),
+            ));
         }
         if Self::is_reserved_local_username(&username) {
             return Err(Self::reserved_local_username_error(&username));
@@ -780,10 +822,10 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(format!(
-                "user {} already exists",
-                username
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::USER_ALREADY_EXISTS,
+                format!("user {} already exists", username),
+            ));
         }
 
         let user = User {
@@ -855,7 +897,10 @@ impl AppUseCase {
         self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
             .await?;
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
 
         let existing = self
@@ -864,21 +909,30 @@ impl AppUseCase {
             .users
             .get_by_id(&actor.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", actor.id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", actor.id),
+                )
+            })?;
 
         if !existing.account_kind.allows_local_credentials() {
-            return Err(AppError::Validation(
-                "externally managed users cannot set a Scryer password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD,
+                "externally managed users cannot set a Scryer password",
             ));
         }
 
-        let hash = existing
-            .password_hash
-            .as_deref()
-            .ok_or_else(|| AppError::Validation("account has no password set".into()))?;
+        let hash = existing.password_hash.as_deref().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::security::ACCOUNT_NO_PASSWORD_SET,
+                "account has no password set",
+            )
+        })?;
         if !self.validate_password(&current_password, hash)? {
-            return Err(AppError::Unauthorized(
-                "current password is incorrect".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CURRENT_PASSWORD_INCORRECT,
+                "current password is incorrect",
             ));
         }
 
@@ -899,16 +953,25 @@ impl AppUseCase {
             .users
             .get_by_id(&actor.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", actor.id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", actor.id),
+                )
+            })?;
 
         if !existing.account_kind.allows_local_credentials() {
-            return Err(AppError::Validation(
-                "externally managed users cannot set a Scryer password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD,
+                "externally managed users cannot set a Scryer password",
             ));
         }
 
         if existing.password_hash.is_some() {
-            return Err(AppError::Validation("current password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CURRENT_PASSWORD_REQUIRED,
+                "current password is required",
+            ));
         }
 
         self.update_own_password_hash(actor, password, None).await
@@ -924,13 +987,17 @@ impl AppUseCase {
             .await?;
 
         if user_id == actor.id {
-            return Err(AppError::Validation(
-                "use change_own_password to update your own password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::USE_CHANGE_OWN_PASSWORD_UPDATE_OWN_PASSWORD,
+                "use change_own_password to update your own password",
             ));
         }
 
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
         let existing = self
             .services
@@ -938,10 +1005,16 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
         if !existing.account_kind.allows_local_credentials() {
-            return Err(AppError::Validation(
-                "externally managed users cannot set a Scryer password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD,
+                "externally managed users cannot set a Scryer password",
             ));
         }
 
@@ -979,7 +1052,10 @@ impl AppUseCase {
         expected_auth_session_version: &Option<String>,
     ) -> AppResult<(User, Option<String>)> {
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
         let existing = self
             .services
@@ -987,10 +1063,16 @@ impl AppUseCase {
             .users
             .get_by_id(&actor.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", actor.id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", actor.id),
+                )
+            })?;
         if !existing.account_kind.allows_local_credentials() {
-            return Err(AppError::Validation(
-                "externally managed users cannot set a Scryer password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD,
+                "externally managed users cannot set a Scryer password",
             ));
         }
 
@@ -998,8 +1080,9 @@ impl AppUseCase {
         if let Some(password_hash) = existing.password_hash.as_deref()
             && self.validate_password(&password, password_hash)?
         {
-            return Err(AppError::Validation(
-                "new password must differ from the temporary password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::NEW_PASSWORD_MUST_DIFFER_TEMPORARY_PASSWORD,
+                "new password must differ from the temporary password",
             ));
         }
         let auth_session_version = Id::new().0;
@@ -1034,7 +1117,10 @@ impl AppUseCase {
         expected_password_hash: Option<&str>,
     ) -> AppResult<User> {
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
 
         self.validate_new_local_password(&password).await?;
@@ -1074,7 +1160,10 @@ impl AppUseCase {
         password_change_required: bool,
     ) -> AppResult<User> {
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
 
         let existing = self
@@ -1083,10 +1172,16 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
         if !existing.account_kind.allows_local_credentials() {
-            return Err(AppError::Validation(
-                "externally managed users cannot set a Scryer password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD,
+                "externally managed users cannot set a Scryer password",
             ));
         }
 
@@ -1134,7 +1229,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", user_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", user_id),
+                )
+            })?;
 
         if user.id == actor.id {
             self.reject_self_lockout(&user, permissions).await?;
@@ -1172,9 +1272,7 @@ impl AppUseCase {
             scryer_domain::AppPermission::ManagePermissions,
         ]);
         if !next_permissions.contains(management_permissions) {
-            return Err(AppError::Validation(
-                "cannot remove your own user-management or permission-management access".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::security::CANNOT_REMOVE_OWN_USER_MANAGEMENT_PERMISSION_MANAGEMENT_ACCESS, "cannot remove your own user-management or permission-management access"));
         }
 
         let full_admin_permissions = Self::required_startup_admin_app_permissions();
@@ -1199,8 +1297,9 @@ impl AppUseCase {
                 return Ok(());
             }
         }
-        Err(AppError::Validation(
-            "cannot demote the last full administrator".into(),
+        Err(AppError::validation_refused(
+            crate::error_reasons::security::CANNOT_DEMOTE_LAST_FULL_ADMINISTRATOR,
+            "cannot demote the last full administrator",
         ))
     }
 
@@ -1220,7 +1319,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", user_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", user_id),
+                )
+            })?;
         let grants = grants
             .into_iter()
             .map(|mut grant| {
@@ -1277,7 +1381,12 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {user_id}"),
+                )
+            })?;
         if enabled
             && Self::is_default_admin_username(&user.username)
             && self
@@ -1286,16 +1395,21 @@ impl AppUseCase {
                 .default_admin_disabled
                 .load(std::sync::atomic::Ordering::SeqCst)
         {
-            return Err(AppError::Validation("admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before enabling it".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::ADMIN_DISABLED_SCRYER_DISABLE_DEFAULT_ADMIN,
+                "admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before enabling it",
+            ));
         }
         if actor.is_some_and(|actor| user.id == actor.id) {
-            return Err(AppError::Validation(
-                "cannot change login status for the current user".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CANNOT_CHANGE_LOGIN_STATUS_CURRENT_USER,
+                "cannot change login status for the current user",
             ));
         }
         if Self::is_reserved_recovery_username(&user.username) {
-            return Err(AppError::Validation(
-                "recovery-admin login is managed by the environment".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::RECOVERY_ADMIN_LOGIN_MANAGED_ENVIRONMENT,
+                "recovery-admin login is managed by the environment",
             ));
         }
         let user = self.attach_user_authorization(user).await?;
@@ -1330,8 +1444,9 @@ impl AppUseCase {
                     .usable_admin_login_exists_excluding(Some(user_id))
                     .await?
             {
-                return Err(AppError::Validation(
-                    "cannot disable the last usable full administrator".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::CANNOT_DISABLE_LAST_USABLE_FULL_ADMINISTRATOR,
+                    "cannot disable the last usable full administrator",
                 ));
             }
         }
@@ -1378,15 +1493,24 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", user_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", user_id),
+                )
+            })?;
 
         if user.id == actor.id {
-            return Err(AppError::Validation("cannot delete current user".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CANNOT_DELETE_CURRENT_USER,
+                "cannot delete current user",
+            ));
         }
 
         if Self::is_default_admin_username(&user.username) {
-            return Err(AppError::Validation(
-                "cannot delete the default admin; disable its login instead".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CANNOT_DELETE_DEFAULT_ADMIN,
+                "cannot delete the default admin; disable its login instead",
             ));
         }
 
@@ -1410,8 +1534,9 @@ impl AppUseCase {
                 }
             }
             if !replacement_full_admin_exists {
-                return Err(AppError::Validation(
-                    "cannot delete the last full administrator".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::CANNOT_DELETE_LAST_FULL_ADMINISTRATOR,
+                    "cannot delete the last full administrator",
                 ));
             }
         }
@@ -1440,11 +1565,17 @@ impl AppUseCase {
             .users
             .get_by_id(user_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("user {}", user_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::security::USER_NOT_FOUND,
+                    format!("user {}", user_id),
+                )
+            })?;
 
         if user.id == actor.id {
-            return Err(AppError::Validation(
-                "cannot reset your own authentication factors".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::CANNOT_RESET_OWN_AUTHENTICATION_FACTORS,
+                "cannot reset your own authentication factors",
             ));
         }
 

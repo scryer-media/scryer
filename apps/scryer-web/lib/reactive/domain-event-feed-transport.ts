@@ -32,7 +32,10 @@ type DomainEventFeedSink = {
 };
 
 export type DomainEventFeedSubscribe = (
-  request: { query: string; variables: { afterSequence: number | string | null } },
+  request: {
+    query: string;
+    variables: { afterSequence: number | string | null };
+  },
   sink: DomainEventFeedSink,
 ) => () => void;
 

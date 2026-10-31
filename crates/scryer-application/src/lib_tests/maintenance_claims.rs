@@ -747,12 +747,16 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
 fn the_shipped_rule_matches_the_web_template() {
     let template =
         include_str!("../../../../apps/scryer-web/lib/constants/maintenance-rule-templates.ts");
-    let escaped = crate::maintenance_rules::EXPIRED_REQUEST_LEASES_REGO
-        .replace('"', "\\\"")
+    let source = crate::maintenance_rules::EXPIRED_REQUEST_LEASES_REGO;
+    let double_quoted = serde_json::to_string(source).expect("serialize matcher literal");
+    let single_quoted = source
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
         .replace('\t', "\\t");
     assert!(
-        template.contains(&format!("\"{escaped}\"")),
+        template.contains(&double_quoted) || template.contains(&format!("'{single_quoted}'")),
         "the expired-request-leases template and the shipped rule must carry the same source"
     );
 }
@@ -790,7 +794,14 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
             storage_root_id: None,
         }
     };
-    let refused = |result: AppResult<_>| matches!(result, Err(AppError::Validation(_)));
+    let refused = |result: AppResult<_>| {
+        matches!(
+            result,
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
+        )
+    };
 
     assert!(refused(
         fixture

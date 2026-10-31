@@ -15,10 +15,7 @@ import {
   indexerErrorDetailQuery,
   indexerErrorsQuery,
 } from "@/lib/graphql/indexer-errors";
-import type {
-  IndexerErrorConnection,
-  IndexerErrorDetail,
-} from "@/lib/types";
+import type { IndexerErrorConnection, IndexerErrorDetail } from "@/lib/types";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 const PAGE_SIZE = 50;
@@ -45,49 +42,75 @@ export function IndexerErrorHistoryModal({
   });
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [details, setDetails] = React.useState<Record<string, IndexerErrorDetail | undefined>>({});
-  const [detailLoading, setDetailLoading] = React.useState<Record<string, boolean | undefined>>({});
-  const [detailErrors, setDetailErrors] = React.useState<Record<string, string | undefined>>({});
+  const [details, setDetails] = React.useState<
+    Record<string, IndexerErrorDetail | undefined>
+  >({});
+  const [detailLoading, setDetailLoading] = React.useState<
+    Record<string, boolean | undefined>
+  >({});
+  const [detailErrors, setDetailErrors] = React.useState<
+    Record<string, string | undefined>
+  >({});
   const [tableVersion, setTableVersion] = React.useState(0);
   const requestGeneration = React.useRef(0);
   const activeDetailId = React.useRef<string | null>(null);
 
-  const fetchPage = React.useCallback(async (after: string | null, append: boolean) => {
-    const generation = requestGeneration.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await client.query<{ indexerErrors: IndexerErrorConnection }>(
-        indexerErrorsQuery,
-        { indexerId: indexer?.id ?? null, first: PAGE_SIZE, after },
-        { requestPolicy: "network-only" },
-      ).toPromise();
-      if (generation !== requestGeneration.current) return;
-      if (result.error) {
-        setError(userFacingGraphQlErrorMessage(result.error, t("indexerErrors.loadError")));
-        return;
+  const fetchPage = React.useCallback(
+    async (after: string | null, append: boolean) => {
+      const generation = requestGeneration.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await client
+          .query<{ indexerErrors: IndexerErrorConnection }>(
+            indexerErrorsQuery,
+            { indexerId: indexer?.id ?? null, first: PAGE_SIZE, after },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (generation !== requestGeneration.current) return;
+        if (result.error) {
+          setError(
+            userFacingGraphQlErrorMessage(
+              result.error,
+              t("indexerErrors.loadError"),
+              t,
+            ),
+          );
+          return;
+        }
+        const next = result.data?.indexerErrors;
+        if (!next) {
+          setError(t("indexerErrors.loadError"));
+          return;
+        }
+        setPage((current) => {
+          if (!append) return next;
+          const existing = new Set(current.items.map((item) => item.id));
+          return {
+            items: [
+              ...current.items,
+              ...next.items.filter((item) => !existing.has(item.id)),
+            ],
+            nextCursor: next.nextCursor,
+          };
+        });
+      } catch (requestError) {
+        if (generation === requestGeneration.current) {
+          setError(
+            userFacingGraphQlErrorMessage(
+              requestError,
+              t("indexerErrors.loadError"),
+              t,
+            ),
+          );
+        }
+      } finally {
+        if (generation === requestGeneration.current) setLoading(false);
       }
-      const next = result.data?.indexerErrors;
-      if (!next) {
-        setError(t("indexerErrors.loadError"));
-        return;
-      }
-      setPage((current) => {
-        if (!append) return next;
-        const existing = new Set(current.items.map((item) => item.id));
-        return {
-          items: [...current.items, ...next.items.filter((item) => !existing.has(item.id))],
-          nextCursor: next.nextCursor,
-        };
-      });
-    } catch (requestError) {
-      if (generation === requestGeneration.current) {
-        setError(userFacingGraphQlErrorMessage(requestError, t("indexerErrors.loadError")));
-      }
-    } finally {
-      if (generation === requestGeneration.current) setLoading(false);
-    }
-  }, [client, indexer?.id, t]);
+    },
+    [client, indexer?.id, t],
+  );
 
   React.useEffect(() => {
     requestGeneration.current += 1;
@@ -101,60 +124,77 @@ export function IndexerErrorHistoryModal({
     if (open) void fetchPage(null, false);
   }, [fetchPage, open]);
 
-  const fetchDetail = React.useCallback(async (id: string) => {
-    const generation = requestGeneration.current;
-    activeDetailId.current = id;
-    setDetails({});
-    setDetailLoading({ [id]: true });
-    setDetailErrors({});
-    try {
-      const result = await client.query<{ indexerError: IndexerErrorDetail | null }>(
-        indexerErrorDetailQuery,
-        { id },
-        { requestPolicy: "network-only" },
-      ).toPromise();
-      if (
-        generation !== requestGeneration.current ||
-        activeDetailId.current !== id
-      ) return;
-      if (result.error || !result.data?.indexerError) {
-        setDetailErrors({
-          [id]: result.error
-            ? userFacingGraphQlErrorMessage(result.error, t("indexerErrors.detailLoadError"))
-            : t("indexerErrors.detailMissing"),
-        });
+  const fetchDetail = React.useCallback(
+    async (id: string) => {
+      const generation = requestGeneration.current;
+      activeDetailId.current = id;
+      setDetails({});
+      setDetailLoading({ [id]: true });
+      setDetailErrors({});
+      try {
+        const result = await client
+          .query<{ indexerError: IndexerErrorDetail | null }>(
+            indexerErrorDetailQuery,
+            { id },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (
+          generation !== requestGeneration.current ||
+          activeDetailId.current !== id
+        )
+          return;
+        if (result.error || !result.data?.indexerError) {
+          setDetailErrors({
+            [id]: result.error
+              ? userFacingGraphQlErrorMessage(
+                  result.error,
+                  t("indexerErrors.detailLoadError"),
+                  t,
+                )
+              : t("indexerErrors.detailMissing"),
+          });
+          return;
+        }
+        setDetails({ [id]: result.data.indexerError });
+      } catch (requestError) {
+        if (
+          generation === requestGeneration.current &&
+          activeDetailId.current === id
+        ) {
+          setDetailErrors({
+            [id]: userFacingGraphQlErrorMessage(
+              requestError,
+              t("indexerErrors.detailLoadError"),
+              t,
+            ),
+          });
+        }
+      } finally {
+        if (
+          generation === requestGeneration.current &&
+          activeDetailId.current === id
+        ) {
+          setDetailLoading({ [id]: false });
+        }
+      }
+    },
+    [client, t],
+  );
+
+  const handleDetailToggle = React.useCallback(
+    (id: string, expanded: boolean) => {
+      if (expanded) {
+        void fetchDetail(id);
         return;
       }
-      setDetails({ [id]: result.data.indexerError });
-    } catch (requestError) {
-      if (
-        generation === requestGeneration.current &&
-        activeDetailId.current === id
-      ) {
-        setDetailErrors({
-          [id]: userFacingGraphQlErrorMessage(requestError, t("indexerErrors.detailLoadError")),
-        });
-      }
-    } finally {
-      if (
-        generation === requestGeneration.current &&
-        activeDetailId.current === id
-      ) {
-        setDetailLoading({ [id]: false });
-      }
-    }
-  }, [client, t]);
-
-  const handleDetailToggle = React.useCallback((id: string, expanded: boolean) => {
-    if (expanded) {
-      void fetchDetail(id);
-      return;
-    }
-    if (activeDetailId.current === id) activeDetailId.current = null;
-    setDetails({});
-    setDetailLoading({});
-    setDetailErrors({});
-  }, [fetchDetail]);
+      if (activeDetailId.current === id) activeDetailId.current = null;
+      setDetails({});
+      setDetailLoading({});
+      setDetailErrors({});
+    },
+    [fetchDetail],
+  );
 
   const refresh = React.useCallback(() => {
     requestGeneration.current += 1;
@@ -177,8 +217,19 @@ export function IndexerErrorHistoryModal({
         <DialogHeader>
           <div className="flex items-center justify-between gap-4 pr-8">
             <DialogTitle>{title}</DialogTitle>
-            <Button type="button" size="sm" variant="secondary" disabled={loading} className="gap-2" onClick={refresh}>
-              {loading ? <LoadingMark className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={loading}
+              className="gap-2"
+              onClick={refresh}
+            >
+              {loading ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
               {t("indexerErrors.refresh")}
             </Button>
           </div>
@@ -189,10 +240,19 @@ export function IndexerErrorHistoryModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {error ? (
-            <div role="alert" className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 text-sm text-[var(--scry-danger-text)]">
+            <div
+              role="alert"
+              className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 text-sm text-[var(--scry-danger-text)]"
+            >
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span className="min-w-0 flex-1">{error}</span>
-              <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void fetchPage(null, false)}>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={loading}
+                onClick={() => void fetchPage(null, false)}
+              >
                 {t("indexerErrors.retry")}
               </Button>
             </div>
@@ -216,7 +276,13 @@ export function IndexerErrorHistoryModal({
               />
               {!error && page.nextCursor ? (
                 <div className="flex justify-center py-4">
-                  <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void fetchPage(page.nextCursor, true)}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={loading}
+                    onClick={() => void fetchPage(page.nextCursor, true)}
+                  >
                     {loading ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                     {t("indexerErrors.loadMore")}
                   </Button>

@@ -41,8 +41,10 @@ export function usePermissions(authenticatedUser: AuthUser) {
     authenticatedUser,
     APP_PERMISSIONS.manageCatalogSettings,
   );
-  const canManageLists =
-    hasAppPermission(authenticatedUser, APP_PERMISSIONS.manageLists);
+  const canManageLists = hasAppPermission(
+    authenticatedUser,
+    APP_PERMISSIONS.manageLists,
+  );
   const canAccessLists = canAccessListsPage(
     canViewCatalog || canRequestMedia || canManageTitle,
     canManageLists || canManageSystemSettings,
@@ -51,7 +53,10 @@ export function usePermissions(authenticatedUser: AuthUser) {
   const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
   const canManageLibrarySettings =
     canManageConfig ||
-    hasAnyLibraryPermission(authenticatedUser, LIBRARY_PERMISSIONS.manageLibrary);
+    hasAnyLibraryPermission(
+      authenticatedUser,
+      LIBRARY_PERMISSIONS.manageLibrary,
+    );
   return {
     canViewCatalog,
     canManageTitle,

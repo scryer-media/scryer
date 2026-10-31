@@ -234,7 +234,7 @@ impl AppUseCase {
             }
             Ok(None) => {
                 return Err(PluginAutoUpdateFailed {
-                    error: AppError::Validation(format!(
+                    error: AppError::validation_refused(crate::error_reasons::plugins::MISSING_PERSISTED_WASM_PAYLOAD, format!(
                         "plugin '{}' is missing persisted WASM payload",
                         prior_record.plugin_id
                     )),

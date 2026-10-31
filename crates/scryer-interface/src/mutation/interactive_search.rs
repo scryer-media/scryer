@@ -28,6 +28,7 @@ impl InteractiveSearchMutations {
             season,
             episode,
             limit,
+            aggregate_page_size,
             query,
             indexer_ids,
             categories,
@@ -38,6 +39,7 @@ impl InteractiveSearchMutations {
             season,
             episode,
             limit,
+            aggregate_page_size,
             query,
             indexer_ids: indexer_ids
                 .map(|ids| ids.into_iter().map(String::from).collect::<Vec<_>>()),
@@ -45,6 +47,31 @@ impl InteractiveSearchMutations {
         };
         let snapshot = app
             .start_interactive_release_search(&actor, request)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_interactive_release_search_snapshot(snapshot))
+    }
+
+    /// Fetch the following page of a `query` interactive release search.
+    async fn continue_interactive_release_search(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Opaque `nextCursor` returned by the previous page of the search.")]
+        after: String,
+        #[graphql(
+            default = 100,
+            desc = "Merged results per page from 1 through 100; defaults to 100."
+        )]
+        first: Option<i32>,
+    ) -> GqlResult<InteractiveReleaseSearchPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let snapshot = app
+            .continue_interactive_release_search_cursor(
+                &actor,
+                &after,
+                first.unwrap_or(100).clamp(1, 100) as usize,
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_interactive_release_search_snapshot(snapshot))

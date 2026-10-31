@@ -1,4 +1,11 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useClient } from "urql";
@@ -23,7 +30,10 @@ import {
 } from "lucide-react";
 import { SingleSelectField } from "@/components/ui/select";
 import "@fontsource-variable/jetbrains-mono";
-import { serviceLogsQuery, serviceLogLinesSubscription } from "@/lib/graphql/queries";
+import {
+  serviceLogsQuery,
+  serviceLogLinesSubscription,
+} from "@/lib/graphql/queries";
 import { CODE_FONT } from "@/lib/fonts";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
@@ -83,7 +93,10 @@ const DATA_SOURCES: DataSource[] = [
   { nameKey: "system.sourceTvdbName", href: "https://www.thetvdb.com/" },
   { nameKey: "system.sourceTmdbName", href: "https://www.themoviedb.org/" },
   { nameKey: "system.sourceMalName", href: "https://myanimelist.net/" },
-  { nameKey: "system.sourceAniBridgeName", href: "https://github.com/anibridge/anibridge" },
+  {
+    nameKey: "system.sourceAniBridgeName",
+    href: "https://github.com/anibridge/anibridge",
+  },
 ];
 
 const SYSTEM_PANEL_CLASS =
@@ -99,7 +112,9 @@ const SYSTEM_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 const ignoreReadOnlyCodeChange = () => {};
 
 function detectLogLevel(line: string): string {
-  const match = String(line ?? "").match(/\b(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b/i);
+  const match = String(line ?? "").match(
+    /\b(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b/i,
+  );
   if (!match) return "info";
   if (match[1].toLowerCase() === "warning") return "warn";
   return match[1].toLowerCase();
@@ -126,7 +141,8 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
 const TRACING_LINE_RE =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2}))\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+([\w:]+):\s+(.*)/;
 const KV_RE = /(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g;
-const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const UUID_RE =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 type ParsedLine = {
   timestamp: string;
@@ -217,7 +233,9 @@ function humanLogText(value: string): React.ReactNode {
     const index = match.index ?? 0;
     if (index > cursor) fragments.push(value.slice(cursor, index));
     fragments.push(
-      <em key={index} className="italic">{"<UUID>"}</em>,
+      <em key={index} className="italic">
+        {"<UUID>"}
+      </em>,
     );
     cursor = index + match[0].length;
   }
@@ -227,16 +245,21 @@ function humanLogText(value: string): React.ReactNode {
 
 function HighlightedLine({ entry }: { entry: LogLineEntry }) {
   if (entry.structured) {
-    const levelColor = LOG_LEVEL_COLORS[entry.structured.level] ?? "text-zinc-700 dark:text-zinc-300";
+    const levelColor =
+      LOG_LEVEL_COLORS[entry.structured.level] ??
+      "text-zinc-700 dark:text-zinc-300";
     return (
       <span style={{ fontFamily: CODE_FONT }}>
-        <span className="text-zinc-500 dark:text-zinc-500">{entry.structured.timestamp}</span>
-        {" "}
-        <span className={levelColor}>{entry.structured.level.toUpperCase().padStart(5)}</span>
-        {" "}
-        <span className="text-zinc-600 dark:text-zinc-400">{entry.structured.target}</span>
-        <span className="text-zinc-500 dark:text-zinc-500">:</span>
-        {" "}
+        <span className="text-zinc-500 dark:text-zinc-500">
+          {entry.structured.timestamp}
+        </span>{" "}
+        <span className={levelColor}>
+          {entry.structured.level.toUpperCase().padStart(5)}
+        </span>{" "}
+        <span className="text-zinc-600 dark:text-zinc-400">
+          {entry.structured.target}
+        </span>
+        <span className="text-zinc-500 dark:text-zinc-500">:</span>{" "}
         <span className="text-zinc-700 dark:text-zinc-300">
           {humanLogText(entry.structured.human.split(": ").slice(1).join(": "))}
         </span>
@@ -246,14 +269,18 @@ function HighlightedLine({ entry }: { entry: LogLineEntry }) {
   const parsed = entry.parsed;
   if (!parsed) {
     return (
-      <span className="text-zinc-700 dark:text-zinc-300" style={{ fontFamily: CODE_FONT }}>
+      <span
+        className="text-zinc-700 dark:text-zinc-300"
+        style={{ fontFamily: CODE_FONT }}
+      >
         {entry.raw}
       </span>
     );
   }
 
   const lvl = parsed.level.toLowerCase();
-  const levelColor = LOG_LEVEL_COLORS[lvl] ?? "text-zinc-700 dark:text-zinc-300";
+  const levelColor =
+    LOG_LEVEL_COLORS[lvl] ?? "text-zinc-700 dark:text-zinc-300";
 
   const fragments: React.ReactNode[] = [];
   let cursor = 0;
@@ -284,14 +311,12 @@ function HighlightedLine({ entry }: { entry: LogLineEntry }) {
 
   return (
     <span style={{ fontFamily: CODE_FONT }}>
-      <span className="text-zinc-500 dark:text-zinc-500">{parsed.timestamp}</span>
-      {" "}
-      <span className={levelColor}>{parsed.level.padStart(5)}</span>
-      {" "}
+      <span className="text-zinc-500 dark:text-zinc-500">
+        {parsed.timestamp}
+      </span>{" "}
+      <span className={levelColor}>{parsed.level.padStart(5)}</span>{" "}
       <span className="text-zinc-600 dark:text-zinc-400">{parsed.target}</span>
-      <span className="text-zinc-500 dark:text-zinc-500">:</span>
-      {" "}
-      {fragments}
+      <span className="text-zinc-500 dark:text-zinc-500">:</span> {fragments}
     </span>
   );
 }
@@ -327,7 +352,8 @@ function buildLogViewerSnapshot(
     return true;
   });
 
-  const liveTailing = !paused && !hasFilters && matching.length > LIVE_TAIL_LINES;
+  const liveTailing =
+    !paused && !hasFilters && matching.length > LIVE_TAIL_LINES;
   const visible = liveTailing
     ? matching.slice(-LIVE_TAIL_LINES)
     : matching.slice(-MAX_RENDERED_LINES);
@@ -346,7 +372,8 @@ function LogViewer() {
   const [search, setSearch] = useState("");
   const [level, setLevel] = useState("all");
   const [paused, setPaused] = useState(false);
-  const [snapshot, setSnapshot] = useState<LogViewerSnapshot>(EMPTY_LOG_SNAPSHOT);
+  const [snapshot, setSnapshot] =
+    useState<LogViewerSnapshot>(EMPTY_LOG_SNAPSHOT);
   const [connected, setConnected] = useState(false);
   const [selectedLine, setSelectedLine] = useState<LogLineEntry | null>(null);
   const selectionRegionRef = useRef<HTMLDivElement>(null);
@@ -386,20 +413,26 @@ function LogViewer() {
     });
   }, []);
 
-  const scheduleSnapshot = useCallback((immediate = false) => {
-    if (snapshotTimerRef.current) {
-      if (!immediate) {
-        return;
+  const scheduleSnapshot = useCallback(
+    (immediate = false) => {
+      if (snapshotTimerRef.current) {
+        if (!immediate) {
+          return;
+        }
+        clearTimeout(snapshotTimerRef.current);
+        snapshotTimerRef.current = null;
       }
-      clearTimeout(snapshotTimerRef.current);
-      snapshotTimerRef.current = null;
-    }
 
-    snapshotTimerRef.current = setTimeout(() => {
-      snapshotTimerRef.current = null;
-      commitSnapshot();
-    }, immediate ? 0 : LOG_RENDER_BATCH_MS);
-  }, [commitSnapshot]);
+      snapshotTimerRef.current = setTimeout(
+        () => {
+          snapshotTimerRef.current = null;
+          commitSnapshot();
+        },
+        immediate ? 0 : LOG_RENDER_BATCH_MS,
+      );
+    },
+    [commitSnapshot],
+  );
 
   const flushPendingLines = useCallback(() => {
     ingestTimerRef.current = null;
@@ -407,7 +440,10 @@ function LogViewer() {
       return;
     }
 
-    const pending = pendingLinesRef.current.splice(0, pendingLinesRef.current.length);
+    const pending = pendingLinesRef.current.splice(
+      0,
+      pendingLinesRef.current.length,
+    );
     const buffer = rawBufferRef.current;
 
     for (const line of pending) {
@@ -423,14 +459,20 @@ function LogViewer() {
     scheduleSnapshot();
   }, [scheduleSnapshot]);
 
-  const enqueueLine = useCallback((line: string) => {
-    pendingLinesRef.current.push(line);
-    if (ingestTimerRef.current) {
-      return;
-    }
+  const enqueueLine = useCallback(
+    (line: string) => {
+      pendingLinesRef.current.push(line);
+      if (ingestTimerRef.current) {
+        return;
+      }
 
-    ingestTimerRef.current = setTimeout(flushPendingLines, LOG_INGEST_BATCH_MS);
-  }, [flushPendingLines]);
+      ingestTimerRef.current = setTimeout(
+        flushPendingLines,
+        LOG_INGEST_BATCH_MS,
+      );
+    },
+    [flushPendingLines],
+  );
 
   useEffect(() => {
     pausedRef.current = paused;
@@ -454,15 +496,20 @@ function LogViewer() {
 
   // Initial load via query
   useEffect(() => {
-    client.query(serviceLogsQuery, { limit: RAW_BUFFER_MAX }).toPromise().then(({ data }) => {
-      const initial: string[] = Array.isArray(data?.serviceLogs?.lines) ? data.serviceLogs.lines : [];
-      rawBufferRef.current = initial.map((line) => {
-        const id = nextLineIdRef.current;
-        nextLineIdRef.current += 1;
-        return buildRawLogLineEntry(id, line);
+    client
+      .query(serviceLogsQuery, { limit: RAW_BUFFER_MAX })
+      .toPromise()
+      .then(({ data }) => {
+        const initial: string[] = Array.isArray(data?.serviceLogs?.lines)
+          ? data.serviceLogs.lines
+          : [];
+        rawBufferRef.current = initial.map((line) => {
+          const id = nextLineIdRef.current;
+          nextLineIdRef.current += 1;
+          return buildRawLogLineEntry(id, line);
+        });
+        scheduleSnapshot(true);
       });
-      scheduleSnapshot(true);
-    });
   }, [client, scheduleSnapshot]);
 
   useDeferredWsSubscription<{ data?: { serviceLogLines?: string } }>({
@@ -531,7 +578,9 @@ function LogViewer() {
       <div className={SYSTEM_PANEL_HEADER_CLASS}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 space-y-1">
-            <h2 className={`flex items-center gap-2 ${SYSTEM_PANEL_TITLE_CLASS}`}>
+            <h2
+              className={`flex items-center gap-2 ${SYSTEM_PANEL_TITLE_CLASS}`}
+            >
               <Terminal className="h-4 w-4 text-[var(--scry-accent-text)]" />
               Live service output
             </h2>
@@ -555,7 +604,9 @@ function LogViewer() {
         </div>
       </div>
       <div className={`${SYSTEM_PANEL_BODY_CLASS} flex min-h-0 flex-col gap-4`}>
-        <div className={`${SYSTEM_INSET_CLASS} grid gap-3 p-3 lg:grid-cols-[150px_minmax(220px,1fr)_auto] lg:items-end`}>
+        <div
+          className={`${SYSTEM_INSET_CLASS} grid gap-3 p-3 lg:grid-cols-[150px_minmax(220px,1fr)_auto] lg:items-end`}
+        >
           <div className="space-y-1">
             <SingleSelectField
               label="Level"
@@ -575,7 +626,9 @@ function LogViewer() {
             />
           </div>
           <div className="space-y-1">
-            <Label className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>Search</Label>
+            <Label className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
+              Search
+            </Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--scry-muted3)]" />
               <Input
@@ -594,7 +647,11 @@ function LogViewer() {
               className="h-9 rounded-[10px] px-3 text-[13px]"
               onClick={() => setPaused((p) => !p)}
             >
-              {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+              {paused ? (
+                <Play className="h-3.5 w-3.5" />
+              ) : (
+                <Pause className="h-3.5 w-3.5" />
+              )}
               {paused ? "Resume" : "Pause"}
             </Button>
             <Button
@@ -634,69 +691,73 @@ function LogViewer() {
           className={`grid min-h-0 gap-4 ${selectedLine ? "xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.45fr)]" : ""}`}
         >
           <div className="flex flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
-          <div className="flex items-center justify-between gap-3 border-b border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-xs text-[var(--scry-muted3)]">
-            <span>Line</span>
-            <span>
-              {snapshot.lines.length} shown · {snapshot.matchedCount} matching
-            </span>
-          </div>
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            data-code-font
-            className={`overflow-y-auto text-xs leading-5 ${isMobile ? "h-[55vh] min-h-[280px]" : "h-[calc(100vh-320px)] min-h-[400px]"}`}
-            style={{ fontFamily: CODE_FONT }}
-          >
-            {snapshot.lines.length === 0 ? (
-              <div className="flex h-full min-h-[220px] items-center justify-center p-6 text-center">
-                <p className={SYSTEM_MUTED_TEXT_CLASS}>No logs available yet.</p>
-              </div>
-            ) : (
-              <div className="p-2">
-                {snapshot.lines.map((line, index) => (
-                  <button
-                    key={line.id}
-                    type="button"
-                    aria-pressed={selectedLine?.id === line.id}
-                    onClick={() => setSelectedLine(line)}
-                    className={`group grid w-full grid-cols-[4.75ch_minmax(0,1fr)] gap-3 rounded-[7px] px-2 py-1 text-left hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-info-border-strong)] ${selectedLine?.id === line.id ? "bg-[var(--scry-hover)]" : ""}`}
-                  >
-                    <span className="select-none text-right tabular-nums text-[var(--scry-faint)]">
-                      {index + 1}
-                    </span>
-                    <div
-                      className="min-w-0 whitespace-pre-wrap break-words"
-                      style={{ fontFamily: CODE_FONT }}
-                    >
-                      <HighlightedLine entry={line} />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        {selectedLine ? (
-          <aside className="flex min-h-[240px] flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
-            <div className="min-h-0 flex-1 overflow-auto p-3" data-code-font>
-              {selectedJson ? (
-                <LazyCodeEditor
-                  id="service-log-event-json"
-                  value={selectedJson}
-                  onChange={ignoreReadOnlyCodeChange}
-                  readOnly
-                  language="json"
-                  copyable
-                  copyLabel="Copy event JSON"
-                  height={isMobile ? "45vh" : "min(55vh, 640px)"}
-                />
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-xs text-[var(--scry-muted3)]">
+              <span>Line</span>
+              <span>
+                {snapshot.lines.length} shown · {snapshot.matchedCount} matching
+              </span>
+            </div>
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              data-code-font
+              className={`overflow-y-auto text-xs leading-5 ${isMobile ? "h-[55vh] min-h-[280px]" : "h-[calc(100vh-320px)] min-h-[400px]"}`}
+              style={{ fontFamily: CODE_FONT }}
+            >
+              {snapshot.lines.length === 0 ? (
+                <div className="flex h-full min-h-[220px] items-center justify-center p-6 text-center">
+                  <p className={SYSTEM_MUTED_TEXT_CLASS}>
+                    No logs available yet.
+                  </p>
+                </div>
               ) : (
-                <p className="text-xs text-[var(--scry-muted3)]">This legacy text log line has no JSON event payload.</p>
+                <div className="p-2">
+                  {snapshot.lines.map((line, index) => (
+                    <button
+                      key={line.id}
+                      type="button"
+                      aria-pressed={selectedLine?.id === line.id}
+                      onClick={() => setSelectedLine(line)}
+                      className={`group grid w-full grid-cols-[4.75ch_minmax(0,1fr)] gap-3 rounded-[7px] px-2 py-1 text-left hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-info-border-strong)] ${selectedLine?.id === line.id ? "bg-[var(--scry-hover)]" : ""}`}
+                    >
+                      <span className="select-none text-right tabular-nums text-[var(--scry-faint)]">
+                        {index + 1}
+                      </span>
+                      <div
+                        className="min-w-0 whitespace-pre-wrap break-words"
+                        style={{ fontFamily: CODE_FONT }}
+                      >
+                        <HighlightedLine entry={line} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
-          </aside>
-        ) : null}
-      </div>
+          </div>
+          {selectedLine ? (
+            <aside className="flex min-h-[240px] flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
+              <div className="min-h-0 flex-1 overflow-auto p-3" data-code-font>
+                {selectedJson ? (
+                  <LazyCodeEditor
+                    id="service-log-event-json"
+                    value={selectedJson}
+                    onChange={ignoreReadOnlyCodeChange}
+                    readOnly
+                    language="json"
+                    copyable
+                    copyLabel="Copy event JSON"
+                    height={isMobile ? "45vh" : "min(55vh, 640px)"}
+                  />
+                ) : (
+                  <p className="text-xs text-[var(--scry-muted3)]">
+                    This legacy text log line has no JSON event payload.
+                  </p>
+                )}
+              </div>
+            </aside>
+          ) : null}
+        </div>
       </div>
     </section>
   );
@@ -747,7 +808,9 @@ export function SystemView({
                     )}
                   </span>
                   <div>
-                    <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.serviceReady")}
                     </p>
                     <p className="text-base font-semibold text-[var(--scry-ink2)]">
@@ -767,7 +830,9 @@ export function SystemView({
                     <Film className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.totalTitlesLabel")}
                     </p>
                     <p className="text-base font-semibold text-[var(--scry-ink2)]">
@@ -787,7 +852,9 @@ export function SystemView({
                     <Users className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.usersLabel")}
                     </p>
                     <p className="text-base font-semibold text-[var(--scry-ink2)]">
@@ -797,16 +864,22 @@ export function SystemView({
                 </div>
               </div>
 
-              <div className={`${SYSTEM_INSET_CLASS} min-h-[231px] p-4 sm:col-span-2 xl:col-span-3`}>
+              <div
+                className={`${SYSTEM_INSET_CLASS} min-h-[231px] p-4 sm:col-span-2 xl:col-span-3`}
+              >
                 <div className="mb-3 flex items-center gap-2">
                   <span className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] text-[var(--scry-accent-text)]">
                     <Database className="h-4 w-4" />
                   </span>
-                  <p className="font-semibold text-[var(--scry-ink2)]">Datastore</p>
+                  <p className="font-semibold text-[var(--scry-ink2)]">
+                    Datastore
+                  </p>
                 </div>
                 <div className="min-w-0 space-y-3">
                   <div>
-                    <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.dbPathLabel")}
                     </p>
                     <p className="mt-1 break-all font-[var(--font-code)] text-xs text-[var(--scry-ink2)]">
@@ -814,7 +887,9 @@ export function SystemView({
                     </p>
                   </div>
                   <div className="min-w-0">
-                    <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       Migration
                     </p>
                     <div className="mt-1 grid min-w-0 gap-2">
@@ -844,7 +919,9 @@ export function SystemView({
                     key={label}
                     className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3"
                   >
-                    <p className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>{label}</p>
+                    <p className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                      {label}
+                    </p>
                     <p className="mt-1 text-lg font-semibold text-[var(--scry-ink2)]">
                       {value}
                     </p>
@@ -854,7 +931,9 @@ export function SystemView({
               <div className="mt-4 min-h-[116px]">
                 {recentEventPreview.length > 0 ? (
                   <>
-                    <p className={`mb-2 text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                    <p
+                      className={`mb-2 text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.recentEventSample")}
                     </p>
                     <div className="space-y-2">
@@ -875,17 +954,24 @@ export function SystemView({
         </div>
       </section>
 
-      <section className={SYSTEM_PANEL_CLASS}>
+      <section
+        id="system-indexer-stats"
+        data-state={indexerStats === null ? "loading" : "ready"}
+        className={SYSTEM_PANEL_CLASS}
+      >
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
           <h3 className={SYSTEM_PANEL_TITLE_CLASS}>Indexer Stats (Last 24h)</h3>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>
           <p className={`mb-3 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
-            Counts cover requests Scryer sends. Prowlarr child counts do not include requests
-            Prowlarr makes internally.
+            Counts cover requests Scryer sends. Prowlarr child counts do not
+            include requests Prowlarr makes internally.
           </p>
           {indexerStats === null ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+            <div
+              className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+              aria-hidden="true"
+            >
               {[0, 1, 2].map((item) => (
                 <div
                   key={item}
@@ -911,14 +997,23 @@ export function SystemView({
               }`}
             >
               {indexerStats.map((stat) => (
-                <div key={stat.indexerId} className={`${SYSTEM_INSET_CLASS} p-4`}>
+                <div
+                  key={stat.indexerId}
+                  id={`system-indexer-stats-${stat.indexerId}`}
+                  data-ui="system-indexer-stats-card"
+                  data-indexer-id={stat.indexerId}
+                  data-indexer-name={stat.indexerName}
+                  className={`${SYSTEM_INSET_CLASS} p-4`}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold text-[var(--scry-ink2)]">
                         {stat.indexerName}
                       </p>
                       {stat.lastQueryAt ? (
-                        <p className={`mt-1 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
+                        <p
+                          className={`mt-1 text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}
+                        >
                           Last query:{" "}
                           {formatUiDateTime(stat.lastQueryAt, dateTimeFormat)}
                         </p>
@@ -929,9 +1024,13 @@ export function SystemView({
                     </span>
                   </div>
                   <div className="mt-3 space-y-2 text-xs">
-                    <p>
-                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Observed calls today:</span>{" "}
-                      {stat.apiRequestsToday}
+                    <p data-ui="system-indexer-observed-requests">
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                        Observed calls today:
+                      </span>{" "}
+                      <span data-ui="system-indexer-observed-count">
+                        {stat.apiRequestsToday}
+                      </span>
                       {stat.apiRequestsWindowStartedAt ? (
                         <span className={SYSTEM_MUTED_TEXT_CLASS}>
                           {" "}
@@ -947,15 +1046,27 @@ export function SystemView({
                     {stat.apiRequestsObservedSince ? (
                       <p className={SYSTEM_MUTED_TEXT_CLASS}>
                         Observed since{" "}
-                        {formatUiDateTime(stat.apiRequestsObservedSince, dateTimeFormat)}.
-                        {new Date(stat.apiRequestsObservedSince).toISOString().slice(0, 10) ===
+                        {formatUiDateTime(
+                          stat.apiRequestsObservedSince,
+                          dateTimeFormat,
+                        )}
+                        .
+                        {new Date(stat.apiRequestsObservedSince)
+                          .toISOString()
+                          .slice(0, 10) ===
                         new Date().toISOString().slice(0, 10)
                           ? " First UTC day is partial."
                           : ""}
                       </p>
                     ) : null}
-                    <p>
-                      <span className={SYSTEM_MUTED_TEXT_CLASS}>Search runs:</span>{" "}
+                    <p
+                      data-ui="system-indexer-search-runs"
+                      data-query-count={stat.queriesLast24H}
+                      data-failed-count={stat.failedLast24H}
+                    >
+                      <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                        Search runs:
+                      </span>{" "}
                       {stat.queriesLast24H}
                       {stat.failedLast24H > 0 && (
                         <span className="text-[var(--scry-danger-text-soft)]">
@@ -965,17 +1076,31 @@ export function SystemView({
                       )}
                     </p>
                     {stat.apiMax !== null && (
-                      <p>
-                        <span className={SYSTEM_MUTED_TEXT_CLASS}>Provider API usage:</span>{" "}
-                        <span className={quotaBadgeClass(stat.apiCurrent, stat.apiMax)}>
+                      <p data-ui="system-indexer-api-usage">
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                          Provider API usage:
+                        </span>{" "}
+                        <span
+                          className={quotaBadgeClass(
+                            stat.apiCurrent,
+                            stat.apiMax,
+                          )}
+                        >
                           {stat.apiCurrent ?? "Unknown"}/{stat.apiMax}
                         </span>
                       </p>
                     )}
                     {stat.grabMax !== null && (
-                      <p>
-                        <span className={SYSTEM_MUTED_TEXT_CLASS}>Provider grab usage:</span>{" "}
-                        <span className={quotaBadgeClass(stat.grabCurrent, stat.grabMax)}>
+                      <p data-ui="system-indexer-grab-usage">
+                        <span className={SYSTEM_MUTED_TEXT_CLASS}>
+                          Provider grab usage:
+                        </span>{" "}
+                        <span
+                          className={quotaBadgeClass(
+                            stat.grabCurrent,
+                            stat.grabMax,
+                          )}
+                        >
                           {stat.grabCurrent ?? "Unknown"}/{stat.grabMax}
                         </span>
                       </p>
@@ -985,7 +1110,9 @@ export function SystemView({
               ))}
             </div>
           ) : (
-            <div className={`${SYSTEM_INSET_CLASS} min-h-[142px] p-4 ${SYSTEM_MUTED_TEXT_CLASS}`}>
+            <div
+              className={`${SYSTEM_INSET_CLASS} min-h-[142px] p-4 ${SYSTEM_MUTED_TEXT_CLASS}`}
+            >
               No indexer activity in the last 24 hours.
             </div>
           )}
@@ -996,7 +1123,9 @@ export function SystemView({
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
           <div className="flex items-center gap-2">
             <Server className="h-4 w-4 text-[var(--scry-accent-text)]" />
-            <h3 className={SYSTEM_PANEL_TITLE_CLASS}>{t("system.sourcesTitle")}</h3>
+            <h3 className={SYSTEM_PANEL_TITLE_CLASS}>
+              {t("system.sourcesTitle")}
+            </h3>
           </div>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>

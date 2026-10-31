@@ -713,7 +713,7 @@ pub(crate) mod scalar {
     }
 
     pub(crate) fn accumulate_avi_idx1_stream_sizes(data: &[u8], stream_sizes: &mut [u64]) {
-        for entry in data.chunks_exact(16) {
+        for entry in data.as_chunks::<16>().0 {
             let Some(stream_number) = super::avi_idx1_decimal_stream_number(entry[0], entry[1])
             else {
                 continue;

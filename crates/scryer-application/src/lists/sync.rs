@@ -298,19 +298,22 @@ pub async fn sync_subscription(
                             let rate_limited =
                                 crate::lists::account_transport::auth_failure_code(&error)
                                     == Some(crate::lists::account_transport::RATE_LIMITED);
-                            let class = match error {
-                                crate::AppError::TemporaryUnavailable { retry_after, .. }
-                                    if rate_limited =>
-                                {
-                                    ListFailureClass::RateLimited {
+                            let class =
+                                match error {
+                                    crate::AppError::TemporaryUnavailable {
+                                        retry_after, ..
+                                    } if rate_limited => ListFailureClass::RateLimited {
                                         retry_after_seconds: retry_after
                                             .map(|delay| delay.as_secs()),
+                                    },
+                                    crate::AppError::TemporaryUnavailable { .. }
+                                    | crate::AppError::Repository(_)
+                                    | crate::AppError::RepositoryFailure { .. }
+                                    | crate::AppError::RepositoryFailed { .. } => {
+                                        ListFailureClass::Unavailable
                                     }
-                                }
-                                crate::AppError::TemporaryUnavailable { .. }
-                                | crate::AppError::Repository(_) => ListFailureClass::Unavailable,
-                                _ => ListFailureClass::Unauthorized,
-                            };
+                                    _ => ListFailureClass::Unauthorized,
+                                };
                             return record_failure(
                                 context,
                                 subscription,

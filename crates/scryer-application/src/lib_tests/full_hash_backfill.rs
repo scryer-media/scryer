@@ -114,6 +114,187 @@ fn bootstrap_backfill(media_files: Arc<MockMediaFileRepo>) -> AppUseCase {
     app.with_test_overrides(|services| services.with_media_files(media_files))
 }
 
+#[tokio::test]
+async fn image_maintenance_is_fifo_and_backfill_skips_without_moving_cursor() {
+    use crate::location::backfill::FullHashBackfillStopReason;
+    use std::{future::Future, task::Poll};
+
+    let dir = tempfile::tempdir().unwrap();
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 3).await;
+    let app = bootstrap_backfill(media_files.clone());
+    let first = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+            files_per_run: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.resume_after_id.as_deref(), Some("file-000"));
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let active = within_deadline(
+        "initial image admission",
+        app.acquire_image_maintenance(&token),
+    )
+    .await
+    .unwrap();
+    // These are the same outer admission calls used by disk-cache maintenance
+    // and AVIF encoding. Poll explicitly to establish queue order.
+    let mut cache = std::pin::pin!(app.acquire_image_maintenance(&token));
+    let mut avif = std::pin::pin!(app.acquire_image_maintenance(&token));
+    std::future::poll_fn(|cx| {
+        assert!(cache.as_mut().poll(cx).is_pending());
+        assert!(avif.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let skipped = app
+        .run_full_hash_backfill_with_options(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        skipped.stop_reason,
+        Some(FullHashBackfillStopReason::ImageMaintenance)
+    );
+    assert_eq!(skipped.resume_after_id, first.resume_after_id);
+    assert_eq!(skipped.bytes_read, 0);
+    assert_eq!(hashed_ids(&media_files).await, vec!["file-000"]);
+    drop(active);
+    // A released gate with queued image work must still reject backfill.
+    let skipped = app
+        .run_full_hash_backfill_with_options(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        skipped.stop_reason,
+        Some(FullHashBackfillStopReason::ImageMaintenance)
+    );
+    let cache = within_deadline("cache admission first", cache)
+        .await
+        .unwrap();
+    std::future::poll_fn(|cx| {
+        assert!(avif.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(cache);
+    let avif = within_deadline("AVIF admission second", avif)
+        .await
+        .unwrap();
+    drop(avif);
+    let resumed = app
+        .run_full_hash_backfill_with_options(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(resumed.hashed, 2);
+}
+
+#[tokio::test]
+async fn image_maintenance_cancellation_removes_waiter_and_failure_releases_gate() {
+    use std::{future::Future, task::Poll};
+    let app = bootstrap_backfill(Arc::new(MockMediaFileRepo::default()));
+    let token = tokio_util::sync::CancellationToken::new();
+    let active = within_deadline("initial admission", app.acquire_image_maintenance(&token))
+        .await
+        .unwrap();
+    let cancelled = token.child_token();
+    let mut waiting = std::pin::pin!(app.acquire_image_maintenance(&cancelled));
+    std::future::poll_fn(|cx| {
+        assert!(waiting.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    cancelled.cancel();
+    assert!(
+        within_deadline("cancel queued image", waiting)
+            .await
+            .is_none()
+    );
+    let failed = tokio::spawn(async move {
+        let _admission = active;
+        panic!("synthetic maintenance failure");
+    });
+    assert!(
+        within_deadline("failed invocation", failed)
+            .await
+            .unwrap_err()
+            .is_panic()
+    );
+    let summary = app
+        .run_full_hash_backfill_with_options(Default::default())
+        .await
+        .unwrap();
+    assert!(summary.completed_sweep);
+}
+
+#[tokio::test]
+async fn scheduled_backfill_stops_at_six_and_manual_run_can_resume() {
+    use crate::location::backfill::FullHashBackfillStopReason;
+    use chrono::{Local, TimeZone};
+    let dir = tempfile::tempdir().unwrap();
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 3).await;
+    let app = bootstrap_backfill(media_files.clone());
+    let at = |hour, minute| {
+        Local
+            .with_ymd_and_hms(2026, 1, 15, hour, minute, 0)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc)
+    };
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(at(5, 59)));
+    let checkpoint = Arc::new(tokio::sync::Semaphore::new(0));
+    let running = app.clone();
+    let pause = checkpoint.clone();
+    let task = tokio::spawn(async move {
+        running
+            .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+                scheduled: true,
+                after_file: Some(pause),
+                ..Default::default()
+            })
+            .await
+    });
+    within_deadline("first file before cutoff", async {
+        while hashed_ids(&media_files).await != vec!["file-000"] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    app.runtime
+        .environment
+        .set_fixed_now_for_tests(Some(at(6, 0)));
+    checkpoint.add_permits(3);
+    let summary = within_deadline("scheduled cutoff", task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        summary.stop_reason,
+        Some(FullHashBackfillStopReason::WindowClosed)
+    );
+    assert_eq!(summary.hashed, 1);
+    assert_eq!(summary.bytes_read, summary.bytes_hashed);
+    assert_eq!(summary.resume_after_id.as_deref(), Some("file-000"));
+    let outside = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+            scheduled: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(outside.examined, 0);
+    assert_eq!(outside.resume_after_id, summary.resume_after_id);
+    let manual = app
+        .run_full_hash_backfill_with_options(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(manual.hashed, 2);
+}
+
 fn bootstrap_backfill_with_operations(
     media_files: Arc<MockMediaFileRepo>,
     operations: Arc<InMemoryLocationOperationStore>,
@@ -232,7 +413,7 @@ async fn a_bounded_run_resumes_from_its_persisted_cursor() {
     };
 
     let first = app
-        .run_full_hash_backfill_with_options(bounded)
+        .run_full_hash_backfill_with_options(bounded.clone())
         .await
         .expect("first bounded run");
     assert_eq!(first.hashed, 2);
@@ -407,33 +588,50 @@ async fn a_file_hashed_since_the_queue_page_is_skipped() {
     );
 }
 
-/// The throttle is real work, not a comment: production options carry a pause
-/// between files, and a run with three queued files must wait for at least two
-/// of them.
-#[tokio::test(start_paused = true)]
-async fn the_job_pauses_between_files() {
+/// The budget expires between files without discarding completed work.
+#[tokio::test]
+async fn backfill_time_limit_preserves_progress_between_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let media_files = Arc::new(MockMediaFileRepo::default());
     seed_unhashed_files(&media_files, dir.path(), 3).await;
 
     let app = bootstrap_backfill(media_files.clone());
-    let options = FullHashBackfillOptions {
-        chunk_pause: Duration::ZERO,
-        ..FullHashBackfillOptions::default()
-    };
-
-    let started = Instant::now();
-    let summary = app
-        .run_full_hash_backfill_with_options(options)
+    let checkpoint = Arc::new(tokio::sync::Semaphore::new(0));
+    let running = app.clone();
+    let pause = checkpoint.clone();
+    let task = tokio::spawn(async move {
+        running
+            .run_full_hash_backfill_with_options(FullHashBackfillOptions {
+                after_file: Some(pause),
+                ..Default::default()
+            })
+            .await
+    });
+    within_deadline("first file persisted before time limit", async {
+        while hashed_ids(&media_files).await != vec!["file-000"] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(30 * 60)).await;
+    tokio::time::resume();
+    checkpoint.add_permits(3);
+    let summary = within_deadline("time-limited backfill", task)
         .await
-        .expect("backfill run");
-
-    assert_eq!(summary.hashed, 3);
-    assert!(
-        started.elapsed() >= options.file_pause * 3,
-        "three files must have paused three times, saw {:?}",
-        started.elapsed()
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.hashed, 1);
+    assert_eq!(summary.resume_after_id.as_deref(), Some("file-000"));
+    assert_eq!(
+        summary.stop_reason,
+        Some(crate::location::backfill::FullHashBackfillStopReason::TimeLimit)
     );
+    let resumed = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(resumed.hashed, 2);
 }
 
 // ── FR-046: scan-side invalidation ──────────────────────────────────────────
@@ -448,7 +646,7 @@ async fn cancellation_preserves_completed_progress_and_retries_the_remaining_fil
     let task = tokio::spawn(async move {
         running
             .run_full_hash_backfill_with_options(FullHashBackfillOptions {
-                file_pause: Duration::from_secs(3600),
+                after_file: Some(Arc::new(tokio::sync::Semaphore::new(0))),
                 ..FullHashBackfillOptions::unthrottled()
             })
             .await
@@ -457,12 +655,12 @@ async fn cancellation_preserves_completed_progress_and_retries_the_remaining_fil
         !hashed_ids(&media_files).await.is_empty()
     })
     .await;
-    assert!(
+    assert_eq!(
         app.run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
             .await
             .unwrap_err()
-            .to_string()
-            .contains("already running")
+            .validation_reason(),
+        Some(crate::error_reasons::location::FULL_HASH_BACKFILL_ALREADY_RUNNING)
     );
     // Other scheduler work can run while the hash job is deliberately parked.
     app.runtime.acquisition.acquisition_wake.notify_one();
@@ -505,7 +703,7 @@ async fn dropping_a_hash_run_releases_its_guard_and_keeps_completed_hashes() {
     let task = tokio::spawn(async move {
         running
             .run_full_hash_backfill_with_options(FullHashBackfillOptions {
-                file_pause: Duration::from_secs(3600),
+                after_file: Some(Arc::new(tokio::sync::Semaphore::new(0))),
                 ..FullHashBackfillOptions::unthrottled()
             })
             .await
@@ -516,6 +714,13 @@ async fn dropping_a_hash_run_releases_its_guard_and_keeps_completed_hashes() {
     .await;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
+    drop(
+        within_deadline(
+            "cancelled invocation to drain",
+            app.runtime.jobs.full_hash_execution_lock.lock(),
+        )
+        .await,
+    );
     let resumed = app
         .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
         .await
@@ -610,7 +815,7 @@ async fn run_backfill_job_over_one_file(stale_catalog_size: bool) -> JobRunRecor
 }
 
 /// The job runner persists a run with an unhashable file as a warning.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_backfill_job_run_with_a_failing_file_is_persisted_as_a_warning() {
     let run = run_backfill_job_over_one_file(true).await;
 
@@ -623,7 +828,7 @@ async fn a_backfill_job_run_with_a_failing_file_is_persisted_as_a_warning() {
 }
 
 /// The same job over a healthy file completes without a warning.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_clean_backfill_job_run_is_persisted_as_completed() {
     let run = run_backfill_job_over_one_file(false).await;
 

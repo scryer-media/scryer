@@ -20,7 +20,9 @@ export type MaintenanceFileResults = {
 /// internal journal as a second action-history row. Older checkpoints omit
 /// `storage_root_id`; they retain their original file and grace-deadline
 /// rendering with a null root.
-export function parseMaintenanceFileResults(detail: string): MaintenanceFileResults | null {
+export function parseMaintenanceFileResults(
+  detail: string,
+): MaintenanceFileResults | null {
   let value: unknown;
   try {
     value = JSON.parse(detail);
@@ -32,19 +34,25 @@ export function parseMaintenanceFileResults(detail: string): MaintenanceFileResu
   if (!isRecord(value) || !Array.isArray(value.deletion_outcomes)) {
     return null;
   }
-  const outcomes = value.deletion_outcomes.flatMap((outcome): MaintenanceFileResults[] => {
-    if (!isRecord(outcome) || typeof outcome.detail !== "string") return [];
-    try {
-      const checkpoint = parseMaintenanceFileCheckpoint(JSON.parse(outcome.detail));
-      return checkpoint ? [checkpoint] : [];
-    } catch {
-      return [];
-    }
-  });
+  const outcomes = value.deletion_outcomes.flatMap(
+    (outcome): MaintenanceFileResults[] => {
+      if (!isRecord(outcome) || typeof outcome.detail !== "string") return [];
+      try {
+        const checkpoint = parseMaintenanceFileCheckpoint(
+          JSON.parse(outcome.detail),
+        );
+        return checkpoint ? [checkpoint] : [];
+      } catch {
+        return [];
+      }
+    },
+  );
   return combineMaintenanceFileResults(outcomes);
 }
 
-function parseMaintenanceFileCheckpoint(value: unknown): MaintenanceFileResults | null {
+function parseMaintenanceFileCheckpoint(
+  value: unknown,
+): MaintenanceFileResults | null {
   if (!isRecord(value) || !Array.isArray(value.files)) {
     return null;
   }
@@ -72,11 +80,14 @@ function parseMaintenanceFileCheckpoint(value: unknown): MaintenanceFileResults 
   return {
     files,
     totalSizeBytes:
-      typeof value.total_size_bytes === "number" && Number.isFinite(value.total_size_bytes)
+      typeof value.total_size_bytes === "number" &&
+      Number.isFinite(value.total_size_bytes)
         ? value.total_size_bytes
         : null,
-    graceDeadline: typeof value.grace_deadline === "string" ? value.grace_deadline : null,
-    storageRootId: typeof value.storage_root_id === "string" ? value.storage_root_id : null,
+    graceDeadline:
+      typeof value.grace_deadline === "string" ? value.grace_deadline : null,
+    storageRootId:
+      typeof value.storage_root_id === "string" ? value.storage_root_id : null,
     completedFileCount,
     remainingFileCount: files.length - completedFileCount,
   };
@@ -97,15 +108,22 @@ function combineMaintenanceFileResults(
       .map((outcome) => outcome.graceDeadline)
       .filter((deadline): deadline is string => deadline !== null),
   );
-  const totalSizeBytes = outcomes.every((outcome) => outcome.totalSizeBytes !== null)
-    ? outcomes.reduce((total, outcome) => total + (outcome.totalSizeBytes ?? 0), 0)
+  const totalSizeBytes = outcomes.every(
+    (outcome) => outcome.totalSizeBytes !== null,
+  )
+    ? outcomes.reduce(
+        (total, outcome) => total + (outcome.totalSizeBytes ?? 0),
+        0,
+      )
     : null;
   const completedFileCount = files.filter((file) => file.completed).length;
   return {
     files,
     totalSizeBytes,
-    graceDeadline: graceDeadlines.size === 1 ? [...graceDeadlines][0] ?? null : null,
-    storageRootId: storageRootIds.size === 1 ? [...storageRootIds][0] ?? null : null,
+    graceDeadline:
+      graceDeadlines.size === 1 ? ([...graceDeadlines][0] ?? null) : null,
+    storageRootId:
+      storageRootIds.size === 1 ? ([...storageRootIds][0] ?? null) : null,
     completedFileCount,
     remainingFileCount: files.length - completedFileCount,
   };

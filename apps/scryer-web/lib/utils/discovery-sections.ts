@@ -154,7 +154,9 @@ function mergeRedundantPublicSections<
   const mergedItemsByTarget = new Map<TSection, OrderableDiscoveryItem[]>();
   const mergedAway = new Set<TSection>();
   for (const section of sections) {
-    const targetType = MERGED_SECTION_TARGETS.get(discoverySectionType(section));
+    const targetType = MERGED_SECTION_TARGETS.get(
+      discoverySectionType(section),
+    );
     if (!targetType) {
       continue;
     }
@@ -227,7 +229,9 @@ function orderDiscoveryHomeSectionsInternal<
   const unknownPersonalizedSections = personalizedSections.filter(
     (section) =>
       !usedPersonalizedSections.has(section) &&
-      !GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES.has(discoverySectionType(section)),
+      !GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES.has(
+        discoverySectionType(section),
+      ),
   );
   const hasLibrarySections =
     personalizedShelf.length > 0 ||
@@ -236,7 +240,9 @@ function orderDiscoveryHomeSectionsInternal<
   const fallbackSections = hasLibrarySections
     ? []
     : personalizedSections.filter((section) =>
-        GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES.has(discoverySectionType(section)),
+        GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES.has(
+          discoverySectionType(section),
+        ),
       );
 
   const publicPromotionSections = PUBLIC_PROMOTION_SECTION_TYPES.flatMap(
@@ -246,7 +252,9 @@ function orderDiscoveryHomeSectionsInternal<
       ),
   );
   const worldShelfSections = WORLD_SHELF_SECTION_ORDER.flatMap((slotType) =>
-    publicSections.filter((section) => worldShelfSlotType(section) === slotType),
+    publicSections.filter(
+      (section) => worldShelfSlotType(section) === slotType,
+    ),
   );
   const curatedSections = publicSections.filter(
     (section) => discoverySectionType(section) === CURATED_SECTION_TYPE,

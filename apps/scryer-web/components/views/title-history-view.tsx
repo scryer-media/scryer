@@ -7,7 +7,11 @@ import {
   HISTORY_TABLE_SHELL_CLASS,
   HistoryEventTable,
 } from "@/components/common/history-event-table";
-import type { LibraryRecord, TitleHistoryEvent, TitleRecord } from "@/lib/types";
+import type {
+  LibraryRecord,
+  TitleHistoryEvent,
+  TitleRecord,
+} from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 import { HistoryEventTypeMultiSelect } from "@/components/common/history-event-type-multi-select";
@@ -124,7 +128,12 @@ export function TitleHistoryView({
         ) : error ? (
           <p className="py-8 text-sm text-[var(--scry-danger-text)]">{error}</p>
         ) : (
-          <div className={cn(HISTORY_TABLE_SHELL_CLASS, "min-h-0 flex-1 overflow-auto")}>
+          <div
+            className={cn(
+              HISTORY_TABLE_SHELL_CLASS,
+              "min-h-0 flex-1 overflow-auto",
+            )}
+          >
             <HistoryEventTable
               events={events}
               showTitle

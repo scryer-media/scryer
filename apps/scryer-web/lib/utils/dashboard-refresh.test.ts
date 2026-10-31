@@ -110,7 +110,19 @@ test("a panel fed by two loads waits for both and shows the first error", () => 
   const ready = { loading: false, ready: true, error: null };
   const loading = { loading: true, ready: false, error: null };
   const failed = { loading: false, ready: false, error: "queue failed" };
-  assert.deepEqual(combinePanelStates(ready, loading), { loading: true, ready: false, error: null });
-  assert.deepEqual(combinePanelStates(ready, failed), { loading: false, ready: false, error: "queue failed" });
-  assert.deepEqual(combinePanelStates(ready, ready), { loading: false, ready: true, error: null });
+  assert.deepEqual(combinePanelStates(ready, loading), {
+    loading: true,
+    ready: false,
+    error: null,
+  });
+  assert.deepEqual(combinePanelStates(ready, failed), {
+    loading: false,
+    ready: false,
+    error: "queue failed",
+  });
+  assert.deepEqual(combinePanelStates(ready, ready), {
+    loading: false,
+    ready: true,
+    error: null,
+  });
 });

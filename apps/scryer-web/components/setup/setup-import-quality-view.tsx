@@ -34,8 +34,12 @@ export default function SetupImportQualityView({
   wizard,
   t,
 }: SetupImportQualityViewProps) {
-  const { mappedLibraries, qualityProfiles, setLibraryQualityProfile, setLibraryPersona } =
-    wizard;
+  const {
+    mappedLibraries,
+    qualityProfiles,
+    setLibraryQualityProfile,
+    setLibraryPersona,
+  } = wizard;
 
   if (mappedLibraries.length === 0) {
     return (
@@ -197,15 +201,23 @@ export default function SetupImportQualityView({
                       content awkwardly, so render the selected persona directly. */}
                   <span className="flex min-w-0 flex-1 flex-col text-left">
                     <span
-                      style={{ fontSize: 13, fontWeight: 600, color: "#f1f5ff" }}
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "#f1f5ff",
+                      }}
                     >
-                      {t(`setup.persona.${lib.scoringPersona.toLowerCase()}.name`)}
+                      {t(
+                        `setup.persona.${lib.scoringPersona.toLowerCase()}.name`,
+                      )}
                     </span>
                     <span
                       className="truncate"
                       style={{ fontSize: 11, color: "var(--scry-muted3)" }}
                     >
-                      {t(`setup.persona.${lib.scoringPersona.toLowerCase()}.desc`)}
+                      {t(
+                        `setup.persona.${lib.scoringPersona.toLowerCase()}.desc`,
+                      )}
                     </span>
                   </span>
                 </SelectTrigger>

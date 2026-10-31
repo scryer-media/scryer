@@ -102,7 +102,10 @@ impl AppUseCase {
 
     pub(crate) fn hash_password(&self, password: &str) -> AppResult<String> {
         if password.is_empty() {
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
 
         let argon2 = Argon2::default();
@@ -248,7 +251,8 @@ impl AppUseCase {
         let now = Utc::now();
         tickets.retain(|_, ticket| ticket.expires_at > now);
         let Some(ticket) = tickets.get(password_ref) else {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::RELEASE_CANDIDATE_EXPIRED,
                 "release candidate expired; search again".to_string(),
             ));
         };
@@ -260,7 +264,8 @@ impl AppUseCase {
             || ticket.source_hint != claims.source_hint
             || ticket.source_title != claims.source_title
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::RELEASE_CANDIDATE_EXPIRED,
                 "release candidate expired; search again".to_string(),
             ));
         }
@@ -369,9 +374,11 @@ impl AppUseCase {
     pub(crate) async fn validate_new_local_password(&self, password: &str) -> AppResult<()> {
         let min_length = self.password_min_length().await?;
         if password.chars().count() < min_length as usize {
-            return Err(AppError::Validation(format!(
-                "password must be at least {min_length} characters"
-            )));
+            return Err(AppError::validation_refused_with_facts(
+                crate::error_reasons::security::PASSWORD_OUT_OF_RANGE,
+                format!("password must be at least {min_length} characters"),
+                vec![crate::RefusalFact::new("minLength", min_length.to_string())],
+            ));
         }
 
         Ok(())
@@ -395,14 +402,19 @@ impl AppUseCase {
         self.validate_password_hash(password_hash)?;
 
         if let Some(phc_string) = password_hash.strip_prefix("v2$") {
-            let parsed = PasswordHash::new(phc_string)
-                .map_err(|err| AppError::Validation(format!("invalid v2 password hash: {err}")))?;
+            let parsed = PasswordHash::new(phc_string).map_err(|err| {
+                AppError::validation_refused(
+                    crate::error_reasons::security::V2_PASSWORD_HASH_INVALID,
+                    format!("invalid v2 password hash: {err}"),
+                )
+            })?;
             Ok(Argon2::default()
                 .verify_password(password.as_bytes(), &parsed)
                 .is_ok())
         } else {
-            Err(AppError::Validation(
-                "unsupported password hash version".into(),
+            Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_HASH_VERSION_UNSUPPORTED,
+                "unsupported password hash version",
             ))
         }
     }
@@ -415,12 +427,16 @@ impl AppUseCase {
     /// silently unable to authenticate.
     pub(crate) fn validate_password_hash(&self, password_hash: &str) -> AppResult<()> {
         if let Some(phc_string) = password_hash.strip_prefix("v2$") {
-            PasswordHash::new(phc_string)
-                .map(|_| ())
-                .map_err(|err| AppError::Validation(format!("invalid v2 password hash: {err}")))
+            PasswordHash::new(phc_string).map(|_| ()).map_err(|err| {
+                AppError::validation_refused(
+                    crate::error_reasons::security::V2_PASSWORD_HASH_INVALID,
+                    format!("invalid v2 password hash: {err}"),
+                )
+            })
         } else {
-            Err(AppError::Validation(
-                "unsupported password hash version".into(),
+            Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_HASH_VERSION_UNSUPPORTED,
+                "unsupported password hash version",
             ))
         }
     }
@@ -461,7 +477,10 @@ impl AppUseCase {
             let capability = match claim.as_str() {
                 "manageOwnAccount" => scryer_domain::ActorCapability::ManageOwnAccount,
                 value => scryer_domain::ActorCapability::parse(value).ok_or_else(|| {
-                    AppError::Unauthorized(format!("unknown actor capability claim: {value}"))
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::security::ACTOR_CAPABILITY_CLAIM_UNKNOWN,
+                        format!("unknown actor capability claim: {value}"),
+                    )
                 })?,
             };
             mask.insert(scryer_domain::ActorCapabilityMask::from_capability(
@@ -572,7 +591,12 @@ impl AppUseCase {
             .users
             .get_by_id(&user.id)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("token subject no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::TOKEN_SUBJECT_NO_LONGER_EXISTS,
+                    "token subject no longer exists",
+                )
+            })?;
         let login_status = user.login_status();
         user.authorization = self.load_user_authorization(&user).await?;
         user.set_login_status(login_status);
@@ -631,7 +655,7 @@ impl AppUseCase {
         self.write_cached_jwt_signing_key(user, false).await
     }
 
-    pub(super) async fn refresh_cached_jwt_signing_key(&self, user: &User) -> AppResult<()> {
+    pub(crate) async fn refresh_cached_jwt_signing_key(&self, user: &User) -> AppResult<()> {
         self.write_cached_jwt_signing_key(user, true).await
     }
 
@@ -668,8 +692,9 @@ impl AppUseCase {
             .await?
             .unwrap_or(3);
         if !(1..=365).contains(&days) {
-            return Err(AppError::Validation(
-                "session duration must be between 1 and 365 days".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::SESSION_DURATION_OUT_OF_RANGE,
+                "session duration must be between 1 and 365 days",
             ));
         }
         Ok(days as i32)
@@ -923,7 +948,10 @@ impl AppUseCase {
             Some(OAuthAuthorizationSource::Authless)
         ) && Self::is_default_admin_username(&actor.username);
         if !actor.login_status().is_enabled() && !is_authless_oauth {
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
         let signing_seed = actor
             .password_hash
@@ -938,8 +966,9 @@ impl AppUseCase {
         if let Some(expected_auth_session_version) = expected_auth_session_version
             && auth_session_version != *expected_auth_session_version
         {
-            return Err(AppError::Unauthorized(
-                "authentication session was invalidated".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::AUTHENTICATION_SESSION_INVALIDATED,
+                "authentication session was invalidated",
             ));
         }
         let authorization_fingerprint = Self::auth_session_fingerprint_for_version(
@@ -1031,10 +1060,13 @@ impl AppUseCase {
         self.ensure_jwt_signing_keys_loaded().await?;
         let cache = self.jwt_signing_keys.read().await;
         let jwt_signing_key = cache.get(&actor.id).cloned().ok_or_else(|| {
-            AppError::Unauthorized(format!(
-                "cannot resolve backup download signing key for actor {}",
-                actor.id
-            ))
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR,
+                format!(
+                    "cannot resolve backup download signing key for actor {}",
+                    actor.id
+                ),
+            )
         })?;
 
         Ok(self.derive_backup_download_signing_key(&jwt_signing_key))
@@ -1047,10 +1079,13 @@ impl AppUseCase {
         self.ensure_jwt_signing_keys_loaded().await?;
         let cache = self.jwt_signing_keys.read().await;
         let jwt_signing_key = cache.get(&actor.id).cloned().ok_or_else(|| {
-            AppError::Unauthorized(format!(
-                "cannot resolve release candidate signing key for actor {}",
-                actor.id
-            ))
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR,
+                format!(
+                    "cannot resolve release candidate signing key for actor {}",
+                    actor.id
+                ),
+            )
         })?;
 
         Ok(self.derive_release_candidate_signing_key(&jwt_signing_key))
@@ -1081,16 +1116,12 @@ impl AppUseCase {
         match scope_kind {
             "episode" => Ok(SubmissionScope::Episode {
                 episode_id: scope_id.ok_or_else(|| {
-                    AppError::Unauthorized(
-                        "release candidate token missing episode scope id".into(),
-                    )
+                    AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_MISSING_EPISODE_SCOPE_ID, "release candidate token missing episode scope id")
                 })?,
             }),
             "episode_set" => {
                 let raw = scope_id.ok_or_else(|| {
-                    AppError::Unauthorized(
-                        "release candidate token missing episode-set scope id".into(),
-                    )
+                    AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_MISSING_EPISODE_SET_SCOPE_ID, "release candidate token missing episode-set scope id")
                 })?;
                 let mut episode_ids =
                     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_else(|_| {
@@ -1102,31 +1133,23 @@ impl AppUseCase {
                 episode_ids.sort();
                 episode_ids.dedup();
                 if episode_ids.is_empty() {
-                    return Err(AppError::Unauthorized(
-                        "release candidate token has empty episode-set scope".into(),
-                    ));
+                    return Err(AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_EMPTY_EPISODE_SET_SCOPE, "release candidate token has empty episode-set scope"));
                 }
                 Ok(SubmissionScope::EpisodeSet { episode_ids })
             }
             "collection" => Ok(SubmissionScope::Collection {
                 collection_id: scope_id.ok_or_else(|| {
-                    AppError::Unauthorized(
-                        "release candidate token missing collection scope id".into(),
-                    )
+                    AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_MISSING_COLLECTION_SCOPE_ID, "release candidate token missing collection scope id")
                 })?,
             }),
             "series_movie" => Ok(SubmissionScope::SeriesMovie {
                 series_movie_link_id: scope_id.ok_or_else(|| {
-                    AppError::Unauthorized(
-                        "release candidate token missing series movie scope id".into(),
-                    )
+                    AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_MISSING_SERIES_MOVIE_SCOPE_ID, "release candidate token missing series movie scope id")
                 })?,
             }),
             "title" => Ok(SubmissionScope::Title),
             "orphan" => Ok(SubmissionScope::Orphan),
-            _ => Err(AppError::Unauthorized(
-                "release candidate token has unknown scope".into(),
-            )),
+            _ => Err(AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_UNKNOWN_SCOPE, "release candidate token has unknown scope")),
         }
     }
 
@@ -1147,7 +1170,10 @@ impl AppUseCase {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                AppError::Validation("release candidate token requires a source hint".into())
+                AppError::validation_refused(
+                    crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_REQUIRES_SOURCE_HINT,
+                    "release candidate token requires a source hint",
+                )
             })?;
         let source_title = selection
             .source_title
@@ -1155,7 +1181,10 @@ impl AppUseCase {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                AppError::Validation("release candidate token requires a source title".into())
+                AppError::validation_refused(
+                    crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_REQUIRES_SOURCE_TITLE,
+                    "release candidate token requires a source title",
+                )
             })?;
 
         let now = Utc::now();
@@ -1281,9 +1310,7 @@ impl AppUseCase {
             .verify_release_candidate_token_for_signed_scope(actor, title_id, token)
             .await?;
         if &claimed_scope != scope {
-            return Err(AppError::Unauthorized(
-                "release candidate token scope does not match request".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_SCOPE_DOES_NOT_MATCH_REQUEST, "release candidate token scope does not match request"));
         }
         Ok(selection)
     }
@@ -1292,11 +1319,17 @@ impl AppUseCase {
         let unverified = jsonwebtoken::dangerous::insecure_decode::<BackupDownloadTokenClaims>(
             token,
         )
-        .map_err(|err| AppError::Unauthorized(format!("malformed backup download token: {err}")))?;
+        .map_err(|err| {
+            AppError::unauthorized_reason(
+                crate::error_reasons::security::MALFORMED_BACKUP_DOWNLOAD_TOKEN,
+                format!("malformed backup download token: {err}"),
+            )
+        })?;
         let subject = unverified.claims.sub.trim();
         if subject.is_empty() {
-            return Err(AppError::Unauthorized(
-                "backup download token subject is empty".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::BACKUP_DOWNLOAD_TOKEN_SUBJECT_EMPTY,
+                "backup download token subject is empty",
             ));
         }
         Ok(subject.to_string())
@@ -1314,23 +1347,28 @@ impl AppUseCase {
         validation.set_issuer(&[self.auth.issuer.as_str()]);
         let key = jsonwebtoken::DecodingKey::from_secret(&signing_key);
         let claims = jsonwebtoken::decode::<BackupDownloadTokenClaims>(token, &key, &validation)
-            .map_err(|err| AppError::Unauthorized(format!("invalid backup download token: {err}")))?
+            .map_err(|err| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::BACKUP_DOWNLOAD_TOKEN_INVALID,
+                    format!("invalid backup download token: {err}"),
+                )
+            })?
             .claims;
 
         if claims.kind != Self::BACKUP_DOWNLOAD_TOKEN_KIND {
-            return Err(AppError::Unauthorized(
-                "invalid backup download token kind".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::BACKUP_DOWNLOAD_TOKEN_KIND_INVALID,
+                "invalid backup download token kind",
             ));
         }
         if claims.sub != actor.id {
-            return Err(AppError::Unauthorized(
-                "backup download token subject does not match actor".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::BACKUP_DOWNLOAD_TOKEN_SUBJECT_DOES_NOT_MATCH_ACTOR,
+                "backup download token subject does not match actor",
             ));
         }
         if claims.filename != filename {
-            return Err(AppError::Unauthorized(
-                "backup download token filename does not match request".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::BACKUP_DOWNLOAD_TOKEN_FILENAME_DOES_NOT_MATCH_REQUEST, "backup download token filename does not match request"));
         }
 
         Ok(())
@@ -1348,7 +1386,12 @@ impl AppUseCase {
             .users
             .get_by_id(&subject)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("unknown backup download subject".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::BACKUP_DOWNLOAD_SUBJECT_UNKNOWN,
+                    "unknown backup download subject",
+                )
+            })?;
         let actor = self.attach_user_authorization(actor).await?;
         self.require_app_permission(&actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1384,24 +1427,34 @@ impl AppUseCase {
         let key = jsonwebtoken::DecodingKey::from_secret(&signing_key);
         let claims = jsonwebtoken::decode::<ReleaseCandidateTokenClaims>(token, &key, &validation)
             .map_err(|err| {
-                AppError::Unauthorized(format!("invalid release candidate token: {err}"))
+                if matches!(
+                    err.kind(),
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature
+                ) {
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::security::RELEASE_TOKEN_EXPIRED,
+                        "release candidate token expired",
+                    )
+                } else {
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::security::RELEASE_TOKEN_INVALID,
+                        "invalid release candidate token",
+                    )
+                }
             })?
             .claims;
 
         if claims.kind != Self::RELEASE_CANDIDATE_TOKEN_KIND {
-            return Err(AppError::Unauthorized(
-                "invalid release candidate token kind".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_KIND_INVALID,
+                "invalid release candidate token kind",
             ));
         }
         if claims.sub != actor.id {
-            return Err(AppError::Unauthorized(
-                "release candidate token subject does not match actor".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_SUBJECT_DOES_NOT_MATCH_ACTOR, "release candidate token subject does not match actor"));
         }
         if claims.title_id != title_id {
-            return Err(AppError::Unauthorized(
-                "release candidate token title does not match request".into(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::security::RELEASE_CANDIDATE_TOKEN_TITLE_DOES_NOT_MATCH_REQUEST, "release candidate token title does not match request"));
         }
 
         let claimed_scope =
@@ -1422,12 +1475,15 @@ impl AppUseCase {
             claims.seeders,
             minimum_seeders,
         ) {
-            return Err(AppError::Validation(format!(
-                "release reports {} seeders, below the minimum of {minimum_seeders} for this indexer",
-                claims
-                    .seeders
-                    .map_or_else(|| "unknown".to_string(), |count| count.to_string())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER,
+                format!(
+                    "release reports {} seeders, below the minimum of {minimum_seeders} for this indexer",
+                    claims
+                        .seeders
+                        .map_or_else(|| "unknown".to_string(), |count| count.to_string())
+                ),
+            ));
         }
 
         let source_password = self.resolve_release_candidate_password_ticket(
@@ -1471,8 +1527,13 @@ impl AppUseCase {
         token: &str,
     ) -> AppResult<(User, AuthenticatedTokenClaims)> {
         // Decode claims without signature verification to extract the subject (user ID).
-        let unverified = jsonwebtoken::dangerous::insecure_decode::<JwtClaims>(token)
-            .map_err(|err| AppError::Unauthorized(format!("malformed token: {err}")))?;
+        let unverified =
+            jsonwebtoken::dangerous::insecure_decode::<JwtClaims>(token).map_err(|err| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::MALFORMED_TOKEN,
+                    format!("malformed token: {err}"),
+                )
+            })?;
 
         let user_id = &unverified.claims.sub;
         self.ensure_jwt_signing_keys_loaded().await?;
@@ -1488,16 +1549,29 @@ impl AppUseCase {
             .await
             .get(user_id)
             .cloned()
-            .ok_or_else(|| AppError::Unauthorized("unknown token subject".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::TOKEN_SUBJECT_UNKNOWN,
+                    "unknown token subject",
+                )
+            })?;
         let key = jsonwebtoken::DecodingKey::from_secret(&signing_key);
 
-        let verified = jsonwebtoken::decode::<JwtClaims>(token, &key, &validation)
-            .map_err(|err| AppError::Unauthorized(format!("invalid token: {err}")))?;
+        let verified =
+            jsonwebtoken::decode::<JwtClaims>(token, &key, &validation).map_err(|err| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::TOKEN_INVALID,
+                    format!("invalid token: {err}"),
+                )
+            })?;
         let claims = verified.claims;
         let oauth_client_present = claims.oauth_client_id.is_some();
         let oauth_grant_present = claims.oauth_grant_id.is_some();
         if oauth_client_present ^ oauth_grant_present {
-            return Err(AppError::Unauthorized("invalid OAuth token claims".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_TOKEN_CLAIMS_INVALID,
+                "invalid OAuth token claims",
+            ));
         }
         let is_oauth = oauth_client_present && oauth_grant_present;
         let is_authless_oauth = is_oauth
@@ -1506,15 +1580,17 @@ impl AppUseCase {
                 OAuthAuthorizationSource::Authless
             );
         if is_oauth && !claims.app_permissions.is_empty() {
-            return Err(AppError::Unauthorized(
-                "OAuth tokens cannot carry app permissions".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::OAUTH_TOKENS_CANNOT_CARRY_APP_PERMISSIONS,
+                "OAuth tokens cannot carry app permissions",
             ));
         }
         if claims.password_change_required_after_enrollment
             && claims.auth_scope != JwtSessionScope::MfaEnrollment
         {
-            return Err(AppError::Unauthorized(
-                "invalid password-change enrollment token claims".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::PASSWORD_CHANGE_ENROLLMENT_TOKEN_CLAIMS_INVALID,
+                "invalid password-change enrollment token claims",
             ));
         }
         let actor_capabilities = if claims.actor_capabilities.is_empty() {
@@ -1531,8 +1607,9 @@ impl AppUseCase {
         } else {
             let mask = Self::actor_capability_claims_to_mask(&claims.actor_capabilities)?;
             if is_oauth && !mask.is_empty() {
-                return Err(AppError::Unauthorized(
-                    "OAuth tokens cannot carry actor capabilities".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::security::OAUTH_TOKENS_CANNOT_CARRY_ACTOR_CAPABILITIES,
+                    "OAuth tokens cannot carry actor capabilities",
                 ));
             }
             if matches!(
@@ -1540,9 +1617,7 @@ impl AppUseCase {
                 JwtSessionScope::MfaEnrollment | JwtSessionScope::PasswordChangeRequired
             ) && !mask.is_empty()
             {
-                return Err(AppError::Unauthorized(
-                    "restricted authentication tokens cannot carry actor capabilities".into(),
-                ));
+                return Err(AppError::unauthorized_reason(crate::error_reasons::security::RESTRICTED_AUTHENTICATION_TOKENS_CANNOT_CARRY_ACTOR_CAPABILITIES, "restricted authentication tokens cannot carry actor capabilities"));
             }
             mask
         };
@@ -1567,11 +1642,19 @@ impl AppUseCase {
             .users
             .get_by_id(&subject)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("token subject no longer exists".into()))?;
+            .ok_or_else(|| {
+                AppError::unauthorized_reason(
+                    crate::error_reasons::security::TOKEN_SUBJECT_NO_LONGER_EXISTS,
+                    "token subject no longer exists",
+                )
+            })?;
         let disabled_authless_grant_allowed =
             is_authless_oauth && Self::is_default_admin_username(&user.username);
         if !(user.login_status().is_enabled() || disabled_authless_grant_allowed) {
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
         user.password_hash = None;
         Ok((user, token_claims))
@@ -1610,19 +1693,28 @@ impl AppUseCase {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             log_failure("missing_username");
-            return Err(AppError::Validation("username is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::USERNAME_REQUIRED,
+                "username is required",
+            ));
         }
         if password.is_empty() {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             log_failure("missing_password");
-            return Err(AppError::Validation("password is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::PASSWORD_REQUIRED,
+                "password is required",
+            ));
         }
         if Self::is_reserved_recovery_username(username) && !self.recovery_admin_login_enabled() {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             log_failure("recovery_login_disabled");
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
 
         let Some(snapshot) = self
@@ -1635,7 +1727,10 @@ impl AppUseCase {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             log_failure("unknown_user");
-            return Err(AppError::NotFound(format!("user {username} not found")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::security::USER_NOT_FOUND,
+                format!("user {username} not found"),
+            ));
         };
         let user = snapshot.user;
 
@@ -1653,14 +1748,20 @@ impl AppUseCase {
                     .await;
             }
             log_failure("account_disabled");
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         }
 
         let Some(password_hash) = user.password_hash.as_ref() else {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             log_failure("no_local_password");
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_UNAVAILABLE,
+                "credentials unavailable",
+            ));
         };
 
         if !self.validate_password(password, password_hash)? {
@@ -1670,7 +1771,10 @@ impl AppUseCase {
             )
             .await;
             log_failure("invalid_password");
-            return Err(AppError::Unauthorized("invalid credentials".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CREDENTIALS_INVALID,
+                "invalid credentials",
+            ));
         }
 
         // The former online v1 → v2 re-hash on login is gone with the v1 format
@@ -1691,19 +1795,24 @@ impl AppUseCase {
         self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
             .await?;
         if current_password.is_empty() {
-            return Err(AppError::Unauthorized(
-                "current password is required for reauthentication".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CURRENT_PASSWORD_REQUIRED_REAUTHENTICATION,
+                "current password is required for reauthentication",
             ));
         }
 
         let user = self.load_user_for_auth_payload(actor).await?;
         let Some(password_hash) = user.password_hash.as_deref() else {
-            return Err(AppError::Unauthorized(
-                "password reauthentication is unavailable for this account".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::PASSWORD_REAUTHENTICATION_UNAVAILABLE_ACCOUNT,
+                "password reauthentication is unavailable for this account",
             ));
         };
         if !self.validate_password(current_password, password_hash)? {
-            return Err(AppError::Unauthorized("invalid current password".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::security::CURRENT_PASSWORD_INVALID,
+                "invalid current password",
+            ));
         }
         Ok(())
     }

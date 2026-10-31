@@ -23,7 +23,7 @@ export function SetupProgressBar({
             <div
               className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
                 isComplete
-                  ? "text-white shadow-[0_6px_16px_rgba(var(--scry-accent-rgb),calc(0.4*var(--scry-glow)))]"
+                  ? "text-white"
                   : isCurrent
                     ? "border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-accent-text)]"
                     : "bg-[var(--scry-chip)] text-[var(--scry-muted2)]"

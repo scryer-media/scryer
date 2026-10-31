@@ -28,6 +28,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot/windows-startup-auth.ps1"
 
 $prefix = "scryer-windows-$Architecture"
 $defenderLog = "$prefix-defender-scan.log"
@@ -192,6 +193,10 @@ function Invoke-ScryerStartupSmoke {
   $oldBind = $env:SCRYER_BIND
   $oldOpenBrowser = $env:SCRYER_OPEN_BROWSER
   $oldAuthEnabled = $env:SCRYER_AUTH_ENABLED
+  $oldDbPath = $env:SCRYER_DB_PATH
+  $oldLogFile = $env:SCRYER_LOG_FILE
+  $applicationLog = Join-Path $startupRoot "scryer.log"
+  $stderrPath = Join-Path $startupRoot "stderr.log"
   $process = $null
 
   try {
@@ -199,6 +204,8 @@ function Invoke-ScryerStartupSmoke {
     $env:APPDATA = $appData
     $env:SCRYER_OPEN_BROWSER = "false"
     $env:SCRYER_AUTH_ENABLED = "false"
+    $env:SCRYER_DB_PATH = Join-Path $startupRoot "scryer.db"
+    $env:SCRYER_LOG_FILE = $applicationLog
 
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
     $listener.Start()
@@ -210,7 +217,7 @@ function Invoke-ScryerStartupSmoke {
     $env:SCRYER_BIND = "127.0.0.1:$port"
 
     Write-Log $startupLog "Starting $ExePath with no arguments from $workDir"
-    $process = Start-Process -FilePath $ExePath -WorkingDirectory $workDir -PassThru
+    $process = Start-Process -FilePath $ExePath -WorkingDirectory $workDir -PassThru -RedirectStandardError $stderrPath -RedirectStandardOutput (Join-Path $startupRoot "stdout.log")
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
     $baseUrl = "http://127.0.0.1:$port"
     $deadline = (Get-Date).AddSeconds(45)
@@ -228,19 +235,7 @@ function Invoke-ScryerStartupSmoke {
           throw "SPA returned HTTP $($spa.StatusCode)"
         }
 
-        $proofResponse = Invoke-WebRequest -Uri "$baseUrl/authless-client" -Headers @{ Accept = "application/json" } -WebSession $session -TimeoutSec 5
-        if ($proofResponse.StatusCode -ne 200) {
-          throw "Authless web client proof returned HTTP $($proofResponse.StatusCode)"
-        }
-        $proofText = if ($proofResponse.Content -is [byte[]]) {
-          [System.Text.Encoding]::UTF8.GetString($proofResponse.Content)
-        } else {
-          [string]$proofResponse.Content
-        }
-        $proof = ($proofText | ConvertFrom-Json).proof
-        if ([string]::IsNullOrWhiteSpace($proof)) {
-          throw "Authless web client proof response did not include a proof"
-        }
+        $proof = Get-ScryerStartupProof -BaseUrl $baseUrl -Session $session
 
         $payload = @{ query = "query { scryerVersion }" } | ConvertTo-Json -Compress
         $api = Invoke-WebRequest -Uri "$baseUrl/graphql" -Method Post -ContentType "application/json" -Body $payload -Headers @{ "X-Scryer-Web-Client" = $proof } -WebSession $session -TimeoutSec 5
@@ -279,13 +274,12 @@ function Invoke-ScryerStartupSmoke {
       }
     }
 
-    $defaultLog = Join-Path $localAppData "scryer\logs\scryer.log"
-    if (Test-Path $defaultLog) {
+    if (Test-Path $applicationLog) {
       Add-Content -Path $startupLog -Value "----- Scryer log tail -----"
-      Get-Content $defaultLog -Tail 160 | Add-Content -Path $startupLog
+      Get-Content $applicationLog -Tail 160 | Add-Content -Path $startupLog
       Add-Content -Path $startupLog -Value "----- end Scryer log tail -----"
     } else {
-      Write-Log $startupLog "Default Scryer log was not created at $defaultLog"
+      Write-Log $startupLog "Scryer log was not created at $applicationLog"
     }
 
     Restore-EnvVar -Name "LOCALAPPDATA" -Value $oldLocalAppData
@@ -293,6 +287,8 @@ function Invoke-ScryerStartupSmoke {
     Restore-EnvVar -Name "SCRYER_BIND" -Value $oldBind
     Restore-EnvVar -Name "SCRYER_OPEN_BROWSER" -Value $oldOpenBrowser
     Restore-EnvVar -Name "SCRYER_AUTH_ENABLED" -Value $oldAuthEnabled
+    Restore-EnvVar -Name "SCRYER_DB_PATH" -Value $oldDbPath
+    Restore-EnvVar -Name "SCRYER_LOG_FILE" -Value $oldLogFile
   }
 }
 

@@ -93,7 +93,10 @@ impl AppUseCase {
                 .get_by_id(&actor.id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Unauthorized("score refresh user no longer exists".into())
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::quality::SCORE_REFRESH_USER_NO_LONGER_EXISTS,
+                        "score refresh user no longer exists",
+                    )
                 })?;
             fresh_actor = self.attach_user_authorization(user).await?;
             &fresh_actor
@@ -106,11 +109,21 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media file".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::quality::MEDIA_FILE_NOT_FOUND,
+                    "media file",
+                )
+            })?;
         let title = self
             .get_title(actor, &file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media title".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::quality::MEDIA_TITLE_NOT_FOUND,
+                    "media title",
+                )
+            })?;
         if manage {
             self.require_library_permission(
                 actor,
@@ -163,10 +176,20 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media file".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::quality::MEDIA_FILE_NOT_FOUND,
+                    "media file",
+                )
+            })?;
         self.get_title(actor, &file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media title".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::quality::MEDIA_TITLE_NOT_FOUND,
+                    "media title",
+                )
+            })?;
         let Some(evaluation) = self
             .services
             .library
@@ -218,8 +241,9 @@ impl AppUseCase {
                 )
             };
             if preview.engine_error.is_some() || !preview.rule_errors.is_empty() {
-                return Err(AppError::Validation(
-                    "file score evaluation failed; previous evaluation retained".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::quality::FILE_SCORE_EVALUATION_FAILED,
+                    "file score evaluation failed; previous evaluation retained",
                 ));
             }
             let scored = preview.scored;
@@ -244,8 +268,9 @@ impl AppUseCase {
         .map_err(|_| AppError::Repository("file score worker failed".into()))??;
         let latest = self.file_score_inputs(actor, file_id, true).await?;
         if latest.fingerprint != fingerprint || latest.file.title_id != title_id {
-            return Err(AppError::Validation(
-                "file scoring inputs changed; refresh again".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::quality::FILE_SCORING_INPUTS_CHANGED,
+                "file scoring inputs changed; refresh again",
             ));
         }
         self.services

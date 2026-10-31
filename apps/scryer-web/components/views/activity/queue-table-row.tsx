@@ -40,7 +40,11 @@ import {
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { diskSpaceReason, importTitleHref, isWaitingForDiskSpace } from "@/lib/utils/import-row";
+import {
+  diskSpaceReason,
+  importTitleHref,
+  isWaitingForDiskSpace,
+} from "@/lib/utils/import-row";
 
 export type QueueTableRowProps = {
   queueItem: DownloadQueueItem;
@@ -97,7 +101,10 @@ function QueueIconAction({
   onClick,
 }: QueueIconActionProps) {
   return (
-    <ActionTooltip content={tooltip ?? label} wrapperTabIndex={disabled ? 0 : undefined}>
+    <ActionTooltip
+      content={tooltip ?? label}
+      wrapperTabIndex={disabled ? 0 : undefined}
+    >
       <Button
         id={id}
         type="button"
@@ -220,7 +227,9 @@ export const QueueTableRow = memo(function QueueTableRow({
           <p className="break-words whitespace-normal text-sm">
             {queueItem.clientName || queueItem.clientType}
           </p>
-          <p className="text-xs text-muted-foreground">{queueItem.clientType}</p>
+          <p className="text-xs text-muted-foreground">
+            {queueItem.clientType}
+          </p>
         </TableCell>
         <TableCell className="w-[15%] align-middle">
           <ActivityQueueStatusBadge
@@ -240,12 +249,20 @@ export const QueueTableRow = memo(function QueueTableRow({
             t={t}
           />
           {(isWaitingForDiskSpace(queueItem) ||
-            ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) && !row.hasStatusDetails)) && (
+            ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) &&
+              !row.hasStatusDetails)) && (
             <p
               className="mt-1 max-w-full break-words whitespace-normal text-xs text-[var(--scry-danger-text-soft)]"
-              title={queueItem.deleteErrorMessage ?? queueItem.importErrorMessage ?? ""}
+              title={
+                queueItem.deleteErrorMessage ??
+                queueItem.importErrorMessage ??
+                ""
+              }
             >
-              {isWaitingForDiskSpace(queueItem) ? diskSpaceReason(queueItem) : queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
+              {isWaitingForDiskSpace(queueItem)
+                ? diskSpaceReason(queueItem)
+                : (queueItem.deleteErrorMessage ??
+                  queueItem.importErrorMessage)}
             </p>
           )}
         </TableCell>
@@ -269,9 +286,7 @@ export const QueueTableRow = memo(function QueueTableRow({
                 disabled={isRowFullyBusy}
                 label={t("queue.pause")}
                 onClick={() => {
-                  if (
-                    isActionLoading || isRowBlocked
-                  ) {
+                  if (isActionLoading || isRowBlocked) {
                     return;
                   }
                   onPause();
@@ -284,11 +299,13 @@ export const QueueTableRow = memo(function QueueTableRow({
               <QueueIconAction
                 className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
-                label={t(canRetryDownloadPassword(queueItem) ? "importHistory.retryWithPassword" : "queue.resume")}
+                label={t(
+                  canRetryDownloadPassword(queueItem)
+                    ? "importHistory.retryWithPassword"
+                    : "queue.resume",
+                )}
                 onClick={() => {
-                  if (
-                    isActionLoading || isRowBlocked
-                  ) {
+                  if (isActionLoading || isRowBlocked) {
                     return;
                   }
                   onResume();
@@ -299,7 +316,12 @@ export const QueueTableRow = memo(function QueueTableRow({
             )}
             {(row.canInteractiveManualImport || row.canDirectManualImport) && (
               <QueueIconAction
-                id={selectorId("activity", activeTab, "manual-import", rowSelectorKey)}
+                id={selectorId(
+                  "activity",
+                  activeTab,
+                  "manual-import",
+                  rowSelectorKey,
+                )}
                 className={`h-10 w-10 border border-[var(--scry-success-border-strong)] bg-[var(--scry-success-bg)] text-[var(--scry-success-text)] hover:bg-[var(--scry-success-bg-strong)] ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
                 label={
@@ -308,9 +330,7 @@ export const QueueTableRow = memo(function QueueTableRow({
                     : t("queue.manualImportTooltip")
                 }
                 onClick={() => {
-                  if (
-                    isActionLoading || isRowBlocked
-                  ) {
+                  if (isActionLoading || isRowBlocked) {
                     return;
                   }
                   onManualImport();
@@ -325,7 +345,12 @@ export const QueueTableRow = memo(function QueueTableRow({
             )}
             {row.canAssignTitle && (
               <QueueIconAction
-                id={selectorId("activity", activeTab, "assign-title", rowSelectorKey)}
+                id={selectorId(
+                  "activity",
+                  activeTab,
+                  "assign-title",
+                  rowSelectorKey,
+                )}
                 className={`h-10 w-10 border border-[var(--scry-warning-border-strong)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)] hover:bg-[var(--scry-warning-bg-strong)] ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
                 label={
@@ -334,9 +359,7 @@ export const QueueTableRow = memo(function QueueTableRow({
                     : t("queue.reassignTitle")
                 }
                 onClick={() => {
-                  if (
-                    isActionLoading || isRowBlocked
-                  ) {
+                  if (isActionLoading || isRowBlocked) {
                     return;
                   }
                   onAssignTitle();
@@ -347,13 +370,12 @@ export const QueueTableRow = memo(function QueueTableRow({
             )}
             {row.canIgnore && (
               <QueueIconAction
+                id={selectorId("activity", activeTab, "ignore", rowSelectorKey)}
                 className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
                 label={t("queue.ignore")}
                 onClick={() => {
-                  if (
-                    isActionLoading || isRowBlocked
-                  ) {
+                  if (isActionLoading || isRowBlocked) {
                     return;
                   }
                   onIgnore();
@@ -364,7 +386,12 @@ export const QueueTableRow = memo(function QueueTableRow({
             )}
             {canReleaseHeldSources(queueItem) && (
               <QueueIconAction
-                id={selectorId("activity", activeTab, "release-held-sources", rowSelectorKey)}
+                id={selectorId(
+                  "activity",
+                  activeTab,
+                  "release-held-sources",
+                  rowSelectorKey,
+                )}
                 className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
                 label={t("queue.releaseHeldSources")}
@@ -411,11 +438,10 @@ export const QueueTableRow = memo(function QueueTableRow({
             <QueueIconAction
               className={`h-10 w-10 border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] text-[var(--scry-danger-text)] hover:bg-[var(--scry-danger-bg-strong)] ${rowActionVisualClass}`}
               disabled={isRowFullyBusy}
+              id={selectorId("activity", activeTab, "delete", rowSelectorKey)}
               label={t("queue.removeFromDownloader")}
               onClick={() => {
-                if (
-                  isActionLoading || isRowBlocked
-                ) {
+                if (isActionLoading || isRowBlocked) {
                   return;
                 }
                 onRequestDelete();
@@ -432,14 +458,18 @@ export const QueueTableRow = memo(function QueueTableRow({
           data-activity-virtual-prefix={isVirtualPrefix ? "" : undefined}
         >
           <TableCell
-            colSpan={activeTab === "activity" ? 6 : activeTab === "import" ? 7 : 5}
+            colSpan={
+              activeTab === "activity" ? 6 : activeTab === "import" ? 7 : 5
+            }
             className="bg-muted/10 p-3"
           >
             <ActivityQueueDetailsPanel
               detailId={detailId}
               releaseTitle={row.releaseTitle}
               errorCode={queueItem.importErrorCode}
-              failureReason={isWaitingForDiskSpace(queueItem) ? "" : row.failureReason}
+              failureReason={
+                isWaitingForDiskSpace(queueItem) ? "" : row.failureReason
+              }
               t={t}
             />
           </TableCell>

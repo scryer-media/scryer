@@ -100,7 +100,7 @@ fn nfo_write_on_import_key(facet: &MediaFacet) -> &'static str {
 fn parse_import_mode_setting(raw: Option<String>) -> AppResult<Option<ImportMode>> {
     raw.map(|value| {
         ImportMode::from_setting(&value).map_err(|message| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::settings::SETTING_VALUE_INVALID, format!(
                 "invalid {IMPORT_MODE_KEY} setting value '{}': {message}",
                 value.trim()
             ))
@@ -120,7 +120,7 @@ fn normalize_chmod_setting(raw: Option<String>, key_name: &str) -> AppResult<Opt
 fn validate_chmod_setting(value: &str, key_name: &str) -> AppResult<()> {
     let len = value.len();
     if !(len == 3 || len == 4) || !value.bytes().all(|byte| (b'0'..=b'7').contains(&byte)) {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::settings::SETTING_VALUE_INVALID, format!(
             "invalid {key_name} setting value '{value}': expected a 3 or 4 digit octal mask"
         )));
     }
@@ -132,13 +132,11 @@ fn normalize_chown_group_setting(raw: Option<String>) -> AppResult<Option<String
         return Ok(None);
     };
     if value.contains('\0') {
-        return Err(AppError::Validation(
-            "invalid permissions.chown_group setting value: group cannot contain NUL".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID, "invalid permissions.chown_group setting value: group cannot contain NUL".to_string()));
     }
     if value.chars().all(|ch| ch.is_ascii_digit()) {
         value.parse::<u32>().map_err(|_| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::settings::PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID, format!(
                 "invalid permissions.chown_group setting value '{value}': numeric gid is outside range"
             ))
         })?;
@@ -538,7 +536,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -815,15 +813,11 @@ impl AppUseCase {
                 || input.specials_folder_template.is_some()
                 || input.use_season_folders.is_some())
         {
-            return Err(AppError::Validation(
-                "season folder templates are only supported for series and anime".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SEASON_FOLDER_TEMPLATES_ONLY_SUPPORTED_SERIES_ANIME, "season folder templates are only supported for series and anime".to_string()));
         }
         let movie_availability = input.movie_availability.clone().normalized()?;
         if facet != MediaFacet::Movie && !movie_availability.is_empty() {
-            return Err(AppError::Validation(
-                "movie availability settings require scope movie".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::MOVIE_AVAILABILITY_SETTINGS_REQUIRE_SCOPE_MOVIE, "movie availability settings require scope movie".to_string()));
         }
         if let Some(template) = input.season_folder_template.as_deref() {
             crate::validate_season_folder_template(template)?;
@@ -1038,9 +1032,7 @@ impl AppUseCase {
 
         if let Some(value) = input.plexmatch_write_on_import {
             let Some(key) = plexmatch_write_on_import_key(&facet) else {
-                return Err(AppError::Validation(
-                    "plexmatch_write_on_import is only valid for series and anime".to_string(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::settings::PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME, "plexmatch_write_on_import is only valid for series and anime".to_string()));
             };
             self.services
                 .config
@@ -1264,9 +1256,7 @@ impl AppUseCase {
             || input.inter_season_movies.is_some()
             || input.monitor_filler_movies.is_some()
         {
-            return Err(AppError::Validation(
-                "anime-specific settings require scope anime".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ANIME_SPECIFIC_SETTINGS_REQUIRE_SCOPE_ANIME, "anime-specific settings require scope anime".to_string()));
         }
 
         if !movie_availability.is_empty() {
@@ -1286,9 +1276,7 @@ impl AppUseCase {
         }
 
         if changed_keys.is_empty() {
-            return Err(AppError::Validation(
-                "at least one media setting change is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::MEDIA_SETTING_CHANGE_REQUIRED, "at least one media setting change is required".to_string()));
         }
 
         let current_roots = self.effective_scan_roots_for_facet(&facet).await?;

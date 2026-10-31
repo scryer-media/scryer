@@ -422,6 +422,7 @@ fn indexer_config(
     now: chrono::DateTime<chrono::Utc>,
 ) -> IndexerConfig {
     IndexerConfig {
+        last_error_code: None,
         id: id.into(),
         name: name.into(),
         provider_type: provider_type.into(),

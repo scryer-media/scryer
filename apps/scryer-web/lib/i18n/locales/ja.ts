@@ -1,49 +1,83 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "このリリースの詳細は利用できなくなりました。もう一度検索して取得してください。",
-  "httpRelease.refusal.live": "このリリースはライブ配信のため、ダウンロードできません。",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "システム時計が5分以上ずれているため、Scryerはメタデータゲートウェイに接続できません。システム時計を同期してScryerを再起動してください。",
+  "httpRelease.refusal.detailsUnavailable":
+    "このリリースの詳細は利用できなくなりました。もう一度検索して取得してください。",
+  "httpRelease.refusal.live":
+    "このリリースはライブ配信のため、ダウンロードできません。",
   "httpRelease.refusal.upcoming": "このリリースはまだ公開されていません。",
   "httpRelease.refusal.removed": "このリリースは提供元によって削除されました。",
-  "httpRelease.refusal.unsupportedTransport": "このリリースは HTTP ダウンローダーが取得できる形式で提供されていません。",
-  "httpRelease.refusal.separateTracks": "このリリースは音声と映像が別々のトラックでのみ提供されており、結合できません。",
-  "httpRelease.refusal.noMediaResource": "このリリースにはダウンロードできるメディアファイルがありません。",
-  "httpRelease.refusal.noSubtitleResource": "このリリースには希望する言語の字幕が提供されていません。",
+  "httpRelease.refusal.unsupportedTransport":
+    "このリリースは HTTP ダウンローダーが取得できる形式で提供されていません。",
+  "httpRelease.refusal.separateTracks":
+    "このリリースは音声と映像が別々のトラックでのみ提供されており、結合できません。",
+  "httpRelease.refusal.noMediaResource":
+    "このリリースにはダウンロードできるメディアファイルがありません。",
+  "httpRelease.refusal.noSubtitleResource":
+    "このリリースには希望する言語の字幕が提供されていません。",
   "titleDelete.refusal.selection": "重複しないタイトルを選択してください。",
   "titleDelete.refusal.busy": "削除はすでに実行中です。",
   "titleDelete.refusal.preview": "削除プレビューを更新して確認してください。",
-  "titleDelete.refusal.confirmation": "削除を確認するには DELETE と入力してください。",
-  "titleDelete.refusal.boundary": "タイトルフォルダーはライブラリのルート内にある必要があり、ルート自体は指定できません。",
-  "titleDelete.refusal.ownership": "フォルダーの所有関係を確認できませんでした。ファイルは保持されました。",
-  "titleDelete.refusal.layout": "このフォルダーまたは内容を単一のタイトルとして安全に削除できません。",
-  "titleDelete.refusal.unavailable": "ライブラリのルートにアクセスできません。アクセスを復旧して再度プレビューしてください。",
-  "titleDelete.refusal.outsideRoots": "ファイルパスが設定済みのどのライブラリルートにも含まれていません。ライブラリルートまたはタイトルフォルダーを修正して、再度プレビューしてください。",
-  "queue.attention.downloadPasswordRetry": "ダウンロードのパスワード再試行が照合待ちです。クライアントにジョブが残っていない場合は、このダウンロードを削除してください。",
-  "titleDelete.refusal.recycle": "タイトルは削除されましたが、一部のごみ箱項目を完全に削除できませんでした。",
-  "titleDelete.refusal.retry": "カタログのクリーンアップに失敗しました。新しいプレビューを取得してから再試行してください。",
+  "titleDelete.refusal.confirmation":
+    "削除を確認するには DELETE と入力してください。",
+  "titleDelete.refusal.boundary":
+    "タイトルフォルダーはライブラリのルート内にある必要があり、ルート自体は指定できません。",
+  "titleDelete.refusal.ownership":
+    "フォルダーの所有関係を確認できませんでした。ファイルは保持されました。",
+  "titleDelete.refusal.layout":
+    "このフォルダーまたは内容を単一のタイトルとして安全に削除できません。",
+  "titleDelete.refusal.unavailable":
+    "ライブラリのルートにアクセスできません。アクセスを復旧して再度プレビューしてください。",
+  "titleDelete.refusal.outsideRoots":
+    "ファイルパスが設定済みのどのライブラリルートにも含まれていません。ライブラリルートまたはタイトルフォルダーを修正して、再度プレビューしてください。",
+  "queue.attention.downloadPasswordRetry":
+    "ダウンロードのパスワード再試行が照合待ちです。クライアントにジョブが残っていない場合は、このダウンロードを削除してください。",
+  "titleDelete.refusal.recycle":
+    "タイトルは削除されましたが、一部のごみ箱項目を完全に削除できませんでした。",
+  "titleDelete.refusal.retry":
+    "カタログのクリーンアップに失敗しました。新しいプレビューを取得してから再試行してください。",
   "settings.downloadClientHttpDownloadDir": "ダウンロードフォルダー",
-  "settings.downloadClientHttpDownloadDirHelp": "完了したファイルと途中のファイルを書き込む場所（Scryer から見たパス）。このダウンローダーのキューは中の .scryer-http フォルダーに保存されます。",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "完了したファイルと途中のファイルを書き込む場所（Scryer から見たパス）。このダウンローダーのキューは中の .scryer-http フォルダーに保存されます。",
   "settings.downloadClientHttpMaxConcurrentDownloads": "同時ダウンロード数",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "同時にダウンロードするリリース数（1〜8）。",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "同時にダウンロードするリリース数（1〜8）。",
   "settings.downloadClientHttpMaxConnectionsPerHost": "ホストごとの接続数",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "同じサーバーから同時に取得できるダウンロード数（1〜8）。",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "同じサーバーから同時に取得できるダウンロード数（1〜8）。",
   "settings.downloadClientHttpBandwidthLimit": "帯域制限（KB/s）",
-  "settings.downloadClientHttpBandwidthLimitHelp": "このクライアントのすべてのダウンロードで共有されます。空欄または 0 で無制限。",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "このクライアントのすべてのダウンロードで共有されます。空欄または 0 で無制限。",
   "settings.publicUrlTitle": "公開 URL",
-  "settings.publicUrlHelp": "ユーザーやサービスが Scryer にアクセスするアドレスです（例: https://scryer.example.com）。アカウント連携と OAuth には変更がすぐに反映され、パスキーには Scryer の再起動後に反映されます。",
+  "settings.publicUrlHelp":
+    "ユーザーやサービスが Scryer にアクセスするアドレスです（例: https://scryer.example.com）。アカウント連携と OAuth には変更がすぐに反映され、パスキーには Scryer の再起動後に反映されます。",
   "settings.publicUrlLabel": "公開 URL",
-  "settings.publicUrlEnvironmentLocked": "SCRYER_PUBLIC_URL で設定されています。変更するには環境変数を編集してください。",
-  "settings.publicUrlInvalid": "設定された公開 URL は無効なため使用されません: {{error}}",
-  "settings.publicUrlError.invalid_url": "https://scryer.example.com のような、http または https の絶対 URL を入力してください。",
-  "settings.publicUrlError.wildcard_host": "公開 URL には、ワイルドカードではなく単一のホストを指定してください。",
-  "settings.publicUrlError.credentials": "公開 URL にユーザー名やパスワードを含めることはできません。",
-  "settings.publicUrlError.query_or_fragment": "公開 URL にクエリ文字列やフラグメントを含めることはできません。",
-  "settings.publicUrlError.path_not_allowed": "Scryer はルートで提供されているため、公開 URL にパスを含めることはできません。",
-  "settings.publicUrlError.path_mismatch": "公開 URL のパスは空にするか、Scryer のベースパスと一致させてください。",
-  "settings.publicUrlError.environment_locked": "公開 URL は SCRYER_PUBLIC_URL で設定されているため、ここでは変更できません。",
-  "settings.publicUrlError.save_and_reset": "公開 URL の保存とクリアを同時に行うことはできません。",
-  "settings.publicUrlError.passkey_acknowledgement_required": "この変更により、登録済みのパスキーが使えなくなります。保存するには確認してください。",
-  "settings.publicUrlPasskeyRestart": "パスキーへの公開 URL の変更は Scryer の再起動後に反映されます。",
+  "settings.publicUrlEnvironmentLocked":
+    "SCRYER_PUBLIC_URL で設定されています。変更するには環境変数を編集してください。",
+  "settings.publicUrlInvalid":
+    "設定された公開 URL は無効なため使用されません: {{error}}",
+  "settings.publicUrlError.invalid_url":
+    "https://scryer.example.com のような、http または https の絶対 URL を入力してください。",
+  "settings.publicUrlError.wildcard_host":
+    "公開 URL には、ワイルドカードではなく単一のホストを指定してください。",
+  "settings.publicUrlError.credentials":
+    "公開 URL にユーザー名やパスワードを含めることはできません。",
+  "settings.publicUrlError.query_or_fragment":
+    "公開 URL にクエリ文字列やフラグメントを含めることはできません。",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer はルートで提供されているため、公開 URL にパスを含めることはできません。",
+  "settings.publicUrlError.path_mismatch":
+    "公開 URL のパスは空にするか、Scryer のベースパスと一致させてください。",
+  "settings.publicUrlError.environment_locked":
+    "公開 URL は SCRYER_PUBLIC_URL で設定されているため、ここでは変更できません。",
+  "settings.publicUrlError.save_and_reset":
+    "公開 URL の保存とクリアを同時に行うことはできません。",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "この変更により、登録済みのパスキーが使えなくなります。保存するには確認してください。",
+  "settings.publicUrlPasskeyRestart":
+    "パスキーへの公開 URL の変更は Scryer の再起動後に反映されます。",
   "settings.publicUrlClear": "公開 URL を消去",
   "settings.publicUrlSaved": "公開 URL を保存しました。",
   "settings.publicUrlLoadError": "公開 URL を読み込めませんでした。",
@@ -64,16 +98,22 @@ const ja: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "既定",
   "settings.publicUrlSourcePublicUrl": "公開 URL",
   "settings.publicUrlPasskeyWarningTitle": "既存のパスキーは使えなくなります",
-  "settings.publicUrlPasskeyWarningChanged": "{{rpId}} 用のパスキーが登録されています。次回の再起動後、パスキーは {{nextRpId}} に移り、既存のパスキーではいずれもサインインできなくなります。",
-  "settings.publicUrlPasskeyWarningDisabled": "{{rpId}} 用のパスキーが登録されています。この公開 URL ではパスキーを使用できません（https のドメイン名または localhost が必要です）。次回の再起動後にパスキーは無効になり、既存のパスキーではいずれもサインインできなくなります。",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}} 人のユーザーがパスキーを持っています。そのうち {{passkeyOnly}} 人は二要素目として認証アプリを持っていないため締め出されます。要素がリセットされるまでサインインできません。",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer は登録済みのパスキーを数えられませんでした。一部のユーザーが締め出されるものと考えてください。",
-  "settings.publicUrlPasskeyWarningRecovery": "アクセスを回復するには、まだサインインできる管理者が {{users}} を開き、締め出された各ユーザーに {{reset}} を使用します。または公開 URL を元に戻して Scryer を再起動するか、SCRYER_RECOVERY_ADMIN_PASSWORD を指定して Scryer を起動し、復旧用管理者としてサインインします。",
+  "settings.publicUrlPasskeyWarningChanged":
+    "{{rpId}} 用のパスキーが登録されています。次回の再起動後、パスキーは {{nextRpId}} に移り、既存のパスキーではいずれもサインインできなくなります。",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "{{rpId}} 用のパスキーが登録されています。この公開 URL ではパスキーを使用できません（https のドメイン名または localhost が必要です）。次回の再起動後にパスキーは無効になり、既存のパスキーではいずれもサインインできなくなります。",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}} 人のユーザーがパスキーを持っています。そのうち {{passkeyOnly}} 人は二要素目として認証アプリを持っていないため締め出されます。要素がリセットされるまでサインインできません。",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer は登録済みのパスキーを数えられませんでした。一部のユーザーが締め出されるものと考えてください。",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "アクセスを回復するには、まだサインインできる管理者が {{users}} を開き、締め出された各ユーザーに {{reset}} を使用します。または公開 URL を元に戻して Scryer を再起動するか、SCRYER_RECOVERY_ADMIN_PASSWORD を指定して Scryer を起動し、復旧用管理者としてサインインします。",
   "settings.publicUrlPasskeyWarningConfirm": "それでも保存",
   "scoring.mandatoryRejection": "必須条件を満たしていません",
   "scoring.finalScoreRejection": "最終スコアが基準未満",
   "settings.refFnBlockScore": "他の加点で相殺できる -10000 点の減点を返します",
-  "settings.arrImportBlockScoreHelp": "合計スコアは -9000 を超え、プロファイルの最低スコア以上である必要があります。必須条件は引き続き適用されます。",
+  "settings.arrImportBlockScoreHelp":
+    "合計スコアは -9000 を超え、プロファイルの最低スコア以上である必要があります。必須条件は引き続き適用されます。",
   "label.ready": "準備完了",
   "label.moreInfo": "詳細情報",
   "label.search": "検索",
@@ -105,15 +145,59 @@ const ja: LocaleDictionary = {
   "label.cancel": "キャンセル",
   "folderBrowser.selectPath": "パスを選択",
   "folderBrowser.go": "移動",
-  "folderBrowser.descriptionFileOrFolder": "Scryer ホスト上のパスを参照して、ファイルまたはフォルダーを選択します。",
-  "folderBrowser.descriptionFile": "Scryer ホスト上のパスを参照して、ファイルを選択します。",
-  "folderBrowser.descriptionFolder": "Scryer ホスト上のパスを参照して、フォルダーを選択します。",
+  "folderBrowser.descriptionFileOrFolder":
+    "Scryer ホスト上のパスを参照して、ファイルまたはフォルダーを選択します。",
+  "folderBrowser.descriptionFile":
+    "Scryer ホスト上のパスを参照して、ファイルを選択します。",
+  "folderBrowser.descriptionFolder":
+    "Scryer ホスト上のパスを参照して、フォルダーを選択します。",
   "folderBrowser.loading": "フォルダーを読み込み中",
-  "folderBrowser.emptyFilesAndFolders": "ファイルもサブディレクトリもありません",
+  "folderBrowser.emptyFilesAndFolders":
+    "ファイルもサブディレクトリもありません",
   "folderBrowser.emptyFolders": "サブディレクトリがありません",
   "folderBrowser.error": "パスを参照できません。",
   "folderBrowser.browseRoot": "/ を参照",
   "folderBrowser.selectFolder": "フォルダーを選択",
+  "folderBrowser.newFolder": "新しいフォルダー",
+  "folderBrowser.newFolderName": "フォルダー名",
+  "folderBrowser.create": "作成",
+  "folderBrowser.newFolderFailed": "フォルダーを作成できませんでした。",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED":
+    "フォルダー名を入力してください。",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "この名前は予約されているため、フォルダー名に使用できません。",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    'フォルダー名に / \\ : * ? " < > | や制御文字は使用できません。',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT":
+    "フォルダー名の末尾にドットは使用できません。",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "フォルダー名をドットで始めることはできません。フォルダーが非表示になります。",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG":
+    "この名前はこのドライブには長すぎます。",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "このドライブはこの名前を受け付けません。もっと簡単な名前にしてください。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE":
+    "絶対パスのフォルダーを選択してください。",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING":
+    "現在のフォルダーは存在しないか、アクセスできません。",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "現在のパスはフォルダーではなくファイルです。",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "同じ名前のファイルまたはフォルダーがすでにあります。大文字と小文字を区別しないドライブもあります。",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer にはここにフォルダーを作成する権限がありません。Scryer を実行しているユーザー (Docker では PUID と PGID) に対するフォルダーの権限を確認してください。",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "このドライブは読み取り専用です。Scryer を Docker で実行している場合は、ボリュームが読み取り専用 (:ro) でマウントされていないか確認してください。",
+  "error.reason.FOLDER_CREATE_DISK_FULL":
+    "ドライブがいっぱいか、ストレージのクォータを使い切っています。",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "このフォルダーには、ドライブが許可する上限までサブフォルダーがあります。",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED":
+    "この場所ではフォルダーを作成できません。",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "ドライブまたはネットワーク共有が応答しません。接続とマウントの状態を確認してください。",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer はフォルダーを作成できませんでした。詳細はサーバーログを確認してください。",
   "label.clear": "クリア",
   "label.add": "追加",
   "label.remove": "削除",
@@ -275,7 +359,6 @@ const ja: LocaleDictionary = {
   "settings.users": "ユーザー",
   "settings.indexers": "インデクサー",
   "settings.indexerSearch": "インデクサー検索",
-  "settings.indexerSearchBetaNotice": "インデクサー検索はベータ版です。動作や結果はリリース間で変わる可能性があります。",
   "settings.pluginBeta": "ベータ",
   "settings.proxies": "プロキシ",
   "settings.proxyUsername": "ユーザー名",
@@ -290,7 +373,8 @@ const ja: LocaleDictionary = {
   "settings.proxyRemoteDns": "DNS をプロキシで解決",
   "settings.proxyRemoteDnsHelp":
     "DNS をプロキシで解決するのは socks5h の動作です。接続先ホスト名をこのマシンではなくプロキシが解決します。",
-  "settings.proxiesHelp": "プロキシは、割り当てたインデクサーやダウンロードクライアントの通信を中継します。ソルバーはブラウザーチャレンジに応答し、標準プロキシは HTTP または SOCKS の中継、トンネルは独自の経路を確立します。",
+  "settings.proxiesHelp":
+    "プロキシは、割り当てたインデクサーやダウンロードクライアントの通信を中継します。ソルバーはブラウザーチャレンジに応答し、標準プロキシは HTTP または SOCKS の中継、トンネルは独自の経路を確立します。",
   "settings.proxyFamilySolver": "ソルバー",
   "settings.proxyFamilyStandard": "標準",
   "settings.proxyFamilyTunnel": "トンネル",
@@ -305,10 +389,12 @@ const ja: LocaleDictionary = {
   "settings.proxyCreateNew": "プロキシを接続",
   "settings.proxyCreate": "プロキシを作成",
   "settings.proxyUpdate": "プロキシを更新",
-  "settings.proxyDeleteConfirmDescription": "プロキシ {{name}} を削除しますか？",
+  "settings.proxyDeleteConfirmDescription":
+    "プロキシ {{name}} を削除しますか？",
   "settings.proxyValidation": "名前とベース URL は必須です。",
   "settings.proxyEndpoint": "エンドポイント",
-  "settings.proxyEndpointHelp": "ssh://ホスト:ポート。省略した場合はポート 22 を使用します。",
+  "settings.proxyEndpointHelp":
+    "ssh://ホスト:ポート。省略した場合はポート 22 を使用します。",
   "settings.proxyAssignment": "プロキシ",
   "settings.proxyDirect": "直接接続（プロキシなし）",
   "settings.proxyMissing": "プロキシが見つかりません",
@@ -316,64 +402,95 @@ const ja: LocaleDictionary = {
   "settings.proxyDisabledHelp": "割り当てられたプロキシは無効です。",
   "settings.proxyDisabledSuffix": "（無効）",
   "settings.proxyClearPassword": "保存済みのパスワードを削除",
-  "settings.proxyTunnelAuthHelp": "SSH にはユーザー名と Ed25519 秘密鍵が必要です。パスワード認証には対応していません。",
+  "settings.proxyTunnelAuthHelp":
+    "SSH にはユーザー名と Ed25519 秘密鍵が必要です。パスワード認証には対応していません。",
   "settings.proxyPrivateKey": "秘密鍵",
-  "settings.proxyPrivateKeyHelp": "対応している秘密鍵は Ed25519 のみです。`ssh-keygen -t ed25519` で生成し、OpenSSH 形式の秘密鍵を貼り付けてください。",
+  "settings.proxyPrivateKeyHelp":
+    "対応している秘密鍵は Ed25519 のみです。`ssh-keygen -t ed25519` で生成し、OpenSSH 形式の秘密鍵を貼り付けてください。",
   "settings.proxyPrivateKeyStored": "秘密鍵設定済み",
-  "settings.proxyPrivateKeyUnchanged": "秘密鍵が保存されています。置き換えるには新しい鍵を貼り付けてください。",
+  "settings.proxyPrivateKeyUnchanged":
+    "秘密鍵が保存されています。置き換えるには新しい鍵を貼り付けてください。",
   "settings.proxyClearPrivateKey": "保存済みの秘密鍵を削除",
   "settings.proxyPrivateKeyPassphrase": "鍵のパスフレーズ",
-  "settings.proxyPrivateKeyPassphraseHelp": "秘密鍵がパスフレーズで保護されている場合のみ必要です。",
+  "settings.proxyPrivateKeyPassphraseHelp":
+    "秘密鍵がパスフレーズで保護されている場合のみ必要です。",
   "settings.proxyHostKey": "ホスト鍵",
   "settings.proxyHostKeyPinnedAt": "{{time}} に固定しました。",
-  "settings.proxyHostKeyUnpinned": "まだ固定されていません。最初に接続が成功した時点でサーバーのホスト鍵を固定します。",
+  "settings.proxyHostKeyUnpinned":
+    "まだ固定されていません。最初に接続が成功した時点でサーバーのホスト鍵を固定します。",
   "settings.proxyHostKeyReset": "ホスト鍵をリセット",
-  "settings.proxyHostKeyResetDescription": "固定済みのホスト鍵を破棄します。次回の接続ではサーバーが提示した鍵をそのまま信頼して固定するため、サーバーの鍵が実際に変わったと分かっている場合のみ実行してください。",
-  "settings.proxyValidationTunnelUsername": "トンネルにはユーザー名が必要です。",
-  "settings.proxyValidationTunnelAuth": "SSH トンネルには Ed25519 秘密鍵が必要です。",
-  "settings.downloadClientProxyHelp": "どの種類のプロキシでも割り当てられます。ネイティブクライアントの通信はプラグインが行うものではないため、チャレンジソルバーは効果がありません。",
+  "settings.proxyHostKeyResetDescription":
+    "固定済みのホスト鍵を破棄します。次回の接続ではサーバーが提示した鍵をそのまま信頼して固定するため、サーバーの鍵が実際に変わったと分かっている場合のみ実行してください。",
+  "settings.proxyValidationTunnelUsername":
+    "トンネルにはユーザー名が必要です。",
+  "settings.proxyValidationTunnelAuth":
+    "SSH トンネルには Ed25519 秘密鍵が必要です。",
+  "settings.downloadClientProxyHelp":
+    "どの種類のプロキシでも割り当てられます。ネイティブクライアントの通信はプラグインが行うものではないため、チャレンジソルバーは効果がありません。",
   "status.proxyCreated": "プロキシを作成しました。",
   "status.proxyUpdated": "プロキシを更新しました。",
   "status.proxyDeleted": "プロキシ {{name}} を削除しました。",
   "status.proxyTestPassed": "プロキシのテストに成功しました。",
   "status.proxyTestFailed": "プロキシのテストに失敗しました。",
   "status.editingProxy": "プロキシ {{name}} を編集しています。",
-  "status.proxyHostKeyReset": "{{name}} のホスト鍵をリセットしました。次回の接続で再び固定されます。",
-  "settings.proxyEndpointHelpWireguard": "wireguard://ホスト:ポート。省略するとポート 51820 が使われます。",
-  "settings.proxyPrivateKeyHelpWireguard": "WireGuard の鍵は 32 バイトの base64 で、`wg genkey` が出力するとおりの形式です（`=` で終わる 44 文字）",
+  "status.proxyHostKeyReset":
+    "{{name}} のホスト鍵をリセットしました。次回の接続で再び固定されます。",
+  "settings.proxyEndpointHelpWireguard":
+    "wireguard://ホスト:ポート。省略するとポート 51820 が使われます。",
+  "settings.proxyPrivateKeyHelpWireguard":
+    "WireGuard の鍵は 32 バイトの base64 で、`wg genkey` が出力するとおりの形式です（`=` で終わる 44 文字）",
   "settings.proxyPeerPublicKey": "ピアの公開鍵",
-  "settings.proxyPeerPublicKeyHelp": "サーバーの `[Peer]` セクションにある `PublicKey` の行です。公開鍵は公開情報なので、そのまま全体を表示します。",
+  "settings.proxyPeerPublicKeyHelp":
+    "サーバーの `[Peer]` セクションにある `PublicKey` の行です。公開鍵は公開情報なので、そのまま全体を表示します。",
   "settings.proxyPresharedKey": "事前共有鍵",
-  "settings.proxyPresharedKeyHelp": "任意です。サーバーが使用している場合は `PresharedKey` の行を入力します。",
+  "settings.proxyPresharedKeyHelp":
+    "任意です。サーバーが使用している場合は `PresharedKey` の行を入力します。",
   "settings.proxyPresharedKeyStored": "事前共有鍵あり",
-  "settings.proxyPresharedKeyUnchanged": "事前共有鍵が保存されています。置き換えるには新しい鍵を貼り付けてください。",
+  "settings.proxyPresharedKeyUnchanged":
+    "事前共有鍵が保存されています。置き換えるには新しい鍵を貼り付けてください。",
   "settings.proxyClearPresharedKey": "保存された事前共有鍵を消去",
   "settings.proxyTunnelAddresses": "アドレス",
-  "settings.proxyTunnelAddressesHelp": "`[Interface]` セクションの `Address` の行です（例: 10.6.0.2/32）。1 行に 1 つ、またはカンマ区切りで入力します。",
+  "settings.proxyTunnelAddressesHelp":
+    "`[Interface]` セクションの `Address` の行です（例: 10.6.0.2/32）。1 行に 1 つ、またはカンマ区切りで入力します。",
   "settings.proxyTunnelDnsServers": "DNS サーバー",
-  "settings.proxyTunnelDnsServersHelp": "トンネル経由で使う任意のリゾルバーです。1 行に 1 つ、またはカンマ区切りで入力します。指定しない場合、宛先は IP アドレスで指定する必要があります。",
+  "settings.proxyTunnelDnsServersHelp":
+    "トンネル経由で使う任意のリゾルバーです。1 行に 1 つ、またはカンマ区切りで入力します。指定しない場合、宛先は IP アドレスで指定する必要があります。",
   "settings.proxyTunnelMtu": "MTU",
-  "settings.proxyTunnelMtuHelp": "任意です。{{min}} から {{max}} の範囲で指定します。空欄の場合は既定値 {{default}} を使います。",
+  "settings.proxyTunnelMtuHelp":
+    "任意です。{{min}} から {{max}} の範囲で指定します。空欄の場合は既定値 {{default}} を使います。",
   "settings.proxyTunnelKeepalive": "キープアライブ",
-  "settings.proxyTunnelKeepaliveHelp": "任意です（秒）。空欄の場合は既定値 {{default}} を使い、0 を指定するとキープアライブを無効にします。",
+  "settings.proxyTunnelKeepaliveHelp":
+    "任意です（秒）。空欄の場合は既定値 {{default}} を使い、0 を指定するとキープアライブを無効にします。",
   "settings.proxyTunnelPublicKey": "このトンネルの公開鍵",
-  "settings.proxyTunnelPublicKeyHelp": "この値をサーバーの `[Peer]` セクションに `PublicKey` の行として貼り付けてください。",
+  "settings.proxyTunnelPublicKeyHelp":
+    "この値をサーバーの `[Peer]` セクションに `PublicKey` の行として貼り付けてください。",
   "settings.proxyTunnelPublicKeyPending": "秘密鍵を保存すると生成されます。",
   "settings.proxyTunnelPublicKeyCopy": "コピー",
   "settings.proxyImportConfig": "WireGuard 設定をインポート",
-  "settings.proxyImportConfigHelp": "VPN プロバイダーから渡された設定全体を貼り付けるか、.conf ファイルを選択すると、下のフィールドが入力されます。各フィールドは 1 行だけの貼り付けにも対応します。",
+  "settings.proxyImportConfigHelp":
+    "VPN プロバイダーから渡された設定全体を貼り付けるか、.conf ファイルを選択すると、下のフィールドが入力されます。各フィールドは 1 行だけの貼り付けにも対応します。",
   "settings.proxyImportConfigApply": "フォームに入力",
   "settings.proxyImportConfigFile": "ファイルを選択",
-  "status.proxyImportConfigFilled": "WireGuard 設定からフォームに入力しました。",
-  "status.proxyImportConfigUnreadable": "これは WireGuard の設定ではないようです。",
-  "status.proxyImportConfigFirstPeer": "ピアが {{count}} 件あります。最初の 1 件だけをインポートしました。",
-  "status.proxyImportConfigIgnored": "{{keys}} は無視しました。トンネルプロキシでは使用しません。",
-  "settings.proxyValidationWireguardPrivateKey": "WireGuard には秘密鍵が必要です。",
-  "settings.proxyValidationWireguardPeerPublicKey": "WireGuard にはピアの公開鍵が必要です。",
-  "settings.proxyValidationWireguardAddresses": "WireGuard には少なくとも 1 つのインターフェイスアドレスが必要です（例: 10.6.0.2/32）。",
-  "settings.proxyValidationWireguardKeyShape": "{{field}} は WireGuard の鍵の形式ではありません。鍵は 32 バイトの base64 で、`wg genkey` が出力するとおりの形式です（`=` で終わる 44 文字）。",
-  "settings.proxyValidationWireguardMtu": "トンネルの MTU は {{min}} から {{max}} の範囲で指定してください。",
-  "settings.proxyValidationWireguardKeepalive": "キープアライブは秒単位の整数で、0 を指定すると無効になります。",
+  "status.proxyImportConfigFilled":
+    "WireGuard 設定からフォームに入力しました。",
+  "status.proxyImportConfigUnreadable":
+    "これは WireGuard の設定ではないようです。",
+  "status.proxyImportConfigFirstPeer":
+    "ピアが {{count}} 件あります。最初の 1 件だけをインポートしました。",
+  "status.proxyImportConfigIgnored":
+    "{{keys}} は無視しました。トンネルプロキシでは使用しません。",
+  "settings.proxyValidationWireguardPrivateKey":
+    "WireGuard には秘密鍵が必要です。",
+  "settings.proxyValidationWireguardPeerPublicKey":
+    "WireGuard にはピアの公開鍵が必要です。",
+  "settings.proxyValidationWireguardAddresses":
+    "WireGuard には少なくとも 1 つのインターフェイスアドレスが必要です（例: 10.6.0.2/32）。",
+  "settings.proxyValidationWireguardKeyShape":
+    "{{field}} は WireGuard の鍵の形式ではありません。鍵は 32 バイトの base64 で、`wg genkey` が出力するとおりの形式です（`=` で終わる 44 文字）。",
+  "settings.proxyValidationWireguardMtu":
+    "トンネルの MTU は {{min}} から {{max}} の範囲で指定してください。",
+  "settings.proxyValidationWireguardKeepalive":
+    "キープアライブは秒単位の整数で、0 を指定すると無効になります。",
   "status.proxyTunnelPublicKeyCopied": "公開鍵をコピーしました。",
   "status.proxyTunnelPublicKeyCopyFailed": "公開鍵をコピーできませんでした。",
   "settings.qualityProfiles": "品質プロファイル",
@@ -482,6 +599,10 @@ const ja: LocaleDictionary = {
   "jobs.column.status": "状態",
   "jobs.action.run": "実行",
   "jobs.action.runNow": "今すぐ実行",
+  "jobs.cancelSearchRequested":
+    "キャンセルを要求しました。現在の検索ステップが終了すると、残りのステップは停止します。",
+  "jobs.cancelSearchNotRunning": "この検索はすでに実行されていません。",
+  "jobs.cancelSearchFailed": "検索をキャンセルできませんでした。",
   "jobs.status.idle": "待機中",
   "jobs.status.queued": "キュー済み",
   "jobs.status.discovering": "検出中",
@@ -495,7 +616,8 @@ const ja: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "システム内部",
   "deletePreview.counting": "削除するファイルを数えています...",
   "deletePreview.error": "削除プレビューを準備できません。",
-  "deletePreview.folderUnknown": "このタイトルのファイルがどのフォルダーにあるか判別できないため、ディスクからは何も削除しません。",
+  "deletePreview.folderUnknown":
+    "このタイトルのファイルがどのフォルダーにあるか判別できないため、ディスクからは何も削除しません。",
   "deletePreview.removeFromCatalogOnly": "カタログからのみ削除",
   "deletePreview.files": "ファイル",
   "deletePreview.media": "メディア",
@@ -530,21 +652,28 @@ const ja: LocaleDictionary = {
   "settings.delayProfiles": "遅延プロファイル",
   "settings.acquisition": "取得",
   "settings.acquisitionSaved": "取得設定を保存しました。",
-  "settings.acquisitionIntro": "RSSは定常状態の取得経路です。各アイテムはインデクサーごとに一度だけ能動的に検索され、その後はRSSで監視されます。バックフィルは一定のペースで有限に実行されます。",
+  "settings.acquisitionIntro":
+    "RSSは定常状態の取得経路です。各アイテムはインデクサーごとに一度だけ能動的に検索され、その後はRSSで監視されます。バックフィルは一定のペースで有限に実行されます。",
   "settings.acquisitionEnabled": "自動取得を有効にする",
-  "settings.acquisitionEnabledHelp": "バックグラウンドの取得ループ（収束検索とRSSマッチング）を実行します。",
+  "settings.acquisitionEnabledHelp":
+    "バックグラウンドの取得ループ（収束検索とRSSマッチング）を実行します。",
   "settings.acquisitionThresholds": "アップグレードしきい値",
   "settings.acquisitionSameTierMinDelta": "同一ティア内の最小スコア差",
-  "settings.acquisitionSameTierMinDeltaHelp": "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
-  "settings.acquisitionPollIntervalSecondsHelp": "ダウンロードクライアントで失敗したダウンロードを確認する頻度。",
+  "settings.acquisitionPollIntervalSecondsHelp":
+    "ダウンロードクライアントで失敗したダウンロードを確認する頻度。",
   "settings.acquisitionWalkIntervalSeconds": "検索ウォーク間隔（秒）",
-  "settings.acquisitionWalkIntervalSecondsHelp": "ライブラリで不足しているメディアやアップグレード可能なメディアを確認し、タイトルのバッチを検索する頻度。タイトルの追加や品質プロファイルの編集などの変更では、すぐにウォークが開始されます。ウォークがポーリング間隔より頻繁に実行されることはありません。",
+  "settings.acquisitionWalkIntervalSecondsHelp":
+    "ライブラリで不足しているメディアやアップグレード可能なメディアを確認し、タイトルのバッチを検索する頻度。タイトルの追加や品質プロファイルの編集などの変更では、すぐにウォークが開始されます。ウォークがポーリング間隔より頻繁に実行されることはありません。",
   "settings.acquisitionMaxScopesPerCycle": "1サイクルあたりの最大評価数",
-  "settings.acquisitionMaxScopesPerCycleHelp": "1回のバックフィルサイクルで評価する上限。実際のリクエストレートはこの値ではなくインデクサーのレート制限で決まります。",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "1回のバックフィルサイクルで評価する上限。実際のリクエストレートはこの値ではなくインデクサーのレート制限で決まります。",
   "settings.acquisitionReconvergeDays": "再収束までの日数",
-  "settings.acquisitionReconvergeDaysHelp": "0で無効（推奨）。収束済みアイテムはRSSで監視されます。フィードの欠落が判明した場合の非常用の再確認としてのみ有効化してください。",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0で無効（推奨）。収束済みアイテムはRSSで監視されます。フィードの欠落が判明した場合の非常用の再確認としてのみ有効化してください。",
   "settings.delayProfileExisting": "既存の遅延プロファイル",
   "settings.delayProfileNone":
     "遅延プロファイルが設定されていません。リリースは即座に取得されます。",
@@ -576,14 +705,16 @@ const ja: LocaleDictionary = {
   "settings.delayProfileBypassPlaceholder": "バイパスしない場合は空欄",
   "settings.delayProfileBypassHelp":
     "優先プロトコルのリリーススコアがこの閾値以上の場合、遅延に関係なく即座に取得します。",
-  "settings.delayProfileBypassHighestQualityLabel": "最高品質では遅延をバイパス",
+  "settings.delayProfileBypassHighestQualityLabel":
+    "最高品質では遅延をバイパス",
   "settings.delayProfileBypassHighestQualityHelp":
     "優先プロトコルの場合、対象の最高品質リリースを直ちに取得します。",
   "settings.delayProfileFacetsLabel": "適用対象",
   "settings.delayProfileFacetsHelp":
     "このプロファイルが適用されるコンテンツタイプです。すべてチェックを外すとすべてのタイプに適用されます。",
   "settings.delayProfileLibrariesLabel": "ライブラリ",
-  "settings.delayProfileLibrariesHelp": "このプロファイルを適用するライブラリ。すべて選択したままにすると、すべてのライブラリに適用されます。プロファイルの最後のライブラリを削除すると、プロファイルは無効になります。",
+  "settings.delayProfileLibrariesHelp":
+    "このプロファイルを適用するライブラリ。すべて選択したままにすると、すべてのライブラリに適用されます。プロファイルの最後のライブラリを削除すると、プロファイルは無効になります。",
   "settings.delayProfileUnknownLibrary": "不明なライブラリ",
   "settings.delayProfileAllFacets": "すべて",
   "settings.delayProfileTagsLabel": "タグ",
@@ -670,7 +801,8 @@ const ja: LocaleDictionary = {
   "settings.indexerRoutingCategoriesPlaceholder": "カテゴリを選択",
   "settings.indexerRoutingNoIndexers": "インデクサーが見つかりません。",
   "settings.indexerRoutingCustomCategories": "カスタムコード",
-  "settings.indexerRoutingCustomCategoryPlaceholder": "インデクサーの caps にある数値 ID",
+  "settings.indexerRoutingCustomCategoryPlaceholder":
+    "インデクサーの caps にある数値 ID",
   "settings.indexerRoutingCustomCategoryAdd": "追加",
   "settings.indexerRoutingIndexerCategories": "このインデクサーにもあり",
   "settings.indexerCategorySeries": "Series",
@@ -703,7 +835,8 @@ const ja: LocaleDictionary = {
   "settings.renameSectionTitle": "ファイルリネーム",
   "settings.renameTokenTitle": "タイトル名",
   "settings.renameTokenYear": "公開年",
-  "settings.renameTokenTitleWithYear": "タイトル名と年（名前の末尾に年がない場合のみ追加）",
+  "settings.renameTokenTitleWithYear":
+    "タイトル名と年（名前の末尾に年がない場合のみ追加）",
   "settings.renameTokenTitleWithoutYear": "末尾の年を除いたタイトル名",
   "settings.renameTokenQuality": "品質（例: 1080p）",
   "settings.renameTokenEdition": "エディション（例: ディレクターズカット）",
@@ -714,6 +847,10 @@ const ja: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "ソース（例: BluRay, WEB-DL）",
+  "settings.renameTokenDynamicRange":
+    "ダイナミックレンジ（例: HDR10、DV、HDR10+）",
+  "settings.renameTokenRevision": "リリースリビジョン（Proper/REPACK）",
+  "settings.renameTokenIs3d": "3D 表示",
   "settings.renameTokenVideoCodec": "映像コーデック（例: x265）",
   "settings.renameTokenAudioCodec": "音声コーデック（例: DTS）",
   "settings.renameTokenAudioChannels": "音声チャンネル（例: 5.1）",
@@ -742,13 +879,17 @@ const ja: LocaleDictionary = {
   "settings.sectionTitle": "設定 • {{section}}",
   "settings.generalText": "一般アプリケーション設定。",
   "settings.verificationDepthTitle": "インポートコピーの検証",
-  "settings.verificationDepthHelp": "コピーしたファイルをどこまで厳密に検証してから元のファイルに手を付けるかを決めます。",
-  "settings.verificationDepthScope": "これはダウンロードクライアントからのインポートコピーにのみ適用されます。ライブラリやルートの移動は、ここでの選択に関係なく常に完全に検証されます。",
+  "settings.verificationDepthHelp":
+    "コピーしたファイルをどこまで厳密に検証してから元のファイルに手を付けるかを決めます。",
+  "settings.verificationDepthScope":
+    "これはダウンロードクライアントからのインポートコピーにのみ適用されます。ライブラリやルートの移動は、ここでの選択に関係なく常に完全に検証されます。",
   "settings.verificationDepthLabel": "検証の深さ",
   "settings.verificationDepthFull": "完全な読み戻し",
-  "settings.verificationDepthFullHelp": "コピーを全体まで読み戻し、コピー中に算出したチェックサムと比較します。",
+  "settings.verificationDepthFullHelp":
+    "コピーを全体まで読み戻し、コピー中に算出したチェックサムと比較します。",
   "settings.verificationDepthQuick": "簡易チェック（既定）",
-  "settings.verificationDepthQuickHelp": "ファイルサイズと先頭・末尾のサンプルを比較します。高速ですが保証は弱くなります。",
+  "settings.verificationDepthQuickHelp":
+    "ファイルサイズと先頭・末尾のサンプルを比較します。高速ですが保証は弱くなります。",
   "settings.verificationDepthSaved": "検証の深さを保存しました。",
   "settings.generalPlaceholder": "言語やその他のグローバル設定を構成します。",
   "settings.historyRetentionTitle": "履歴の保持",
@@ -767,7 +908,8 @@ const ja: LocaleDictionary = {
     "srrdb.com で難読化されたファイル名を復元",
   "settings.srrdbFilenameRecoveryHelp":
     "SABnzbd または NZBGet からの自動インポートに難読化された名前の動画ファイルが含まれる場合、Scryer は各ファイルの CRC-32 チェックサムとサイズをサードパーティのサービスである srrdb.com に送信し、元のファイル名を照会します。ライブラリやファイルに関するそれ以外の情報は送信されません。ディスク上のファイルの名前が変更されることはありません。",
-  "discovery.personalizedDisabled": "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
+  "discovery.personalizedDisabled":
+    "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
   "settings.keepHistoryForever": "履歴を無期限に保持",
   "settings.historyRetentionDaysHeader": "履歴を保持する期間",
   "settings.historyRetentionDaysSuffix": "日",
@@ -945,7 +1087,6 @@ const ja: LocaleDictionary = {
   "title.episodeRange": "第{{start}}話 - 第{{end}}話",
   "title.episodeCountOne": "{{count}}話",
   "title.episodeCountOther": "{{count}}話",
-  "title.searchingReleases": "インデクサーでリリースを検索中…",
   "title.noReleasesFound": "{{name}} のリリースは見つかりませんでした。",
   "title.searchNeedsDownloadClientTitle":
     "検索にはダウンロードクライアントが必要です",
@@ -995,7 +1136,8 @@ const ja: LocaleDictionary = {
     "{{name}} に属するフォルダーを選択してください。Scryer は所有権を割り当て直してフォルダーを再スキャンします。ファイルは移動されません。",
   "title.changeFolderLibrary": "ライブラリ",
   "title.changeFolderCurrentFolder": "現在のフォルダー",
-  "title.changeFolderCurrentFolderUnknown": "フォルダーを選択すると表示されます",
+  "title.changeFolderCurrentFolderUnknown":
+    "フォルダーを選択すると表示されます",
   "title.changeFolderCurrentRoot": "現在のルート",
   "title.changeFolderCurrentRootUnknown": "不明",
   "title.changeFolderRootLabel": "ルート",
@@ -1122,7 +1264,8 @@ const ja: LocaleDictionary = {
   "queue.manualImportQueued": "手動インポートがキューに追加されました。",
   "queue.manualImportFailed": "手動インポートに失敗しました。",
   "queue.manualImportMultipleEpisodes": "このファイルに複数のエピソード",
-  "queue.manualImportMultipleEpisodesLabel": "このファイルに複数のエピソードを割り当てる",
+  "queue.manualImportMultipleEpisodesLabel":
+    "このファイルに複数のエピソードを割り当てる",
   "queue.manualImportApplySuggestions": "すべてに候補を適用",
   "queue.removeFailed": "削除に失敗しました",
   "queue.manualImportTooltip":
@@ -1156,31 +1299,49 @@ const ja: LocaleDictionary = {
   "queue.ignoreFailed": "ダウンロードの無視に失敗しました。",
   "queue.releaseHeldSources": "保持中のソースを解放",
   "queue.releaseHeldSourcesConfirmTitle": "保持中のソースを解放しますか？",
-  "queue.releaseHeldSourcesConfirmDescription": "{{client}} の {{download}} はインポートが完了しましたが、ソースはまだ保持されています。解放すると、このダウンロードのすべてのインポートの保持が解除されます。一時展開フォルダーは、中の動画がすべてインポート済みで、ほかに使用されていない場合にのみ削除されます。",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}} は完了したダウンロードを削除する設定です。Scryer がインポートを確認すると、このダウンロードとそのファイルはダウンロードクライアントから削除されます。",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}} は完了したダウンロードを保持する設定のため、このダウンロードはダウンロードクライアントに残ります。",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{client}} の {{download}} はインポートが完了しましたが、ソースはまだ保持されています。解放すると、このダウンロードのすべてのインポートの保持が解除されます。一時展開フォルダーは、中の動画がすべてインポート済みで、ほかに使用されていない場合にのみ削除されます。",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}} は完了したダウンロードを削除する設定です。Scryer がインポートを確認すると、このダウンロードとそのファイルはダウンロードクライアントから削除されます。",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}} は完了したダウンロードを保持する設定のため、このダウンロードはダウンロードクライアントに残ります。",
   "queue.releaseHeldSourcesSuccess": "保持中のソースを解放しました。",
   "queue.releaseHeldSourcesFailed": "保持中のソースを解放できませんでした。",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "対応が必要な字幕のためにソースを保持しています。解放すると待機を終了し、警告を消去します。",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "このインポートで置き換えたファイルの削除が完了しなかったため、ソースを保持しています。",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "このダウンロードのアーカイブ展開に失敗し、展開されていないアーカイブは一度もインポートされていません。解放によってダウンロードがインポート済みになり、ダウンロードクライアントが削除できるようになるのは、想定されるすべてのファイルのインポートが証明された場合だけです。一度もインポートされていないものはダウンロードと一緒に削除されます。",
-  "queue.releaseHeldSourcesReasonUnknown": "これらのソースが保持されている理由の記録がありません。解放によってダウンロードがインポート済みになり、ダウンロードクライアントが削除できるようになるのは、想定されるすべてのファイルのインポートが証明された場合だけです。一度もインポートされていないものはダウンロードと一緒に削除されます。",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "対応が必要な字幕のためにソースを保持しています。解放すると待機を終了し、警告を消去します。",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "このインポートで置き換えたファイルの削除が完了しなかったため、ソースを保持しています。",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "このダウンロードのアーカイブ展開に失敗し、展開されていないアーカイブは一度もインポートされていません。解放によってダウンロードがインポート済みになり、ダウンロードクライアントが削除できるようになるのは、想定されるすべてのファイルのインポートが証明された場合だけです。一度もインポートされていないものはダウンロードと一緒に削除されます。",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "これらのソースが保持されている理由の記録がありません。解放によってダウンロードがインポート済みになり、ダウンロードクライアントが削除できるようになるのは、想定されるすべてのファイルのインポートが証明された場合だけです。一度もインポートされていないものはダウンロードと一緒に削除されます。",
   "queue.releaseHeldSourcesTitles": "この解放の対象: {{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}} はシード要件を満たした完了済みダウンロードを削除します。Scryer がインポートを確認すると、このダウンロードとそのファイルはシード完了時に削除されます。",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "解放後に {{client}} がこのダウンロードをどう扱うか判断できませんでした。",
-  "queue.releaseHeldSourcesAwaitingImport": "保持中のソースを解放しました。ダウンロードは完全にはインポートされていないため、インポートに戻され、何も削除されていません。",
-  "queue.releaseHeldSourcesNotSettled": "保持中のソースを解放しましたが、ダウンロードを更新できませんでした。完了するにはもう一度解放してください。",
-  "queue.releaseHeldSourcesUnproven": "保持中のソースを解放しましたが、ダウンロードのすべてのファイルがインポートされたことを証明できないため、インポート済みにはせず、何もクリーンアップしていません。残りをインポートするか、手動で削除してください。",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "保持中のソースを解放しましたが、ダウンロードは確定されず、何もクリーンアップされませんでした。",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "一部の一時展開フォルダーを残しました: {{reasons}}。",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}} はシード要件を満たした完了済みダウンロードを削除します。Scryer がインポートを確認すると、このダウンロードとそのファイルはシード完了時に削除されます。",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "解放後に {{client}} がこのダウンロードをどう扱うか判断できませんでした。",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "保持中のソースを解放しました。ダウンロードは完全にはインポートされていないため、インポートに戻され、何も削除されていません。",
+  "queue.releaseHeldSourcesNotSettled":
+    "保持中のソースを解放しましたが、ダウンロードを更新できませんでした。完了するにはもう一度解放してください。",
+  "queue.releaseHeldSourcesUnproven":
+    "保持中のソースを解放しましたが、ダウンロードのすべてのファイルがインポートされたことを証明できないため、インポート済みにはせず、何もクリーンアップしていません。残りをインポートするか、手動で削除してください。",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "保持中のソースを解放しましたが、ダウンロードは確定されず、何もクリーンアップされませんでした。",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "一部の一時展開フォルダーを残しました: {{reasons}}。",
   "queue.releaseHeldSourcesPreservedNotOwned": "所有者を確認できませんでした",
   "queue.releaseHeldSourcesPreservedUnsafe": "想定外または読み取れない内容",
-  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "インポートされていない動画が含まれています",
+  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo":
+    "インポートされていない動画が含まれています",
   "queue.releaseHeldSourcesPreservedInUse": "別のインポートでまだ必要です",
-  "queue.releaseHeldSourcesPreservedUnverified": "インポート済みのファイルを確認できませんでした",
+  "queue.releaseHeldSourcesPreservedUnverified":
+    "インポート済みのファイルを確認できませんでした",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "削除に失敗しました",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "ダウンロードのインポートが確認されませんでした",
-  "queue.releaseHeldSourcesPreservedLookupIncomplete": "すべてのフォルダーを確認できませんでした",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "ダウンロードのインポートが確認されませんでした",
+  "queue.releaseHeldSourcesPreservedLookupIncomplete":
+    "すべてのフォルダーを確認できませんでした",
   "queue.pause": "一時停止",
   "queue.pauseSuccess": "ダウンロードを一時停止しました。",
   "queue.pauseFailed": "ダウンロードの一時停止に失敗しました。",
@@ -1196,7 +1357,8 @@ const ja: LocaleDictionary = {
   "queue.manualUnavailableForResult":
     "この結果では手動キューイングを利用できません。",
   "importHistory.retry": "インポートを再試行",
-  "importHistory.retryHelp": "ダウンロード済みのファイルを現在の割り当てと品質プロファイルで再評価します。再ダウンロードは行いません。",
+  "importHistory.retryHelp":
+    "ダウンロード済みのファイルを現在の割り当てと品質プロファイルで再評価します。再ダウンロードは行いません。",
   "importHistory.retryWithPassword": "パスワードを指定してインポートを再試行",
   "importHistory.passwordRequired": "パスワードが必要です",
   "importHistory.passwordPlaceholder": "アーカイブのパスワード",
@@ -1236,7 +1398,8 @@ const ja: LocaleDictionary = {
   "settings.indexerStatus": "ステータス",
   "settings.indexerDisabledUntil": "バックオフ {{time}}",
   "settings.indexerCoolingDownUntil": "待機中 · {{time}} に再開",
-  "settings.indexerCoolingDownHelp": "インデクサーから速度を落とすよう要請されました。検索は自動的に再開されます。",
+  "settings.indexerCoolingDownHelp":
+    "インデクサーから速度を落とすよう要請されました。検索は自動的に再開されます。",
   "settings.indexerLastError": "エラー {{time}}",
   "settings.indexerLastSearched": "検索 {{time}}",
   "settings.indexerNoActivity": "アクティビティなし",
@@ -1246,21 +1409,29 @@ const ja: LocaleDictionary = {
   "settings.noIndexersFound": "インデクサーが見つかりません。",
   "settings.indexerConfig": "プラグイン設定",
   "settings.indexerDynamicFieldsLoading": "この選択の項目を読み込み中…",
-  "settings.indexerDynamicFieldsError": "この選択の項目を読み込めませんでした: {{error}}",
+  "settings.indexerDynamicFieldsError":
+    "この選択の項目を読み込めませんでした: {{error}}",
   "settings.indexerLoginChallengeLoading": "サインイン画像を読み込み中…",
   "settings.indexerLoginChallengeImageAlt": "サインイン画像",
-  "settings.indexerLoginChallengeError": "サインイン画像を読み込めませんでした: {{error}}",
+  "settings.indexerLoginChallengeError":
+    "サインイン画像を読み込めませんでした: {{error}}",
   "settings.indexerLoginChallengeRefresh": "新しい画像",
-  "settings.indexerLoginChallengeRefusal.malformed": "プラグインのサインイン画像を読み取れませんでした。",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "このインデクサーは Scryer が表示できない種類のサインイン確認を求めています。",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "サインイン画像は Scryer が表示しない形式です。",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "サインイン画像が大きすぎて表示できません。",
+  "settings.indexerLoginChallengeRefusal.malformed":
+    "プラグインのサインイン画像を読み取れませんでした。",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "このインデクサーは Scryer が表示できない種類のサインイン確認を求めています。",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "サインイン画像は Scryer が表示しない形式です。",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "サインイン画像が大きすぎて表示できません。",
   "settings.newPassword": "新しいパスワード",
   "settings.rules": "カスタムルール",
   "settings.noRulesFound": "カスタムルールが設定されていません。",
   "settings.trashPacksTitle": "TRaSH Guides ロケールパック",
-  "settings.trashPacksHelp": "TRaSH Guides 由来のスコア専用パック。初期状態では無効です。有効化したパックは条件に一致するすべての作品に適用されます。タグフィルターを設定すると、パックのロケール条件または指定タグに一致する作品に絞り込まれます。",
-  "settings.trashPackFrenchConflict": "「{{name}}」は既に有効です。別のフランス語パックを有効にする前に無効化してください。",
+  "settings.trashPacksHelp":
+    "TRaSH Guides 由来のスコア専用パック。初期状態では無効です。有効化したパックは条件に一致するすべての作品に適用されます。タグフィルターを設定すると、パックのロケール条件または指定タグに一致する作品に絞り込まれます。",
+  "settings.trashPackFrenchConflict":
+    "「{{name}}」は既に有効です。別のフランス語パックを有効にする前に無効化してください。",
   "settings.ruleCreate": "ルール作成",
   "settings.ruleUpdate": "ルール更新",
   "settings.ruleDescription": "説明",
@@ -1403,7 +1574,8 @@ const ja: LocaleDictionary = {
     "プラグイン'{{name}}'がアンインストールされました。",
   "status.pluginUpgraded":
     "プラグイン'{{name}}'がv{{version}}にアップグレードされました。",
-  "status.pluginAutoUpdateSettingsSaved": "プラグインの自動更新設定を保存しました。",
+  "status.pluginAutoUpdateSettingsSaved":
+    "プラグインの自動更新設定を保存しました。",
   "status.pluginToggled": "プラグイン'{{name}}'が{{state}}されました。",
   "form.indexerNamePlaceholder": "マイNewznabインデクサー",
   "form.providerTypePlaceholder": "プロバイダータイプ",
@@ -1614,7 +1786,8 @@ const ja: LocaleDictionary = {
   "status.editingIndexer": "インデクサー{{name}}を編集中",
   "status.editingDownloadClient": "ダウンロードクライアント{{name}}を編集中",
   "status.deletingUser": "ユーザー{{name}}を削除しますか？",
-  "status.deletingUserListsWarning": "このユーザーがフォローしているリストとその同期履歴も削除されます。",
+  "status.deletingUserListsWarning":
+    "このユーザーがフォローしているリストとその同期履歴も削除されます。",
   "status.deletingIndexer": "インデクサー{{name}}を削除しますか？",
   "status.userRequired": "ユーザー名とパスワードは必須です。",
   "status.passwordRequired": "パスワードは必須です。",
@@ -1631,32 +1804,54 @@ const ja: LocaleDictionary = {
   "status.titleMonitoringEnabled": "タイトルモニタリングが有効になりました。",
   "status.titleMonitoringDisabled": "タイトルモニタリングが無効になりました。",
   "status.indexerDeleted": "インデクサー{{name}}を削除しました。",
-  "plugins.failure.invalidConfig": "プラグインはこの設定を使用できませんでした。設定を確認して、もう一度お試しください。",
-  "plugins.failure.authFailed": "サービスが認証情報を拒否しました。API キー、ユーザー名、またはパスワードを確認してください。",
-  "plugins.failure.rateLimited": "サービスから Scryer にリクエストを減らすよう求められました。しばらくしてからもう一度お試しください。",
-  "plugins.failure.upstreamUnavailable": "サービスに接続できないか、応答がありませんでした。アドレスを確認して、もう一度お試しください。",
+  "plugins.failure.invalidConfig":
+    "プラグインはこの設定を使用できませんでした。設定を確認して、もう一度お試しください。",
+  "plugins.failure.authFailed":
+    "サービスが認証情報を拒否しました。API キー、ユーザー名、またはパスワードを確認してください。",
+  "plugins.failure.rateLimited":
+    "サービスから Scryer にリクエストを減らすよう求められました。しばらくしてからもう一度お試しください。",
+  "plugins.failure.upstreamUnavailable":
+    "サービスに接続できないか、応答がありませんでした。アドレスを確認して、もう一度お試しください。",
   "plugins.failure.unsupported": "プラグインはこの操作に対応していません。",
-  "plugins.failure.temporary": "プラグインで一時的な問題が発生しました。しばらくしてからもう一度お試しください。",
-  "plugins.failure.permanent": "プラグインはこのリクエストを完了できませんでした。状況が変わるまで、再試行しても解決しません。",
-  "plugins.failure.hostFailure": "プラグインが予期せず停止しました。詳細は Scryer のログを確認してください。",
+  "plugins.failure.temporary":
+    "プラグインで一時的な問題が発生しました。しばらくしてからもう一度お試しください。",
+  "plugins.failure.permanent":
+    "プラグインはこのリクエストを完了できませんでした。状況が変わるまで、再試行しても解決しません。",
+  "plugins.failure.hostFailure":
+    "プラグインが予期せず停止しました。詳細は Scryer のログを確認してください。",
   "plugins.failure.timedOut": "プラグインの応答に時間がかかりすぎました。",
   "plugins.failure.resourceLimit": "プラグインのメモリが不足しました。",
   "plugins.failure.withDetail": "{{reason}} 詳細: {{detail}}",
-  "plugins.failure.invalidUsernamePassword": "サービスがユーザー名またはパスワードを拒否しました。両方を確認して、もう一度お試しください。",
-  "plugins.failure.invalidApiKey": "サービスが API キーを拒否しました。キーを確認して、もう一度お試しください。",
-  "plugins.failure.invalidPasskey": "サービスがパスキーを拒否しました。パスキーを確認して、もう一度お試しください。",
-  "plugins.failure.invalidCookie": "サービスがセッション Cookie を拒否しました。ブラウザーから新しい Cookie をコピーして、もう一度お試しください。",
-  "plugins.failure.captchaRequired": "サービスが CAPTCHA を要求しています。サービスのウェブサイトで一度サインインしてから、もう一度お試しください。",
-  "plugins.failure.twoFactorRequired": "このサインインには二要素認証コードが必要です。代わりに API キーまたはアプリパスワードを使用してください。",
-  "plugins.failure.accountBanned": "サービスがこのアカウントを凍結しました。解決するにはサービスにお問い合わせください。",
-  "plugins.failure.accountDisabled": "サービスがこのアカウントを無効にしました。サービスのウェブサイトでアカウントを確認してください。",
-  "plugins.failure.endpointNotFound": "このアドレスでサービスが見つかりませんでした。URL とベースパスを確認してください。",
-  "plugins.failure.tlsError": "サービスへの安全な接続に失敗しました。アドレスと証明書を確認してください。",
-  "plugins.failure.invalidResponse": "サービスからの応答をプラグインが読み取れませんでした。アドレスが正しいサービスを指しているか確認してください。",
-  "plugins.failure.quotaExceeded": "アカウントがサービスの利用上限に達しました。リセットされるまで待つか、上限を引き上げてください。",
-  "plugins.failure.itemNotFound": "このアイテムはサービス上にもう存在しません。",
-  "plugins.failure.downloadRejected": "ダウンロードクライアントがこのダウンロードを拒否しました。",
-  "plugins.failure.pathNotWritable": "プラグインが設定されたフォルダーに書き込めませんでした。フォルダーが存在し、書き込み可能か確認してください。",
+  "plugins.failure.invalidUsernamePassword":
+    "サービスがユーザー名またはパスワードを拒否しました。両方を確認して、もう一度お試しください。",
+  "plugins.failure.invalidApiKey":
+    "サービスが API キーを拒否しました。キーを確認して、もう一度お試しください。",
+  "plugins.failure.invalidPasskey":
+    "サービスがパスキーを拒否しました。パスキーを確認して、もう一度お試しください。",
+  "plugins.failure.invalidCookie":
+    "サービスがセッション Cookie を拒否しました。ブラウザーから新しい Cookie をコピーして、もう一度お試しください。",
+  "plugins.failure.captchaRequired":
+    "サービスが CAPTCHA を要求しています。サービスのウェブサイトで一度サインインしてから、もう一度お試しください。",
+  "plugins.failure.twoFactorRequired":
+    "このサインインには二要素認証コードが必要です。代わりに API キーまたはアプリパスワードを使用してください。",
+  "plugins.failure.accountBanned":
+    "サービスがこのアカウントを凍結しました。解決するにはサービスにお問い合わせください。",
+  "plugins.failure.accountDisabled":
+    "サービスがこのアカウントを無効にしました。サービスのウェブサイトでアカウントを確認してください。",
+  "plugins.failure.endpointNotFound":
+    "このアドレスでサービスが見つかりませんでした。URL とベースパスを確認してください。",
+  "plugins.failure.tlsError":
+    "サービスへの安全な接続に失敗しました。アドレスと証明書を確認してください。",
+  "plugins.failure.invalidResponse":
+    "サービスからの応答をプラグインが読み取れませんでした。アドレスが正しいサービスを指しているか確認してください。",
+  "plugins.failure.quotaExceeded":
+    "アカウントがサービスの利用上限に達しました。リセットされるまで待つか、上限を引き上げてください。",
+  "plugins.failure.itemNotFound":
+    "このアイテムはサービス上にもう存在しません。",
+  "plugins.failure.downloadRejected":
+    "ダウンロードクライアントがこのダウンロードを拒否しました。",
+  "plugins.failure.pathNotWritable":
+    "プラグインが設定されたフォルダーに書き込めませんでした。フォルダーが存在し、書き込み可能か確認してください。",
   "plugins.failure.unknown": "プラグインが問題を報告しました: {{code}}",
   "status.testingIndexerConnection": "接続をテスト中…",
   "status.indexerConnectionTestPassed":
@@ -1676,8 +1871,10 @@ const ja: LocaleDictionary = {
     "{{client}}の接続テストに成功しました。",
   "status.downloadClientConnectionTestFailed":
     "{{client}}の接続テストに失敗しました。",
-  "status.autoSearchNoCandidates": "{{name}} のリリースが見つかりません: どのインデクサーも候補を返しませんでした。ルーティングカテゴリとインデクサーの状態を確認してください。",
-  "status.autoSearchAllRejected": "{{name}} のリリースが見つかりません: 自動検索が {{count}} 件の候補をすべて却下しました。{{reasons}}",
+  "status.autoSearchNoCandidates":
+    "{{name}} のリリースが見つかりません: どのインデクサーも候補を返しませんでした。ルーティングカテゴリとインデクサーの状態を確認してください。",
+  "status.autoSearchAllRejected":
+    "{{name}} のリリースが見つかりません: 自動検索が {{count}} 件の候補をすべて却下しました。{{reasons}}",
   "status.queueFailed": "キュー操作に失敗しました。",
   "status.apiError": "リクエスト失敗",
   "user.created": "ユーザー{{name}}を作成しました。",
@@ -1704,14 +1901,18 @@ const ja: LocaleDictionary = {
   "wanted.colIndexers": "インデクサー",
   "wanted.convergence.searching": "検索中 {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS監視中",
-  "wanted.convergence.convergedHint": "すべてのインデクサーを検索済み — 新しいリリースはRSS経由で届きます。再確認するには検索を実行してください。",
+  "wanted.convergence.convergedHint":
+    "すべてのインデクサーを検索済み — 新しいリリースはRSS経由で届きます。再確認するには検索を実行してください。",
   "wanted.convergence.deferred": "インデクサーのクォータ待ち",
-  "wanted.convergence.deferredHint": "残りのインデクサーはクールダウン中またはクォータ切れです。検索は自動的に再開されます。",
+  "wanted.convergence.deferredHint":
+    "残りのインデクサーはクールダウン中またはクォータ切れです。検索は自動的に再開されます。",
   "wanted.convergence.queuedHot": "待機中 · 新着",
   "wanted.convergence.queuedCold": "待機中 · ロングテール",
   "wanted.searchJobStarted": "検索を開始しました。",
-  "wanted.searchJobComplete": "検索完了: {{processed}}件検索、{{grabbed}}件取得、{{failed}}件失敗。",
-  "wanted.searchJobCancelled": "{{processed}}件処理後に検索をキャンセルしました。{{grabbed}}件取得済み。",
+  "wanted.searchJobComplete":
+    "検索完了: {{processed}}件検索、{{grabbed}}件取得、{{failed}}件失敗。",
+  "wanted.searchJobCancelled":
+    "{{processed}}件処理後に検索をキャンセルしました。{{grabbed}}件取得済み。",
   "wanted.colPhase": "フェーズ",
   "wanted.colScore": "スコア",
   "wanted.searchNow": "今すぐ検索",
@@ -1977,6 +2178,7 @@ const ja: LocaleDictionary = {
   "history.seedingStarted": "シード中",
   "history.seedingCompleted": "シード完了",
   "history.downloadIgnored": "無視",
+  "history.downloadMissing": "クライアントに表示されていません",
   "history.facet": "カテゴリ",
   "history.actions": "操作",
   "history.expandDetails": "イベント詳細を展開",
@@ -2009,12 +2211,18 @@ const ja: LocaleDictionary = {
   "status.recycleBinEmptied":
     "ごみ箱が空になりました ({{count}} 項目が削除されました)。",
   "status.recycleBinSettingsSaved": "ごみ箱設定を保存しました。",
-  "settings.recycleBinPathExistingItems": "フォルダーを変更すると、すでにごみ箱にある項目は新しいフォルダーへ移動されます。移動できなかった項目は以前のフォルダーに残り、保存後にここに表示されます。",
-  "settings.recycleBinRelocatedOne": "ごみ箱の項目 {{count}} 件を新しいフォルダーへ移動しました。",
-  "settings.recycleBinRelocatedOther": "ごみ箱の項目 {{count}} 件を新しいフォルダーへ移動しました。",
-  "settings.recycleBinRelocationFailedOne": "ごみ箱の項目 {{count}} 件を移動できませんでした:",
-  "settings.recycleBinRelocationFailedOther": "ごみ箱の項目 {{count}} 件を移動できませんでした:",
-  "status.recycleBinSettingsSavedWithRelocationFailures": "ごみ箱設定を保存しましたが、一部の項目を移動できませんでした。",
+  "settings.recycleBinPathExistingItems":
+    "フォルダーを変更すると、すでにごみ箱にある項目は新しいフォルダーへ移動されます。移動できなかった項目は以前のフォルダーに残り、保存後にここに表示されます。",
+  "settings.recycleBinRelocatedOne":
+    "ごみ箱の項目 {{count}} 件を新しいフォルダーへ移動しました。",
+  "settings.recycleBinRelocatedOther":
+    "ごみ箱の項目 {{count}} 件を新しいフォルダーへ移動しました。",
+  "settings.recycleBinRelocationFailedOne":
+    "ごみ箱の項目 {{count}} 件を移動できませんでした:",
+  "settings.recycleBinRelocationFailedOther":
+    "ごみ箱の項目 {{count}} 件を移動できませんでした:",
+  "status.recycleBinSettingsSavedWithRelocationFailures":
+    "ごみ箱設定を保存しましたが、一部の項目を移動できませんでした。",
   "appUpgrade.title": "アプリケーションのアップグレード",
   "appUpgrade.subtitle": "バージョンとアップグレードの管理",
   "appUpgrade.upgradeNow": "今すぐアップグレード",
@@ -2024,7 +2232,8 @@ const ja: LocaleDictionary = {
   "appUpgrade.restartNotice": "このアップグレード中に Scryer が再起動します。",
   "appUpgrade.uacNotice": "Windows にローカルの昇格確認が表示されます。",
   "appUpgrade.startFailed": "アップグレードを開始できませんでした。",
-  "appUpgrade.targetChanged": "利用可能な更新が変更されました。内容を確認してからもう一度お試しください。",
+  "appUpgrade.targetChanged":
+    "利用可能な更新が変更されました。内容を確認してからもう一度お試しください。",
   "appUpgrade.loading": "アップグレードの状態を読み込んでいます…",
   "appUpgrade.currentVersion": "現在のバージョン",
   "appUpgrade.availableVersion": "利用可能なバージョン",
@@ -2034,19 +2243,31 @@ const ja: LocaleDictionary = {
   "appUpgrade.owner.inApp": "Scryer",
   "appUpgrade.owner.operator": "運用者",
   "appUpgrade.eligibility": "アップグレードの可否",
-  "appUpgrade.eligibility.eligible": "このインストールはアプリ内でアップグレードできます。",
-  "appUpgrade.eligibility.managed_by_docker": "このインストールは Docker により管理されています。",
-  "appUpgrade.eligibility.managed_by_homebrew": "このインストールは Homebrew により管理されています。",
-  "appUpgrade.eligibility.managed_by_winget": "このインストールは winget により管理されています。",
-  "appUpgrade.eligibility.windows_supervised": "この Windows インストールは外部で管理されています。",
-  "appUpgrade.eligibility.disabled_by_operator": "アプリ内アップグレードは運用者により無効化されています。",
-  "appUpgrade.eligibility.unsupported_layout": "このインストール構成はサポートされていません。",
-  "appUpgrade.eligibility.install_dir_not_writable": "インストール先ディレクトリに書き込めません。",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS が Scryer を一時コピーから実行しています。Scryer をアプリケーションフォルダに移動してから開いてください。",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer は読み取り専用ボリュームから実行されています。Scryer をアプリケーションフォルダにドラッグしてから開いてください。",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "このアプリは Scryer アプリから起動されていないため、アップグレード後に再起動できません。",
+  "appUpgrade.eligibility.eligible":
+    "このインストールはアプリ内でアップグレードできます。",
+  "appUpgrade.eligibility.managed_by_docker":
+    "このインストールは Docker により管理されています。",
+  "appUpgrade.eligibility.managed_by_homebrew":
+    "このインストールは Homebrew により管理されています。",
+  "appUpgrade.eligibility.managed_by_winget":
+    "このインストールは winget により管理されています。",
+  "appUpgrade.eligibility.windows_supervised":
+    "この Windows インストールは外部で管理されています。",
+  "appUpgrade.eligibility.disabled_by_operator":
+    "アプリ内アップグレードは運用者により無効化されています。",
+  "appUpgrade.eligibility.unsupported_layout":
+    "このインストール構成はサポートされていません。",
+  "appUpgrade.eligibility.install_dir_not_writable":
+    "インストール先ディレクトリに書き込めません。",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS が Scryer を一時コピーから実行しています。Scryer をアプリケーションフォルダに移動してから開いてください。",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer は読み取り専用ボリュームから実行されています。Scryer をアプリケーションフォルダにドラッグしてから開いてください。",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "このアプリは Scryer アプリから起動されていないため、アップグレード後に再起動できません。",
   "appUpgrade.eligibility.unknown": "アップグレードの可否を取得できません。",
-  "appUpgrade.rebootRequired": "このアップグレードを完了するには Windows を再起動してください。",
+  "appUpgrade.rebootRequired":
+    "このアップグレードを完了するには Windows を再起動してください。",
   "appUpgrade.activeRun": "アップグレード中",
   "appUpgrade.latestRun": "最後のアップグレード",
   "appUpgrade.runStatusLabel": "状態: {{status}}",
@@ -2065,17 +2286,23 @@ const ja: LocaleDictionary = {
   "appUpgrade.phase.restarting": "再起動中",
   "appUpgrade.phase.reboot_required": "再起動が必要",
   "appUpgrade.phase.unknown": "処理中",
-  "appUpgrade.downloadProgress": "{{total}} 中 {{downloaded}} をダウンロード済み",
+  "appUpgrade.downloadProgress":
+    "{{total}} 中 {{downloaded}} をダウンロード済み",
   "appUpgrade.downloadedBytes": "{{downloaded}} をダウンロード済み",
   "appUpgrade.operatorGuidance": "運用者が管理するアップグレード",
-  "appUpgrade.guidance.winget": "管理者権限のターミナルでこのコマンドを実行してください。",
+  "appUpgrade.guidance.winget":
+    "管理者権限のターミナルでこのコマンドを実行してください。",
   "appUpgrade.guidance.wingetCommand": "winget upgrade ScryerMedia.Scryer",
-  "appUpgrade.guidance.docker": "新しいイメージを取得し、デプロイ設定でコンテナを再作成してください。",
-  "appUpgrade.guidance.homebrew": "ターミナルでこのコマンドを実行してください。",
+  "appUpgrade.guidance.docker":
+    "新しいイメージを取得し、デプロイ設定でコンテナを再作成してください。",
+  "appUpgrade.guidance.homebrew":
+    "ターミナルでこのコマンドを実行してください。",
   "appUpgrade.guidance.homebrewCommand": "brew upgrade scryer",
-  "appUpgrade.guidance.disabled": "アプリ内アップグレードは環境変数で無効化されています。",
+  "appUpgrade.guidance.disabled":
+    "アプリ内アップグレードは環境変数で無効化されています。",
   "appUpgrade.guidance.disabledVariable": "SCRYER_DISABLE_SELF_UPGRADE",
-  "appUpgrade.guidance.other": "このインストールの運用者が提供するアップグレード方法を使用してください。",
+  "appUpgrade.guidance.other":
+    "このインストールの運用者が提供するアップグレード方法を使用してください。",
   "appUpgrade.installationKind.portable": "ポータブル",
   "appUpgrade.installationKind.directMsi": "直接 MSI",
   "appUpgrade.installationKind.macosAppBundle": "macOS アプリ",
@@ -2094,25 +2321,33 @@ const ja: LocaleDictionary = {
   "settings.maintenanceNavRules": "ルール",
   "settings.maintenanceNavHistory": "履歴",
   "settings.maintenanceRuleAction": "アクション",
-  "settings.maintenanceRuleActionHelp": "メンテナンスアクションが有効になったときに、このルールが行う処理です。",
+  "settings.maintenanceRuleActionHelp":
+    "メンテナンスアクションが有効になったときに、このルールが行う処理です。",
   "settings.maintenanceRuleActionPlaceholder": "アクションを選択",
   "settings.maintenanceRuleNoActions": "タイトル単位のアクションはありません。",
   "settings.maintenanceRuleGraceDays": "猶予日数",
-  "settings.maintenanceRuleGraceDaysHelp": "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
+  "settings.maintenanceRuleGraceDaysHelp":
+    "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
   "settings.maintenanceRuleTargetProfile": "対象の品質プロファイル",
-  "settings.maintenanceRuleTargetProfileHelp": "このアクションが一致したタイトルを切り替える先のプロファイルです。",
+  "settings.maintenanceRuleTargetProfileHelp":
+    "このアクションが一致したタイトルを切り替える先のプロファイルです。",
   "settings.maintenanceRuleTargetProfileIdHelp": "品質プロファイルの ID です。",
   "settings.maintenanceRuleLibraries": "ライブラリの適用範囲",
-  "settings.maintenanceRuleLibrariesHelp": "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
+  "settings.maintenanceRuleLibrariesHelp":
+    "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
   "settings.maintenanceRuleLibrariesAll": "すべてのライブラリ",
   "settings.maintenanceRuleCreate": "メンテナンスルールを作成",
   "settings.maintenanceRuleUpdate": "メンテナンスルールを更新",
   "settings.maintenanceRuleCopy": "新しいルールとしてコピー",
   "settings.maintenanceRuleCreateNew": "新しいメンテナンスルールを作成",
-  "settings.maintenanceRuleValidationRequired": "名前、マッチャーのソース、アクションは必須です。",
-  "settings.maintenanceRuleConfirmDiscardTitle": "保存していない変更を破棄しますか？",
-  "settings.maintenanceRuleConfirmDiscardDescription": "メンテナンスルールエディターに未保存の変更があり、失われます。",
-  "settings.maintenanceRuleDeleting": "メンテナンスルール {{name}} を削除しますか？",
+  "settings.maintenanceRuleValidationRequired":
+    "名前、マッチャーのソース、アクションは必須です。",
+  "settings.maintenanceRuleConfirmDiscardTitle":
+    "保存していない変更を破棄しますか？",
+  "settings.maintenanceRuleConfirmDiscardDescription":
+    "メンテナンスルールエディターに未保存の変更があり、失われます。",
+  "settings.maintenanceRuleDeleting":
+    "メンテナンスルール {{name}} を削除しますか？",
   "settings.noMaintenanceRulesFound": "メンテナンスルールはまだありません。",
   "settings.maintenanceRuleRevision": "リビジョン",
   "settings.maintenanceRuleRisk": "リスク",
@@ -2121,26 +2356,37 @@ const ja: LocaleDictionary = {
   "settings.maintenanceRiskMedium": "中リスク",
   "settings.maintenanceRiskHigh": "高リスク",
   "settings.maintenanceActionDoNothing": "何もしない",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles": "対象のモニタリングを解除し、ファイルは保持",
-  "settings.maintenanceActionDeleteTitleAndFiles": "タイトルとそのファイルを削除",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles": "タイトルのモニタリングを解除し、すべてのファイルを削除",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles": "シリーズのモニタリングを解除し、既存のファイルを削除",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles": "対象のモニタリングを解除し、そのファイルを削除",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty": "シーズンのモニタリングを解除してファイルを削除し、シリーズが空になれば削除",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty": "シーズンのモニタリングを解除し、シリーズが空になればシリーズも解除",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged": "品質プロファイルを変更し、変更された場合は検索",
+  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+    "対象のモニタリングを解除し、ファイルは保持",
+  "settings.maintenanceActionDeleteTitleAndFiles":
+    "タイトルとそのファイルを削除",
+  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+    "タイトルのモニタリングを解除し、すべてのファイルを削除",
+  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+    "シリーズのモニタリングを解除し、既存のファイルを削除",
+  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+    "対象のモニタリングを解除し、そのファイルを削除",
+  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+    "シーズンのモニタリングを解除してファイルを削除し、シリーズが空になれば削除",
+  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+    "シーズンのモニタリングを解除し、シリーズが空になればシリーズも解除",
+  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+    "品質プロファイルを変更し、変更された場合は検索",
   "settings.maintenancePreviewTitle": "プレビュー",
-  "settings.maintenancePreviewSubtitle": "実際のタイトルに対してマッチャーを実行します。プレビューは読み取り専用で、一致する対象を報告するだけで何も変更しません。",
+  "settings.maintenancePreviewSubtitle":
+    "実際のタイトルに対してマッチャーを実行します。プレビューは読み取り専用で、一致する対象を報告するだけで何も変更しません。",
   "settings.maintenancePreviewSource": "マッチャー",
   "settings.maintenancePreviewSourceStored": "保存済みルール",
   "settings.maintenancePreviewSourceDraft": "エディターの下書き",
   "settings.maintenancePreviewLibrary": "ライブラリ",
   "settings.maintenancePreviewLibraryPlaceholder": "ライブラリを選択",
   "settings.maintenancePreviewLimit": "タイトル数",
-  "settings.maintenancePreviewLimitHelp": "1 回の実行につき最大 {{max}} 件のタイトルです。",
+  "settings.maintenancePreviewLimitHelp":
+    "1 回の実行につき最大 {{max}} 件のタイトルです。",
   "settings.maintenancePreviewRun": "プレビューを実行",
   "settings.maintenancePreviewRunning": "プレビューを実行中...",
-  "settings.maintenancePreviewEmpty": "ライブラリを選択してプレビューを実行してください。",
+  "settings.maintenancePreviewEmpty":
+    "ライブラリを選択してプレビューを実行してください。",
   "settings.maintenancePreviewNoTitles": "評価されたタイトルはありません。",
   "settings.maintenancePreviewColOutcome": "結果",
   "settings.maintenancePreviewColReasons": "理由コード",
@@ -2152,8 +2398,10 @@ const ja: LocaleDictionary = {
   "settings.maintenancePreviewRuleSelect": "ルール",
   "settings.maintenancePreviewRuleSelectPlaceholder": "保存済みルールを選択",
   "settings.maintenanceRuleUpdated": "メンテナンスルールを更新しました。",
-  "settings.maintenanceRuleCreated": "メンテナンスルールを作成し、無効の状態で保存しました。",
-  "settings.maintenanceRuleDeleted": "メンテナンスルール {{name}} を削除しました。",
+  "settings.maintenanceRuleCreated":
+    "メンテナンスルールを作成し、無効の状態で保存しました。",
+  "settings.maintenanceRuleDeleted":
+    "メンテナンスルール {{name}} を削除しました。",
 
   // ── メンテナンスルール — インスタンスの状態 ──
 
@@ -2163,11 +2411,16 @@ const ja: LocaleDictionary = {
   "settings.maintenanceArmingNone": "効果なし",
   "settings.maintenanceArmingReversible": "可逆",
   "settings.maintenanceArmingDestructive": "破壊的",
-  "settings.maintenanceArmDestructiveLoading": "このルールが保持している候補を数えています…",
-  "settings.maintenanceArmDestructiveCount": "{{count}} 件の候補が対象になり得ます。",
-  "settings.maintenanceArmDestructiveNoCandidates": "現在、このルールには対象になり得る候補がありません。",
-  "settings.maintenanceArmDestructiveCountChanged": "読んでいる間に件数が変わりました。現在このルールは {{count}} 件を保持しています。数を確認して、もう一度承認してください。",
-  "settings.maintenanceArmDestructiveAcknowledge": "このルールが {{count}} 件のタイトルのファイルを削除し得ることを理解しました。",
+  "settings.maintenanceArmDestructiveLoading":
+    "このルールが保持している候補を数えています…",
+  "settings.maintenanceArmDestructiveCount":
+    "{{count}} 件の候補が対象になり得ます。",
+  "settings.maintenanceArmDestructiveNoCandidates":
+    "現在、このルールには対象になり得る候補がありません。",
+  "settings.maintenanceArmDestructiveCountChanged":
+    "読んでいる間に件数が変わりました。現在このルールは {{count}} 件を保持しています。数を確認して、もう一度承認してください。",
+  "settings.maintenanceArmDestructiveAcknowledge":
+    "このルールが {{count}} 件のタイトルのファイルを削除し得ることを理解しました。",
 
   // ── メンテナンスルール — 候補 ──
   "settings.maintenanceCandidatesFilterRule": "ルール",
@@ -2181,7 +2434,8 @@ const ja: LocaleDictionary = {
   "settings.maintenanceCandidatesColFirstMatched": "初回一致",
   "settings.maintenanceCandidatesColDue": "期限",
   "settings.maintenanceCandidatesHeldSince": "{{time}} から保留中",
-  "settings.maintenanceCandidatesEmpty": "このフィルターに一致する候補はありません。",
+  "settings.maintenanceCandidatesEmpty":
+    "このフィルターに一致する候補はありません。",
   "settings.maintenanceCandidateExclude": "このタイトルを除外",
   "settings.maintenanceCandidateStateObserving": "観察中",
   "settings.maintenanceCandidateStatePendingAction": "アクション待ち",
@@ -2202,7 +2456,8 @@ const ja: LocaleDictionary = {
 
   // ── メンテナンスルール — 実行と履歴 ──
   "settings.maintenanceRunsTitle": "実行と履歴",
-  "settings.maintenanceRunsSubtitle": "最近の評価パスとアクションの試行を、新しい順に表示します。",
+  "settings.maintenanceRunsSubtitle":
+    "最近の評価パスとアクションの試行を、新しい順に表示します。",
   "settings.maintenanceRunScope": "対象範囲",
   "settings.maintenanceRunScopeAll": "すべてのルール",
   "settings.maintenanceRunEvaluationNow": "今すぐ評価",
@@ -2214,13 +2469,15 @@ const ja: LocaleDictionary = {
   "settings.maintenanceEvaluationRunsTitle": "評価の実行",
   "settings.maintenanceEvaluationRunsEmpty": "評価の実行記録はまだありません。",
   "settings.maintenanceActionRunsTitle": "アクションの実行",
-  "settings.maintenanceActionRunsEmpty": "アクションの実行記録はまだありません。",
+  "settings.maintenanceActionRunsEmpty":
+    "アクションの実行記録はまだありません。",
   "settings.maintenanceRunColStarted": "開始",
   "settings.maintenanceRunColStatus": "状態",
   "settings.maintenanceRunColCounts": "件数",
   "settings.maintenanceRunColDuration": "所要時間",
   "settings.maintenanceRunColError": "エラー",
-  "settings.maintenanceRunCounts": "評価 {{evaluated}} · 一致 {{matched}} · 不一致 {{noMatch}} · 不明 {{unknown}} · エラー {{errors}}",
+  "settings.maintenanceRunCounts":
+    "評価 {{evaluated}} · 一致 {{matched}} · 不一致 {{noMatch}} · 不明 {{unknown}} · エラー {{errors}}",
   "settings.maintenanceRunDuration": "{{seconds}} 秒",
   "settings.maintenanceRunRevision": "リビジョン {{revision}}",
   "settings.maintenanceRunStatusRunning": "実行中",
@@ -2234,7 +2491,8 @@ const ja: LocaleDictionary = {
 
   // ── メンテナンスルール — 除外 ──
   "settings.maintenanceExclusionsTitle": "除外",
-  "settings.maintenanceExclusionsSubtitle": "メンテナンスルールが決して手を触れてはならないタイトルです。全体除外はすべてのルールに適用されます。",
+  "settings.maintenanceExclusionsSubtitle":
+    "メンテナンスルールが決して手を触れてはならないタイトルです。全体除外はすべてのルールに適用されます。",
   "settings.maintenanceExclusionsEmpty": "除外はありません。",
   "settings.maintenanceExclusionColScope": "対象範囲",
   "settings.maintenanceExclusionColReason": "理由",
@@ -2244,33 +2502,41 @@ const ja: LocaleDictionary = {
   "settings.maintenanceExclusionRemoved": "{{title}} の除外を解除しました。",
   "settings.maintenanceExclusionRemoving": "{{title}} の除外を解除しますか？",
   "settings.maintenanceExcludeTitle": "メンテナンスから除外",
-  "settings.maintenanceExcludeBody": "{{title}} は次回の評価から除外され、その候補は除外状態になります。",
+  "settings.maintenanceExcludeBody":
+    "{{title}} は次回の評価から除外され、その候補は除外状態になります。",
   "settings.maintenanceExcludeScope": "対象範囲",
   "settings.maintenanceExcludeScopeGlobal": "すべてのルール",
   "settings.maintenanceExcludeReason": "理由",
-  "settings.maintenanceExcludeReasonPlaceholder": "このタイトルを除外する理由（任意）",
+  "settings.maintenanceExcludeReasonPlaceholder":
+    "このタイトルを除外する理由（任意）",
   "settings.maintenanceExcludeConfirm": "除外する",
   "settings.maintenanceExcluded": "{{title}} をメンテナンスから除外しました。",
   "move.dialogTitle": "タイトルを移動",
-  "move.dialogDescription": "移動する前に、選択した {{count}} 件のタイトルの計画を確認してください。",
+  "move.dialogDescription":
+    "移動する前に、選択した {{count}} 件のタイトルの計画を確認してください。",
   "move.destinationLibrary": "移動先ライブラリ",
   "move.destinationRoot": "移動先ルート",
   "move.destinationRootPlaceholder": "ルートを選択",
   "move.actionHeading": "移動先…",
-  "move.actionDescription": "このタイトルのファイルを別のルートフォルダ、または別のライブラリへ移動します。",
+  "move.actionDescription":
+    "このタイトルのファイルを別のルートフォルダ、または別のライブラリへ移動します。",
   "move.actionButton": "移動…",
   "move.wizardKindDescription": "このタイトルの移動先を選択してください。",
   "move.kindRootHeading": "別のルートへ移動",
-  "move.kindRootHelp": "タイトルはこのライブラリに残したまま、ファイルを同じライブラリの別のルートフォルダへ移動します。",
+  "move.kindRootHelp":
+    "タイトルはこのライブラリに残したまま、ファイルを同じライブラリの別のルートフォルダへ移動します。",
   "move.kindLibraryHeading": "別のライブラリへ移動",
-  "move.kindLibraryHelp": "タイトルを別のライブラリへ、そのライブラリのいずれかのルートへ転送します。",
+  "move.kindLibraryHelp":
+    "タイトルを別のライブラリへ、そのライブラリのいずれかのルートへ転送します。",
   "move.noOtherRoots":
     "このライブラリには移動先となる別のルートフォルダがありません。ライブラリにルートを追加するか、別のライブラリへ移動してください。",
   "move.back": "戻る",
   "move.next": "次へ",
-  "move.destinationRootHelp": "移動先を変更すると、タイトルを保存する代わりに移動ワークフローが開きます。",
+  "move.destinationRootHelp":
+    "移動先を変更すると、タイトルを保存する代わりに移動ワークフローが開きます。",
   "move.destinationNoSelection": "タイトルが選択されていません。",
-  "move.destinationMixedSourceLibraries": "選択が複数のライブラリにまたがっています。ライブラリごとに移動してください。",
+  "move.destinationMixedSourceLibraries":
+    "選択が複数のライブラリにまたがっています。ライブラリごとに移動してください。",
   "move.destinationCrossLibraryNotice":
     "これらのタイトルは現在のライブラリを離れ、{{library}} に所属します。",
   "move.destinationLibraryInMoveWorkflow":
@@ -2287,10 +2553,12 @@ const ja: LocaleDictionary = {
   "move.mergeNoDetails": "この統合で引き継がれるものは他にありません。",
   "move.mergeBlockedHeading":
     "この統合は実行できません: 次のレコードを引き継げません。",
-  "move.mergeCarried": "{{files}} 件のメディアファイルと {{history}} 件の履歴が一緒に移ります。",
+  "move.mergeCarried":
+    "{{files}} 件のメディアファイルと {{history}} 件の履歴が一緒に移ります。",
   "move.mergeDropped":
     "統合されるタイトルの他の {{count}} 件のレコードは引き継がれず、タイトルとともに失われます。",
-  "move.mergeRoleChangesHeading": "{{demotions}} 個のファイルは追加コピーになります",
+  "move.mergeRoleChangesHeading":
+    "{{demotions}} 個のファイルは追加コピーになります",
   "move.mergeRoleChangesHeadingPlain": "ファイルの役割",
   "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
     "「{{title}}」にはこれらのエピソードのプライマリファイルが既にあります。移動してくるファイルは追加コピーとして保持され、既存のものは置き換えられません。",
@@ -2303,41 +2571,54 @@ const ja: LocaleDictionary = {
   "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
     "これらのファイルはここでは 2 つのエピソードに登録されていますが、移動先では 1 つのエピソードです。移動先では各ファイルが 1 回だけ登録されます。",
   "move.mergeRoleUnnamedFile": "ファイル {{id}}",
-  "move.operationTransferNote": "これらのタイトルは別のライブラリへ移動しています。",
+  "move.operationTransferNote":
+    "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
   "move.mode.FILES_ALREADY_THERE": "ファイルは既にそこにある",
-  "move.modeHelp.MOVE_WITH_SCRYER": "Scryer がファイルを移動またはコピーし、カタログを変更する前にすべて検証します。",
-  "move.modeHelp.FILES_ALREADY_THERE": "Scryer が移動先をスキャンし、自分で移したファイルを引き継ぎます。",
-  "move.catalogOnlyFastPath": "これらのタイトルにはディスク上のファイルがないため、カタログのみの再割り当てです。何も移動せず、モードの選択も不要です。",
-  "move.selectDestinationPrompt": "計画を見るには移動先ルートを選択してください。",
+  "move.modeHelp.MOVE_WITH_SCRYER":
+    "Scryer がファイルを移動またはコピーし、カタログを変更する前にすべて検証します。",
+  "move.modeHelp.FILES_ALREADY_THERE":
+    "Scryer が移動先をスキャンし、自分で移したファイルを引き継ぎます。",
+  "move.catalogOnlyFastPath":
+    "これらのタイトルにはディスク上のファイルがないため、カタログのみの再割り当てです。何も移動せず、モードの選択も不要です。",
+  "move.selectDestinationPrompt":
+    "計画を見るには移動先ルートを選択してください。",
   "move.previewLoading": "計画を作成中…",
   "move.previewFailed": "移動のプレビューに失敗しました。",
-  "move.planChanged": "プレビュー後に計画が変わりました。確定する前に新しい計画を確認してください。",
+  "move.planChanged":
+    "プレビュー後に計画が変わりました。確定する前に新しい計画を確認してください。",
   "move.rePreview": "もう一度プレビュー",
   "move.summaryTitles": "タイトル",
   "move.summaryFiles": "ファイル",
   "move.summarySize": "合計サイズ",
   "move.sampledItems": "サンプル",
   "move.blockedHeading": "{{count}} 件のタイトルはまだ移動できません",
-  "move.blockedHelp": "選択を解除すれば残りを移動できます。または処理が終わるまでお待ちください。",
+  "move.blockedHelp":
+    "選択を解除すれば残りを移動できます。または処理が終わるまでお待ちください。",
   "move.deselect": "選択解除",
   "move.deselectedCount": "{{count}} 件のタイトルをこの移動から除外しました。",
   "move.restoreSelection": "選択を元に戻す",
   "move.titleFileSummary": "{{files}} ファイル · {{size}}",
-  "move.freeSpaceRequired": "移動先に {{required}} が必要です。空き {{available}}。",
+  "move.freeSpaceRequired":
+    "移動先に {{required}} が必要です。空き {{available}}。",
   "move.freeSpaceUnknown": "不明",
   "move.freeSpaceInsufficient": "移動先の空き容量が足りません。",
   "move.startRefusedNoSpace":
     "移動先にこの移動を行うための空き容量が足りません。空き容量を増やすか、対象のタイトル数を減らしてからやり直してください。",
   "move.freeSpaceNotProbed": "移動先ボリュームを測定できませんでした。",
-  "move.freeSpaceRecycleOtherVolume": "ごみ箱が別のボリュームにあり、{{required}} が必要です。",
-  "move.verificationStatementFull": "{{files}} ファイル（{{bytes}}）すべてを完全に読み戻して照合します。",
-  "move.verificationStatementQuick": "{{files}} ファイル（{{bytes}}）を先頭・末尾・サイズで照合します。",
-  "move.verificationNotApplicable": "移動するファイルがないため、検証するものはありません。",
+  "move.freeSpaceRecycleOtherVolume":
+    "ごみ箱が別のボリュームにあり、{{required}} が必要です。",
+  "move.verificationStatementFull":
+    "{{files}} ファイル（{{bytes}}）すべてを完全に読み戻して照合します。",
+  "move.verificationStatementQuick":
+    "{{files}} ファイル（{{bytes}}）を先頭・末尾・サイズで照合します。",
+  "move.verificationNotApplicable":
+    "移動するファイルがないため、検証するものはありません。",
   "move.verificationStampFull": "検証済み（完全）",
   "move.verificationStampQuick": "検証済み（簡易）",
-  "move.verificationFallbackCount": "{{count}} ファイルが簡易チェックにフォールバックしました",
+  "move.verificationFallbackCount":
+    "{{count}} ファイルが簡易チェックにフォールバックしました",
   "move.typedConfirmationPrompt": "確認のためフレーズを入力してください",
   "move.confirm": "移動を開始",
   "move.startFailed": "移動を開始できませんでした。",
@@ -2345,7 +2626,8 @@ const ja: LocaleDictionary = {
   "move.operationLoadFailed": "操作を読み込めませんでした。",
   "move.operationMissing": "その操作はもう存在しません。",
   "move.operationDismiss": "閉じる",
-  "move.operationProgress": "タイトル {{titles}} · ファイル {{files}} · {{bytes}}",
+  "move.operationProgress":
+    "タイトル {{titles}} · ファイル {{files}} · {{bytes}}",
   "move.counterMerges": "統合済み",
   "move.counterDedups": "重複排除",
   "move.counterRenames": "名前変更",
@@ -2369,7 +2651,8 @@ const ja: LocaleDictionary = {
   "move.assetStateDone": "完了",
   "move.assetStatePlanned": "予定",
   "move.cancelAction": "操作をキャンセル",
-  "move.cancelRequested": "キャンセルを要求しました。次のタイトルで停止します。",
+  "move.cancelRequested":
+    "キャンセルを要求しました。次のタイトルで停止します。",
   "move.cancelNotPossible": "この操作はすでに終了しています。",
   "move.cancelFailed": "キャンセルを要求できませんでした。",
   "move.cancelDraining": "次のタイトルで停止します",
@@ -2426,42 +2709,58 @@ const ja: LocaleDictionary = {
   "move.toastWarningsChip": "一部のタイトルはアクティビティで確認が必要です。",
   "move.toastFailedSubtitle": "移動に失敗しました",
   "move.toastCanceledSubtitle": "移動をキャンセルしました",
-  "move.startedHeading": "移動を開始しました。アクティビティで進行状況を確認できます。",
+  "move.startedHeading":
+    "移動を開始しました。アクティビティで進行状況を確認できます。",
   "move.viewInActivity": "アクティビティで表示",
   "rootChange.rowAction": "ルートを変更",
-  "rootChange.unavailableWhileUnsaved": "先に未保存のルート編集を保存するか破棄してください。",
+  "rootChange.unavailableWhileUnsaved":
+    "先に未保存のルート編集を保存するか破棄してください。",
   "rootChange.dialogTitle": "ルートを変更",
-  "rootChange.dialogDescription": "{path} 上のすべてが移動します。ルート全体の操作でタイトルを残すことはできません。",
+  "rootChange.dialogDescription":
+    "{path} 上のすべてが移動します。ルート全体の操作でタイトルを残すことはできません。",
   "rootChange.destinationHeading": "このルートの移動先",
   "rootChange.destinationNewPath": "新しいパス",
-  "rootChange.destinationNewPathHelp": "ルートは同一性とタイトルの割り当てを保持し、変わるのはパスだけです。",
+  "rootChange.destinationNewPathHelp":
+    "ルートは同一性とタイトルの割り当てを保持し、変わるのはパスだけです。",
   "rootChange.destinationExistingRoot": "このライブラリの別のルート",
-  "rootChange.destinationExistingRootHelp": "このルートは選んだルートに統合され、その設定は廃止されます。",
-  "rootChange.destinationNoOtherRoots": "このライブラリには統合先となる別のルートがありません。",
+  "rootChange.destinationExistingRootHelp":
+    "このルートは選んだルートに統合され、その設定は廃止されます。",
+  "rootChange.destinationNoOtherRoots":
+    "このライブラリには統合先となる別のルートがありません。",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.planChanged": "プレビュー後にプランが変わりました。確定する前にもう一度プレビューしてください。",
+  "rootChange.planChanged":
+    "プレビュー後にプランが変わりました。確定する前にもう一度プレビューしてください。",
   "rootChange.previewFailed": "このルート変更をプレビューできませんでした。",
   "rootChange.previewing": "ルート全体を読み取っています。",
   "rootChange.preview": "プレビュー",
   "rootChange.confirm": "開始",
   "rootChange.startFailed": "このルート変更を開始できませんでした。",
-  "rootChange.startedHeading": "ルート変更を開始しました。アクティビティで確認できます。",
+  "rootChange.startedHeading":
+    "ルート変更を開始しました。アクティビティで確認できます。",
   "rootChange.viewInActivity": "アクティビティで表示",
-  "rootChange.identityKeepsRoot": "このルートは同一性と {titles} 件すべてのタイトル割り当てを保持します。",
+  "rootChange.identityKeepsRoot":
+    "このルートは同一性と {titles} 件すべてのタイトル割り当てを保持します。",
   "rootChange.identityKeepsDefault": "このライブラリの既定ルートのままです。",
-  "rootChange.identityLosesDefault": "このライブラリの既定ルートではなくなります。",
-  "rootChange.consolidationStatement": "このルート上の {titles} 件のタイトルはすべて、選んだルートへ移動します。",
-  "rootChange.consolidationRetiresConfiguration": "移動元ルートの設定は、すべてが到着し、ごみ箱処理がすべて終わった時点で廃止されます。",
-  "rootChange.defaultTransfers": "移動先ルートがこのライブラリの既定になるため、新しいコンテンツはそこに保存されます。",
+  "rootChange.identityLosesDefault":
+    "このライブラリの既定ルートではなくなります。",
+  "rootChange.consolidationStatement":
+    "このルート上の {titles} 件のタイトルはすべて、選んだルートへ移動します。",
+  "rootChange.consolidationRetiresConfiguration":
+    "移動元ルートの設定は、すべてが到着し、ごみ箱処理がすべて終わった時点で廃止されます。",
+  "rootChange.defaultTransfers":
+    "移動先ルートがこのライブラリの既定になるため、新しいコンテンツはそこに保存されます。",
   "rootChange.defaultStays": "このライブラリの既定ルートは変わりません。",
   "rootChange.accountingHeading": "このルート上のすべてのタイトル",
   "rootChange.accountingAssigned": "割り当て済み",
   "rootChange.accountingRelocating": "移動",
   "rootChange.accountingCatalogOnly": "カタログのみ",
   "rootChange.accountingBlocked": "ブロック",
-  "rootChange.accountingDoesNotClose": "内訳が合計と一致しません。このプランを確定しないでください。",
-  "rootChange.blockedTitlesHeading": "{count} 件のタイトルはこの操作に入れません。",
-  "rootChange.blockedTitlesNoExclude": "開始前に解消してください。ルート全体の操作でタイトルを残すことはできません。",
+  "rootChange.accountingDoesNotClose":
+    "内訳が合計と一致しません。このプランを確定しないでください。",
+  "rootChange.blockedTitlesHeading":
+    "{count} 件のタイトルはこの操作に入れません。",
+  "rootChange.blockedTitlesNoExclude":
+    "開始前に解消してください。ルート全体の操作でタイトルを残すことはできません。",
   "rootChange.groupsHeading": "この統合の内容",
   "rootChange.group.movingIntoUnusedFolders": "空きフォルダーへ",
   "rootChange.group.mergingWithDestinationTitles": "マージ",
@@ -2471,54 +2770,93 @@ const ja: LocaleDictionary = {
   "rootChange.group.companionCollisions": "付随ファイル名が使用済み",
   "rootChange.group.untrackedSourceEntries": "移動元の未追跡ファイル",
   "rootChange.renamedFoldersHeading": "名前が変わるフォルダー",
-  "rootChange.renamedFoldersSampled": "ここには先頭のフォルダーのみを表示しています。",
+  "rootChange.renamedFoldersSampled":
+    "ここには先頭のフォルダーのみを表示しています。",
   "rootChange.contentHeading": "このルートにあるもの",
   "rootChange.contentManaged": "追跡中のメディア",
   "rootChange.contentCompanions": "付随ファイル",
   "rootChange.contentUnknown": "説明できないもの",
   "rootChange.contentSampled": "ここには先頭の項目のみを表示しています。",
-  "rootChange.unknownContentHelp": "何も追跡していないコンテンツが {bytes} あります。移動も削除もされず、そのため古い場所は残ります。",
+  "rootChange.unknownContentHelp":
+    "何も追跡していないコンテンツが {bytes} あります。移動も削除もされず、そのため古い場所は残ります。",
   "rootChange.retirementHeading": "その後の古い場所",
-  "rootChange.retirementEmptyDirectoriesOnly": "削除されるのは空のディレクトリだけです（{count} 件）。",
-  "rootChange.retirementVerificationFirst": "移動先のコピーが検証されるまで、移動元からは何も削除されません。",
+  "rootChange.retirementEmptyDirectoriesOnly":
+    "削除されるのは空のディレクトリだけです（{count} 件）。",
+  "rootChange.retirementVerificationFirst":
+    "移動先のコピーが検証されるまで、移動元からは何も削除されません。",
   "rootChange.retirementRetainedHeading": "内容ごと残るもの:",
-  "rootChange.retirementBlockedHeading": "次が解消されるまで古い場所は残ります:",
+  "rootChange.retirementBlockedHeading":
+    "次が解消されるまで古い場所は残ります:",
   "rootChange.retirementPermitted": "古い場所の廃止を妨げるものはありません。",
-  "rootChange.verificationStatement": "移動元をごみ箱に入れる前に、{files} 件のファイル（{bytes}）を移動先で完全に検証します。",
-  "rootChange.insufficientSpace": "移動先に必要な {required} の空きがありません。",
+  "rootChange.verificationStatement":
+    "移動元をごみ箱に入れる前に、{files} 件のファイル（{bytes}）を移動先で完全に検証します。",
+  "rootChange.insufficientSpace":
+    "移動先に必要な {required} の空きがありません。",
   "rootChange.typedConfirmationPrompt": "確認のためフレーズを入力してください",
-  "rootChange.reason.root_identity_retained": "ルートは同一性を保持し、変わるのはパスだけです。",
-  "rootChange.reason.catalog_only_root_change": "追跡ファイルがないため、カタログ上の再割り当てのみです。",
-  "rootChange.reason.title_blocked_for_root_change": "このタイトルはまだルート変更に入れません。",
-  "rootChange.reason.unknown_root_content": "どのタイトルも説明できないルート上のコンテンツです。",
-  "rootChange.reason.source_retirement_blocked": "古い場所はまだ廃止できません。",
-  "rootChange.reason.file_outside_title_folder": "タイトルのフォルダー外にある追跡ファイルです。",
-  "rootChange.reason.hardlinked_source": "移動元ファイルには他のハードリンクがあり、移動には追従しません。",
-  "rootChange.reason.roots_consolidated": "このルート上のすべてのタイトルが移動先ルートへ移ります。",
-  "rootChange.reason.default_root_transferred": "移動先ルートがこのライブラリの既定になります。",
-  "rootChange.reason.moves_into_unused_folder": "誰も使っていないフォルダーへ移動します。",
-  "rootChange.reason.merges_with_destination_title": "同一性を共有する移動先タイトルにマージされます。",
-  "rootChange.reason.folder_name_uniqued": "移動先でフォルダー名が使われているため、こちらの名前を変更します。",
-  "rootChange.reason.catalog_only_consolidation": "追跡ファイルがないため、カタログ上の再割り当てのみです。",
-  "rootChange.reason.destination_folder_exists": "移動先フォルダーはすでに存在します。",
-  "rootChange.retirementBlocker.blocked_titles": "一部のタイトルはこの操作に入れません。",
-  "rootChange.retirementBlocker.unexplained_source_content": "何も説明できない移動元のコンテンツです。",
-  "rootChange.refusal.root_change_path_not_absolute": "絶対パスを指定してください。",
-  "rootChange.refusal.root_change_paths_overlap": "新しいパスが古いパスの内側にある、またはその逆です。",
-  "rootChange.refusal.root_change_source_root_is_symlink": "このルートはシンボリックリンクです。先に実体のディレクトリを指すようにしてください。",
-  "rootChange.refusal.root_change_source_root_unavailable": "このルートは現在読み取れないため、内容を計画できません。",
-  "rootChange.refusal.root_change_destination_not_empty": "新しいパスにはすでにコンテンツがあります。空のディレクトリか新規のディレクトリを選んでください。",
-  "rootChange.refusal.root_change_destination_parent_missing": "新しいパスの親ディレクトリが存在しません。",
-  "rootChange.refusal.root_change_destination_is_configured_root": "そのパスは既に別のライブラリのルートとして設定されています。",
-  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin": "そのパスはカスタムのごみ箱と重なっています。ごみ箱を含むパスや、ごみ箱の内側にあるパスは使用できません。",
-  "rootChange.refusal.root_change_mode_not_supported": "ルートの変更では常にファイルを移動します。「ファイルはすでにそこにある」はここでは選べません。",
-  "rootChange.refusal.root_consolidation_path_not_absolute": "絶対パスを指定してください。",
-  "rootChange.refusal.root_consolidation_same_root": "ルートを自分自身に統合することはできません。",
-  "rootChange.refusal.root_consolidation_paths_overlap": "これらのルートの一方がもう一方の内側にあります。",
-  "rootChange.refusal.root_consolidation_source_root_is_symlink": "このルートはシンボリックリンクです。先に実体のディレクトリを指すようにしてください。",
-  "rootChange.refusal.root_consolidation_source_root_unavailable": "このルートは現在読み取れないため、内容を計画できません。",
-  "rootChange.refusal.root_consolidation_destination_root_unavailable": "移動先ルートは現在読み取れないため、そこにある内容を踏まえた計画ができません。",
-  "rootChange.refusal.root_consolidation_mode_not_supported": "統合では常にファイルを移動します。「ファイルはすでにそこにある」はここでは選べません。",
+  "rootChange.reason.root_identity_retained":
+    "ルートは同一性を保持し、変わるのはパスだけです。",
+  "rootChange.reason.catalog_only_root_change":
+    "追跡ファイルがないため、カタログ上の再割り当てのみです。",
+  "rootChange.reason.title_blocked_for_root_change":
+    "このタイトルはまだルート変更に入れません。",
+  "rootChange.reason.unknown_root_content":
+    "どのタイトルも説明できないルート上のコンテンツです。",
+  "rootChange.reason.source_retirement_blocked":
+    "古い場所はまだ廃止できません。",
+  "rootChange.reason.file_outside_title_folder":
+    "タイトルのフォルダー外にある追跡ファイルです。",
+  "rootChange.reason.hardlinked_source":
+    "移動元ファイルには他のハードリンクがあり、移動には追従しません。",
+  "rootChange.reason.roots_consolidated":
+    "このルート上のすべてのタイトルが移動先ルートへ移ります。",
+  "rootChange.reason.default_root_transferred":
+    "移動先ルートがこのライブラリの既定になります。",
+  "rootChange.reason.moves_into_unused_folder":
+    "誰も使っていないフォルダーへ移動します。",
+  "rootChange.reason.merges_with_destination_title":
+    "同一性を共有する移動先タイトルにマージされます。",
+  "rootChange.reason.folder_name_uniqued":
+    "移動先でフォルダー名が使われているため、こちらの名前を変更します。",
+  "rootChange.reason.catalog_only_consolidation":
+    "追跡ファイルがないため、カタログ上の再割り当てのみです。",
+  "rootChange.reason.destination_folder_exists":
+    "移動先フォルダーはすでに存在します。",
+  "rootChange.retirementBlocker.blocked_titles":
+    "一部のタイトルはこの操作に入れません。",
+  "rootChange.retirementBlocker.unexplained_source_content":
+    "何も説明できない移動元のコンテンツです。",
+  "rootChange.refusal.root_change_path_not_absolute":
+    "絶対パスを指定してください。",
+  "rootChange.refusal.root_change_paths_overlap":
+    "新しいパスが古いパスの内側にある、またはその逆です。",
+  "rootChange.refusal.root_change_source_root_is_symlink":
+    "このルートはシンボリックリンクです。先に実体のディレクトリを指すようにしてください。",
+  "rootChange.refusal.root_change_source_root_unavailable":
+    "このルートは現在読み取れないため、内容を計画できません。",
+  "rootChange.refusal.root_change_destination_not_empty":
+    "新しいパスにはすでにコンテンツがあります。空のディレクトリか新規のディレクトリを選んでください。",
+  "rootChange.refusal.root_change_destination_parent_missing":
+    "新しいパスの親ディレクトリが存在しません。",
+  "rootChange.refusal.root_change_destination_is_configured_root":
+    "そのパスは既に別のライブラリのルートとして設定されています。",
+  "rootChange.refusal.root_change_destination_conflicts_with_recycle_bin":
+    "そのパスはカスタムのごみ箱と重なっています。ごみ箱を含むパスや、ごみ箱の内側にあるパスは使用できません。",
+  "rootChange.refusal.root_change_mode_not_supported":
+    "ルートの変更では常にファイルを移動します。「ファイルはすでにそこにある」はここでは選べません。",
+  "rootChange.refusal.root_consolidation_path_not_absolute":
+    "絶対パスを指定してください。",
+  "rootChange.refusal.root_consolidation_same_root":
+    "ルートを自分自身に統合することはできません。",
+  "rootChange.refusal.root_consolidation_paths_overlap":
+    "これらのルートの一方がもう一方の内側にあります。",
+  "rootChange.refusal.root_consolidation_source_root_is_symlink":
+    "このルートはシンボリックリンクです。先に実体のディレクトリを指すようにしてください。",
+  "rootChange.refusal.root_consolidation_source_root_unavailable":
+    "このルートは現在読み取れないため、内容を計画できません。",
+  "rootChange.refusal.root_consolidation_destination_root_unavailable":
+    "移動先ルートは現在読み取れないため、そこにある内容を踏まえた計画ができません。",
+  "rootChange.refusal.root_consolidation_mode_not_supported":
+    "統合では常にファイルを移動します。「ファイルはすでにそこにある」はここでは選べません。",
   "indexerSearch.searchWithThisIndexer": "このインデクサーで検索",
   "indexerSearch.queryPlaceholder": "すべてのインデクサーからリリースを検索…",
   "indexerSearch.kindLabel": "種別",
@@ -2555,7 +2893,8 @@ const ja: LocaleDictionary = {
   "indexerSearch.health.skipped": "スキップ",
   "indexerSearch.skipReason.indexerDisabled": "インデクサーは無効です",
   "indexerSearch.skipReason.temporarilyDisabled": "一時的に無効",
-  "indexerSearch.skipReason.temporarilyDisabledUntil": "{{time}} まで一時的に無効",
+  "indexerSearch.skipReason.temporarilyDisabledUntil":
+    "{{time}} まで一時的に無効",
   "indexerSearch.skipReason.backedOff": "最近のエラーにより待機中",
   "indexerSearch.skipReason.backedOffUntil": "{{time}} まで待機中",
   "indexerSearch.skipReason.noTextSearch": "テキスト検索に対応していません",
@@ -2587,7 +2926,8 @@ const ja: LocaleDictionary = {
   "indexerSearch.row.select": "リリースを選択",
   "indexerSearch.row.grab": "取得",
   "indexerSearch.row.download": "ファイルをダウンロード",
-  "indexerSearch.download.unavailable": "このリリースはマグネットリンクのため、ダウンロードできるファイルがありません",
+  "indexerSearch.download.unavailable":
+    "このリリースはマグネットリンクのため、ダウンロードできるファイルがありません",
   "indexerSearch.row.expand": "詳細を表示",
   "indexerSearch.row.collapse": "詳細を隠す",
   "indexerSearch.row.grabs": "{{count}} 回取得",
@@ -2607,7 +2947,8 @@ const ja: LocaleDictionary = {
   "indexerSearch.footer.nothingQueued": "取得するまで何もキューに入りません。",
   "indexerSearch.footer.grabSelected": "選択項目を取得",
   "indexerSearch.footer.downloadSelected": "{{count}} 件をダウンロード",
-  "indexerSearch.empty.prompt": "キーワードを入力してインデクサーを検索してください。",
+  "indexerSearch.empty.prompt":
+    "キーワードを入力してインデクサーを検索してください。",
   "indexerSearch.empty.searching": "インデクサーを検索中…",
   "indexerSearch.empty.noResults": "一致するリリースはありません。",
   "grabDialog.title.one": "リリースを取得",
@@ -2662,27 +3003,37 @@ const ja: LocaleDictionary = {
   "settings.noRequestRulesFound": "リクエストルールはまだありません。",
   "settings.requestRuleLibraries": "ライブラリ",
   "settings.requestRuleLibrariesAll": "すべてのライブラリ",
-  "settings.requestRuleLibrariesHelp": "すべてのチェックを外すと、このルールはすべてのライブラリのリクエストに適用されます。",
+  "settings.requestRuleLibrariesHelp":
+    "すべてのチェックを外すと、このルールはすべてのライブラリのリクエストに適用されます。",
   "settings.requestRuleRevision": "リビジョン",
   "settings.requestRuleDecisionCount": "判定数",
   "settings.requestRuleCopy": "ルールをコピー",
   "settings.requestRuleCreate": "ルールを作成",
   "settings.requestRuleUpdate": "ルールを更新",
   "settings.requestRuleCreateNew": "新しいリクエストルール",
-  "settings.requestRuleCreated": "リクエストルールを作成しました。有効にするまで無効のままです。",
+  "settings.requestRuleCreated":
+    "リクエストルールを作成しました。有効にするまで無効のままです。",
   "settings.requestRuleUpdated": "リクエストルールを更新しました。",
   "settings.requestRuleDeleted": "リクエストルール {{name}} を削除しました。",
-  "settings.requestRuleDeleting": "リクエストルール {{name}} を削除しますか？記録された判定は残ります。",
-  "settings.requestRuleValidationRequired": "リクエストルールには名前とマッチャーが必要です。",
-  "settings.requestRuleConfirmDiscardTitle": "保存していない変更を破棄しますか？",
-  "settings.requestRuleConfirmDiscardDescription": "エディタのマッチャーは保存されていません。続行すると置き換えられます。",
+  "settings.requestRuleDeleting":
+    "リクエストルール {{name}} を削除しますか？記録された判定は残ります。",
+  "settings.requestRuleValidationRequired":
+    "リクエストルールには名前とマッチャーが必要です。",
+  "settings.requestRuleConfirmDiscardTitle":
+    "保存していない変更を破棄しますか？",
+  "settings.requestRuleConfirmDiscardDescription":
+    "エディタのマッチャーは保存されていません。続行すると置き換えられます。",
   "settings.requestRuleRequesters": "このルールで人を指定する",
-  "settings.requestRuleRequestersHelp": "対象のアカウントをチェックして適用します。エディタのマッチャーが書き換えられるので、保存前に内容を確認できます。",
+  "settings.requestRuleRequestersHelp":
+    "対象のアカウントをチェックして適用します。エディタのマッチャーが書き換えられるので、保存前に内容を確認できます。",
   "settings.requestRuleRequestersApply": "これらの名前をマッチャーに書き込む",
-  "settings.requestRuleRequestersUnavailable": "アカウント一覧の取得にはこのページにない権限が必要です。名前はマッチャーに手で入力してください。",
-  "settings.requestRuleRequestersNoTarget": "このマッチャーは誰も指定していないため、選んだアカウントを書き込む場所がありません。先に requesters セットかユーザー名の比較を追加してください。",
+  "settings.requestRuleRequestersUnavailable":
+    "アカウント一覧の取得にはこのページにない権限が必要です。名前はマッチャーに手で入力してください。",
+  "settings.requestRuleRequestersNoTarget":
+    "このマッチャーは誰も指定していないため、選んだアカウントを書き込む場所がありません。先に requesters セットかユーザー名の比較を追加してください。",
   "settings.requestPreviewTitle": "このルールをリクエストで試す",
-  "settings.requestPreviewSubtitle": "あなたが記述したリクエストに対してマッチャーを 1 つ実行します。送信も記録もされません。",
+  "settings.requestPreviewSubtitle":
+    "あなたが記述したリクエストに対してマッチャーを 1 つ実行します。送信も記録もされません。",
   "settings.requestPreviewSource": "マッチャー",
   "settings.requestPreviewSourceStored": "保存済みのルール",
   "settings.requestPreviewSourceDraft": "エディタの下書き",
@@ -2702,11 +3053,13 @@ const ja: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}} を使用します。",
   "settings.requestPreviewRun": "プレビューを実行",
   "settings.requestPreviewRunning": "実行中…",
-  "settings.requestPreviewEmpty": "リクエストを記述してプレビューを実行すると、このルールの判断がわかります。",
+  "settings.requestPreviewEmpty":
+    "リクエストを記述してプレビューを実行すると、このルールの判断がわかります。",
   "settings.requestPreviewMetadataPartial": "メタデータが不完全",
   "settings.requestPreviewShowInput": "マッチャーが見た入力を表示",
   "settings.requestPreviewHideInput": "入力を隠す",
-  "settings.requestPreviewInputUnavailable": "入力ドキュメントを読み戻せませんでした。",
+  "settings.requestPreviewInputUnavailable":
+    "入力ドキュメントを読み戻せませんでした。",
   "settings.requestDecisionsTitle": "最近の判定",
   "settings.requestDecisionsOutcomeFilter": "結果",
   "settings.requestDecisionsOutcomeAll": "すべての結果",
@@ -2723,17 +3076,20 @@ const ja: LocaleDictionary = {
   "search.keepForDays": "{{count}} 日",
   "search.keepForCustom": "日数を指定…",
   "search.keepForCustomLabel": "保持する日数",
-  "search.keepForHelp": "Scryer がこのメディアを保持する期間です。期限が切れるとメンテナンスルールが削除することがあります。無期限は期限切れになりません。",
+  "search.keepForHelp":
+    "Scryer がこのメディアを保持する期間です。期限が切れるとメンテナンスルールが削除することがあります。無期限は期限切れになりません。",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "タグ",
   "settings.titleTagsExisting": "定義済みのタグ",
-  "settings.titleTagsHelp": "ここで定義したタグだけがタイトルに適用できます。名前を変更すると、そのタグを持つすべてのタイトルと遅延プロファイルが書き換えられ、削除するとすべてのタイトルから外れます。",
+  "settings.titleTagsHelp":
+    "ここで定義したタグだけがタイトルに適用できます。名前を変更すると、そのタグを持つすべてのタイトルと遅延プロファイルが書き換えられ、削除するとすべてのタイトルから外れます。",
   "settings.titleTagsNone": "タグはまだ定義されていません。",
   "settings.titleTagsLoadError": "タグを読み込めませんでした。",
   "settings.titleTagLabelLabel": "ラベル",
   "settings.titleTagLabelPlaceholder": "keep",
-  "settings.titleTagLabelHelp": "小文字にし、余分な空白を取り除いて保存します。最大64文字です。",
+  "settings.titleTagLabelHelp":
+    "小文字にし、余分な空白を取り除いて保存します。最大64文字です。",
   "settings.titleTagDescriptionLabel": "説明",
   "settings.titleTagDescriptionPlaceholder": "このタグの用途（任意）",
   "settings.titleTagTitleCount": "タイトル数",
@@ -2743,25 +3099,35 @@ const ja: LocaleDictionary = {
   "settings.titleTagSaved": "タグを保存しました。",
   "settings.titleTagSaveError": "タグを保存できませんでした。",
   "settings.titleTagDeleteError": "タグを削除できませんでした。",
-  "settings.titleTagDeleted": "{{count}} 件のタイトルから {{label}} を削除しました。",
+  "settings.titleTagDeleted":
+    "{{count}} 件のタイトルから {{label}} を削除しました。",
   "settings.titleTagDeleteConfirmTitle": "タグを削除",
-  "settings.titleTagDeleteConfirm": "{{label}} は {{count}} 件のタイトルに付いています。削除するとそのすべてと、これで絞り込む遅延プロファイルからも外れます。このタグを指定したルールは一致しなくなります。",
+  "settings.titleTagDeleteConfirm":
+    "{{label}} は {{count}} 件のタイトルに付いています。削除するとそのすべてと、これで絞り込む遅延プロファイルからも外れます。このタグを指定したルールは一致しなくなります。",
   "settings.titleTagLabelRequired": "タグのラベルを入力してください。",
-  "settings.titleTagLabelReserved": "ラベルを scryer: で始めることはできません。この接頭辞は Scryer 自身が書き込む設定用に予約されています。",
+  "settings.titleTagLabelReserved":
+    "ラベルを scryer: で始めることはできません。この接頭辞は Scryer 自身が書き込む設定用に予約されています。",
   "settings.titleTagLabelTooLong": "ラベルは64文字までです。",
   "settings.titleTagLabelInvalid": "ラベルに制御文字は使えません。",
-  "settings.titleTagRenameSummary": "{{label}} に名前を変更しました。タイトル {{titles}} 件、シリーズ映画 {{seriesMovies}} 件、遅延プロファイル {{delayProfiles}} 件を書き換えました。",
-  "settings.titleTagRenameWarning": "ルールのソースは書き換えられないため、{{count}} 件のルール参照が今も古いラベル {{label}} を指しており、一致しなくなります: {{references}}。",
-  "settings.titleTagReferenceMaintenanceRuleSets": "メンテナンスルールセット {{count}} 件",
-  "settings.titleTagReferenceReleaseRuleSets": "リリースルールセット {{count}} 件",
-  "settings.titleTagReferenceManagedTagFilters": "管理対象タグフィルター {{count}} 件",
-  "settings.titleTagReferenceRequestRuleSets": "リクエストルールセット {{count}} 件",
+  "settings.titleTagRenameSummary":
+    "{{label}} に名前を変更しました。タイトル {{titles}} 件、シリーズ映画 {{seriesMovies}} 件、遅延プロファイル {{delayProfiles}} 件を書き換えました。",
+  "settings.titleTagRenameWarning":
+    "ルールのソースは書き換えられないため、{{count}} 件のルール参照が今も古いラベル {{label}} を指しており、一致しなくなります: {{references}}。",
+  "settings.titleTagReferenceMaintenanceRuleSets":
+    "メンテナンスルールセット {{count}} 件",
+  "settings.titleTagReferenceReleaseRuleSets":
+    "リリースルールセット {{count}} 件",
+  "settings.titleTagReferenceManagedTagFilters":
+    "管理対象タグフィルター {{count}} 件",
+  "settings.titleTagReferenceRequestRuleSets":
+    "リクエストルールセット {{count}} 件",
   "title.tagsLabel": "タグ",
   "title.tagsNone": "タグなし",
   "title.tagsAdd": "タグを追加…",
   "title.tagsAllApplied": "Every defined tag is already applied",
   "title.tagsRemove": "{{label}} を外す",
-  "title.tagsEmptyRegistry": "No tags are defined yet. An administrator defines them in Settings > Tags.",
+  "title.tagsEmptyRegistry":
+    "No tags are defined yet. An administrator defines them in Settings > Tags.",
   "title.bulkAddTags": "タグを追加",
   "title.bulkRemoveTags": "タグを外す",
   "title.catalogFilters.themes": "テーマ",
@@ -2777,13 +3143,16 @@ const ja: LocaleDictionary = {
   "settings.maintenanceActionRemoveTags": "タグを削除",
   "settings.maintenanceRuleTags": "タグ",
   "settings.maintenanceRuleTagsNone": "タグが選択されていません",
-  "settings.maintenanceRuleTagsHelp": "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
+  "settings.maintenanceRuleTagsHelp":
+    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} を追加",
   "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} を削除",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
-  "settings.maintenanceTemplateTaggedForRemovalDescription": "Caution: this template deletes the title and its files. It matches anything carrying the \"remove\" tag, after a week's grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define \"remove\" in Settings > Tags first.",
+  "settings.maintenanceTemplateTaggedForRemovalDescription":
+    'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
   "settings.maintenanceTemplateFlagForReviewTitle": "確認用にフラグ",
-  "settings.maintenanceTemplateFlagForReviewDescription": "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
+  "settings.maintenanceTemplateFlagForReviewDescription":
+    "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
   "mediaFile.noAnalysis": "No native analysis recorded for this file yet.",
@@ -2852,7 +3221,8 @@ const ja: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "トラックに言語フィールドがないため、トラック名から推定しました。",
+  "mediaInfo.inferredLanguageFootnote":
+    "トラックに言語フィールドがないため、トラック名から推定しました。",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -2864,10 +3234,12 @@ const ja: LocaleDictionary = {
   "mediaInfo.roleForced": "Forced",
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "リスト",
-  "lists.commandDescription": "公開リストやチャートをフォローし、タイトルを自動で追加します。",
+  "lists.commandDescription":
+    "公開リストやチャートをフォローし、タイトルを自動で追加します。",
   "lists.tab.public": "公開リスト",
   "lists.tab.exclusions": "除外",
-  "lists.exclusions.commandDescription": "どのリストからも追加されないタイトル。",
+  "lists.exclusions.commandDescription":
+    "どのリストからも追加されないタイトル。",
   "lists.action.enabled": "{{name}} をフォロー",
   "lists.action.retry": "再試行",
   "lists.action.syncAll": "すべて同期",
@@ -2878,10 +3250,12 @@ const ja: LocaleDictionary = {
   "lists.url.submit": "リストを確認",
   "lists.url.help": "対応プロバイダーのリストのアドレスを貼り付けてください。",
   "lists.url.recognized": "{{provider}} · {{list}}",
-  "lists.url.unrecognized": "このアドレスは Scryer でフォローできません。対応リストは下のプロバイダーカタログを確認してください。",
+  "lists.url.unrecognized":
+    "このアドレスは Scryer でフォローできません。対応リストは下のプロバイダーカタログを確認してください。",
   "lists.followed.heading": "フォロー中のリスト",
   "lists.followed.empty": "フォロー中の公開リストはまだありません。",
-  "lists.followed.emptyManager": "公開リストはまだありません。上に URL を貼り付けるか、下のカタログから選んでください。",
+  "lists.followed.emptyManager":
+    "公開リストはまだありません。上に URL を貼り付けるか、下のカタログから選んでください。",
   "lists.table.list": "リスト",
   "lists.table.coverage": "カバー率",
   "lists.table.mode": "モード",
@@ -2904,11 +3278,15 @@ const ja: LocaleDictionary = {
   "lists.mode.hold": "承認待ちにする",
   "lists.mode.request": "リクエスト",
   "lists.mode.discover": "ディスカバーにのみ表示",
-  "lists.modeHelp.add": "新しいタイトルを種類ごとに選んだ監視設定で追加します。監視対象のタイトルは検索され、監視対象外のタイトルは検索されません。",
-  "lists.modeHelp.hold": "新しいタイトルごとに保留中のリクエストを作成し、承認を待ちます。",
+  "lists.modeHelp.add":
+    "新しいタイトルを種類ごとに選んだ監視設定で追加します。監視対象のタイトルは検索され、監視対象外のタイトルは検索されません。",
+  "lists.modeHelp.hold":
+    "新しいタイトルごとに保留中のリクエストを作成し、承認を待ちます。",
   "lists.modeHelp.request": "メンバーとして新しいタイトルをリクエストします。",
-  "lists.modeHelp.discover": "リストのタイトルを記録するだけで、何も追加しません。",
-  "lists.mode.discoverUnavailable": "リストがディスカバーに表示されるようになると利用できます。",
+  "lists.modeHelp.discover":
+    "リストのタイトルを記録するだけで、何も追加しません。",
+  "lists.mode.discoverUnavailable":
+    "リストがディスカバーに表示されるようになると利用できます。",
   "lists.onLeave.keep": "タイトルを残す",
   "lists.onLeave.log": "記録する",
   "lists.onLeave.unmonitor": "監視を解除する",
@@ -2953,23 +3331,29 @@ const ja: LocaleDictionary = {
   "lists.follow.kinds": "対象",
   "lists.follow.modeHeading": "新しいタイトルが載ったとき",
   "lists.follow.routesHeading": "タイトルの追加先",
-  "lists.follow.routesHelp": "タイトルの種類ごとにライブラリが必要です。ライブラリがない種類は追加されません。",
+  "lists.follow.routesHelp":
+    "タイトルの種類ごとにライブラリが必要です。ライブラリがない種類は追加されません。",
   "lists.follow.filtersHeading": "フィルター",
   "lists.follow.syncHeading": "同期",
   "lists.follow.maxPerSync": "1 回の同期での最大タイトル数",
   "lists.follow.maxPerSyncPlaceholder": "上限なし",
-  "lists.follow.maxPerSyncHelp": "上限を超えたタイトルは次回の同期まで待機します。",
+  "lists.follow.maxPerSyncHelp":
+    "上限を超えたタイトルは次回の同期まで待機します。",
   "lists.follow.onLeave": "タイトルがリストから外れたとき",
-  "lists.follow.onLeaveHelp": "このリストが追加し、ほかのどのリストにも載っていないタイトルにのみ適用されます。リストがタイトルを削除することはありません。",
-  "lists.follow.interval": "スケジュールはプロバイダーが決めます: {{interval}}ごと。",
+  "lists.follow.onLeaveHelp":
+    "このリストが追加し、ほかのどのリストにも載っていないタイトルにのみ適用されます。リストがタイトルを削除することはありません。",
+  "lists.follow.interval":
+    "スケジュールはプロバイダーが決めます: {{interval}}ごと。",
   "lists.follow.problem.name": "リストに名前を付けてください。",
-  "lists.follow.problem.kinds": "少なくとも 1 種類のタイトルを対象にしてください。",
+  "lists.follow.problem.kinds":
+    "少なくとも 1 種類のタイトルを対象にしてください。",
   "lists.follow.problem.mode": "新しいタイトルの扱いを選んでください。",
   "lists.follow.problem.route": "対象の種類ごとにライブラリを選んでください。",
   "lists.follow.problem.maxPerSync": "上限は 1 以上にしてください。",
   "lists.follow.problem.params": "必須のリスト詳細を入力してください。",
   "lists.route.heading": "{{kind}}",
-  "lists.route.noLibrary": "この種類のタイトルを管理できるライブラリがありません。",
+  "lists.route.noLibrary":
+    "この種類のタイトルを管理できるライブラリがありません。",
   "lists.filter.rating": "最低評価",
   "lists.filter.ratingScale": "評価の出典",
   "lists.filter.ratingPlaceholder": "指定なし",
@@ -2983,11 +3367,13 @@ const ja: LocaleDictionary = {
   "lists.filter.languages": "原語",
   "lists.filter.languagesPlaceholder": "en, ja",
   "lists.filter.releasedOnly": "公開済みのタイトルのみ",
-  "lists.filter.releasedOnlyHelp": "未公開のタイトルをスキップします。同期のたびに再確認されます。",
+  "lists.filter.releasedOnlyHelp":
+    "未公開のタイトルをスキップします。同期のたびに再確認されます。",
   "lists.preview.heading": "プレビュー",
   "lists.preview.nextSyncHeading": "次回の同期で追加されるもの",
   "lists.preview.run": "プレビュー",
-  "lists.preview.notRun": "プレビューすると、最初の同期で追加される内容を確認できます。",
+  "lists.preview.notRun":
+    "プレビューすると、最初の同期で追加される内容を確認できます。",
   "lists.preview.failed": "このリストをプレビューできませんでした。",
   "lists.preview.total": "リスト内",
   "lists.preview.inLibrary": "ライブラリにあり",
@@ -2995,7 +3381,8 @@ const ja: LocaleDictionary = {
   "lists.preview.filtered": "フィルター済み",
   "lists.preview.excluded": "除外",
   "lists.preview.unresolved": "一致なし",
-  "lists.preview.unresolvedHelp": "{{count}} 件のタイトルはまだ一致していません。同期のたびに再試行されます。",
+  "lists.preview.unresolvedHelp":
+    "{{count}} 件のタイトルはまだ一致していません。同期のたびに再試行されます。",
   "lists.preview.wouldAddHeading": "次回の同期で追加されるタイトル",
   "lists.preview.nothingToAdd": "今のところ追加するものはありません。",
   "lists.detail.coverage": "カバー率",
@@ -3004,7 +3391,8 @@ const ja: LocaleDictionary = {
   "lists.detail.nextSync": "次回の同期",
   "lists.detail.noCap": "上限なし",
   "lists.detail.openAtProvider": "プロバイダーで開く",
-  "lists.detail.pausedUntil": "プロバイダーからリクエストを控えるよう求められました。{{time}} 以降に同期を再開します。",
+  "lists.detail.pausedUntil":
+    "プロバイダーからリクエストを控えるよう求められました。{{time}} 以降に同期を再開します。",
   "lists.detail.titles": "タイトル ({{count}})",
   "lists.detail.title": "タイトル",
   "lists.detail.state": "状態",
@@ -3015,9 +3403,11 @@ const ja: LocaleDictionary = {
   "lists.detail.nextPage": "次へ",
   "lists.detail.history": "同期履歴",
   "lists.detail.noRuns": "同期はまだありません。",
-  "lists.detail.runCounts": "リスト {{total}} 件 · 追加 {{added}} 件 · 保留 {{held}} 件",
+  "lists.detail.runCounts":
+    "リスト {{total}} 件 · 追加 {{added}} 件 · 保留 {{held}} 件",
   "lists.unfollow.title": "{{name}} のフォローを解除しますか?",
-  "lists.unfollow.description": "Scryer はこのリストの同期を停止します。タイトルはライブラリに残り、保留中のリクエストはリクエスト画面に残ります。",
+  "lists.unfollow.description":
+    "Scryer はこのリストの同期を停止します。タイトルはライブラリに残り、保留中のリクエストはリクエスト画面に残ります。",
   "lists.status.followed": "{{name}} をフォローしました。",
   "lists.status.updated": "{{name}} を保存しました。",
   "lists.status.unfollowed": "{{name}} のフォローを解除しました。",
@@ -3039,12 +3429,16 @@ const ja: LocaleDictionary = {
   "lists.exclusions.created": "追加日",
   "lists.exclusions.remove": "{{name}} の除外を解除",
   "lists.exclusions.removeTitle": "{{name}} の除外を解除しますか?",
-  "lists.exclusions.removeDescription": "次回の同期でリストがこのタイトルを再び追加する可能性があります。",
+  "lists.exclusions.removeDescription":
+    "次回の同期でリストがこのタイトルを再び追加する可能性があります。",
   "lists.exclusions.deleteCheckbox": "リストからも除外する",
-  "lists.exclusions.deleteNoIds": "{{name}} を削除しましたが、リストから除外するための外部 ID がありません。",
-  "lists.exclusions.deleteFailed": "{{name}} を削除しましたが、リストからの除外に失敗しました。リストページで除外を追加してください。",
+  "lists.exclusions.deleteNoIds":
+    "{{name}} を削除しましたが、リストから除外するための外部 ID がありません。",
+  "lists.exclusions.deleteFailed":
+    "{{name}} を削除しましたが、リストからの除外に失敗しました。リストページで除外を追加してください。",
   "lists.policy.heading": "メンバーのリストポリシー",
-  "lists.policy.help": "メンバーの個人リストをどのようにリクエストにするかを設定します。",
+  "lists.policy.help":
+    "メンバーの個人リストをどのようにリクエストにするかを設定します。",
   "lists.policy.empty": "表示するメンバーがいません。",
   "lists.policy.member": "メンバー",
   "lists.policy.requests30d": "リストからのリクエスト (30 日)",
@@ -3053,24 +3447,36 @@ const ja: LocaleDictionary = {
   "lists.policy.value.auto": "自動承認",
   "lists.policy.value.approval": "承認が必要",
   "lists.policy.value.none": "リストを許可しない",
-  "settings.refMaintFactsListsAddedByList": "人ではなくリストが対象をライブラリに追加したかどうか",
-  "settings.refMaintFactsListsOnEnabledList": "有効なリスト（公開・個人いずれか）が今も対象を含んでいるかどうか",
-  "settings.refMaintFactsListsNames": "今も対象を含んでいる有効な公開リストの名前",
-  "settings.refMaintFactsListsLeftAll": "対象を含んだことのあるすべてのリストが対象を外したかどうか",
+  "settings.refMaintFactsListsAddedByList":
+    "人ではなくリストが対象をライブラリに追加したかどうか",
+  "settings.refMaintFactsListsOnEnabledList":
+    "有効なリスト（公開・個人いずれか）が今も対象を含んでいるかどうか",
+  "settings.refMaintFactsListsNames":
+    "今も対象を含んでいる有効な公開リストの名前",
+  "settings.refMaintFactsListsLeftAll":
+    "対象を含んだことのあるすべてのリストが対象を外したかどうか",
   "settings.refMaintFactsListsLeftAt": "最後のリストが対象を外した日時",
   "settings.refMaintFactsListsLastListName": "対象が最も最近外れた公開リスト",
-  "settings.refMaintFactsListsAddedByListValue": "リストの同期がタイトルを作成した場合は true。リストストアを読み取れなかった場合は理由 list_store_unreadable で不明",
-  "settings.refMaintFactsListsOnEnabledListValue": "有効なリストが少なくとも 1 つ対象を含んでいる間は true",
-  "settings.refMaintFactsListsNamesValue": "公開リストの名前のみ（並べ替え済み）。メンバーの個人リスト名は含まれません",
-  "settings.refMaintFactsListsLeftAllValue": "対象を含んでいたすべてのリストが外した時点で true。まだ含むリストがある場合や、どのリストにも載ったことがない場合は false",
-  "settings.refMaintFactsListsLeftAtValue": "RFC3339 形式のタイムスタンプ。まだ対象を含むリストがある間は理由 not_left_every_list で値なし",
-  "settings.refMaintFactsListsLastListNameValue": "その公開リストの名前。対象が公開リストから外れたことがない場合は理由 no_public_list_left で値なし",
+  "settings.refMaintFactsListsAddedByListValue":
+    "リストの同期がタイトルを作成した場合は true。リストストアを読み取れなかった場合は理由 list_store_unreadable で不明",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "有効なリストが少なくとも 1 つ対象を含んでいる間は true",
+  "settings.refMaintFactsListsNamesValue":
+    "公開リストの名前のみ（並べ替え済み）。メンバーの個人リスト名は含まれません",
+  "settings.refMaintFactsListsLeftAllValue":
+    "対象を含んでいたすべてのリストが外した時点で true。まだ含むリストがある場合や、どのリストにも載ったことがない場合は false",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339 形式のタイムスタンプ。まだ対象を含むリストがある間は理由 not_left_every_list で値なし",
+  "settings.refMaintFactsListsLastListNameValue":
+    "その公開リストの名前。対象が公開リストから外れたことがない場合は理由 no_public_list_left で値なし",
   "lists.providerSettings.heading": "プロバイダー設定",
-  "lists.providerSettings.copy": "このサーバー上のこのプロバイダーのすべてのリストで共有されます。",
+  "lists.providerSettings.copy":
+    "このサーバー上のこのプロバイダーのすべてのリストで共有されます。",
   "lists.providerSettings.required": "必須",
   "lists.providerSettings.secretStored": "保存済み",
   "lists.providerSettings.secretEmpty": "未設定",
-  "lists.providerSettings.secretPlaceholder": "保存済みの値を保持するには空欄のままにします",
+  "lists.providerSettings.secretPlaceholder":
+    "保存済みの値を保持するには空欄のままにします",
   "lists.providerSettings.clearSecret": "消去",
   "lists.providerSettings.keepSecret": "保持",
   "lists.providerSettings.save": "設定を保存",
@@ -3079,53 +3485,72 @@ const ja: LocaleDictionary = {
   "title.listProvenance.left": "リスト {{name}} から外れました",
   "lists.tab.personal": "個人",
   "lists.accounts.heading": "自分のアカウント",
-  "lists.accounts.copy": "アカウントを接続して非公開リストやウォッチリストをフォローします。アカウントと個人リストは自分だけが閲覧できます。",
+  "lists.accounts.copy":
+    "アカウントを接続して非公開リストやウォッチリストをフォローします。アカウントと個人リストは自分だけが閲覧できます。",
   "lists.accounts.connect": "接続",
   "lists.accounts.connected": "接続済み",
   "lists.accounts.reconnect": "再接続",
   "lists.accounts.manage": "管理",
   "lists.accounts.manageTitle": "{{provider}} アカウントの管理",
-  "lists.accounts.private": "このリストとアカウント情報は自分だけが閲覧できます。",
-  "lists.accounts.waiting": "プロバイダーのウィンドウで認証を完了してください。承認は自動的に確認されます。",
-  "lists.accounts.linkFailed": "アカウントの接続に失敗しました。接続をやり直してください。",
-  "lists.accounts.pollRetrying": "現在、承認を確認できませんでした。セッションの期限が切れるまで再試行します。",
-  "lists.accounts.originNotAllowed": "このアドレスからはアカウントを接続できません。公開されたコンテナーポート、リバースプロキシ、またはホスト名経由で Scryer にアクセスしている場合は、管理者に Scryer の公開 URL を設定するよう依頼してください。それ以外の場合は、localhost または Scryer が待ち受けているアドレスで開いてください。",
-  "lists.accounts.linkExpired": "接続セッションの期限が切れました。リストから新しい接続を開始してください。",
-  "lists.accounts.popupBlocked": "ポップアップを許可してアカウントを承認し、再接続してください。",
+  "lists.accounts.private":
+    "このリストとアカウント情報は自分だけが閲覧できます。",
+  "lists.accounts.waiting":
+    "プロバイダーのウィンドウで認証を完了してください。承認は自動的に確認されます。",
+  "lists.accounts.linkFailed":
+    "アカウントの接続に失敗しました。接続をやり直してください。",
+  "lists.accounts.pollRetrying":
+    "現在、承認を確認できませんでした。セッションの期限が切れるまで再試行します。",
+  "lists.accounts.originNotAllowed":
+    "このアドレスからはアカウントを接続できません。公開されたコンテナーポート、リバースプロキシ、またはホスト名経由で Scryer にアクセスしている場合は、管理者に Scryer の公開 URL を設定するよう依頼してください。それ以外の場合は、localhost または Scryer が待ち受けているアドレスで開いてください。",
+  "lists.accounts.linkExpired":
+    "接続セッションの期限が切れました。リストから新しい接続を開始してください。",
+  "lists.accounts.popupBlocked":
+    "ポップアップを許可してアカウントを承認し、再接続してください。",
   "lists.accounts.finishing": "アカウントの接続を完了しています…",
   "lists.accounts.linked": "アカウントを接続しました。",
   "lists.accounts.returnToLists": "個人リストに戻る",
-  "lists.accounts.noProviders": "個人リストのプロバイダーがインストールされていません。",
+  "lists.accounts.noProviders":
+    "個人リストのプロバイダーがインストールされていません。",
   "lists.accounts.ownedLists": "自分のリスト",
   "lists.accounts.statuses": "利用可能な状態：{{statuses}}",
   "lists.accounts.unlink": "アカウントの接続を解除",
   "lists.accounts.confirmUnlink": "解除を確認",
-  "lists.accounts.unlinkHelp": "解除すると、このアカウントを使用する購読は削除されます。ライブラリのファイルは保持されます。",
+  "lists.accounts.unlinkHelp":
+    "解除すると、このアカウントを使用する購読は削除されます。ライブラリのファイルは保持されます。",
   "lists.accounts.unlinked": "アカウントの接続を解除しました。",
-  "lists.accounts.personalRouting": "個人リストは自分のものです。追加と検索には、選択したすべてのライブラリのタイトル管理権限が必要です。リクエストはリストポリシーとリクエストルールに従います。",
+  "lists.accounts.personalRouting":
+    "個人リストは自分のものです。追加と検索には、選択したすべてのライブラリのタイトル管理権限が必要です。リクエストはリストポリシーとリクエストルールに従います。",
   "lists.providerApps.heading": "カスタム OAuth",
   "lists.providerApps.settingsLabel": "リスト · カスタム OAuth",
-  "lists.providerApps.copy": "既定のプロジェクトアプリは登録不要で使えます。このインスタンスから直接接続するために、独自の Trakt、AniList、MyAnimeList アプリを登録することもできます。",
-  "lists.providerApps.simklDefault": "Simkl は既定のプロジェクトアプリを使います。",
+  "lists.providerApps.copy":
+    "既定のプロジェクトアプリは登録不要で使えます。このインスタンスから直接接続するために、独自の Trakt、AniList、MyAnimeList アプリを登録することもできます。",
+  "lists.providerApps.simklDefault":
+    "Simkl は既定のプロジェクトアプリを使います。",
   "lists.providerApps.useOwn": "独自のプロバイダーアプリを使用",
   "lists.providerApps.clientId": "クライアント ID",
   "lists.providerApps.clientSecret": "クライアントシークレット",
-  "lists.providerApps.traktSecretHint": "Trakt では任意です。Trakt は PKCE でメンバーをサインインさせるため、シークレットが必要なのは旧来の Trakt アプリだけです。",
+  "lists.providerApps.traktSecretHint":
+    "Trakt では任意です。Trakt は PKCE でメンバーをサインインさせるため、シークレットが必要なのは旧来の Trakt アプリだけです。",
   "lists.providerApps.redirectUri": "リダイレクト URI",
-  "lists.providerApps.redirectHelp": "このインスタンスの /lists/oauth/callback URL をプロバイダーに登録してください。シークレットを空欄にすると保存済みの値を保持します。",
+  "lists.providerApps.redirectHelp":
+    "このインスタンスの /lists/oauth/callback URL をプロバイダーに登録してください。シークレットを空欄にすると保存済みの値を保持します。",
   "episodeAssign.action": "エピソードに割り当て",
   "episodeAssign.dialogTitle": "エピソードに割り当て",
-  "episodeAssign.dialogDescription": "{{name}} が属するエピソードを選んでください。Scryer はそのエピソードに合わせてファイル名を変更して配置します。",
-  "episodeAssign.pendingDescription": "Scryer は {{name}} がどのエピソードか判断できませんでした。エピソードを選ぶと、Scryer がそこへ取り込みます。",
+  "episodeAssign.dialogDescription":
+    "{{name}} が属するエピソードを選んでください。Scryer はそのエピソードに合わせてファイル名を変更して配置します。",
+  "episodeAssign.pendingDescription":
+    "Scryer は {{name}} がどのエピソードか判断できませんでした。エピソードを選ぶと、Scryer がそこへ取り込みます。",
   "episodeAssign.unnamed": "このファイル",
   "episodeAssign.targetLabel": "エピソード",
   "episodeAssign.loadingEpisodes": "エピソードを読み込み中…",
   "episodeAssign.loadFailed": "エピソードを読み込めませんでした。",
-  "episodeAssign.unchanged": "このファイルはすでにこのエピソードに割り当てられています。",
+  "episodeAssign.unchanged":
+    "このファイルはすでにこのエピソードに割り当てられています。",
   "episodeAssign.apply": "割り当て",
   "episodeAssign.applying": "割り当て中…",
   "episodeAssign.replaceTitle": "このエピソードにはすでにファイルがあります",
-  "episodeAssign.replaceDescription": "このファイルを割り当てると、エピソードのプライマリファイルになります。現在のファイルは追加ファイルとしてディスクに残ります。",
+  "episodeAssign.replaceDescription":
+    "このファイルを割り当てると、エピソードのプライマリファイルになります。現在のファイルは追加ファイルとしてディスクに残ります。",
   "episodeAssign.replaceApply": "置き換えて割り当て",
   "episodeAssign.success": "ファイルを割り当てて名前を変更しました。",
   "episodeAssign.failed": "ファイルを割り当てられませんでした。",
@@ -3136,14 +3561,22 @@ const ja: LocaleDictionary = {
   "episodeAssign.noMatches": "一致するエピソードはありません。",
   "episodeAssign.selectPlaceholder": "エピソードを選択…",
   "episodeAssign.refusal.noEpisodes": "エピソードを 1 つ以上選んでください。",
-  "episodeAssign.refusal.outsideTitle": "そのエピソードは別のタイトルに属しています。",
-  "episodeAssign.refusal.primaryConflict": "このエピソードにはすでにプライマリファイルがあります。",
-  "episodeAssign.refusal.notEpisodic": "エピソードに割り当てられるのはシリーズとアニメのファイルのみです。",
-  "episodeAssign.refusal.unsupportedFile": "このファイルはエピソード間で移動できません。シリーズ映画のファイルとディスクイメージは現在の場所に残ります。",
-  "episodeAssign.refusal.destinationOccupied": "このエピソードで生成される名前は、すでに別のファイルが使用しています。そのファイルを移動または削除してから、もう一度お試しください。",
-  "episodeAssign.refusal.renameRefused": "Scryer はこのエピソード用のファイル名を決められませんでした。タイトルのライブラリフォルダーと命名テンプレートを確認してください。",
-  "episodeAssign.refusal.renameFailed": "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
-  "pendingImports.reason.anime_numbering_ambiguous": "エピソード番号があいまいです",
+  "episodeAssign.refusal.outsideTitle":
+    "そのエピソードは別のタイトルに属しています。",
+  "episodeAssign.refusal.primaryConflict":
+    "このエピソードにはすでにプライマリファイルがあります。",
+  "episodeAssign.refusal.notEpisodic":
+    "エピソードに割り当てられるのはシリーズとアニメのファイルのみです。",
+  "episodeAssign.refusal.unsupportedFile":
+    "このファイルはエピソード間で移動できません。シリーズ映画のファイルとディスクイメージは現在の場所に残ります。",
+  "episodeAssign.refusal.destinationOccupied":
+    "このエピソードで生成される名前は、すでに別のファイルが使用しています。そのファイルを移動または削除してから、もう一度お試しください。",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer はこのエピソード用のファイル名を決められませんでした。タイトルのライブラリフォルダーと命名テンプレートを確認してください。",
+  "episodeAssign.refusal.renameFailed":
+    "ファイルを新しい名前へ移動できませんでした。ファイルとエピソードは元のままです。",
+  "pendingImports.reason.anime_numbering_ambiguous":
+    "エピソード番号があいまいです",
 };
 
 export default ja;

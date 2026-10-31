@@ -19,7 +19,7 @@ const LEVELS = new Set(["error", "warn", "info", "debug", "trace"]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -30,7 +30,8 @@ function text(value: unknown): string | null {
 function formatValue(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   try {
     return JSON.stringify(value);
   } catch {
@@ -51,7 +52,14 @@ function contextSummary(context: ServiceLogContext | null): string[] {
   if (workflowKind && workflowId) values.push(`${workflowKind}=${workflowId}`);
 
   const resource = context.resource;
-  for (const key of ["title_id", "import_id", "download_id", "job_id", "client_id", "indexer_id"]) {
+  for (const key of [
+    "title_id",
+    "import_id",
+    "download_id",
+    "job_id",
+    "client_id",
+    "indexer_id",
+  ]) {
     const value = text(resource?.[key]);
     if (value) values.push(`${key}=${value}`);
   }
@@ -101,6 +109,8 @@ export function parseServiceLogLine(raw: string): ParsedServiceLogLine | null {
   };
 }
 
-export function prettyServiceLogLine(parsed: ParsedServiceLogLine | null): string | null {
+export function prettyServiceLogLine(
+  parsed: ParsedServiceLogLine | null,
+): string | null {
   return parsed ? JSON.stringify(parsed.event, null, 2) : null;
 }

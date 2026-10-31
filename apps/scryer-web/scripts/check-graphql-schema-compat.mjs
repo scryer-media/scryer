@@ -40,7 +40,10 @@ export function hasSchemaCompatibilityFailure(
   changes,
   { allowDangerous = false } = {},
 ) {
-  return changes.breaking.length > 0 || (!allowDangerous && changes.dangerous.length > 0);
+  return (
+    changes.breaking.length > 0 ||
+    (!allowDangerous && changes.dangerous.length > 0)
+  );
 }
 
 function formatChangeSection(title, changes) {

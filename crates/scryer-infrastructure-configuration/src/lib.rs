@@ -26,3 +26,5 @@ pub mod storage {
 pub mod types {
     pub use scryer_infrastructure_sql::types::*;
 }
+
+mod error_reasons;

@@ -642,17 +642,18 @@ impl LibraryScanTracker {
             {
                 let mut state = self.state.lock().await;
                 if state.sessions.contains_key(&session_id) {
-                    return Err(AppError::Validation(format!(
-                        "library scan session {session_id} is already running"
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::library::SCAN_ALREADY_RUNNING,
+                        format!("library scan session {session_id} is already running"),
+                    ));
                 }
                 if state.sessions.values().any(|active| {
                     library_scan_scopes_conflict(active, &facet, library_id.as_deref())
                 }) {
-                    return Err(AppError::Validation(format!(
-                        "{} library scan already running",
-                        facet.as_str()
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::library::SCAN_ALREADY_RUNNING,
+                        format!("{} library scan already running", facet.as_str()),
+                    ));
                 }
 
                 let snapshot = LibraryScanSession::with_id_for_library(
@@ -1639,7 +1640,12 @@ mod tests {
             .await
             .expect_err("reject duplicate movie scan");
 
-        assert!(matches!(err, AppError::Validation(_)));
+        assert!(matches!(
+            err,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
         assert_eq!(first.facet, MediaFacet::Movie);
     }
 
@@ -1675,7 +1681,12 @@ mod tests {
             .await
             .expect_err("reject duplicate scan for the same library");
 
-        assert!(matches!(duplicate, AppError::Validation(_)));
+        assert!(matches!(
+            duplicate,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
         assert_eq!(first.library_id.as_deref(), Some("movie-library-a"));
         assert_eq!(second.library_id.as_deref(), Some("movie-library-b"));
         assert_eq!(tracker.list_active().await.len(), 2);
@@ -1704,7 +1715,12 @@ mod tests {
             .await
             .expect_err("reject a reused active session id");
 
-        assert!(matches!(duplicate_id, AppError::Validation(_)));
+        assert!(matches!(
+            duplicate_id,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
         assert_eq!(tracker.list_active().await, vec![first]);
         assert!(
             tracker
@@ -1745,8 +1761,18 @@ mod tests {
             .await
             .expect_err("scoped scan should block unscoped scan");
 
-        assert!(matches!(scoped_error, AppError::Validation(_)));
-        assert!(matches!(unscoped_error, AppError::Validation(_)));
+        assert!(matches!(
+            scoped_error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
+        assert!(matches!(
+            unscoped_error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1816,7 +1842,12 @@ mod tests {
             )
             .await
             .expect_err("other active replacement should keep its scope locked");
-        assert!(matches!(still_active_error, AppError::Validation(_)));
+        assert!(matches!(
+            still_active_error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ));
     }
 
     // The paused clock fires the coalescing flush timer only once every task

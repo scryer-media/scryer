@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import {
   lazy,
   Suspense,
@@ -240,7 +241,6 @@ function fallbackMediaContentSettingsSection(
   return "overview";
 }
 
-
 function formatSmgUpgradeDeadline(
   value: string | null,
   dateTimeFormat: UiDateTimeFormat,
@@ -263,7 +263,10 @@ function SmgUpgradeBanner({
   const status = normalizeSmgVersionCompatibilityStatus(notice.status);
   const isDeprecated = status === "deprecated";
   const Icon = isDeprecated ? AlertTriangle : AlertOctagon;
-  const deadline = formatSmgUpgradeDeadline(notice.upgradeDeadline, dateTimeFormat);
+  const deadline = formatSmgUpgradeDeadline(
+    notice.upgradeDeadline,
+    dateTimeFormat,
+  );
   const minimumVersion = notice.minimumVersion.trim();
   const serverMessage = notice.message.trim();
   const details = [
@@ -332,14 +335,17 @@ function SmgScryerUpdateBanner({
   const currentVersion = notice.currentVersion.trim();
   const latestVersion = notice.latestVersion.trim();
   const releaseUrl = notice.releaseUrl?.trim() || null;
-  const { status, refresh } = useApplicationUpgradeStatus(canManageSystemSettings, {
-    settingsSubscriptionEnabled,
-  });
+  const { status, refresh } = useApplicationUpgradeStatus(
+    canManageSystemSettings,
+    {
+      settingsSubscriptionEnabled,
+    },
+  );
 
   return (
     <div
       data-slot="root-shell-notice"
-      className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),calc(0.10*var(--scry-glow)))] backdrop-blur"
+      className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] text-[var(--scry-body)] backdrop-blur"
     >
       <div className="mx-auto flex w-full max-w-[1480px] items-center gap-3 px-4 py-2 text-sm">
         <CircleFadingArrowUp
@@ -392,7 +398,9 @@ function SmgScryerUpdateBanner({
 /**
  * Renders the main content area.
  */
-const ApiExplorerContainer = lazy(() => import("@/components/containers/api-explorer-container"));
+const ApiExplorerContainer = lazy(
+  () => import("@/components/containers/api-explorer-container"),
+);
 
 function MainContent({
   view,
@@ -480,7 +488,11 @@ function MainContent({
       if (!instanceFeaturesLoaded) {
         return <ViewLoadingFallback />;
       }
-      return <div role="status" className="p-8 text-muted-foreground">API explorer is unavailable.</div>;
+      return (
+        <div role="status" className="p-8 text-muted-foreground">
+          API explorer is unavailable.
+        </div>
+      );
     }
     return <ApiExplorerContainer key={userId} />;
   }
@@ -495,10 +507,18 @@ function MainContent({
       return <ViewLoadingFallback />;
     }
     if (activitySection === "history") {
-      return <TitleHistoryContainer key="activity-history" showRetryActions={canResolveImports} />;
+      return (
+        <TitleHistoryContainer
+          key="activity-history"
+          showRetryActions={canResolveImports}
+        />
+      );
     }
     return (
-      <ActivityContainer key={`activity-${activitySection}`} activitySection={activitySection} />
+      <ActivityContainer
+        key={`activity-${activitySection}`}
+        activitySection={activitySection}
+      />
     );
   }
   if (view === "calendar") {
@@ -853,25 +873,37 @@ function AuthenticatedHomePage({
     dismissSmgScryerUpdateReminder,
     refreshSmgNotices,
   } = useSmgNotices({
+    t,
     settingsSubscriptionEnabled: canSubscribeToLibraryEvents,
   });
-  const overviewRouteKey = JSON.stringify([view, parsedOverviewLibrarySlug, parsedOverviewSlug]);
+  const overviewRouteKey = JSON.stringify([
+    view,
+    parsedOverviewLibrarySlug,
+    parsedOverviewSlug,
+  ]);
   const navigationOverviewTarget = useMemo(
-    () => overviewTargetFromNavigation(location.state, {
-      view, librarySlug: parsedOverviewLibrarySlug, slug: parsedOverviewSlug,
-    }),
+    () =>
+      overviewTargetFromNavigation(location.state, {
+        view,
+        librarySlug: parsedOverviewLibrarySlug,
+        slug: parsedOverviewSlug,
+      }),
     [location.state, parsedOverviewLibrarySlug, parsedOverviewSlug, view],
   );
   const [overviewResolution, setOverviewResolution] = useState<{
     key: string;
     target: OverviewTitleTarget | null;
   } | null>(null);
-  const resolvedOverviewTarget = overviewResolution?.key === overviewRouteKey
-    ? overviewResolution.target
-    : navigationOverviewTarget;
-  const setResolvedOverviewTarget = useCallback((target: OverviewTitleTarget | null) => {
-    setOverviewResolution({ key: overviewRouteKey, target });
-  }, [overviewRouteKey]);
+  const resolvedOverviewTarget =
+    overviewResolution?.key === overviewRouteKey
+      ? overviewResolution.target
+      : navigationOverviewTarget;
+  const setResolvedOverviewTarget = useCallback(
+    (target: OverviewTitleTarget | null) => {
+      setOverviewResolution({ key: overviewRouteKey, target });
+    },
+    [overviewRouteKey],
+  );
   const [overviewSlugLoading, setOverviewSlugLoading] = useState(false);
   const [legacyOverviewResolution, setLegacyOverviewResolution] = useState<{
     requestedId: string;
@@ -1155,7 +1187,7 @@ function AuthenticatedHomePage({
 
         setResolvedOverviewTarget(null);
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
         navigateTo(view, undefined, "overview", undefined, undefined);
@@ -1246,7 +1278,7 @@ function AuthenticatedHomePage({
           return;
         }
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.apiError"),
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
           { level: "ERROR" },
         );
         replaceWithOverviewList();
@@ -1280,12 +1312,12 @@ function AuthenticatedHomePage({
       : null;
   const overviewTitleRoutePending = Boolean(
     isMediaView(view) &&
-      (overviewSlugLoading ||
-        (parsedOverviewSlug
-          ? overviewResolution?.key !== overviewRouteKey
-          : legacyOverviewResolution?.requestedId !== legacyOverviewTitleId)) &&
-      !overviewTitleId &&
-      (parsedOverviewSlug || legacyOverviewTitleId),
+    (overviewSlugLoading ||
+      (parsedOverviewSlug
+        ? overviewResolution?.key !== overviewRouteKey
+        : legacyOverviewResolution?.requestedId !== legacyOverviewTitleId)) &&
+    !overviewTitleId &&
+    (parsedOverviewSlug || legacyOverviewTitleId),
   );
 
   const handleOpenOverview = useCallback(
@@ -1593,12 +1625,7 @@ function AuthenticatedHomePage({
     }
 
     navigateToAccessibleDefault();
-  }, [
-    canAccessLists,
-    navigateToAccessibleDefault,
-    routeIsCanonical,
-    view,
-  ]);
+  }, [canAccessLists, navigateToAccessibleDefault, routeIsCanonical, view]);
 
   useEffect(() => {
     if (!routeIsCanonical || view !== "activity" || canAccessActivity) {
@@ -1773,261 +1800,273 @@ function AuthenticatedHomePage({
               <LibraryScanProgressProvider>
                 <JobRunProvider enabled={canSubscribeToJobEvents}>
                   <LocationMoveProgressProvider>
-                  <ReactiveRefreshProvider
-                    enabled={canSubscribeToLibraryEvents}
-                  >
-                    <GlobalSearchProvider
-                      activeFacet={activeFacet}
-                      authenticatedUser={authenticatedUser}
-                      onOpenOverview={handleOpenOverview}
-                      queueFacet={queueFacet}
-                      uiLanguage={uiLanguage}
+                    <ReactiveRefreshProvider
+                      enabled={canSubscribeToLibraryEvents}
                     >
-                      {smgVersionCompatibilityNotice ? (
-                        <SmgUpgradeBanner
-                          notice={smgVersionCompatibilityNotice}
-                          t={t}
-                        />
-                      ) : null}
-
-                      {showSmgScryerUpdateReminder &&
-                      smgScryerUpdateNotice &&
-                      updateNoticeMatchesRunningVersion ? (
-                        <SmgScryerUpdateBanner
-                          canManageSystemSettings={canManageSystemSettings}
-                          settingsSubscriptionEnabled={canSubscribeToLibraryEvents}
-                          notice={smgScryerUpdateNotice}
-                          t={t}
-                          onDismiss={dismissSmgScryerUpdateReminder}
-                        />
-                      ) : null}
-
-                      {!isOnline ? (
-                        <div
-                          data-slot="root-shell-notice"
-                          className="flex items-center justify-center gap-2 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm font-medium text-[var(--scry-body)] shadow-[0_8px_28px_rgba(2,6,23,0.14)] backdrop-blur"
-                        >
-                          <WifiOff className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]" />
-                          <span className="text-[var(--scry-ink2)]">
-                            {t("pwa.offline")}
-                          </span>
-                        </div>
-                      ) : null}
-
-                      {showInstallBanner ? (
-                        <div
-                          data-slot="root-shell-notice"
-                          className="flex items-center justify-center gap-3 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm text-[var(--scry-body)] shadow-[0_8px_28px_rgba(var(--scry-accent-rgb),calc(0.10*var(--scry-glow)))] backdrop-blur"
-                        >
-                          <Download className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]" />
-                          <span className="text-[var(--scry-muted)]">
-                            {isIosSafari
-                              ? t("pwa.iosInstallHint")
-                              : t("pwa.installApp")}
-                          </span>
-                          {canPrompt ? (
-                            <Button
-                              type="button"
-                              onClick={() => void promptInstall()}
-                              variant="outline"
-                              size="sm"
-                              className="h-7 rounded-[8px] px-3 text-xs font-semibold text-[var(--scry-accent-text)]"
-                            >
-                              {t("pwa.installApp")}
-                            </Button>
-                          ) : null}
-                          <IconButton
-                            type="button"
-                            onClick={dismissInstallBanner}
-                            label={t("label.dismiss")}
-                            appearance="ghost"
-                            className="ml-auto h-7 w-7 rounded-[8px]"
-                          >
-                            <X className="h-4 w-4" />
-                          </IconButton>
-                        </div>
-                      ) : null}
-
-                      <Dialog
-                        open={settingsStepUpOpen}
-                        onOpenChange={(open) => {
-                          if (!open && settingsStepUpOpen) {
-                            handleCancelSettingsStepUp();
-                          }
-                        }}
+                      <GlobalSearchProvider
+                        activeFacet={activeFacet}
+                        authenticatedUser={authenticatedUser}
+                        onOpenOverview={handleOpenOverview}
+                        queueFacet={queueFacet}
+                        uiLanguage={uiLanguage}
                       >
-                        <DialogContent
-                          id="settings-mfa-step-up-dialog"
-                          className="sm:max-w-md"
-                          onInteractOutside={(event) => event.preventDefault()}
-                        >
-                          <DialogHeader>
-                            <DialogTitle>
-                              {t("settings.mfaStepUpTitle")}
-                            </DialogTitle>
-                            <DialogDescription>
-                              {t("settings.mfaStepUpDescription")}
-                            </DialogDescription>
-                          </DialogHeader>
-                          <TotpCodeForm
-                            id="settings-mfa-step-up-form"
-                            inputId="settings-mfa-step-up-code"
-                            submitId="settings-mfa-step-up-submit"
-                            cancelId="settings-mfa-step-up-cancel"
-                            code={settingsStepUpCode}
-                            title={t("auth.totpCode")}
-                            description={t("auth.totpCodeRequired")}
-                            submitLabel={t("settings.mfaStepUpSubmit")}
-                            busyLabel={t("settings.mfaStepUpVerifying")}
-                            cancelLabel={t("label.cancel")}
-                            busy={settingsStepUpBusy}
-                            onCodeChange={setSettingsStepUpCode}
-                            onSubmit={handleSettingsStepUpSubmit}
-                            onCancel={handleCancelSettingsStepUp}
+                        {smgVersionCompatibilityNotice ? (
+                          <SmgUpgradeBanner
+                            notice={smgVersionCompatibilityNotice}
+                            t={t}
                           />
-                          {settingsStepUpError ? (
-                            <p
-                              id="settings-mfa-step-up-error"
-                              className="text-sm text-destructive"
-                            >
-                              {settingsStepUpError}
-                            </p>
-                          ) : null}
-                        </DialogContent>
-                      </Dialog>
+                        ) : null}
 
-                      <div
-                        ref={shellFrameRef}
-                        data-slot="root-shell-frame"
-                        className="flex min-h-0 w-full flex-1 min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:overflow-hidden"
-                        style={
-                          {
-                            "--root-shell-top-offset": `${shellTopOffset}px`,
-                          } as CSSProperties
-                        }
-                      >
-                        <RootSidebar
-                          topNav={topNav}
-                          view={view}
-                          settingsSection={settingsSection}
-                          contentSettingsSection={contentSettingsSection}
-                          systemSection={systemSection}
-                          logsSection={logsSection}
-                          activitySection={activitySection}
-                          wantedSection={wantedSection}
-                          user={authenticatedUser}
-                          pendingImportCounts={pendingImportCounts}
-                          pendingMediaRequestCounts={pendingMediaRequestCounts}
-                          manualImportRequiredCount={manualImportRequiredCount}
-                          manualImportCountKnown={manualImportCountKnown}
-                          manualImportCountStale={manualImportCountStale}
-                          pluginUpdateCount={pluginUpdateCount}
-                          pluginBlockedCount={pluginBlockedCount}
-                          header={
-                            <RootHeader
-                              onOpenOverview={handleOpenOverview}
-                              routeCommandItems={globalSearchRouteCommands}
-                            />
-                          }
-                          onNavigate={navigateTo}
-                        >
-                          <main
-                            data-slot="root-main-scroll"
-                            className="flex min-h-[70vh] flex-1 flex-col min-[981px]:min-h-0 min-[981px]:overflow-y-auto"
+                        {showSmgScryerUpdateReminder &&
+                        smgScryerUpdateNotice &&
+                        updateNoticeMatchesRunningVersion ? (
+                          <SmgScryerUpdateBanner
+                            canManageSystemSettings={canManageSystemSettings}
+                            settingsSubscriptionEnabled={
+                              canSubscribeToLibraryEvents
+                            }
+                            notice={smgScryerUpdateNotice}
+                            t={t}
+                            onDismiss={dismissSmgScryerUpdateReminder}
+                          />
+                        ) : null}
+
+                        {!isOnline ? (
+                          <div
+                            data-slot="root-shell-notice"
+                            className="flex items-center justify-center gap-2 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm font-medium text-[var(--scry-body)] shadow-[0_8px_28px_rgba(2,6,23,0.14)] backdrop-blur"
                           >
-                            <Suspense fallback={<ViewLoadingFallback />}>
-                              {routeIsLanding ? (
-                                <ViewLoadingFallback />
-                              ) : !routeIsCanonical ? (
-                                <NotFoundPage />
-                              ) : settingsStepUpPolicyLoadFailed ? (
-                                <div className="mx-auto flex min-h-[360px] w-full max-w-md flex-col items-center justify-center gap-3 px-6 py-12 text-center">
-                                  <div className="flex h-12 w-12 items-center justify-center rounded-[14px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)] shadow-[0_12px_28px_rgba(2,6,23,0.12)]">
-                                    <AlertTriangle
-                                      className="h-6 w-6"
-                                      aria-hidden="true"
-                                    />
+                            <WifiOff className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]" />
+                            <span className="text-[var(--scry-ink2)]">
+                              {t("pwa.offline")}
+                            </span>
+                          </div>
+                        ) : null}
+
+                        {showInstallBanner ? (
+                          <div
+                            data-slot="root-shell-notice"
+                            className="flex items-center justify-center gap-3 border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-soft),var(--scry-surfA))] px-4 py-2 text-sm text-[var(--scry-body)] backdrop-blur"
+                          >
+                            <Download className="h-4 w-4 flex-none text-[var(--scry-accent-ring)]" />
+                            <span className="text-[var(--scry-muted)]">
+                              {isIosSafari
+                                ? t("pwa.iosInstallHint")
+                                : t("pwa.installApp")}
+                            </span>
+                            {canPrompt ? (
+                              <Button
+                                type="button"
+                                onClick={() => void promptInstall()}
+                                variant="outline"
+                                size="sm"
+                                className="h-7 rounded-[8px] px-3 text-xs font-semibold text-[var(--scry-accent-text)]"
+                              >
+                                {t("pwa.installApp")}
+                              </Button>
+                            ) : null}
+                            <IconButton
+                              type="button"
+                              onClick={dismissInstallBanner}
+                              label={t("label.dismiss")}
+                              appearance="ghost"
+                              className="ml-auto h-7 w-7 rounded-[8px]"
+                            >
+                              <X className="h-4 w-4" />
+                            </IconButton>
+                          </div>
+                        ) : null}
+
+                        <Dialog
+                          open={settingsStepUpOpen}
+                          onOpenChange={(open) => {
+                            if (!open && settingsStepUpOpen) {
+                              handleCancelSettingsStepUp();
+                            }
+                          }}
+                        >
+                          <DialogContent
+                            id="settings-mfa-step-up-dialog"
+                            className="sm:max-w-md"
+                            onInteractOutside={(event) =>
+                              event.preventDefault()
+                            }
+                          >
+                            <DialogHeader>
+                              <DialogTitle>
+                                {t("settings.mfaStepUpTitle")}
+                              </DialogTitle>
+                              <DialogDescription>
+                                {t("settings.mfaStepUpDescription")}
+                              </DialogDescription>
+                            </DialogHeader>
+                            <TotpCodeForm
+                              id="settings-mfa-step-up-form"
+                              inputId="settings-mfa-step-up-code"
+                              submitId="settings-mfa-step-up-submit"
+                              cancelId="settings-mfa-step-up-cancel"
+                              code={settingsStepUpCode}
+                              title={t("auth.totpCode")}
+                              description={t("auth.totpCodeRequired")}
+                              submitLabel={t("settings.mfaStepUpSubmit")}
+                              busyLabel={t("settings.mfaStepUpVerifying")}
+                              cancelLabel={t("label.cancel")}
+                              busy={settingsStepUpBusy}
+                              onCodeChange={setSettingsStepUpCode}
+                              onSubmit={handleSettingsStepUpSubmit}
+                              onCancel={handleCancelSettingsStepUp}
+                            />
+                            {settingsStepUpError ? (
+                              <p
+                                id="settings-mfa-step-up-error"
+                                className="text-sm text-destructive"
+                              >
+                                {settingsStepUpError}
+                              </p>
+                            ) : null}
+                          </DialogContent>
+                        </Dialog>
+
+                        <div
+                          ref={shellFrameRef}
+                          data-slot="root-shell-frame"
+                          className="flex min-h-0 w-full flex-1 min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:overflow-hidden"
+                          style={
+                            {
+                              "--root-shell-top-offset": `${shellTopOffset}px`,
+                            } as CSSProperties
+                          }
+                        >
+                          <RootSidebar
+                            topNav={topNav}
+                            view={view}
+                            settingsSection={settingsSection}
+                            contentSettingsSection={contentSettingsSection}
+                            systemSection={systemSection}
+                            logsSection={logsSection}
+                            activitySection={activitySection}
+                            wantedSection={wantedSection}
+                            user={authenticatedUser}
+                            pendingImportCounts={pendingImportCounts}
+                            pendingMediaRequestCounts={
+                              pendingMediaRequestCounts
+                            }
+                            manualImportRequiredCount={
+                              manualImportRequiredCount
+                            }
+                            manualImportCountKnown={manualImportCountKnown}
+                            manualImportCountStale={manualImportCountStale}
+                            pluginUpdateCount={pluginUpdateCount}
+                            pluginBlockedCount={pluginBlockedCount}
+                            header={
+                              <RootHeader
+                                onOpenOverview={handleOpenOverview}
+                                routeCommandItems={globalSearchRouteCommands}
+                              />
+                            }
+                            onNavigate={navigateTo}
+                          >
+                            <main
+                              data-slot="root-main-scroll"
+                              className="flex min-h-[70vh] flex-1 flex-col min-[981px]:min-h-0 min-[981px]:overflow-y-auto"
+                            >
+                              <Suspense fallback={<ViewLoadingFallback />}>
+                                {routeIsLanding ? (
+                                  <ViewLoadingFallback />
+                                ) : !routeIsCanonical ? (
+                                  <NotFoundPage />
+                                ) : settingsStepUpPolicyLoadFailed ? (
+                                  <div className="mx-auto flex min-h-[360px] w-full max-w-md flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+                                    <div className="flex h-12 w-12 items-center justify-center rounded-[14px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)] shadow-[0_12px_28px_rgba(2,6,23,0.12)]">
+                                      <AlertTriangle
+                                        className="h-6 w-6"
+                                        aria-hidden="true"
+                                      />
+                                    </div>
+                                    <h2 className="text-lg font-bold text-[var(--scry-ink2)]">
+                                      {t("settings.mfaStepUpPolicyLoadFailed")}
+                                    </h2>
+                                    <p className="text-sm leading-6 text-[var(--scry-muted3)]">
+                                      {t(
+                                        "settings.mfaStepUpPolicyLoadFailedDescription",
+                                      )}
+                                    </p>
+                                    <Button
+                                      id="settings-mfa-step-up-policy-retry"
+                                      type="button"
+                                      onClick={() =>
+                                        void refreshConfigStepUpPolicy()
+                                      }
+                                    >
+                                      {t("settings.mfaStepUpPolicyRetry")}
+                                    </Button>
                                   </div>
-                                  <h2 className="text-lg font-bold text-[var(--scry-ink2)]">
-                                    {t("settings.mfaStepUpPolicyLoadFailed")}
-                                  </h2>
-                                  <p className="text-sm leading-6 text-[var(--scry-muted3)]">
-                                    {t(
-                                      "settings.mfaStepUpPolicyLoadFailedDescription",
-                                    )}
-                                  </p>
-                                  <Button
-                                    id="settings-mfa-step-up-policy-retry"
-                                    type="button"
-                                    onClick={() =>
-                                      void refreshConfigStepUpPolicy()
+                                ) : settingsStepUpBlocksContent ? (
+                                  <ViewLoadingFallback />
+                                ) : (
+                                  <MainContent
+                                    view={view}
+                                    overviewTitleId={overviewTitleId}
+                                    overviewTitleRoutePending={
+                                      overviewTitleRoutePending
                                     }
-                                  >
-                                    {t("settings.mfaStepUpPolicyRetry")}
-                                  </Button>
-                                </div>
-                              ) : settingsStepUpBlocksContent ? (
-                                <ViewLoadingFallback />
-                              ) : (
-                                <MainContent
-                                  view={view}
-                                  overviewTitleId={overviewTitleId}
-                                  overviewTitleRoutePending={
-                                    overviewTitleRoutePending
-                                  }
-                                  routeOverviewEpisodeId={overviewEpisodeId}
-                                  handleBackToList={handleBackToList}
-                                  settingsSection={settingsSection}
-                                  userId={authenticatedUser.id}
-                                  username={authenticatedUser.username}
-                                  canManageTitlesInLibrary={canManageTitlesInLibrary}
-                                  selectedLanguage={selectedLanguage}
-                                  uiLanguage={uiLanguage}
-                                  discoveryAuthorizationSignature={
-                                    discoveryAuthorizationSignature
-                                  }
-                                  setLanguagePreferenceFromShell={
-                                    setLanguagePreferenceFromShell
-                                  }
-                                  contentSettingsSection={
-                                    contentSettingsSection
-                                  }
-                                  systemSection={systemSection}
-                                  logsSection={logsSection}
-                                  scryerVersion={scryerVersion}
-                                  pluginUpdateCount={pluginUpdateCount}
-                                  pluginBlockedCount={pluginBlockedCount}
-                                  activitySection={activitySection}
-                                  wantedSection={wantedSection}
-                                  handleOpenOverview={handleOpenOverview}
-                                  handleImportRouteEmpty={handleBackToList}
-                                  canViewCatalog={canViewCatalog}
-                                  canAccessActivity={canAccessActivity}
-                                  canResolveImports={canResolveImports}
-                                  canManageTitle={canManageTitle}
-                                  canRequestMedia={canRequestMedia}
-                                  canManageUserAccounts={canManageUserAccounts}
-                                  canManageUsers={canManageUsers}
-                                  canManageSystemSettings={
-                                    canManageSystemSettings
-                                  }
-                                  canManageCatalogSettings={
-                                    canManageCatalogSettings
-                                  }
-                                  canManageConfig={canManageConfig}
-                                  canAccessLists={canAccessLists}
-                                  canManageLists={canManageLists}
-                                  canManageLibrarySettings={
-                                    canManageLibrarySettings
-                                  }
-                                />
-                              )}
-                            </Suspense>
-                          </main>
-                        </RootSidebar>
-                      </div>
-                    </GlobalSearchProvider>
-                  </ReactiveRefreshProvider>
+                                    routeOverviewEpisodeId={overviewEpisodeId}
+                                    handleBackToList={handleBackToList}
+                                    settingsSection={settingsSection}
+                                    userId={authenticatedUser.id}
+                                    username={authenticatedUser.username}
+                                    canManageTitlesInLibrary={
+                                      canManageTitlesInLibrary
+                                    }
+                                    selectedLanguage={selectedLanguage}
+                                    uiLanguage={uiLanguage}
+                                    discoveryAuthorizationSignature={
+                                      discoveryAuthorizationSignature
+                                    }
+                                    setLanguagePreferenceFromShell={
+                                      setLanguagePreferenceFromShell
+                                    }
+                                    contentSettingsSection={
+                                      contentSettingsSection
+                                    }
+                                    systemSection={systemSection}
+                                    logsSection={logsSection}
+                                    scryerVersion={scryerVersion}
+                                    pluginUpdateCount={pluginUpdateCount}
+                                    pluginBlockedCount={pluginBlockedCount}
+                                    activitySection={activitySection}
+                                    wantedSection={wantedSection}
+                                    handleOpenOverview={handleOpenOverview}
+                                    handleImportRouteEmpty={handleBackToList}
+                                    canViewCatalog={canViewCatalog}
+                                    canAccessActivity={canAccessActivity}
+                                    canResolveImports={canResolveImports}
+                                    canManageTitle={canManageTitle}
+                                    canRequestMedia={canRequestMedia}
+                                    canManageUserAccounts={
+                                      canManageUserAccounts
+                                    }
+                                    canManageUsers={canManageUsers}
+                                    canManageSystemSettings={
+                                      canManageSystemSettings
+                                    }
+                                    canManageCatalogSettings={
+                                      canManageCatalogSettings
+                                    }
+                                    canManageConfig={canManageConfig}
+                                    canAccessLists={canAccessLists}
+                                    canManageLists={canManageLists}
+                                    canManageLibrarySettings={
+                                      canManageLibrarySettings
+                                    }
+                                  />
+                                )}
+                              </Suspense>
+                            </main>
+                          </RootSidebar>
+                        </div>
+                      </GlobalSearchProvider>
+                    </ReactiveRefreshProvider>
                   </LocationMoveProgressProvider>
                 </JobRunProvider>
               </LibraryScanProgressProvider>

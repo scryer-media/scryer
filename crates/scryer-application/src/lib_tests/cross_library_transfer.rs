@@ -1196,7 +1196,10 @@ async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
     assert!(
         matches!(
             error,
-            AppError::LocationPlanRefused { .. } | AppError::Validation(_)
+            AppError::LocationPlanRefused { .. }
+                | AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
         ),
         "unexpected error: {error:?}"
     );
@@ -1912,9 +1915,13 @@ async fn an_interrupted_transfer_refuses_library_and_root_reconfiguration_undern
         .app
         .delete_library(&fixture.user, &fixture.destination_library_id)
         .await;
-    let Err(crate::AppError::Validation(message)) = deleted else {
+    let Err(crate::AppError::ValidationRefused {
+        message, reason, ..
+    }) = deleted
+    else {
         panic!("deleting a library under an interrupted operation must be refused: {deleted:?}");
     };
+    assert_eq!(reason, crate::error_reasons::location::OWNERSHIP_BUSY);
     assert!(
         message.contains(operation_id),
         "the refusal names the operation holding the ground: {message}"
@@ -1931,9 +1938,13 @@ async fn an_interrupted_transfer_refuses_library_and_root_reconfiguration_undern
             None,
         )
         .await;
-    let Err(crate::AppError::Validation(message)) = repointed else {
+    let Err(crate::AppError::ValidationRefused {
+        message, reason, ..
+    }) = repointed
+    else {
         panic!("retiring a root under an interrupted operation must be refused: {repointed:?}");
     };
+    assert_eq!(reason, crate::error_reasons::location::OWNERSHIP_BUSY);
     assert!(
         message.contains(operation_id),
         "the refusal names the operation holding the ground: {message}"

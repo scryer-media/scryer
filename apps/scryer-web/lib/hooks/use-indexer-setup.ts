@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Client } from "urql";
 
@@ -205,11 +206,13 @@ export function useIndexerSetup({ client, t }: UseIndexerSetupArgs) {
       if (error) throw error;
       setIdxSaved(true);
     } catch (err) {
-      setIdxError(err instanceof Error ? err.message : "Failed to save");
+      setIdxError(
+        userFacingGraphQlErrorMessage(err, t("error.fallback.failedToSave"), t),
+      );
     } finally {
       setIdxSaving(false);
     }
-  }, [buildIndexerConfigValues, client, idxName, idxProviderType]);
+  }, [buildIndexerConfigValues, client, idxName, idxProviderType, t]);
 
   const handleIdxTestAndSave = useCallback(async () => {
     setIdxTesting(true);

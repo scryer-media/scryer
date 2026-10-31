@@ -322,7 +322,9 @@ export default function SetupImportLibrariesView({
       onRemap={() => setRemapRootId(root.id)}
       onAssign={() => setAssignSheetRootId(root.id)}
       onRemoveManual={() => removeManualRoot(root.id)}
-      onBrowseManual={() => setBrowseTarget({ kind: "manual", rootId: root.id })}
+      onBrowseManual={() =>
+        setBrowseTarget({ kind: "manual", rootId: root.id })
+      }
       t={t}
     />
   );
@@ -493,7 +495,8 @@ export default function SetupImportLibrariesView({
           const editing = editLibId === lib.id;
           const dropState = importLibraryDropState(
             Boolean(draggedRoot),
-            !draggedRoot || kindCompatibleWithFacet(draggedRoot.kind, lib.facet),
+            !draggedRoot ||
+              kindCompatibleWithFacet(draggedRoot.kind, lib.facet),
           );
           return (
             <div
@@ -509,7 +512,9 @@ export default function SetupImportLibrariesView({
                 nativeDragEnabled ? (e) => libZoneOver(e, lib.facet) : undefined
               }
               onDragEnter={
-                nativeDragEnabled ? (e) => libZoneEnter(e, lib.facet) : undefined
+                nativeDragEnabled
+                  ? (e) => libZoneEnter(e, lib.facet)
+                  : undefined
               }
               onDragLeave={nativeDragEnabled ? zoneLeave : undefined}
               onDrop={nativeDragEnabled ? (e) => dropTo(e, lib.id) : undefined}
@@ -598,7 +603,9 @@ export default function SetupImportLibrariesView({
                   <button
                     type="button"
                     title={t("setup.renameLibrary")}
-                    aria-label={t("setup.renameLibraryAria", { name: lib.name })}
+                    aria-label={t("setup.renameLibraryAria", {
+                      name: lib.name,
+                    })}
                     onClick={() => startRename(lib.id, lib.name)}
                     style={{
                       flex: 1,
@@ -797,7 +804,7 @@ export default function SetupImportLibrariesView({
         root={assignSheetRoot}
         libraries={libraries}
         currentLibraryId={
-          assignSheetRootId ? assign[assignSheetRootId] ?? null : null
+          assignSheetRootId ? (assign[assignSheetRootId] ?? null) : null
         }
         open={assignSheetRootId != null}
         onOpenChange={(open) => {

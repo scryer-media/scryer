@@ -11,7 +11,7 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {title_id}")))?;
         self.require_library_permission(actor, &title.library_id, permission)
             .await?;
         Ok(title)
@@ -28,9 +28,7 @@ impl AppUseCase {
             .await?
             .is_empty()
         {
-            Err(AppError::Unauthorized(
-                "You do not have access to this library".to_string(),
-            ))
+            Err(AppError::unauthorized_reason(crate::error_reasons::integration::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()))
         } else {
             Ok(())
         }
@@ -114,7 +112,7 @@ impl AppUseCase {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(AppError::NotFound(_)) => {
+                Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
                     tracing::warn!(
                         title_id,
                         download_client_item_id,
@@ -287,6 +285,7 @@ fn download_history_item_from_terminal_row(
         queued_at: epoch_seconds(row.submitted_at),
         last_updated_at: epoch_seconds(row.last_state_at),
         attention_required: state == DownloadQueueState::Failed,
+        attention_reason_code: None,
         attention_reason: row.tracked_reason.clone(),
         download_client_item_id,
         download_id: Some(row.download_id.to_wire()),

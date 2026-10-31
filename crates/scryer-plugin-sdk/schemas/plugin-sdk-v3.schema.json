@@ -859,6 +859,10 @@
     "IndexerCapabilities": {
       "type": "object",
       "properties": {
+        "raw_nab_search": {
+          "description": "Accepts exact Nab operations and explicit recent-feed paging on raw\nrequests. Older components must not silently reinterpret those fields.",
+          "type": "boolean"
+        },
         "resolve_network_endpoints": {
           "description": "Resolve instance-specific HTTP origins before any ordinary operation.",
           "type": "boolean"
@@ -3026,6 +3030,32 @@
             "string",
             "null"
           ]
+        },
+        "recent_paging": {
+          "description": "Explicit recent-feed continuation. Never infer it from an empty query;\nit is mutually exclusive with background `rss_catch_up`.",
+          "type": "boolean"
+        },
+        "host_caps": {
+          "description": "Host-resolved caps, including a permissive empty snapshot on a failed\nrefresh. When present, a Nab adapter must not consult or fetch caps.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginSearchCaps"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nab": {
+          "description": "An exact Nab operation. Its protocol parameters are validated against\nthe selected source's caps; they are not a title-search strategy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginNabSearch"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3040,6 +3070,12 @@
         },
         "language": {
           "type": "string"
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -3172,6 +3208,150 @@
       },
       "required": [
         "last_seen_published_at"
+      ]
+    },
+    "PluginSearchCaps": {
+      "description": "Capability data resolved once by the host for every search surface.",
+      "type": "object",
+      "properties": {
+        "searching_present": {
+          "type": "boolean",
+          "default": false
+        },
+        "limits_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "limits_max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tv_search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "movie_search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "music_search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio_search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "book_search": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginCapsSearchNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "categories": {
+          "$ref": "#/$defs/IndexerCategoryModel",
+          "default": {
+            "separate_anime_categories": false,
+            "provider_category_metadata": false
+          }
+        }
+      }
+    },
+    "PluginCapsSearchNode": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "supported_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "search_engine": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available"
+      ]
+    },
+    "PluginNabSearch": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/PluginNabOperation"
+        },
+        "parameters": {
+          "description": "Nab mode parameters only; credentials, transport options, query,\ncategories, limit and offset are carried by their owning boundaries.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "required": [
+        "operation"
+      ]
+    },
+    "PluginNabOperation": {
+      "type": "string",
+      "enum": [
+        "search",
+        "tv",
+        "movie",
+        "music",
+        "book"
       ]
     },
     "PluginActionRequest": {
@@ -7127,6 +7307,12 @@
         "title": {
           "type": "string"
         },
+        "attributes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginReleaseAttribute"
+          }
+        },
         "link": {
           "type": [
             "string",
@@ -7388,6 +7574,46 @@
       },
       "required": [
         "title"
+      ]
+    },
+    "PluginReleaseAttribute": {
+      "description": "Original feed metadata, in source order, including repeated values. Keep\nseparate from normalized maps so serializing a result does not lose data.",
+      "type": "object",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/PluginReleaseAttributeOrigin"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace_uri": {
+          "description": "Resolved XML namespace, including source-local prefix bindings. JSON\nNab attributes can omit this and use the standard prefix's namespace.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "name",
+        "value"
+      ]
+    },
+    "PluginReleaseAttributeOrigin": {
+      "type": "string",
+      "enum": [
+        "attribute",
+        "element"
       ]
     },
     "PluginError": {

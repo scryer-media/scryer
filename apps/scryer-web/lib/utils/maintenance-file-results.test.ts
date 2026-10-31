@@ -9,7 +9,12 @@ test("legacy deletion checkpoints keep their file and grace details", () => {
       grace_deadline: "2026-09-09T12:00:00Z",
       total_size_bytes: 42,
       files: [
-        { file_id: "file-a", file_path: "/library/a.mkv", completed: true, error: null },
+        {
+          file_id: "file-a",
+          file_path: "/library/a.mkv",
+          completed: true,
+          error: null,
+        },
         { file_id: "file-b", completed: false, error: "temporary failure" },
       ],
     }),
@@ -46,7 +51,11 @@ test("storage checkpoints report their selected root and partial progress", () =
       files: [
         { file_id: "file-a", completed: true, error: null },
         { file_id: "file-b", completed: false, error: null },
-        { file_id: "file-c", completed: false, error: "capacity no longer matches" },
+        {
+          file_id: "file-c",
+          completed: false,
+          error: "capacity no longer matches",
+        },
       ],
     }),
   );
@@ -69,7 +78,11 @@ test("sequence history unwraps its scoped deletion outcomes without another hist
             total_size_bytes: 42,
             files: [
               { file_id: "file-a", completed: true, error: null },
-              { file_id: "file-b", completed: false, error: "capacity changed" },
+              {
+                file_id: "file-b",
+                completed: false,
+                error: "capacity changed",
+              },
             ],
           }),
         },

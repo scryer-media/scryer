@@ -143,10 +143,10 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!(
-                            "media server connection {}",
-                            connection.id
-                        )));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::MEDIA_SERVER_CONNECTION_NOT_FOUND,
+                            format!("media server connection {}", connection.id),
+                        ));
                     }
                     replace_connection_details(tx, &connection, encryption_key.as_ref()).await?;
                     Ok(connection)
@@ -333,7 +333,10 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("media server connection {id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::MEDIA_SERVER_CONNECTION_NOT_FOUND,
+                            format!("media server connection {id}"),
+                        ));
                     }
                     Ok(())
                 })
@@ -506,8 +509,9 @@ fn validate_playback_item_connection_ids(
     items: &[MediaServerPlaybackItem],
 ) -> AppResult<()> {
     if items.iter().any(|item| item.connection_id != connection_id) {
-        return Err(AppError::Validation(
-            "playback mapping connection ID does not match persistence target".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_PLAYBACK_CONNECTION_MISMATCH,
+            "playback mapping connection ID does not match persistence target",
         ));
     }
     Ok(())

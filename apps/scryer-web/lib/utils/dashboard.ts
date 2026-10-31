@@ -69,8 +69,15 @@ export function usagePercent(
 }
 
 /** Terabytes with one decimal, for figures that must fit a narrow tile. */
-export function formatTerabytes(bytes: number | null | undefined): string | null {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
+export function formatTerabytes(
+  bytes: number | null | undefined,
+): string | null {
+  if (
+    bytes === null ||
+    bytes === undefined ||
+    !Number.isFinite(bytes) ||
+    bytes < 0
+  ) {
     return null;
   }
   return (bytes / 1_000_000_000_000).toFixed(1);
@@ -84,7 +91,12 @@ export type FormattedStorageSize = {
 export function formatStorageSize(
   bytes: number | null | undefined,
 ): FormattedStorageSize | null {
-  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
+  if (
+    bytes === null ||
+    bytes === undefined ||
+    !Number.isFinite(bytes) ||
+    bytes < 0
+  ) {
     return null;
   }
   if (bytes < 1_000_000_000_000) {
@@ -192,12 +204,13 @@ export type StorageRootUsage = {
   totalBytes: number | null;
 };
 
-export type StorageLibraryGroup<T extends StorageRootUsage = StorageRootUsage> = {
-  libraryId: string;
-  libraryName: string;
-  facet: string;
-  roots: T[];
-};
+export type StorageLibraryGroup<T extends StorageRootUsage = StorageRootUsage> =
+  {
+    libraryId: string;
+    libraryName: string;
+    facet: string;
+    roots: T[];
+  };
 
 /**
  * Group roots by library, order libraries by their worst root descending, and
@@ -228,7 +241,8 @@ export function groupStorageRootsByLibrary<T extends StorageRootUsage>(
   }
 
   return Array.from(groups.values()).sort((left, right) => {
-    const difference = worstRootPercent(right.roots) - worstRootPercent(left.roots);
+    const difference =
+      worstRootPercent(right.roots) - worstRootPercent(left.roots);
     if (difference !== 0) {
       return difference;
     }

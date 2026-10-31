@@ -62,7 +62,9 @@ export function LocalRemotePathMappingsField({
   const [rows, setRows] = React.useState<PathMappingRow[]>(() =>
     parsePathMappings(value, direction),
   );
-  const [browseRowIndex, setBrowseRowIndex] = React.useState<number | null>(null);
+  const [browseRowIndex, setBrowseRowIndex] = React.useState<number | null>(
+    null,
+  );
 
   React.useEffect(() => {
     setRows((currentRows) =>
@@ -118,7 +120,9 @@ export function LocalRemotePathMappingsField({
   );
 
   const browseInitialPath =
-    browseRowIndex == null ? "/" : (rows[browseRowIndex]?.localPath.trim() || "/");
+    browseRowIndex == null
+      ? "/"
+      : rows[browseRowIndex]?.localPath.trim() || "/";
   const isEmpty = serializePathMappings(rows, direction).trim().length === 0;
   const localPathFirst = direction === "local-to-remote";
   const rowErrors = React.useMemo<PathMappingRowErrors[]>(
@@ -128,11 +132,20 @@ export function LocalRemotePathMappingsField({
         const remotePath = row.remotePath.trim();
         const errors: PathMappingRowErrors = {};
         if (!localPath && remotePath) {
-          errors.localPath = t("settings.downloadClientRemotePathMappingsLocalRequired");
+          errors.localPath = t(
+            "settings.downloadClientRemotePathMappingsLocalRequired",
+          );
         } else if (localPath && !remotePath) {
-          errors.remotePath = t("settings.downloadClientRemotePathMappingsRemoteRequired");
-        } else if (localPath && !isLocalPathFormatValidForStyle(localPath, localPathStyle)) {
-          errors.localPath = t("settings.downloadClientRemotePathMappingsLocalAbsolute");
+          errors.remotePath = t(
+            "settings.downloadClientRemotePathMappingsRemoteRequired",
+          );
+        } else if (
+          localPath &&
+          !isLocalPathFormatValidForStyle(localPath, localPathStyle)
+        ) {
+          errors.localPath = t(
+            "settings.downloadClientRemotePathMappingsLocalAbsolute",
+          );
         }
         return errors;
       }),
@@ -156,10 +169,30 @@ export function LocalRemotePathMappingsField({
       <div className="space-y-2">
         {rows.map((row, index) => {
           const rowError = rowErrors[index] ?? {};
-          const localInputId = selectorId("path-mapping", fieldKey, index + 1, "local");
-          const remoteInputId = selectorId("path-mapping", fieldKey, index + 1, "remote");
-          const browseButtonId = selectorId("path-mapping", fieldKey, index + 1, "browse");
-          const removeButtonId = selectorId("path-mapping", fieldKey, index + 1, "remove");
+          const localInputId = selectorId(
+            "path-mapping",
+            fieldKey,
+            index + 1,
+            "local",
+          );
+          const remoteInputId = selectorId(
+            "path-mapping",
+            fieldKey,
+            index + 1,
+            "remote",
+          );
+          const browseButtonId = selectorId(
+            "path-mapping",
+            fieldKey,
+            index + 1,
+            "browse",
+          );
+          const removeButtonId = selectorId(
+            "path-mapping",
+            fieldKey,
+            index + 1,
+            "remove",
+          );
           const firstInputId = localPathFirst ? localInputId : remoteInputId;
           const secondInputId = localPathFirst ? remoteInputId : localInputId;
           return (
@@ -170,16 +203,25 @@ export function LocalRemotePathMappingsField({
                     id={firstInputId}
                     value={localPathFirst ? row.localPath : row.remotePath}
                     readOnly={localPathFirst}
-                    onClick={localPathFirst ? () => setBrowseRowIndex(index) : undefined}
+                    onClick={
+                      localPathFirst
+                        ? () => setBrowseRowIndex(index)
+                        : undefined
+                    }
                     onChange={
                       localPathFirst
                         ? undefined
-                        : (event) => updateRow(index, { remotePath: event.target.value })
+                        : (event) =>
+                            updateRow(index, { remotePath: event.target.value })
                     }
                     required={required && isEmpty && index === 0}
                     className={`font-[var(--font-code)] text-sm${localPathFirst ? " cursor-pointer pr-10" : ""}`}
                     aria-invalid={
-                      (localPathFirst ? rowError.localPath : rowError.remotePath)
+                      (
+                        localPathFirst
+                          ? rowError.localPath
+                          : rowError.remotePath
+                      )
                         ? true
                         : undefined
                     }
@@ -210,16 +252,25 @@ export function LocalRemotePathMappingsField({
                     id={secondInputId}
                     value={localPathFirst ? row.remotePath : row.localPath}
                     readOnly={!localPathFirst}
-                    onClick={!localPathFirst ? () => setBrowseRowIndex(index) : undefined}
+                    onClick={
+                      !localPathFirst
+                        ? () => setBrowseRowIndex(index)
+                        : undefined
+                    }
                     onChange={
                       localPathFirst
-                        ? (event) => updateRow(index, { remotePath: event.target.value })
+                        ? (event) =>
+                            updateRow(index, { remotePath: event.target.value })
                         : undefined
                     }
                     required={required && isEmpty && index === 0}
                     className={`font-[var(--font-code)] text-sm${!localPathFirst ? " cursor-pointer pr-10" : ""}`}
                     aria-invalid={
-                      (localPathFirst ? rowError.remotePath : rowError.localPath)
+                      (
+                        localPathFirst
+                          ? rowError.remotePath
+                          : rowError.localPath
+                      )
                         ? true
                         : undefined
                     }
@@ -237,7 +288,8 @@ export function LocalRemotePathMappingsField({
                   ) : null}
                 </div>
 
-                {rows.length > 1 || Boolean(row.localPath.trim() || row.remotePath.trim()) ? (
+                {rows.length > 1 ||
+                Boolean(row.localPath.trim() || row.remotePath.trim()) ? (
                   <IconButton
                     id={removeButtonId}
                     label={t("label.remove")}
@@ -252,7 +304,9 @@ export function LocalRemotePathMappingsField({
                 )}
               </div>
               {rowError.remotePath ? (
-                <p className="text-xs text-destructive">{rowError.remotePath}</p>
+                <p className="text-xs text-destructive">
+                  {rowError.remotePath}
+                </p>
               ) : null}
               {rowError.localPath ? (
                 <p className="text-xs text-destructive">{rowError.localPath}</p>

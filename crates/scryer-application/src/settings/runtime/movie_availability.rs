@@ -25,9 +25,7 @@ fn normalize_movie_default_availability(value: &str) -> AppResult<String> {
     if matches!(value.as_str(), "announced" | "in_cinemas" | "released") {
         Ok(value)
     } else {
-        Err(AppError::Validation(
-            "default movie availability must be announced, in_cinemas, or released".into(),
-        ))
+        Err(AppError::validation_refused(crate::error_reasons::settings::DEFAULT_MOVIE_AVAILABILITY_INVALID, "default movie availability must be announced, in_cinemas, or released"))
     }
 }
 
@@ -36,9 +34,7 @@ fn normalize_movie_release_market(value: &str) -> AppResult<String> {
     if is_movie_release_market(&market) {
         Ok(market)
     } else {
-        Err(AppError::Validation(
-            "movie release market must be a two-letter ISO-3166 country code".into(),
-        ))
+        Err(AppError::validation_refused(crate::error_reasons::settings::MOVIE_RELEASE_MARKET_INVALID, "movie release market must be a two-letter ISO-3166 country code"))
     }
 }
 

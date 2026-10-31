@@ -132,7 +132,10 @@ impl DownloadMutations {
         let download_id =
             scryer_domain::download_identity::DownloadId::parse(input.download_id.as_str())
                 .ok_or_else(|| {
-                    to_gql_error(AppError::Validation("invalid canonical download id".into()))
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_DOWNLOAD_ID_INVALID,
+                        "invalid canonical download id",
+                    ))
                 })?;
         let source = scryer_application::ClientJobLocator::new(
             Some(input.client_id.as_str()),
@@ -235,7 +238,12 @@ impl DownloadMutations {
             .get_title_for_download_actions(&actor, &title_id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title {title_id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                ))
+            })?;
 
         Ok(match outcome {
             QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
@@ -302,7 +310,12 @@ impl DownloadMutations {
             .get_title_for_download_actions(&actor, &title_id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title {title_id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                ))
+            })?;
 
         Ok(match outcome {
             QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
@@ -366,7 +379,12 @@ impl DownloadMutations {
             .get_title_for_download_actions(&actor, &title_id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title {title_id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                ))
+            })?;
 
         Ok(match outcome {
             QueueDownloadOutcome::Queued(queued) => QueueDownloadPayload {
@@ -409,7 +427,12 @@ impl DownloadMutations {
             .get_title_for_download_actions(&actor, &title_id)
             .await
             .map_err(to_gql_error)?
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title {title_id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                ))
+            })?;
         let outcome = app
             .queue_best_release(
                 &actor,

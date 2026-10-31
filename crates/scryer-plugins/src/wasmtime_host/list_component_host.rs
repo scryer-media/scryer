@@ -19,11 +19,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
+use scryer_plugin_sdk::PluginDescriptor;
 use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
-use scryer_plugin_sdk::host::{
-    PluginHostRequest, PluginHostResponse, PluginHttpRequest as SdkPluginHttpRequest,
-};
-use scryer_plugin_sdk::{PluginDescriptor, PluginError, PluginErrorCode, PluginResult};
+use scryer_plugin_sdk::host::PluginHttpRequest as SdkPluginHttpRequest;
 use tracing::Instrument;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
@@ -180,63 +178,33 @@ impl runtime_host::HostWithStore<ListComponentCtx> for HasSelf<ListComponentCtx>
         accessor: &wasmtime::component::Accessor<ListComponentCtx, Self>,
         request: runtime_host::HttpRequest,
     ) -> Result<runtime_host::HttpResponse, runtime_host::TransportError> {
-        use runtime_host::{Header, HttpResponse, TransportError};
+        use runtime_host::{Header, HttpResponse};
 
         let command_host = accessor.with(|mut access| access.get().command_host.clone());
-        let encoded = postcard::to_allocvec(&PluginHostRequest::Http(SdkPluginHttpRequest {
-            url: request.url,
-            method: Some(request.method),
-            headers: request
-                .headers
-                .into_iter()
-                .map(|header| (header.name, header.value))
-                .collect(),
-            body: request.body,
-        }))
-        .map_err(|_| TransportError::InvalidRequest)?;
-
-        let encoded_response =
-            match family_component_host::dispatch_host_call(&command_host, encoded).await {
-                Ok(response) => response,
-                Err(HostCallError::Service {
-                    failure: HostCallFailure::InvalidRequest,
-                    error,
-                }) => {
-                    tracing::debug!(
-                        target: "scryer_plugins::list",
-                        error = error.as_str(),
-                        "list component typed http request was rejected by the host",
-                    );
-                    return Err(TransportError::InvalidRequest);
-                }
-                Err(HostCallError::Service { error, .. } | HostCallError::Task(error)) => {
-                    tracing::debug!(
-                        target: "scryer_plugins::list",
-                        error = error.as_str(),
-                        "list component typed http request failed in transport",
-                    );
-                    return Err(TransportError::Transport);
-                }
-            };
-
-        let PluginHostResponse::Http(result) =
-            postcard::from_bytes(&encoded_response).map_err(|_| TransportError::Transport)?
-        else {
-            return Err(TransportError::Transport);
-        };
-
-        match result {
-            PluginResult::Ok(response) => Ok(HttpResponse {
-                status: response.status,
-                headers: response
+        let response = family_component_host::dispatch_http_request(
+            &command_host,
+            SdkPluginHttpRequest {
+                url: request.url,
+                method: Some(request.method),
+                headers: request
                     .headers
                     .into_iter()
-                    .map(|(name, value)| Header { name, value })
+                    .map(|header| (header.name, header.value))
                     .collect(),
-                body: response.body,
-            }),
-            PluginResult::Err(error) => Err(http_transport_error(&error)),
-        }
+                body: request.body,
+            },
+        )
+        .await
+        .map_err(http_transport_error)?;
+        Ok(HttpResponse {
+            status: response.status,
+            headers: response
+                .headers
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: response.body,
+        })
     }
 
     /// A sleep that cannot outlive the invocation.
@@ -250,28 +218,18 @@ impl runtime_host::HostWithStore<ListComponentCtx> for HasSelf<ListComponentCtx>
     }
 }
 
-/// Project the service layer's `PluginError` onto `transport-error`, with the
-/// same table the subtitle host documents.
-fn http_transport_error(error: &PluginError) -> runtime_host::TransportError {
+/// Map the host-owned HTTP failure fact into this world's generated enum.
+fn http_transport_error(
+    kind: crate::plugin_http_host::HostHttpErrorKind,
+) -> runtime_host::TransportError {
+    use crate::plugin_http_host::HostHttpErrorKind;
     use runtime_host::TransportError;
-
-    if matches!(error.code, PluginErrorCode::Unsupported) {
-        return TransportError::ForbiddenOrigin;
-    }
-    let detail = error.debug_message.as_deref().unwrap_or_default();
-    if detail.contains("is not allowed") {
-        TransportError::ForbiddenOrigin
-    } else if detail.contains("Invalid URL")
-        || detail.contains("only supports GET")
-        || detail.contains("is disabled.")
-    {
-        TransportError::InvalidRequest
-    } else if detail.contains("timed out after") || detail.contains("deadline exhausted") {
-        TransportError::Timeout
-    } else if detail.contains("exceeds the configured maximum number of bytes") {
-        TransportError::ResponseTooLarge
-    } else {
-        TransportError::Transport
+    match kind {
+        HostHttpErrorKind::ForbiddenOrigin => TransportError::ForbiddenOrigin,
+        HostHttpErrorKind::InvalidRequest => TransportError::InvalidRequest,
+        HostHttpErrorKind::Timeout => TransportError::Timeout,
+        HostHttpErrorKind::ResponseTooLarge => TransportError::ResponseTooLarge,
+        HostHttpErrorKind::Transport => TransportError::Transport,
     }
 }
 
@@ -598,6 +556,7 @@ fn finish_error(
     error::to_app_error(
         failure,
         &error::InvocationContext {
+            plugin_kind: error::PluginHostKind::List,
             plugin_id: invocation.plugin_id,
             plugin_version: invocation.plugin_version,
             operation: invocation.operation,

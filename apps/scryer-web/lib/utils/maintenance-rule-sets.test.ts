@@ -158,7 +158,11 @@ test("a new draft starts from the starter matcher with no package or import line
 });
 
 test("sequence step IDs remain valid when randomUUID is unavailable", () => {
-  const id = maintenanceActionSequenceStepId(null, () => 1234, () => 0.5);
+  const id = maintenanceActionSequenceStepId(
+    null,
+    () => 1234,
+    () => 0.5,
+  );
 
   assert.equal(id, "step-1234-i");
   assert.match(id, /^[A-Za-z0-9_-]+$/);
@@ -170,7 +174,10 @@ test("a draft loaded from a rule set round-trips its revision and action", () =>
   assert.equal(draft.name, detail.ruleSet.name);
   assert.equal(draft.regoSource, detail.revision.regoSource);
   assert.equal(draft.graceDays, 14);
-  assert.equal(draft.actionKind, "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED");
+  assert.equal(
+    draft.actionKind,
+    "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+  );
   assert.equal(draft.targetQualityProfileId, "profile-7");
   assert.deepEqual(draft.libraryIds, ["lib-movies", "lib-series"]);
   assert.notEqual(draft.libraryIds, detail.ruleSet.libraryIds);
@@ -192,7 +199,11 @@ test("copying a rule set renames the draft and keeps nothing that identifies the
 
 test("create input saves a full sequence and never sends a legacy action", () => {
   const input = createMaintenanceRuleSetInput(
-    { ...maintenanceRuleDraftFromDetail(detail), description: "  ", libraryIds: [] },
+    {
+      ...maintenanceRuleDraftFromDetail(detail),
+      description: "  ",
+      libraryIds: [],
+    },
     descriptors,
   );
 
@@ -275,31 +286,50 @@ test("a tag step sends normalized, deduplicated labels and nothing else", () => 
             includeDescendants: null,
             targetQualityProfileId: "profile-uhd",
             searchCondition: null,
-            tags: ["  Needs   Review ", "keep", "needs review", "scryer:monitor-type:all"],
+            tags: [
+              "  Needs   Review ",
+              "keep",
+              "needs review",
+              "scryer:monitor-type:all",
+            ],
           },
         },
       ],
     },
   };
 
-  assert.deepEqual(createMaintenanceRuleSetInput(draft, tagDescriptors).actionSequence, {
-    schemaVersion: 2,
-    steps: [{ id: "add-tags", kind: "ADD_TAGS", parameters: { tags: ["keep", "needs review"] } }],
-  });
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(draft, tagDescriptors).actionSequence,
+    {
+      schemaVersion: 2,
+      steps: [
+        {
+          id: "add-tags",
+          kind: "ADD_TAGS",
+          parameters: { tags: ["keep", "needs review"] },
+        },
+      ],
+    },
+  );
 
   // Replacing the step drops every old parameter with it.
   assert.deepEqual(
     maintenanceActionSequenceInput({
       schemaVersion: 2,
-      steps: [{
-        ...draft.actionSequence.steps[0],
-        kind: "DELETE_TITLE_AND_FILES",
-      }],
+      steps: [
+        {
+          ...draft.actionSequence.steps[0],
+          kind: "DELETE_TITLE_AND_FILES",
+        },
+      ],
     }).steps[0].parameters,
     {},
   );
   assert.equal(actionRequiresTags(tagDescriptors, "ADD_TAGS"), true);
-  assert.equal(actionRequiresTags(tagDescriptors, "DELETE_TITLE_AND_FILES"), false);
+  assert.equal(
+    actionRequiresTags(tagDescriptors, "DELETE_TITLE_AND_FILES"),
+    false,
+  );
 });
 
 test("the tag actions are offerable for a title rule", () => {
@@ -328,7 +358,11 @@ test("the tag actions are offerable for a title rule", () => {
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
   const draft = maintenanceRuleDraftFromDetail(detail);
-  const matcher = updateMaintenanceRuleMatcherInput("rule-1", draft, descriptors);
+  const matcher = updateMaintenanceRuleMatcherInput(
+    "rule-1",
+    draft,
+    descriptors,
+  );
   const metadata = updateMaintenanceRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(matcher).sort(), [
@@ -357,7 +391,8 @@ test("a selected root follows create, update, and inline preview inputs", () => 
     "root-a",
   );
   assert.equal(
-    updateMaintenanceRuleMatcherInput("rule-1", draft, descriptors).storageRootId,
+    updateMaintenanceRuleMatcherInput("rule-1", draft, descriptors)
+      .storageRootId,
     "root-a",
   );
   assert.equal(
@@ -375,7 +410,9 @@ test("a selected root follows create, update, and inline preview inputs", () => 
 });
 
 test("only descriptors that support a movie or a show are offerable for a title rule", () => {
-  const offerable = titleScopedActionDescriptors(descriptors).map((d) => d.kind);
+  const offerable = titleScopedActionDescriptors(descriptors).map(
+    (d) => d.kind,
+  );
 
   assert.deepEqual(offerable, [
     "DO_NOTHING",
@@ -491,8 +528,14 @@ test("a destructive action reads as destructive", () => {
 
 test("the preview limit stays inside the API's cap", () => {
   assert.equal(clampMaintenancePreviewLimit(0), 1);
-  assert.equal(clampMaintenancePreviewLimit(500), MAINTENANCE_PREVIEW_LIMIT_MAX);
-  assert.equal(clampMaintenancePreviewLimit(Number.NaN), MAINTENANCE_PREVIEW_LIMIT_DEFAULT);
+  assert.equal(
+    clampMaintenancePreviewLimit(500),
+    MAINTENANCE_PREVIEW_LIMIT_MAX,
+  );
+  assert.equal(
+    clampMaintenancePreviewLimit(Number.NaN),
+    MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
+  );
   assert.equal(clampMaintenancePreviewLimit(20), 20);
 });
 
@@ -551,7 +594,11 @@ test("every action kind in the pinned enum has a label", () => {
   for (const kind of kinds) {
     const key = actionKindLabelKey(kind);
     assert.ok(key, `${kind} has no label key`);
-    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
   }
   assert.equal(actionKindLabelKey("SOME_FUTURE_KIND"), null);
 });
@@ -585,16 +632,26 @@ const reviewedDeleteRule = {
 };
 
 test("enabled is offered only for a rule whose action changes something", () => {
-  assert.deepEqual(ruleStateOptionsFor({ enabledArming: "NONE" }), ["DISABLED", "DRY_RUN"]);
+  assert.deepEqual(ruleStateOptionsFor({ enabledArming: "NONE" }), [
+    "DISABLED",
+    "DRY_RUN",
+  ]);
   for (const enabledArming of ["REVERSIBLE", "DESTRUCTIVE"] as const) {
-    assert.deepEqual(ruleStateOptionsFor({ enabledArming }), ["DISABLED", "DRY_RUN", "ENABLED"]);
+    assert.deepEqual(ruleStateOptionsFor({ enabledArming }), [
+      "DISABLED",
+      "DRY_RUN",
+      "ENABLED",
+    ]);
   }
 });
 
 test("only enabling a rule that deletes files asks for confirmation", () => {
   const states: MaintenanceRuleState[] = ["DISABLED", "DRY_RUN", "ENABLED"];
   for (const state of states) {
-    assert.equal(ruleStateNeedsConfirmation({ enabledArming: "REVERSIBLE" }, state), false);
+    assert.equal(
+      ruleStateNeedsConfirmation({ enabledArming: "REVERSIBLE" }, state),
+      false,
+    );
     assert.equal(
       ruleStateNeedsConfirmation({ enabledArming: "DESTRUCTIVE" }, state),
       state === "ENABLED",
@@ -605,16 +662,32 @@ test("only enabling a rule that deletes files asks for confirmation", () => {
 
 test("a state change carries the reviewed revision, scope and count only when it confirms", () => {
   assert.deepEqual(
-    setMaintenanceRuleStateVariables({ ...reviewedDeleteRule, enabledArming: "REVERSIBLE" }, "ENABLED", 7),
+    setMaintenanceRuleStateVariables(
+      { ...reviewedDeleteRule, enabledArming: "REVERSIBLE" },
+      "ENABLED",
+      7,
+    ),
     { ruleSetId: "rule-1", state: "ENABLED", confirmation: undefined },
   );
-  assert.equal(setMaintenanceRuleStateVariables(reviewedDeleteRule, "DRY_RUN", 7).confirmation, undefined);
-  const variables = setMaintenanceRuleStateVariables(reviewedDeleteRule, "ENABLED", 7);
+  assert.equal(
+    setMaintenanceRuleStateVariables(reviewedDeleteRule, "DRY_RUN", 7)
+      .confirmation,
+    undefined,
+  );
+  const variables = setMaintenanceRuleStateVariables(
+    reviewedDeleteRule,
+    "ENABLED",
+    7,
+  );
   reviewedDeleteRule.libraryIds.push("library-b");
   assert.deepEqual(variables, {
     ruleSetId: "rule-1",
     state: "ENABLED",
-    confirmation: { revisionNumber: 3, libraryIds: ["library-a"], candidateCount: 7 },
+    confirmation: {
+      revisionNumber: 3,
+      libraryIds: ["library-a"],
+      candidateCount: 7,
+    },
   });
   reviewedDeleteRule.libraryIds.pop();
 });
@@ -625,7 +698,11 @@ test("a global delete rule confirms an explicit empty scope", () => {
     "ENABLED",
     0,
   );
-  assert.deepEqual(variables.confirmation, { revisionNumber: 3, libraryIds: [], candidateCount: 0 });
+  assert.deepEqual(variables.confirmation, {
+    revisionNumber: 3,
+    libraryIds: [],
+    candidateCount: 0,
+  });
 });
 
 test("every rule state and effect has real copy in the default locale", () => {
@@ -639,26 +716,49 @@ test("every rule state and effect has real copy in the default locale", () => {
   assert.equal(en["settings.maintenanceRuleStateDryRun"], "Dry run");
   assert.equal(en["settings.maintenanceRuleStateEnabled"], "Enabled");
   assert.equal(ruleStateLabelKey("SOME_FUTURE_STATE"), null);
-  const armings: MaintenanceEffectArming[] = ["NONE", "REVERSIBLE", "DESTRUCTIVE"];
+  const armings: MaintenanceEffectArming[] = [
+    "NONE",
+    "REVERSIBLE",
+    "DESTRUCTIVE",
+  ];
   for (const arming of armings) {
     const key = effectArmingLabelKey(arming);
     assert.ok(key, `${arming} has no label key`);
-    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
   }
   assert.equal(effectArmingLabelKey("SOME_FUTURE_ARMING"), null);
 });
 
-test("the count-mismatch message shape the dialog re-asks against is pinned", () => {
-  const message =
-    "destructive arming requires acknowledging the current candidate count (12)";
-
-  assert.equal(parseAcknowledgedCandidateCountMismatch(message), 12);
+test("count acknowledgement reads a numeric fact and ignores prose", () => {
+  const error = (
+    value: unknown,
+    reason = "MAINTENANCE_ARM_COUNT_MISMATCH",
+  ) => ({
+    graphQLErrors: [
+      {
+        message: "any words (999)",
+        extensions: { code: "VALIDATION_ERROR", reason, currentCount: value },
+      },
+    ],
+  });
+  assert.equal(parseAcknowledgedCandidateCountMismatch(error(12)), 12);
+  assert.equal(parseAcknowledgedCandidateCountMismatch(error(0)), 0);
+  for (const value of [-1, 1.5, "12", Number.NaN, Number.POSITIVE_INFINITY])
+    assert.equal(parseAcknowledgedCandidateCountMismatch(error(value)), null);
   assert.equal(
-    parseAcknowledgedCandidateCountMismatch(`[GraphQL] ${message}`),
-    12,
+    parseAcknowledgedCandidateCountMismatch(error(12, "OTHER")),
+    null,
   );
-  assert.equal(parseAcknowledgedCandidateCountMismatch(message.toUpperCase()), 12);
-  assert.equal(parseAcknowledgedCandidateCountMismatch("rule not found"), null);
+  assert.equal(
+    parseAcknowledgedCandidateCountMismatch(
+      "acknowledging the current candidate count (12)",
+    ),
+    null,
+  );
 });
 
 // ── Candidates ────────────────────────────────────────────────────────
@@ -679,7 +779,11 @@ test("every candidate state has a label and a tone", () => {
   for (const state of states) {
     const key = candidateStateLabelKey(state);
     assert.ok(key, `${state} has no label key`);
-    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
   }
   assert.equal(candidateStateLabelKey("SOME_FUTURE_STATE"), null);
 
@@ -757,7 +861,11 @@ test("every countdown phrasing exists in the default locale", () => {
   ];
 
   for (const key of keys) {
-    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
   }
 });
 
@@ -772,10 +880,17 @@ test("run statuses fall back to the raw value the API sent", () => {
   ]) {
     const key = runStatusLabelKey(status);
     assert.ok(key, `${status} has no label key`);
-    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
   }
 
-  assert.equal(runStatusLabelKey("SUCCEEDED"), "settings.maintenanceRunStatusSucceeded");
+  assert.equal(
+    runStatusLabelKey("SUCCEEDED"),
+    "settings.maintenanceRunStatusSucceeded",
+  );
   assert.equal(runStatusLabelKey("some_future_status"), null);
   assert.equal(runStatusBadgeTone("failed"), "negative");
   assert.equal(runStatusBadgeTone("already_satisfied"), "warning");
@@ -881,26 +996,61 @@ test("every contract title and description key resolves in the default locale", 
   assert.deepEqual(missing, []);
 });
 
-
 test("scope is copied, sent on create and preview, and immutable on matcher updates", () => {
-  const scoped: MaintenanceRuleSetDetail = { ...detail, ruleSet: { ...detail.ruleSet, subjectKind: "EPISODE" } };
+  const scoped: MaintenanceRuleSetDetail = {
+    ...detail,
+    ruleSet: { ...detail.ruleSet, subjectKind: "EPISODE" },
+  };
   const draft = copyMaintenanceRuleDraft(scoped);
   assert.equal(draft.subjectKind, "EPISODE");
-  assert.equal(createMaintenanceRuleSetInput(draft, descriptors).subjectKind, "EPISODE");
-  assert.equal(maintenancePreviewInput({ draft, descriptors, libraryId: "series" }).subjectKind, "EPISODE");
-  assert.equal(Object.hasOwn(updateMaintenanceRuleMatcherInput("rule", draft, descriptors), "subjectKind"), false);
+  assert.equal(
+    createMaintenanceRuleSetInput(draft, descriptors).subjectKind,
+    "EPISODE",
+  );
+  assert.equal(
+    maintenancePreviewInput({ draft, descriptors, libraryId: "series" })
+      .subjectKind,
+    "EPISODE",
+  );
+  assert.equal(
+    Object.hasOwn(
+      updateMaintenanceRuleMatcherInput("rule", draft, descriptors),
+      "subjectKind",
+    ),
+    false,
+  );
 });
 
 test("the API's scope matrix controls child actions", () => {
-  const scoped: MaintenanceActionDescriptor = { ...descriptors[0], kind: "UNMONITOR_SCOPE_DELETE_FILES", supportedRuleScopes: ["SEASON", "EPISODE"] };
+  const scoped: MaintenanceActionDescriptor = {
+    ...descriptors[0],
+    kind: "UNMONITOR_SCOPE_DELETE_FILES",
+    supportedRuleScopes: ["SEASON", "EPISODE"],
+  };
   assert.equal(scopedActionDescriptors([scoped], "TITLE").length, 0);
-  assert.equal(scopedActionDescriptors([scoped], "EPISODE")[0].kind, "UNMONITOR_SCOPE_DELETE_FILES");
-  assert.equal(scopedActionDescriptors([scoped], "SEASON")[0].kind, "UNMONITOR_SCOPE_DELETE_FILES");
+  assert.equal(
+    scopedActionDescriptors([scoped], "EPISODE")[0].kind,
+    "UNMONITOR_SCOPE_DELETE_FILES",
+  );
+  assert.equal(
+    scopedActionDescriptors([scoped], "SEASON")[0].kind,
+    "UNMONITOR_SCOPE_DELETE_FILES",
+  );
 });
 
 test("exact subject preview retains its owning title and the draft library scope", () => {
-  const draft = { ...initialMaintenanceRuleDraft(), subjectKind: "EPISODE" as const, libraryIds: ["series"] };
-  const input = maintenancePreviewInput({ draft, descriptors, titleIds: ["show"], subjectIds: ["episode"], libraryId: "ignored" });
+  const draft = {
+    ...initialMaintenanceRuleDraft(),
+    subjectKind: "EPISODE" as const,
+    libraryIds: ["series"],
+  };
+  const input = maintenancePreviewInput({
+    draft,
+    descriptors,
+    titleIds: ["show"],
+    subjectIds: ["episode"],
+    libraryId: "ignored",
+  });
   assert.ok("titleIds" in input);
   assert.ok("subjectIds" in input);
   assert.deepEqual(input.titleIds, ["show"]);

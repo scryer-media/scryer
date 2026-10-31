@@ -3678,7 +3678,9 @@ mod tests {
             gateway.search_call_count(METADATA_TYPE_MOVIE, "Glass Harbor"),
             1
         );
-        assert!(matches!(error, AppError::Repository(message) if message == "rate limited"));
+        assert!(
+            matches!(error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message == "rate limited")
+        );
     }
 
     #[tokio::test]

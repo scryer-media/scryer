@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useClient } from "urql";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
@@ -19,11 +20,11 @@ import {
   searchMetadataQuery,
   titlesByExternalIdsQuery,
 } from "@/lib/graphql/queries";
+import { isAbortError, makeAbortableFetch } from "@/lib/graphql/urql-client";
 import {
-  isAbortError,
-  makeAbortableFetch,
-} from "@/lib/graphql/urql-client";
-import { addTitleMutation, submitMediaRequestMutation } from "@/lib/graphql/mutations";
+  addTitleMutation,
+  submitMediaRequestMutation,
+} from "@/lib/graphql/mutations";
 import {
   ANIME_INTER_SEASON_MOVIES_KEY,
   ANIME_MONITOR_SPECIALS_KEY,
@@ -124,7 +125,11 @@ function hasOpenDialogContent(): boolean {
     return false;
   }
 
-  return document.querySelector("[data-slot='dialog-content'][data-state='open']") !== null;
+  return (
+    document.querySelector(
+      "[data-slot='dialog-content'][data-state='open']",
+    ) !== null
+  );
 }
 
 function normalizeOrderedLookupValues(values: string[]): string[] {
@@ -141,14 +146,19 @@ function normalizeOrderedLookupValues(values: string[]): string[] {
   return normalized;
 }
 
-function titleMetadataIds(title: TitleRecord, source: "smg" | "tvdb"): string[] {
+function titleMetadataIds(
+  title: TitleRecord,
+  source: "smg" | "tvdb",
+): string[] {
   return (title.externalIds ?? [])
     .filter((externalId) => externalId.source.toLowerCase() === source)
     .map((externalId) => externalId.value.trim())
     .filter(Boolean);
 }
 
-function buildCatalogTitleLookupByMetadataId(titles: TitleRecord[]): Record<string, TitleRecord> {
+function buildCatalogTitleLookupByMetadataId(
+  titles: TitleRecord[],
+): Record<string, TitleRecord> {
   const lookup: Record<string, TitleRecord> = {};
   for (const title of titles) {
     for (const source of ["smg", "tvdb"] as const) {
@@ -183,7 +193,9 @@ function metadataResultIdentityKey(result: MetadataTvdbSearchItem): string {
   return tvdbId ? `tvdb:${tvdbId}` : "";
 }
 
-function metadataResultCatalogLookupKeys(result: MetadataTvdbSearchItem): string[] {
+function metadataResultCatalogLookupKeys(
+  result: MetadataTvdbSearchItem,
+): string[] {
   const smgId = metadataResultSmgId(result);
   const tvdbId = metadataResultTvdbId(result);
   return [
@@ -196,7 +208,9 @@ function isMetadataResultCataloged(
   lookup: Record<string, TitleRecord>,
   result: MetadataTvdbSearchItem,
 ): boolean {
-  return metadataResultCatalogLookupKeys(result).some((key) => lookup[key] !== undefined);
+  return metadataResultCatalogLookupKeys(result).some(
+    (key) => lookup[key] !== undefined,
+  );
 }
 
 function filterCatalogedMetadataResults(
@@ -250,10 +264,7 @@ function sameStringList(
   );
 }
 
-function sameTitleList(
-  previous: TitleRecord[],
-  next: TitleRecord[],
-): boolean {
+function sameTitleList(previous: TitleRecord[], next: TitleRecord[]): boolean {
   return (
     previous.length === next.length &&
     previous.every((item, index) => {
@@ -284,7 +295,8 @@ function sameTitleList(
           (nextItem.episodesMonitored ?? null) &&
         (item.episodesTotal ?? null) === (nextItem.episodesTotal ?? null) &&
         (item.contentStatus ?? null) === (nextItem.contentStatus ?? null) &&
-        (item.metadataFetchedAt ?? null) === (nextItem.metadataFetchedAt ?? null) &&
+        (item.metadataFetchedAt ?? null) ===
+          (nextItem.metadataFetchedAt ?? null) &&
         (item.createdAt ?? null) === (nextItem.createdAt ?? null) &&
         sameExternalIds(item.externalIds, nextItem.externalIds)
       );
@@ -364,7 +376,9 @@ export interface UseGlobalSearchResult {
   catalogChangeSignal: number;
 }
 
-function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolean {
+function monitorTypeToMonitored(
+  monitorType: MetadataCatalogMonitorType,
+): boolean {
   // ADVANCED monitors the title and lets the selection decide the seasons.
   return monitorType !== "UNMONITORED" && monitorType !== "NONE";
 }
@@ -415,7 +429,9 @@ export function submitMediaRequestInput(
     contentStatus: result.status || undefined,
     rating: result.rating ?? undefined,
     ratingSources: result.ratingSources,
-    externalRatings: result.externalRatings?.map(mediaRequestExternalRatingInput),
+    externalRatings: result.externalRatings?.map(
+      mediaRequestExternalRatingInput,
+    ),
     requestedQualityProfileId: options.requestedQualityProfileId || undefined,
     requestedMonitorType: options.requestedMonitorType || undefined,
     requestedMonitorSelection:
@@ -442,7 +458,9 @@ function mediaRequestExternalRatingInput(
   };
 }
 
-function librariesByFacetFromList(libraries: LibraryRecord[]): Record<Facet, LibraryRecord[]> {
+function librariesByFacetFromList(
+  libraries: LibraryRecord[],
+): Record<Facet, LibraryRecord[]> {
   return libraries.reduce(
     (acc: Record<Facet, LibraryRecord[]>, library: LibraryRecord) => {
       acc[library.facet]?.push(library);
@@ -514,7 +532,8 @@ export function useGlobalSearch({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
-  const catalogAuthorizationSignature = authorizationCacheSignature(authenticatedUser);
+  const catalogAuthorizationSignature =
+    authorizationCacheSignature(authenticatedUser);
   const canManageTitle = hasAnyLibraryPermission(
     authenticatedUser,
     LIBRARY_PERMISSIONS.manageTitles,
@@ -529,67 +548,82 @@ export function useGlobalSearch({
   );
   const [queueFacet, setQueueFacet] = useState<Facet>(initialQueueFacet);
   const catalogChangeSignal = 0;
-  const sortByRelevance = useCallback((results: MetadataTvdbSearchItem[], query: string) => {
-    const q = query.trim().toLowerCase();
+  const sortByRelevance = useCallback(
+    (results: MetadataTvdbSearchItem[], query: string) => {
+      const q = query.trim().toLowerCase();
 
-    function score(item: MetadataTvdbSearchItem): number {
-      const name = (item.name || "").toLowerCase();
-      const pop = Math.max(item.popularity ?? 0, 1);
-      if (name === q) return 1e9 + pop;
-      if (name.startsWith(q)) return pop * 5;
-      if (name.includes(q)) return pop * 3;
-      return pop;
-    }
+      function score(item: MetadataTvdbSearchItem): number {
+        const name = (item.name || "").toLowerCase();
+        const pop = Math.max(item.popularity ?? 0, 1);
+        if (name === q) return 1e9 + pop;
+        if (name.startsWith(q)) return pop * 5;
+        if (name.includes(q)) return pop * 3;
+        return pop;
+      }
 
-    return [...results].sort((left, right) => {
-      const ls = score(left);
-      const rs = score(right);
-      if (ls !== rs) return rs - ls;
-      return (right.year ?? 0) - (left.year ?? 0);
-    });
-  }, []);
+      return [...results].sort((left, right) => {
+        const ls = score(left);
+        const rs = score(right);
+        if (ls !== rs) return rs - ls;
+        return (right.year ?? 0) - (left.year ?? 0);
+      });
+    },
+    [],
+  );
 
   const [globalSearch, setGlobalSearch] = useState("");
   const globalSearchInputRef = useRef<HTMLInputElement>(null);
   const [searching, setSearching] = useState(false);
   const [catalogSearchLoading, setCatalogSearchLoading] = useState(false);
   const [metadataSearchLoading, setMetadataSearchLoading] = useState(false);
-  const [tvdbCandidates, setTvdbCandidates] = useState<MetadataTvdbSearchItem[]>([]);
-  const [catalogSearchResults, setCatalogSearchResults] = useState<TitleRecord[]>([]);
+  const [tvdbCandidates, setTvdbCandidates] = useState<
+    MetadataTvdbSearchItem[]
+  >([]);
+  const [catalogSearchResults, setCatalogSearchResults] = useState<
+    TitleRecord[]
+  >([]);
   const [catalogTitlesByTvdbId, setCatalogTitlesByTvdbId] = useState<
     Record<string, TitleRecord>
   >({});
-  const [metadataSearchResults, setMetadataSearchResults] = useState<MetadataSearchResults>(
-    () => Object.fromEntries(FACET_REGISTRY.map((f) => [f.metadataKey, []])),
-  );
-  const [catalogQualityProfileOptions, setCatalogQualityProfileOptions] = useState<
-    CatalogQualityProfileOption[]
-  >([]);
+  const [metadataSearchResults, setMetadataSearchResults] =
+    useState<MetadataSearchResults>(() =>
+      Object.fromEntries(FACET_REGISTRY.map((f) => [f.metadataKey, []])),
+    );
+  const [catalogQualityProfileOptions, setCatalogQualityProfileOptions] =
+    useState<CatalogQualityProfileOption[]>([]);
   const [globalQualityProfileId, setGlobalQualityProfileId] = useState<string>(
     QUALITY_PROFILE_INHERIT_VALUE,
   );
-  const [animeCatalogDefaults, setAnimeCatalogDefaults] = useState<AnimeCatalogDefaults>({
-    monitorSpecials: true,
-    interSeasonMovies: true,
-  });
-  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] = useState<
-    Record<ViewCategoryId, string>
-  >(
-    () => Object.fromEntries(FACET_REGISTRY.map((f) => [f.scopeId, QUALITY_PROFILE_INHERIT_VALUE])) as Record<ViewCategoryId, string>,
-  );
+  const [animeCatalogDefaults, setAnimeCatalogDefaults] =
+    useState<AnimeCatalogDefaults>({
+      monitorSpecials: true,
+      interSeasonMovies: true,
+    });
+  const [categoryQualityProfileOverrides, setCategoryQualityProfileOverrides] =
+    useState<Record<ViewCategoryId, string>>(
+      () =>
+        Object.fromEntries(
+          FACET_REGISTRY.map((f) => [f.scopeId, QUALITY_PROFILE_INHERIT_VALUE]),
+        ) as Record<ViewCategoryId, string>,
+    );
   const [isGlobalSearchPanelOpen, setIsGlobalSearchPanelOpen] = useState(false);
   const [catalogConfigLoading, setCatalogConfigLoading] = useState(false);
-  const [rootFoldersByFacet, setRootFoldersByFacet] = useState<Record<Facet, RootFolderOption[]>>(
-    () => ({ MOVIE: [], SERIES: [], ANIME: [] }),
-  );
-  const [librariesByFacet, setLibrariesByFacet] = useState<Record<Facet, LibraryRecord[]>>(
-    () => ({ MOVIE: [], SERIES: [], ANIME: [] }),
-  );
-  const [requestableLibrariesByFacet, setRequestableLibrariesByFacet] = useState<
+  const [rootFoldersByFacet, setRootFoldersByFacet] = useState<
+    Record<Facet, RootFolderOption[]>
+  >(() => ({ MOVIE: [], SERIES: [], ANIME: [] }));
+  const [librariesByFacet, setLibrariesByFacet] = useState<
     Record<Facet, LibraryRecord[]>
   >(() => ({ MOVIE: [], SERIES: [], ANIME: [] }));
-  const [catalogConfigAuthorizationSignature, setCatalogConfigAuthorizationSignature] =
-    useState<string | null>(null);
+  const [requestableLibrariesByFacet, setRequestableLibrariesByFacet] =
+    useState<Record<Facet, LibraryRecord[]>>(() => ({
+      MOVIE: [],
+      SERIES: [],
+      ANIME: [],
+    }));
+  const [
+    catalogConfigAuthorizationSignature,
+    setCatalogConfigAuthorizationSignature,
+  ] = useState<string | null>(null);
   const catalogConfigMatchesAuthorization =
     catalogConfigAuthorizationSignature === catalogAuthorizationSignature;
   const visibleLibrariesByFacet = catalogConfigMatchesAuthorization
@@ -612,7 +646,9 @@ export function useGlobalSearch({
   } | null>(null);
   const catalogConfigRefreshTokenRef = useRef(0);
   const catalogConfigLoadedRef = useRef(false);
-  const catalogAuthorizationSignatureRef = useRef(catalogAuthorizationSignature);
+  const catalogAuthorizationSignatureRef = useRef(
+    catalogAuthorizationSignature,
+  );
   useEffect(() => {
     catalogAuthorizationSignatureRef.current = catalogAuthorizationSignature;
   }, [catalogAuthorizationSignature]);
@@ -649,7 +685,9 @@ export function useGlobalSearch({
         return overrideProfileId;
       }
 
-      const normalizedGlobalProfileId = coerceProfileSetting(globalQualityProfileId);
+      const normalizedGlobalProfileId = coerceProfileSetting(
+        globalQualityProfileId,
+      );
       if (
         normalizedGlobalProfileId &&
         normalizedGlobalProfileId !== QUALITY_PROFILE_INHERIT_VALUE &&
@@ -698,14 +736,17 @@ export function useGlobalSearch({
     catalogConfigRefreshTokenRef.current = refreshToken;
     const isCurrentRefresh = () =>
       catalogConfigRefreshTokenRef.current === refreshToken &&
-      catalogAuthorizationSignatureRef.current === catalogAuthorizationSignature;
+      catalogAuthorizationSignatureRef.current ===
+        catalogAuthorizationSignature;
 
     const refreshPromise = (async () => {
       setCatalogConfigLoading(true);
       try {
         const { data, error } = await client
           .query(
-            canManageTitle ? globalSearchInitQuery : globalSearchRequesterInitQuery,
+            canManageTitle
+              ? globalSearchInitQuery
+              : globalSearchRequesterInitQuery,
             {
               includeMediaSettings: canReadCatalogSettings,
             },
@@ -717,12 +758,12 @@ export function useGlobalSearch({
         catalogConfigLoadedRef.current = true;
         setCatalogConfigAuthorizationSignature(catalogAuthorizationSignature);
 
-        const parsedProfiles = (data.qualityProfileSettings?.profiles ?? []).map(
-          (profile: { id: string; name: string }) => ({
-            id: profile.id.trim(),
-            name: profile.name.trim() || profile.id.trim(),
-          }),
-        );
+        const parsedProfiles = (
+          data.qualityProfileSettings?.profiles ?? []
+        ).map((profile: { id: string; name: string }) => ({
+          id: profile.id.trim(),
+          name: profile.name.trim() || profile.id.trim(),
+        }));
 
         setCatalogQualityProfileOptions((previous) =>
           previous.length === parsedProfiles.length &&
@@ -743,7 +784,9 @@ export function useGlobalSearch({
         );
 
         const nextOverrides: Record<ViewCategoryId, string> =
-          qualityProfileSettingsToCategoryOverrides(data.qualityProfileSettings);
+          qualityProfileSettingsToCategoryOverrides(
+            data.qualityProfileSettings,
+          );
         setCategoryQualityProfileOverrides((previous) =>
           previous.MOVIE === nextOverrides.MOVIE &&
           previous.SERIES === nextOverrides.SERIES &&
@@ -770,11 +813,20 @@ export function useGlobalSearch({
             ANIME: data.animeSettings?.rootFolders ?? [],
           };
           setRootFoldersByFacet((previous) => {
-            const same = (["MOVIE", "SERIES", "ANIME"] as Facet[]).every((f) => {
-              const prev = previous[f];
-              const next = nextRootFolders[f];
-              return prev.length === next.length && prev.every((e, i) => e.path === next[i]?.path && e.isDefault === next[i]?.isDefault);
-            });
+            const same = (["MOVIE", "SERIES", "ANIME"] as Facet[]).every(
+              (f) => {
+                const prev = previous[f];
+                const next = nextRootFolders[f];
+                return (
+                  prev.length === next.length &&
+                  prev.every(
+                    (e, i) =>
+                      e.path === next[i]?.path &&
+                      e.isDefault === next[i]?.isDefault,
+                  )
+                );
+              },
+            );
             return same ? previous : nextRootFolders;
           });
         }
@@ -797,10 +849,17 @@ export function useGlobalSearch({
         });
       } catch (error) {
         if (!isCurrentRefresh()) return;
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+          { level: "ERROR" },
+        );
         try {
           const { data, error } = await client
-            .query(requestableLibrariesQuery, {}, { requestPolicy: "network-only" })
+            .query(
+              requestableLibrariesQuery,
+              {},
+              { requestPolicy: "network-only" },
+            )
             .toPromise();
           if (error) throw error;
           if (!isCurrentRefresh()) return;
@@ -808,7 +867,10 @@ export function useGlobalSearch({
             data?.requestableLibraries ?? [],
           );
           setRequestableLibrariesByFacet((previous) => {
-            return sameLibrariesByFacet(previous, nextRequestableLibrariesByFacet)
+            return sameLibrariesByFacet(
+              previous,
+              nextRequestableLibrariesByFacet,
+            )
               ? previous
               : nextRequestableLibrariesByFacet;
           });
@@ -816,7 +878,12 @@ export function useGlobalSearch({
           setCatalogConfigAuthorizationSignature(catalogAuthorizationSignature);
         } catch (fallbackError) {
           if (isCurrentRefresh()) {
-            setGlobalStatus(fallbackError instanceof Error ? fallbackError.message : t("status.apiError"), { level: "ERROR" });
+            setGlobalStatus(
+              fallbackError instanceof Error
+                ? fallbackError.message
+                : t("status.apiError"),
+              { level: "ERROR" },
+            );
           }
         }
       } finally {
@@ -839,7 +906,14 @@ export function useGlobalSearch({
       promise: refreshPromise,
     };
     return refreshPromise;
-  }, [canManageTitle, canReadCatalogSettings, catalogAuthorizationSignature, client, setGlobalStatus, t]);
+  }, [
+    canManageTitle,
+    canReadCatalogSettings,
+    catalogAuthorizationSignature,
+    client,
+    setGlobalStatus,
+    t,
+  ]);
 
   const ensureCatalogConfigReady = useCallback(
     async (facet: Facet) => {
@@ -852,10 +926,7 @@ export function useGlobalSearch({
   );
 
   const primeCatalogConfigForMetadataActions = useCallback(async () => {
-    if (
-      catalogConfigLoadedRef.current &&
-      catalogConfigMatchesAuthorization
-    ) {
+    if (catalogConfigLoadedRef.current && catalogConfigMatchesAuthorization) {
       return;
     }
 
@@ -909,12 +980,14 @@ export function useGlobalSearch({
   );
 
   const isMetadataSearchResultInAnyCatalog = useCallback(
-    (result: MetadataTvdbSearchItem) => isMetadataResultCataloged(catalogTitlesByTvdbId, result),
+    (result: MetadataTvdbSearchItem) =>
+      isMetadataResultCataloged(catalogTitlesByTvdbId, result),
     [catalogTitlesByTvdbId],
   );
 
   const isMetadataSearchResultInCatalog = useCallback(
-    (_facet: Facet, result: MetadataTvdbSearchItem) => isMetadataSearchResultInAnyCatalog(result),
+    (_facet: Facet, result: MetadataTvdbSearchItem) =>
+      isMetadataSearchResultInAnyCatalog(result),
     [isMetadataSearchResultInAnyCatalog],
   );
 
@@ -943,25 +1016,29 @@ export function useGlobalSearch({
 
       try {
         if (title.facet === "MOVIE") {
-          const { data, error } = await client.query(metadataMovieQuery, {
-            input: {
-              smgId: smgId ? Number(smgId) : undefined,
-              tvdbId: tvdbId || undefined,
-              language: metadataLanguageForUi(uiLanguage),
-            },
-          }).toPromise();
+          const { data, error } = await client
+            .query(metadataMovieQuery, {
+              input: {
+                smgId: smgId ? Number(smgId) : undefined,
+                tvdbId: tvdbId || undefined,
+                language: metadataLanguageForUi(uiLanguage),
+              },
+            })
+            .toPromise();
           if (error || !data?.metadataMovie?.posterUrl) return title;
           return { ...title, posterUrl: data.metadataMovie.posterUrl };
         }
 
-        const { data, error } = await client.query(metadataSeriesQuery, {
-          input: {
-            smgId: smgId ? Number(smgId) : undefined,
-            tvdbId: tvdbId || undefined,
-            includeEpisodes: false,
-            language: metadataLanguageForUi(uiLanguage),
-          },
-        }).toPromise();
+        const { data, error } = await client
+          .query(metadataSeriesQuery, {
+            input: {
+              smgId: smgId ? Number(smgId) : undefined,
+              tvdbId: tvdbId || undefined,
+              includeEpisodes: false,
+              language: metadataLanguageForUi(uiLanguage),
+            },
+          })
+          .toPromise();
         if (error || !data?.metadataSeries?.posterUrl) return title;
         return { ...title, posterUrl: data.metadataSeries.posterUrl };
       } catch {
@@ -975,7 +1052,10 @@ export function useGlobalSearch({
     () => Object.fromEntries(FACET_REGISTRY.map((f) => [f.metadataKey, []])),
     [],
   );
-  const emptyCatalogTitlesByTvdbId = useMemo<Record<string, TitleRecord>>(() => ({}), []);
+  const emptyCatalogTitlesByTvdbId = useMemo<Record<string, TitleRecord>>(
+    () => ({}),
+    [],
+  );
 
   useEffect(() => {
     if (canViewCatalog) {
@@ -983,9 +1063,13 @@ export function useGlobalSearch({
     }
 
     cancelAutocomplete();
-    setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+    setCatalogSearchResults((previous) =>
+      previous.length === 0 ? previous : [],
+    );
     setCatalogTitlesByTvdbId((previous) =>
-      Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+      Object.keys(previous).length === 0
+        ? previous
+        : emptyCatalogTitlesByTvdbId,
     );
   }, [canViewCatalog, cancelAutocomplete, emptyCatalogTitlesByTvdbId]);
 
@@ -1000,14 +1084,16 @@ export function useGlobalSearch({
         return [];
       }
 
-      const { data, error } = await client.query(
-        titlesByExternalIdsQuery,
-        {
-          source: source.trim(),
-          values: normalizedValues,
-        },
-        fetchOverride ? { fetch: fetchOverride } : undefined,
-      ).toPromise();
+      const { data, error } = await client
+        .query(
+          titlesByExternalIdsQuery,
+          {
+            source: source.trim(),
+            values: normalizedValues,
+          },
+          fetchOverride ? { fetch: fetchOverride } : undefined,
+        )
+        .toPromise();
       if (error) {
         throw error;
       }
@@ -1017,7 +1103,10 @@ export function useGlobalSearch({
   );
 
   const lookupCatalogTitlesByTvdbIds = useCallback(
-    async (tvdbIds: string[], fetchOverride?: typeof fetch): Promise<TitleRecord[]> =>
+    async (
+      tvdbIds: string[],
+      fetchOverride?: typeof fetch,
+    ): Promise<TitleRecord[]> =>
       lookupCatalogTitlesByExternalIds("tvdb", tvdbIds, fetchOverride),
     [lookupCatalogTitlesByExternalIds],
   );
@@ -1047,12 +1136,14 @@ export function useGlobalSearch({
     async (query: string) => {
       setGlobalStatus(t("status.searchingTvdb", { query }));
       try {
-        const { data: searchData, error: searchError } = await client.query(searchMetadataQuery, {
-          query,
-          type: mapFacetToTvdbType(queueFacet),
-          limit: 12,
-          language: metadataLanguageForUi(uiLanguage),
-        }).toPromise();
+        const { data: searchData, error: searchError } = await client
+          .query(searchMetadataQuery, {
+            query,
+            type: mapFacetToTvdbType(queueFacet),
+            limit: 12,
+            language: metadataLanguageForUi(uiLanguage),
+          })
+          .toPromise();
         if (searchError) throw searchError;
         const rankedMatches = sortByRelevance(
           (searchData.searchMetadata || []) as MetadataTvdbSearchItem[],
@@ -1064,13 +1155,21 @@ export function useGlobalSearch({
             )
           : {};
         const matches = rankedMatches.filter(
-          (item: MetadataTvdbSearchItem) => !isMetadataResultCataloged(catalogLookup, item),
+          (item: MetadataTvdbSearchItem) =>
+            !isMetadataResultCataloged(catalogLookup, item),
         );
         setTvdbCandidates(matches);
-        setGlobalStatus(matches.length ? t("status.foundTvdb", { count: matches.length }) : t("status.nothingFound"));
+        setGlobalStatus(
+          matches.length
+            ? t("status.foundTvdb", { count: matches.length })
+            : t("status.nothingFound"),
+        );
         return matches;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
         setTvdbCandidates([]);
         return [];
       }
@@ -1094,7 +1193,9 @@ export function useGlobalSearch({
       if (!trimmed) {
         setCatalogSearchLoading(false);
         setMetadataSearchLoading(false);
-        setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+        setCatalogSearchResults((previous) =>
+          previous.length === 0 ? previous : [],
+        );
         setMetadataSearchResults((previous) => {
           if (isMetadataEmpty(previous)) {
             return previous;
@@ -1102,7 +1203,9 @@ export function useGlobalSearch({
           return emptyMetadataSearchResults;
         });
         setCatalogTitlesByTvdbId((previous) =>
-          Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+          Object.keys(previous).length === 0
+            ? previous
+            : emptyCatalogTitlesByTvdbId,
         );
         if (options?.surfaceErrors !== false) {
           setGlobalStatus(t("label.ready"));
@@ -1124,9 +1227,13 @@ export function useGlobalSearch({
       let directCatalogEntries: TitleRecord[] = [];
       let promotedCatalogEntries: TitleRecord[] = [];
       if (!canViewCatalog) {
-        setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+        setCatalogSearchResults((previous) =>
+          previous.length === 0 ? previous : [],
+        );
         setCatalogTitlesByTvdbId((previous) =>
-          Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+          Object.keys(previous).length === 0
+            ? previous
+            : emptyCatalogTitlesByTvdbId,
         );
       }
 
@@ -1135,17 +1242,26 @@ export function useGlobalSearch({
       // spinner keeps spinning.
 
       const catalogPromise = canViewCatalog
-        ? client.query(catalogSearchTitlesQuery, {
-            query: trimmed,
-            facet: null,
-            limit: AUTOCOMPLETE_LIMIT,
-          }, { fetch: abortableFetch }).toPromise()
+        ? client
+            .query(
+              catalogSearchTitlesQuery,
+              {
+                query: trimmed,
+                facet: null,
+                limit: AUTOCOMPLETE_LIMIT,
+              },
+              { fetch: abortableFetch },
+            )
+            .toPromise()
             .then(async ({ data, error }) => {
               if (error) throw error;
               if (requestId !== autocompleteRequestId.current) return;
-              const catalogEntries = (data?.titles?.items ?? []) as TitleRecord[];
+              const catalogEntries = (data?.titles?.items ??
+                []) as TitleRecord[];
               const enriched = await Promise.all(
-                catalogEntries.map((title: TitleRecord) => resolveCatalogPosterUrl(title)),
+                catalogEntries.map((title: TitleRecord) =>
+                  resolveCatalogPosterUrl(title),
+                ),
               );
               if (requestId !== autocompleteRequestId.current) return;
               directCatalogEntries = enriched;
@@ -1160,15 +1276,25 @@ export function useGlobalSearch({
             })
         : Promise.resolve();
 
-      const metadataPromise = client.query(searchMetadataMultiQuery, {
-        query: trimmed,
-        limit: AUTOCOMPLETE_LIMIT,
-        language: metadataLanguageForUi(uiLanguage),
-      }, { fetch: abortableFetch }).toPromise()
+      const metadataPromise = client
+        .query(
+          searchMetadataMultiQuery,
+          {
+            query: trimmed,
+            limit: AUTOCOMPLETE_LIMIT,
+            language: metadataLanguageForUi(uiLanguage),
+          },
+          { fetch: abortableFetch },
+        )
+        .toPromise()
         .then(async ({ data, error }) => {
           if (error) throw error;
           if (requestId !== autocompleteRequestId.current) return;
-          const multi = data.searchMetadataMulti ?? { movies: [], series: [], anime: [] };
+          const multi = data.searchMetadataMulti ?? {
+            movies: [],
+            series: [],
+            anime: [],
+          };
           const rankedMovies = sortByRelevance(
             (multi.movies || []) as MetadataTvdbSearchItem[],
             trimmed,
@@ -1182,16 +1308,21 @@ export function useGlobalSearch({
             trimmed,
           );
           if (canViewCatalog) {
-            promotedCatalogEntries = await lookupCatalogTitlesForMetadataResults(
-              [...rankedMovies, ...rankedAnime, ...rankedSeries],
-              abortableFetch,
-            );
+            promotedCatalogEntries =
+              await lookupCatalogTitlesForMetadataResults(
+                [...rankedMovies, ...rankedAnime, ...rankedSeries],
+                abortableFetch,
+              );
           }
           if (requestId !== autocompleteRequestId.current) return;
-          const nextCatalogLookup = buildCatalogTitleLookupByMetadataId(promotedCatalogEntries);
+          const nextCatalogLookup = buildCatalogTitleLookupByMetadataId(
+            promotedCatalogEntries,
+          );
           if (canViewCatalog) {
             setCatalogTitlesByTvdbId((previous) =>
-              sameCatalogLookup(previous, nextCatalogLookup) ? previous : nextCatalogLookup,
+              sameCatalogLookup(previous, nextCatalogLookup)
+                ? previous
+                : nextCatalogLookup,
             );
           }
           const movieResults = canViewCatalog
@@ -1230,7 +1361,8 @@ export function useGlobalSearch({
                 prev.every(
                   (item, i) =>
                     next[i] !== undefined &&
-                    metadataResultIdentityKey(item) === metadataResultIdentityKey(next[i]),
+                    metadataResultIdentityKey(item) ===
+                      metadataResultIdentityKey(next[i]),
                 )
               );
             });
@@ -1256,17 +1388,32 @@ export function useGlobalSearch({
         catalogResult.status === "rejected" &&
         !isAbortError(catalogResult.reason)
       ) {
-        const msg = catalogResult.reason instanceof Error ? catalogResult.reason.message : t("status.apiError");
+        const msg = userFacingGraphQlErrorMessage(
+          catalogResult.reason,
+          t("status.apiError"),
+          t,
+        );
         setGlobalStatus(msg, { level: "ERROR" });
       }
-      if (metadataResult.status === "rejected" && !isAbortError(metadataResult.reason)) {
+      if (
+        metadataResult.status === "rejected" &&
+        !isAbortError(metadataResult.reason)
+      ) {
         if (options?.surfaceErrors !== false) {
-          const msg = metadataResult.reason instanceof Error ? metadataResult.reason.message : t("status.apiError");
+          const msg = userFacingGraphQlErrorMessage(
+            metadataResult.reason,
+            t("status.apiError"),
+            t,
+          );
           setGlobalStatus(msg, { level: "ERROR" });
         }
-        setMetadataSearchResults((prev) => (isMetadataEmpty(prev) ? prev : emptyMetadataSearchResults));
+        setMetadataSearchResults((prev) =>
+          isMetadataEmpty(prev) ? prev : emptyMetadataSearchResults,
+        );
         setCatalogTitlesByTvdbId((previous) =>
-          Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+          Object.keys(previous).length === 0
+            ? previous
+            : emptyCatalogTitlesByTvdbId,
         );
         promotedCatalogEntries = [];
       }
@@ -1276,12 +1423,18 @@ export function useGlobalSearch({
         : [];
       const nextCatalogResults = canViewCatalog
         ? (
-            await Promise.all(mergedCatalogEntries.map((title) => resolveCatalogPosterUrl(title)))
+            await Promise.all(
+              mergedCatalogEntries.map((title) =>
+                resolveCatalogPosterUrl(title),
+              ),
+            )
           ).slice(0, AUTOCOMPLETE_LIMIT)
         : [];
       if (requestId !== autocompleteRequestId.current) return;
       setCatalogSearchResults((previous) =>
-        sameTitleList(previous, nextCatalogResults) ? previous : nextCatalogResults,
+        sameTitleList(previous, nextCatalogResults)
+          ? previous
+          : nextCatalogResults,
       );
 
       setSearching(false);
@@ -1303,7 +1456,9 @@ export function useGlobalSearch({
 
   const runEmptyCatalogPreload = useCallback(async () => {
     if (!canViewCatalog) {
-      setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+      setCatalogSearchResults((previous) =>
+        previous.length === 0 ? previous : [],
+      );
       setCatalogSearchLoading(false);
       setMetadataSearchLoading(false);
       setSearching(false);
@@ -1321,24 +1476,36 @@ export function useGlobalSearch({
     const abortableFetch = makeAbortableFetch(abortController.signal);
 
     try {
-      const { data, error } = await client.query(catalogSearchTitlesQuery, {
-        query: null,
-        facet: null,
-        limit: EMPTY_QUERY_CATALOG_LIMIT,
-      }, { fetch: abortableFetch }).toPromise();
+      const { data, error } = await client
+        .query(
+          catalogSearchTitlesQuery,
+          {
+            query: null,
+            facet: null,
+            limit: EMPTY_QUERY_CATALOG_LIMIT,
+          },
+          { fetch: abortableFetch },
+        )
+        .toPromise();
       if (error) throw error;
       if (requestId !== autocompleteRequestId.current) return;
 
-      const next = ((data?.titles?.items ?? []) as TitleRecord[]).slice(0, EMPTY_QUERY_CATALOG_LIMIT);
+      const next = ((data?.titles?.items ?? []) as TitleRecord[]).slice(
+        0,
+        EMPTY_QUERY_CATALOG_LIMIT,
+      );
       setCatalogSearchResults((previous) =>
         sameTitleList(previous, next) ? previous : next,
       );
       setGlobalStatus(t("label.ready"));
     } catch (error) {
-      if (requestId !== autocompleteRequestId.current || isAbortError(error)) return;
-      const msg = error instanceof Error ? error.message : t("status.apiError");
+      if (requestId !== autocompleteRequestId.current || isAbortError(error))
+        return;
+      const msg = userFacingGraphQlErrorMessage(error, t("status.apiError"), t);
       setGlobalStatus(msg, { level: "ERROR" });
-      setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+      setCatalogSearchResults((previous) =>
+        previous.length === 0 ? previous : [],
+      );
     } finally {
       if (requestId === autocompleteRequestId.current) {
         setCatalogSearchLoading(false);
@@ -1359,13 +1526,19 @@ export function useGlobalSearch({
     if (trimmed.length < AUTOCOMPLETE_MIN_CHARS) {
       cancelAutocomplete();
       setMetadataSearchResults((previous) => {
-        if (previous.movie.length === 0 && previous.series.length === 0 && previous.anime.length === 0) {
+        if (
+          previous.movie.length === 0 &&
+          previous.series.length === 0 &&
+          previous.anime.length === 0
+        ) {
           return previous;
         }
         return emptyMetadataSearchResults;
       });
       setCatalogTitlesByTvdbId((previous) =>
-        Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+        Object.keys(previous).length === 0
+          ? previous
+          : emptyCatalogTitlesByTvdbId,
       );
       if (
         trimmed.length === 0 &&
@@ -1375,7 +1548,9 @@ export function useGlobalSearch({
       ) {
         void runEmptyCatalogPreload();
       } else {
-        setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+        setCatalogSearchResults((previous) =>
+          previous.length === 0 ? previous : [],
+        );
       }
       // Don't auto-close when the panel was force-opened (mobile overlay).
       if (!forcedOpenRef.current) {
@@ -1413,16 +1588,19 @@ export function useGlobalSearch({
     };
   }, []);
 
-  const openGlobalSearchPanel = useCallback((force?: boolean) => {
-    if (force) {
-      forcedOpenRef.current = true;
-      setIsGlobalSearchPanelOpen(true);
-      return;
-    }
-    if (globalSearch.trim().length >= AUTOCOMPLETE_MIN_CHARS) {
-      setIsGlobalSearchPanelOpen(true);
-    }
-  }, [globalSearch]);
+  const openGlobalSearchPanel = useCallback(
+    (force?: boolean) => {
+      if (force) {
+        forcedOpenRef.current = true;
+        setIsGlobalSearchPanelOpen(true);
+        return;
+      }
+      if (globalSearch.trim().length >= AUTOCOMPLETE_MIN_CHARS) {
+        setIsGlobalSearchPanelOpen(true);
+      }
+    },
+    [globalSearch],
+  );
 
   const closeGlobalSearchPanel = useCallback(() => {
     forcedOpenRef.current = false;
@@ -1432,12 +1610,16 @@ export function useGlobalSearch({
   const clearGlobalSearchState = useCallback(() => {
     cancelAutocomplete();
     setGlobalSearch("");
-    setCatalogSearchResults((previous) => (previous.length === 0 ? previous : []));
+    setCatalogSearchResults((previous) =>
+      previous.length === 0 ? previous : [],
+    );
     setMetadataSearchResults((previous) =>
       isMetadataEmpty(previous) ? previous : emptyMetadataSearchResults,
     );
     setCatalogTitlesByTvdbId((previous) =>
-      Object.keys(previous).length === 0 ? previous : emptyCatalogTitlesByTvdbId,
+      Object.keys(previous).length === 0
+        ? previous
+        : emptyCatalogTitlesByTvdbId,
     );
   }, [
     cancelAutocomplete,
@@ -1461,9 +1643,16 @@ export function useGlobalSearch({
     const handleShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       const isSlashShortcut =
-        key === "/" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        key === "/" &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey;
       const isCommandShortcut =
-        key === "k" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+        key === "k" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey;
 
       if (!isSlashShortcut && !isCommandShortcut) {
         return;
@@ -1525,45 +1714,53 @@ export function useGlobalSearch({
       }
       pendingCatalogAddKeysRef.current.add(requestKey);
       try {
-        const { data: addData, error: addError } = await client.mutation(addTitleMutation, {
-          input: {
-            name,
-            facet,
-            libraryId: options.libraryId || undefined,
-            monitored,
-            tags: [],
-            options: {
-              qualityProfileId: options.qualityProfileId?.trim() || undefined,
-              rootFolderId: options.rootFolderId || undefined,
-              monitorType: options.monitorType,
-              ...(facet === "MOVIE"
-                ? {}
-                : { useSeasonFolders: options.seasonFolder }),
-              ...(facet === "ANIME"
-                ? {
-                    monitorSpecials: options.monitorSpecials !== false,
-                    interSeasonMovies: options.interSeasonMovies !== false,
-                  }
+        const { data: addData, error: addError } = await client
+          .mutation(addTitleMutation, {
+            input: {
+              name,
+              facet,
+              libraryId: options.libraryId || undefined,
+              monitored,
+              tags: [],
+              options: {
+                qualityProfileId: options.qualityProfileId?.trim() || undefined,
+                rootFolderId: options.rootFolderId || undefined,
+                monitorType: options.monitorType,
+                ...(facet === "MOVIE"
+                  ? {}
+                  : { useSeasonFolders: options.seasonFolder }),
+                ...(facet === "ANIME"
+                  ? {
+                      monitorSpecials: options.monitorSpecials !== false,
+                      interSeasonMovies: options.interSeasonMovies !== false,
+                    }
+                  : {}),
+                ...(options.monitorType === "ADVANCED"
+                  ? {
+                      monitorSelection: monitorSelectionInput(
+                        options.monitorSelection,
+                      ),
+                    }
+                  : {}),
+              },
+              externalIds,
+              smgId: result.smgId ?? undefined,
+              tvdbId: metadataResultTvdbId(result) || undefined,
+              tmdbId: result.tmdbId ?? undefined,
+              imdbId: result.imdbId?.trim() || undefined,
+              ...(facet === "MOVIE" && options.minAvailability
+                ? { minAvailability: options.minAvailability }
                 : {}),
-              ...(options.monitorType === "ADVANCED"
-                ? { monitorSelection: monitorSelectionInput(options.monitorSelection) }
-                : {}),
+              year: result.year ?? undefined,
+              overview: result.overview || undefined,
+              sortTitle: result.sortTitle || undefined,
+              slug: result.slug || undefined,
+              runtimeMinutes: result.runtimeMinutes ?? undefined,
+              language: result.language || undefined,
+              contentStatus: result.status || undefined,
             },
-            externalIds,
-            smgId: result.smgId ?? undefined,
-            tvdbId: metadataResultTvdbId(result) || undefined,
-            tmdbId: result.tmdbId ?? undefined,
-            imdbId: result.imdbId?.trim() || undefined,
-            ...(facet === "MOVIE" && options.minAvailability ? { minAvailability: options.minAvailability } : {}),
-            year: result.year ?? undefined,
-            overview: result.overview || undefined,
-            sortTitle: result.sortTitle || undefined,
-            slug: result.slug || undefined,
-            runtimeMinutes: result.runtimeMinutes ?? undefined,
-            language: result.language || undefined,
-            contentStatus: result.status || undefined,
-          },
-        }).toPromise();
+          })
+          .toPromise();
         if (addError) throw addError;
         const addedName = addData.addTitle.title.name;
         // The status line keeps the full sentence; the toast carries the same
@@ -1595,22 +1792,21 @@ export function useGlobalSearch({
         // Whatever view is mounted behind the search panel still shows the
         // pre-add catalog, and nothing navigates now, so tell it to reload.
         dispatchCatalogTitlesRefresh({ facet, titleId });
-        void runMetadataAutocomplete(globalSearch.trim(), { surfaceErrors: false });
+        void runMetadataAutocomplete(globalSearch.trim(), {
+          surfaceErrors: false,
+        });
         return titleId;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.queueFailed"), t),
+          { level: "ERROR" },
+        );
         return null;
       } finally {
         pendingCatalogAddKeysRef.current.delete(requestKey);
       }
     },
-    [
-      globalSearch,
-      runMetadataAutocomplete,
-      client,
-      setGlobalStatus,
-      t,
-    ],
+    [globalSearch, runMetadataAutocomplete, client, setGlobalStatus, t],
   );
 
   const requestMetadataSearchResult = useCallback(
@@ -1633,16 +1829,23 @@ export function useGlobalSearch({
       }
       pendingRequestKeysRef.current.add(requestKey);
       try {
-        const { error } = await client.mutation(submitMediaRequestMutation, {
-          input: submitMediaRequestInput(result, facet, options),
-        }).toPromise();
+        const { error } = await client
+          .mutation(submitMediaRequestMutation, {
+            input: submitMediaRequestInput(result, facet, options),
+          })
+          .toPromise();
         if (error) throw error;
         setGlobalStatus(t("status.requestSubmitted", { name }));
         dispatchNavigationBadgesRefresh();
-        void runMetadataAutocomplete(globalSearch.trim(), { surfaceErrors: false });
+        void runMetadataAutocomplete(globalSearch.trim(), {
+          surfaceErrors: false,
+        });
         return true;
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.queueFailed"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.queueFailed"), t),
+          { level: "ERROR" },
+        );
         return false;
       } finally {
         pendingRequestKeysRef.current.delete(requestKey);
@@ -1652,17 +1855,20 @@ export function useGlobalSearch({
   );
 
   /** Force-trigger global search (bypasses autocomplete min-char threshold). */
-  const forceSearchGlobal = useCallback(async (queryOverride?: string) => {
-    const trimmed = (queryOverride ?? globalSearch).trim();
-    if (!trimmed) return;
-    cancelAutocomplete();
-    if (queryOverride !== undefined && trimmed !== globalSearch.trim()) {
-      skipNextAutocompleteQueryRef.current = trimmed;
-      setGlobalSearch(trimmed);
-    }
-    setIsGlobalSearchPanelOpen(true);
-    await runMetadataAutocomplete(trimmed);
-  }, [cancelAutocomplete, globalSearch, runMetadataAutocomplete]);
+  const forceSearchGlobal = useCallback(
+    async (queryOverride?: string) => {
+      const trimmed = (queryOverride ?? globalSearch).trim();
+      if (!trimmed) return;
+      cancelAutocomplete();
+      if (queryOverride !== undefined && trimmed !== globalSearch.trim()) {
+        skipNextAutocompleteQueryRef.current = trimmed;
+        setGlobalSearch(trimmed);
+      }
+      setIsGlobalSearchPanelOpen(true);
+      await runMetadataAutocomplete(trimmed);
+    },
+    [cancelAutocomplete, globalSearch, runMetadataAutocomplete],
+  );
 
   return {
     globalSearch,

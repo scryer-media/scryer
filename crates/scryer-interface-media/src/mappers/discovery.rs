@@ -29,9 +29,10 @@ fn discovery_home_canonical_tag_keys(
 ) -> scryer_application::AppResult<Vec<String>> {
     let keys = keys.unwrap_or_default();
     if keys.iter().any(|key| key.trim().is_empty()) {
-        return Err(scryer_application::AppError::Validation(format!(
-            "discovery home {field_name} entries must not be blank"
-        )));
+        return Err(scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_DISCOVERY_FILTER_BLANK,
+            format!("discovery home {field_name} entries must not be blank"),
+        ));
     }
     Ok(keys)
 }
@@ -43,23 +44,28 @@ pub fn discovery_home_query_from_input(
     let filters = input.filters.unwrap_or_default();
     let limit_per_section = match input.limit_per_section {
         Some(value) if !(1..=DISCOVERY_HOME_MAX_SECTION_LIMIT).contains(&value) => {
-            return Err(scryer_application::AppError::Validation(format!(
-                "discovery home limitPerSection must be between 1 and {DISCOVERY_HOME_MAX_SECTION_LIMIT}"
-            )));
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_DISCOVERY_LIMIT_INVALID,
+                format!(
+                    "discovery home limitPerSection must be between 1 and {DISCOVERY_HOME_MAX_SECTION_LIMIT}"
+                ),
+            ));
         }
         Some(value) => value as usize,
         None => 25,
     };
     let minimum_rating = filters.minimum_rating;
     if minimum_rating.is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value)) {
-        return Err(scryer_application::AppError::Validation(
+        return Err(scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_DISCOVERY_RATING_INVALID,
             "discovery home minimumRating must be a finite value between 0 and 10".to_owned(),
         ));
     }
     if let (Some(minimum_year), Some(maximum_year)) = (filters.minimum_year, filters.maximum_year)
         && minimum_year > maximum_year
     {
-        return Err(scryer_application::AppError::Validation(
+        return Err(scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_DISCOVERY_YEARS_INVALID,
             "discovery home minimumYear must not exceed maximumYear".to_owned(),
         ));
     }
@@ -329,9 +335,10 @@ pub(super) fn discovery_home_media_facet(
     field_name: &str,
 ) -> scryer_application::AppResult<MediaFacetValue> {
     MediaFacetValue::parse(value).ok_or_else(|| {
-        scryer_application::AppError::Validation(format!(
-            "discovery home {field_name} must be a supported media facet: {value}"
-        ))
+        scryer_application::AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_DISCOVERY_FACET_UNSUPPORTED,
+            format!("discovery home {field_name} must be a supported media facet: {value}"),
+        )
     })
 }
 
@@ -364,9 +371,10 @@ pub(super) fn discovery_surface_value(
         "personalized" => DiscoverySurfaceValue::Personalized,
         "mixed" => DiscoverySurfaceValue::Mixed,
         value => {
-            return Err(scryer_application::AppError::Validation(format!(
-                "discovery home section has an unsupported surface: {value}"
-            )));
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_DISCOVERY_SURFACE_UNSUPPORTED,
+                format!("discovery home section has an unsupported surface: {value}"),
+            ));
         }
     };
     Ok(surface)

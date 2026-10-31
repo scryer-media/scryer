@@ -9,7 +9,11 @@ import { setMemberListPolicyMutation } from "@/lib/graphql/mutations";
 import { listMemberPoliciesQuery } from "@/lib/graphql/queries";
 import { useListsReactiveRefresh } from "@/lib/hooks/use-lists-reactive-refresh";
 import type { ListPolicy, MemberListPolicy } from "@/lib/types/lists";
-import { latestRead, memberListPoliciesChanged, rollBackMemberListPolicy } from "@/lib/utils/lists";
+import {
+  latestRead,
+  memberListPoliciesChanged,
+  rollBackMemberListPolicy,
+} from "@/lib/utils/lists";
 
 export function MemberListPoliciesContainer() {
   const client = useClient();
@@ -25,23 +29,29 @@ export function MemberListPoliciesContainer() {
   const [reads] = React.useState(latestRead);
 
   // A background read leaves the table on screen, and what it shows if it fails.
-  const load = React.useCallback(async ({ background = false }: { background?: boolean } = {}) => {
-    const isNewest = reads.begin();
-    if (!background) setLoading(true);
-    try {
-      const result = await client
-        .query(listMemberPoliciesQuery, {}, { requestPolicy: "network-only" })
-        .toPromise();
-      if (!isNewest()) return;
-      if (result.error) throw result.error;
-      setPolicies((result.data?.listMemberPolicies ?? []) as MemberListPolicy[]);
-      setError(null);
-    } catch (loadError) {
-      if (!background) setError(listErrorMessage(loadError, t, t("status.failedToLoad")));
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [client, reads, t]);
+  const load = React.useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      const isNewest = reads.begin();
+      if (!background) setLoading(true);
+      try {
+        const result = await client
+          .query(listMemberPoliciesQuery, {}, { requestPolicy: "network-only" })
+          .toPromise();
+        if (!isNewest()) return;
+        if (result.error) throw result.error;
+        setPolicies(
+          (result.data?.listMemberPolicies ?? []) as MemberListPolicy[],
+        );
+        setError(null);
+      } catch (loadError) {
+        if (!background)
+          setError(listErrorMessage(loadError, t, t("status.failedToLoad")));
+      } finally {
+        if (!background) setLoading(false);
+      }
+    },
+    [client, reads, t],
+  );
 
   React.useEffect(() => {
     void load();
@@ -58,20 +68,34 @@ export function MemberListPoliciesContainer() {
       setSavingUserId(userId);
       // A read still in flight predates this change and must not undo it.
       reads.invalidate();
-      setPolicies((current) => current.map((entry) => (entry.user.id === userId ? { ...entry, policy } : entry)));
+      setPolicies((current) =>
+        current.map((entry) =>
+          entry.user.id === userId ? { ...entry, policy } : entry,
+        ),
+      );
       try {
-        const result = await client.mutation(setMemberListPolicyMutation, { userId, policy }).toPromise();
+        const result = await client
+          .mutation(setMemberListPolicyMutation, { userId, policy })
+          .toPromise();
         if (result.error) throw result.error;
-        const saved = result.data?.setMemberListPolicy as MemberListPolicy | undefined;
+        const saved = result.data?.setMemberListPolicy as
+          MemberListPolicy | undefined;
         if (saved) {
           reads.invalidate();
-          setPolicies((current) => current.map((entry) => (entry.user.id === userId ? saved : entry)));
+          setPolicies((current) =>
+            current.map((entry) => (entry.user.id === userId ? saved : entry)),
+          );
         }
       } catch (saveError) {
         if (previous) {
-          setPolicies((current) => rollBackMemberListPolicy(current, previous, policy));
+          setPolicies((current) =>
+            rollBackMemberListPolicy(current, previous, policy),
+          );
         }
-        setGlobalStatus(listErrorMessage(saveError, t, t("status.failedToUpdate")), { level: "ERROR" });
+        setGlobalStatus(
+          listErrorMessage(saveError, t, t("status.failedToUpdate")),
+          { level: "ERROR" },
+        );
       } finally {
         setSavingUserId(null);
       }

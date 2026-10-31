@@ -13,8 +13,14 @@ const byEpisode = {
 const byMovieLink = { "link-1": [{ id: "file-4" }] };
 
 test("a file's owning rows are found across every supplied map", () => {
-  assert.deepEqual([...mediaFileOwnerKeys("file-2", [byEpisode, byMovieLink])], ["episode-1"]);
-  assert.deepEqual([...mediaFileOwnerKeys("file-4", [byEpisode, byMovieLink])], ["link-1"]);
+  assert.deepEqual(
+    [...mediaFileOwnerKeys("file-2", [byEpisode, byMovieLink])],
+    ["episode-1"],
+  );
+  assert.deepEqual(
+    [...mediaFileOwnerKeys("file-4", [byEpisode, byMovieLink])],
+    ["link-1"],
+  );
 });
 
 test("an unknown file owns nothing, so a deletion targets no rows", () => {
@@ -23,8 +29,14 @@ test("an unknown file owns nothing, so a deletion targets no rows", () => {
 });
 
 test("a file cached under several rows marks all of them", () => {
-  const shared = { "episode-1": [{ id: "file-1" }], "episode-2": [{ id: "file-1" }] };
-  assert.deepEqual([...mediaFileOwnerKeys("file-1", [shared])], ["episode-1", "episode-2"]);
+  const shared = {
+    "episode-1": [{ id: "file-1" }],
+    "episode-2": [{ id: "file-1" }],
+  };
+  assert.deepEqual(
+    [...mediaFileOwnerKeys("file-1", [shared])],
+    ["episode-1", "episode-2"],
+  );
 });
 
 test("a completed single-file run removes only the file it was asked to delete", () => {
@@ -40,9 +52,12 @@ test("a completed single-file run removes only the file it was asked to delete",
   };
   const deleted = deletedMediaFileIds(run);
   assert.deepEqual([...(deleted ?? [])], ["file-2"]);
-  assert.deepEqual(dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])), {
-    "episode-1": [{ id: "file-1", role: "primary" }],
-  });
+  assert.deepEqual(
+    dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])),
+    {
+      "episode-1": [{ id: "file-1", role: "primary" }],
+    },
+  );
 });
 
 test("a failed single-file run removes nothing from the cache", () => {
@@ -52,7 +67,10 @@ test("a failed single-file run removes nothing from the cache", () => {
     summaryJson: { fileId: "file-2", deleteFromDisk: true },
   });
   assert.equal(deleted?.size, 0);
-  assert.deepEqual(dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])), cached);
+  assert.deepEqual(
+    dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])),
+    cached,
+  );
 });
 
 test("a batch run's reported ids are trusted whatever the run status", () => {
@@ -71,8 +89,11 @@ test("an unusable summary drops every targeted row instead", () => {
   for (const summaryJson of [null, "not json", { deletedFileIds: [1] }, {}]) {
     const deleted = deletedMediaFileIds({ status: "COMPLETED", summaryJson });
     assert.equal(deleted, null);
-    assert.deepEqual(dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])), {
-      "episode-2": [{ id: "file-3" }],
-    });
+    assert.deepEqual(
+      dropDeletedMediaFiles(cached, deleted, new Set(["episode-1"])),
+      {
+        "episode-2": [{ id: "file-3" }],
+      },
+    );
   }
 });

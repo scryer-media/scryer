@@ -3,7 +3,11 @@ import { createPortal } from "react-dom";
 import { useTranslate } from "@/lib/context/translate-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { resolveFloatingPanelPlacement } from "@/lib/floating-panel";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { overlayCapsCategories } from "@/lib/utils/indexer-caps-categories";
@@ -59,7 +63,10 @@ export const indexerCategoryLabelMap: Record<string, string> = {
   "2060": "settings.indexerCategoryThreeD",
 };
 
-export const INDEXER_CATEGORY_DEFINITIONS: Record<string, IndexerCategoryGroupDefinition> = {
+export const INDEXER_CATEGORY_DEFINITIONS: Record<
+  string,
+  IndexerCategoryGroupDefinition
+> = {
   series: {
     labelKey: "series",
     code: "5000",
@@ -90,9 +97,7 @@ export const INDEXER_CATEGORY_DEFINITIONS: Record<string, IndexerCategoryGroupDe
   other: {
     labelKey: "other",
     code: "8000",
-    categories: [
-      { code: "8010", labelKey: "settings.indexerCategoryMisc" },
-    ],
+    categories: [{ code: "8010", labelKey: "settings.indexerCategoryMisc" }],
   },
 };
 
@@ -113,13 +118,19 @@ export function sortCategoryCodes(values: string[]): string[] {
 
     if (Number.isNaN(leftNumber) || Number.isNaN(rightNumber)) {
       if (Number.isNaN(leftNumber) && Number.isNaN(rightNumber)) {
-        return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+        return left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
       }
       return Number.isNaN(leftNumber) ? 1 : -1;
     }
 
     return leftNumber === rightNumber
-      ? left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
+      ? left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
       : leftNumber - rightNumber;
   });
 }
@@ -146,7 +157,10 @@ export function formatCategoryCodeList(codes: string[]): string {
   return formatTagsInput(sortCategoryCodes(normalizeCategoryCodes(codes)));
 }
 
-export function getSortedCategoryCodesByScope(scope: CategoryPickerScope, values: string[]) {
+export function getSortedCategoryCodesByScope(
+  scope: CategoryPickerScope,
+  values: string[],
+) {
   const normalized = normalizeCategoryCodes(values);
   const scopeGroups = INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope]
     .map((groupKey) => {
@@ -154,7 +168,9 @@ export function getSortedCategoryCodesByScope(scope: CategoryPickerScope, values
       return [group.code, ...group.categories.map((category) => category.code)];
     })
     .flat();
-  const orderedKnownCodes = scopeGroups.filter((code) => normalized.includes(code));
+  const orderedKnownCodes = scopeGroups.filter((code) =>
+    normalized.includes(code),
+  );
   const unknownCodes = normalized.filter((code) => !scopeGroups.includes(code));
   return [...orderedKnownCodes, ...unknownCodes];
 }
@@ -251,19 +267,24 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   // The panel is portalled, so any remount — a transient `disabled` flip while a
   // save is in flight, for instance — would otherwise drop the reader back at the
   // top of a long category list mid-selection.
-  const attachFloatingPanel = React.useCallback((node: HTMLDivElement | null) => {
-    floatingPanelRef.current = node;
-    if (node) {
-      node.scrollTop = panelScrollTopRef.current;
-    }
-  }, []);
+  const attachFloatingPanel = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      floatingPanelRef.current = node;
+      if (node) {
+        node.scrollTop = panelScrollTopRef.current;
+      }
+    },
+    [],
+  );
 
   const syncPickerRect = React.useCallback(() => {
     if (!pickerRef.current || typeof window === "undefined") {
       return;
     }
     const nextRect = pickerRef.current.getBoundingClientRect();
-    setPickerRect((previous) => (isSameRect(previous, nextRect) ? previous : nextRect));
+    setPickerRect((previous) =>
+      isSameRect(previous, nextRect) ? previous : nextRect,
+    );
   }, []);
 
   React.useEffect(() => {
@@ -344,7 +365,12 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   };
 
   const capsOverlay = React.useMemo(
-    () => overlayCapsCategories(scope, capsCategories, knownCategoryCodesForScope(scope)),
+    () =>
+      overlayCapsCategories(
+        scope,
+        capsCategories,
+        knownCategoryCodesForScope(scope),
+      ),
     [scope, capsCategories],
   );
   const capsOfferedCodes = React.useMemo(
@@ -372,51 +398,95 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
   // routing save is in flight, and unmounting the portal on that blip is what made
   // the panel jump back to the top after every checkbox. Every control inside is
   // already disabled individually.
-  const floatingPanel = isOpen && panelPlacement
-    ? createPortal(
-        <div
-          id={panelId}
-          ref={attachFloatingPanel}
-          onScroll={(event) => {
-            panelScrollTopRef.current = event.currentTarget.scrollTop;
-          }}
-          className="z-50 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg"
-          style={{
-            position: "fixed",
-            top: panelPlacement.top,
-            left: panelPlacement.left,
-            width: panelPlacement.width,
-            maxHeight: panelPlacement.maxHeight,
-          }}
-        >
-          {INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope].map((groupKey) => {
-            const group = INDEXER_CATEGORY_DEFINITIONS[groupKey];
-            return (
-              <div key={groupKey} className="mb-2 last:mb-0">
-                <label className="mb-1 flex items-center justify-between rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60">
-                  <span className="flex items-center gap-2">
-                    <Checkbox
-                      id={
-                        categoryIdPrefix
-                          ? selectorId(categoryIdPrefix, group.code)
-                          : undefined
-                      }
-                      checked={selectedSet.has(group.code)}
-                      onCheckedChange={() => toggleCategoryHeader(groupKey)}
-                      aria-label={`${t("indexerCategory.labelCategory")}: ${t(group.labelKey)} ${group.code}`}
-                      disabled={disabled}
-                    />
-                    {t(group.labelKey)}
-                  </span>
-                  <span className="text-xs font-[var(--font-code)] text-muted-foreground">{group.code}</span>
-                </label>
+  const floatingPanel =
+    isOpen && panelPlacement
+      ? createPortal(
+          <div
+            id={panelId}
+            ref={attachFloatingPanel}
+            onScroll={(event) => {
+              panelScrollTopRef.current = event.currentTarget.scrollTop;
+            }}
+            className="z-50 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-[0_18px_42px_rgba(0,0,0,0.42)]"
+            style={{
+              position: "fixed",
+              top: panelPlacement.top,
+              left: panelPlacement.left,
+              width: panelPlacement.width,
+              maxHeight: panelPlacement.maxHeight,
+            }}
+          >
+            {INDEXER_CATEGORY_GROUPS_BY_SCOPE[scope].map((groupKey) => {
+              const group = INDEXER_CATEGORY_DEFINITIONS[groupKey];
+              return (
+                <div key={groupKey} className="mb-2 last:mb-0">
+                  <label className="mb-1 flex items-center justify-between rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60">
+                    <span className="flex items-center gap-2">
+                      <Checkbox
+                        id={
+                          categoryIdPrefix
+                            ? selectorId(categoryIdPrefix, group.code)
+                            : undefined
+                        }
+                        checked={selectedSet.has(group.code)}
+                        onCheckedChange={() => toggleCategoryHeader(groupKey)}
+                        aria-label={`${t("indexerCategory.labelCategory")}: ${t(group.labelKey)} ${group.code}`}
+                        disabled={disabled}
+                      />
+                      {t(group.labelKey)}
+                    </span>
+                    <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                      {group.code}
+                    </span>
+                  </label>
+                  <div className="space-y-1 pl-3">
+                    {group.categories.map((category) => (
+                      <label
+                        key={category.code}
+                        className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60"
+                      >
+                        <span className="flex items-center gap-2 text-foreground">
+                          <Checkbox
+                            id={
+                              categoryIdPrefix
+                                ? selectorId(categoryIdPrefix, category.code)
+                                : undefined
+                            }
+                            checked={selectedSet.has(category.code)}
+                            onCheckedChange={() =>
+                              toggleCategory(category.code)
+                            }
+                            aria-label={`${t("indexerCategory.labelCategory")}: ${t(category.labelKey)} ${category.code}`}
+                            disabled={disabled}
+                          />
+                          {t(category.labelKey)}
+                          {capsOverlay.labelsByCode.has(category.code) ? (
+                            <span className="truncate normal-case text-xs text-muted-foreground">
+                              {capsOverlay.labelsByCode.get(category.code)}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                          {category.code}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {capsOverlay.extraCategories.length > 0 ? (
+              <div className="mt-2 border-t border-border pt-2">
+                <div className="mb-1 px-2 text-sm text-foreground">
+                  {t("settings.indexerRoutingIndexerCategories")}
+                </div>
                 <div className="space-y-1 pl-3">
-                  {group.categories.map((category) => (
+                  {capsOverlay.extraCategories.map((category) => (
                     <label
                       key={category.code}
-                      className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm capitalize text-foreground hover:bg-accent/60"
+                      className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
                     >
-                      <span className="flex items-center gap-2 text-foreground">
+                      <span className="flex min-w-0 items-center gap-2 text-foreground">
                         <Checkbox
                           id={
                             categoryIdPrefix
@@ -425,110 +495,89 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
                           }
                           checked={selectedSet.has(category.code)}
                           onCheckedChange={() => toggleCategory(category.code)}
-                          aria-label={`${t("indexerCategory.labelCategory")}: ${t(category.labelKey)} ${category.code}`}
+                          aria-label={`${t("indexerCategory.labelCategory")}: ${category.label ?? category.code} ${category.code}`}
                           disabled={disabled}
                         />
-                        {t(category.labelKey)}
-                        {capsOverlay.labelsByCode.has(category.code) ? (
-                          <span className="truncate normal-case text-xs text-muted-foreground">
-                            {capsOverlay.labelsByCode.get(category.code)}
-                          </span>
-                        ) : null}
+                        <span className="truncate">
+                          {category.label ?? category.code}
+                        </span>
                       </span>
-                      <span className="text-xs font-[var(--font-code)] text-muted-foreground">{category.code}</span>
+                      <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                        {category.code}
+                      </span>
                     </label>
                   ))}
                 </div>
               </div>
-            );
-          })}
-          {capsOverlay.extraCategories.length > 0 ? (
+            ) : null}
             <div className="mt-2 border-t border-border pt-2">
               <div className="mb-1 px-2 text-sm text-foreground">
-                {t("settings.indexerRoutingIndexerCategories")}
+                {t("settings.indexerRoutingCustomCategories")}
               </div>
-              <div className="space-y-1 pl-3">
-                {capsOverlay.extraCategories.map((category) => (
-                  <label
-                    key={category.code}
-                    className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
-                  >
-                    <span className="flex min-w-0 items-center gap-2 text-foreground">
-                      <Checkbox
-                        id={
-                          categoryIdPrefix
-                            ? selectorId(categoryIdPrefix, category.code)
-                            : undefined
-                        }
-                        checked={selectedSet.has(category.code)}
-                        onCheckedChange={() => toggleCategory(category.code)}
-                        aria-label={`${t("indexerCategory.labelCategory")}: ${category.label ?? category.code} ${category.code}`}
-                        disabled={disabled}
-                      />
-                      <span className="truncate">{category.label ?? category.code}</span>
-                    </span>
-                    <span className="text-xs font-[var(--font-code)] text-muted-foreground">{category.code}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <div className="mt-2 border-t border-border pt-2">
-            <div className="mb-1 px-2 text-sm text-foreground">
-              {t("settings.indexerRoutingCustomCategories")}
-            </div>
-            {customCodes.length > 0 ? (
-              <div className="space-y-1 pl-3">
-                {customCodes.map((code) => (
-                  <label
-                    key={code}
-                    className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
-                  >
-                    <span className="flex items-center gap-2 text-foreground">
-                      <Checkbox
-                        id={categoryIdPrefix ? selectorId(categoryIdPrefix, code) : undefined}
-                        checked={selectedSet.has(code)}
-                        onCheckedChange={() => toggleCategory(code)}
-                        aria-label={`${t("indexerCategory.labelCategory")}: ${code}`}
-                        disabled={disabled}
-                      />
-                      {code}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            ) : null}
-            <form
-              className="mt-1 flex items-center gap-2 px-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                addCustomCode();
-              }}
-            >
-              <Input
-                {...integerInputProps}
-                id={categoryIdPrefix ? selectorId(categoryIdPrefix, "custom-code") : undefined}
-                value={customCodeDraft}
-                onChange={(event) => setCustomCodeDraft(sanitizeDigits(event.target.value))}
-                placeholder={t("settings.indexerRoutingCustomCategoryPlaceholder")}
-                aria-label={t("settings.indexerRoutingCustomCategories")}
-                disabled={disabled}
-                className="h-8 text-sm"
-              />
-              <Button
-                type="submit"
-                variant="secondary"
-                size="sm"
-                disabled={disabled || !canAddCustomCode}
+              {customCodes.length > 0 ? (
+                <div className="space-y-1 pl-3">
+                  {customCodes.map((code) => (
+                    <label
+                      key={code}
+                      className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm text-foreground hover:bg-accent/60"
+                    >
+                      <span className="flex items-center gap-2 text-foreground">
+                        <Checkbox
+                          id={
+                            categoryIdPrefix
+                              ? selectorId(categoryIdPrefix, code)
+                              : undefined
+                          }
+                          checked={selectedSet.has(code)}
+                          onCheckedChange={() => toggleCategory(code)}
+                          aria-label={`${t("indexerCategory.labelCategory")}: ${code}`}
+                          disabled={disabled}
+                        />
+                        {code}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+              <form
+                className="mt-1 flex items-center gap-2 px-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  addCustomCode();
+                }}
               >
-                {t("settings.indexerRoutingCustomCategoryAdd")}
-              </Button>
-            </form>
-          </div>
-        </div>,
-        document.body,
-      )
-    : null;
+                <Input
+                  {...integerInputProps}
+                  id={
+                    categoryIdPrefix
+                      ? selectorId(categoryIdPrefix, "custom-code")
+                      : undefined
+                  }
+                  value={customCodeDraft}
+                  onChange={(event) =>
+                    setCustomCodeDraft(sanitizeDigits(event.target.value))
+                  }
+                  placeholder={t(
+                    "settings.indexerRoutingCustomCategoryPlaceholder",
+                  )}
+                  aria-label={t("settings.indexerRoutingCustomCategories")}
+                  disabled={disabled}
+                  className="h-8 text-sm"
+                />
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="sm"
+                  disabled={disabled || !canAddCustomCode}
+                >
+                  {t("settings.indexerRoutingCustomCategoryAdd")}
+                </Button>
+              </form>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
 
   return (
     <div ref={pickerRef} className="relative inline-block w-full">
@@ -544,9 +593,12 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
         <span
           className={`truncate text-left ${formatCategoryCodeList(draftCategories) ? "text-card-foreground" : "text-muted-foreground"}`}
         >
-          {formatCategoryCodeList(draftCategories) || t("settings.indexerRoutingCategoriesPlaceholder")}
+          {formatCategoryCodeList(draftCategories) ||
+            t("settings.indexerRoutingCategoriesPlaceholder")}
         </span>
-        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown
+          className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
+        />
       </Button>
       {floatingPanel}
     </div>

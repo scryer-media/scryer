@@ -914,7 +914,9 @@ impl AppUseCase {
                         .await
                     {
                         Ok(()) => {}
-                        Err(AppError::Unauthorized(_)) => return Ok(false),
+                        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+                            return Ok(false);
+                        }
                         Err(error) => return Err(error),
                     }
                 }
@@ -970,7 +972,8 @@ impl AppUseCase {
                     | JobKey::RecycleBinPurge
             )
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::jobs::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ));
         }
@@ -1110,7 +1113,7 @@ impl AppUseCase {
         let (tx, rx) = broadcast::channel(128);
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let mut receiver = app.runtime.jobs.job_run_tracker.subscribe();
             let initial_runs = match app.active_job_runs(&actor).await {
                 Ok(runs) => runs,
@@ -1126,7 +1129,10 @@ impl AppUseCase {
             }
 
             loop {
-                match receiver.recv().await {
+                match tokio::select! {
+                    _ = app.restore_coordinator().shutdown_workers.cancelled() => break,
+                    event = receiver.recv() => event,
+                } {
                     Ok(run) => {
                         if !can_manage_system {
                             match app.actor_can_view_interactive_job_run(&actor, &run).await {
@@ -1154,6 +1160,20 @@ impl AppUseCase {
         Ok(rx)
     }
 
+    /// Admit one image-maintenance invocation. Mutex waiters are FIFO, and a
+    /// queued image invocation prevents backfill's nonblocking acquisition.
+    /// Call only at the invocation boundary, never from nested cache operations.
+    pub async fn acquire_image_maintenance(
+        &self,
+        shutdown: &tokio_util::sync::CancellationToken,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => None,
+            guard = self.runtime.jobs.background_disk_maintenance.clone().lock_owned() => Some(guard),
+        }
+    }
+
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1169,15 +1189,17 @@ impl AppUseCase {
         job_key: JobKey,
     ) -> AppResult<JobRun> {
         if job_key == JobKey::CustomJob {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::CUSTOM_JOB_RUN_NEEDS_ID_SCHEDULED_SCRIPT_RUN,
                 "a custom job run needs the id of the scheduled script to run".to_string(),
             ));
         }
         let hash_start = if job_key == JobKey::FullHashBackfill {
             let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
             if self.runtime.jobs.full_hash_shutdown.is_cancelled() {
-                return Err(AppError::Validation(
-                    "Full-hash backfill is shutting down".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::jobs::FULL_HASH_BACKFILL_SHUTTING_DOWN,
+                    "Full-hash backfill is shutting down",
                 ));
             }
             if let Some(active) = self
@@ -1196,8 +1218,9 @@ impl AppUseCase {
         let artwork_start = if job_key == JobKey::ArtworkEncoding {
             let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
             if self.runtime.catalog.artwork_shutdown.is_cancelled() {
-                return Err(AppError::Validation(
-                    "Artwork encoding is shutting down".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::jobs::ARTWORK_ENCODING_SHUTTING_DOWN,
+                    "Artwork encoding is shutting down",
                 ));
             }
             if let Some(active) = self
@@ -1214,10 +1237,13 @@ impl AppUseCase {
             None
         };
         if !job_key.manual_trigger_allowed() {
-            return Err(AppError::Validation(format!(
-                "{} can only run on its configured schedule",
-                job_key.display_name()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::ONLY_RUN_CONFIGURED_SCHEDULE,
+                format!(
+                    "{} can only run on its configured schedule",
+                    job_key.display_name()
+                ),
+            ));
         }
         self.ensure_job_can_start(job_key, None).await?;
 
@@ -1254,7 +1280,7 @@ impl AppUseCase {
         let log_span = job_log_span(&run, actor);
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(
+        self.restore_coordinator().spawn_task(
             async move {
                 if let Err(error) = app
                     .run_job_run(run, JobExecutionPrincipal::User(actor), event_actor)
@@ -1429,17 +1455,34 @@ impl AppUseCase {
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
+        // First-run import supplies authoritative source identities. Automatic
+        // scans must not bind those folders before the wizard has installed them.
+        if trigger_source != JobTriggerSource::Manual && !self.setup_complete().await? {
+            return Ok(());
+        }
         let facet = job_key_library_facet(job_key).expect("library job facet");
         let libraries = self.services.catalog.libraries.list(Some(facet)).await?;
         if libraries.is_empty() {
-            return Err(AppError::Validation(format!(
-                "{} has no libraries",
-                job_key.display_name()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::NO_LIBRARIES,
+                format!("{} has no libraries", job_key.display_name()),
+            ));
         }
 
         let mut first_error = None;
         for library in libraries {
+            // Setup can finish before its hinted full scan starts. Keep automatic
+            // scans behind that scan until it consumes the source monitoring state.
+            if trigger_source != JobTriggerSource::Manual
+                && self
+                    .has_pending_external_import_monitor_snapshot_for_library(
+                        &library.facet,
+                        &library.id,
+                    )
+                    .await?
+            {
+                continue;
+            }
             if let Err(error) = self.ensure_job_can_start(job_key, Some(&library.id)).await {
                 if first_error.is_none() {
                     first_error = Some(error.to_string());
@@ -1488,7 +1531,10 @@ impl AppUseCase {
         }
 
         if let Some(error) = first_error {
-            Err(AppError::Validation(error))
+            Err(AppError::validation_refused(
+                crate::error_reasons::jobs::TASK_FAILED,
+                error,
+            ))
         } else {
             Ok(())
         }
@@ -1632,10 +1678,10 @@ impl AppUseCase {
             .has_active_job(job_key)
             .await
         {
-            return Err(AppError::Validation(format!(
-                "{} is already running",
-                job_key.display_name()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::jobs::ALREADY_RUNNING,
+                format!("{} is already running", job_key.display_name()),
+            ));
         }
 
         if let Some(facet) = job_key_library_facet(job_key) {
@@ -1657,10 +1703,10 @@ impl AppUseCase {
                 .has_conflicting_session(&facet, Some(&library_id))
                 .await
             {
-                return Err(AppError::Validation(format!(
-                    "{} library scan is already running",
-                    facet.as_str()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::SCAN_ALREADY_RUNNING,
+                    format!("{} library scan is already running", facet.as_str()),
+                ));
             }
         }
 
@@ -1777,8 +1823,9 @@ impl AppUseCase {
             | JobKey::BackgroundLibraryRefreshSeries
             | JobKey::BackgroundLibraryRefreshAnime => {
                 if !background_library_refresh_enabled() {
-                    return Err(AppError::Validation(
-                        "background library refresh is temporarily disabled".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::jobs::BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
+                        "background library refresh is temporarily disabled",
                     ));
                 }
                 let summary = if let Some(library_id) = job_run_library_id(run) {
@@ -2080,10 +2127,12 @@ impl AppUseCase {
                 use futures_util::FutureExt;
                 // Keep a panicking backfill from leaving an active tracker
                 // entry that would block every later manual/scheduled retry.
-                let summary = std::panic::AssertUnwindSafe(self.run_full_hash_backfill_job())
-                    .catch_unwind()
-                    .await
-                    .map_err(|_| AppError::Repository("Full-hash backfill panicked".into()))??;
+                let summary = std::panic::AssertUnwindSafe(
+                    self.run_full_hash_backfill_job(run.trigger_source),
+                )
+                .catch_unwind()
+                .await
+                .map_err(|_| AppError::Repository("Full-hash backfill panicked".into()))??;
                 let mut outcome = JobExecutionOutcome::new(
                     Some(summary.summary_text()),
                     serde_json::to_string(&summary).ok(),
@@ -2113,35 +2162,41 @@ impl AppUseCase {
                     serde_json::to_string(&summary).ok(),
                 ))
             }
-            JobKey::TitleDeletion => Err(AppError::Validation(
-                "title deletion jobs must be started from the title deletion mutation".into(),
+            JobKey::TitleDeletion => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::TITLE_DELETION_JOBS_INVALID,
+                "title deletion jobs must be started from the title deletion mutation",
             )),
-            JobKey::TitleRename => Err(AppError::Validation(
-                "title rename jobs must be started from the rename mutation".into(),
+            JobKey::TitleRename => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::TITLE_RENAME_JOBS_INVALID,
+                "title rename jobs must be started from the rename mutation",
             )),
-            JobKey::MediaFileDeletion => Err(AppError::Validation(
-                "media file deletion jobs must be started from the media file deletion mutation"
-                    .into(),
+            JobKey::MediaFileDeletion => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::MEDIA_FILE_DELETION_JOBS_INVALID,
+                "media file deletion jobs must be started from the media file deletion mutation",
             )),
-            JobKey::MediaFileRescore => Err(AppError::Validation(
-                "select files, seasons, or titles to refresh scores".into(),
+            JobKey::MediaFileRescore => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES,
+                "select files, seasons, or titles to refresh scores",
             )),
-            JobKey::RecycleBinRestore => Err(AppError::Validation(
-                "recycle restore jobs must be started from the recycle restore mutation".into(),
+            JobKey::RecycleBinRestore => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::RECYCLE_RESTORE_JOBS_INVALID,
+                "recycle restore jobs must be started from the recycle restore mutation",
             )),
-            JobKey::RecycleBinPurge => Err(AppError::Validation(
-                "recycle purge jobs must be started from the recycle bin mutation".into(),
+            JobKey::RecycleBinPurge => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::RECYCLE_PURGE_JOBS_INVALID,
+                "recycle purge jobs must be started from the recycle bin mutation",
             )),
-            JobKey::AcquisitionSearch => Err(AppError::Validation(
-                "acquisition search jobs must be started from the acquisition search mutation"
-                    .into(),
+            JobKey::AcquisitionSearch => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::ACQUISITION_SEARCH_JOBS_INVALID,
+                "acquisition search jobs must be started from the acquisition search mutation",
             )),
-            JobKey::ApplicationUpgrade => Err(AppError::Validation(
-                "application upgrade jobs must be started from the application upgrade mutation"
-                    .into(),
+            JobKey::ApplicationUpgrade => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::APPLICATION_UPGRADE_JOBS_INVALID,
+                "application upgrade jobs must be started from the application upgrade mutation",
             )),
-            JobKey::LocationOperation => Err(AppError::Validation(
-                "location operations must be started from the location operation mutation".into(),
+            JobKey::LocationOperation => Err(AppError::validation_refused(
+                crate::error_reasons::jobs::LOCATION_OPERATIONS_INVALID,
+                "location operations must be started from the location operation mutation",
             )),
         }
     }
@@ -3575,10 +3630,16 @@ impl AppUseCase {
     ) -> AppResult<DiscoveryContextIncrementalRunSummary> {
         let run_id = format!("context-incremental-{}", uuid::Uuid::new_v4());
         let base_generation_id = state.last_success_generation_id.clone().ok_or_else(|| {
-            AppError::Validation("discovery incremental requires an active generation".into())
+            AppError::validation_refused(
+                crate::error_reasons::jobs::DISCOVERY_INCREMENTAL_REQUIRES_ACTIVE_GENERATION,
+                "discovery incremental requires an active generation",
+            )
         })?;
         let previous_fingerprint = state.last_subject_fingerprint.clone().ok_or_else(|| {
-            AppError::Validation("discovery incremental requires a previous fingerprint".into())
+            AppError::validation_refused(
+                crate::error_reasons::jobs::DISCOVERY_INCREMENTAL_REQUIRES_PREVIOUS_FINGERPRINT,
+                "discovery incremental requires a previous fingerprint",
+            )
         })?;
         let covered_sequence = pending_changes
             .iter()
@@ -3944,7 +4005,7 @@ impl AppUseCase {
                     );
                 }
             });
-        tokio::spawn(start);
+        self.restore_coordinator().spawn_task(start);
     }
 
     pub(crate) async fn fail_job_run(
@@ -4030,7 +4091,7 @@ pub async fn start_background_library_refresh_loop(
         let initial_delay_seconds =
             background_library_refresh_initial_delay_seconds(&scheduler_seed, job_key)
                 .expect("background refresh job");
-        tokio::spawn(async move {
+        app.restore_coordinator().clone().spawn_task(async move {
             run_background_library_refresh_worker(app, token, job_key, initial_delay_seconds).await;
         });
     }

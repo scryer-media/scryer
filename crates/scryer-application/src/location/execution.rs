@@ -516,8 +516,9 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
         if tokio::fs::canonicalize(source).await.ok()
             == tokio::fs::canonicalize(destination).await.ok()
         {
-            return Err(AppError::Validation(
-                "source and destination are the same path".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+                "source and destination are the same path",
             ));
         }
         return Ok(same_regular_file(&source_metadata, &destination_metadata));
@@ -533,8 +534,9 @@ async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppRes
                     ))
                 })?;
             if !same_regular_file(&source_metadata, &placed) {
-                return Err(AppError::Validation(
-                    "source changed during file placement".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SOURCE_CHANGED_DURING_FILE_PLACEMENT,
+                    "source changed during file placement",
                 ));
             }
             Ok(true)
@@ -612,9 +614,10 @@ impl<'a> RootMoveReconciler<'a> {
 
     fn title(&self, title_id: &str) -> AppResult<&RootMoveTitleExecution> {
         self.plan.title(title_id).ok_or_else(|| {
-            AppError::Validation(format!(
-                "the confirmed plan has no instructions for title {title_id}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::location::CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE,
+                format!("the confirmed plan has no instructions for title {title_id}"),
+            )
         })
     }
 
@@ -646,10 +649,13 @@ impl<'a> RootMoveReconciler<'a> {
         outcome: &mut TitleStepOutcome,
     ) -> AppResult<()> {
         let merges = self.merges.ok_or_else(|| {
-            AppError::Validation(format!(
-                "\"{}\" merges into {destination_title_id}, but no merge engine is configured",
-                planned.title_name
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::location::MERGE_UNAVAILABLE,
+                format!(
+                    "\"{}\" merges into {destination_title_id}, but no merge engine is configured",
+                    planned.title_name
+                ),
+            )
         })?;
 
         let snapshot = merges
@@ -669,13 +675,16 @@ impl<'a> RootMoveReconciler<'a> {
         // title rather than a merge attached to a guess. A failed title is
         // contained — the rest of the operation runs on.
         if plan.is_blocked() {
-            return Err(AppError::Validation(format!(
-                "\"{}\" can no longer merge into {destination_title_id}: {}",
-                planned.title_name,
-                plan.summary
-                    .blocked_reason()
-                    .unwrap_or_else(|| "unmappable records".to_string())
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::MERGE_UNAVAILABLE,
+                format!(
+                    "\"{}\" can no longer merge into {destination_title_id}: {}",
+                    planned.title_name,
+                    plan.summary
+                        .blocked_reason()
+                        .unwrap_or_else(|| "unmappable records".to_string())
+                ),
+            ));
         }
 
         let identity_map = plan.require_identity_map()?.clone();
@@ -796,7 +805,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             .await?;
         for resolution in &resolutions {
             if !resolution.proof_is_current().await {
-                return Err(AppError::Validation("A file changed before the catalog update. Its source was preserved; retry to compare it again.".into()));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::VERIFICATION_MISMATCH,
+                    "A file changed before the catalog update. Its source was preserved; retry to compare it again.",
+                ));
             }
             if let Some(warning) = &resolution.warning {
                 // A transfer-time rename is FR-074/FR-075 doing its job, not a
@@ -931,7 +943,10 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     continue;
                 }
                 if !row.proof_is_current().await {
-                    return Err(AppError::Validation("A file changed before source cleanup. The source was preserved; retry to compare it again.".into()));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::FILE_CHANGED_BEFORE_SOURCE_CLEANUP,
+                        "A file changed before source cleanup. The source was preserved; retry to compare it again.",
+                    ));
                 }
                 resolved.destination_path = row.destination_path.clone();
             }
@@ -956,10 +971,8 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // before this source is dropped without a recycle bin behind
                 // it.
                 if !row.proof_supports_disposal().await? {
-                    return Err(AppError::Validation(
-                        "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
-                            .into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::location::DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE, "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
+                            ));
                 }
                 let source = stored_path_to_path_buf(&file.source_path);
                 match tokio::fs::remove_file(&source).await {
@@ -983,8 +996,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             if record.hashes.is_none() {
                 let source = stored_path_to_path_buf(&file.source_path);
                 if source == file.destination() {
-                    return Err(AppError::Validation(
-                        "source and destination are the same path".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::SOURCE_DESTINATION_SAME_PATH,
+                        "source and destination are the same path",
                     ));
                 }
                 let source_metadata = match tokio::fs::symlink_metadata(&source).await {
@@ -1011,10 +1025,13 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     false
                 };
                 if !same_regular_file(&source_metadata, &destination_metadata) && !same_link {
-                    return Err(AppError::Validation(format!(
-                        "source or destination changed before cleanup: {}",
-                        file.source_path
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+                        format!(
+                            "source or destination changed before cleanup: {}",
+                            file.source_path
+                        ),
+                    ));
                 }
                 tokio::fs::remove_file(&source)
                     .await
@@ -1029,8 +1046,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(AppError::Repository(error.to_string())),
                 Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                    return Err(AppError::Validation(
-                        "Source changed before cleanup; preserved it.".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
+                        "Source changed before cleanup; preserved it.",
                     ));
                 }
                 Ok(_) => {}
@@ -1049,8 +1067,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 || super::resolution::file_version(&source).await? != source_version
                 || super::resolution::file_version(&destination).await? != destination_version
             {
-                return Err(AppError::Validation(
-                    "Source or destination changed before cleanup; preserved the source.".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+                    "Source or destination changed before cleanup; preserved the source.",
                 ));
             }
             let disposal = self

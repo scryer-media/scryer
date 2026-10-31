@@ -346,14 +346,16 @@ function itemContentType(item: DiscoveryHomeCard): DiscoveryContentType | null {
 }
 
 function discoveryItemDisplayGenreLabels(item: DiscoveryHomeHero): string[] {
-  return [...new Set(item.genreTags.map((tag) => tag.name.trim()).filter(Boolean))];
+  return [
+    ...new Set(item.genreTags.map((tag) => tag.name.trim()).filter(Boolean)),
+  ];
 }
 
 function discoveryItemHasUsefulTitle(item: DiscoveryHomeCard) {
   return Boolean(
     usefulDiscoveryTitle(item.displayTitle) ||
-      usefulDiscoveryTitle(item.sortTitle) ||
-      usefulDiscoveryTitle(item.originalTitle),
+    usefulDiscoveryTitle(item.sortTitle) ||
+    usefulDiscoveryTitle(item.originalTitle),
   );
 }
 
@@ -541,11 +543,14 @@ function DiscoveryHero({
     (detail): detail is string => Boolean(detail),
   );
   const backdropUrl = heroBackdropUrl(item);
-  const [failedBackdropUrl, setFailedBackdropUrl] = React.useState<string | null>(null);
+  const [failedBackdropUrl, setFailedBackdropUrl] = React.useState<
+    string | null
+  >(null);
   React.useEffect(() => {
     setFailedBackdropUrl(null);
   }, [backdropUrl]);
-  const displayedBackdropUrl = failedBackdropUrl === backdropUrl ? null : backdropUrl;
+  const displayedBackdropUrl =
+    failedBackdropUrl === backdropUrl ? null : backdropUrl;
   const heroActionAvailable =
     !item.ownedInInput && (canManageTitle || canRequestMedia);
   const HeroActionIcon = canManageTitle ? Plus : Send;
@@ -553,7 +558,10 @@ function DiscoveryHero({
     ? t("discovery.add")
     : t("discovery.request");
   return (
-    <section className="group relative min-h-[340px] overflow-hidden rounded-[18px] border border-[var(--scry-border2)] bg-slate-950 lg:h-full">
+    <section
+      id="discovery-hero"
+      className="group relative min-h-[340px] overflow-hidden rounded-[18px] border border-[var(--scry-border2)] bg-slate-950 lg:h-full"
+    >
       {displayedBackdropUrl ? (
         <img
           src={displayedBackdropUrl}
@@ -581,12 +589,13 @@ function DiscoveryHero({
           <button
             type="button"
             onClick={() => onAction(item)}
+            id="discovery-hero-action"
             aria-label={`${heroActionLabel}: ${titleLabel}`}
             className="absolute inset-0 z-20 cursor-pointer rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
           />
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute left-1/2 top-1/2 z-40 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[16px] bg-[var(--scry-accent)] text-primary-foreground opacity-0 shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.45),0_0_36px_rgba(var(--scry-accent-rgb),calc(0.5*var(--scry-glow))),0_18px_36px_rgba(0,0,0,0.42)] transition duration-200 group-hover:opacity-100 group-focus-within:opacity-100"
+            className="pointer-events-none absolute left-1/2 top-1/2 z-40 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[16px] bg-[var(--scry-accent)] text-primary-foreground opacity-0 shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.45),0_18px_36px_rgba(0,0,0,0.42)] transition duration-200 group-hover:opacity-100 group-focus-within:opacity-100"
           >
             <HeroActionIcon className="h-7 w-7" aria-hidden="true" />
           </span>
@@ -612,7 +621,10 @@ function DiscoveryHero({
               {itemTypeLabel(item)}
             </span>
           </div>
-          <h2 className="m-0 mb-3 font-[var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow">
+          <h2
+            id="discovery-hero-title"
+            className="m-0 mb-3 font-[var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow"
+          >
             {titleLabel}
           </h2>
           <div className="mb-3.5 flex flex-wrap items-center gap-3 text-[13px] text-[var(--scry-text2)]">
@@ -814,8 +826,12 @@ function DiscoveryFilters({
           : t("discovery.type.anime"),
   }));
   const { genres, themes, studioSlugs: studioSlugOptions } = filterOptions;
-  const genreLabels = new Map(genres.map((option) => [option.key, option.name]));
-  const themeLabels = new Map(themes.map((option) => [option.key, option.name]));
+  const genreLabels = new Map(
+    genres.map((option) => [option.key, option.name]),
+  );
+  const themeLabels = new Map(
+    themes.map((option) => [option.key, option.name]),
+  );
   const minimumYearBound = DEFAULT_MINIMUM_YEAR;
   const maximumYearBound = defaultMaximumDiscoveryYear();
   const yearSpan = Math.max(1, maximumYearBound - minimumYearBound);
@@ -840,7 +856,7 @@ function DiscoveryFilters({
             <SlidersHorizontal className="h-[18px] w-[18px]" />
           </div>
           <span className="text-[16px] font-semibold text-[var(--scry-ink2)]">
-          {t("discovery.filters")}
+            {t("discovery.filters")}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -874,7 +890,9 @@ function DiscoveryFilters({
           ) : null}
         </div>
       </div>
-      <DiscoveryFilterLabel icon={<Disc3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+      <DiscoveryFilterLabel
+        icon={<Disc3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+      >
         {t("discovery.contentType")}
       </DiscoveryFilterLabel>
       <div className="mb-5 grid gap-2">
@@ -904,7 +922,9 @@ function DiscoveryFilters({
           </button>
         ))}
       </div>
-      <DiscoveryFilterLabel icon={<Film className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+      <DiscoveryFilterLabel
+        icon={<Film className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+      >
         {t("discovery.genres")}
       </DiscoveryFilterLabel>
       <div className="mb-5">
@@ -925,7 +945,9 @@ function DiscoveryFilters({
           }
         />
       </div>
-      <DiscoveryFilterLabel icon={<Tag className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+      <DiscoveryFilterLabel
+        icon={<Tag className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+      >
         {t("discovery.tags")}
       </DiscoveryFilterLabel>
       <div className="mb-5">
@@ -948,7 +970,11 @@ function DiscoveryFilters({
       </div>
       {studioSlugOptions.length > 0 ? (
         <>
-          <DiscoveryFilterLabel icon={<Building2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+          <DiscoveryFilterLabel
+            icon={
+              <Building2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            }
+          >
             {t("discovery.studio")}
           </DiscoveryFilterLabel>
           <div className="mb-5 flex flex-wrap gap-2">
@@ -977,7 +1003,11 @@ function DiscoveryFilters({
         </>
       ) : null}
       <div className="mb-2.5 flex items-center justify-between">
-        <DiscoveryFilterLabel icon={<CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+        <DiscoveryFilterLabel
+          icon={
+            <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          }
+        >
           {t("discovery.releaseYear")}
         </DiscoveryFilterLabel>
         <span className="text-[11.5px] text-[var(--scry-faint)]">
@@ -1000,7 +1030,9 @@ function DiscoveryFilters({
           value={minimumYear}
           aria-label={t("discovery.releaseYear")}
           onChange={(event) =>
-            onMinimumYearChange(Math.min(Number(event.target.value), maximumYear))
+            onMinimumYearChange(
+              Math.min(Number(event.target.value), maximumYear),
+            )
           }
           className={cn(
             "absolute left-0 right-0 top-1/2 -translate-y-1/2 bg-transparent",
@@ -1015,7 +1047,9 @@ function DiscoveryFilters({
           value={maximumYear}
           aria-label={t("discovery.releaseYear")}
           onChange={(event) =>
-            onMaximumYearChange(Math.max(Number(event.target.value), minimumYear))
+            onMaximumYearChange(
+              Math.max(Number(event.target.value), minimumYear),
+            )
           }
           className={cn(
             "absolute left-0 right-0 top-1/2 -translate-y-1/2 bg-transparent",
@@ -1025,7 +1059,9 @@ function DiscoveryFilters({
         />
       </div>
       <div className="mb-2.5 flex items-center justify-between">
-        <DiscoveryFilterLabel icon={<Star className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+        <DiscoveryFilterLabel
+          icon={<Star className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+        >
           {t("discovery.minimumRating")}
         </DiscoveryFilterLabel>
         <span className="text-[11.5px] font-bold text-[var(--scry-accent-ring)]">
@@ -1044,7 +1080,9 @@ function DiscoveryFilters({
           max={10}
           step={0.5}
           value={minimumRating}
-          onChange={(event) => onMinimumRatingChange(Number(event.target.value))}
+          onChange={(event) =>
+            onMinimumRatingChange(Number(event.target.value))
+          }
           className={cn(
             "absolute left-0 right-0 top-1/2 -translate-y-1/2",
             FILTER_RANGE_CLASS_NAME,
@@ -1102,10 +1140,7 @@ function writeHiddenItemKeys(keys: string[]) {
     return;
   }
   try {
-    window.localStorage.setItem(
-      HIDDEN_ITEMS_STORAGE_KEY,
-      JSON.stringify(keys),
-    );
+    window.localStorage.setItem(HIDDEN_ITEMS_STORAGE_KEY, JSON.stringify(keys));
   } catch {
     // Storage may be unavailable (private mode / quota) — hiding stays
     // in-memory for the session, which is acceptable for a local preference.
@@ -1258,8 +1293,7 @@ export function DiscoveryView({
   }, [discoverableFacetSet, discoverableFacets]);
   const [selectedGenres, setSelectedGenres] = React.useState<string[]>([]);
   const [selectedThemes, setSelectedThemes] = React.useState<string[]>([]);
-  const [minimumYear, setMinimumYear] =
-    React.useState(DEFAULT_MINIMUM_YEAR);
+  const [minimumYear, setMinimumYear] = React.useState(DEFAULT_MINIMUM_YEAR);
   const [maximumYear, setMaximumYear] = React.useState(
     defaultMaximumDiscoveryYear,
   );
@@ -1272,10 +1306,7 @@ export function DiscoveryView({
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [filterRailCollapsed, setFilterRailCollapsed] = React.useState(false);
   const { hiddenKeys, hideItem, resetHidden } = useHiddenDiscoveryItems();
-  const orderedResult = React.useMemo(
-    () => orderedHomeSections(home),
-    [home],
-  );
+  const orderedResult = React.useMemo(() => orderedHomeSections(home), [home]);
   const orderedSections = orderedResult.sections;
   const capabilitySections = React.useMemo(
     () => sectionsForDiscoveryFacets(orderedSections, discoverableFacetSet),
@@ -1368,14 +1399,10 @@ export function DiscoveryView({
     serverFiltersRef.current = serverFilters;
     serverFiltersSignatureRef.current = serverFiltersSignature;
   }, [serverFilters, serverFiltersSignature]);
-  const lastPublishedFiltersSignatureRef = React.useRef(
-    serverFiltersSignature,
-  );
+  const lastPublishedFiltersSignatureRef = React.useRef(serverFiltersSignature);
   React.useEffect(() => {
     const currentSignature = serverFiltersSignatureRef.current;
-    if (
-      lastPublishedFiltersSignatureRef.current === currentSignature
-    ) {
+    if (lastPublishedFiltersSignatureRef.current === currentSignature) {
       return;
     }
     lastPublishedFiltersSignatureRef.current = currentSignature;
@@ -1389,23 +1416,18 @@ export function DiscoveryView({
   ]);
   React.useEffect(() => {
     const expectedSignature = serverFiltersSignatureRef.current;
-    if (
-      lastPublishedFiltersSignatureRef.current === expectedSignature
-    ) {
+    if (lastPublishedFiltersSignatureRef.current === expectedSignature) {
       return;
     }
-    const timeout = window.setTimeout(
-      () => {
-        const currentFilters = serverFiltersRef.current;
-        const currentSignature = discoveryHomeFiltersSignature(currentFilters);
-        if (lastPublishedFiltersSignatureRef.current === currentSignature) {
-          return;
-        }
-        lastPublishedFiltersSignatureRef.current = currentSignature;
-        onFiltersChange(currentFilters);
-      },
-      250,
-    );
+    const timeout = window.setTimeout(() => {
+      const currentFilters = serverFiltersRef.current;
+      const currentSignature = discoveryHomeFiltersSignature(currentFilters);
+      if (lastPublishedFiltersSignatureRef.current === currentSignature) {
+        return;
+      }
+      lastPublishedFiltersSignatureRef.current = currentSignature;
+      onFiltersChange(currentFilters);
+    }, 250);
     return () => window.clearTimeout(timeout);
   }, [
     effectiveMaximumYear,
@@ -1413,10 +1435,7 @@ export function DiscoveryView({
     minimumRating,
     onFiltersChange,
   ]);
-  const sections = React.useMemo(
-    () => rawSections,
-    [rawSections],
-  );
+  const sections = React.useMemo(() => rawSections, [rawSections]);
   const heroSections = React.useMemo(
     () =>
       // Pre-floor list: a thin rail hidden from the page must not blank the
@@ -1430,21 +1449,18 @@ export function DiscoveryView({
       ).filter((section) => !sectionIsCompleteCollection(section)),
     [discoverableFacetSet, hiddenKeys, orderedResult.heroVisibilitySections],
   );
-  const heroItem = React.useMemo(
-    () => {
-      const configuredHeroFacet = home?.heroItem
-        ? discoveryItemFacet(home.heroItem)
-        : null;
-      return home?.heroItem &&
-        configuredHeroFacet !== null &&
-        discoverableFacetSet.has(configuredHeroFacet) &&
-        discoveryItemHasUsefulTitle(home.heroItem) &&
-        heroItemIsVisibleInSections(home.heroItem, heroSections)
-        ? home.heroItem
-        : null;
-    },
-    [discoverableFacetSet, heroSections, home?.heroItem],
-  );
+  const heroItem = React.useMemo(() => {
+    const configuredHeroFacet = home?.heroItem
+      ? discoveryItemFacet(home.heroItem)
+      : null;
+    return home?.heroItem &&
+      configuredHeroFacet !== null &&
+      discoverableFacetSet.has(configuredHeroFacet) &&
+      discoveryItemHasUsefulTitle(home.heroItem) &&
+      heroItemIsVisibleInSections(home.heroItem, heroSections)
+      ? home.heroItem
+      : null;
+  }, [discoverableFacetSet, heroSections, home?.heroItem]);
   const heroFacet = heroItem ? discoveryItemFacet(heroItem) : null;
   const heroRailSection = React.useMemo(
     () => findHeroRailSection(heroSections),
@@ -1495,10 +1511,9 @@ export function DiscoveryView({
   }, []);
   const clearFilters = React.useCallback(() => {
     const clearedFilters = emptyDiscoveryHomeFilters();
-    const clearedFiltersSignature = discoveryHomeFiltersSignature(clearedFilters);
-    if (
-      lastPublishedFiltersSignatureRef.current !== clearedFiltersSignature
-    ) {
+    const clearedFiltersSignature =
+      discoveryHomeFiltersSignature(clearedFilters);
+    if (lastPublishedFiltersSignatureRef.current !== clearedFiltersSignature) {
       lastPublishedFiltersSignatureRef.current = clearedFiltersSignature;
       onFiltersChange(clearedFilters);
     }
@@ -1606,7 +1621,12 @@ export function DiscoveryView({
         {error ? (
           <div className="mb-5 flex items-center justify-between gap-4 rounded-[12px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-4 py-3 text-sm text-[var(--scry-danger-text)]">
             <span>{error}</span>
-            <Button type="button" size="sm" variant="outline" onClick={onRefresh}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onRefresh}
+            >
               {t("label.retry")}
             </Button>
           </div>

@@ -91,7 +91,7 @@ impl AppUseCase {
                     })?;
             }
             other => {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_RUNTIME_REMOVAL_UNSUPPORTED, format!(
                     "unsupported plugin_type '{}' for runtime removal",
                     other
                 )));

@@ -240,7 +240,12 @@ async fn upgrade_root_check_failure_preserves_existing_payload() {
     let moved_root = root.with_file_name("unavailable-root-fixture");
     std::fs::rename(&root, &moved_root).unwrap();
     let result = crate::upgrade::resolve_old_file_recycle_context(&app, &title, &old_file).await;
-    assert!(matches!(result, Err(AppError::Validation(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
+    ));
     assert_untouched(
         &moved_root.join(media.strip_prefix(&root).unwrap()),
         "Synthetic Feature media",
@@ -907,7 +912,7 @@ async fn title_delete_rechecks_revoked_permissions_before_purging_files() {
     assert!(matches!(
         app.delete_title(&fixture.user, &fixture.deleted.id, false, None)
             .await,
-        Err(AppError::Unauthorized(_))
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
     ));
     assert_eq!(snapshot_tree(&bin), before);
     assert!(
@@ -955,7 +960,9 @@ async fn library_names(app: &AppUseCase) -> Vec<String> {
 
 fn assert_bin_conflict(error: AppError, root: &Path) {
     match error {
-        AppError::Validation(message) => {
+        AppError::Validation(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. } => {
             assert!(
                 message.contains(&*root.to_string_lossy())
                     && message.contains("custom recycle bin path"),
@@ -1286,7 +1293,15 @@ async fn a_custom_bin_that_links_into_a_library_root_is_refused_and_keeps_the_fi
         )
         .await
         .expect_err("the linked location is refused");
-    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. }
+        ),
+        "{error:?}"
+    );
     let settings = app
         .get_recycle_bin_settings(&user)
         .await

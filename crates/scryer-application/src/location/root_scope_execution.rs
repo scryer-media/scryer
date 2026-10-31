@@ -214,17 +214,22 @@ impl AppUseCase {
             .libraries
             .get_by_id(&call.library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", call.library_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                    format!("library {}", call.library_id),
+                )
+            })?;
         let source_root = library
             .roots
             .iter()
             .find(|root| root.id == call.root_id)
             .cloned()
             .ok_or_else(|| {
-                AppError::NotFound(format!(
-                    "root {} in library {}",
-                    call.root_id, call.library_id
-                ))
+                AppError::not_found_reason(
+                    crate::error_reasons::location::ROOT_NOT_FOUND,
+                    format!("root {} in library {}", call.root_id, call.library_id),
+                )
             })?;
 
         // FR-083, before any filesystem work is planned.
@@ -700,7 +705,8 @@ impl AppUseCase {
             RootScopeCallDestination::Path(path) => {
                 let path = path.trim();
                 if path.is_empty() {
-                    return Err(AppError::Validation(
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::location::ROOT_NEW_PATH_REQUIRED,
                         "choose a new path for this root".to_string(),
                     ));
                 }
@@ -737,7 +743,10 @@ impl AppUseCase {
                     .find(|root| &root.id == root_id)
                     .cloned()
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("root {root_id} in library {}", library.id))
+                        AppError::not_found_reason(
+                            crate::error_reasons::location::ROOT_NOT_FOUND,
+                            format!("root {root_id} in library {}", library.id),
+                        )
                     })?;
                 let path = stored_path_to_path_buf(root.path.trim());
                 Ok((path, Some(root)))
@@ -942,12 +951,22 @@ impl AppUseCase {
             .libraries
             .get_by_id(&tail.library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", tail.library_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                    format!("library {}", tail.library_id),
+                )
+            })?;
         let root = library
             .roots
             .iter()
             .find(|root| root.id == tail.root_id)
-            .ok_or_else(|| AppError::NotFound(format!("library root {}", tail.root_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::LIBRARY_ROOT_NOT_FOUND,
+                    format!("library root {}", tail.root_id),
+                )
+            })?;
 
         let already_flipped = scryer_domain::normalize_library_root_path(root.path.trim())
             == scryer_domain::normalize_library_root_path(tail.destination_root_path.trim());
@@ -1188,7 +1207,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(&tail.library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", tail.library_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                    format!("library {}", tail.library_id),
+                )
+            })?;
 
         let titles = self
             .services

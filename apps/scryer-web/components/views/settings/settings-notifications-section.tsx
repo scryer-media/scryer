@@ -1,4 +1,3 @@
-
 import * as React from "react";
 import { Bell, Edit, Plus, Power, PowerOff, Send, Trash2 } from "lucide-react";
 import { Link } from "react-router";
@@ -15,7 +14,13 @@ import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
 import { Input, signedIntegerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Badge } from "@/components/ui/badge";
@@ -52,8 +57,12 @@ type SettingsNotificationsSectionProps = {
   channels: NotificationChannel[];
   editingChannelId: string | null;
   channelDraft: NotificationChannelDraft;
-  setChannelDraft: React.Dispatch<React.SetStateAction<NotificationChannelDraft>>;
-  submitChannel: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  setChannelDraft: React.Dispatch<
+    React.SetStateAction<NotificationChannelDraft>
+  >;
+  submitChannel: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingChannelId: string | null;
   resetChannelDraft: () => void;
   editChannel: (channel: NotificationChannel) => void;
@@ -70,17 +79,27 @@ type SettingsNotificationsSectionProps = {
   subscriptionTitlesById: Record<string, TitleRecord | null>;
   editingSubscriptionId: string | null;
   subscriptionDraft: NotificationSubscriptionDraft;
-  setSubscriptionDraft: React.Dispatch<React.SetStateAction<NotificationSubscriptionDraft>>;
-  submitSubscription: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  setSubscriptionDraft: React.Dispatch<
+    React.SetStateAction<NotificationSubscriptionDraft>
+  >;
+  submitSubscription: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingSubscriptionId: string | null;
   resetSubscriptionDraft: () => void;
   editSubscription: (sub: NotificationSubscriptionRow) => void;
-  toggleSubscriptionEnabled: (sub: NotificationSubscriptionRow) => Promise<void> | void;
-  deleteSubscription: (sub: NotificationSubscriptionRow) => Promise<void> | void;
+  toggleSubscriptionEnabled: (
+    sub: NotificationSubscriptionRow,
+  ) => Promise<void> | void;
+  deleteSubscription: (
+    sub: NotificationSubscriptionRow,
+  ) => Promise<void> | void;
   eventTypes: string[];
   isSubscriptionEditorOpen: boolean;
   subscriptionEditorMode: "create" | "edit";
-  startCreateSubscription: (target?: Pick<NotificationTarget, "targetKind" | "id">) => void;
+  startCreateSubscription: (
+    target?: Pick<NotificationTarget, "targetKind" | "id">,
+  ) => void;
   localPathStyle: LocalPathStyle | undefined;
 };
 
@@ -100,15 +119,13 @@ function NotificationActionButton({
   ...props
 }: Omit<React.ComponentProps<typeof IconButton>, "tone"> & {
   label: string;
-  tone: Extract<BoxedActionButtonTone, "edit" | "enabled" | "disabled" | "delete" | "neutral">;
+  tone: Extract<
+    BoxedActionButtonTone,
+    "edit" | "enabled" | "disabled" | "delete" | "neutral"
+  >;
 }) {
   return (
-    <IconButton
-      label={label}
-      tone={tone}
-      className={className}
-      {...props}
-    >
+    <IconButton label={label} tone={tone} className={className} {...props}>
       {children}
     </IconButton>
   );
@@ -127,7 +144,8 @@ const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
   file_deleted: "settings.notificationEvent.fileDeleted",
   file_deleted_for_upgrade: "settings.notificationEvent.fileDeletedForUpgrade",
   file_restored: "settings.notificationEvent.fileRestored",
-  post_processing_completed: "settings.notificationEvent.postProcessingCompleted",
+  post_processing_completed:
+    "settings.notificationEvent.postProcessingCompleted",
   subtitle_downloaded: "settings.notificationEvent.subtitleDownloaded",
   subtitle_search_failed: "settings.notificationEvent.subtitleSearchFailed",
   media_request_submitted: "settings.notificationEvent.mediaRequestSubmitted",
@@ -137,7 +155,8 @@ const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
   health_issue: "settings.notificationEvent.healthIssue",
   health_restored: "settings.notificationEvent.healthRestored",
   application_update: "settings.notificationEvent.applicationUpdate",
-  manual_interaction_required: "settings.notificationEvent.manualInteractionRequired",
+  manual_interaction_required:
+    "settings.notificationEvent.manualInteractionRequired",
   list_title_added: "settings.notificationEvent.listTitleAdded",
   list_request_submitted: "settings.notificationEvent.listRequestSubmitted",
   list_item_held: "settings.notificationEvent.listItemHeld",
@@ -191,7 +210,11 @@ function formatResolvedTitleLabel(title: TitleRecord): string {
 function titleOverviewHref(title: TitleRecord): string {
   const titleSlug = title.slug?.trim() || null;
   const librarySlug = title.librarySlug?.trim() || null;
-  const basePath = buildOverviewDetailPath(viewFromFacet(title.facet), librarySlug, titleSlug);
+  const basePath = buildOverviewDetailPath(
+    viewFromFacet(title.facet),
+    librarySlug,
+    titleSlug,
+  );
   if (titleSlug && librarySlug) {
     return basePath;
   }
@@ -238,10 +261,7 @@ function DynamicConfigField({
 }) {
   const fieldId = selectorId("settings-notification-field", field.key);
   const help = field.helpText ? (
-    <InfoHelp
-      text={field.helpText}
-      ariaLabel={`About ${field.label}`}
-    />
+    <InfoHelp text={field.helpText} ariaLabel={`About ${field.label}`} />
   ) : null;
   const requiredMarker = field.required ? (
     <span aria-hidden="true" className="text-destructive">
@@ -273,7 +293,10 @@ function DynamicConfigField({
   if (field.fieldType === "SELECT" && field.options.length > 0) {
     return (
       <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -287,7 +310,17 @@ function DynamicConfigField({
           </SelectTrigger>
           <SelectContent>
             {field.options.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+              <SelectItem
+                id={selectorId(
+                  "settings-notification-option",
+                  field.key,
+                  opt.value,
+                )}
+                key={opt.value}
+                value={opt.value}
+              >
+                {opt.label}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -312,7 +345,10 @@ function DynamicConfigField({
 
     return (
       <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -360,13 +396,18 @@ function notificationTargetValue(target: NotificationTarget): string {
   return `${target.targetKind}:${target.id}`;
 }
 
-function parseNotificationTargetValue(value: string): Pick<NotificationTarget, "targetKind" | "id"> | null {
+function parseNotificationTargetValue(
+  value: string,
+): Pick<NotificationTarget, "targetKind" | "id"> | null {
   const separator = value.indexOf(":");
   if (separator <= 0) {
     return null;
   }
   const targetKind = value.slice(0, separator);
-  if (targetKind !== "plugin_channel" && targetKind !== "media_server_connection") {
+  if (
+    targetKind !== "plugin_channel" &&
+    targetKind !== "media_server_connection"
+  ) {
     return null;
   }
   const id = value.slice(separator + 1);
@@ -379,8 +420,9 @@ function notificationTargetName(
   targetId: string,
 ): string {
   return (
-    targets.find((target) => target.targetKind === targetKind && target.id === targetId)?.name ??
-    targetId
+    targets.find(
+      (target) => target.targetKind === targetKind && target.id === targetId,
+    )?.name ?? targetId
   );
 }
 
@@ -450,10 +492,16 @@ export function SettingsNotificationsSection({
           target.id === subscriptionDraft.targetId,
       ) ?? null
     );
-  }, [notificationTargets, subscriptionDraft.targetId, subscriptionDraft.targetKind]);
+  }, [
+    notificationTargets,
+    subscriptionDraft.targetId,
+    subscriptionDraft.targetKind,
+  ]);
   const selectedSubscriptionProvider = React.useMemo(() => {
-    const providerType = selectedSubscriptionTarget?.providerType.trim().toLowerCase();
-    return providerType ? providerByType.get(providerType) ?? null : null;
+    const providerType = selectedSubscriptionTarget?.providerType
+      .trim()
+      .toLowerCase();
+    return providerType ? (providerByType.get(providerType) ?? null) : null;
   }, [providerByType, selectedSubscriptionTarget]);
   const supportedSubscriptionEventTypes = React.useMemo(() => {
     const supportedEvents = selectedSubscriptionProvider?.supportedEvents ?? [];
@@ -509,8 +557,10 @@ export function SettingsNotificationsSection({
         prev.eventTypes.filter((eventType) => supported.has(eventType)),
       );
       if (
-        filtered.length === prev.eventTypes.length
-        && filtered.every((eventType, index) => eventType === prev.eventTypes[index])
+        filtered.length === prev.eventTypes.length &&
+        filtered.every(
+          (eventType, index) => eventType === prev.eventTypes[index],
+        )
       ) {
         return prev;
       }
@@ -546,7 +596,9 @@ export function SettingsNotificationsSection({
         }
         return {
           ...prev,
-          facetScopeIds: FACET_SCOPE_OPTIONS.filter((scopeOption) => next.has(scopeOption)),
+          facetScopeIds: FACET_SCOPE_OPTIONS.filter((scopeOption) =>
+            next.has(scopeOption),
+          ),
         };
       });
     },
@@ -568,22 +620,25 @@ export function SettingsNotificationsSection({
               <TableRow>
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.notificationProviderType")}</TableHead>
-                <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-center">
+                  {t("label.enabled")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {notificationTargets.map((target) => {
                 const channel =
                   target.targetKind === "plugin_channel"
-                    ? channels.find((item) => item.id === target.id) ?? null
+                    ? (channels.find((item) => item.id === target.id) ?? null)
                     : null;
                 const provider = providerByType.get(
                   target.providerType.trim().toLowerCase(),
                 );
                 const providerLabel =
-                  provider?.name ??
-                  humanizeSnakeCase(target.providerType);
+                  provider?.name ?? humanizeSnakeCase(target.providerType);
                 const targetLabel =
                   target.targetKind === "media_server_connection"
                     ? t("settings.mediaServersSection")
@@ -592,7 +647,10 @@ export function SettingsNotificationsSection({
                   <TableRow
                     data-ui="settings-table-row"
                     key={notificationTargetValue(target)}
-                    id={selectorId("settings-notification-channel-row", target.name)}
+                    id={selectorId(
+                      "settings-notification-channel-row",
+                      target.name,
+                    )}
                   >
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-2">
@@ -652,7 +710,10 @@ export function SettingsNotificationsSection({
                     <TableCell className="text-right">
                       <div className="inline-flex items-center gap-2">
                         <NotificationActionButton
-                          id={selectorId("settings-notification-subscription-create-for", target.name)}
+                          id={selectorId(
+                            "settings-notification-subscription-create-for",
+                            target.name,
+                          )}
                           label={t("settings.notificationSubscriptionCreate")}
                           tone="neutral"
                           onClick={() => startCreateSubscription(target)}
@@ -664,7 +725,10 @@ export function SettingsNotificationsSection({
                           <>
                             {provider?.supportsTest ? (
                               <NotificationActionButton
-                                id={selectorId("settings-notification-channel-test", channel.name)}
+                                id={selectorId(
+                                  "settings-notification-channel-test",
+                                  channel.name,
+                                )}
                                 label={t("settings.notificationTest")}
                                 tone="neutral"
                                 onClick={() => void testChannel(channel)}
@@ -678,8 +742,15 @@ export function SettingsNotificationsSection({
                               </NotificationActionButton>
                             ) : null}
                             <NotificationActionButton
-                              id={selectorId("settings-notification-channel-toggle", channel.name)}
-                              label={channel.isEnabled ? t("label.disable") : t("label.enable")}
+                              id={selectorId(
+                                "settings-notification-channel-toggle",
+                                channel.name,
+                              )}
+                              label={
+                                channel.isEnabled
+                                  ? t("label.disable")
+                                  : t("label.enable")
+                              }
                               tone={channel.isEnabled ? "enabled" : "disabled"}
                               onClick={() => void toggleChannelEnabled(channel)}
                               disabled={mutatingChannelId === channel.id}
@@ -691,7 +762,10 @@ export function SettingsNotificationsSection({
                               )}
                             </NotificationActionButton>
                             <NotificationActionButton
-                              id={selectorId("settings-notification-channel-edit", channel.name)}
+                              id={selectorId(
+                                "settings-notification-channel-edit",
+                                channel.name,
+                              )}
                               label={t("label.edit")}
                               tone="edit"
                               onClick={() => editChannel(channel)}
@@ -699,7 +773,10 @@ export function SettingsNotificationsSection({
                               <Edit className="h-4 w-4" />
                             </NotificationActionButton>
                             <NotificationActionButton
-                              id={selectorId("settings-notification-channel-delete", channel.name)}
+                              id={selectorId(
+                                "settings-notification-channel-delete",
+                                channel.name,
+                              )}
                               label={t("label.delete")}
                               tone="delete"
                               onClick={() => void deleteChannel(channel)}
@@ -746,133 +823,179 @@ export function SettingsNotificationsSection({
                   <p>{t("settings.notificationNoProviders")}</p>
                   <p>
                     To notify a media server (ie. Jellyfin), first create a{" "}
-                    <Link className="underline hover:text-foreground" to="/settings/media-servers">
+                    <Link
+                      className="underline hover:text-foreground"
+                      to="/settings/media-servers"
+                    >
                       media server connection
                     </Link>
                     .
                   </p>
                 </div>
               ) : (
-                <form id="settings-notification-channel-form" className="space-y-3" onSubmit={submitChannel}>
-               <div className="grid gap-3 md:grid-cols-2">
-                 <label>
-                   <Label className="mb-2 block" htmlFor="settings-notification-channel-provider-type">{t("settings.notificationProviderType")}</Label>
-                   <Select
-                     value={normalizedChannelType || undefined}
-                     onValueChange={(v) => {
-                       const provider = providerTypes.find((pt) => pt.providerType === v);
-                       setChannelDraft((prev) => ({
-                         ...prev,
-                         channelType: v,
-                         mediaServerConnectionId: "",
-                         name: provider?.name ?? "",
-                       }));
-                     }}
-                   >
-                     <SelectTrigger id="settings-notification-channel-provider-type" className="w-full">
-                       <SelectValue placeholder={t("settings.notificationProviderType")}>
-                         {selectedProvider ? (
-                           <PluginVisualLabel
-                             providerType={selectedProvider.providerType}
-                             pluginType="notification"
-                             label={selectedProvider.name}
-                           />
-                         ) : null}
-                       </SelectValue>
-                     </SelectTrigger>
-                     <SelectContent>
-                      {providerTypeOptions.map((opt) => (
-                         <SelectItem
-                           id={selectorId("settings-notification-channel-provider-type-option", opt.value)}
-                           key={opt.value}
-                           value={opt.value}
-                         >
-                           <PluginVisualLabel
-                             providerType={opt.value}
-                             pluginType="notification"
-                             label={opt.label}
-                           />
-                         </SelectItem>
-                       ))}
-                     </SelectContent>
-                   </Select>
-                 </label>
-                 <label>
-                   <Label className="mb-2 block" htmlFor="settings-notification-channel-name">{t("label.name")}</Label>
-                   <Input
-                     id="settings-notification-channel-name"
-                     value={channelDraft.name}
-                     onChange={(event) =>
-                       setChannelDraft((prev) => ({
-                         ...prev,
-                         name: event.target.value,
-                       }))
-                     }
-                     required
-                     placeholder="My Webhook"
-                   />
-                 </label>
-               </div>
-
-              {selectedProviderFields.length > 0 ? (
-                <div className="space-y-3">
+                <form
+                  id="settings-notification-channel-form"
+                  className="space-y-3"
+                  onSubmit={submitChannel}
+                >
                   <div className="grid gap-3 md:grid-cols-2">
-                    {selectedProviderFields
-                      .filter((f) => f.fieldType !== "BOOL")
-                      .map((field) => (
-                        <DynamicConfigField
-                          key={field.key}
-                          field={field}
-                          value={channelDraft.configValues[field.key] ?? field.defaultValue ?? ""}
-                          onChange={handleConfigValueChange}
-                          localPathStyle={localPathStyle}
-                        />
-                      ))}
+                    <label>
+                      <Label
+                        className="mb-2 block"
+                        htmlFor="settings-notification-channel-provider-type"
+                      >
+                        {t("settings.notificationProviderType")}
+                      </Label>
+                      <Select
+                        value={normalizedChannelType || undefined}
+                        onValueChange={(v) => {
+                          const provider = providerTypes.find(
+                            (pt) => pt.providerType === v,
+                          );
+                          setChannelDraft((prev) => ({
+                            ...prev,
+                            channelType: v,
+                            mediaServerConnectionId: "",
+                            name: provider?.name ?? "",
+                          }));
+                        }}
+                      >
+                        <SelectTrigger
+                          id="settings-notification-channel-provider-type"
+                          className="w-full"
+                        >
+                          <SelectValue
+                            placeholder={t("settings.notificationProviderType")}
+                          >
+                            {selectedProvider ? (
+                              <PluginVisualLabel
+                                providerType={selectedProvider.providerType}
+                                pluginType="notification"
+                                label={selectedProvider.name}
+                              />
+                            ) : null}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {providerTypeOptions.map((opt) => (
+                            <SelectItem
+                              id={selectorId(
+                                "settings-notification-channel-provider-type-option",
+                                opt.value,
+                              )}
+                              key={opt.value}
+                              value={opt.value}
+                            >
+                              <PluginVisualLabel
+                                providerType={opt.value}
+                                pluginType="notification"
+                                label={opt.label}
+                              />
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label>
+                      <Label
+                        className="mb-2 block"
+                        htmlFor="settings-notification-channel-name"
+                      >
+                        {t("label.name")}
+                      </Label>
+                      <Input
+                        id="settings-notification-channel-name"
+                        value={channelDraft.name}
+                        onChange={(event) =>
+                          setChannelDraft((prev) => ({
+                            ...prev,
+                            name: event.target.value,
+                          }))
+                        }
+                        required
+                        placeholder="My Webhook"
+                      />
+                    </label>
                   </div>
-                  {selectedProviderFields.some((f) => f.fieldType === "BOOL") ? (
-                    <div className="flex items-center gap-6">
-                      {selectedProviderFields
-                        .filter((f) => f.fieldType === "BOOL")
-                        .map((field) => (
-                          <DynamicConfigField
-                            key={field.key}
-                            field={field}
-                            value={channelDraft.configValues[field.key] ?? field.defaultValue ?? "false"}
-                            onChange={handleConfigValueChange}
-                            localPathStyle={localPathStyle}
-                          />
-                        ))}
+
+                  {selectedProviderFields.length > 0 ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {selectedProviderFields
+                          .filter((f) => f.fieldType !== "BOOL")
+                          .map((field) => (
+                            <DynamicConfigField
+                              key={field.key}
+                              field={field}
+                              value={
+                                channelDraft.configValues[field.key] ??
+                                field.defaultValue ??
+                                ""
+                              }
+                              onChange={handleConfigValueChange}
+                              localPathStyle={localPathStyle}
+                            />
+                          ))}
+                      </div>
+                      {selectedProviderFields.some(
+                        (f) => f.fieldType === "BOOL",
+                      ) ? (
+                        <div className="flex items-center gap-6">
+                          {selectedProviderFields
+                            .filter((f) => f.fieldType === "BOOL")
+                            .map((field) => (
+                              <DynamicConfigField
+                                key={field.key}
+                                field={field}
+                                value={
+                                  channelDraft.configValues[field.key] ??
+                                  field.defaultValue ??
+                                  "false"
+                                }
+                                onChange={handleConfigValueChange}
+                                localPathStyle={localPathStyle}
+                              />
+                            ))}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
-                </div>
-              ) : null}
 
-              <label className="flex items-center gap-2">
-                <Checkbox
-                  id="settings-notification-channel-enabled"
-                  checked={channelDraft.isEnabled}
-                  onCheckedChange={(value) =>
-                    setChannelDraft((prev) => ({
-                      ...prev,
-                      isEnabled: value === true,
-                    }))
-                  }
-                />
-                <span className="text-sm">{t("label.enabled")}</span>
-              </label>
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      id="settings-notification-channel-enabled"
+                      checked={channelDraft.isEnabled}
+                      onCheckedChange={(value) =>
+                        setChannelDraft((prev) => ({
+                          ...prev,
+                          isEnabled: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">{t("label.enabled")}</span>
+                  </label>
 
-              <div className="flex gap-2">
-                <Button id="settings-notification-channel-save" type="submit" disabled={mutatingChannelId === "new"}>
-                  {mutatingChannelId === "new"
-                    ? t("label.saving")
-                    : editingChannelId
-                      ? t("settings.notificationChannelUpdate")
-                      : t("settings.notificationChannelCreate")}
-                </Button>
-                <Button id="settings-notification-channel-cancel" type="button" variant="outline" onClick={resetChannelDraft}>
-                  {t("label.cancel")}
-                </Button>
-              </div>
+                  <div className="flex gap-2">
+                    <Button
+                      id="settings-notification-channel-save"
+                      type="submit"
+                      disabled={mutatingChannelId === "new"}
+                    >
+                      {mutatingChannelId === "new"
+                        ? t("label.saving")
+                        : editingChannelId
+                          ? t("settings.notificationChannelUpdate")
+                          : t("settings.notificationChannelCreate")}
+                    </Button>
+                    <Button
+                      id="settings-notification-channel-cancel"
+                      type="button"
+                      variant="outline"
+                      onClick={resetChannelDraft}
+                    >
+                      {t("label.cancel")}
+                    </Button>
+                  </div>
                 </form>
               )}
             </CardContent>
@@ -914,8 +1037,12 @@ export function SettingsNotificationsSection({
                 <TableHead>{t("settings.notificationEventType")}</TableHead>
                 <TableHead>{t("settings.notificationChannel")}</TableHead>
                 <TableHead>{t("settings.notificationScope")}</TableHead>
-                <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
+                <TableHead className="text-center">
+                  {t("label.enabled")}
+                </TableHead>
+                <TableHead className="text-right">
+                  {t("label.actions")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -925,7 +1052,11 @@ export function SettingsNotificationsSection({
                   key={sub.id}
                   id={selectorId(
                     "settings-notification-subscription-row",
-                    notificationTargetName(notificationTargets, sub.targetKind, sub.targetId),
+                    notificationTargetName(
+                      notificationTargets,
+                      sub.targetKind,
+                      sub.targetId,
+                    ),
                     orderedSubscriptionEventTypes(sub.eventTypes).join("-"),
                     sub.scope,
                     sub.scopeId,
@@ -936,21 +1067,29 @@ export function SettingsNotificationsSection({
                     sub.targetId,
                   )}
                   data-notification-target-kind={sub.targetKind}
-                  data-notification-events={orderedSubscriptionEventTypes(sub.eventTypes).join(",")}
+                  data-notification-events={orderedSubscriptionEventTypes(
+                    sub.eventTypes,
+                  ).join(",")}
                   data-notification-scope={sub.scope}
                   data-notification-scope-id={sub.scopeId ?? ""}
                 >
                   <TableCell>
                     <div className="space-y-1">
-                      {orderedSubscriptionEventTypes(sub.eventTypes).map((eventType) => (
-                        <div key={eventType} className="leading-snug">
-                          {notificationEventLabel(eventType, t)}
-                        </div>
-                      ))}
+                      {orderedSubscriptionEventTypes(sub.eventTypes).map(
+                        (eventType) => (
+                          <div key={eventType} className="leading-snug">
+                            {notificationEventLabel(eventType, t)}
+                          </div>
+                        ),
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
-                    {notificationTargetName(notificationTargets, sub.targetKind, sub.targetId)}
+                    {notificationTargetName(
+                      notificationTargets,
+                      sub.targetKind,
+                      sub.targetId,
+                    )}
                   </TableCell>
                   <TableCell>
                     {(() => {
@@ -984,7 +1123,7 @@ export function SettingsNotificationsSection({
                               {formatResolvedTitleLabel(title)}
                             </Link>
                           ) : (
-                            scopeIdLabel ?? t("label.unknown")
+                            (scopeIdLabel ?? t("label.unknown"))
                           )}
                           {")"}
                         </>
@@ -994,16 +1133,25 @@ export function SettingsNotificationsSection({
                   <TableCell className="text-center">
                     <RenderBooleanIcon
                       value={sub.isEnabled}
-                      label={`${t("label.enabled")}: ${orderedSubscriptionEventTypes(sub.eventTypes)
-                        .map((eventType) => notificationEventLabel(eventType, t))
+                      label={`${t("label.enabled")}: ${orderedSubscriptionEventTypes(
+                        sub.eventTypes,
+                      )
+                        .map((eventType) =>
+                          notificationEventLabel(eventType, t),
+                        )
                         .join(", ")}`}
                     />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex items-center gap-2">
                       <NotificationActionButton
-                        id={selectorId("settings-notification-subscription-toggle", sub.id)}
-                        label={sub.isEnabled ? t("label.disable") : t("label.enable")}
+                        id={selectorId(
+                          "settings-notification-subscription-toggle",
+                          sub.id,
+                        )}
+                        label={
+                          sub.isEnabled ? t("label.disable") : t("label.enable")
+                        }
                         tone={sub.isEnabled ? "enabled" : "disabled"}
                         onClick={() => void toggleSubscriptionEnabled(sub)}
                         disabled={mutatingSubscriptionId === sub.id}
@@ -1015,7 +1163,10 @@ export function SettingsNotificationsSection({
                         )}
                       </NotificationActionButton>
                       <NotificationActionButton
-                        id={selectorId("settings-notification-subscription-edit", sub.id)}
+                        id={selectorId(
+                          "settings-notification-subscription-edit",
+                          sub.id,
+                        )}
                         label={t("label.edit")}
                         tone="edit"
                         onClick={() => editSubscription(sub)}
@@ -1023,7 +1174,10 @@ export function SettingsNotificationsSection({
                         <Edit className="h-4 w-4" />
                       </NotificationActionButton>
                       <NotificationActionButton
-                        id={selectorId("settings-notification-subscription-delete", sub.id)}
+                        id={selectorId(
+                          "settings-notification-subscription-delete",
+                          sub.id,
+                        )}
                         label={t("label.delete")}
                         tone="delete"
                         onClick={() => void deleteSubscription(sub)}
@@ -1063,185 +1217,225 @@ export function SettingsNotificationsSection({
             </CardHeader>
             <CardContent>
               {notificationTargets.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("settings.notificationNoChannels")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("settings.notificationNoChannels")}
+                </p>
               ) : (
                 <form
                   id="settings-notification-subscription-form"
                   className="space-y-3"
                   onSubmit={submitSubscription}
                 >
-              <div className="grid gap-3 md:grid-cols-3">
-                <label>
-                  <Label className="mb-2 block">{t("settings.notificationEventType")}</Label>
-                  <MultiSelectDropdown
-                    options={eventTypeOptions}
-                    selectedValues={subscriptionDraft.eventTypes}
-                    onSelectedValuesChange={(values) =>
-                      setSubscriptionDraft((prev) => ({
-                        ...prev,
-                        eventTypes: values,
-                      }))
-                    }
-                    triggerLabel={
-                      eventTypeOptions
-                        .filter((option) => subscriptionDraft.eventTypes.includes(option.value))
-                        .map((option) => option.label)
-                        .join(", ") || t("settings.notificationEventType")
-                    }
-                    placeholder={t("settings.notificationEventType")}
-                    id="settings-notification-subscription-event-types"
-                    optionIdPrefix="settings-notification-subscription-event-type-option"
-                  />
-                </label>
-                <label>
-                  <Label className="mb-2 block">{t("settings.notificationChannel")}</Label>
-                  <Select
-                    value={
-                      subscriptionDraft.targetId
-                        ? `${subscriptionDraft.targetKind}:${subscriptionDraft.targetId}`
-                        : undefined
-                    }
-                    onValueChange={(v) => {
-                      const target = parseNotificationTargetValue(v);
-                      if (!target) {
-                        return;
-                      }
-                      setSubscriptionDraft((prev) => ({
-                        ...prev,
-                        targetKind: target.targetKind,
-                        targetId: target.id,
-                      }));
-                    }}
-                  >
-                    <SelectTrigger id="settings-notification-subscription-target" className="w-full">
-                      <SelectValue placeholder={t("settings.notificationChannel")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {notificationTargets
-                        .filter((target) => target.isEnabled)
-                        .map((target) => (
-                          <SelectItem
-                            id={selectorId(
-                              "settings-notification-subscription-target-option",
-                              target.name,
-                            )}
-                            key={notificationTargetValue(target)}
-                            value={notificationTargetValue(target)}
-                          >
-                            {target.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-                <label>
-                  <Label className="mb-2 block">{t("settings.notificationScope")}</Label>
-                  <Select
-                    value={subscriptionDraft.scope || undefined}
-                    onValueChange={(value) =>
-                      setSubscriptionDraft((prev) => ({
-                        ...prev,
-                        scope: value,
-                      }))
-                    }
-                  >
-                    <SelectTrigger id="settings-notification-subscription-scope" className="w-full">
-                      <SelectValue placeholder={t("settings.notificationScope")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {scopeOptions.map((option) => (
-                        <SelectItem
-                          id={selectorId("settings-notification-subscription-scope-option", option.value)}
-                          key={option.value}
-                          value={option.value}
-                        >
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-              </div>
-
-              {selectedSubscriptionProvider?.providerType === "jellyfin" ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("settings.notificationJellyfinSubscriptionHint")}
-                </p>
-              ) : null}
-
-              {subscriptionDraft.scope === "facet" ? (
-                <div>
-                  <Label className="mb-2 block">{t("settings.notificationScopeId")}</Label>
-                  <div className="flex flex-wrap gap-4 rounded-md border border-border bg-card/40 p-3">
-                    {FACET_SCOPE_OPTIONS.map((facet) => (
-                      <label key={facet} className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={selectedFacetScopeIds.includes(facet)}
-                          onCheckedChange={(checked) =>
-                            handleFacetScopeCheckedChange(facet, checked === true)
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.notificationEventType")}
+                      </Label>
+                      <MultiSelectDropdown
+                        options={eventTypeOptions}
+                        selectedValues={subscriptionDraft.eventTypes}
+                        onSelectedValuesChange={(values) =>
+                          setSubscriptionDraft((prev) => ({
+                            ...prev,
+                            eventTypes: values,
+                          }))
+                        }
+                        triggerLabel={
+                          eventTypeOptions
+                            .filter((option) =>
+                              subscriptionDraft.eventTypes.includes(
+                                option.value,
+                              ),
+                            )
+                            .map((option) => option.label)
+                            .join(", ") || t("settings.notificationEventType")
+                        }
+                        placeholder={t("settings.notificationEventType")}
+                        id="settings-notification-subscription-event-types"
+                        optionIdPrefix="settings-notification-subscription-event-type-option"
+                      />
+                    </label>
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.notificationChannel")}
+                      </Label>
+                      <Select
+                        value={
+                          subscriptionDraft.targetId
+                            ? `${subscriptionDraft.targetKind}:${subscriptionDraft.targetId}`
+                            : undefined
+                        }
+                        onValueChange={(v) => {
+                          const target = parseNotificationTargetValue(v);
+                          if (!target) {
+                            return;
                           }
-                        />
-                        {sectionLabelForFacet(t, facet)}
-                      </label>
-                    ))}
+                          setSubscriptionDraft((prev) => ({
+                            ...prev,
+                            targetKind: target.targetKind,
+                            targetId: target.id,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger
+                          id="settings-notification-subscription-target"
+                          className="w-full"
+                        >
+                          <SelectValue
+                            placeholder={t("settings.notificationChannel")}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {notificationTargets
+                            .filter((target) => target.isEnabled)
+                            .map((target) => (
+                              <SelectItem
+                                id={selectorId(
+                                  "settings-notification-subscription-target-option",
+                                  target.name,
+                                )}
+                                key={notificationTargetValue(target)}
+                                value={notificationTargetValue(target)}
+                              >
+                                {target.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.notificationScope")}
+                      </Label>
+                      <Select
+                        value={subscriptionDraft.scope || undefined}
+                        onValueChange={(value) =>
+                          setSubscriptionDraft((prev) => ({
+                            ...prev,
+                            scope: value,
+                          }))
+                        }
+                      >
+                        <SelectTrigger
+                          id="settings-notification-subscription-scope"
+                          className="w-full"
+                        >
+                          <SelectValue
+                            placeholder={t("settings.notificationScope")}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {scopeOptions.map((option) => (
+                            <SelectItem
+                              id={selectorId(
+                                "settings-notification-subscription-scope-option",
+                                option.value,
+                              )}
+                              key={option.value}
+                              value={option.value}
+                            >
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
                   </div>
-                </div>
-              ) : null}
 
-              {subscriptionDraft.scope === "title" ? (
-                <label>
-                  <Label className="mb-2 block">{t("settings.notificationScopeId")}</Label>
-                  <TitleAutocompletePicker
-                    selectedTitle={subscriptionDraft.titleScopeTitle}
-                    selectedTitleId={subscriptionDraft.titleScopeId || null}
-                    onSelectedTitleChange={(title) =>
-                      setSubscriptionDraft((prev) => ({
-                        ...prev,
-                        titleScopeId: title?.id ?? "",
-                        titleScopeTitle: title,
-                      }))
-                    }
-                    placeholder={t("settings.notificationScopeIdPlaceholderTitle")}
-                    ariaLabel={t("settings.notificationScopeId")}
-                  />
-                </label>
-              ) : null}
+                  {selectedSubscriptionProvider?.providerType === "jellyfin" ? (
+                    <p className="text-sm text-muted-foreground">
+                      {t("settings.notificationJellyfinSubscriptionHint")}
+                    </p>
+                  ) : null}
 
-              <label className="flex items-center gap-2">
-                <Checkbox
-                  id="settings-notification-subscription-enabled"
-                  checked={subscriptionDraft.isEnabled}
-                  onCheckedChange={(value) =>
-                    setSubscriptionDraft((prev) => ({
-                      ...prev,
-                      isEnabled: value === true,
-                    }))
-                  }
-                />
-                <span className="text-sm">{t("label.enabled")}</span>
-              </label>
+                  {subscriptionDraft.scope === "facet" ? (
+                    <div>
+                      <Label className="mb-2 block">
+                        {t("settings.notificationScopeId")}
+                      </Label>
+                      <div className="flex flex-wrap gap-4 rounded-md border border-border bg-card/40 p-3">
+                        {FACET_SCOPE_OPTIONS.map((facet) => (
+                          <label
+                            key={facet}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <Checkbox
+                              checked={selectedFacetScopeIds.includes(facet)}
+                              onCheckedChange={(checked) =>
+                                handleFacetScopeCheckedChange(
+                                  facet,
+                                  checked === true,
+                                )
+                              }
+                            />
+                            {sectionLabelForFacet(t, facet)}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
-              <div className="flex gap-2">
-                <Button
-                  id="settings-notification-subscription-save"
-                  type="submit"
-                  disabled={!isSubscriptionDraftValid || mutatingSubscriptionId !== null}
-                >
-                  {mutatingSubscriptionId !== null
-                    ? t("label.saving")
-                    : editingSubscriptionId
-                      ? t("settings.notificationSubscriptionUpdate")
-                      : t("settings.notificationSubscriptionCreate")}
-                </Button>
-                <Button
-                  id="settings-notification-subscription-cancel"
-                  type="button"
-                  variant="outline"
-                  onClick={resetSubscriptionDraft}
-                >
-                  {t("label.cancel")}
-                </Button>
-              </div>
+                  {subscriptionDraft.scope === "title" ? (
+                    <label>
+                      <Label className="mb-2 block">
+                        {t("settings.notificationScopeId")}
+                      </Label>
+                      <TitleAutocompletePicker
+                        selectedTitle={subscriptionDraft.titleScopeTitle}
+                        selectedTitleId={subscriptionDraft.titleScopeId || null}
+                        onSelectedTitleChange={(title) =>
+                          setSubscriptionDraft((prev) => ({
+                            ...prev,
+                            titleScopeId: title?.id ?? "",
+                            titleScopeTitle: title,
+                          }))
+                        }
+                        placeholder={t(
+                          "settings.notificationScopeIdPlaceholderTitle",
+                        )}
+                        ariaLabel={t("settings.notificationScopeId")}
+                      />
+                    </label>
+                  ) : null}
+
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      id="settings-notification-subscription-enabled"
+                      checked={subscriptionDraft.isEnabled}
+                      onCheckedChange={(value) =>
+                        setSubscriptionDraft((prev) => ({
+                          ...prev,
+                          isEnabled: value === true,
+                        }))
+                      }
+                    />
+                    <span className="text-sm">{t("label.enabled")}</span>
+                  </label>
+
+                  <div className="flex gap-2">
+                    <Button
+                      id="settings-notification-subscription-save"
+                      type="submit"
+                      disabled={
+                        !isSubscriptionDraftValid ||
+                        mutatingSubscriptionId !== null
+                      }
+                    >
+                      {mutatingSubscriptionId !== null
+                        ? t("label.saving")
+                        : editingSubscriptionId
+                          ? t("settings.notificationSubscriptionUpdate")
+                          : t("settings.notificationSubscriptionCreate")}
+                    </Button>
+                    <Button
+                      id="settings-notification-subscription-cancel"
+                      type="button"
+                      variant="outline"
+                      onClick={resetSubscriptionDraft}
+                    >
+                      {t("label.cancel")}
+                    </Button>
+                  </div>
                 </form>
               )}
             </CardContent>

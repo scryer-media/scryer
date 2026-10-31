@@ -79,26 +79,8 @@ pub fn from_delete_episode_files_job_accepted(
 }
 
 pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPayload {
-    let seeders = result
-        .extra
-        .get("seeders")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let peers = result
-        .extra
-        .get("peers")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let info_hash = result
-        .extra
-        .get("info_hash")
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string());
-    let freeleech = result.extra.get("freeleech").and_then(|v| v.as_bool());
-    let download_volume_factor = result
-        .extra
-        .get("downloadvolumefactor")
-        .and_then(|v| v.as_f64());
+    let facts = result.release_facts();
+    let int = |value: Option<i64>| value.and_then(|value| i32::try_from(value).ok());
 
     IndexerSearchResultPayload {
         source: result.source,
@@ -110,7 +92,10 @@ pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPay
             .source_kind
             .map(DownloadSourceKindValue::from_application),
         size_bytes: result.size_bytes.map(Long::from),
-        published_at: parse_optional_datetime(result.published_at, "indexer search published_at"),
+        published_at: result
+            .published_at
+            .as_deref()
+            .and_then(scryer_domain::publish_time::parse_publish_time),
         thumbs_up: result.thumbs_up,
         thumbs_down: result.thumbs_down,
         grabs: result.indexer_grabs.map(|grabs| grabs as i32),
@@ -118,11 +103,21 @@ pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPay
         quality_profile_decision: result
             .quality_profile_decision
             .map(from_quality_profile_decision),
-        seeders,
-        peers,
-        info_hash,
-        freeleech,
-        download_volume_factor,
+        seeders: int(facts.seeders),
+        peers: int(facts.peers),
+        leechers: int(facts.leechers),
+        info_hash: facts.info_hash,
+        freeleech: facts.freeleech,
+        download_volume_factor: facts.download_volume_factor,
+        upload_volume_factor: facts.upload_volume_factor,
+        minimum_seed_ratio: facts.minimum_seed_ratio,
+        minimum_seed_time_minutes: int(facts.minimum_seed_time_minutes),
+        indexer_flags: facts.indexer_flags,
+        languages: facts.languages,
+        subtitles: facts.subtitles,
+        files: int(facts.files),
+        year: facts.year,
+        poster_url: facts.poster_url,
         candidate_token: result.candidate_token,
         queue_scope: result.queue_scope.map(from_submission_scope),
         auto_eligible: result.auto_eligible,
@@ -378,6 +373,7 @@ pub fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueueItemPay
         ),
         attention_required: item.attention_required,
         attention_reason: item.attention_reason,
+        attention_reason_code: item.attention_reason_code,
         download_client_item_id: item.download_client_item_id,
         download_id: item.download_id,
         import_status: item.import_status.map(ImportStatusValue::from_domain),
@@ -430,7 +426,7 @@ pub fn from_wanted_item(
         season_number: item.season_number,
         episode_number: item.episode_number,
         media_type: WantedMediaTypeValue::parse(&item.media_type).ok_or_else(|| {
-            scryer_application::AppError::Validation(format!(
+            scryer_application::AppError::Repository(format!(
                 "invalid wanted item media_type '{}'",
                 item.media_type
             ))
@@ -455,9 +451,9 @@ pub fn from_wanted_item(
         indexers_routed: 0,
         recency_lane: RecencyLaneValue::Cold,
         created_at: parse_datetime(&item.created_at, "wanted item created_at")
-            .map_err(scryer_application::AppError::Validation)?,
+            .map_err(scryer_application::AppError::Repository)?,
         updated_at: parse_datetime(&item.updated_at, "wanted item updated_at")
-            .map_err(scryer_application::AppError::Validation)?,
+            .map_err(scryer_application::AppError::Repository)?,
     })
 }
 
@@ -494,7 +490,7 @@ pub fn from_wanted_scope_view(
         season_number: view.season_number,
         episode_number: view.episode_number,
         media_type: WantedMediaTypeValue::parse(&view.media_type).ok_or_else(|| {
-            scryer_application::AppError::Validation(format!(
+            scryer_application::AppError::Repository(format!(
                 "invalid wanted view media_type '{}'",
                 view.media_type
             ))
@@ -584,7 +580,7 @@ pub fn from_release_decision(
         score_delta: decision.score_delta,
         explanation_json: decision.explanation_json.map(json_string_to_value),
         created_at: parse_datetime(&decision.created_at, "release decision created_at")
-            .map_err(scryer_application::AppError::Validation)?,
+            .map_err(scryer_application::AppError::Repository)?,
     })
 }
 

@@ -349,17 +349,34 @@ fn encode_cursor(summary: &IndexerErrorSummary) -> String {
 }
 
 fn decode_cursor(cursor: &str) -> AppResult<IndexerErrorCursor> {
-    let decoded = BASE64
-        .decode(cursor)
-        .map_err(|_| AppError::Validation("invalid indexer error cursor".to_string()))?;
-    let decoded = String::from_utf8(decoded)
-        .map_err(|_| AppError::Validation("invalid indexer error cursor".to_string()))?;
+    let decoded = BASE64.decode(cursor).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_INDEXER_ERROR_CURSOR_INVALID,
+            "invalid indexer error cursor".to_string(),
+        )
+    })?;
+    let decoded = String::from_utf8(decoded).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::ACQUISITION_INDEXER_ERROR_CURSOR_INVALID,
+            "invalid indexer error cursor".to_string(),
+        )
+    })?;
     let (occurred_at, id) = decoded
         .split_once('\n')
         .filter(|(_, id)| !id.is_empty())
-        .ok_or_else(|| AppError::Validation("invalid indexer error cursor".to_string()))?;
+        .ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_ERROR_CURSOR_INVALID,
+                "invalid indexer error cursor".to_string(),
+            )
+        })?;
     let occurred_at = DateTime::parse_from_rfc3339(occurred_at)
-        .map_err(|_| AppError::Validation("invalid indexer error cursor".to_string()))?
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_INDEXER_ERROR_CURSOR_INVALID,
+                "invalid indexer error cursor".to_string(),
+            )
+        })?
         .with_timezone(&Utc);
     Ok(IndexerErrorCursor {
         occurred_at,

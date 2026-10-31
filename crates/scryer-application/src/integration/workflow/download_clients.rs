@@ -9,7 +9,7 @@ impl AppUseCase {
     fn normalize_download_client_type(&self, client_type: impl AsRef<str>) -> AppResult<String> {
         let normalized = client_type.as_ref().trim().to_lowercase();
         if normalized.is_empty() {
-            return Err(AppError::Validation("client type is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_TYPE_REQUIRED, "client type is required"));
         }
 
         if NATIVE_DOWNLOAD_CLIENT_TYPES
@@ -34,7 +34,7 @@ impl AppUseCase {
             return Ok(normalized);
         }
 
-        Err(AppError::Validation(format!(
+        Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_TYPE_UNSUPPORTED, format!(
             "unsupported download client type '{}'",
             client_type.as_ref()
         )))
@@ -48,7 +48,7 @@ impl AppUseCase {
         }
 
         let parsed: serde_json::Value =
-            serde_json::from_str(raw).map_err(|error| AppError::Validation(error.to_string()))?;
+            serde_json::from_str(raw).map_err(|error| AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_INVALID, error.to_string()))?;
         serde_json::to_string(&parsed).map_err(|error| AppError::Repository(error.to_string()))
     }
 }
@@ -66,9 +66,7 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::Unauthorized(
-                "You do not have permission to perform this action".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::ACTION_PERMISSION_DENIED, "You do not have permission to perform this action".to_string()));
         }
 
         let client_type = client_type
@@ -126,9 +124,7 @@ impl AppUseCase {
             .has_any_app_permission(actor, settings_permissions)
             .await?
         {
-            return Err(AppError::Unauthorized(
-                "You do not have permission to perform this action".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::integration::ACTION_PERMISSION_DENIED, "You do not have permission to perform this action".to_string()));
         }
 
         self.services
@@ -136,6 +132,26 @@ impl AppUseCase {
             .download_client_status
             .list()
             .await
+    }
+}
+impl AppUseCase {
+    /// End a client's failure run, as an answering refresh does: the status
+    /// row goes and the router stops skipping the client. A status write that
+    /// fails is logged and leaves the run to the next refresh.
+    pub(crate) async fn end_download_client_failure_run(&self, client_id: &str) {
+        if let Err(error) = self
+            .services
+            .integrations
+            .download_client_status
+            .record_success(client_id)
+            .await
+        {
+            tracing::warn!(
+                client_id,
+                error = %error,
+                "failed to clear the download client's failure backoff"
+            );
+        }
     }
 }
 impl AppUseCase {
@@ -235,7 +251,7 @@ impl AppUseCase {
             .await?;
         let client_id = client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::Validation("client id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
         }
 
         self.services
@@ -253,9 +269,7 @@ impl AppUseCase {
     async fn validate_enabled_download_client_proxy(&self, raw_id: &str) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "proxy config id cannot be empty".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ID_REQUIRED, "proxy config id cannot be empty"));
         }
         let config = self
             .services
@@ -263,11 +277,9 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIGURATION_NOT_FOUND, "Proxy configuration was not found."))?;
         if !config.is_enabled {
-            return Err(AppError::Validation(
-                "Proxy is disabled for this download client.".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_DISABLED_DOWNLOAD_CLIENT, "Proxy is disabled for this download client."));
         }
         Ok(config.id)
     }
@@ -283,9 +295,7 @@ impl AppUseCase {
 
         let name = input.name.trim().to_string();
         if name.is_empty() {
-            return Err(AppError::Validation(
-                "download client name is required".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_NAME_REQUIRED, "download client name is required"));
         }
 
         let client_type = self.normalize_download_client_type(input.client_type)?;
@@ -361,13 +371,11 @@ impl AppUseCase {
             .await?;
         let client_id = update.id.trim();
         if client_id.is_empty() {
-            return Err(AppError::Validation("client id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
         }
 
         if !update.has_changes() {
-            return Err(AppError::Validation(
-                "at least one download client field must be provided".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::DOWNLOAD_CLIENT_FIELD_REQUIRED, "at least one download client field must be provided"));
         }
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
@@ -375,7 +383,7 @@ impl AppUseCase {
             .as_ref()
             .is_some_and(|value| value.is_empty())
         {
-            return Err(AppError::Validation("client name cannot be empty".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_NAME_REQUIRED, "client name cannot be empty"));
         }
 
         let normalized_client_type = match update.client_type {
@@ -417,7 +425,7 @@ impl AppUseCase {
                     .get_by_id(client_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!(
+                        AppError::not_found_reason(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONFIG_NOT_FOUND, format!(
                             "download client config '{client_id}' not found"
                         ))
                     })?,
@@ -475,6 +483,16 @@ impl AppUseCase {
             })
             .await?;
         drop(proxy_assignment);
+        self.runtime
+            .acquisition
+            .download_submission_guards
+            .invalidate_client_snapshots();
+        // A save is the operator's correction: an enabled client is routed
+        // again at once instead of after its backoff, and the next refresh
+        // judges the saved configuration afresh.
+        if updated.is_enabled {
+            self.end_download_client_failure_run(&updated.id).await;
+        }
         self.refresh_download_client_category_admission_best_effort()
             .await;
         self.emit_configuration_changed_event(
@@ -498,7 +516,7 @@ impl AppUseCase {
             .await?;
         let client_id = client_id.trim();
         if client_id.is_empty() {
-            return Err(AppError::Validation("client id is required".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::integration::CLIENT_ID_REQUIRED, "client id is required"));
         }
 
         let mapped_indexer_ids = self

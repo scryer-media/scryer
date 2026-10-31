@@ -65,7 +65,10 @@ impl UserListAccountRepository for ListStore {
         )
         .await?;
         if changed == 0 {
-            return Err(AppError::NotFound(format!("list account {}", account.id)));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LIST_ACCOUNT_NOT_FOUND,
+                format!("list account {}", account.id),
+            ));
         }
         Ok(account)
     }
@@ -107,7 +110,7 @@ impl UserListAccountRepository for ListStore {
             let user_id = user_id.clone();
             Box::pin(async move {
                 let owned = SqlRuntime::fetch_optional(crate::queries::sql_runtime::SqlExec::Tx(tx), "SELECT id FROM user_list_accounts WHERE id = {} AND user_id = {}", &[SqlArg::Text(id.clone()), SqlArg::Text(user_id.clone())]).await?;
-                if owned.is_none() { return Err(AppError::NotFound("list account not found".into())); }
+                if owned.is_none() { return Err(AppError::not_found_reason(crate::error_reasons::MEDIA_LIST_ACCOUNT_NOT_FOUND, "list account not found")); }
                 SqlRuntime::execute(crate::queries::sql_runtime::SqlExec::Tx(tx), "DELETE FROM list_subscriptions WHERE credential_id = {} AND owner_user_id = {} AND scope = 'personal'", &[SqlArg::Text(id.clone()), SqlArg::Text(user_id.clone())]).await?;
                 SqlRuntime::execute(crate::queries::sql_runtime::SqlExec::Tx(tx), "DELETE FROM user_list_accounts WHERE id = {} AND user_id = {}", &[SqlArg::Text(id), SqlArg::Text(user_id)]).await?;
                 Ok(())
@@ -124,7 +127,10 @@ impl UserListAccountRepository for ListStore {
         )
         .await?;
         if changed == 0 {
-            return Err(AppError::NotFound(format!("list account {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LIST_ACCOUNT_NOT_FOUND,
+                format!("list account {id}"),
+            ));
         }
         Ok(())
     }

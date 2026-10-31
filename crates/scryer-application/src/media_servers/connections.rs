@@ -192,8 +192,9 @@ impl AppUseCase {
             .await?;
         let id = patch.id.trim().to_string();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "media server connection id is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::CONNECTION_ID_REQUIRED,
+                "media server connection id is required",
             ));
         }
         let existing = self
@@ -202,7 +203,12 @@ impl AppUseCase {
             .media_server_connections
             .get_by_id(&id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media server connection {id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_servers::CONNECTION_NOT_FOUND,
+                    format!("media server connection {id}"),
+                )
+            })?;
 
         let provider = patch
             .provider
@@ -220,9 +226,7 @@ impl AppUseCase {
                 .has_external_accounts(&id)
                 .await?
         {
-            return Err(AppError::Validation(
-                "cannot change provider for a connection with linked accounts".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::CANNOT_CHANGE_PROVIDER_CONNECTION_LINKED_ACCOUNTS, "cannot change provider for a connection with linked accounts"));
         }
         let requested_machine_id = if patch.clear_machine_id {
             None
@@ -261,9 +265,7 @@ impl AppUseCase {
         };
         let enabled = patch.enabled.unwrap_or(existing.enabled);
         if provider == MediaServerProvider::Emby && enabled && patch.clear_api_key {
-            return Err(AppError::Validation(
-                "an enabled Emby connection must retain a verified API key".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::ENABLED_EMBY_CONNECTION_MUST_RETAIN_VERIFIED_API_KEY, "an enabled Emby connection must retain a verified API key"));
         }
         let mut base_url = patch
             .base_url
@@ -310,7 +312,7 @@ impl AppUseCase {
             && !rotate_emby_credentials
         {
             let stored_api_key = api_key.as_deref().ok_or_else(|| {
-                AppError::Validation("changing an Emby server URL requires a stored API key".into())
+                AppError::validation_refused(crate::error_reasons::media_servers::CHANGING_EMBY_SERVER_URL_REQUIRES_STORED_API_KEY, "changing an Emby server URL requires a stored API key")
             })?;
             let identity = self
                 .services
@@ -322,9 +324,7 @@ impl AppUseCase {
             emby_server_id = Some(identity.server_id);
         }
         if emby_connect_enabled && emby_server_id.is_none() {
-            return Err(AppError::Validation(
-                "Emby Connect login requires a verified server identity".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::EMBY_CONNECT_LOGIN_REQUIRES_VERIFIED_SERVER_IDENTITY, "Emby Connect login requires a verified server identity"));
         }
 
         let normalized = self
@@ -449,9 +449,9 @@ impl AppUseCase {
             .has_external_accounts(id)
             .await?
         {
-            return Err(AppError::Validation(
-                "media server connection is referenced by linked accounts; disable it instead"
-                    .into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::CONNECTION_REFERENCED_LINKED_ACCOUNTS,
+                "media server connection is referenced by linked accounts; disable it instead",
             ));
         }
         if self
@@ -461,9 +461,9 @@ impl AppUseCase {
             .has_notification_channels(id)
             .await?
         {
-            return Err(AppError::Validation(
-                "media server connection is referenced by notification channels; disable it instead"
-                    .into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::CONNECTION_REFERENCED_NOTIFICATION_CHANNELS,
+                "media server connection is referenced by notification channels; disable it instead",
             ));
         }
         self.services
@@ -495,7 +495,12 @@ impl AppUseCase {
             .media_server_connections
             .get_by_id(id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media server connection {}", id.trim())))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::media_servers::CONNECTION_NOT_FOUND,
+                    format!("media server connection {}", id.trim()),
+                )
+            })?;
         self.ensure_provider_plugin_not_blocked(connection.provider.as_str())
             .await?;
 
@@ -506,9 +511,7 @@ impl AppUseCase {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    AppError::Validation(
-                        "Emby connection test requires a saved integration API key".into(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::media_servers::EMBY_CONNECTION_TEST_REQUIRES_SAVED_INTEGRATION_API_KEY, "Emby connection test requires a saved integration API key")
                 })?;
             let identity = self
                 .services
@@ -583,8 +586,9 @@ impl AppUseCase {
     ) -> AppResult<MediaServerConnection> {
         let id = id.trim().to_string();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "media server connection id is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::CONNECTION_ID_REQUIRED,
+                "media server connection id is required",
             ));
         }
         let base_url = normalize_media_server_base_url(&provider, base_url)?;
@@ -621,10 +625,8 @@ impl AppUseCase {
             && (login_enabled || linking_enabled || auto_add_enabled)
             && machine_id.is_none()
         {
-            return Err(AppError::Validation(
-                "Discover and select a Plex server before enabling login, linking, or auto-add"
-                    .into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::media_servers::DISCOVER_SELECT_PLEX_SERVER_BEFORE_ENABLING_LOGIN_LINKING_AUTO_ADD, "Discover and select a Plex server before enabling login, linking, or auto-add"
+                    ));
         }
 
         Ok(MediaServerConnection {
@@ -689,17 +691,16 @@ impl AppUseCase {
                     || connection.linking_enabled
                     || connection.auto_add_enabled;
                 if has_auth_capability && connection.machine_id.is_none() {
-                    return Err(AppError::Validation(
-                        "Discover and select a Plex server before enabling login, linking, or auto-add"
-                            .into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::media_servers::DISCOVER_SELECT_PLEX_SERVER_BEFORE_ENABLING_LOGIN_LINKING_AUTO_ADD, "Discover and select a Plex server before enabling login, linking, or auto-add"
+                            ));
                 }
                 let token = plex_auth_token
                     .map(str::trim)
                     .filter(|value| !value.is_empty());
                 if require_plex_token && token.is_none() {
-                    return Err(AppError::Validation(
-                        "Sign in with Plex to test this connection".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::media_servers::SIGN_PLEX_TEST_CONNECTION,
+                        "Sign in with Plex to test this connection",
                     ));
                 }
                 if let Some(token) = token {
@@ -712,9 +713,7 @@ impl AppUseCase {
                     if let Some(machine_id) = connection.machine_id.as_deref()
                         && !servers.iter().any(|server| server.id == machine_id)
                     {
-                        return Err(AppError::Unauthorized(
-                            "Plex account does not have access to the selected server".into(),
-                        ));
+                        return Err(AppError::unauthorized_reason(crate::error_reasons::media_servers::PLEX_ACCOUNT_DOES_NOT_ACCESS_SELECTED_SERVER, "Plex account does not have access to the selected server"));
                     }
                 }
             }
@@ -728,9 +727,7 @@ impl AppUseCase {
                     if !connection.enabled {
                         return Ok(());
                     }
-                    return Err(AppError::Validation(
-                        "Emby connection requires a verified integration API key".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::media_servers::EMBY_CONNECTION_REQUIRES_VERIFIED_INTEGRATION_API_KEY, "Emby connection requires a verified integration API key"));
                 };
                 let identity = self
                     .services
@@ -744,9 +741,7 @@ impl AppUseCase {
                     )
                     .await?;
                 if connection.emby_server_id.as_deref() != Some(identity.server_id.as_str()) {
-                    return Err(AppError::Validation(
-                        "Emby server identity does not match the saved connection".into(),
-                    ));
+                    return Err(AppError::validation_refused(crate::error_reasons::media_servers::EMBY_SERVER_IDENTITY_DOES_NOT_MATCH_SAVED_CONNECTION, "Emby server identity does not match the saved connection"));
                 }
             }
         }

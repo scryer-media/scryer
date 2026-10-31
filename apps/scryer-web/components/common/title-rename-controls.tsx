@@ -70,9 +70,7 @@ export function TitleRenamePlan({
       plan={rename.plan}
       applying={rename.applying}
       applyDisabled={
-        rename.applying ||
-        rename.previewing ||
-        !renamePlanHasWork(rename.plan)
+        rename.applying || rename.previewing || !renamePlanHasWork(rename.plan)
       }
       applyButtonId={applyButtonId}
       onApply={() => void rename.apply()}

@@ -2,7 +2,9 @@ export type CalendarViewMode = "dayGridMonth" | "dayGridWeek";
 
 export const CALENDAR_VIEW_MODE_STORAGE_KEY = "scryer:calendar-view-mode";
 
-export function parseStoredCalendarViewMode(value: string | null): CalendarViewMode | null {
+export function parseStoredCalendarViewMode(
+  value: string | null,
+): CalendarViewMode | null {
   switch (value) {
     case "dayGridMonth":
     case "dayGridWeek":
@@ -19,8 +21,9 @@ export function readStoredCalendarViewMode(): CalendarViewMode {
 
   try {
     return (
-      parseStoredCalendarViewMode(window.localStorage.getItem(CALENDAR_VIEW_MODE_STORAGE_KEY)) ??
-      "dayGridMonth"
+      parseStoredCalendarViewMode(
+        window.localStorage.getItem(CALENDAR_VIEW_MODE_STORAGE_KEY),
+      ) ?? "dayGridMonth"
     );
   } catch {
     return "dayGridMonth";

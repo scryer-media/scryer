@@ -529,7 +529,11 @@ async fn uninstall_builtin_rejected() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, scryer_application::AppError::Validation(_)),
+        matches!(
+            err,
+            scryer_application::AppError::Validation(_)
+                | scryer_application::AppError::ValidationRefused { .. }
+        ),
         "should reject uninstall of builtin: {err:?}"
     );
 }

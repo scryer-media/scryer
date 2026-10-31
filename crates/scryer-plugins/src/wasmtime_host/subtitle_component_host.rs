@@ -45,11 +45,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
+use scryer_plugin_sdk::PluginDescriptor;
 use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
-use scryer_plugin_sdk::host::{
-    PluginHostRequest, PluginHostResponse, PluginHttpRequest as SdkPluginHttpRequest,
-};
-use scryer_plugin_sdk::{PluginDescriptor, PluginError, PluginErrorCode, PluginResult};
+use scryer_plugin_sdk::host::PluginHttpRequest as SdkPluginHttpRequest;
 use tracing::Instrument;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
@@ -264,9 +262,8 @@ impl contract_v1_1::scryer::runtime::host::HostWithStore<SubtitleComponentCtx>
     /// uses.
     ///
     /// This is the rule the whole revision hangs on: there is no second HTTP
-    /// implementation for subtitle providers. The typed request is re-encoded
-    /// as the SDK's `PluginHostRequest::Http` and handed to
-    /// [`family_component_host::dispatch_host_call`], so allowed-host
+    /// implementation for subtitle providers. Both doors call the shared
+    /// [`CommandHost::http_request`] service, so allowed-host
     /// enforcement, the response-size cap, the assigned proxy policy and the
     /// remaining per-invocation budget are applied once, by [`CommandHost`],
     /// exactly as they are for a 1.0 guest calling `host-call` directly. The
@@ -279,63 +276,33 @@ impl contract_v1_1::scryer::runtime::host::HostWithStore<SubtitleComponentCtx>
         contract_v1_1::scryer::runtime::host::HttpResponse,
         contract_v1_1::scryer::runtime::host::TransportError,
     > {
-        use contract_v1_1::scryer::runtime::host::{Header, HttpResponse, TransportError};
+        use contract_v1_1::scryer::runtime::host::{Header, HttpResponse};
 
         let command_host = accessor.with(|mut access| access.get().command_host.clone());
-        let encoded = postcard::to_allocvec(&PluginHostRequest::Http(SdkPluginHttpRequest {
-            url: request.url,
-            method: Some(request.method),
-            headers: request
-                .headers
-                .into_iter()
-                .map(|header| (header.name, header.value))
-                .collect(),
-            body: request.body,
-        }))
-        .map_err(|_| TransportError::InvalidRequest)?;
-
-        let encoded_response =
-            match family_component_host::dispatch_host_call(&command_host, encoded).await {
-                Ok(response) => response,
-                Err(HostCallError::Service {
-                    failure: HostCallFailure::InvalidRequest,
-                    error,
-                }) => {
-                    tracing::debug!(
-                        target: "scryer_plugins::subtitle",
-                        error = error.as_str(),
-                        "subtitle component typed http request was rejected by the host",
-                    );
-                    return Err(TransportError::InvalidRequest);
-                }
-                Err(HostCallError::Service { error, .. } | HostCallError::Task(error)) => {
-                    tracing::debug!(
-                        target: "scryer_plugins::subtitle",
-                        error = error.as_str(),
-                        "subtitle component typed http request failed in transport",
-                    );
-                    return Err(TransportError::Transport);
-                }
-            };
-
-        let PluginHostResponse::Http(result) =
-            postcard::from_bytes(&encoded_response).map_err(|_| TransportError::Transport)?
-        else {
-            return Err(TransportError::Transport);
-        };
-
-        match result {
-            PluginResult::Ok(response) => Ok(HttpResponse {
-                status: response.status,
-                headers: response
+        let response = family_component_host::dispatch_http_request(
+            &command_host,
+            SdkPluginHttpRequest {
+                url: request.url,
+                method: Some(request.method),
+                headers: request
                     .headers
                     .into_iter()
-                    .map(|(name, value)| Header { name, value })
+                    .map(|header| (header.name, header.value))
                     .collect(),
-                body: response.body,
-            }),
-            PluginResult::Err(error) => Err(http_transport_error(&error)),
-        }
+                body: request.body,
+            },
+        )
+        .await
+        .map_err(http_transport_error)?;
+        Ok(HttpResponse {
+            status: response.status,
+            headers: response
+                .headers
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: response.body,
+        })
     }
 
     /// A sleep that cannot outlive the invocation.
@@ -355,54 +322,18 @@ impl contract_v1_1::scryer::runtime::host::HostWithStore<SubtitleComponentCtx>
     }
 }
 
-/// Project the service layer's `PluginError` onto the world's
-/// `transport-error`.
-///
-/// The encoded door reports HTTP failures as a `PluginError` whose detail lives
-/// in `debug_message`, because `CommandHost` composes messages from
-/// `PluginHttpHost`'s `Result<_, String>`. The typed world wants one of seven
-/// enum cases, so this is the projection, and it is deliberately written as a
-/// table rather than a chain of guesses:
-///
-/// | service-layer outcome                                     | `transport-error`    |
-/// |-----------------------------------------------------------|----------------------|
-/// | `PluginErrorCode::Unsupported` — no HTTP service here      | `forbidden-origin`   |
-/// | `HTTP request to … is not allowed` — allowed-hosts denial  | `forbidden-origin`   |
-/// | `Invalid URL …` / `Invalid URL scheme: …`                  | `invalid-request`    |
-/// | `Proxy … is disabled.` / `proxy only supports GET …`       | `invalid-request`    |
-/// | `… timed out after … ms` / `HTTP deadline exhausted`       | `timeout`            |
-/// | `HTTP response exceeds the configured maximum …`           | `response-too-large` |
-/// | anything else (worker stopped, DNS, TLS, socket)           | `transport`          |
-///
-/// Two cases the world declares are unreachable on this path, and that is
-/// intentional rather than an omission. `cancelled` never appears because
-/// cancellation here is structural — the future is dropped, so nothing returns
-/// — and `capacity` never appears because the encoded door has no in-flight
-/// governor of its own; the indexer host's per-actor and per-process HTTP
-/// counters live on `ComponentHost`, which subtitle providers do not use. A
-/// guest must therefore not treat either as a signal it will observe.
+/// Map the host-owned HTTP failure fact into this world's generated enum.
 fn http_transport_error(
-    error: &PluginError,
+    kind: crate::plugin_http_host::HostHttpErrorKind,
 ) -> contract_v1_1::scryer::runtime::host::TransportError {
+    use crate::plugin_http_host::HostHttpErrorKind;
     use contract_v1_1::scryer::runtime::host::TransportError;
-
-    if matches!(error.code, PluginErrorCode::Unsupported) {
-        return TransportError::ForbiddenOrigin;
-    }
-    let detail = error.debug_message.as_deref().unwrap_or_default();
-    if detail.contains("is not allowed") {
-        TransportError::ForbiddenOrigin
-    } else if detail.contains("Invalid URL")
-        || detail.contains("only supports GET")
-        || detail.contains("is disabled.")
-    {
-        TransportError::InvalidRequest
-    } else if detail.contains("timed out after") || detail.contains("deadline exhausted") {
-        TransportError::Timeout
-    } else if detail.contains("exceeds the configured maximum number of bytes") {
-        TransportError::ResponseTooLarge
-    } else {
-        TransportError::Transport
+    match kind {
+        HostHttpErrorKind::ForbiddenOrigin => TransportError::ForbiddenOrigin,
+        HostHttpErrorKind::InvalidRequest => TransportError::InvalidRequest,
+        HostHttpErrorKind::Timeout => TransportError::Timeout,
+        HostHttpErrorKind::ResponseTooLarge => TransportError::ResponseTooLarge,
+        HostHttpErrorKind::Transport => TransportError::Transport,
     }
 }
 
@@ -919,6 +850,7 @@ fn finish_error(
     error::to_app_error(
         failure,
         &error::InvocationContext {
+            plugin_kind: error::PluginHostKind::Subtitle,
             plugin_id: invocation.plugin_id,
             plugin_version: invocation.plugin_version,
             operation: invocation.operation,

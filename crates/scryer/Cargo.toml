@@ -1,6 +1,6 @@
 [package]
 name = "scryer"
-version = "0.21.21"
+version = "0.21.23"
 edition.workspace = true
 
 [features]
@@ -45,7 +45,7 @@ futures-util = "0.3"
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "compression-zstd"] }
+tower-http = { version = "0.7", features = ["compression-br", "compression-gzip", "compression-zstd"] }
 http = "1.5"
 dotenvy = { workspace = true }
 chrono = { workspace = true }
@@ -58,7 +58,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 aws-lc-rs = { workspace = true }
-brotli = "8"
+brotli = "9"
 flate2 = "1"
 percent-encoding = "2"
 toml = { workspace = true }

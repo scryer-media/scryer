@@ -126,7 +126,11 @@ test("sequence cursor preserves raw Long strings and ignores replays", () => {
   const { scheduler, flushAll } = createManualScheduler();
   const engine = createReactiveRefreshEngine({ scheduler });
   const runs: number[] = [];
-  engine.register({ aliasKey: "any", predicate: () => true, run: () => runs.push(1) });
+  engine.register({
+    aliasKey: "any",
+    predicate: () => true,
+    run: () => runs.push(1),
+  });
 
   engine.handleEvent(makeEvent({ sequence: "42", eventType: "title_updated" }));
   // Raw value is preserved for the resubscribe variable; numeric for compare.
@@ -172,8 +176,16 @@ test("runAll queues every registered alias for the degraded fallback path", () =
   const { scheduler, flushAll } = createManualScheduler();
   const engine = createReactiveRefreshEngine({ scheduler });
   const runs: string[] = [];
-  engine.register({ aliasKey: "a", predicate: () => false, run: () => runs.push("a") });
-  engine.register({ aliasKey: "b", predicate: () => false, run: () => runs.push("b") });
+  engine.register({
+    aliasKey: "a",
+    predicate: () => false,
+    run: () => runs.push("a"),
+  });
+  engine.register({
+    aliasKey: "b",
+    predicate: () => false,
+    run: () => runs.push("b"),
+  });
   engine.runAll();
   flushAll();
   assert.deepEqual(runs.sort(), ["a", "b"]);
@@ -204,7 +216,10 @@ test("a throwing run is routed to onError without aborting the flush", () => {
 });
 
 test("predicate combinators compose", () => {
-  const p = allOf(forEventTypes("title_updated"), not(forStreamKind("archive")));
+  const p = allOf(
+    forEventTypes("title_updated"),
+    not(forStreamKind("archive")),
+  );
   assert.equal(
     p(makeEvent({ eventType: "title_updated", streamKind: "title" })),
     true,

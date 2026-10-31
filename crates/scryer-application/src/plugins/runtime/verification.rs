@@ -77,7 +77,7 @@ fn blake3_digest_components(digests: &[String], label: &str) -> AppResult<(Strin
             return Ok((algorithm, value));
         }
     }
-    Err(AppError::Validation(format!(
+    Err(AppError::validation_refused(crate::error_reasons::plugins::DOES_NOT_INCLUDE_BLAKE3_DIGEST, format!(
         "{label} does not include a blake3 digest"
     )))
 }
@@ -144,13 +144,13 @@ pub async fn decode_persisted_plugin_wasm_payload(
         }
     };
     let algorithm = installation.wasm_digest_algo.as_deref().ok_or_else(|| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::plugins::MISSING_PERSISTED_WASM_DIGEST_ALGORITHM, format!(
             "plugin '{}' is missing persisted wasm digest algorithm",
             installation.plugin_id
         ))
     })?;
     let expected_digest = installation.wasm_digest.as_deref().ok_or_else(|| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::plugins::MISSING_PERSISTED_WASM_DIGEST_VALUE, format!(
             "plugin '{}' is missing persisted wasm digest value",
             installation.plugin_id
         ))
@@ -172,13 +172,13 @@ fn parse_persisted_plugin_descriptor(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            AppError::Validation(format!(
+            AppError::validation_refused(crate::error_reasons::plugins::MISSING_PERSISTED_DESCRIPTOR_JSON, format!(
                 "plugin '{}' is missing persisted descriptor_json",
                 installation.plugin_id
             ))
         })?;
     serde_json::from_str(descriptor_json).map_err(|error| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::plugins::INVALID_PERSISTED_DESCRIPTOR_JSON, format!(
             "plugin '{}' has invalid persisted descriptor_json: {error}",
             installation.plugin_id
         ))
@@ -259,7 +259,7 @@ fn ensure_host_process_capability_allowed(
             support_tier = ?support_tier,
             "rejecting plugin: host-process capability is reserved for official plugins"
         );
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS, format!(
             "plugin '{}' requests the host-process capability, which is reserved for official plugins",
             descriptor.id
         )));
@@ -277,18 +277,18 @@ fn validate_downloaded_plugin_descriptor(
     enforce_release_host_compatibility: bool,
 ) -> AppResult<ValidatedDownloadedPlugin> {
     validate_plugin_descriptor_sdk_contract(descriptor, SDK_VERSION)
-        .map_err(AppError::Validation)?;
-    validate_plugin_descriptor_host_permissions(descriptor).map_err(AppError::Validation)?;
+        .map_err(|message| AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_SDK_INCOMPATIBLE, message))?;
+    validate_plugin_descriptor_host_permissions(descriptor).map_err(|message| AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_HOST_PERMISSIONS_INVALID, message))?;
     ensure_host_process_capability_allowed(descriptor, support_tier)?;
 
     if descriptor.id != plugin_id {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_ID_MISMATCH, format!(
             "downloaded plugin descriptor id '{}' does not match registry id '{}'",
             descriptor.id, plugin_id
         )));
     }
     if descriptor.plugin_type() != expected_plugin_type {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS, format!(
             "downloaded plugin '{}' has plugin_type '{}' but registry expects '{}'",
             descriptor.id,
             descriptor.plugin_type(),
@@ -298,7 +298,7 @@ fn validate_downloaded_plugin_descriptor(
     if normalize_provider_key(descriptor.provider_type())
         != normalize_provider_key(expected_provider_type)
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS, format!(
             "downloaded plugin '{}' has provider_type '{}' but registry expects '{}'",
             descriptor.id,
             descriptor.provider_type(),
@@ -306,7 +306,7 @@ fn validate_downloaded_plugin_descriptor(
         )));
     }
     if descriptor.version != release.version {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE, format!(
             "downloaded plugin '{}' has version '{}' but the selected release is '{}'",
             descriptor.id, descriptor.version, release.version
         )));
@@ -317,7 +317,7 @@ fn validate_downloaded_plugin_descriptor(
         .is_some_and(|sdk_version| !sdk_version.trim().is_empty())
         && release.sdk_version.as_deref() != Some(descriptor.sdk_version.as_str())
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE, format!(
             "downloaded plugin '{}' has sdk_version '{}' but the selected release is '{}'",
             descriptor.id,
             descriptor.sdk_version,
@@ -338,7 +338,7 @@ fn validate_downloaded_plugin_descriptor(
     if enforce_release_host_compatibility
         && !downloaded_plugin_release_is_host_compatible(plugin_id, release)
     {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION, format!(
             "plugin '{}' no longer has a host-compatible release for this Scryer version",
             plugin_id
         )));

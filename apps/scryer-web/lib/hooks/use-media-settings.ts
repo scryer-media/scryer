@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { SettingsSaveGuard } from "@/lib/utils/settings-save-guard";
 import { useClient } from "urql";
@@ -90,8 +91,13 @@ export type UseMediaSettingsResult = {
   globalScoringPersona: ScoringPersonaId;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
-  saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
-  categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
+  saveCategoryRequiredAudioLanguages: (
+    languages: string[],
+  ) => Promise<void> | void;
+  categoryPersonaSelections: Record<
+    ViewCategoryId,
+    FacetScoringPersonaSelectionRecord
+  >;
   categoryFolderTemplates: Record<ViewCategoryId, string>;
   setCategoryFolderTemplates: React.Dispatch<
     React.SetStateAction<Record<ViewCategoryId, string>>
@@ -161,12 +167,23 @@ export type UseMediaSettingsResult = {
     React.SetStateAction<Record<ViewCategoryId, string>>
   >;
   fileChmod: Record<ViewCategoryId, string>;
-  setFileChmod: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
+  setFileChmod: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
   folderChmod: Record<ViewCategoryId, string>;
-  setFolderChmod: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
+  setFolderChmod: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
   chownGroup: Record<ViewCategoryId, string>;
-  setChownGroup: React.Dispatch<React.SetStateAction<Record<ViewCategoryId, string>>>;
-  saveSetting: (scope: string, scopeId: string | undefined, keyName: string, value: string) => Promise<void> | void;
+  setChownGroup: React.Dispatch<
+    React.SetStateAction<Record<ViewCategoryId, string>>
+  >;
+  saveSetting: (
+    scope: string,
+    scopeId: string | undefined,
+    keyName: string,
+    value: string,
+  ) => Promise<void> | void;
   saveCategoryQualityProfileOverride: (value: string) => Promise<void> | void;
   saveCategoryScoringPersonaOverride: (
     persona: ScoringPersonaId | null,
@@ -187,7 +204,10 @@ const DEFAULT_SEASON_FOLDER_TEMPLATE = "Season {season}";
 const DEFAULT_SPECIALS_FOLDER_TEMPLATE = "Specials";
 const DEFAULT_RENAME_TEMPLATE =
   "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
-const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<ViewCategoryId, string[]> = {
+const DEFAULT_CATEGORY_REQUIRED_AUDIO_LANGUAGES: Record<
+  ViewCategoryId,
+  string[]
+> = {
   MOVIE: [],
   SERIES: [],
   ANIME: [],
@@ -213,8 +233,9 @@ export function useMediaSettings({
     DEFAULT_SERIES_LIBRARY_PATH,
   );
   const [rootFolders, setRootFolders] = React.useState<RootFolderOption[]>([]);
-  const [localPathStyle, setLocalPathStyle] =
-    React.useState<LocalPathStyle | undefined>(undefined);
+  const [localPathStyle, setLocalPathStyle] = React.useState<
+    LocalPathStyle | undefined
+  >(undefined);
   const [mediaSettingsLoading, setMediaSettingsLoading] = React.useState(false);
   const [mediaSettingsSaving, setMediaSettingsSaving] = React.useState(false);
   const [qualityProfiles, setQualityProfiles] = React.useState<
@@ -256,13 +277,12 @@ export function useMediaSettings({
       SERIES: DEFAULT_SEASON_FOLDER_TEMPLATE,
       ANIME: DEFAULT_SEASON_FOLDER_TEMPLATE,
     });
-  const [categoryUseSeasonFolders, setCategoryUseSeasonFolders] = React.useState<
-    Record<ViewCategoryId, boolean>
-  >({
-    MOVIE: true,
-    SERIES: true,
-    ANIME: true,
-  });
+  const [categoryUseSeasonFolders, setCategoryUseSeasonFolders] =
+    React.useState<Record<ViewCategoryId, boolean>>({
+      MOVIE: true,
+      SERIES: true,
+      ANIME: true,
+    });
   const [categorySpecialsFolderTemplates, setCategorySpecialsFolderTemplates] =
     React.useState<Record<ViewCategoryId, string>>({
       MOVIE: DEFAULT_SPECIALS_FOLDER_TEMPLATE,
@@ -337,7 +357,9 @@ export function useMediaSettings({
     SERIES: "false",
     ANIME: "false",
   });
-  const [importMode, setImportMode] = React.useState<Record<ViewCategoryId, ImportMode>>({
+  const [importMode, setImportMode] = React.useState<
+    Record<ViewCategoryId, ImportMode>
+  >({
     MOVIE: "HARDLINK_OR_COPY",
     SERIES: "HARDLINK_OR_COPY",
     ANIME: "HARDLINK_OR_COPY",
@@ -356,17 +378,23 @@ export function useMediaSettings({
     SERIES: "false",
     ANIME: "false",
   });
-  const [fileChmod, setFileChmod] = React.useState<Record<ViewCategoryId, string>>({
+  const [fileChmod, setFileChmod] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
     MOVIE: "",
     SERIES: "",
     ANIME: "",
   });
-  const [folderChmod, setFolderChmod] = React.useState<Record<ViewCategoryId, string>>({
+  const [folderChmod, setFolderChmod] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
     MOVIE: "",
     SERIES: "",
     ANIME: "",
   });
-  const [chownGroup, setChownGroup] = React.useState<Record<ViewCategoryId, string>>({
+  const [chownGroup, setChownGroup] = React.useState<
+    Record<ViewCategoryId, string>
+  >({
     MOVIE: "",
     SERIES: "",
     ANIME: "",
@@ -388,20 +416,26 @@ export function useMediaSettings({
         .toPromise()
         .then(({ error }) => {
           if (error) {
-            setGlobalStatus(error.message, { level: "ERROR" });
+            setGlobalStatus(
+              userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+              { level: "ERROR" },
+            );
           }
         });
     },
-    [activeQualityScopeId, client, setGlobalStatus],
+    [activeQualityScopeId, client, setGlobalStatus, t],
   );
 
   const [generalSaveGuard] = React.useState(() => new SettingsSaveGuard());
   const saveSetting = React.useCallback(
-    (_scope: string, _scopeId: string | undefined, keyName: string, value: string) => {
+    (
+      _scope: string,
+      _scopeId: string | undefined,
+      keyName: string,
+      value: string,
+    ) => {
       const boolValue = value.trim().toLowerCase() === "true";
-      let input:
-        | Record<string, boolean | string>
-        | null = null;
+      let input: Record<string, boolean | string> | null = null;
 
       switch (keyName) {
         case "anime.filler_policy":
@@ -496,19 +530,95 @@ export function useMediaSettings({
       const scope = input.scope as ViewCategoryId;
       const field = Object.keys(input).find((key) => key !== "scope")!;
       const fields: Record<string, [string, (value: string) => void]> = {
-        fillerPolicy: [categoryFillerPolicies[scope], (next) => setCategoryFillerPolicies((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        recapPolicy: [categoryRecapPolicies[scope], (next) => setCategoryRecapPolicies((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        monitorSpecials: [categoryMonitorSpecials[scope], (next) => setCategoryMonitorSpecials((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        interSeasonMovies: [categoryInterSeasonMovies[scope], (next) => setCategoryInterSeasonMovies((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        monitorFillerMovies: [categoryMonitorFillerMovies[scope], (next) => setCategoryMonitorFillerMovies((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        nfoWriteOnImport: [nfoWriteOnImport[scope], (next) => setNfoWriteOnImport((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        plexmatchWriteOnImport: [plexmatchWriteOnImport[scope], (next) => setPlexmatchWriteOnImport((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        renameEnabled: [categoryRenameEnabled[scope], (next) => setCategoryRenameEnabled((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        importMode: [importMode[scope], (next) => setImportMode((prev) => ({ ...prev, [scope]: next as ImportMode }))],
-        setPermissionsLinux: [setPermissionsLinux[scope], (next) => setSetPermissionsLinux((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        fileChmod: [fileChmod[scope], (next) => setFileChmod((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        folderChmod: [folderChmod[scope], (next) => setFolderChmod((prev) => updateFacetScopedStringRecord(prev, scope, next))],
-        chownGroup: [chownGroup[scope], (next) => setChownGroup((prev) => updateFacetScopedStringRecord(prev, scope, next))],
+        fillerPolicy: [
+          categoryFillerPolicies[scope],
+          (next) =>
+            setCategoryFillerPolicies((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        recapPolicy: [
+          categoryRecapPolicies[scope],
+          (next) =>
+            setCategoryRecapPolicies((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        monitorSpecials: [
+          categoryMonitorSpecials[scope],
+          (next) =>
+            setCategoryMonitorSpecials((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        interSeasonMovies: [
+          categoryInterSeasonMovies[scope],
+          (next) =>
+            setCategoryInterSeasonMovies((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        monitorFillerMovies: [
+          categoryMonitorFillerMovies[scope],
+          (next) =>
+            setCategoryMonitorFillerMovies((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        nfoWriteOnImport: [
+          nfoWriteOnImport[scope],
+          (next) =>
+            setNfoWriteOnImport((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        plexmatchWriteOnImport: [
+          plexmatchWriteOnImport[scope],
+          (next) =>
+            setPlexmatchWriteOnImport((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        renameEnabled: [
+          categoryRenameEnabled[scope],
+          (next) =>
+            setCategoryRenameEnabled((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        importMode: [
+          importMode[scope],
+          (next) =>
+            setImportMode((prev) => ({ ...prev, [scope]: next as ImportMode })),
+        ],
+        setPermissionsLinux: [
+          setPermissionsLinux[scope],
+          (next) =>
+            setSetPermissionsLinux((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        fileChmod: [
+          fileChmod[scope],
+          (next) =>
+            setFileChmod((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        folderChmod: [
+          folderChmod[scope],
+          (next) =>
+            setFolderChmod((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
+        chownGroup: [
+          chownGroup[scope],
+          (next) =>
+            setChownGroup((prev) =>
+              updateFacetScopedStringRecord(prev, scope, next),
+            ),
+        ],
       };
       const [previousValue, restore] = fields[field];
       if (!generalSaveGuard.begin()) {
@@ -522,22 +632,44 @@ export function useMediaSettings({
         .then(({ data, error }) => {
           if (error) throw error;
           const savedValue = data?.updateMediaSettings?.[field];
-          restore(savedValue === undefined ? String(input[field]) : String(savedValue ?? ""));
+          restore(
+            savedValue === undefined
+              ? String(input[field])
+              : String(savedValue ?? ""),
+          );
         })
         .catch((error: unknown) => {
           restore(previousValue);
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+            { level: "ERROR" },
+          );
         })
         .finally(() => {
           generalSaveGuard.end();
           setMediaSettingsSaving(false);
         });
     },
-    [activeQualityScopeId, client, setGlobalStatus, generalSaveGuard, t,
-      categoryFillerPolicies, categoryRecapPolicies, categoryMonitorSpecials,
-      categoryInterSeasonMovies, categoryMonitorFillerMovies, nfoWriteOnImport,
-      plexmatchWriteOnImport, categoryRenameEnabled, importMode,
-      setPermissionsLinux, fileChmod, folderChmod, chownGroup],
+    [
+      activeQualityScopeId,
+      client,
+      setGlobalStatus,
+      generalSaveGuard,
+      t,
+      categoryFillerPolicies,
+      categoryRecapPolicies,
+      categoryMonitorSpecials,
+      categoryInterSeasonMovies,
+      categoryMonitorFillerMovies,
+      nfoWriteOnImport,
+      plexmatchWriteOnImport,
+      categoryRenameEnabled,
+      importMode,
+      setPermissionsLinux,
+      fileChmod,
+      folderChmod,
+      chownGroup,
+    ],
   );
 
   const normalizeQualityProfiles = React.useCallback(
@@ -567,14 +699,16 @@ export function useMediaSettings({
     ) => {
       if (mediaSettings) {
         if (view === "movies") {
-          const nextPath = mediaSettings.libraryPath.trim() || DEFAULT_MOVIE_LIBRARY_PATH;
+          const nextPath =
+            mediaSettings.libraryPath.trim() || DEFAULT_MOVIE_LIBRARY_PATH;
           setMoviesPath((currentPath) =>
             currentPath === nextPath ? currentPath : nextPath,
           );
         }
 
         if (view === "series") {
-          const nextPath = mediaSettings.libraryPath.trim() || DEFAULT_SERIES_LIBRARY_PATH;
+          const nextPath =
+            mediaSettings.libraryPath.trim() || DEFAULT_SERIES_LIBRARY_PATH;
           setSeriesPath((currentPath) =>
             currentPath === nextPath ? currentPath : nextPath,
           );
@@ -594,13 +728,14 @@ export function useMediaSettings({
       }
 
       if (qualityProfileSettings) {
-        const nextProfileText = qualityProfileSettingsToCatalogText(qualityProfileSettings);
+        const nextProfileText = qualityProfileSettingsToCatalogText(
+          qualityProfileSettings,
+        );
         const nextProfiles = normalizeQualityProfiles(nextProfileText);
 
         const rawGlobalProfileId =
-          coerceProfileSetting(
-            qualityProfileSettings?.globalProfileId ?? "",
-          ) || "";
+          coerceProfileSetting(qualityProfileSettings?.globalProfileId ?? "") ||
+          "";
         const resolvedGlobalId =
           rawGlobalProfileId &&
           nextProfiles.some((p) => p.id === rawGlobalProfileId)
@@ -610,7 +745,8 @@ export function useMediaSettings({
           current === resolvedGlobalId ? current : resolvedGlobalId,
         );
         setGlobalScoringPersona((current) =>
-          current === (qualityProfileSettings?.globalScoringPersona ?? "BALANCED")
+          current ===
+          (qualityProfileSettings?.globalScoringPersona ?? "BALANCED")
             ? current
             : (qualityProfileSettings?.globalScoringPersona ?? "BALANCED"),
         );
@@ -626,14 +762,20 @@ export function useMediaSettings({
             : nextProfiles,
         );
 
-        const nextOverrides = qualityProfileSettingsToCategoryOverrides(qualityProfileSettings);
+        const nextOverrides = qualityProfileSettingsToCategoryOverrides(
+          qualityProfileSettings,
+        );
         setCategoryQualityProfileOverrides((previous) =>
-          QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => previous[scopeId] === nextOverrides[scopeId])
+          QUALITY_PROFILE_SCOPE_IDS.every(
+            (scopeId) => previous[scopeId] === nextOverrides[scopeId],
+          )
             ? previous
             : nextOverrides,
         );
         const nextPersonaSelections =
-          qualityProfileSettingsToCategoryPersonaSelections(qualityProfileSettings);
+          qualityProfileSettingsToCategoryPersonaSelections(
+            qualityProfileSettings,
+          );
         setCategoryPersonaSelections((previous) =>
           QUALITY_PROFILE_SCOPE_IDS.every((scopeId) => {
             const current = previous[scopeId];
@@ -647,11 +789,11 @@ export function useMediaSettings({
             ? previous
             : nextPersonaSelections,
         );
-
       }
 
       if (mediaSettings) {
-        const mediaSettingsScopeId = facetScopedMediaSettingsScopeId(mediaSettings);
+        const mediaSettingsScopeId =
+          facetScopedMediaSettingsScopeId(mediaSettings);
         setCategoryRequiredAudioLanguages((previous) => {
           const nextLanguages = mediaSettings.requiredAudioLanguages ?? [];
           return updateFacetScopedStringArrayRecord(
@@ -661,7 +803,8 @@ export function useMediaSettings({
           );
         });
         setCategoryFolderTemplates((previous) => {
-          const nextTemplate = mediaSettings.folderTemplate || DEFAULT_FOLDER_TEMPLATE;
+          const nextTemplate =
+            mediaSettings.folderTemplate || DEFAULT_FOLDER_TEMPLATE;
           return updateFacetScopedStringRecord(
             previous,
             mediaSettingsScopeId,
@@ -672,7 +815,8 @@ export function useMediaSettings({
           updateFacetScopedStringRecord(
             previous,
             mediaSettingsScopeId,
-            mediaSettings.seasonFolderTemplate || DEFAULT_SEASON_FOLDER_TEMPLATE,
+            mediaSettings.seasonFolderTemplate ||
+              DEFAULT_SEASON_FOLDER_TEMPLATE,
           ),
         );
         setCategoryUseSeasonFolders((previous) => {
@@ -685,11 +829,13 @@ export function useMediaSettings({
           updateFacetScopedStringRecord(
             previous,
             mediaSettingsScopeId,
-            mediaSettings.specialsFolderTemplate || DEFAULT_SPECIALS_FOLDER_TEMPLATE,
+            mediaSettings.specialsFolderTemplate ||
+              DEFAULT_SPECIALS_FOLDER_TEMPLATE,
           ),
         );
         setCategoryRenameTemplates((previous) => {
-          const nextTemplate = mediaSettings.renameTemplate || DEFAULT_RENAME_TEMPLATE;
+          const nextTemplate =
+            mediaSettings.renameTemplate || DEFAULT_RENAME_TEMPLATE;
           return updateFacetScopedStringRecord(
             previous,
             mediaSettingsScopeId,
@@ -697,7 +843,8 @@ export function useMediaSettings({
           );
         });
         setCategoryRenameEnabled((previous) => {
-          const nextValue = mediaSettings.renameEnabled === false ? "false" : "true";
+          const nextValue =
+            mediaSettings.renameEnabled === false ? "false" : "true";
           return updateFacetScopedStringRecord(
             previous,
             mediaSettingsScopeId,
@@ -730,19 +877,39 @@ export function useMediaSettings({
         if (mediaSettings.scope === "ANIME") {
           const animeSettings = normalizeAnimeMediaSettings(mediaSettings);
           setCategoryFillerPolicies((previous) =>
-            updateFacetScopedStringRecord(previous, mediaSettingsScopeId, animeSettings.fillerPolicy),
+            updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              animeSettings.fillerPolicy,
+            ),
           );
           setCategoryRecapPolicies((previous) =>
-            updateFacetScopedStringRecord(previous, mediaSettingsScopeId, animeSettings.recapPolicy),
+            updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              animeSettings.recapPolicy,
+            ),
           );
           setCategoryMonitorSpecials((previous) =>
-            updateFacetScopedStringRecord(previous, mediaSettingsScopeId, animeSettings.monitorSpecials),
+            updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              animeSettings.monitorSpecials,
+            ),
           );
           setCategoryInterSeasonMovies((previous) =>
-            updateFacetScopedStringRecord(previous, mediaSettingsScopeId, animeSettings.interSeasonMovies),
+            updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              animeSettings.interSeasonMovies,
+            ),
           );
           setCategoryMonitorFillerMovies((previous) =>
-            updateFacetScopedStringRecord(previous, mediaSettingsScopeId, animeSettings.monitorFillerMovies),
+            updateFacetScopedStringRecord(
+              previous,
+              mediaSettingsScopeId,
+              animeSettings.monitorFillerMovies,
+            ),
           );
         }
 
@@ -757,7 +924,9 @@ export function useMediaSettings({
 
         if (mediaSettings.plexmatchWriteOnImport !== null) {
           setPlexmatchWriteOnImport((previous) => {
-            const nextValue = mediaSettings.plexmatchWriteOnImport ? "true" : "false";
+            const nextValue = mediaSettings.plexmatchWriteOnImport
+              ? "true"
+              : "false";
             return updateFacetScopedStringRecord(
               previous,
               mediaSettingsScopeId,
@@ -804,11 +973,7 @@ export function useMediaSettings({
         );
       }
     },
-    [
-      normalizeQualityProfiles,
-      setGlobalScoringPersona,
-      view,
-    ],
+    [normalizeQualityProfiles, setGlobalScoringPersona, view],
   );
 
   const refreshMediaSettings = React.useCallback(async () => {
@@ -832,7 +997,7 @@ export function useMediaSettings({
       );
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -849,7 +1014,8 @@ export function useMediaSettings({
 
   const saveCategoryQualityProfileOverride = React.useCallback(
     async (rawValue: string) => {
-      const previousProfile = categoryQualityProfileOverrides[activeQualityScopeId];
+      const previousProfile =
+        categoryQualityProfileOverrides[activeQualityScopeId];
       const selectedProfile = coerceProfileSetting(rawValue);
 
       if (selectedProfile === previousProfile) {
@@ -892,39 +1058,43 @@ export function useMediaSettings({
       setQualityProfileParseError("");
 
       try {
-        const { data: qualityProfileData, error: qualityProfileError } = await client
-          .mutation(saveQualityProfileSettingsMutation, {
-            input: {
-              profiles: [],
-              globalProfileId: null,
-              categorySelections: [
-                {
-                  scope: activeQualityScopeId,
-                  profileId:
-                    selectedProfile === QUALITY_PROFILE_INHERIT_VALUE
-                      ? null
-                      : selectedProfile,
-                  inheritGlobal: selectedProfile === QUALITY_PROFILE_INHERIT_VALUE,
-                },
-              ],
-              replaceExisting: false,
-            },
-          })
-          .toPromise();
+        const { data: qualityProfileData, error: qualityProfileError } =
+          await client
+            .mutation(saveQualityProfileSettingsMutation, {
+              input: {
+                profiles: [],
+                globalProfileId: null,
+                categorySelections: [
+                  {
+                    scope: activeQualityScopeId,
+                    profileId:
+                      selectedProfile === QUALITY_PROFILE_INHERIT_VALUE
+                        ? null
+                        : selectedProfile,
+                    inheritGlobal:
+                      selectedProfile === QUALITY_PROFILE_INHERIT_VALUE,
+                  },
+                ],
+                replaceExisting: false,
+              },
+            })
+            .toPromise();
         if (qualityProfileError) throw qualityProfileError;
 
         applyMediaSettingsFromPayload(
           qualityProfileData?.saveQualityProfileSettings,
           undefined,
         );
-        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setCategoryQualityProfileOverrides((previous) => ({
           ...previous,
           [activeQualityScopeId]: previousProfile,
         }));
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {
@@ -984,14 +1154,16 @@ export function useMediaSettings({
           data?.saveQualityProfileSettings,
           undefined,
         );
-        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setCategoryPersonaSelections((previous) => ({
           ...previous,
           [activeQualityScopeId]: previousSelection,
         }));
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
         throw error;
@@ -1012,11 +1184,14 @@ export function useMediaSettings({
 
   const saveCategoryRequiredAudioLanguages = React.useCallback(
     async (languages: string[]) => {
-      const previousLanguages = categoryRequiredAudioLanguages[activeQualityScopeId] ?? [];
+      const previousLanguages =
+        categoryRequiredAudioLanguages[activeQualityScopeId] ?? [];
       const nextLanguages = [...languages];
       const same =
         previousLanguages.length === nextLanguages.length &&
-        previousLanguages.every((value, index) => value === nextLanguages[index]);
+        previousLanguages.every(
+          (value, index) => value === nextLanguages[index],
+        );
       if (same) {
         return;
       }
@@ -1041,14 +1216,16 @@ export function useMediaSettings({
         }
 
         applyMediaSettingsFromPayload(undefined, data?.updateMediaSettings);
-        setGlobalStatus(t("settings.qualitySettingsSaved"), { level: "SUCCESS" });
+        setGlobalStatus(t("settings.qualitySettingsSaved"), {
+          level: "SUCCESS",
+        });
       } catch (error) {
         setCategoryRequiredAudioLanguages((previous) => ({
           ...previous,
           [activeQualityScopeId]: previousLanguages,
         }));
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
         throw error;
@@ -1131,14 +1308,21 @@ export function useMediaSettings({
                 : {}),
               renameEnabled,
               ...renameConfigInput,
-              nfoWriteOnImport: nfoWriteOnImport[activeQualityScopeId] === "true",
+              nfoWriteOnImport:
+                nfoWriteOnImport[activeQualityScopeId] === "true",
               ...(activeQualityScopeId === "ANIME"
                 ? {
-                    fillerPolicy: normalizeFillerPolicy(categoryFillerPolicies.ANIME),
-                    recapPolicy: normalizeRecapPolicy(categoryRecapPolicies.ANIME),
+                    fillerPolicy: normalizeFillerPolicy(
+                      categoryFillerPolicies.ANIME,
+                    ),
+                    recapPolicy: normalizeRecapPolicy(
+                      categoryRecapPolicies.ANIME,
+                    ),
                     monitorSpecials: categoryMonitorSpecials.ANIME === "true",
-                    interSeasonMovies: categoryInterSeasonMovies.ANIME !== "false",
-                    monitorFillerMovies: categoryMonitorFillerMovies.ANIME === "true",
+                    interSeasonMovies:
+                      categoryInterSeasonMovies.ANIME !== "false",
+                    monitorFillerMovies:
+                      categoryMonitorFillerMovies.ANIME === "true",
                     plexmatchWriteOnImport:
                       plexmatchWriteOnImport[activeQualityScopeId] === "true",
                   }
@@ -1167,7 +1351,7 @@ export function useMediaSettings({
         setGlobalStatus(successMessage, { level: "SUCCESS" });
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {

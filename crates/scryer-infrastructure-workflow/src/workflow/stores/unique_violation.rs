@@ -9,22 +9,14 @@ use scryer_application::{AppError, AppResult};
 
 use crate::queries::sql_runtime::{SqlRuntime, SqlTx, StoreDatastore, TxFuture};
 
-/// Whether a repository error is a unique/primary-key violation.
-///
-/// Mirrors `is_title_external_id_conflict_error` in the titles store: the SQL
-/// runtime flattens every sqlx failure into `AppError::Repository(String)` via
-/// `repo_err`, so there is no typed error or SQLSTATE surface to match on and
-/// message matching is the established pattern. Both dialects' stable texts are
-/// covered — sqlite's `UNIQUE constraint failed: ...` and postgres's
-/// `duplicate key value violates unique constraint ...` — rather than a single
-/// constraint name, because a racing writer can collide on either the
-/// active-locator partial unique index or the `downloads` primary key.
+/// Whether the SQL driver reported a unique or primary-key violation.
 pub(super) fn is_unique_violation(error: &AppError) -> bool {
     matches!(
-        error,
-        AppError::Repository(message)
-            if message.contains("UNIQUE constraint failed")
-                || message.contains("duplicate key value violates unique constraint")
+        error.repository_kind(),
+        Some(
+            scryer_application::RepositoryErrorKind::UniqueViolation
+                | scryer_application::RepositoryErrorKind::TitleExternalIdConflict
+        )
     )
 }
 

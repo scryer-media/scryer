@@ -16,7 +16,11 @@ import { selectorId } from "@/lib/utils/dom-ids";
 /** Which captured stream the output column shows. */
 export type ScriptOutputFilter = "combined" | "stdout" | "stderr";
 
-const OUTPUT_FILTERS: readonly ScriptOutputFilter[] = ["combined", "stdout", "stderr"];
+const OUTPUT_FILTERS: readonly ScriptOutputFilter[] = [
+  "combined",
+  "stdout",
+  "stderr",
+];
 
 /** Combined / Stdout / Stderr buttons; each button's id is `<id>-<filter>`. */
 export function ScriptOutputFilterGroup({
@@ -129,7 +133,8 @@ export function ScriptRunsTable({
   leadingColumn?: ScriptRunsLeadingColumn;
 }) {
   const t = useTranslate();
-  const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
+  const [outputFilter, setOutputFilter] =
+    useState<ScriptOutputFilter>("combined");
   const leading: ScriptRunsLeadingColumn = leadingColumn ?? {
     header: t("label.title"),
     render: renderRunTitle,
@@ -137,7 +142,10 @@ export function ScriptRunsTable({
 
   if (runs.length === 0) {
     return (
-      <p id={ids.empty(scriptId)} className="px-3 py-4 text-xs text-muted-foreground">
+      <p
+        id={ids.empty(scriptId)}
+        className="px-3 py-4 text-xs text-muted-foreground"
+      >
         {noRunsLabel}
       </p>
     );
@@ -166,7 +174,11 @@ export function ScriptRunsTable({
             const stdout = showStdout ? run.stdoutTail : null;
             const stderr = showStderr ? run.stderrTail : null;
             return (
-              <TableRow data-ui="settings-table-row" key={run.id} id={ids.row(run)}>
+              <TableRow
+                data-ui="settings-table-row"
+                key={run.id}
+                id={ids.row(run)}
+              >
                 <TableCell className="text-xs">{leading.render(run)}</TableCell>
                 <TableCell>
                   <span
@@ -175,11 +187,15 @@ export function ScriptRunsTable({
                   >
                     {run.status}
                     {run.exitCode != null && run.status === "failed" ? (
-                      <span id={ids.exitCode?.(run)}>{` (exit ${run.exitCode})`}</span>
+                      <span
+                        id={ids.exitCode?.(run)}
+                      >{` (exit ${run.exitCode})`}</span>
                     ) : null}
                   </span>
                 </TableCell>
-                <TableCell className="text-xs">{formatScriptRunDuration(run.durationMs)}</TableCell>
+                <TableCell className="text-xs">
+                  {formatScriptRunDuration(run.durationMs)}
+                </TableCell>
                 <TableCell className="max-w-[400px]">
                   {stdout || stderr ? (
                     <div className="space-y-1">
@@ -215,7 +231,9 @@ export function ScriptRunsTable({
                       ) : null}
                     </div>
                   ) : (
-                    <span className="text-[10px] text-muted-foreground">{outputNotCapturedLabel}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {outputNotCapturedLabel}
+                    </span>
                   )}
                 </TableCell>
               </TableRow>

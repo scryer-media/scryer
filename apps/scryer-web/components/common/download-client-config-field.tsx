@@ -102,7 +102,10 @@ export function DownloadClientConfigField({
   if (field.fieldType === "SELECT" && field.options.length > 0) {
     return (
       <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -129,7 +132,10 @@ export function DownloadClientConfigField({
   if (field.fieldType === "FILTERED_SELECT" && field.options.length > 0) {
     return (
       <div>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -163,7 +169,11 @@ export function DownloadClientConfigField({
         </Label>
         <div className="grid gap-2 sm:grid-cols-2">
           {field.options.map((option) => {
-            const optionId = selectorId(optionIdPrefix, field.key, option.value);
+            const optionId = selectorId(
+              optionIdPrefix,
+              field.key,
+              option.value,
+            );
             return (
               <label
                 key={option.value}
@@ -204,7 +214,10 @@ export function DownloadClientConfigField({
   if (field.fieldType === "MULTILINE") {
     return (
       <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -221,10 +234,17 @@ export function DownloadClientConfigField({
     );
   }
 
-  if (isFileBackedField && field.fieldType !== "NUMBER" && field.fieldType !== "PASSWORD") {
+  if (
+    isFileBackedField &&
+    field.fieldType !== "NUMBER" &&
+    field.fieldType !== "PASSWORD"
+  ) {
     return (
       <div>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
+        <Label
+          className="mb-2 inline-flex items-center gap-2"
+          htmlFor={fieldId}
+        >
           {field.label}
           {requiredMarker}
           {help}
@@ -238,7 +258,7 @@ export function DownloadClientConfigField({
             placeholder={
               hasStoredSecretValue
                 ? t("form.apiKeyStoredPlaceholder")
-                : field.defaultValue ?? ""
+                : (field.defaultValue ?? "")
             }
           />
           <Button
@@ -289,10 +309,12 @@ export function DownloadClientConfigField({
           placeholder={
             hasStoredSecretValue
               ? t("form.apiKeyStoredPlaceholder")
-              : field.defaultValue ?? ""
+              : (field.defaultValue ?? "")
           }
         />
-        {field.fieldType === "PASSWORD" && hasStoredSecretValue && onClearStoredSecret ? (
+        {field.fieldType === "PASSWORD" &&
+        hasStoredSecretValue &&
+        onClearStoredSecret ? (
           <Button
             type="button"
             variant="outline"

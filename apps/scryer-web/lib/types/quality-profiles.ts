@@ -3,7 +3,8 @@ export type ParsedQualityProfile = {
   name: string;
 };
 
-export type ScoringPersonaId = "BALANCED" | "AUDIOPHILE" | "EFFICIENT" | "COMPATIBLE";
+export type ScoringPersonaId =
+  "BALANCED" | "AUDIOPHILE" | "EFFICIENT" | "COMPATIBLE";
 
 export type QualityTargetId = "8k" | "4k" | "1080p";
 
@@ -123,7 +124,8 @@ export type QualityProfileDraft = {
 };
 
 export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export type QualityProfileListField =
   | "source_allowlist"

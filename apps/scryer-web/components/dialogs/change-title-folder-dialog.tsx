@@ -105,22 +105,25 @@ export function ChangeTitleFolderDialog({
   const [entries, setEntries] = React.useState<DirectoryEntry[]>([]);
   const [browseLoading, setBrowseLoading] = React.useState(false);
   const [browseError, setBrowseError] = React.useState<string | null>(null);
-  const [selectedFolderPath, setSelectedFolderPath] = React.useState<string | null>(
+  const [selectedFolderPath, setSelectedFolderPath] = React.useState<
+    string | null
+  >(null);
+  const [preview, setPreview] = React.useState<ChangeFolderPreview | null>(
     null,
   );
-  const [preview, setPreview] = React.useState<ChangeFolderPreview | null>(null);
   const [previewLoading, setPreviewLoading] = React.useState(false);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
-  const [resolution, setResolution] = React.useState<FolderMatchResolution | null>(
-    null,
-  );
+  const [resolution, setResolution] =
+    React.useState<FolderMatchResolution | null>(null);
   const [applying, setApplying] = React.useState(false);
   const [applyError, setApplyError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<ChangeFolderResult | null>(null);
 
   const selectedRoot =
     sortedRoots.find((root) => root.id === rootId) ?? sortedRoots[0] ?? null;
-  const selectedRootPath = selectedRoot ? normalizeFolderPath(selectedRoot.path) : "";
+  const selectedRootPath = selectedRoot
+    ? normalizeFolderPath(selectedRoot.path)
+    : "";
 
   // Reset the whole flow whenever the dialog opens on a (possibly new) title.
   React.useEffect(() => {
@@ -167,7 +170,11 @@ export function ChangeTitleFolderDialog({
         if (error) {
           setEntries([]);
           setBrowseError(
-            userFacingGraphQlErrorMessage(error, t("title.changeFolderBrowseFailed")),
+            userFacingGraphQlErrorMessage(
+              error,
+              t("title.changeFolderBrowseFailed"),
+              t,
+            ),
           );
           return;
         }
@@ -180,7 +187,11 @@ export function ChangeTitleFolderDialog({
         }
         setEntries([]);
         setBrowseError(
-          userFacingGraphQlErrorMessage(error, t("title.changeFolderBrowseFailed")),
+          userFacingGraphQlErrorMessage(
+            error,
+            t("title.changeFolderBrowseFailed"),
+            t,
+          ),
         );
       })
       .finally(() => {
@@ -224,13 +235,13 @@ export function ChangeTitleFolderDialog({
             userFacingGraphQlErrorMessage(
               error,
               t("title.changeFolderPreviewFailed"),
+              t,
             ),
           );
           return;
         }
         const next = data?.changeTitleFolderPreview as
-          | ChangeFolderPreview
-          | undefined;
+          ChangeFolderPreview | undefined;
         if (!next) {
           setPreview(null);
           setResolution(null);
@@ -249,7 +260,11 @@ export function ChangeTitleFolderDialog({
         setPreview(null);
         setResolution(null);
         setPreviewError(
-          userFacingGraphQlErrorMessage(error, t("title.changeFolderPreviewFailed")),
+          userFacingGraphQlErrorMessage(
+            error,
+            t("title.changeFolderPreviewFailed"),
+            t,
+          ),
         );
       })
       .finally(() => {
@@ -282,8 +297,7 @@ export function ChangeTitleFolderDialog({
         throw error;
       }
       const applied = data?.applyTitleFolderChange as
-        | ChangeFolderResult
-        | undefined;
+        ChangeFolderResult | undefined;
       if (!applied) {
         throw new Error(t("title.changeFolderApplyFailed"));
       }
@@ -296,7 +310,11 @@ export function ChangeTitleFolderDialog({
       }
     } catch (error: unknown) {
       setApplyError(
-        userFacingGraphQlErrorMessage(error, t("title.changeFolderApplyFailed")),
+        userFacingGraphQlErrorMessage(
+          error,
+          t("title.changeFolderApplyFailed"),
+          t,
+        ),
       );
     } finally {
       setApplying(false);
@@ -307,7 +325,10 @@ export function ChangeTitleFolderDialog({
   const currentRootPath =
     preview?.currentRootPath ?? title?.rootFolderPath?.trim() ?? null;
   const libraryName =
-    preview?.libraryName ?? title?.libraryName?.trim() ?? title?.libraryId ?? "";
+    preview?.libraryName ??
+    title?.libraryName?.trim() ??
+    title?.libraryId ??
+    "";
   const owner = preview?.currentOwner ?? null;
   const conflicted = preview?.ownership === "OWNED_BY_ANOTHER_TITLE";
   const alreadyOwned = preview?.ownership === "OWNED_BY_THIS_TITLE";
@@ -402,8 +423,12 @@ export function ChangeTitleFolderDialog({
           <div className="space-y-4">
             <dl className="grid gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm sm:grid-cols-2">
               <div className="min-w-0">
-                <dt className="text-xs text-muted-foreground">{t("label.title")}</dt>
-                <dd className="truncate text-foreground">{title?.name ?? ""}</dd>
+                <dt className="text-xs text-muted-foreground">
+                  {t("label.title")}
+                </dt>
+                <dd className="truncate text-foreground">
+                  {title?.name ?? ""}
+                </dd>
               </div>
               <div className="min-w-0">
                 <dt className="text-xs text-muted-foreground">
@@ -419,7 +444,8 @@ export function ChangeTitleFolderDialog({
                   className="truncate font-[var(--font-code)] text-foreground"
                   title={currentFolderPath ?? undefined}
                 >
-                  {currentFolderPath ?? t("title.changeFolderCurrentFolderUnknown")}
+                  {currentFolderPath ??
+                    t("title.changeFolderCurrentFolderUnknown")}
                 </dd>
               </div>
               <div className="min-w-0">
@@ -549,7 +575,8 @@ export function ChangeTitleFolderDialog({
                         ) : null}
                         {entries.map((entry) => {
                           const selected =
-                            selectedFolderPath === normalizeFolderPath(entry.path);
+                            selectedFolderPath ===
+                            normalizeFolderPath(entry.path);
                           return (
                             <div
                               key={entry.path}
@@ -568,7 +595,9 @@ export function ChangeTitleFolderDialog({
                                 type="button"
                                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                                 onClick={() =>
-                                  setSelectedFolderPath(normalizeFolderPath(entry.path))
+                                  setSelectedFolderPath(
+                                    normalizeFolderPath(entry.path),
+                                  )
                                 }
                                 disabled={applying}
                               >
@@ -690,7 +719,9 @@ export function ChangeTitleFolderDialog({
                         <Button
                           id="change-title-folder-choose-swap"
                           type="button"
-                          variant={resolution === "SWAP" ? "primary" : "outline"}
+                          variant={
+                            resolution === "SWAP" ? "primary" : "outline"
+                          }
                           size="sm"
                           onClick={() => setResolution("SWAP")}
                           disabled={applying}

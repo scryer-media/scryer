@@ -41,7 +41,9 @@ export function ScriptEditorDialogs({
         open={pendingDeleteScript !== null}
         title={t("label.delete")}
         description={
-          pendingDeleteScript ? t("status.deletingRule", { name: pendingDeleteScript.name }) : ""
+          pendingDeleteScript
+            ? t("status.deletingRule", { name: pendingDeleteScript.name })
+            : ""
         }
         confirmLabel={t("label.delete")}
         cancelLabel={t("label.cancel")}

@@ -3,7 +3,10 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompletedDownloadPathState {
     Ready,
+    /// Still inside the grace window.
     Retry,
+    /// Past the grace window: an automatic retry is scheduled.
+    RetryAfterGrace,
     Blocked,
 }
 
@@ -15,7 +18,10 @@ pub(super) fn evaluate_completed_download_path(
     if completed_download_path_is_unsupported_url(&completed.dest_dir) {
         td.path_missing_since = None;
         td.status = TrackedDownloadStatus::Warning;
-        td.status_messages = vec![PATH_URL_UNSUPPORTED_MESSAGE.to_string()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+            crate::tracked_downloads::TrackedStatusMessageKind::PathUnsupported,
+            PATH_URL_UNSUPPORTED_MESSAGE,
+        )];
         return CompletedDownloadPathState::Blocked;
     }
 
@@ -37,17 +43,23 @@ pub(super) fn evaluate_completed_download_path(
     let elapsed = now.signed_duration_since(*missing_since);
     if elapsed < Duration::minutes(COMPLETED_PATH_GRACE_PERIOD_MINUTES) {
         td.status = TrackedDownloadStatus::Warning;
-        td.status_messages = vec![PATH_WAITING_MESSAGE.to_string()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+            crate::tracked_downloads::TrackedStatusMessageKind::PathWaiting,
+            PATH_WAITING_MESSAGE,
+        )];
         return CompletedDownloadPathState::Retry;
     }
 
     td.status = TrackedDownloadStatus::Warning;
-    td.status_messages = vec![missing_completed_download_path_message(completed)];
+    td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::new(
+        crate::tracked_downloads::TrackedStatusMessageKind::PathUnavailable,
+        missing_completed_download_path_message(completed),
+    )];
     td.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
         attempts: 1,
         next_retry_at: now + Duration::minutes(5),
     });
-    CompletedDownloadPathState::Retry
+    CompletedDownloadPathState::RetryAfterGrace
 }
 
 fn missing_completed_download_path_message(completed: &CompletedDownload) -> String {

@@ -5,8 +5,10 @@ export type ManualDiscSelection = {
   episodeMappings: { discTitleId: string; episodeId: string }[];
 };
 
-export type ManualDiscInventory = Pick<MediaDiscMetadata,
-  "discType" | "selectedTitleId" | "automaticSelection" | "titles">;
+export type ManualDiscInventory = Pick<
+  MediaDiscMetadata,
+  "discType" | "selectedTitleId" | "automaticSelection" | "titles"
+>;
 
 export type ManualImportVideoFacts = {
   containerFormat: string | null;
@@ -32,7 +34,9 @@ function formatCodec(value: string): string {
   return labels[normalized] ?? value.toUpperCase();
 }
 
-export function formatManualImportVideoFacts(facts: ManualImportVideoFacts | null): string {
+export function formatManualImportVideoFacts(
+  facts: ManualImportVideoFacts | null,
+): string {
   if (!facts) return "Media details unavailable for this format";
 
   const parts: string[] = [];

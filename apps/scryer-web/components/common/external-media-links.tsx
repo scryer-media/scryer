@@ -1,6 +1,9 @@
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
-import { buildTvdbMovieUrl, buildTvdbSeriesUrl } from "@/lib/utils/external-media-links";
+import {
+  buildTvdbMovieUrl,
+  buildTvdbSeriesUrl,
+} from "@/lib/utils/external-media-links";
 import { ExternalLink } from "lucide-react";
 
 const imdbLogoUrl = `${import.meta.env.BASE_URL}media-sites/imdb.svg`;
@@ -203,7 +206,10 @@ function tmdbUrl(tmdbId: string | null | undefined, mediaType: "movie" | "tv") {
   return `https://www.themoviedb.org/${mediaType}/${encodeURIComponent(trimmed)}`;
 }
 
-function numericProviderUrl(baseUrl: string, providerId: string | null | undefined) {
+function numericProviderUrl(
+  baseUrl: string,
+  providerId: string | null | undefined,
+) {
   const trimmed = providerId?.trim();
   if (!trimmed) {
     return null;

@@ -124,7 +124,7 @@ async fn title_create_requires_an_existing_library_for_the_title_facet() {
         .expect_err("missing library should reject title creation");
     assert!(matches!(
         missing_err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("missing-library") && message.contains("movie")
     ));
 
@@ -135,7 +135,7 @@ async fn title_create_requires_an_existing_library_for_the_title_facet() {
         .expect_err("library from another facet should reject title creation");
     assert!(matches!(
         facet_err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("series")
     ));
 
@@ -487,7 +487,7 @@ async fn title_update_metadata_keeps_validation_and_not_found_errors() {
         .expect_err("empty update should fail validation");
     assert!(matches!(
         empty_err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("at least one title field")
     ));
 
@@ -503,7 +503,7 @@ async fn title_update_metadata_keeps_validation_and_not_found_errors() {
     .expect_err("blank title name should fail validation");
     assert!(matches!(
         blank_name_err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("title name cannot be empty")
     ));
 
@@ -519,7 +519,7 @@ async fn title_update_metadata_keeps_validation_and_not_found_errors() {
     .expect_err("missing title update should fail not found");
     assert!(matches!(
         missing_err,
-        scryer_application::AppError::NotFound(message) if message.contains("missing-title")
+        scryer_application::AppError::NotFound(message) | scryer_application::AppError::NotFoundReason { message, .. } if message.contains("missing-title")
     ));
 
     let renamed = TitleRepository::update_metadata(
@@ -1941,7 +1941,7 @@ async fn title_queries_get_by_facet_and_slug_trim_input_and_reject_duplicates() 
             .expect_err("duplicate slug lookup should fail validation");
     assert!(matches!(
         err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("earth-defenders") && message.contains("multiple titles")
     ));
 
@@ -1996,7 +1996,7 @@ async fn title_queries_get_by_facet_libraries_and_slug_trim_input_and_reject_dup
     .expect_err("duplicate library slug lookup should fail validation");
     assert!(matches!(
         err,
-        scryer_application::AppError::Validation(message)
+        scryer_application::AppError::Validation(message) | scryer_application::AppError::ValidationRefused { message, .. }
             if message.contains("planet-heroes") && message.contains("multiple titles")
     ));
 

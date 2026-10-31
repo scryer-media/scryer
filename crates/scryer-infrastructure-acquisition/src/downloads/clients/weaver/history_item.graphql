@@ -17,6 +17,7 @@ query HistoryItem($id: Int!) {
       value
     }
     attention {
+      code
       message
     }
   }

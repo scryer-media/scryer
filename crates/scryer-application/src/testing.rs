@@ -134,6 +134,11 @@ pub trait AppUseCaseTestExt {
         F: FnOnce(AppServicesBuilder) -> AppServicesBuilder;
 
     fn notification_wake_receiver(&self) -> tokio::sync::broadcast::Receiver<i64>;
+
+    fn with_indexer_client_for_test(
+        &self,
+        client: std::sync::Arc<dyn crate::IndexerClient>,
+    ) -> AppUseCase;
 }
 
 impl AppUseCaseTestExt for AppUseCase {
@@ -146,6 +151,15 @@ impl AppUseCaseTestExt for AppUseCase {
 
     fn notification_wake_receiver(&self) -> tokio::sync::broadcast::Receiver<i64> {
         self.runtime.events.notification_event_broadcast.subscribe()
+    }
+
+    fn with_indexer_client_for_test(
+        &self,
+        client: std::sync::Arc<dyn crate::IndexerClient>,
+    ) -> AppUseCase {
+        let mut app = self.clone();
+        app.services.integrations.indexer_client = client;
+        app
     }
 }
 

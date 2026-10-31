@@ -1,4 +1,3 @@
-
 import { SettingsQualityProfilesSection } from "@/components/views/settings/settings-quality-profiles-section";
 import { useQualityProfilesManager } from "@/lib/hooks/use-quality-profiles-manager";
 import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
@@ -85,17 +84,17 @@ export function SettingsQualityProfilesContainer() {
       categoryQualityProfileOverrides={categoryQualityProfileOverrides}
       setCategoryQualityProfileOverrides={setCategoryQualityProfileOverrides}
       categoryPersonaSelections={categoryPersonaSelections}
-    mediaSettingsLoading={mediaSettingsLoading}
-    initialLoadComplete={initialLoadComplete}
-    qualityProfilesSaving={qualityProfilesSaving}
-    updateQualityProfilesGlobal={updateQualityProfilesGlobal}
-    saveGlobalQualityProfile={saveGlobalQualityProfile}
-    saveGlobalScoringPersona={saveGlobalScoringPersona}
-    categoryQualityProfileSaving={categoryQualityProfileSaving}
-    saveCategoryQualityProfile={saveCategoryQualityProfile}
-    saveCategoryScoringPersona={saveCategoryScoringPersona}
-    archivalQualityOptions={archivalQualityOptions}
-    deleteQualityProfile={deleteQualityProfile}
-  />
+      mediaSettingsLoading={mediaSettingsLoading}
+      initialLoadComplete={initialLoadComplete}
+      qualityProfilesSaving={qualityProfilesSaving}
+      updateQualityProfilesGlobal={updateQualityProfilesGlobal}
+      saveGlobalQualityProfile={saveGlobalQualityProfile}
+      saveGlobalScoringPersona={saveGlobalScoringPersona}
+      categoryQualityProfileSaving={categoryQualityProfileSaving}
+      saveCategoryQualityProfile={saveCategoryQualityProfile}
+      saveCategoryScoringPersona={saveCategoryScoringPersona}
+      archivalQualityOptions={archivalQualityOptions}
+      deleteQualityProfile={deleteQualityProfile}
+    />
   );
 }

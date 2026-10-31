@@ -36,7 +36,9 @@ const REPORT: MediaProbeReport = {
   warnings: [],
 };
 
-function metadata(overrides: Partial<MediaStreamMetadata> = {}): MediaStreamMetadata {
+function metadata(
+  overrides: Partial<MediaStreamMetadata> = {},
+): MediaStreamMetadata {
   return {
     id: "1",
     programId: null,
@@ -80,7 +82,14 @@ function metadata(overrides: Partial<MediaStreamMetadata> = {}): MediaStreamMeta
       masteringDisplay: null,
       contentLight: null,
     },
-    hdr: { dolbyVision: null, hdr10plus: null, hdr10: null, hlg: null, pq: null, dovi: null },
+    hdr: {
+      dolbyVision: null,
+      hdr10plus: null,
+      hdr10: null,
+      hlg: null,
+      pq: null,
+      dovi: null,
+    },
     ...overrides,
   };
 }
@@ -99,7 +108,9 @@ function stream(overrides: Partial<MediaStreamDetail> = {}): MediaStreamDetail {
   };
 }
 
-function analysis(overrides: Partial<MediaAnalysisDetails> = {}): MediaAnalysisDetails {
+function analysis(
+  overrides: Partial<MediaAnalysisDetails> = {},
+): MediaAnalysisDetails {
   return {
     revision: 3,
     durationSeconds: null,
@@ -118,10 +129,13 @@ function analysis(overrides: Partial<MediaAnalysisDetails> = {}): MediaAnalysisD
   };
 }
 
-function mediaFile(overrides: Partial<MediaInfoFileDetails> = {}): MediaInfoFileDetails {
+function mediaFile(
+  overrides: Partial<MediaInfoFileDetails> = {},
+): MediaInfoFileDetails {
   return {
     id: "file-1",
-    filePath: "/library/Synthetic Show Alpha/Season 01/Synthetic Show Alpha - S01E01.mkv",
+    filePath:
+      "/library/Synthetic Show Alpha/Season 01/Synthetic Show Alpha - S01E01.mkv",
     sizeBytes: 3 * 1024 ** 3,
     scanStatus: "scanned",
     videoCodec: null,
@@ -152,15 +166,25 @@ test("audioStreamsForFile prefers the native analysis audio streams", () => {
   const file = mediaFile({
     audioCodec: "ac3",
     audioLanguages: ["eng", "deu"],
-    audioStreams: [{ codec: "aac", channels: 2, language: "eng", bitrateKbps: 128 }],
+    audioStreams: [
+      { codec: "aac", channels: 2, language: "eng", bitrateKbps: 128 },
+    ],
     analysis: analysis({
       streams: [
-        stream({ kind: "VIDEO", codec: "hevc", metadata: metadata({ id: "0" }) }),
+        stream({
+          kind: "VIDEO",
+          codec: "hevc",
+          metadata: metadata({ id: "0" }),
+        }),
         stream({
           codec: "truehd",
           channels: 8,
           language: "eng",
-          metadata: metadata({ id: "1", bitrateBps: 4_000_000, channelLayout: "7.1" }),
+          metadata: metadata({
+            id: "1",
+            bitrateBps: 4_000_000,
+            channelLayout: "7.1",
+          }),
         }),
       ],
     }),
@@ -232,7 +256,9 @@ test("formatters map codecs, containers and resolutions to display labels", () =
   assert.equal(formatMediaFileSize(1024 ** 3), "1.00 GB");
   assert.equal(formatMediaFileSize(0), "-");
   assert.equal(
-    mediaFileBaseName("/library/Synthetic Feature Beta (2019)/Synthetic Feature Beta.mkv"),
+    mediaFileBaseName(
+      "/library/Synthetic Feature Beta (2019)/Synthetic Feature Beta.mkv",
+    ),
     "Synthetic Feature Beta.mkv",
   );
   assert.equal(mediaFileBaseName(null), null);
@@ -272,24 +298,42 @@ test("mediaInfoSections builds the file, video and release tables", () => {
     analysis: analysis({ overallBitrateBps: 24_000_000, revision: 4 }),
   });
 
-  const byId = new Map(mediaInfoSections(file, { ...LABELS, added: "2026-01-02" }).map((s) => [s.id, s]));
+  const byId = new Map(
+    mediaInfoSections(file, { ...LABELS, added: "2026-01-02" }).map((s) => [
+      s.id,
+      s,
+    ]),
+  );
   const value = (id: string, labelKey: string) =>
-    byId.get(id)?.rows.find((entry) => entry.labelKey === labelKey)?.value ?? null;
+    byId.get(id)?.rows.find((entry) => entry.labelKey === labelKey)?.value ??
+    null;
 
   assert.equal(value("media-info-file", "mediaInfo.container"), "MKV");
   assert.equal(value("media-info-file", "mediaInfo.duration"), "1h 00m 00s");
   assert.equal(value("media-info-file", "mediaInfo.chapterCount"), "12");
   assert.equal(value("media-info-file", "mediaInfo.added"), "2026-01-02");
   assert.equal(value("media-info-file", "mediaInfo.releaseHash"), "abc123");
-  assert.equal(value("media-info-video", "mediaInfo.resolution"), "3840 × 2160 (4K)");
+  assert.equal(
+    value("media-info-video", "mediaInfo.resolution"),
+    "3840 × 2160 (4K)",
+  );
   assert.equal(value("media-info-video", "mediaInfo.videoCodec"), "HEVC");
   assert.equal(value("media-info-video", "mediaInfo.bitDepth"), "10-bit");
   assert.equal(value("media-info-video", "mediaInfo.hdr"), "HDR");
   assert.equal(value("media-info-release", "mediaInfo.sourceType"), "BluRay");
-  assert.equal(value("media-info-release", "mediaInfo.releaseGroup"), "SYNTHGRP");
-  assert.equal(value("media-info-release", "mediaInfo.acquisitionScore"), "1250");
+  assert.equal(
+    value("media-info-release", "mediaInfo.releaseGroup"),
+    "SYNTHGRP",
+  );
+  assert.equal(
+    value("media-info-release", "mediaInfo.acquisitionScore"),
+    "1250",
+  );
   // The probe's own bookkeeping is not shown, even when the file has it.
-  assert.deepEqual([...byId.keys()], ["media-info-file", "media-info-video", "media-info-release"]);
+  assert.deepEqual(
+    [...byId.keys()],
+    ["media-info-file", "media-info-video", "media-info-release"],
+  );
 });
 
 test("the release listing section shows the frozen listing facts, extras last in key order", () => {
@@ -339,14 +383,22 @@ test("the release listing section shows the frozen listing facts, extras last in
       ["zeta_flag", "true"],
     ],
   );
-  assert.ok(mediaInfoSections(file, LABELS).some((entry) => entry.id === "media-info-release-listing"));
+  assert.ok(
+    mediaInfoSections(file, LABELS).some(
+      (entry) => entry.id === "media-info-release-listing",
+    ),
+  );
 });
 
 test("a file without a listing snapshot gets no release listing section", () => {
   for (const releaseListing of [undefined, null]) {
     const file = mediaFile({ releaseListing });
     assert.equal(mediaInfoReleaseListingSection(file, LABELS), null);
-    assert.ok(!mediaInfoSections(file, LABELS).some((entry) => entry.id === "media-info-release-listing"));
+    assert.ok(
+      !mediaInfoSections(file, LABELS).some(
+        (entry) => entry.id === "media-info-release-listing",
+      ),
+    );
   }
 });
 
@@ -422,9 +474,24 @@ test("audioTrackRows marks a language inferred only when the track has no langua
   const file = mediaFile({
     analysis: analysis({
       streams: [
-        stream({ codec: "truehd", language: null, inferredLanguage: "eng", name: "English" }),
-        stream({ codec: "ac3", language: "jpn", inferredLanguage: null, name: "English" }),
-        stream({ codec: "ac3", language: null, inferredLanguage: null, name: "Surround" }),
+        stream({
+          codec: "truehd",
+          language: null,
+          inferredLanguage: "eng",
+          name: "English",
+        }),
+        stream({
+          codec: "ac3",
+          language: "jpn",
+          inferredLanguage: null,
+          name: "English",
+        }),
+        stream({
+          codec: "ac3",
+          language: null,
+          inferredLanguage: null,
+          name: "Surround",
+        }),
       ],
     }),
   });
@@ -434,12 +501,18 @@ test("audioTrackRows marks a language inferred only when the track has no langua
     rows.map((entry) => entry.languageInferred),
     [true, false, false],
   );
-  assert.equal(rows[0].language, new Intl.DisplayNames(undefined, { type: "language" }).of("eng"));
+  assert.equal(
+    rows[0].language,
+    new Intl.DisplayNames(undefined, { type: "language" }).of("eng"),
+  );
   assert.equal(rows[2].language, "?");
 });
 
 test("subtitleTrackRows fills in from the legacy language and codec columns", () => {
-  const file = mediaFile({ subtitleLanguages: ["eng", "fra"], subtitleCodecs: ["subrip"] });
+  const file = mediaFile({
+    subtitleLanguages: ["eng", "fra"],
+    subtitleCodecs: ["subrip"],
+  });
   const rows = subtitleTrackRows(file);
   assert.deepEqual(
     rows.map((entry) => [entry.index, entry.codec, entry.forced]),
@@ -453,8 +526,17 @@ test("subtitleTrackRows fills in from the legacy language and codec columns", ()
 test("chapterRows and attachmentRows read straight from the analysis", () => {
   const file = mediaFile({
     analysis: analysis({
-      chapters: [{ id: "c1", title: "Cold open", startSeconds: 0, endSeconds: 90 }],
-      attachments: [{ id: "a1", name: "cover.jpg", mediaType: "image/jpeg", sizeBytes: 2048 }],
+      chapters: [
+        { id: "c1", title: "Cold open", startSeconds: 0, endSeconds: 90 },
+      ],
+      attachments: [
+        {
+          id: "a1",
+          name: "cover.jpg",
+          mediaType: "image/jpeg",
+          sizeBytes: 2048,
+        },
+      ],
     }),
   });
 

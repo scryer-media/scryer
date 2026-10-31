@@ -1,6 +1,10 @@
 import * as React from "react";
 
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { facetById } from "@/lib/facets/registry";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
@@ -13,7 +17,10 @@ import {
   listMembershipTitleHref,
 } from "@/lib/utils/lists";
 
-import { LIST_TITLE_FLYOUT_CLASS, ListTitleFlyoutBody } from "./list-title-flyout";
+import {
+  LIST_TITLE_FLYOUT_CLASS,
+  ListTitleFlyoutBody,
+} from "./list-title-flyout";
 import { useListTitleMetadata } from "./use-list-title-metadata";
 
 const OPEN_DELAY_MS = 200;
@@ -23,16 +30,29 @@ const CLOSE_DELAY_MS = 180;
  * A list entry's title: a link when the title is in a library, and for every
  * entry a flyout to its left with what the metadata service knows of it.
  */
-export function ListMembershipTitle({ membership }: { membership: ListMembership }) {
+export function ListMembershipTitle({
+  membership,
+}: {
+  membership: ListMembership;
+}) {
   const t = useTranslate();
   const isMobile = useIsMobile();
   const [open, setOpen] = React.useState(false);
   // The flyout opens with what the list says and fills in when the service answers;
   // an entry the service cannot describe keeps the plain flyout.
-  const [metadata, requestMetadata] = useListTitleMetadata(listMembershipMetadataLookup(membership));
+  const [metadata, requestMetadata] = useListTitleMetadata(
+    listMembershipMetadataLookup(membership),
+  );
   const timer = React.useRef<number | null>(null);
-  const label = listTitleWithoutYear(membership.displayTitle ?? membership.itemKey, membership.year);
-  const href = listMembershipTitleHref(membership.kind, membership.titleId, membership.seriesMovieLinkId);
+  const label = listTitleWithoutYear(
+    membership.displayTitle ?? membership.itemKey,
+    membership.year,
+  );
+  const href = listMembershipTitleHref(
+    membership.kind,
+    membership.titleId,
+    membership.seriesMovieLinkId,
+  );
   const FacetIcon = facetById(membership.kind)?.icon;
 
   const clearTimer = React.useCallback(() => {
@@ -104,7 +124,11 @@ export function ListMembershipTitle({ membership }: { membership: ListMembership
       >
         <ListTitleFlyoutBody
           title={label}
-          kindIcon={FacetIcon ? <FacetIcon className="h-4 w-4" aria-hidden="true" /> : null}
+          kindIcon={
+            FacetIcon ? (
+              <FacetIcon className="h-4 w-4" aria-hidden="true" />
+            ) : null
+          }
           kindLabel={t(listKindLabelKey(membership.kind))}
           year={membership.year}
           runtimeMinutes={metadata?.runtimeMinutes}

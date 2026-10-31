@@ -72,7 +72,12 @@ impl TitleCompletionRecorder for LocationTitleHistory<'_> {
             .titles
             .get_by_id(surviving_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {surviving_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {surviving_id}"),
+                )
+            })?;
         let actor = self
             .actor
             .get_or_try_init(|| async {

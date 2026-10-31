@@ -194,7 +194,8 @@ impl MergePlan {
     /// than unwrapping.
     pub fn require_identity_map(&self) -> AppResult<&MergeIdentityMap> {
         self.identity_map.as_ref().ok_or_else(|| {
-            crate::AppError::Validation(
+            crate::AppError::validation_refused(
+                crate::error_reasons::location::MERGE_UNAVAILABLE,
                 self.summary
                     .blocked_reason()
                     .unwrap_or_else(|| "the merge has no identity map".to_string()),
@@ -318,14 +319,17 @@ pub async fn execute_merge(
     plan: &MergePlan,
 ) -> AppResult<MergeOutcome> {
     if plan.is_blocked() {
-        return Err(crate::AppError::Validation(format!(
-            "merge of title {} into {} is blocked: {}",
-            plan.source_title_id,
-            plan.destination_title_id,
-            plan.summary
-                .blocked_reason()
-                .unwrap_or_else(|| "unmappable records".to_string())
-        )));
+        return Err(crate::AppError::validation_refused(
+            crate::error_reasons::location::MERGE_TITLE_INTO_BLOCKED,
+            format!(
+                "merge of title {} into {} is blocked: {}",
+                plan.source_title_id,
+                plan.destination_title_id,
+                plan.summary
+                    .blocked_reason()
+                    .unwrap_or_else(|| "unmappable records".to_string())
+            ),
+        ));
     }
     plan.require_identity_map()?;
     repository.execute_title_merge(plan).await

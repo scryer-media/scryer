@@ -20,6 +20,24 @@ const BACKGROUND_ACQUISITION_TITLE_LIMIT: usize = 4;
 /// how far one cycle follows them.
 const BACKGROUND_ACQUISITION_TOP_UP_FACTOR: usize = 4;
 
+/// How many indexer searches one title may issue in one background walk.
+///
+/// The walk's time budget alone cannot keep a walk light: several titles run
+/// at once, and a long-running series with dozens of uncovered episodes keeps
+/// its slot searching for as long as it has scopes left, one search per
+/// scope, each fanned out across every indexer the scope still needs. This
+/// bound caps what any one title spends per walk; a title that reaches it
+/// stops at its next stage and the next walk resumes it from the first scope
+/// it did not reach, so a large backlog is eaten a slice at a time.
+///
+/// The walk's time budget is the primary bound; this one is generous on
+/// purpose. One hundred and twenty still walks a title missing a hundred
+/// episodes in one pass (a series pack, its season packs and one search per
+/// episode), which the walk has to manage once per walk interval, and leaves
+/// room for an ordinary title many times over. Only a title missing more than
+/// that is spread over several walks.
+pub(crate) const BACKGROUND_TITLE_WALK_QUERY_BUDGET: usize = 120;
+
 /// How far apart two instances' maintenance evaluation passes can drift. Much
 /// smaller than the eight-hour cadence on purpose: the jitter is there to keep
 /// a fleet from sweeping in lockstep, not to postpone the first pass.
@@ -163,14 +181,57 @@ pub(crate) struct BackgroundAcquisitionCycleOutcome {
     /// interactive walk over a large title runs for minutes, so a re-arm here
     /// would run a full convergence cycle every re-arm interval for the whole
     /// job — each one advancing the cold cursor and spending indexer evaluation
-    /// budget. The job wakes the poller itself when it releases the lock (see
-    /// [`run_interactive_title_acquisition_walk`]), so exactly one cycle
-    /// follows it.
+    /// budget. The job does not wake the poller when it releases the lock
+    /// either (see [`run_interactive_title_acquisition_walk`]): the cursor
+    /// comes back to the title on the next walk.
     pub skipped_locked_titles: usize,
     /// The soonest a cooling host is expected back, when the scheduler snapshot
     /// named one. An exhausted quota carries no instant at all, and an untimed
     /// deferral waits for the poller's own tick rather than guessing.
     pub retry_after: Option<std::time::Duration>,
+    /// Whether the pass went on to walk, whatever pass it was started as: a
+    /// failure-check pass walks when failure handling re-opened a scope. The
+    /// walk cadence measures its idle gap from the end of any walk.
+    pub walked: bool,
+    /// Titles this walk stopped before their last scope, for the deadline or
+    /// for their search budget. The next walk resumes each of them.
+    pub titles_stopped_midway: usize,
+    /// Indexer searches the walk issued across all of its titles.
+    pub indexer_queries: usize,
+    /// Why the walk stopped short of its selection, if it did.
+    pub stop: Option<WalkStopReason>,
+}
+
+/// Why a background walk, or one title inside it, stopped before the end of
+/// its work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WalkStopReason {
+    /// RSS was admitted; finish current queries and leave the remaining work.
+    RssPriority,
+    /// The walk's time budget ran out.
+    Deadline,
+    /// A title spent [`BACKGROUND_TITLE_WALK_QUERY_BUDGET`] searches.
+    QueryBudget,
+}
+
+impl WalkStopReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RssPriority => "rss_priority",
+            Self::Deadline => "deadline",
+            Self::QueryBudget => "query_budget",
+        }
+    }
+
+    /// The stop that describes a walk two stops happened in: running out of
+    /// time ends the whole walk, a spent search budget only ends one title.
+    fn combine(current: Option<Self>, next: Self) -> Option<Self> {
+        match current {
+            Some(Self::RssPriority) => Some(Self::RssPriority),
+            Some(Self::Deadline) => Some(Self::Deadline),
+            _ => Some(next),
+        }
+    }
 }
 
 impl BackgroundAcquisitionCycleOutcome {
@@ -198,8 +259,9 @@ impl BackgroundAcquisitionCycleOutcome {
 }
 
 /// `budget` bounds the walk: once it has run that long the cycle starts no
-/// further title, lets the titles in flight finish, and leaves the rotation
-/// cursor on the first title it did not reach. `None` walks without a bound.
+/// further title, the titles in flight stop at their next stage, and the
+/// rotation cursor is left on the first scope the walk did not reach. `None`
+/// walks without a bound.
 async fn run_background_acquisition_cycle(
     app: &AppUseCase,
     pass: BackgroundAcquisitionPass,
@@ -234,6 +296,14 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     // its own cadence. The walk never runs on its own: it always follows a
     // fetch and failure check in the same pass, so it decides on a snapshot
     // exactly as fresh as it did before the split.
+    // A pass inside the walk cadence's idle gap leaves a re-opened scope for
+    // the first walk after it rather than walking now.
+    if pass == BackgroundAcquisitionPass::FailureCheckWalkHeld {
+        return BackgroundAcquisitionCycleOutcome::default();
+    }
+    let Some(rss_yield) = app.runtime.acquisition.walk_priority.begin_background() else {
+        return BackgroundAcquisitionCycleOutcome::default();
+    };
     let scope_reopened = app
         .runtime
         .acquisition
@@ -317,10 +387,24 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     let mut budget = max_scopes;
     let mut titles_walked = 0usize;
     let mut skipped_locked_titles = 0usize;
-    let mut stopped_for_budget = false;
+    let mut titles_stopped_midway = 0usize;
+    let mut indexer_queries = 0usize;
+    let mut stop: Option<WalkStopReason> = None;
     while budget > 0 {
+        if rss_yield.is_cancelled() {
+            if titles_walked == 0 {
+                app.runtime
+                    .acquisition
+                    .interrupted_walk_scope_keys
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend(carried_scope_keys);
+            }
+            stop = WalkStopReason::combine(stop, WalkStopReason::RssPriority);
+            break;
+        }
         if titles_walked > 0 && deadline_passed(deadline) {
-            stopped_for_budget = true;
+            stop = WalkStopReason::combine(stop, WalkStopReason::Deadline);
             break;
         }
         let selection = crate::acquisition::targets::select_background_acquisition_batch(
@@ -365,6 +449,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
             &dl_snapshot,
             deadline,
             titles_walked,
+            &rss_yield,
         )
         .await
         else {
@@ -372,10 +457,14 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         };
         titles_walked += round.titles_walked;
         skipped_locked_titles += round.skipped_locked_titles;
+        titles_stopped_midway += round.titles_stopped_midway;
+        indexer_queries += round.indexer_queries;
         if !round.undispatched.is_empty() {
             // The cursors already moved past this whole selection; put them
             // back on the first scope the walk did not reach so the next cycle
             // continues from there instead of skipping it for a full rotation.
+            // A title stopped mid-way leaves its remaining scopes here too, so
+            // the next cycle resumes it at its first unwalked scope.
             let rewound_hot = rewound_lane_cursor(
                 &targets,
                 &selection.indices,
@@ -415,7 +504,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
                 .interrupted_walk_scope_keys
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = carried;
-            stopped_for_budget = true;
+            stop = WalkStopReason::combine(stop, round.stop.unwrap_or(WalkStopReason::Deadline));
             break;
         }
         // Indexers that are cooling down or out of quota defer every scope
@@ -435,13 +524,43 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         retry_after: (deferred_scopes > 0)
             .then(|| availability.earliest_recovery_in(&now))
             .flatten(),
+        walked: true,
+        titles_stopped_midway,
+        indexer_queries,
+        stop,
     };
-    if stopped_for_budget {
-        info!(
+    // One INFO line per walk, worded for why it ended.
+    let stop_reason = stop.map_or("none", WalkStopReason::as_str);
+    let elapsed_secs = cycle_started.elapsed().as_secs();
+    match stop {
+        Some(WalkStopReason::RssPriority) => debug!(
             titles_walked,
-            elapsed_secs = cycle_started.elapsed().as_secs(),
+            indexer_queries, "background acquisition cycle yielded to RSS"
+        ),
+        Some(WalkStopReason::Deadline) => info!(
+            titles_walked,
+            titles_stopped_midway,
+            indexer_queries,
+            elapsed_secs,
+            stop_reason,
             "background acquisition walk reached its time budget; the next cycle continues from its cursor"
-        );
+        ),
+        Some(WalkStopReason::QueryBudget) => info!(
+            titles_walked,
+            titles_stopped_midway,
+            indexer_queries,
+            elapsed_secs,
+            stop_reason,
+            "background acquisition walk stopped a title at its search budget; the next cycle continues from its cursor"
+        ),
+        None => info!(
+            titles_walked,
+            titles_stopped_midway,
+            indexer_queries,
+            elapsed_secs,
+            stop_reason,
+            "background acquisition walk finished its selection"
+        ),
     }
     // One line per cycle, above the per-title summaries.
     tracing::debug!(
@@ -465,9 +584,16 @@ struct SelectedScopesWalk {
     /// [`TitleWalkStats::spent_nothing`]). A title the walk could not run for
     /// — held by an interactive walk, or failed — gives none back.
     unspent_scopes: usize,
-    /// Selected scopes whose title was never started because the cycle ran out
-    /// of time first.
+    /// Selected scopes the walk did not reach: their title was never started
+    /// because the cycle ran out of time first, or their title stopped before
+    /// them (see [`TitleWalkStats::unwalked_target_indices`]).
     undispatched: HashSet<usize>,
+    /// Titles that stopped before their last scope.
+    titles_stopped_midway: usize,
+    /// Indexer searches the selection's titles issued.
+    indexer_queries: usize,
+    /// Why the selection was cut short, if it was.
+    stop: Option<WalkStopReason>,
 }
 
 fn deadline_passed(deadline: Option<tokio::time::Instant>) -> bool {
@@ -514,6 +640,7 @@ async fn walk_selected_scopes(
     dl_snapshot: &DownloadClientSnapshot,
     deadline: Option<tokio::time::Instant>,
     titles_walked_before: usize,
+    rss_yield: &tokio_util::sync::CancellationToken,
 ) -> Option<SelectedScopesWalk> {
     // Count selected episode scopes per (title_id, season_num). Season pack
     // search is only worthwhile when >= 2 episodes from the same season are in
@@ -564,12 +691,13 @@ async fn walk_selected_scopes(
     let mut out_of_time = false;
     loop {
         while in_flight.len() < BACKGROUND_ACQUISITION_TITLE_LIMIT {
-            // The budget is checked between titles, never inside one, and a
-            // cycle always walks at least one title so it cannot stall.
+            // The budget is checked here between titles, and again inside each
+            // title between its stages. A cycle always walks at least one
+            // title so it cannot stall.
             if titles_walked_before + dispatched > 0 && deadline_passed(deadline) {
                 out_of_time = true;
             }
-            if out_of_time {
+            if out_of_time || rss_yield.is_cancelled() {
                 break;
             }
             let Some(title_work) = ready_titles.pop_front() else {
@@ -584,13 +712,14 @@ async fn walk_selected_scopes(
             };
             // A title an operator's interactive walk holds is skipped, not
             // waited on: the cycle has other titles to get through and the
-            // cursor comes back to this one. The skip is counted for telemetry
-            // but does not re-arm the retry timer — the job notifies the wake
-            // when it releases the lock, so one cycle follows it instead of one
-            // cycle per retry interval for the length of the walk. The reverse
-            // holds too: an operator's walk that arrives while this cycle holds
-            // the title cancels `yield_token`, and the walk hands the title over
-            // at its next stage.
+            // cursor comes back to this one on the next walk. The skip is
+            // counted for telemetry but does not re-arm the retry timer, and
+            // the job does not wake the poller when it releases the lock: a
+            // cycle that followed an operator's season or episode search would
+            // walk the whole title straight after it, and the operator asked
+            // for one season. The reverse holds too: an operator's walk that
+            // arrives while this cycle holds the title cancels `yield_token`,
+            // and the walk hands the title over at its next stage.
             let Some((walk_guard, yield_token)) = app
                 .runtime
                 .acquisition
@@ -605,6 +734,10 @@ async fn walk_selected_scopes(
                 );
                 continue;
             };
+            if rss_yield.is_cancelled() {
+                ready_titles.push_front(title_work);
+                break;
+            }
             let cycle = Arc::clone(cycle);
             let scope_count = title_work
                 .ready
@@ -632,7 +765,10 @@ async fn walk_selected_scopes(
                     &cycle,
                     season_due_counts,
                     dl_snapshot,
-                    TitleWalkOptions::background(yield_token.clone()),
+                    TitleWalkOptions {
+                        rss_yield: Some(rss_yield.clone()),
+                        ..TitleWalkOptions::background(yield_token.clone(), deadline)
+                    },
                     |_, _| {},
                 )
                 .await;
@@ -644,6 +780,9 @@ async fn walk_selected_scopes(
             break;
         };
         round.titles_walked += 1;
+        if let Ok(stats) = &result {
+            round.indexer_queries += stats.queries;
+        }
         if yielded {
             // The operator's walk now owns the title; whatever this walk left
             // undone is neither a failure nor unspent work to top the batch up
@@ -657,7 +796,24 @@ async fn walk_selected_scopes(
                 .increment(1);
             continue;
         }
-        if result.as_ref().is_ok_and(TitleWalkStats::spent_nothing) {
+        if let Ok(stats) = &result
+            && let Some(title_stop) = stats.stopped
+        {
+            // The title walked part of its selection; the rest goes back on
+            // the cursor with the titles the cycle never started.
+            debug!(
+                title_id = title_id.as_str(),
+                stop_reason = title_stop.as_str(),
+                queries = stats.queries,
+                unwalked_scopes = stats.unwalked_target_indices.len(),
+                "background acquisition: title stopped before its last scope"
+            );
+            round.titles_stopped_midway += 1;
+            round.stop = WalkStopReason::combine(round.stop, title_stop);
+            round
+                .undispatched
+                .extend(stats.unwalked_target_indices.iter().copied());
+        } else if result.as_ref().is_ok_and(TitleWalkStats::spent_nothing) {
             round.unspent_scopes += scope_count;
         }
         if let Err(err) = result {
@@ -679,11 +835,20 @@ async fn walk_selected_scopes(
             .iter()
             .map(|work| work.title_id.as_str())
             .collect::<HashSet<_>>();
-        round.undispatched = indices
-            .iter()
-            .copied()
-            .filter(|index| unreached.contains(targets[*index].title_id.as_str()))
-            .collect();
+        round.undispatched.extend(
+            indices
+                .iter()
+                .copied()
+                .filter(|index| unreached.contains(targets[*index].title_id.as_str())),
+        );
+        round.stop = WalkStopReason::combine(
+            round.stop,
+            if rss_yield.is_cancelled() {
+                WalkStopReason::RssPriority
+            } else {
+                WalkStopReason::Deadline
+            },
+        );
     }
     Some(round)
 }
@@ -710,7 +875,13 @@ fn submission_blocks_search_for_wanted_item(
         return false;
     }
 
-    if tracked_state == Some(scryer_domain::TrackedDownloadState::Failed) {
+    if matches!(
+        tracked_state,
+        Some(
+            scryer_domain::TrackedDownloadState::Failed
+                | scryer_domain::TrackedDownloadState::Missing
+        )
+    ) {
         return false;
     }
 
@@ -1161,6 +1332,7 @@ async fn arbitrate_and_commit_title_grabs(
     stats: &mut TitleWalkStats,
     cancellation: &tokio_util::sync::CancellationToken,
     initiated_by: &DomainEventActor,
+    automatic: bool,
 ) -> (usize, usize) {
     if proposals.is_empty() {
         return (0, 0);
@@ -1208,6 +1380,7 @@ async fn arbitrate_and_commit_title_grabs(
             now,
             &mut failures,
             initiated_by,
+            automatic,
         )
         .await;
         stats.record_grab_failures(failures);
@@ -1236,6 +1409,7 @@ async fn commit_grab_proposal(
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
     initiated_by: &DomainEventActor,
+    automatic: bool,
 ) -> Vec<String> {
     let GrabProposal {
         stage,
@@ -1255,6 +1429,7 @@ async fn commit_grab_proposal(
                 dl_snapshot,
                 now,
                 initiated_by,
+                automatic,
             )
             .await
             {
@@ -1281,6 +1456,7 @@ async fn commit_grab_proposal(
                 now,
                 failures,
                 initiated_by,
+                automatic,
             )
             .await
             {
@@ -1314,6 +1490,7 @@ async fn commit_grab_proposal(
                 now,
                 failures,
                 initiated_by,
+                automatic,
             )
             .await
             {
@@ -1410,21 +1587,53 @@ pub(crate) struct TitleWalkOptions {
     /// operator's walk that wants this title (see `AcquisitionTitleWalkLocks`),
     /// so the two paths use one code path.
     cancellation: tokio_util::sync::CancellationToken,
+    /// Cooperative RSS yield, never passed to in-flight HTTP or grab work.
+    rss_yield: Option<tokio_util::sync::CancellationToken>,
     /// Who the walk's grabs are recorded against on their grab events. This is
     /// attribution only: the walk authorizes nothing, and whoever asked for it
     /// was authorized before it started. The background cycle and searches run
     /// as the system execution actor record the system.
     initiated_by: DomainEventActor,
+    /// The background cycle's time budget. Once it has passed the walk starts
+    /// no further stage; the stage in flight finishes. `None` for an
+    /// interactive walk, which the operator asked to run to the end.
+    deadline: Option<tokio::time::Instant>,
+    /// How many indexer searches the walk may issue before it stops at its
+    /// next stage. `None` for an interactive walk.
+    query_budget: Option<usize>,
 }
 
 impl TitleWalkOptions {
-    fn background(yield_token: tokio_util::sync::CancellationToken) -> Self {
+    fn background(
+        yield_token: tokio_util::sync::CancellationToken,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Self {
         Self {
             intent: AcquisitionWalkIntent::Background,
             season_filter: None,
             cancellation: yield_token,
+            rss_yield: None,
             initiated_by: DomainEventActor::system(),
+            deadline,
+            query_budget: Some(BACKGROUND_TITLE_WALK_QUERY_BUDGET),
         }
+    }
+
+    /// Why the walk should start no further stage, given what it has spent.
+    fn stop_reason(&self, stats: &TitleWalkStats) -> Option<WalkStopReason> {
+        if self
+            .rss_yield
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return Some(WalkStopReason::RssPriority);
+        }
+        if deadline_passed(self.deadline) {
+            return Some(WalkStopReason::Deadline);
+        }
+        self.query_budget
+            .is_some_and(|budget| stats.queries >= budget)
+            .then_some(WalkStopReason::QueryBudget)
     }
 
     /// The search token for a query this walk issues.
@@ -1465,6 +1674,12 @@ pub(crate) struct TitleWalkStats {
     /// job outright rather than warning, because nothing the operator asked for
     /// could even be attempted.
     pub submit_unavailable: bool,
+    /// Why the walk stopped before its last stage, when the background
+    /// cycle's deadline or the title's search budget cut it short.
+    pub stopped: Option<WalkStopReason>,
+    /// The episode or movie scopes a stopped walk never reached, as indices
+    /// into the cycle's targets. The cycle puts them back on its cursor.
+    pub unwalked_target_indices: Vec<usize>,
 }
 
 /// What one work item's submission attempts amounted to.
@@ -1525,6 +1740,7 @@ impl TitleWalkStats {
 /// to another title.
 struct TitleWalkSession {
     options: TitleWalkOptions,
+    search: crate::catalog::release_search::WalkSearchContext,
     proposals: Vec<GrabProposal>,
     stats: TitleWalkStats,
 }
@@ -1533,6 +1749,7 @@ impl TitleWalkSession {
     fn new(options: TitleWalkOptions) -> Self {
         Self {
             options,
+            search: Default::default(),
             proposals: Vec::new(),
             stats: TitleWalkStats::default(),
         }
@@ -1820,6 +2037,7 @@ async fn try_series_pack_for_title(
         dl_snapshot,
         now,
         &session.options.initiated_by,
+        !session.options.intent.is_interactive(),
     )
     .await?;
     Ok((!episode_ids.is_empty()).then_some(episode_ids))
@@ -1868,17 +2086,10 @@ async fn plan_series_pack_for_title(
             return Ok(None);
         }
     };
-    let mut owned_episode_ids = match app
-        .services
-        .library
-        .media_files
-        .list_media_files_for_title(&title.id)
-        .await
-    {
+    let mut owned_episode_ids = match reads.primary_file_cutoffs(app).await {
         Ok(files) => files
-            .into_iter()
-            .filter(|file| file.role.is_primary())
-            .filter_map(|file| file.episode_id)
+            .iter()
+            .filter_map(|file| file.episode_id.clone())
             .collect::<HashSet<_>>(),
         Err(error) => {
             warn!(
@@ -1948,8 +2159,13 @@ async fn plan_series_pack_for_title(
         let holds = if uncovered.is_empty() {
             HashMap::new()
         } else {
-            app.contained_indexer_holds(&convergence.scope_key, &uncovered, now)
-                .await
+            app.contained_indexer_holds(
+                &convergence.scope_key,
+                title_subject.search_facet.as_str(),
+                &uncovered,
+                now,
+            )
+            .await
         };
         let uncovered = uncovered
             .into_iter()
@@ -1972,7 +2188,7 @@ async fn plan_series_pack_for_title(
     }
     session.stats.queries += 1;
     let search_outcome = app
-        .search_and_score_subject_restricted_with_fired_indexers(
+        .search_and_score_subject_with_context(
             search_title,
             &title_subject,
             "background_acquisition_series_pack",
@@ -1981,6 +2197,7 @@ async fn plan_series_pack_for_title(
             Some(searchable.into_iter().collect()),
             intent.background_value(target),
             now,
+            &mut session.search,
         )
         .await?;
     app.link_search_session_coverage_scope(
@@ -1998,6 +2215,7 @@ async fn plan_series_pack_for_title(
         &owned_episode_ids,
         claimed_episode_ids,
         reads,
+        !session.options.intent.is_interactive(),
     )
     .await?;
     let session_finalized = app
@@ -2092,6 +2310,7 @@ async fn commit_series_pack_proposal(
     dl_snapshot: &DownloadClientSnapshot,
     now: &DateTime<Utc>,
     initiated_by: &DomainEventActor,
+    automatic: bool,
 ) -> AppResult<Vec<String>> {
     let SeriesPackCommit {
         anchors,
@@ -2159,14 +2378,21 @@ async fn commit_series_pack_proposal(
             restore_standby_releases(app, anchor, &preserved_standby).await;
             return Err(error);
         }
-        let outcome = try_saved_candidates(
+        let outcome = try_saved_candidates_with_trigger(
             app,
             anchor,
-            None,
-            Some(claimed_episode_ids),
+            SavedCandidateExclusions {
+                failed_release_title: None,
+                excluded_episode_ids: Some(claimed_episode_ids),
+            },
             dl_snapshot,
             now,
             initiated_by,
+            if automatic {
+                super::pending::PendingGrabTrigger::Automatic
+            } else {
+                super::pending::PendingGrabTrigger::InteractiveSearch
+            },
         )
         .await;
         let (scope, standby_start, recovered) = match outcome {
@@ -2232,6 +2458,7 @@ async fn commit_season_pack_proposal(
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
     initiated_by: &DomainEventActor,
+    automatic: bool,
 ) -> AppResult<Vec<String>> {
     let season_num = commit.season;
     let season_key = commit.season_key.clone();
@@ -2285,6 +2512,7 @@ async fn commit_season_pack_proposal(
             let release_listing_json = ReleaseListingSnapshot::json_for_candidate(best_pack, *now);
             let canonical_result = app
                 .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                    automatic,
                     http_release: best_pack.http.clone(),
                     request: DownloadClientAddRequest {
                         http: None,
@@ -2339,7 +2567,10 @@ async fn commit_season_pack_proposal(
 
             let canonical_submission = match canonical_result {
                 Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
-                Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
+                Ok(
+                    CanonicalDownloadSubmissionOutcome::Conflict(_)
+                    | CanonicalDownloadSubmissionOutcome::Deferred,
+                ) => {
                     break 'season_pack_candidates;
                 }
                 Err(error) => Err(error),
@@ -2412,6 +2643,7 @@ async fn commit_season_pack_proposal(
                             .map(|decision| decision.preference_score)
                             .unwrap_or(0),
                         "grabbed_at": now.to_rfc3339(),
+                    "download_id": grab.download_id,
                         "season_pack": true,
                         "source_provider": best_pack.source.clone(),
                         "release_listing_json": release_listing_json,
@@ -2586,6 +2818,7 @@ async fn evaluate_series_pack_candidates(
     owned_episode_ids: &HashSet<String>,
     claimed_episode_ids: &HashSet<String>,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    automatic: bool,
 ) -> AppResult<(Vec<IndexerSearchResult>, HashSet<String>)> {
     let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
     let mut collection_ids = HashSet::new();
@@ -2643,12 +2876,13 @@ async fn evaluate_series_pack_candidates(
         let mut scoped_subject = title_subject.clone();
         scoped_subject.submission_scope = SubmissionScope::EpisodeSet { episode_ids };
         for candidate in app
-            .evaluate_search_results_for_subject_with_reads(
+            .evaluate_search_results_for_subject_with_missing_history(
                 title,
                 &scoped_subject,
                 candidates,
                 false,
                 reads,
+                automatic,
             )
             .await?
         {
@@ -2859,7 +3093,7 @@ struct BackgroundAcquisitionTitleContext {
     /// The title's catalog and media-file reads for the length of this walk.
     /// Every due scope of the title is evaluated against the same rows, so
     /// they are read once per walk rather than once per scope.
-    reads: crate::acquisition::title_reads::TitleCatalogReads,
+    reads: Arc<crate::acquisition::title_reads::TitleCatalogReads>,
     submissions: Vec<DownloadSubmission>,
     tracked_states:
         HashMap<crate::contracts::ClientJobLocator, scryer_domain::TrackedDownloadState>,
@@ -2937,7 +3171,7 @@ impl BackgroundAcquisitionTitleContext {
         Ok(Self {
             title,
             episodes_by_id,
-            reads,
+            reads: Arc::new(reads),
             submissions,
             tracked_states,
             convergence_inputs: Default::default(),
@@ -2988,6 +3222,12 @@ where
         .await;
     }
     let mut session = TitleWalkSession::new(options);
+    session.search.reads = Some(Arc::clone(&context.reads));
+    session.search.rss_yield = session.options.rss_yield.clone();
+    // A title stops for the cycle's deadline or its own search budget only
+    // after it has walked a scope, so a resumed title always gets further than
+    // its pack stages and the backlog keeps moving.
+    let mut scopes_walked = 0usize;
 
     while let Some(work) = title_work.ready.pop_front() {
         if session.options.cancellation.is_cancelled() {
@@ -2995,6 +3235,26 @@ where
                 title_id = title_work.title_id.as_str(),
                 "acquisition title walk cancelled"
             );
+            break;
+        }
+        if (scopes_walked > 0
+            || session
+                .options
+                .rss_yield
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled()))
+            && let Some(stop) = session.options.stop_reason(&session.stats)
+        {
+            // In-flight work has finished; nothing further is admitted. The
+            // scopes left in the queue go back on the cycle's cursor.
+            title_work.ready.push_front(work);
+            session.stats.unwalked_target_indices = title_work
+                .ready
+                .iter()
+                .filter(|work| matches!(work.kind, BackgroundAcquisitionWorkKind::Scope))
+                .map(|work| work.target_index)
+                .collect();
+            session.stats.stopped = Some(stop);
             break;
         }
         let target = &targets[work.target_index];
@@ -3043,6 +3303,18 @@ where
                 .increment(1);
         }
 
+        if session.search.interrupted {
+            title_work.ready.push_front(work);
+            session.stats.unwalked_target_indices = title_work
+                .ready
+                .iter()
+                .filter(|work| matches!(work.kind, BackgroundAcquisitionWorkKind::Scope))
+                .map(|work| work.target_index)
+                .collect();
+            session.stats.stopped = Some(WalkStopReason::RssPriority);
+            break;
+        }
+
         match work.kind {
             BackgroundAcquisitionWorkKind::TitlePack => {
                 cycle.complete_title_pack_stage(&title_work.title_id);
@@ -3057,7 +3329,7 @@ where
             BackgroundAcquisitionWorkKind::SeasonPack { season } => {
                 cycle.complete_season_pack_stage(&(title_work.title_id.clone(), season));
             }
-            BackgroundAcquisitionWorkKind::Scope => {}
+            BackgroundAcquisitionWorkKind::Scope => scopes_walked += 1,
         }
 
         session.stats.stages += 1;
@@ -3086,6 +3358,7 @@ where
         &mut stats,
         &session.options.cancellation,
         &session.options.initiated_by,
+        !session.options.intent.is_interactive(),
     )
     .await;
     session.stats = stats;
@@ -3107,6 +3380,8 @@ where
         committed = session.stats.committed,
         set_aside = session.stats.set_aside,
         failed = session.stats.failed,
+        stopped = session.stats.stopped.map(WalkStopReason::as_str),
+        unwalked_scopes = session.stats.unwalked_target_indices.len(),
         elapsed_ms = started.elapsed().as_millis() as u64,
         "acquisition title walk complete"
     );
@@ -3145,28 +3420,6 @@ fn acquisition_walk_stage_label(
             (Some(season), None) => format!("{title_name} — season {season}"),
             _ => title_name.to_string(),
         },
-    }
-}
-
-/// Wakes the convergence poller when an interactive walk gives its title lock
-/// back, so exactly one cycle follows the job.
-///
-/// The cycle skips a locked title rather than waiting, and deliberately does not
-/// re-arm its retry timer for the skip — a walk over a large title runs for
-/// minutes, and a timer would spend a whole cycle every interval for the length
-/// of it. This is the other half of that decision: one wake when the title is
-/// free again, on every exit path including cancellation and error.
-struct InteractiveWalkLease {
-    guard: Option<crate::services::TitleWalkGuard>,
-    wake: Arc<tokio::sync::Notify>,
-}
-
-impl Drop for InteractiveWalkLease {
-    fn drop(&mut self) {
-        // Release before waking: the cycle this wakes takes the title lock with
-        // `try_acquire` and would skip the title all over again if it ran first.
-        drop(self.guard.take());
-        self.wake.notify_one();
     }
 }
 
@@ -3239,15 +3492,19 @@ where
 {
     if !respect_title_monitoring {
         if app.location_owned_title_ids().await?.contains(title_id) {
-            return Err(AppError::Validation(
-                "This title is being moved. Search is available when the move finishes.".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::TITLE_BEING_MOVED_SEARCH_UNAVAILABLE,
+                "This title is being moved. Search is available when the move finishes.",
             ));
         }
         let excluded = app.non_wanted_state_scope_keys().await?;
         if scope_keys
             .is_some_and(|keys| !keys.is_empty() && keys.iter().all(|key| excluded.contains(key)))
         {
-            return Err(AppError::Validation("The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::acquisition::MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING,
+                "The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.",
+            ));
         }
     }
     let title = app
@@ -3256,7 +3513,12 @@ where
         .titles
         .get_by_id(title_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        .ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                format!("title {title_id}"),
+            )
+        })?;
 
     let now = Utc::now();
     let targets = app
@@ -3328,10 +3590,14 @@ where
             }
         }
     };
-    let _walk_lease = InteractiveWalkLease {
-        guard: Some(walk_guard),
-        wake: Arc::clone(&app.runtime.acquisition.acquisition_wake),
-    };
+    // Held to the end of the walk and simply dropped. Releasing it does not
+    // wake the convergence poller: a woken cycle runs a full, gap-exempt walk
+    // with no season filter, and when its batch lands on this title — likely,
+    // since the cycle skipped the title while the job held it — it searches
+    // every missing season right after the operator asked for one. The cycle
+    // skipped the title without re-arming its retry timer, and its cursor comes
+    // back to the title on the next walk.
+    let _walk_guard = walk_guard;
     if cancellation.is_cancelled() {
         return Ok(TitleWalkStats::default());
     }
@@ -3343,13 +3609,15 @@ where
         .iter()
         .all(|target| excluded.contains(&target.scope_key))
     {
-        return Err(AppError::Validation(
-            "The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING,
+            "The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.",
         ));
     }
     if app.location_owned_title_ids().await?.contains(title_id) {
-        return Err(AppError::Validation(
-            "This title is being moved. Search is available when the move finishes.".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::TITLE_BEING_MOVED_SEARCH_UNAVAILABLE,
+            "This title is being moved. Search is available when the move finishes.",
         ));
     }
 
@@ -3378,7 +3646,10 @@ where
             intent: AcquisitionWalkIntent::Interactive,
             season_filter,
             cancellation,
+            rss_yield: None,
             initiated_by,
+            deadline: None,
+            query_budget: None,
         },
         |kind, target| {
             processed += 1;
@@ -3540,9 +3811,9 @@ async fn process_single_target(
     };
     let item = &mut item;
     if item.status == AcquisitionScopeStatus::Paused {
-        return Err(AppError::Validation(
-            "Acquisition was paused while this search was waiting. Resume it before searching."
-                .into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::acquisition::PAUSED_WHILE_SEARCH_WAITING,
+            "Acquisition was paused while this search was waiting. Resume it before searching.",
         ));
     }
 
@@ -3600,7 +3871,7 @@ async fn process_single_target(
             item,
             episode.as_ref(),
             cycle,
-            &mut session.proposals,
+            session,
         )
         .await;
     }
@@ -3615,14 +3886,21 @@ async fn process_single_target(
     let stale_standby_indexer_ids = if item.status == AcquisitionScopeStatus::Wanted
         && !item.id.is_empty()
     {
-        match try_saved_candidates(
+        match try_saved_candidates_with_trigger(
             app,
             item,
-            None,
-            Some(&claimed_episode_ids),
+            SavedCandidateExclusions {
+                failed_release_title: None,
+                excluded_episode_ids: Some(&claimed_episode_ids),
+            },
             dl_snapshot,
             now,
             &session.options.initiated_by,
+            if session.options.intent.is_interactive() {
+                super::pending::PendingGrabTrigger::InteractiveSearch
+            } else {
+                super::pending::PendingGrabTrigger::Automatic
+            },
         )
         .await
         {
@@ -3868,9 +4146,16 @@ async fn process_single_target(
             // search here hit the provider's own limit waits out its backoff.
             // It stays uncovered, but asking it sooner repeats the same capped
             // answer. This is not a deferral: the poller must not re-arm for
-            // it, and the cycle keeps selecting other scopes.
+            // it, and the cycle keeps selecting other scopes. An indexer
+            // learned to carry nothing for this facet is held the same way
+            // until its suppression ends.
             let holds = app
-                .contained_indexer_holds(&convergence.scope_key, &uncovered, *now)
+                .contained_indexer_holds(
+                    &convergence.scope_key,
+                    pending_subject.for_convergence().search_facet.as_str(),
+                    &uncovered,
+                    *now,
+                )
                 .await;
             let uncovered = uncovered
                 .into_iter()
@@ -4002,6 +4287,7 @@ async fn process_single_target(
                                 let holds = app
                                     .contained_indexer_holds(
                                         &pack_convergence.scope_key,
+                                        pack_subject.for_convergence().search_facet.as_str(),
                                         &uncovered,
                                         *now,
                                     )
@@ -4040,7 +4326,7 @@ async fn process_single_target(
                     let pack_subject = pack_subject.resolve(app).await?;
                     session.stats.queries += 1;
                     match app
-                        .search_and_evaluate_subject_restricted(
+                        .search_and_evaluate_subject_with_context(
                             &search_title,
                             &pack_subject,
                             "background_acquisition_season_pack",
@@ -4051,10 +4337,11 @@ async fn process_single_target(
                             // an interactive walk takes the operator lane.
                             intent.background_value(target),
                             *now,
+                            &mut session.search,
                         )
                         .await
                     {
-                        Ok(results) => results,
+                        Ok(outcome) => outcome.results,
                         Err(err) => {
                             warn!(
                                 title_id = title.id.as_str(),
@@ -4226,7 +4513,7 @@ async fn process_single_target(
 
     session.stats.queries += 1;
     let search_outcome = match app
-        .search_and_score_subject_restricted(
+        .search_and_score_subject_with_context(
             &search_title,
             &subject,
             "background_acquisition",
@@ -4235,6 +4522,7 @@ async fn process_single_target(
             Some(uncovered),
             intent.background_value(target),
             *now,
+            &mut session.search,
         )
         .await
     {
@@ -4264,12 +4552,13 @@ async fn process_single_target(
     // One evaluation over the union, so the merged rows are ranked by the same
     // comparator as the rest rather than appended past it.
     let results = app
-        .evaluate_search_results_for_subject_with_reads(
+        .evaluate_search_results_for_subject_with_missing_history(
             &search_title,
             &subject,
             scored,
             false,
             &context.reads,
+            !session.options.intent.is_interactive(),
         )
         .await?;
     // A finalize failure withholds coverage (the scope re-searches next cycle)
@@ -4323,13 +4612,9 @@ async fn process_single_target(
     let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
     let existing_files = context
         .reads
-        .media_files(app)
+        .primary_file_cutoffs(app)
         .await
-        .unwrap_or_default()
-        .iter()
-        .filter(|file| file.role.is_primary())
-        .cloned()
-        .collect::<Vec<_>>();
+        .unwrap_or_default();
     let cutoff_scope = app.cutoff_scope_for(&subject.submission_scope).await;
     let analyzed_cutoff_quality =
         crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
@@ -4719,6 +5004,7 @@ async fn process_single_target(
         now,
         &mut grab_failures,
         &session.options.initiated_by,
+        !session.options.intent.is_interactive(),
     )
     .await;
     // Counted before the `?`: a scope whose submissions failed is a failed work
@@ -4897,7 +5183,7 @@ async fn propose_covered_episode_evidence(
     item: &AcquisitionScopeState,
     episode: Option<&Episode>,
     cycle: &BackgroundAcquisitionCycleCoordinator,
-    proposals: &mut Vec<GrabProposal>,
+    session: &mut TitleWalkSession,
 ) -> AppResult<()> {
     let title = &context.title;
     let Some(season) = episode
@@ -4920,12 +5206,13 @@ async fn propose_covered_episode_evidence(
     // One evaluation, the same one the live path runs, so a pack and an episode
     // are compared on scores produced by the same comparator.
     let results = app
-        .evaluate_search_results_for_subject_with_reads(
+        .evaluate_search_results_for_subject_with_missing_history(
             &search_title,
             &subject,
             extras,
             false,
             &context.reads,
+            !session.options.intent.is_interactive(),
         )
         .await?;
 
@@ -4974,7 +5261,7 @@ async fn propose_covered_episode_evidence(
     episode_ids.sort();
     episode_ids.dedup();
 
-    proposals.push(GrabProposal {
+    session.proposals.push(GrabProposal {
         stage: BackgroundAcquisitionWorkKind::Scope,
         episode_ids,
         season_key: None,
@@ -5025,6 +5312,7 @@ async fn commit_scope_grab(
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
     initiated_by: &DomainEventActor,
+    automatic: bool,
 ) -> AppResult<ScopeGrabOutcome> {
     // A proposal built from in-hand evidence never reached the inline
     // `ensure_acquisition_scope_state`, and a grab needs its anchor row.
@@ -5184,6 +5472,7 @@ async fn commit_scope_grab(
         let release_listing_json = ReleaseListingSnapshot::json_for_candidate(candidate, *now);
         let canonical_result = app
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                automatic,
                 http_release: candidate.http.clone(),
                 request: DownloadClientAddRequest {
                     http: None,
@@ -5239,6 +5528,9 @@ async fn commit_scope_grab(
 
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
+            Ok(CanonicalDownloadSubmissionOutcome::Deferred) => {
+                return Ok(ScopeGrabOutcome::Exhausted);
+            }
             Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
                 // A submission for this release already exists: the scope is
                 // spoken for, and its saved list was handled when that grab ran.
@@ -5283,6 +5575,7 @@ async fn commit_scope_grab(
                     "title": candidate.title,
                     "score": candidate_score,
                     "grabbed_at": now.to_rfc3339(),
+                    "download_id": grab.download_id,
                     "source_provider": candidate.source.clone(),
                     "release_listing_json": release_listing_json,
                 })
@@ -5513,6 +5806,10 @@ fn arm_deferred_acquisition_retry(
 pub(crate) enum BackgroundAcquisitionPass {
     /// Read the download clients and handle failed grabs, then stop.
     FailureCheckOnly,
+    /// The failure check, while the walk is held back: inside the idle gap
+    /// after a walk, or while an RSS sync runs. Unlike [`Self::FailureCheckOnly`]
+    /// it does not walk for a re-opened scope; that waits for the next walk.
+    FailureCheckWalkHeld,
     /// The failure check, then the catalog scan, batch selection and walk.
     Full,
 }
@@ -5541,6 +5838,15 @@ enum BackgroundAcquisitionTrigger {
 /// A tick between walks also walks when failure handling has re-opened a
 /// scope since the last walk (see `scope_reopened_since_walk`); that decision
 /// is made inside the pass and does not move this count.
+///
+/// A scheduled walk, and a deferred-work re-arm, never start inside the idle
+/// gap: the walk interval, floored at the poll interval, measured from the end
+/// of the last walk. A walk that overran its budget still leaves the machine
+/// that long before the next one. A wake is exempt from the gap: something
+/// just changed (a title was added, a profile or a setting moved), and the
+/// operator expects that to be acted on now, not after the rest. No walk,
+/// whatever asks for it, starts while an RSS sync runs. A walk held back runs
+/// on the first tick after the hold lifts.
 #[derive(Debug)]
 struct AcquisitionWalkCadence {
     poll_period: std::time::Duration,
@@ -5550,8 +5856,14 @@ struct AcquisitionWalkCadence {
     /// Deferred work whose cooldown lifts after the next tick but before the
     /// next scheduled walk. The first tick at or after it walks, so the scope
     /// is not left waiting for the rest of the walk interval. Shorter
-    /// deferrals keep their exact re-arm timer, which runs a full pass.
+    /// deferrals keep their exact re-arm timer, which runs a full pass. Both
+    /// still wait out the idle gap.
     walk_retry_at: Option<tokio::time::Instant>,
+    /// When the last walk ended; the idle gap is measured from here.
+    last_walk_ended_at: Option<tokio::time::Instant>,
+    /// A walk was asked for while it was held back, so the first tick after
+    /// the hold lifts walks.
+    walk_held: bool,
 }
 
 impl AcquisitionWalkCadence {
@@ -5562,6 +5874,8 @@ impl AcquisitionWalkCadence {
             ticks_per_walk: 1,
             ticks_since_walk: 0,
             walk_retry_at: None,
+            last_walk_ended_at: None,
+            walk_held: false,
         };
         cadence.set_walk_period(walk_period);
         cadence
@@ -5577,24 +5891,56 @@ impl AcquisitionWalkCadence {
         self.ticks_per_walk = walk_secs.div_ceil(poll_secs).max(1);
     }
 
+    /// The shortest rest between the end of one walk and the start of the next.
+    fn min_walk_gap(&self) -> std::time::Duration {
+        self.walk_period.max(self.poll_period)
+    }
+
+    fn in_walk_gap(&self, now: tokio::time::Instant) -> bool {
+        self.last_walk_ended_at
+            .is_some_and(|ended| now.saturating_duration_since(ended) < self.min_walk_gap())
+    }
+
+    #[cfg(test)]
     fn pass_for(
         &mut self,
         trigger: BackgroundAcquisitionTrigger,
         now: tokio::time::Instant,
     ) -> BackgroundAcquisitionPass {
-        match trigger {
+        self.pass_for_beside_rss(trigger, now, false)
+    }
+
+    /// The pass `trigger` runs. `rss_running` holds every walk back; the idle
+    /// gap holds back all but a wake.
+    fn pass_for_beside_rss(
+        &mut self,
+        trigger: BackgroundAcquisitionTrigger,
+        now: tokio::time::Instant,
+        rss_running: bool,
+    ) -> BackgroundAcquisitionPass {
+        let wants_walk = match trigger {
             BackgroundAcquisitionTrigger::Wake | BackgroundAcquisitionTrigger::DeferredRetry => {
-                BackgroundAcquisitionPass::Full
+                true
             }
             BackgroundAcquisitionTrigger::PollTick => {
                 self.ticks_since_walk = self.ticks_since_walk.saturating_add(1);
                 let retry_due = self.walk_retry_at.is_some_and(|at| at <= now);
-                if self.ticks_since_walk >= self.ticks_per_walk || retry_due {
-                    BackgroundAcquisitionPass::Full
-                } else {
-                    BackgroundAcquisitionPass::FailureCheckOnly
-                }
+                self.ticks_since_walk >= self.ticks_per_walk || retry_due || self.walk_held
             }
+        };
+        let exempt_from_gap = trigger == BackgroundAcquisitionTrigger::Wake;
+        let held = rss_running || (!exempt_from_gap && self.in_walk_gap(now));
+        match (wants_walk, held) {
+            (true, false) => {
+                self.walk_held = false;
+                BackgroundAcquisitionPass::Full
+            }
+            (true, true) => {
+                self.walk_held = true;
+                BackgroundAcquisitionPass::FailureCheckWalkHeld
+            }
+            (false, true) => BackgroundAcquisitionPass::FailureCheckWalkHeld,
+            (false, false) => BackgroundAcquisitionPass::FailureCheckOnly,
         }
     }
 
@@ -5605,6 +5951,9 @@ impl AcquisitionWalkCadence {
         outcome: BackgroundAcquisitionCycleOutcome,
         now: tokio::time::Instant,
     ) {
+        if pass == BackgroundAcquisitionPass::Full || outcome.walked {
+            self.last_walk_ended_at = Some(now);
+        }
         if pass != BackgroundAcquisitionPass::Full {
             return;
         }
@@ -5631,6 +5980,9 @@ fn acquisition_walk_interval_may_have_changed(
 /// The background acquisition cycle's task name; one cycle runs at a time no
 /// matter which trigger started it.
 const BACKGROUND_ACQUISITION_CYCLE_TASK: &str = "background_acquisition_cycle";
+
+/// The scheduled RSS sync's task name. A walk does not start while it runs.
+const RSS_SYNC_TASK: &str = "rss_sync";
 
 /// How often the scheduler loop checks its in-flight jobs against their
 /// overdue budgets.
@@ -5811,7 +6163,10 @@ where
         supervisor.note_skipped(BACKGROUND_ACQUISITION_CYCLE_TASK);
         return None;
     }
-    let pass = walk_cadence.pass_for(trigger, tokio::time::Instant::now());
+    // RSS runs through this supervisor too, so whether it is running is known
+    // here for free; the walk yields the indexers to it.
+    let rss_running = supervisor.is_running(RSS_SYNC_TASK);
+    let pass = walk_cadence.pass_for_beside_rss(trigger, tokio::time::Instant::now(), rss_running);
     let budget = scheduled_task_overdue_budget(walk_cadence.walk_period);
     supervisor
         .try_spawn(BACKGROUND_ACQUISITION_CYCLE_TASK, budget, run(pass, budget))
@@ -6247,9 +6602,9 @@ pub async fn start_background_acquisition_poller(
     // the scope waits out the full tick. Only a cooldown that expires *inside*
     // the poll interval arms it — an untimed deferral (an exhausted quota) and
     // a title an interactive walk holds both wait for the tick, the latter
-    // because the job wakes the poller itself when it releases the lock. One
-    // pending deadline at a time, and floored so a condition that has just
-    // lifted cannot spin the loop.
+    // until the next walk, since the job does not wake the poller when it
+    // releases the lock. One pending deadline at a time, and floored so a
+    // condition that has just lifted cannot spin the loop.
     let mut deferred_retry_at: Option<tokio::time::Instant> = None;
 
     loop {
@@ -6472,7 +6827,7 @@ pub async fn start_background_acquisition_poller(
             }
             _ = rss_sync_interval.tick() => {
                 let next_run_in = rss_sync_next_run_delta(rss_sync_tick);
-                admit_scheduled_job(&app, &mut supervisor, "rss_sync", rss_sync_tick, Some((JobKey::RssSync, next_run_in)), move |app| async move {
+                admit_scheduled_job(&app, &mut supervisor, RSS_SYNC_TASK, rss_sync_tick, Some((JobKey::RssSync, next_run_in)), move |app| async move {
                     app.advertise_job_next_run_at(
                         JobKey::RssSync,
                         Utc::now() + next_run_in,
@@ -6748,7 +7103,7 @@ mod task_runner_tests {
 
     #[tokio::test(start_paused = true)]
     async fn supervisor_admits_one_background_acquisition_pass_whatever_its_variant() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly, Full};
+        use BackgroundAcquisitionPass::{FailureCheckWalkHeld, Full};
         use BackgroundAcquisitionTrigger::{DeferredRetry, PollTick, Wake};
 
         tokio::time::timeout(SUPERVISOR_TEST_BOUND, async {
@@ -6796,14 +7151,15 @@ mod task_runner_tests {
                 tokio::time::Instant::now(),
             );
 
-            // With the walk finished the next tick runs, as a failure check.
+            // With the walk finished the next tick runs, as a failure check
+            // inside the walk's idle gap.
             let next = admit_background_acquisition_pass(
                 &mut supervisor,
                 &mut cadence,
                 PollTick,
                 |_, _| async {},
             );
-            assert_eq!(next, Some((PollTick, FailureCheckOnly)));
+            assert_eq!(next, Some((PollTick, FailureCheckWalkHeld)));
             supervisor.join_next().await.unwrap().result.unwrap();
         })
         .await
@@ -6913,7 +7269,9 @@ mod task_runner_tests {
 
     #[test]
     fn default_cadence_checks_failures_every_tick_and_walks_every_fifth() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly as Check, Full};
+        use BackgroundAcquisitionPass::{
+            FailureCheckOnly as Check, FailureCheckWalkHeld as Held, Full,
+        };
         let poll = secs(crate::settings::runtime::DEFAULT_ACQUISITION_POLL_INTERVAL_SECONDS as u64);
         let walk = secs(crate::settings::runtime::DEFAULT_ACQUISITION_WALK_INTERVAL_SECONDS as u64);
         assert_eq!((poll, walk), (secs(60), secs(300)));
@@ -6921,12 +7279,13 @@ mod task_runner_tests {
 
         let passes = drive_poll_ticks(&mut cadence, tokio::time::Instant::now(), poll, 10);
 
-        // Every tick runs the failure check (both kinds of pass do); only
-        // every fifth one goes on to walk.
+        // Every tick runs the failure check (every kind of pass does); only
+        // every fifth one goes on to walk. The ticks inside the idle gap after
+        // a walk hold back a walk for a re-opened scope too.
         assert_eq!(
             passes,
             vec![
-                Check, Check, Check, Check, Full, Check, Check, Check, Check, Full
+                Check, Check, Check, Check, Full, Held, Held, Held, Held, Full
             ]
         );
     }
@@ -6953,18 +7312,22 @@ mod task_runner_tests {
 
     #[test]
     fn a_walk_interval_that_is_not_a_multiple_rounds_up_to_the_next_tick() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly as Check, Full};
+        use BackgroundAcquisitionPass::{
+            FailureCheckOnly as Check, FailureCheckWalkHeld as Held, Full,
+        };
         let mut cadence = AcquisitionWalkCadence::new(secs(30), secs(100));
         let passes = drive_poll_ticks(&mut cadence, tokio::time::Instant::now(), secs(30), 8);
         assert_eq!(
             passes,
-            vec![Check, Check, Check, Full, Check, Check, Check, Full]
+            vec![Check, Check, Check, Full, Held, Held, Held, Full]
         );
     }
 
     #[test]
     fn a_wake_walks_at_once_and_restarts_the_walk_count() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly as Check, Full};
+        use BackgroundAcquisitionPass::{
+            FailureCheckOnly as Check, FailureCheckWalkHeld as Held, Full,
+        };
         let start = tokio::time::Instant::now();
         let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
         assert_eq!(
@@ -6978,28 +7341,161 @@ mod task_runner_tests {
         assert_eq!(pass, Full);
         cadence.record(pass, BackgroundAcquisitionCycleOutcome::default(), woken_at);
 
-        // The walk it ran restarts the count: the next scheduled walk is a
-        // full interval later, not two ticks later.
+        // The walk it ran restarts the count and opens the idle gap. The fifth
+        // tick after it still falls inside the gap, so its walk is held to the
+        // first tick past the gap.
         assert_eq!(
-            drive_poll_ticks(&mut cadence, start + secs(120), secs(60), 5),
-            vec![Check, Check, Check, Check, Full]
+            drive_poll_ticks(&mut cadence, start + secs(120), secs(60), 6),
+            vec![Held, Held, Held, Held, Held, Full]
         );
 
-        // A wake right after a walk still walks.
-        let pass = cadence.pass_for(BackgroundAcquisitionTrigger::Wake, start + secs(421));
+        // A wake right after a walk walks again; a deferred retry right after
+        // that waits out the gap, and the first tick after it walks for it.
+        let walked_at = start + secs(480);
+        let woken_at = walked_at + secs(1);
+        let pass = cadence.pass_for(BackgroundAcquisitionTrigger::Wake, woken_at);
         assert_eq!(pass, Full);
+        cadence.record(pass, BackgroundAcquisitionCycleOutcome::default(), woken_at);
         assert_eq!(
             cadence.pass_for(
                 BackgroundAcquisitionTrigger::DeferredRetry,
-                start + secs(422)
+                woken_at + secs(1)
             ),
+            Held
+        );
+        assert_eq!(
+            cadence.pass_for(BackgroundAcquisitionTrigger::PollTick, woken_at + secs(60)),
+            Held
+        );
+        assert_eq!(
+            cadence.pass_for(BackgroundAcquisitionTrigger::PollTick, woken_at + secs(300)),
             Full
         );
     }
 
+    /// The gap is measured from the end of the last walk, not its start: a walk
+    /// that ran far past its budget still leaves the machine a full gap before
+    /// the next scheduled or re-armed one.
     #[test]
-    fn deferred_work_lifting_before_the_next_walk_walks_on_the_first_tick_after_it() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly as Check, Full};
+    fn the_idle_gap_holds_the_next_walk_back_after_an_overrun() {
+        use BackgroundAcquisitionPass::{FailureCheckWalkHeld as Held, Full};
+        use BackgroundAcquisitionTrigger::{DeferredRetry, PollTick, Wake};
+        let start = tokio::time::Instant::now();
+        let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
+        assert_eq!(cadence.pass_for(Wake, start), Full);
+        // The walk overran: it ends forty minutes after it started, by which
+        // time its own interval has long passed.
+        let ended = start + secs(2400);
+        cadence.record(
+            Full,
+            BackgroundAcquisitionCycleOutcome {
+                walked: true,
+                ..BackgroundAcquisitionCycleOutcome::default()
+            },
+            ended,
+        );
+
+        // A deferred retry and every tick of the gap run the failure check
+        // only.
+        assert_eq!(cadence.pass_for(DeferredRetry, ended + secs(5)), Held);
+        for tick in 1..=4 {
+            assert_eq!(
+                cadence.pass_for(PollTick, ended + secs(60) * tick),
+                Held,
+                "tick {tick} is inside the gap"
+            );
+        }
+        // One second short of the gap is still inside it.
+        assert_eq!(cadence.pass_for(PollTick, ended + secs(299)), Held);
+        // The first tick at the gap's end walks.
+        assert_eq!(cadence.pass_for(PollTick, ended + secs(300)), Full);
+    }
+
+    /// A wake is what a title add, a profile change or a settings change
+    /// sends, so it walks straight through the idle gap. The walk it starts
+    /// restarts the gap for the scheduled cadence behind it.
+    #[test]
+    fn a_wake_walks_inside_the_idle_gap() {
+        use BackgroundAcquisitionPass::{
+            FailureCheckOnly as Check, FailureCheckWalkHeld as Held, Full,
+        };
+        use BackgroundAcquisitionTrigger::{DeferredRetry, PollTick, Wake};
+        let start = tokio::time::Instant::now();
+        let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
+        let walked = BackgroundAcquisitionCycleOutcome {
+            walked: true,
+            ..BackgroundAcquisitionCycleOutcome::default()
+        };
+        assert_eq!(cadence.pass_for(Wake, start), Full);
+        cadence.record(Full, walked, start);
+
+        // Deep inside the gap the tick and a re-arm are held, the wake is not.
+        assert_eq!(cadence.pass_for(PollTick, start + secs(60)), Held);
+        assert_eq!(cadence.pass_for(DeferredRetry, start + secs(90)), Held);
+        assert_eq!(cadence.pass_for(Wake, start + secs(120)), Full);
+        cadence.record(Full, walked, start + secs(130));
+
+        // The wake's walk is the new gap start: the tick that would have
+        // ended the first gap is still inside the second, and the one past
+        // the second gap is free but not yet due.
+        assert_eq!(cadence.pass_for(PollTick, start + secs(300)), Held);
+        assert_eq!(cadence.pass_for(PollTick, start + secs(430)), Check);
+    }
+
+    /// A walk does not start while the scheduled RSS sync runs, and the first
+    /// tick after it walks instead.
+    #[tokio::test(start_paused = true)]
+    async fn a_walk_waits_for_a_running_rss_sync() {
+        use BackgroundAcquisitionPass::{FailureCheckWalkHeld as Held, Full};
+        use BackgroundAcquisitionTrigger::{PollTick, Wake};
+
+        tokio::time::timeout(SUPERVISOR_TEST_BOUND, async {
+            let mut supervisor = ScheduledTaskSupervisor::<()>::new();
+            let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
+            let (release, held) = tokio::sync::oneshot::channel::<()>();
+            assert!(supervisor.try_spawn(
+                RSS_SYNC_TASK,
+                scheduled_task_overdue_budget(secs(60)),
+                async move {
+                    let _ = held.await;
+                },
+            ));
+
+            let wake = admit_background_acquisition_pass(
+                &mut supervisor,
+                &mut cadence,
+                Wake,
+                |_, _| async {},
+            );
+            assert_eq!(wake, Some((Wake, Held)));
+            supervisor.join_next().await.unwrap().result.unwrap();
+            assert!(supervisor.is_running(RSS_SYNC_TASK));
+
+            release.send(()).unwrap();
+            let done = supervisor.join_next().await.unwrap();
+            assert_eq!(done.name, RSS_SYNC_TASK);
+
+            tokio::time::advance(secs(60)).await;
+            let tick = admit_background_acquisition_pass(
+                &mut supervisor,
+                &mut cadence,
+                PollTick,
+                |_, _| async {},
+            );
+            assert_eq!(
+                tick,
+                Some((PollTick, Full)),
+                "the held walk runs once RSS is done"
+            );
+            supervisor.join_next().await.unwrap().result.unwrap();
+        })
+        .await
+        .expect("the held RSS sync must finish once released");
+    }
+
+    #[test]
+    fn deferred_work_lifting_inside_the_idle_gap_walks_when_the_gap_ends() {
+        use BackgroundAcquisitionPass::{FailureCheckWalkHeld as Held, Full};
         let start = tokio::time::Instant::now();
         let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
         let walked_at = start;
@@ -7012,15 +7508,17 @@ mod task_runner_tests {
             },
             walked_at,
         );
-        // 60 s: still cooling. 120 s: lifted at 90 s, so this tick walks.
+        // 60 s: still cooling. 120 s: lifted at 90 s, but the walk that
+        // deferred it ended only two minutes ago, so the retry waits out the
+        // idle gap and the first tick past it walks.
         assert_eq!(
-            drive_poll_ticks(&mut cadence, start, secs(60), 2),
-            vec![Check, Full]
+            drive_poll_ticks(&mut cadence, start, secs(60), 5),
+            vec![Held, Held, Held, Held, Full]
         );
         // That walk found nothing deferred, so the retry is spent.
         assert_eq!(
-            drive_poll_ticks(&mut cadence, start + secs(120), secs(60), 5),
-            vec![Check, Check, Check, Check, Full]
+            drive_poll_ticks(&mut cadence, start + secs(300), secs(60), 5),
+            vec![Held, Held, Held, Held, Full]
         );
 
         // A deferral shorter than the tick is left to the exact re-arm timer,
@@ -7042,7 +7540,9 @@ mod task_runner_tests {
 
     #[test]
     fn a_changed_walk_interval_applies_to_the_running_cadence() {
-        use BackgroundAcquisitionPass::{FailureCheckOnly as Check, Full};
+        use BackgroundAcquisitionPass::{
+            FailureCheckOnly as Check, FailureCheckWalkHeld as Held, Full,
+        };
         let start = tokio::time::Instant::now();
         let mut cadence = AcquisitionWalkCadence::new(secs(60), secs(300));
         assert_eq!(
@@ -7057,10 +7557,11 @@ mod task_runner_tests {
             vec![Full, Full, Full]
         );
 
+        // The longer interval lengthens the idle gap with it.
         cadence.set_walk_period(secs(180));
         assert_eq!(
             drive_poll_ticks(&mut cadence, start + secs(300), secs(60), 3),
-            vec![Check, Check, Full]
+            vec![Held, Held, Full]
         );
 
         let key = crate::settings::runtime::ACQUISITION_WALK_INTERVAL_SECONDS_KEY;

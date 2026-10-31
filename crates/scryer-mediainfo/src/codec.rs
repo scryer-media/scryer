@@ -879,8 +879,10 @@ fn contains_aligned_syncword(data: &[u8], syncword: u32) -> bool {
     }
     let start = data.len() % 4;
     data[start..]
-        .chunks_exact(4)
-        .any(|chunk| u32::from_be_bytes(chunk.try_into().expect("chunk length")) == syncword)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|chunk| u32::from_be_bytes(*chunk) == syncword)
 }
 
 fn contains_aligned_syncword_shifted(data: &[u8], syncword: u32) -> bool {
@@ -888,9 +890,11 @@ fn contains_aligned_syncword_shifted(data: &[u8], syncword: u32) -> bool {
         return false;
     }
     let start = data.len() % 4;
-    data[start..].chunks_exact(4).any(|chunk| {
-        (u32::from_be_bytes(chunk.try_into().expect("chunk length")) >> 1) == (syncword >> 1)
-    })
+    data[start..]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|chunk| (u32::from_be_bytes(*chunk) >> 1) == (syncword >> 1))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -997,7 +1001,7 @@ fn normalize_dts_core_prefix(data: &[u8]) -> Option<Vec<u8>> {
             let mut bit_buffer = 0u32;
             let mut bits_in_buffer = 0usize;
 
-            for chunk in data.chunks_exact(2) {
+            for chunk in data.as_chunks::<2>().0 {
                 let word = if marker == DTS_SYNCWORD_CORE_14B_BE {
                     u16::from_be_bytes([chunk[0], chunk[1]])
                 } else {

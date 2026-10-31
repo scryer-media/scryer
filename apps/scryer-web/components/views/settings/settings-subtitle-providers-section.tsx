@@ -58,7 +58,9 @@ type Props = {
   toggleProviderEnabled: (
     provider: SubtitleProviderConfigRecord,
   ) => Promise<void> | void;
-  deleteProvider: (provider: SubtitleProviderConfigRecord) => Promise<void> | void;
+  deleteProvider: (
+    provider: SubtitleProviderConfigRecord,
+  ) => Promise<void> | void;
   providerTypes: SubtitleProviderTypeInfo[];
   testProviderConnection: () => Promise<void> | void;
   isTestingConnection: boolean;
@@ -104,7 +106,10 @@ function SubtitleProviderActionButton({
   ...props
 }: Omit<React.ComponentProps<typeof IconButton>, "tone"> & {
   label: string;
-  tone: Extract<BoxedActionButtonTone, "edit" | "enabled" | "disabled" | "delete">;
+  tone: Extract<
+    BoxedActionButtonTone,
+    "edit" | "enabled" | "disabled" | "delete"
+  >;
 }) {
   return (
     <IconButton label={label} tone={tone} className={className} {...props}>
@@ -146,7 +151,9 @@ function SubtitleProviderStatusCell({
 }) {
   const t = useTranslate();
   if (!provider.isEnabled) {
-    return <span className={PROVIDER_MUTED_TEXT_CLASS}>{t("label.disabled")}</span>;
+    return (
+      <span className={PROVIDER_MUTED_TEXT_CLASS}>{t("label.disabled")}</span>
+    );
   }
 
   if (provider.disabledUntil) {
@@ -228,7 +235,6 @@ function SubtitleProviderFacetChips({
     </div>
   );
 }
-
 
 function DynamicSubtitleConfigField({
   field,
@@ -388,7 +394,9 @@ export function SettingsSubtitleProvidersSection({
   startCreateProvider,
 }: Props) {
   const t = useTranslate();
-  const normalizedProviderType = providerDraft.providerType.trim().toLowerCase();
+  const normalizedProviderType = providerDraft.providerType
+    .trim()
+    .toLowerCase();
   const isEditing = editorMode === "edit";
 
   const providerTypeOptions = React.useMemo(() => {
@@ -491,8 +499,8 @@ export function SettingsSubtitleProvidersSection({
         }
         return {
           ...previous,
-          enabledFacets: SUBTITLE_FACETS.map((item) => item.value).filter((value) =>
-            current.has(value),
+          enabledFacets: SUBTITLE_FACETS.map((item) => item.value).filter(
+            (value) => current.has(value),
           ),
         };
       });
@@ -504,7 +512,9 @@ export function SettingsSubtitleProvidersSection({
     <div id="settings-subtitle-providers-section" className="space-y-4">
       <section className={PROVIDER_PANEL_CLASS}>
         <div className={PROVIDER_PANEL_HEADER_CLASS}>
-          <h2 className={`flex items-center gap-2 ${PROVIDER_PANEL_TITLE_CLASS}`}>
+          <h2
+            className={`flex items-center gap-2 ${PROVIDER_PANEL_TITLE_CLASS}`}
+          >
             <PlugZap className="h-4 w-4" />
             {t("settings.existingSubtitleProviders")}
           </h2>
@@ -513,12 +523,28 @@ export function SettingsSubtitleProvidersSection({
           <Table overflow="clip" layout="fixed" density="dense">
             <TableHeader>
               <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                <TableHead className={`w-[24%] font-semibold ${PROVIDER_MUTED_TEXT_CLASS}`}>{t("label.name")}</TableHead>
-                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>{t("settings.subtitleProviderType")}</TableHead>
-                <TableHead className={`w-24 ${PROVIDER_TABLE_HEADER_CELL_CLASS}`}>{t("label.enabled")}</TableHead>
-                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>{t("settings.subtitleProviderFacets")}</TableHead>
-                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>{t("settings.subtitleProviderStatus")}</TableHead>
-                <TableActionsHead className="w-36">{t("label.actions")}</TableActionsHead>
+                <TableHead
+                  className={`w-[24%] font-semibold ${PROVIDER_MUTED_TEXT_CLASS}`}
+                >
+                  {t("label.name")}
+                </TableHead>
+                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>
+                  {t("settings.subtitleProviderType")}
+                </TableHead>
+                <TableHead
+                  className={`w-24 ${PROVIDER_TABLE_HEADER_CELL_CLASS}`}
+                >
+                  {t("label.enabled")}
+                </TableHead>
+                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>
+                  {t("settings.subtitleProviderFacets")}
+                </TableHead>
+                <TableHead className={PROVIDER_TABLE_HEADER_CELL_CLASS}>
+                  {t("settings.subtitleProviderStatus")}
+                </TableHead>
+                <TableActionsHead className="w-36">
+                  {t("label.actions")}
+                </TableActionsHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -536,10 +562,15 @@ export function SettingsSubtitleProvidersSection({
                   <TableRow
                     data-ui="settings-table-row"
                     key={provider.id}
-                    id={selectorId("settings-subtitle-provider-row", provider.name)}
+                    id={selectorId(
+                      "settings-subtitle-provider-row",
+                      provider.name,
+                    )}
                     className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                   >
-                    <TableCell className="truncate font-medium text-[var(--scry-ink2)]">{provider.name}</TableCell>
+                    <TableCell className="truncate font-medium text-[var(--scry-ink2)]">
+                      {provider.name}
+                    </TableCell>
                     <TableCell className="text-center text-[var(--scry-ink2)]">
                       <span className="inline-flex justify-center">
                         <PluginVisualLabel
@@ -550,12 +581,22 @@ export function SettingsSubtitleProvidersSection({
                       </span>
                     </TableCell>
                     <TableCell className="text-center">
-                      <span className={provider.isEnabled ? "text-[var(--scry-success-text-soft)]" : PROVIDER_MUTED_TEXT_CLASS}>
-                        {provider.isEnabled ? t("label.enabled") : t("label.disabled")}
+                      <span
+                        className={
+                          provider.isEnabled
+                            ? "text-[var(--scry-success-text-soft)]"
+                            : PROVIDER_MUTED_TEXT_CLASS
+                        }
+                      >
+                        {provider.isEnabled
+                          ? t("label.enabled")
+                          : t("label.disabled")}
                       </span>
                     </TableCell>
                     <TableCell className="text-center">
-                      <SubtitleProviderFacetChips facets={provider.enabledFacets ?? []} />
+                      <SubtitleProviderFacetChips
+                        facets={provider.enabledFacets ?? []}
+                      />
                     </TableCell>
                     <TableCell className="text-center">
                       <SubtitleProviderStatusCell provider={provider} />
@@ -563,7 +604,10 @@ export function SettingsSubtitleProvidersSection({
                     <TableActionsCell className="w-36">
                       <div className="inline-flex items-center justify-center gap-2">
                         <SubtitleProviderActionButton
-                          id={selectorId("settings-subtitle-provider-edit", provider.id)}
+                          id={selectorId(
+                            "settings-subtitle-provider-edit",
+                            provider.id,
+                          )}
                           label={t("label.edit")}
                           tone="edit"
                           onClick={() => editProvider(provider)}
@@ -572,9 +616,14 @@ export function SettingsSubtitleProvidersSection({
                           <Edit className="h-4 w-4" />
                         </SubtitleProviderActionButton>
                         <SubtitleProviderActionButton
-                          id={selectorId("settings-subtitle-provider-toggle", provider.id)}
+                          id={selectorId(
+                            "settings-subtitle-provider-toggle",
+                            provider.id,
+                          )}
                           label={
-                            provider.isEnabled ? t("label.disable") : t("label.enable")
+                            provider.isEnabled
+                              ? t("label.disable")
+                              : t("label.enable")
                           }
                           tone={provider.isEnabled ? "enabled" : "disabled"}
                           onClick={() => void toggleProviderEnabled(provider)}
@@ -587,7 +636,10 @@ export function SettingsSubtitleProvidersSection({
                           )}
                         </SubtitleProviderActionButton>
                         <SubtitleProviderActionButton
-                          id={selectorId("settings-subtitle-provider-delete", provider.id)}
+                          id={selectorId(
+                            "settings-subtitle-provider-delete",
+                            provider.id,
+                          )}
                           label={t("label.delete")}
                           tone="delete"
                           onClick={() => void deleteProvider(provider)}
@@ -612,175 +664,192 @@ export function SettingsSubtitleProvidersSection({
             className={PROVIDER_PANEL_CLASS}
             onSubmit={submitProvider}
           >
-            <div className={`${PROVIDER_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}>
+            <div
+              className={`${PROVIDER_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}
+            >
               <h2 className={PROVIDER_PANEL_TITLE_CLASS}>
                 {isEditing
                   ? t("settings.subtitleProviderEdit")
                   : t("settings.subtitleProviderCreate")}
               </h2>
-              {mutatingProviderId ? (
-                <LoadingMark className="h-4 w-4" />
-              ) : null}
+              {mutatingProviderId ? <LoadingMark className="h-4 w-4" /> : null}
             </div>
 
             <div className={`${PROVIDER_PANEL_BODY_CLASS} space-y-4`}>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label>
-                <Label className="mb-2 block text-[var(--scry-ink2)]">{t("settings.subtitleProviderType")}</Label>
-                <Select
-                  value={normalizedProviderType}
-                  onValueChange={handleProviderTypeChange}
-                >
-                  <SelectTrigger id="settings-subtitle-provider-type" className="w-full">
-                    <SelectValue placeholder={t("form.providerTypePlaceholder")}>
-                      {normalizedProviderType ? (
-                        <PluginVisualLabel
-                          providerType={normalizedProviderType}
-                          pluginType="subtitle_provider"
-                          label={
-                            selectedProvider?.name ??
-                            providerTypeOptions.find(
-                              (option) => option.value === normalizedProviderType,
-                            )?.label ??
-                            normalizedProviderType
-                          }
-                        />
-                      ) : null}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {providerTypeOptions.map((option) => (
-                      <SelectItem
-                        id={selectorId(
-                          "settings-subtitle-provider-type-option",
-                          option.value,
-                        )}
-                        key={option.value}
-                        value={option.value}
+              <div className="grid gap-4 md:grid-cols-2">
+                <label>
+                  <Label className="mb-2 block text-[var(--scry-ink2)]">
+                    {t("settings.subtitleProviderType")}
+                  </Label>
+                  <Select
+                    value={normalizedProviderType}
+                    onValueChange={handleProviderTypeChange}
+                  >
+                    <SelectTrigger
+                      id="settings-subtitle-provider-type"
+                      className="w-full"
+                    >
+                      <SelectValue
+                        placeholder={t("form.providerTypePlaceholder")}
                       >
-                        <PluginVisualLabel
-                          providerType={option.value}
-                          pluginType="subtitle_provider"
-                          label={option.label}
-                        />
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
+                        {normalizedProviderType ? (
+                          <PluginVisualLabel
+                            providerType={normalizedProviderType}
+                            pluginType="subtitle_provider"
+                            label={
+                              selectedProvider?.name ??
+                              providerTypeOptions.find(
+                                (option) =>
+                                  option.value === normalizedProviderType,
+                              )?.label ??
+                              normalizedProviderType
+                            }
+                          />
+                        ) : null}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providerTypeOptions.map((option) => (
+                        <SelectItem
+                          id={selectorId(
+                            "settings-subtitle-provider-type-option",
+                            option.value,
+                          )}
+                          key={option.value}
+                          value={option.value}
+                        >
+                          <PluginVisualLabel
+                            providerType={option.value}
+                            pluginType="subtitle_provider"
+                            label={option.label}
+                          />
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
 
-              <label>
-                <Label className="mb-2 block text-[var(--scry-ink2)]">{t("label.name")}</Label>
-                <Input
-                  id="settings-subtitle-provider-name"
-                  value={providerDraft.name}
-                  onChange={(event) =>
+                <label>
+                  <Label className="mb-2 block text-[var(--scry-ink2)]">
+                    {t("label.name")}
+                  </Label>
+                  <Input
+                    id="settings-subtitle-provider-name"
+                    value={providerDraft.name}
+                    onChange={(event) =>
+                      setProviderDraft((previous) => ({
+                        ...previous,
+                        name: event.target.value,
+                      }))
+                    }
+                    placeholder={t("settings.subtitleProviderNamePlaceholder")}
+                    required
+                  />
+                </label>
+              </div>
+
+              <label className="flex items-center gap-2 text-[var(--scry-ink2)]">
+                <Checkbox
+                  id="settings-subtitle-provider-enabled"
+                  checked={providerDraft.isEnabled}
+                  onCheckedChange={(value) =>
                     setProviderDraft((previous) => ({
                       ...previous,
-                      name: event.target.value,
+                      isEnabled: value === true,
                     }))
                   }
-                  placeholder={t("settings.subtitleProviderNamePlaceholder")}
-                  required
                 />
+                <span className="text-sm">{t("label.enabled")}</span>
               </label>
-            </div>
 
-            <label className="flex items-center gap-2 text-[var(--scry-ink2)]">
-              <Checkbox
-                id="settings-subtitle-provider-enabled"
-                checked={providerDraft.isEnabled}
-                onCheckedChange={(value) =>
-                  setProviderDraft((previous) => ({
-                    ...previous,
-                    isEnabled: value === true,
-                  }))
-                }
-              />
-              <span className="text-sm">{t("label.enabled")}</span>
-            </label>
-
-            <div className="space-y-2">
-              <Label className="block text-[var(--scry-ink2)]">{t("settings.subtitleProviderFacets")}</Label>
-              <div className="flex flex-wrap gap-3">
-                {SUBTITLE_FACETS.map((facet) => (
-                  <label
-                    key={facet.value}
-                    className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-sm text-[var(--scry-ink2)]"
-                  >
-                    <Checkbox
-                      id={selectorId("settings-subtitle-provider-facet", facet.value)}
-                      checked={providerDraft.enabledFacets.includes(facet.value)}
-                      onCheckedChange={(value) =>
-                        handleFacetToggle(facet.value, value === true)
-                      }
-                    />
-                    <span>{t(facet.labelKey)}</span>
-                  </label>
-                ))}
-              </div>
-              <p className={`text-xs ${PROVIDER_MUTED_TEXT_CLASS}`}>
-                {t("settings.subtitleProviderFacetsHelp")}
-              </p>
-            </div>
-
-            {selectedProviderFields.length > 0 ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                {selectedProviderFields.map((field) => (
-                  <DynamicSubtitleConfigField
-                    key={`${normalizedProviderType}:${field.key}`}
-                    field={field}
-                    value={providerDraft.configValues[field.key] ?? ""}
-                    onChange={handleConfigValueChange}
-                    hasStoredSecretValue={providerDraft.storedSecretKeys.includes(
-                      field.key,
-                    )}
-                  />
-                ))}
-              </div>
-            ) : normalizedProviderType ? (
-              <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
-                <div className="flex items-start gap-2">
-                  <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--scry-warning-text)]" />
-                  <p>{t("settings.subtitleProviderUnknownType")}</p>
+              <div className="space-y-2">
+                <Label className="block text-[var(--scry-ink2)]">
+                  {t("settings.subtitleProviderFacets")}
+                </Label>
+                <div className="flex flex-wrap gap-3">
+                  {SUBTITLE_FACETS.map((facet) => (
+                    <label
+                      key={facet.value}
+                      className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-sm text-[var(--scry-ink2)]"
+                    >
+                      <Checkbox
+                        id={selectorId(
+                          "settings-subtitle-provider-facet",
+                          facet.value,
+                        )}
+                        checked={providerDraft.enabledFacets.includes(
+                          facet.value,
+                        )}
+                        onCheckedChange={(value) =>
+                          handleFacetToggle(facet.value, value === true)
+                        }
+                      />
+                      <span>{t(facet.labelKey)}</span>
+                    </label>
+                  ))}
                 </div>
+                <p className={`text-xs ${PROVIDER_MUTED_TEXT_CLASS}`}>
+                  {t("settings.subtitleProviderFacetsHelp")}
+                </p>
               </div>
-            ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                id="settings-subtitle-provider-save"
-                type="submit"
-                disabled={
-                  mutatingProviderId !== null ||
-                  !providerDraft.name.trim() ||
-                  !normalizedProviderType
-                }
-              >
-                {editingProviderId ? t("label.save") : t("label.create")}
-              </Button>
-              <Button
-                id="settings-subtitle-provider-test-connection"
-                type="button"
-                variant="secondary"
-                onClick={() => void testProviderConnection()}
-                disabled={isTestingConnection || !normalizedProviderType}
-              >
-                {isTestingConnection ? (
-                  <LoadingMark className="mr-1 h-4 w-4" />
-                ) : null}
-                {t("label.testConnection")}
-              </Button>
-              <Button
-                id="settings-subtitle-provider-cancel"
-                type="button"
-                variant="outline"
-                onClick={resetProviderDraft}
-                disabled={mutatingProviderId !== null}
-              >
-                {t("label.cancel")}
-              </Button>
-            </div>
+              {selectedProviderFields.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  {selectedProviderFields.map((field) => (
+                    <DynamicSubtitleConfigField
+                      key={`${normalizedProviderType}:${field.key}`}
+                      field={field}
+                      value={providerDraft.configValues[field.key] ?? ""}
+                      onChange={handleConfigValueChange}
+                      hasStoredSecretValue={providerDraft.storedSecretKeys.includes(
+                        field.key,
+                      )}
+                    />
+                  ))}
+                </div>
+              ) : normalizedProviderType ? (
+                <div className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
+                  <div className="flex items-start gap-2">
+                    <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--scry-warning-text)]" />
+                    <p>{t("settings.subtitleProviderUnknownType")}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  id="settings-subtitle-provider-save"
+                  type="submit"
+                  disabled={
+                    mutatingProviderId !== null ||
+                    !providerDraft.name.trim() ||
+                    !normalizedProviderType
+                  }
+                >
+                  {editingProviderId ? t("label.save") : t("label.create")}
+                </Button>
+                <Button
+                  id="settings-subtitle-provider-test-connection"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void testProviderConnection()}
+                  disabled={isTestingConnection || !normalizedProviderType}
+                >
+                  {isTestingConnection ? (
+                    <LoadingMark className="mr-1 h-4 w-4" />
+                  ) : null}
+                  {t("label.testConnection")}
+                </Button>
+                <Button
+                  id="settings-subtitle-provider-cancel"
+                  type="button"
+                  variant="outline"
+                  onClick={resetProviderDraft}
+                  disabled={mutatingProviderId !== null}
+                >
+                  {t("label.cancel")}
+                </Button>
+              </div>
             </div>
           </form>
           {isEditing ? (

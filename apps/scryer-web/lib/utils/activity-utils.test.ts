@@ -53,7 +53,9 @@ const translations: Record<string, string> = {
 
 const translate = (key: string) => translations[key] ?? key;
 
-function blockedItem(overrides: Partial<DownloadQueueItem> = {}): DownloadQueueItem {
+function blockedItem(
+  overrides: Partial<DownloadQueueItem> = {},
+): DownloadQueueItem {
   return {
     id: "queue-1",
     titleId: null,
@@ -111,16 +113,27 @@ function blockedItem(overrides: Partial<DownloadQueueItem> = {}): DownloadQueueI
 }
 
 test("password retry recovery rows show localized actionable detail", () => {
-  const recoveryMessage = "Remove this download if the client no longer has the job.";
-  const row = deriveQueueRowPresentation(blockedItem({
-    state: "FAILED",
-    titleId: "synthetic-title",
-    trackedMatchType: "SUBMISSION",
-    attentionReason: "download_password_retry",
-    trackedStatusMessages: ["Additional client detail"],
-  }), (key) => key === "queue.attention.downloadPasswordRetry" ? recoveryMessage : translate(key));
+  const recoveryMessage =
+    "Remove this download if the client no longer has the job.";
+  const row = deriveQueueRowPresentation(
+    blockedItem({
+      state: "FAILED",
+      titleId: "synthetic-title",
+      trackedMatchType: "SUBMISSION",
+      attentionReasonCode: "download_password_retry",
+      attentionReason: "A download password retry is awaiting reconciliation.",
+      trackedStatusMessages: ["Additional client detail"],
+    }),
+    (key) =>
+      key === "queue.attention.downloadPasswordRetry"
+        ? recoveryMessage
+        : translate(key),
+  );
 
-  assert.equal(row.failureReason, `Additional client detail\n${recoveryMessage}`);
+  assert.equal(
+    row.failureReason,
+    `Additional client detail\n${recoveryMessage}`,
+  );
   assert.equal(row.hasStatusDetails, true);
   assert.equal(row.hasExpandableDetails, true);
 });

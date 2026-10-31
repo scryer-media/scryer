@@ -19,7 +19,9 @@ static TRUST_SNAPSHOT_INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
 fn map_trust_error(error: artifact_trust::Error) -> AppError {
     match error {
-        artifact_trust::Error::Validation(message) => AppError::Validation(message),
+        artifact_trust::Error::Validation(message) => {
+            AppError::validation_refused(crate::error_reasons::plugins::ARTIFACT_UNTRUSTED, message)
+        }
         artifact_trust::Error::Repository(message) => AppError::Repository(message),
     }
 }
@@ -86,7 +88,9 @@ mod tests {
         altered[0] ^= 1;
         assert!(matches!(
             verify_signed_blob(altered, bundle.to_vec(), signer).await,
-            Err(AppError::Validation(_))
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
         ));
     }
 
@@ -107,7 +111,9 @@ mod tests {
         altered[0] ^= 1;
         assert!(matches!(
             verify_signed_blob(altered, bundle.to_vec(), signer).await,
-            Err(AppError::Validation(_))
+            Err(AppError::Validation(_)
+                | AppError::ValidationRefused { .. }
+                | AppError::ValidationRefusedWithCount { .. })
         ));
     }
 }

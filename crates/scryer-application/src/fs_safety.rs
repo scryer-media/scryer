@@ -26,46 +26,58 @@ pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) ->
 
 pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
     let metadata = std::fs::symlink_metadata(root).map_err(|error| {
-        AppError::Validation(format!(
-            "configured media root {} is unavailable: {}",
-            root.display(),
-            error
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNAVAILABLE,
+            format!(
+                "configured media root {} is unavailable: {}",
+                root.display(),
+                error
+            ),
+        )
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "configured media root {} is a symlink",
-            root.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_SYMLINK,
+            format!("configured media root {} is a symlink", root.display()),
+        ));
     }
     if !metadata.is_dir() {
-        return Err(AppError::Validation(format!(
-            "configured media root {} is not a directory",
-            root.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY,
+            format!(
+                "configured media root {} is not a directory",
+                root.display()
+            ),
+        ));
     }
 
     let mut entries = std::fs::read_dir(root).map_err(|error| {
-        AppError::Validation(format!(
-            "configured media root {} is unreadable: {}",
-            root.display(),
-            error
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE,
+            format!(
+                "configured media root {} is unreadable: {}",
+                root.display(),
+                error
+            ),
+        )
     })?;
     match entries.next() {
         Some(Ok(_)) => {}
         Some(Err(error)) => {
-            return Err(AppError::Validation(format!(
-                "configured media root {} is unreadable: {}",
-                root.display(),
-                error
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE,
+                format!(
+                    "configured media root {} is unreadable: {}",
+                    root.display(),
+                    error
+                ),
+            ));
         }
         None => {
-            return Err(AppError::Validation(format!(
-                "configured media root {} is empty",
-                root.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY,
+                format!("configured media root {} is empty", root.display()),
+            ));
         }
     }
     Ok(())
@@ -238,7 +250,12 @@ mod tests {
 
         let empty_result = resolve_available_root_for_path(&target, &roots);
         assert!(
-            matches!(empty_result, Err(AppError::Validation(_))),
+            matches!(
+                empty_result,
+                Err(AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. })
+            ),
             "empty roots should fail closed for destructive user disk deletes"
         );
 
@@ -255,7 +272,12 @@ mod tests {
 
         let result = resolve_available_root_for_path(&target, &roots);
         assert!(
-            matches!(result, Err(AppError::Validation(_))),
+            matches!(
+                result,
+                Err(AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. })
+            ),
             "DB-only housekeeping must also fail closed for empty roots"
         );
     }

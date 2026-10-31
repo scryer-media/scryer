@@ -576,7 +576,7 @@ fn encrypted(source: &mut dyn MediaSource, bluray: bool) -> Result<bool, MediaIn
     let mut bytes = vec![0; length];
     source.read_exact(&mut bytes)?;
     if bluray {
-        for packet in bytes.chunks_exact(192) {
+        for packet in bytes.as_chunks::<192>().0 {
             if packet[4] == 0x47 && packet[7] & 0xc0 != 0 {
                 return Ok(true);
             }

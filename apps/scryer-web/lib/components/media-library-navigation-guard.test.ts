@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const panel = readFileSync(
-  new URL("../../components/views/media-content/media-library-settings-panel.tsx", import.meta.url),
+  new URL(
+    "../../components/views/media-content/media-library-settings-panel.tsx",
+    import.meta.url,
+  ),
   "utf8",
 );
 
@@ -12,7 +15,11 @@ function assertPanelMatches(pattern: RegExp, message: string) {
   assert.ok(pattern.test(panel), `${message} (${pattern})`);
 }
 
-function sliceBetween(source: string, startMarker: string, endMarker: string): string {
+function sliceBetween(
+  source: string,
+  startMarker: string,
+  endMarker: string,
+): string {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start);
   assert.ok(start >= 0 && end > start, `${startMarker.trim()} is present`);
@@ -32,8 +39,14 @@ test("a library save keeps the unsaved-changes guard down until the panel adopts
 
   const raised = body.indexOf("setSaveInProgress(true)");
   assert.ok(raised >= 0, "the panel marks its own save as in progress");
-  assert.ok(raised < body.indexOf("await onCreateLibrary("), "raised before a create");
-  assert.ok(raised < body.indexOf("await onUpdateLibrary("), "raised before an update");
+  assert.ok(
+    raised < body.indexOf("await onCreateLibrary("),
+    "raised before a create",
+  );
+  assert.ok(
+    raised < body.indexOf("await onUpdateLibrary("),
+    "raised before an update",
+  );
 
   const finallyAt = body.lastIndexOf("} finally {");
   const released = body.indexOf("setSaveInProgress(false)", finallyAt);
@@ -47,7 +60,10 @@ test("a library save keeps the unsaved-changes guard down until the panel adopts
     "hydrateSavedSettings(refreshedSettings)",
   ]) {
     const at = body.lastIndexOf(adoption);
-    assert.ok(at >= 0 && at < finallyAt, `${adoption} runs before the guard is released`);
+    assert.ok(
+      at >= 0 && at < finallyAt,
+      `${adoption} runs before the guard is released`,
+    );
   }
 
   assertPanelMatches(

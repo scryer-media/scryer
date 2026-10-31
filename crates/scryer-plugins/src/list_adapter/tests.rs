@@ -170,7 +170,13 @@ async fn a_member_only_provider_is_never_invoked_without_a_credential() {
         .fetch(fetch_request(None))
         .await
         .expect_err("a credential-less fetch must be refused");
-    assert!(matches!(error, AppError::Validation(_)), "{error}");
+    assert!(
+        matches!(
+            error,
+            AppError::Validation(_) | AppError::ValidationRefused { .. }
+        ),
+        "{error}"
+    );
 
     let PluginResult::Ok(page) = client
         .fetch(fetch_request(Some(member_credential())))

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { facetById, facetByMetadataKey, metadataFacetGraphqlValue } from "./registry.ts";
+import {
+  facetById,
+  facetByMetadataKey,
+  metadataFacetGraphqlValue,
+} from "./registry.ts";
 
 test("metadata facet keys resolve to canonical GraphQL enum values", () => {
   assert.equal(facetByMetadataKey("movie")?.id, "MOVIE");

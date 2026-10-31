@@ -158,6 +158,8 @@ pub struct DeleteRequestRuleSetPayload {
 /// Result of validating request rule source without saving it.
 #[derive(SimpleObject, Clone)]
 pub struct RequestRuleValidationPayload {
+    /// Structured conditions and source locations.
+    pub diagnostics: Vec<super::rules::RuleValidationDiagnosticPayload>,
     /// Whether the source is valid.
     pub valid: bool,
     /// Validation errors; empty when valid.

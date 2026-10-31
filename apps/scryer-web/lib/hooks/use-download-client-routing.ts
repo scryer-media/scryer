@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 
 import { updateDownloadClientRoutingMutation } from "@/lib/graphql/mutations";
@@ -100,7 +101,10 @@ export function useDownloadClientRouting({
       clients: DownloadClientRecord[],
       routingEntries: DownloadClientRoutingEntry[],
     ) => {
-      const nextState = buildDownloadClientRoutingState(clients, routingEntries);
+      const nextState = buildDownloadClientRoutingState(
+        clients,
+        routingEntries,
+      );
       const scopeRouting = nextState.routing;
       const nextOrder = nextState.order;
 
@@ -146,7 +150,7 @@ export function useDownloadClientRouting({
       );
     } catch (error) {
       setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToLoad"),
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
         { level: "ERROR" },
       );
     } finally {
@@ -196,7 +200,10 @@ export function useDownloadClientRouting({
         setDownloadClientRoutingByScope((previous) => {
           const currentScopeRouting = previous[scopeId] ?? {};
           if (
-            areNzbgetRoutingMapsEqual(currentScopeRouting, normalizedSavedRouting)
+            areNzbgetRoutingMapsEqual(
+              currentScopeRouting,
+              normalizedSavedRouting,
+            )
           ) {
             return previous;
           }
@@ -223,7 +230,7 @@ export function useDownloadClientRouting({
         );
       } catch (error) {
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.failedToUpdate"),
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
           { level: "ERROR" },
         );
       } finally {

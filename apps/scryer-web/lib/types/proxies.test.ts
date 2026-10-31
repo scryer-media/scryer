@@ -172,7 +172,8 @@ test("every provider belongs to exactly one family", () => {
   assert.equal(proxyProviderFamily("wireguard"), "tunnel");
   assert.equal(isProxyProviderType("wireguard"), true);
   assert.deepEqual(PROXY_PROVIDER_TYPES_BY_FAMILY.tunnel, [
-    "http3",    "ssh_tunnel",
+    "http3",
+    "ssh_tunnel",
     "wireguard",
   ]);
   // A provider from a newer server still has no family rather than a wrong one.
@@ -192,7 +193,9 @@ test("the new-proxy picker withholds SOCKS4 and offers every other provider", ()
   );
   assert.deepEqual(
     [...offered].sort(),
-    PROXY_PROVIDER_TYPES.filter((providerType) => providerType !== "socks4").sort(),
+    PROXY_PROVIDER_TYPES.filter(
+      (providerType) => providerType !== "socks4",
+    ).sort(),
   );
   // A saved SOCKS4 proxy still has a family and a label to render with.
   assert.equal(proxyProviderFamily("socks4"), "standard");
@@ -259,7 +262,10 @@ test("a WireGuard key is 32 bytes of base64, and the check says so cheaply", () 
   assert.equal(looksLikeWireguardKey("a".repeat(43)), false);
   assert.equal(looksLikeWireguardKey("a".repeat(44)), false);
   assert.equal(looksLikeWireguardKey(`${"a".repeat(43)}=extra`), false);
-  assert.equal(looksLikeWireguardKey("-----BEGIN OPENSSH PRIVATE KEY-----"), false);
+  assert.equal(
+    looksLikeWireguardKey("-----BEGIN OPENSSH PRIVATE KEY-----"),
+    false,
+  );
   assert.equal(looksLikeWireguardKey(""), false);
 });
 
@@ -463,7 +469,8 @@ test("every field takes a pasted configuration line", () => {
     "vpn.test:51820",
   );
   // A PEM block is multi-line and is never read as an assignment.
-  const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
+  const pem =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
   assert.equal(stripConfigAssignment(pem, ["privatekey"]), pem);
 });
 
@@ -476,18 +483,30 @@ test("an endpoint without a scheme takes its provider's own", () => {
     normalizeProxyEndpoint("ssh_tunnel", "seedbox.test:2222"),
     "ssh://seedbox.test:2222",
   );
-  assert.equal(normalizeProxyEndpoint("socks5", "127.0.0.1:1080"), "socks5://127.0.0.1:1080");
-  assert.equal(normalizeProxyEndpoint("byparr", "localhost:8191"), "http://localhost:8191");
+  assert.equal(
+    normalizeProxyEndpoint("socks5", "127.0.0.1:1080"),
+    "socks5://127.0.0.1:1080",
+  );
+  assert.equal(
+    normalizeProxyEndpoint("byparr", "localhost:8191"),
+    "http://localhost:8191",
+  );
   // A bare IPv6 literal is a host, so it is bracketed rather than read as a
   // host and a nonsense port.
-  assert.equal(normalizeProxyEndpoint("wireguard", "fd00::1"), "wireguard://[fd00::1]");
+  assert.equal(
+    normalizeProxyEndpoint("wireguard", "fd00::1"),
+    "wireguard://[fd00::1]",
+  );
   assert.equal(
     normalizeProxyEndpoint("wireguard", "[fd00::1]:51820"),
     "wireguard://[fd00::1]:51820",
   );
   // A scheme the operator actually wrote is never rewritten: that would hide a
   // real mistake rather than forgive a paste.
-  assert.equal(normalizeProxyEndpoint("wireguard", "https://vpn.test"), "https://vpn.test");
+  assert.equal(
+    normalizeProxyEndpoint("wireguard", "https://vpn.test"),
+    "https://vpn.test",
+  );
   // A provider only a newer server knows has no scheme of ours to supply.
   assert.equal(normalizeProxyEndpoint("something-new", "vpn.test"), "vpn.test");
   assert.equal(normalizeProxyEndpoint("wireguard", "   "), "");
@@ -495,7 +514,9 @@ test("an endpoint without a scheme takes its provider's own", () => {
 
 test("a list field takes lines, commas and whole configuration lines", () => {
   assert.deepEqual(
-    splitTunnelList("Address = 10.6.0.2/32, fd00::2/128\n# spare\nDNS = 10.6.0.1"),
+    splitTunnelList(
+      "Address = 10.6.0.2/32, fd00::2/128\n# spare\nDNS = 10.6.0.1",
+    ),
     ["10.6.0.2/32", "fd00::2/128", "10.6.0.1"],
   );
   assert.deepEqual(splitTunnelList("10.6.0.2/32,\n\n"), ["10.6.0.2/32"]);

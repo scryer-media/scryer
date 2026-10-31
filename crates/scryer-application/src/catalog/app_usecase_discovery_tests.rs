@@ -536,6 +536,7 @@ fn synthetic_indexer_config(
         managed_metadata_json: None,
         caps_snapshot_json: None,
         last_health_status: None,
+        last_error_code: None,
         last_error_message: None,
         last_error_at: None,
         config_json: None,
@@ -756,10 +757,14 @@ fn a_rate_limited_indexer_reads_as_a_cooldown_with_its_retry_time() {
     .expect("a rate limit is an incomplete outcome");
 
     assert_eq!(
-        reason,
+        reason.message,
         "indexer is cooling down after a rate limit; retry after 120s"
     );
     assert!(reason_is_rate_limit(&reason));
+    assert!(matches!(
+        reason.kind,
+        IncompleteIndexerKind::RateLimited | IncompleteIndexerKind::QueryBudget
+    ));
 
     // Everything else that leaves a search incomplete is still a failure, and
     // the snapshot must not dress it up as a cooldown.
@@ -770,7 +775,9 @@ fn a_rate_limited_indexer_reads_as_a_cooldown_with_its_retry_time() {
     })
     .expect("an upstream failure is an incomplete outcome");
     assert!(!reason_is_rate_limit(&upstream));
-    assert!(!reason_is_rate_limit("timed out"));
+    assert!(!reason_is_rate_limit(&IncompleteIndexerReason::failed(
+        "timed out".to_string()
+    )));
 }
 
 #[test]
@@ -783,7 +790,7 @@ fn a_contained_indexer_reads_as_contained_with_its_retry_time() {
     .expect("a contained indexer is an incomplete outcome");
 
     assert_eq!(
-        reason,
+        reason.message,
         "indexer search contained at the provider's result limit; retry after 3600s"
     );
     // Containment is the provider's own limit, not a cooldown it asked for.
@@ -799,6 +806,13 @@ fn an_indexer_over_its_query_budget_reads_as_a_wait_with_its_next_slot() {
     })
     .expect("a skipped over-budget indexer is an incomplete outcome");
 
-    assert_eq!(reason, "indexer is over its query budget; retry after 45s");
+    assert_eq!(
+        reason.message,
+        "indexer is over its query budget; retry after 45s"
+    );
     assert!(reason_is_rate_limit(&reason));
+    assert!(matches!(
+        reason.kind,
+        IncompleteIndexerKind::RateLimited | IncompleteIndexerKind::QueryBudget
+    ));
 }

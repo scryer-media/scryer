@@ -15,7 +15,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeLibraryScanFacet(value: unknown): LibraryScanProgress["facet"] {
+function normalizeLibraryScanFacet(
+  value: unknown,
+): LibraryScanProgress["facet"] {
   return value === "ANIME" ? "ANIME" : value === "SERIES" ? "SERIES" : "MOVIE";
 }
 
@@ -69,7 +71,9 @@ export function normalizeCustomJobId(value: unknown): string | null {
  * id; built-in jobs keep their job key.
  */
 export function jobInstanceKey(
-  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+  target:
+    | { customJobId?: string | null; key: JobKey }
+    | { customJobId?: string | null; jobKey: JobKey },
 ): string {
   if (target.customJobId) {
     return target.customJobId;
@@ -78,7 +82,9 @@ export function jobInstanceKey(
 }
 
 export function jobTargetOf(
-  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+  target:
+    | { customJobId?: string | null; key: JobKey }
+    | { customJobId?: string | null; jobKey: JobKey },
 ): JobTarget {
   return {
     jobKey: "key" in target ? target.key : target.jobKey,
@@ -146,10 +152,14 @@ export function normalizeLibraryScanProgress(
         isRecord(value.titleMatchProgress) ? value.titleMatchProgress.total : 0,
       ),
       completed: normalizeNumber(
-        isRecord(value.titleMatchProgress) ? value.titleMatchProgress.completed : 0,
+        isRecord(value.titleMatchProgress)
+          ? value.titleMatchProgress.completed
+          : 0,
       ),
       failed: normalizeNumber(
-        isRecord(value.titleMatchProgress) ? value.titleMatchProgress.failed : 0,
+        isRecord(value.titleMatchProgress)
+          ? value.titleMatchProgress.failed
+          : 0,
       ),
     },
     hydrationProgress: {
@@ -157,7 +167,9 @@ export function normalizeLibraryScanProgress(
         isRecord(value.hydrationProgress) ? value.hydrationProgress.total : 0,
       ),
       completed: normalizeNumber(
-        isRecord(value.hydrationProgress) ? value.hydrationProgress.completed : 0,
+        isRecord(value.hydrationProgress)
+          ? value.hydrationProgress.completed
+          : 0,
       ),
       failed: normalizeNumber(
         isRecord(value.hydrationProgress) ? value.hydrationProgress.failed : 0,
@@ -165,7 +177,9 @@ export function normalizeLibraryScanProgress(
     },
     mediaAnalysisProgress: {
       total: normalizeNumber(
-        isRecord(value.mediaAnalysisProgress) ? value.mediaAnalysisProgress.total : 0,
+        isRecord(value.mediaAnalysisProgress)
+          ? value.mediaAnalysisProgress.total
+          : 0,
       ),
       completed: normalizeNumber(
         isRecord(value.mediaAnalysisProgress)
@@ -173,7 +187,9 @@ export function normalizeLibraryScanProgress(
           : 0,
       ),
       failed: normalizeNumber(
-        isRecord(value.mediaAnalysisProgress) ? value.mediaAnalysisProgress.failed : 0,
+        isRecord(value.mediaAnalysisProgress)
+          ? value.mediaAnalysisProgress.failed
+          : 0,
       ),
     },
     summary: isRecord(value.summary)
@@ -197,7 +213,8 @@ export function normalizeJobRun(value: unknown): JobRun | null {
     id: value.id,
     jobKey: normalizeJobKey(value.jobKey),
     customJobId: normalizeCustomJobId(value.customJobId),
-    displayName: typeof value.displayName === "string" ? value.displayName : "Job",
+    displayName:
+      typeof value.displayName === "string" ? value.displayName : "Job",
     category: normalizeCategory(value.category),
     section: normalizeSection(value.section),
     status: normalizeJobRunStatus(value.status),
@@ -209,10 +226,13 @@ export function normalizeJobRun(value: unknown): JobRun | null {
     completedAt:
       typeof value.completedAt === "string" ? value.completedAt : null,
     summaryJson: value.summaryJson ?? null,
-    summaryText: typeof value.summaryText === "string" ? value.summaryText : null,
+    summaryText:
+      typeof value.summaryText === "string" ? value.summaryText : null,
     errorText: typeof value.errorText === "string" ? value.errorText : null,
     progressJson: value.progressJson ?? null,
-    libraryScanProgress: normalizeLibraryScanProgress(value.libraryScanProgress),
+    libraryScanProgress: normalizeLibraryScanProgress(
+      value.libraryScanProgress,
+    ),
   };
 }
 
@@ -249,25 +269,30 @@ export function parseFullHashBackfillFailures(
     return empty;
   }
 
-  const failures = parsed.failures.flatMap((failure): FullHashBackfillFailure[] => {
-    if (
-      !isRecord(failure) ||
-      typeof failure.path !== "string" ||
-      typeof failure.reason !== "string"
-    ) {
-      return [];
-    }
-    return [
-      {
-        mediaFileId: typeof failure.mediaFileId === "string" ? failure.mediaFileId : "",
-        path: failure.path,
-        reason: failure.reason,
-      },
-    ];
-  });
+  const failures = parsed.failures.flatMap(
+    (failure): FullHashBackfillFailure[] => {
+      if (
+        !isRecord(failure) ||
+        typeof failure.path !== "string" ||
+        typeof failure.reason !== "string"
+      ) {
+        return [];
+      }
+      return [
+        {
+          mediaFileId:
+            typeof failure.mediaFileId === "string" ? failure.mediaFileId : "",
+          path: failure.path,
+          reason: failure.reason,
+        },
+      ];
+    },
+  );
   const failed = normalizeNumber(parsed.failed);
   const notListed =
-    parsed.failuresTruncated === true ? Math.max(failed - failures.length, 0) : 0;
+    parsed.failuresTruncated === true
+      ? Math.max(failed - failures.length, 0)
+      : 0;
   return { failures, notListed };
 }
 
@@ -282,13 +307,23 @@ export function preferJobRunSnapshot(
   if (!existing) {
     return incoming;
   }
-  if (isTerminalJobRunStatus(existing.status) && !isTerminalJobRunStatus(incoming.status)) {
+  if (
+    isTerminalJobRunStatus(existing.status) &&
+    !isTerminalJobRunStatus(incoming.status)
+  ) {
     return existing;
   }
-  if (existing.id === incoming.id && existing.jobKey === "ACQUISITION_SEARCH" &&
-      !isTerminalJobRunStatus(incoming.status)) {
-    const previous = isRecord(existing.progressJson) ? normalizeNumber(existing.progressJson.revision) : 0;
-    const next = isRecord(incoming.progressJson) ? normalizeNumber(incoming.progressJson.revision) : 0;
+  if (
+    existing.id === incoming.id &&
+    existing.jobKey === "ACQUISITION_SEARCH" &&
+    !isTerminalJobRunStatus(incoming.status)
+  ) {
+    const previous = isRecord(existing.progressJson)
+      ? normalizeNumber(existing.progressJson.revision)
+      : 0;
+    const next = isRecord(incoming.progressJson)
+      ? normalizeNumber(incoming.progressJson.revision)
+      : 0;
     if (previous > next) return existing;
   }
   if (
@@ -360,7 +395,8 @@ export function scriptRunForJobRun<T extends { id: string }>(
 
 /** Waits between captured-output reloads; they add up to about two minutes. */
 export const SCRIPT_OUTPUT_POLL_DELAYS_MS: readonly number[] = [
-  1_000, 2_000, 5_000, 5_000, 10_000, 10_000, 15_000, 15_000, 15_000, 20_000, 20_000,
+  1_000, 2_000, 5_000, 5_000, 10_000, 10_000, 15_000, 15_000, 15_000, 20_000,
+  20_000,
 ];
 
 /**
@@ -369,14 +405,20 @@ export const SCRIPT_OUTPUT_POLL_DELAYS_MS: readonly number[] = [
  * nothing to wait for.
  */
 export function runAwaitingScriptOutput(
-  history: readonly Pick<JobRun, "id" | "status" | "summaryJson" | "startedAt">[],
+  history: readonly Pick<
+    JobRun,
+    "id" | "status" | "summaryJson" | "startedAt"
+  >[],
   scriptRuns: readonly { id: string; status: string }[],
 ): string | null {
   const newestFinished = history
     .filter((run) => isTerminalJobRunStatus(run.status))
     .reduce<(typeof history)[number] | null>(
       (newest, run) =>
-        newest === null || Date.parse(run.startedAt) > Date.parse(newest.startedAt) ? run : newest,
+        newest === null ||
+        Date.parse(run.startedAt) > Date.parse(newest.startedAt)
+          ? run
+          : newest,
       null,
     );
   if (!newestFinished) return null;

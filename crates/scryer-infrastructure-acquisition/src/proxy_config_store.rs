@@ -196,7 +196,10 @@ impl ProxyConfigRepository for ProxyConfigStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("proxy config {}", config.id)));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_PROXY_CONFIG_NOT_FOUND,
+                        format!("proxy config {}", config.id),
+                    ));
                 }
                 // Pinning/reset are the only writers of trust columns. Return
                 // their live value rather than the caller's stale snapshot.
@@ -207,7 +210,12 @@ impl ProxyConfigRepository for ProxyConfigStore {
                     encryption_key.as_ref(),
                 )
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("proxy config {}", config.id)))
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_PROXY_CONFIG_NOT_FOUND,
+                        format!("proxy config {}", config.id),
+                    )
+                })
             })
         })
         .await
@@ -225,7 +233,10 @@ impl ProxyConfigRepository for ProxyConfigStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("proxy config {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::ACQUISITION_PROXY_CONFIG_NOT_FOUND,
+                        format!("proxy config {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -258,7 +269,10 @@ impl ProxyConfigRepository for ProxyConfigStore {
         )
         .await?;
         if rows == 0 {
-            return Err(AppError::NotFound(format!("proxy config {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::ACQUISITION_PROXY_CONFIG_NOT_FOUND,
+                format!("proxy config {id}"),
+            ));
         }
         Ok(())
     }
@@ -324,7 +338,10 @@ impl ProxyConfigRepository for ProxyConfigStore {
         )
         .await?;
         if rows == 0 {
-            return Err(AppError::NotFound(format!("proxy config {id}")));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::ACQUISITION_PROXY_CONFIG_NOT_FOUND,
+                format!("proxy config {id}"),
+            ));
         }
         Ok(())
     }

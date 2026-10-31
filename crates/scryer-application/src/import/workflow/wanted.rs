@@ -114,9 +114,7 @@ async fn execute_resolved_episode_import(
             .collect();
         let targets: std::collections::BTreeSet<_> = target_episode_ids.iter().collect();
         if mapped.is_empty() || mapped != targets {
-            return Err(AppError::Validation(
-                "disc import targets must exactly match its explicit episode mappings".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DISC_IMPORT_TARGETS_INVALID, "disc import targets must exactly match its explicit episode mappings"));
         }
     }
     let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
@@ -684,7 +682,7 @@ async fn execute_resolved_episode_import(
             .parent()
             .and_then(|path| path.to_str())
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::import::MEDIA_ROOT_REQUIRED, format!(
                     "cannot safely upgrade {} because no configured media root could be resolved",
                     title.name
                 ))

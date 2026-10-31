@@ -1,5 +1,6 @@
 pub(crate) use crate::*;
 
+pub(crate) mod download_enrichment;
 pub mod download_queue_commands;
 pub(crate) mod dynamic_config_fields;
 pub(crate) mod indexer_caps_cache;

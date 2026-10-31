@@ -24,8 +24,9 @@ fn claim_rename_idempotency_key(scope: &str, key: Option<String>) -> GqlResult<O
 
     let normalized = raw_key.trim();
     if normalized.is_empty() {
-        return Err(to_gql_error(AppError::Validation(
-            "idempotencyKey cannot be empty".to_string(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_IDEMPOTENCY_KEY_REQUIRED,
+            "idempotencyKey cannot be empty",
         )));
     }
 
@@ -37,8 +38,9 @@ fn claim_rename_idempotency_key(scope: &str, key: Option<String>) -> GqlResult<O
         ))
     })?;
     if !guard.insert(composite.clone()) {
-        return Err(to_gql_error(AppError::Validation(
-            "duplicate idempotencyKey".to_string(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_IDEMPOTENCY_KEY_DUPLICATE,
+            "duplicate idempotencyKey",
         )));
     }
 

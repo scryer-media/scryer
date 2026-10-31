@@ -116,7 +116,10 @@ impl AppUseCase {
     ) -> AppResult<Option<RequestRuleDecisionView>> {
         let request_id = request_id.trim();
         if request_id.is_empty() {
-            return Err(AppError::Validation("media request id is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::MEDIA_REQUEST_ID_REQUIRED,
+                "media request id is required",
+            ));
         }
         let request = self
             .services
@@ -124,7 +127,12 @@ impl AppUseCase {
             .media_requests
             .get(request_id)
             .await?
-            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::MEDIA_REQUEST_NOT_FOUND,
+                    "media request not found",
+                )
+            })?;
 
         let manages = self
             .has_library_permission(actor, &request.library_id, LibraryPermission::ManageTitles)
@@ -135,7 +143,8 @@ impl AppUseCase {
                 .iter()
                 .any(|requester| requester.user_id == actor.id)
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::request_rules::MAY_NOT_READ_REQUEST_S_DECISION,
                 "You may not read this request's decision".to_string(),
             ));
         }

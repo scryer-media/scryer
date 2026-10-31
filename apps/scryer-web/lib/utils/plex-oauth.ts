@@ -33,7 +33,9 @@ function createPlexClientIdentifier(): string {
   }
   const bytes = new Uint8Array(16);
   window.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 function plexHeaders(clientIdentifier: string): Record<string, string> {
@@ -78,7 +80,9 @@ function openPlexPopup(): Window {
     `scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`,
   );
   if (!popup) {
-    throw new Error("Unable to open the Plex login window. Allow popups and try again.");
+    throw new Error(
+      "Unable to open the Plex login window. Allow popups and try again.",
+    );
   }
   isolatePlexPopup(popup);
   popup.focus();
@@ -91,7 +95,9 @@ function encodeParams(params: Record<string, string>): string {
     .join("&");
 }
 
-async function createPlexPin(headers: Record<string, string>): Promise<{ id: number; code: string }> {
+async function createPlexPin(
+  headers: Record<string, string>,
+): Promise<{ id: number; code: string }> {
   const response = await fetch("https://plex.tv/api/v2/pins?strong=true", {
     method: "POST",
     headers,
@@ -117,9 +123,14 @@ async function pollPlexPin(
       headers,
     });
     if (response.status === 429) {
-      const retryAfterMs = retryAfterHeaderToMs(response.headers.get("Retry-After"));
+      const retryAfterMs = retryAfterHeaderToMs(
+        response.headers.get("Retry-After"),
+      );
       nextDelayMs = Math.min(
-        Math.max(retryAfterMs ?? nextDelayMs * 2, PLEX_PIN_RATE_LIMIT_BACKOFF_MS),
+        Math.max(
+          retryAfterMs ?? nextDelayMs * 2,
+          PLEX_PIN_RATE_LIMIT_BACKOFF_MS,
+        ),
         PLEX_PIN_MAX_BACKOFF_MS,
       );
       await waitForPlexPoll(nextDelayMs, deadline);
@@ -158,7 +169,9 @@ function retryAfterHeaderToMs(value: string | null): number | null {
 
 async function waitForPlexPoll(delayMs: number, deadline: number) {
   const remainingMs = Math.max(0, deadline - Date.now());
-  await new Promise((resolve) => window.setTimeout(resolve, Math.min(delayMs, remainingMs)));
+  await new Promise((resolve) =>
+    window.setTimeout(resolve, Math.min(delayMs, remainingMs)),
+  );
 }
 
 export async function authenticateWithPlexPin(): Promise<string> {
@@ -176,7 +189,8 @@ export async function authenticateWithPlexPin(): Promise<string> {
       "context[device][device]": headers["X-Plex-Device"],
       "context[device][deviceName]": headers["X-Plex-Device-Name"],
       "context[device][model]": headers["X-Plex-Model"],
-      "context[device][screenResolution]": headers["X-Plex-Device-Screen-Resolution"],
+      "context[device][screenResolution]":
+        headers["X-Plex-Device-Screen-Resolution"],
       "context[device][layout]": "desktop",
       code: pin.code,
     })}`;

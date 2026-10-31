@@ -304,15 +304,9 @@ struct CiArgs {
 
 #[derive(Subcommand)]
 enum CiCommand {
-    Clippy(ClippyArgs),
+    Clippy,
     UpgradeManifest(UpgradeManifestArgs),
     Winget(WingetArgs),
-}
-
-#[derive(Args)]
-struct ClippyArgs {
-    #[arg(long)]
-    linux_only: bool,
 }
 
 #[derive(Args)]
@@ -501,7 +495,7 @@ fn main() -> Result<()> {
             SdkCommand::Release(args) => run_sdk_release(&ctx, args),
         },
         Commands::Ci(args) => match args.command {
-            CiCommand::Clippy(args) => run_clippy_ci(&ctx, args),
+            CiCommand::Clippy => run_clippy_ci(&ctx),
             CiCommand::UpgradeManifest(args) => run_ci_upgrade_manifest(&ctx, args),
             CiCommand::Winget(args) => run_ci_winget(&ctx, args),
         },
@@ -2489,6 +2483,11 @@ fn add_prod_package_args(command: &mut Command) {
     }
 }
 
+const WINDOWS_CLIPPY_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// The Unix launcher never builds for Windows, as in `.github/scripts/windows_ci.py`.
+const WINDOWS_CLIPPY_EXCLUDED_PACKAGE: &str = "scryer-launcher";
+
 /// Matches CI's clippy scope: the whole workspace except the xtask crates, every target
 /// (tests and benches included) and every feature, so test and feature-gated code is linted
 /// here instead of only in the native Windows lane.
@@ -3467,114 +3466,64 @@ fn refresh_builtin_plugins(
     })
 }
 
-fn run_clippy_ci(ctx: &TaskContext, args: ClippyArgs) -> Result<()> {
-    let linux_image = std::env::var("SCRYER_LINUX_CLIPPY_IMAGE")
-        .unwrap_or_else(|_| "rust:1.97.1-bookworm".to_string());
-    let linux_platform = std::env::var("SCRYER_LINUX_CLIPPY_PLATFORM").ok();
+fn run_clippy_ci(ctx: &TaskContext) -> Result<()> {
+    let manifest =
+        fs::read_to_string(ctx.repo_root.join("Cargo.toml")).context("read root Cargo.toml")?;
+    let unoptimized = clippy_unoptimized_config_args(&manifest)?;
 
-    if !args.linux_only {
-        println!("Running cargo clippy for host target");
-        let mut command = ctx.command_in("cargo", &ctx.repo_root);
-        command.arg("clippy");
-        add_ci_clippy_package_args(&mut command);
-        command.args(["--", "-D", "warnings"]);
-        run_checked(&mut command)?;
+    println!("Running cargo clippy for host target");
+    let mut command = ctx.command_in("cargo", &ctx.repo_root);
+    command.arg("clippy");
+    add_ci_clippy_package_args(&mut command);
+    command.args(&unoptimized);
+    command.args(["--", "-D", "warnings"]);
+    run_checked(&mut command)?;
+
+    if !command_available("cargo-xwin")? {
+        warn("cargo-xwin not installed — installing");
+        let mut install = ctx.command_in("cargo", &ctx.repo_root);
+        install.args(["install", "--locked", "cargo-xwin"]);
+        run_checked(&mut install)?;
     }
+    let mut target = ctx.command_in("rustup", &ctx.repo_root);
+    target.args(["target", "add", WINDOWS_CLIPPY_TARGET]);
+    run_checked(&mut target)?;
 
-    if command_available("docker")? {
-        println!("Running cargo clippy in Linux container: {linux_image}");
-        let repo_cache_key = release_cache_key(&ctx.repo_root);
-        let platform_key = linux_platform.as_deref().unwrap_or("native");
-        let cargo_volume = format!("scryer-clippy-cargo-{repo_cache_key}");
-        let target_volume = format!(
-            "scryer-clippy-target-{repo_cache_key}-{}",
-            docker_cache_key_component(platform_key)
-        );
-        let work_mount = format!("{}:/work", ctx.repo_root.display());
-        let cargo_mount = format!("{cargo_volume}:/cargo");
-        let target_mount = format!("{target_volume}:/target");
-        let clippy_shell = ci_clippy_shell();
-        let mut command = ctx.command("docker");
-        command.args(["run", "--rm"]);
-        if let Some(platform) = linux_platform.as_deref().filter(|value| !value.is_empty()) {
-            command.args(["--platform", platform]);
-        }
-        command.args([
-            "-v",
-            &work_mount,
-            "-v",
-            &cargo_mount,
-            "-v",
-            &target_mount,
-            "-w",
-            "/work",
-            "-e",
-            "CARGO_HOME=/cargo",
-            "-e",
-            "CARGO_TARGET_DIR=/target",
-            "-e",
-            "CARGO_INCREMENTAL=0",
-            "-e",
-            "CARGO_PROFILE_DEV_DEBUG=0",
-            "-e",
-            "CARGO_PROFILE_DEV_STRIP=debuginfo",
-            "-e",
-            "CARGO_PROFILE_TEST_DEBUG=0",
-            "-e",
-            "CARGO_PROFILE_TEST_STRIP=debuginfo",
-            "-e",
-            "CARGO_TERM_COLOR=always",
-            &linux_image,
-            "bash",
-            "-lc",
-            &clippy_shell,
-        ]);
-        run_checked(&mut command)?;
-    } else {
-        bail!("cannot run Linux clippy locally; install Docker");
-    }
-
-    Ok(())
-}
-
-fn ci_clippy_shell() -> String {
-    let package_args = ci_clippy_selection_args()
-        .iter()
-        .filter(|arg| **arg != "--locked")
-        .map(|arg| format!(" {arg}"))
-        .collect::<String>();
-    let mut shell = String::from(
-        "set -euo pipefail; /usr/local/cargo/bin/rustup component add clippy; toolchain=\"$('/usr/local/cargo/bin/rustup' show active-toolchain | cut -d' ' -f1)\"; toolchain_bin=\"/usr/local/rustup/toolchains/${toolchain}/bin\"; export PATH=\"${toolchain_bin}:$PATH\"; \"${toolchain_bin}/cargo-clippy\" clippy --locked",
+    println!("Running cargo clippy for {WINDOWS_CLIPPY_TARGET}");
+    let mut command = ctx.command_in("cargo", &ctx.repo_root);
+    command.args(["xwin", "clippy", "--target", WINDOWS_CLIPPY_TARGET]);
+    add_ci_clippy_package_args(&mut command);
+    command.args(["--exclude", WINDOWS_CLIPPY_EXCLUDED_PACKAGE]);
+    command.args(&unoptimized);
+    command.args(["--", "-D", "warnings"]);
+    // Clippy never links, so regorus's Spectre library lookup only needs a real directory.
+    command.env(
+        "MSVC_SPECTRE_LIB_DIR_x86_64_pc_windows_msvc",
+        &ctx.repo_root,
     );
-    shell.push_str(&package_args);
-    shell.push_str(" -- -D warnings");
-    shell
+    command.env("SCRYER_SKIP_WINDOWS_RESOURCES", "1");
+    run_checked(&mut command)
 }
 
-fn release_cache_key(path: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
-    digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
-        .chars()
-        .take(12)
-        .collect()
-}
-
-fn docker_cache_key_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
+/// Clippy never runs what it lints, so the packages the dev profile optimizes for
+/// tests and local serving are reset here instead of slowing its build scripts.
+fn clippy_unoptimized_config_args(manifest: &str) -> Result<Vec<String>> {
+    let manifest: TomlValue = toml::from_str(manifest).context("parse root Cargo.toml")?;
+    let packages = manifest
+        .get("profile")
+        .and_then(|profile| profile.get("dev"))
+        .and_then(|dev| dev.get("package"))
+        .and_then(TomlValue::as_table);
+    Ok(packages
+        .into_iter()
+        .flat_map(|packages| packages.keys())
+        .flat_map(|package| {
+            [
+                "--config".to_string(),
+                format!("profile.dev.package.{package}.opt-level=0"),
+            ]
         })
-        .collect()
+        .collect())
 }
 
 fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
@@ -4073,7 +4022,14 @@ fn run_sdk_release(ctx: &TaskContext, args: SdkReleaseArgs) -> Result<()> {
 
     step("Running SDK validation");
     let mut cargo_test = ctx.release_command_in("cargo", &ctx.repo_root);
-    cargo_test.args(["test", "--locked", "-p", PLUGIN_SDK_PACKAGE]);
+    cargo_test.args([
+        "nextest",
+        "run",
+        "--locked",
+        "--no-fail-fast",
+        "-p",
+        PLUGIN_SDK_PACKAGE,
+    ]);
     run_checked(&mut cargo_test)?;
     let mut cargo_package = ctx.release_command_in("cargo", &ctx.repo_root);
     cargo_package.args([
@@ -4323,6 +4279,13 @@ fn run_scryer_rust_validation(ctx: &TaskContext, prefix: &'static str) -> Result
             "RUSTSEC-2026-0095",
             "RUSTSEC-2026-0096",
             "RUSTSEC-2026-0114",
+            // Wasmtime's compiled-code cache pins zstd 0.13 upstream. It only calls
+            // zstd::decode_all and zstd::encode_all on its own local cache files, which
+            // never reach the reused contexts, seekable API or streaming write decoder
+            // these cover. Remove them once wasmtime moves to zstd 0.14.3.
+            "RUSTSEC-2026-0391",
+            "RUSTSEC-2026-0398",
+            "RUSTSEC-2026-0403",
         ];
         warn(format!(
             "Ignoring advisories pending upstream fixes: {}",
@@ -4591,9 +4554,9 @@ fn run_scryer_release_hygiene_validation(ctx: &TaskContext, prefix: &'static str
 fn run_scryer_ci_clippy_validation(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     prefixed_step(
         prefix,
-        "Running CI-equivalent clippy for the whole workspace",
+        "Running host and Windows clippy for the whole workspace",
     );
-    run_clippy_ci(ctx, ClippyArgs { linux_only: true })?;
+    run_clippy_ci(ctx)?;
     prefixed_ok(prefix, "CI clippy passed");
     Ok(())
 }
@@ -5065,6 +5028,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
                 "Linux clippy lane is missing {arg}; it must match the release dry run"
             );
         }
+    }
+
+    #[test]
+    fn clippy_resets_every_package_the_dev_profile_optimizes() {
+        let args = clippy_unoptimized_config_args(
+            r#"
+[profile.dev]
+debug = 0
+
+[profile.dev.package.scryer-interface]
+opt-level = 1
+
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.test.package.scryer]
+opt-level = 1
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            args,
+            [
+                "--config",
+                "profile.dev.package.argon2.opt-level=0",
+                "--config",
+                "profile.dev.package.scryer-interface.opt-level=0",
+            ]
+        );
     }
 
     #[test]

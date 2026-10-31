@@ -17,7 +17,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
@@ -102,7 +106,9 @@ type SettingsRequestRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RequestRuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RequestRuleSetDraft>>;
-  submitRuleSet: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  submitRuleSet: (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => Promise<void> | void;
   mutatingRuleSetId: string | null;
   resetRuleSetDraft: () => void;
   startCreateRuleSet: () => void;
@@ -132,7 +138,9 @@ type SettingsRequestRulesSectionProps = {
   previewRuleSetId: string;
   setPreviewRuleSetId: (id: string) => void;
   previewSample: RequestRulePreviewSample;
-  setPreviewSample: React.Dispatch<React.SetStateAction<RequestRulePreviewSample>>;
+  setPreviewSample: React.Dispatch<
+    React.SetStateAction<RequestRulePreviewSample>
+  >;
   searchPreviewTitles: (
     query: string,
     facet: string,
@@ -339,7 +347,10 @@ function RequestTemplateGallery({
         </p>
       </CardHeader>
       {open ? (
-        <CardContent id="settings-request-template-gallery" className="@container">
+        <CardContent
+          id="settings-request-template-gallery"
+          className="@container"
+        >
           <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2">
             {REQUEST_RULE_TEMPLATES.map((template) => (
               <RequestTemplateCard
@@ -505,9 +516,9 @@ function RequestPreviewPanel({
 >) {
   const t = useTranslate();
   const [titleQuery, setTitleQuery] = React.useState("");
-  const [titleResults, setTitleResults] = React.useState<MetadataTvdbSearchItem[]>(
-    [],
-  );
+  const [titleResults, setTitleResults] = React.useState<
+    MetadataTvdbSearchItem[]
+  >([]);
   const [titleSearching, setTitleSearching] = React.useState(false);
   const [showInputDocument, setShowInputDocument] = React.useState(false);
 
@@ -701,7 +712,9 @@ function RequestPreviewPanel({
         </div>
 
         <div>
-          <Label className="mb-2 block">{t("settings.requestPreviewMedia")}</Label>
+          <Label className="mb-2 block">
+            {t("settings.requestPreviewMedia")}
+          </Label>
           <Input
             id="settings-request-preview-title-search"
             value={titleQuery}
@@ -726,7 +739,9 @@ function RequestPreviewPanel({
           {titleResults.length > 0 ? (
             <ul className="mt-2 space-y-1">
               {titleResults.slice(0, 8).map((result) => {
-                const key = String(result.smgId ?? result.tvdbId ?? result.name);
+                const key = String(
+                  result.smgId ?? result.tvdbId ?? result.name,
+                );
                 return (
                   <li key={key}>
                     <button
@@ -781,7 +796,9 @@ function RequestPreviewPanel({
             <div className="flex flex-wrap items-center gap-2">
               <OutcomeBadge outcome={decision.policyOutcome} />
               {decision.votes[0]?.held ? (
-                <Badge tone="warning">{t("settings.requestDecisionHeld")}</Badge>
+                <Badge tone="warning">
+                  {t("settings.requestDecisionHeld")}
+                </Badge>
               ) : null}
               {previewResult.metadataPartial ? (
                 <Badge tone="warning">
@@ -813,7 +830,10 @@ function RequestPreviewPanel({
               </div>
             ) : null}
             {previewResult.undefinedTags.length > 0 ? (
-              <div id="settings-request-preview-undefined-tags" className="space-y-1">
+              <div
+                id="settings-request-preview-undefined-tags"
+                className="space-y-1"
+              >
                 <div className="flex flex-wrap gap-1">
                   {previewResult.undefinedTags.map((tag) => (
                     <Badge key={tag} tone="warning" className="text-[10px]">
@@ -955,7 +975,9 @@ function RequestDecisionsPanel({
                   {t("settings.requestDecisionsColOutcome")}
                 </TableHead>
                 <TableHead>{t("settings.requestDecisionsColVotes")}</TableHead>
-                <TableHead>{t("settings.requestDecisionsColReasons")}</TableHead>
+                <TableHead>
+                  {t("settings.requestDecisionsColReasons")}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -976,7 +998,8 @@ function RequestDecisionsPanel({
                     <TableCell>
                       <div className="space-y-1">
                         <OutcomeBadge outcome={decision.effectiveOutcome} />
-                        {decision.policyOutcome !== decision.effectiveOutcome ? (
+                        {decision.policyOutcome !==
+                        decision.effectiveOutcome ? (
                           <p className="text-xs text-muted-foreground">
                             {t("settings.requestDecisionsPolicySaid", {
                               outcome: decision.policyOutcome,
@@ -1090,7 +1113,9 @@ export function SettingsRequestRulesSection({
                   id="settings-request-rules-ai-prompt"
                   ruleKind="request decision"
                   inputContract={requestInputContract}
-                  outputContract={'Define one or more supported decisions: approve if { ... }, deny if { ... }, manual if { ... }, or tags contains "stable_tag" if { ... }.'}
+                  outputContract={
+                    'Define one or more supported decisions: approve if { ... }, deny if { ... }, manual if { ... }, or tags contains "stable_tag" if { ... }.'
+                  }
                 />
               </div>
               <div className="overflow-x-auto">
@@ -1134,7 +1159,9 @@ export function SettingsRequestRulesSection({
                           data-ui="settings-table-row"
                           key={record.id}
                           id={settingsRequestRuleRowId(record.id)}
-                          data-request-rule-enabled={record.enabled ? "true" : "false"}
+                          data-request-rule-enabled={
+                            record.enabled ? "true" : "false"
+                          }
                         >
                           <TableCell className="font-medium">
                             <span id={settingsRequestRuleNameId(record.name)}>
@@ -1199,7 +1226,10 @@ export function SettingsRequestRulesSection({
                     })}
                     {ruleSetRecords.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-muted-foreground">
+                        <TableCell
+                          colSpan={7}
+                          className="text-muted-foreground"
+                        >
                           {t("settings.noRequestRulesFound")}
                         </TableCell>
                       </TableRow>
@@ -1271,14 +1301,28 @@ export function SettingsRequestRulesSection({
                             regoSource: value,
                           }))
                         }
-                        diagnostics={regoDiagnostics(ruleSetDraft.regoSource, validationResult)}
+                        diagnostics={regoDiagnostics(
+                          ruleSetDraft.regoSource,
+                          validationResult,
+                          t,
+                        )}
                         feedback={
                           <EditorValidationStatus
                             id="settings-request-rule-validation"
                             checking={validating}
                             result={validationResult}
-                            data-request-rule-valid={validationResult ? String(validationResult.valid) : undefined}
-                            data-request-rule-person-targeting-refusal={validationResult?.errors.some(isPersonTargetingRefusal) ? "true" : undefined}
+                            data-request-rule-valid={
+                              validationResult
+                                ? String(validationResult.valid)
+                                : undefined
+                            }
+                            data-request-rule-person-targeting-refusal={
+                              validationResult?.diagnostics?.some(
+                                isPersonTargetingRefusal,
+                              )
+                                ? "true"
+                                : undefined
+                            }
                           />
                         }
                         minLines={12}

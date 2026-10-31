@@ -126,7 +126,10 @@ function canUninstallPlugin(plugin: RegistryPluginRecord) {
   return !plugin.builtin || plugin.sourceKind === "downloaded";
 }
 
-function uninstallLabel(plugin: RegistryPluginRecord, t: SetupPluginsViewProps["t"]) {
+function uninstallLabel(
+  plugin: RegistryPluginRecord,
+  t: SetupPluginsViewProps["t"],
+) {
   return plugin.builtin && plugin.sourceKind === "downloaded"
     ? t("settings.pluginRevertToBundled")
     : t("settings.pluginUninstall");
@@ -135,9 +138,11 @@ function uninstallLabel(plugin: RegistryPluginRecord, t: SetupPluginsViewProps["
 function isRunningPluginProgress(
   progress?: PluginInstallProgressRecord,
 ): progress is PluginInstallProgressRecord {
-  return progress !== undefined
-    && progress.state !== "SUCCEEDED"
-    && progress.state !== "FAILED";
+  return (
+    progress !== undefined &&
+    progress.state !== "SUCCEEDED" &&
+    progress.state !== "FAILED"
+  );
 }
 
 function pluginProgressLabel(
@@ -158,7 +163,6 @@ function pluginProgressLabel(
       return progress.label;
   }
 }
-
 
 type PluginActionProps = {
   plugin: RegistryPluginRecord;
@@ -198,7 +202,9 @@ function SetupPluginAction({
   return (
     <IconButton
       id={selectorId("setup-plugin-install", plugin.name)}
-      label={busy ? t("settings.pluginInstalling") : t("settings.pluginInstall")}
+      label={
+        busy ? t("settings.pluginInstalling") : t("settings.pluginInstall")
+      }
       tone="install"
       disabled={busy}
       onClick={() => onInstallPlugin(plugin)}
@@ -221,7 +227,9 @@ function SetupPluginStatus({
   progress?: PluginInstallProgressRecord;
   error?: string;
 }) {
-  const runningProgress = isRunningPluginProgress(progress) ? progress : undefined;
+  const runningProgress = isRunningPluginProgress(progress)
+    ? progress
+    : undefined;
   return (
     <>
       {runningProgress ? (
@@ -231,7 +239,8 @@ function SetupPluginStatus({
           </div>
           <Progress
             value={
-              (runningProgress.stepIndex / Math.max(runningProgress.stepCount, 1)) *
+              (runningProgress.stepIndex /
+                Math.max(runningProgress.stepCount, 1)) *
               100
             }
             className="h-1.5"
@@ -295,7 +304,8 @@ function SetupPluginCard({
   onInstallPlugin,
   onUninstallPlugin,
 }: SetupPluginCardProps) {
-  const busy = mutatingPluginIds.includes(plugin.id) || plugin.installInProgress;
+  const busy =
+    mutatingPluginIds.includes(plugin.id) || plugin.installInProgress;
   return (
     <div
       id={selectorId("setup-plugin-card", plugin.name)}
@@ -458,7 +468,8 @@ export function SetupPluginsView({
                 id={selectorId("setup-recommendation", recommendation.key)}
                 className={cn(
                   "flex min-w-0 flex-col gap-2 rounded-[14px] border border-[var(--scry-line2)] bg-[var(--scry-page2)] p-4",
-                  recommendation.plugins.length > 1 && "md:col-span-2 lg:col-span-3",
+                  recommendation.plugins.length > 1 &&
+                    "md:col-span-2 lg:col-span-3",
                 )}
               >
                 <div>

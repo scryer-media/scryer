@@ -97,10 +97,10 @@ pub fn link_count(path: &Path) -> AppResult<LinkCount> {
 /// Read the link count and size of `path` (blocking).
 pub fn hardlink_fact(path: &Path) -> AppResult<HardlinkFact> {
     hardlink_fact_optional(path)?.ok_or_else(|| {
-        AppError::NotFound(format!(
-            "path not found for hardlink detection: {}",
-            path.display()
-        ))
+        AppError::not_found_reason(
+            crate::error_reasons::location::PATH_NOT_FOUND,
+            format!("path not found for hardlink detection: {}", path.display()),
+        )
     })
 }
 

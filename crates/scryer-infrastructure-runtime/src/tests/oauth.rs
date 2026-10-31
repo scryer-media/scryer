@@ -190,6 +190,7 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
     assert!(matches!(
         error,
         scryer_application::AppError::Unauthorized(_)
+            | scryer_application::AppError::UnauthorizedReason { .. }
     ));
 
     let exchange_grant = scryer_application::OAuthRefreshGrantRecord {
@@ -233,6 +234,7 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
     assert!(matches!(
         error,
         scryer_application::AppError::Unauthorized(_)
+            | scryer_application::AppError::UnauthorizedReason { .. }
     ));
     let code = oauth
         .get_authorization_code("code-disabled-client")
@@ -370,6 +372,7 @@ async fn authorization_code_exchange_rechecks_the_registered_redirect_uri() {
     assert!(matches!(
         error,
         scryer_application::AppError::Unauthorized(_)
+            | scryer_application::AppError::UnauthorizedReason { .. }
     ));
     let code = oauth
         .get_authorization_code("code-redirect-change")

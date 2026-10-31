@@ -5,7 +5,10 @@ export type EpisodePanelTab = "details" | "blocklist";
 
 export interface EpisodePanelState {
   searchResultsByEpisode: Record<string, Release[]>;
-  searchIndexerProgressByEpisode: Record<string, InteractiveSearchIndexerProgress[]>;
+  searchIndexerProgressByEpisode: Record<
+    string,
+    InteractiveSearchIndexerProgress[]
+  >;
   searchLoadingByEpisode: Record<string, boolean>;
   autoSearchLoadingByEpisode: Record<string, boolean>;
 }
@@ -49,8 +52,10 @@ export function episodePanelReducer(
     case "RESET_SEARCH": {
       const { [action.episodeId]: _results, ...searchResultsByEpisode } =
         state.searchResultsByEpisode;
-      const { [action.episodeId]: _progress, ...searchIndexerProgressByEpisode } =
-        state.searchIndexerProgressByEpisode;
+      const {
+        [action.episodeId]: _progress,
+        ...searchIndexerProgressByEpisode
+      } = state.searchIndexerProgressByEpisode;
       return {
         ...state,
         searchResultsByEpisode,
@@ -68,7 +73,8 @@ export function episodePanelReducer(
           },
         };
       }
-      const { [action.episodeId]: _removed, ...rest } = state.searchLoadingByEpisode;
+      const { [action.episodeId]: _removed, ...rest } =
+        state.searchLoadingByEpisode;
       return { ...state, searchLoadingByEpisode: rest };
     }
 
@@ -82,7 +88,8 @@ export function episodePanelReducer(
           },
         };
       }
-      const { [action.episodeId]: _removed, ...rest } = state.autoSearchLoadingByEpisode;
+      const { [action.episodeId]: _removed, ...rest } =
+        state.autoSearchLoadingByEpisode;
       return { ...state, autoSearchLoadingByEpisode: rest };
     }
 

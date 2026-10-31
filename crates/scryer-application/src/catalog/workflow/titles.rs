@@ -1163,9 +1163,7 @@ impl AppUseCase {
         conflict: &SubmissionScopeConflict,
     ) -> AppResult<()> {
         if !conflict.replaceable {
-            return Err(AppError::Validation(
-                "the existing download is no longer safe to replace".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE, "the existing download is no longer safe to replace"));
         }
 
         if let Some(client_id) = conflict.download_client_id.as_deref() {
@@ -2122,7 +2120,12 @@ impl AppUseCase {
                 references: destination_references,
             };
             match submissions.reassign_download_to_title(&reassignment).await {
-                Ok(true) => moved.push(download_id),
+                Ok(true) => {
+                    self.runtime
+                        .acquisition
+                        .invalidate_download_registry_observations();
+                    moved.push(download_id);
+                }
                 Ok(false) => debug!(
                     title_id = %source_title_id,
                     download_id = %download_id,
@@ -2142,11 +2145,6 @@ impl AppUseCase {
         }
 
         if !moved.is_empty() {
-            // Resolutions memoized against the source title must not outlive
-            // the move.
-            self.runtime
-                .acquisition
-                .invalidate_download_registry_observations();
             if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
                 match handle
                     .reassign_title(

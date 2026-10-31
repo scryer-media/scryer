@@ -98,8 +98,9 @@ impl BackupEncryptionMetadataV1 {
     #[cfg(any(feature = "runtime-backups", test))]
     fn from_bytes(bytes: &[u8]) -> AppResult<Self> {
         if bytes.len() != BACKUP_ENCRYPTION_METADATA_V1_LEN {
-            return Err(AppError::Validation(
-                "backup encryption metadata is invalid".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_ENCRYPTION_METADATA_INVALID,
+                "backup encryption metadata is invalid",
             ));
         }
 
@@ -354,6 +355,7 @@ impl<R: Read> AeadChunkReader<R> {
     }
 
     fn fill_plaintext(&mut self) -> AppResult<()> {
+        crate::check_restore_deadline()?;
         if self.finished {
             return Ok(());
         }
@@ -367,9 +369,10 @@ impl<R: Read> AeadChunkReader<R> {
 
         let mut in_out = vec![0_u8; ciphertext_len];
         self.reader.read_exact(&mut in_out).map_err(|error| {
-            AppError::Validation(format!(
-                "encrypted backup payload is truncated or invalid: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID,
+                format!("encrypted backup payload is truncated or invalid: {error}"),
+            )
         })?;
 
         let nonce = chunk_nonce(self.nonce_prefix, self.chunk_index);
@@ -382,8 +385,9 @@ impl<R: Read> AeadChunkReader<R> {
             .key
             .open_in_place(nonce, Aad::from(aad.as_slice()), &mut in_out)
             .map_err(|_| {
-                AppError::Validation(
-                    "failed to decrypt backup bundle: wrong password or corrupted data".into(),
+                AppError::validation_refused(
+                    crate::error_reasons::security::FAILED_DECRYPT_BACKUP_BUNDLE,
+                    "failed to decrypt backup bundle: wrong password or corrupted data",
                 )
             })?;
         let plaintext_len = plaintext.len();
@@ -805,12 +809,26 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "indexer_api_clients",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_api_client_grants",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "indexer_api_quotas",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
         table: "indexer_errors",
         classification: BackupTableClassification::Export,
+    },
+    // Short-lived learned emptiness per indexer and facet; a restored
+    // instance relearns it within a few background searches.
+    BackupTableCatalogEntry {
+        table: "indexer_facet_learning",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "indexer_search_candidates",
@@ -834,6 +852,20 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "indexer_search_runs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    // Listing cursors and reader ownership describe in-flight searches,
+    // just like the search runs above. They are rebuilt after restoration.
+    BackupTableCatalogEntry {
+        table: "indexer_search_listings",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_listing_runs",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_listing_readers",
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
@@ -1289,6 +1321,14 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "user_ui_dashboard_layout_items",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "user_ui_dashboard_layouts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "user_ui_settings",
         classification: BackupTableClassification::Export,
     },
@@ -1431,7 +1471,7 @@ pub fn validate_restore_manifest_table_set(
     {
         return Ok(());
     }
-    Err(AppError::Validation(format!(
+    Err(AppError::validation_refused(crate::error_reasons::security::BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG, format!(
         "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]. {}",
         missing.join(", "),
         unexpected.join(", "),
@@ -1651,8 +1691,9 @@ impl BackupBundleStaging {
 
     pub fn finish(mut self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
         if request.passphrase.trim().is_empty() {
-            return Err(AppError::Validation(
-                "backup export requires a non-empty password".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
+                "backup export requires a non-empty password",
             ));
         }
 
@@ -1692,7 +1733,9 @@ pub fn inspect_backup_bundle(
     bundle_path: &Path,
     passphrase: Option<&str>,
 ) -> AppResult<BackupBundleInspectSummary> {
+    crate::check_restore_deadline()?;
     let extracted = extract_bundle_to_tempdir(bundle_path, passphrase)?;
+    crate::check_restore_deadline()?;
     let manifest = load_manifest(extracted.path())?;
     validate_extracted_bundle(extracted.path(), &manifest)?;
     Ok(manifest.summary())
@@ -1737,7 +1780,9 @@ pub fn prepare_backup_restore_payload(
     bundle_path: &Path,
     passphrase: Option<&str>,
 ) -> AppResult<BackupBundleRestorePayload> {
+    crate::check_restore_deadline()?;
     let extracted = extract_bundle_to_tempdir(bundle_path, passphrase)?;
+    crate::check_restore_deadline()?;
     let manifest = load_manifest(extracted.path())?;
     validate_extracted_bundle(extracted.path(), &manifest)?;
 
@@ -1774,12 +1819,13 @@ fn write_json_file(path: &Path, value: &impl Serialize) -> AppResult<()> {
 }
 
 fn checksum_hex(path: impl AsRef<Path>) -> AppResult<String> {
-    let mut file = File::open(path.as_ref()).map_err(|error| {
+    let file = File::open(path.as_ref()).map_err(|error| {
         AppError::Repository(format!(
             "failed to open {} for checksum: {error}",
             path.as_ref().display()
         ))
     })?;
+    let mut file = crate::RestoreReader::new(file);
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -1839,9 +1885,9 @@ fn extract_bundle_to_tempdir(bundle_path: &Path, passphrase: Option<&str>) -> Ap
     })?;
 
     let payload_reader = open_bundle_payload_reader(bundle_path, passphrase)?;
-    let decoder = zstd::Decoder::new(payload_reader)
+    let decoder = zstd::Decoder::new(crate::RestoreReader::new(payload_reader))
         .map_err(|error| map_streaming_bundle_error(error, "backup payload is not valid zstd"))?;
-    let mut archive = tar::Archive::new(decoder);
+    let mut archive = tar::Archive::new(crate::RestoreReader::new(decoder));
     archive.unpack(tempdir.path()).map_err(|error| {
         map_streaming_bundle_error(error, "backup payload is not a valid tar archive")
     })?;
@@ -1874,14 +1920,18 @@ fn open_bundle_payload_reader(
     })?;
     if read == ENCRYPTED_BUNDLE_MAGIC.len() && prefix == ENCRYPTED_BUNDLE_MAGIC {
         let passphrase = passphrase.ok_or_else(|| {
-            AppError::Validation("this backup bundle is encrypted and requires a password".into())
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_BUNDLE_ENCRYPTED_REQUIRES_PASSWORD,
+                "this backup bundle is encrypted and requires a password",
+            )
         })?;
         let header = parse_encrypted_bundle_header_after_magic(&mut reader)?;
         let reader = AeadChunkReader::new(reader, header, passphrase)?;
         Ok(Box::new(reader))
     } else {
-        Ok(Box::new(
-            std::io::Cursor::new(prefix[..read].to_vec()).chain(reader),
+        Err(AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_BUNDLE_INVALID,
+            "restore requires an encrypted backup bundle",
         ))
     }
 }
@@ -1907,31 +1957,39 @@ fn parse_encrypted_bundle_header_after_magic(
 ) -> AppResult<EncryptedBundleHeaderV1> {
     let mut version = [0_u8; 1];
     reader.read_exact(&mut version).map_err(|error| {
-        AppError::Validation(format!("encrypted backup header is truncated: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_HEADER_TRUNCATED,
+            format!("encrypted backup header is truncated: {error}"),
+        )
     })?;
     if version[0] != BACKUP_ENCRYPTION_VERSION_1 {
-        return Err(AppError::Validation(format!(
-            "unsupported encrypted backup version {}",
-            version[0]
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_VERSION_UNSUPPORTED,
+            format!("unsupported encrypted backup version {}", version[0]),
+        ));
     }
 
     let mut metadata_len = [0_u8; 4];
     reader.read_exact(&mut metadata_len).map_err(|error| {
-        AppError::Validation(format!(
-            "encrypted backup metadata header is truncated: {error}"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_METADATA_HEADER_TRUNCATED,
+            format!("encrypted backup metadata header is truncated: {error}"),
+        )
     })?;
     let metadata_len = u32::from_be_bytes(metadata_len) as usize;
     if metadata_len != BACKUP_ENCRYPTION_METADATA_V1_LEN {
-        return Err(AppError::Validation(
-            "backup encryption metadata is invalid".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_ENCRYPTION_METADATA_INVALID,
+            "backup encryption metadata is invalid",
         ));
     }
 
     let mut metadata_bytes = [0_u8; BACKUP_ENCRYPTION_METADATA_V1_LEN];
     reader.read_exact(&mut metadata_bytes).map_err(|error| {
-        AppError::Validation(format!("encrypted backup metadata is truncated: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_METADATA_TRUNCATED,
+            format!("encrypted backup metadata is truncated: {error}"),
+        )
     })?;
 
     Ok(EncryptedBundleHeaderV1 {
@@ -1959,9 +2017,10 @@ fn derive_backup_encryption_key(
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
         .map_err(|error| {
-            AppError::Validation(format!(
-                "failed to derive backup encryption key from password: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::security::FAILED_DERIVE_BACKUP_ENCRYPTION_KEY_PASSWORD,
+                format!("failed to derive backup encryption key from password: {error}"),
+            )
         })?;
     Ok(key)
 }
@@ -1995,32 +2054,35 @@ fn chunk_aad(version: u8, metadata_bytes: &[u8], chunk_index: u64) -> Vec<u8> {
 fn read_encrypted_chunk_len(reader: &mut impl Read) -> AppResult<Option<usize>> {
     let mut len = [0_u8; 4];
     let read = reader.read(&mut len[..1]).map_err(|error| {
-        AppError::Validation(format!(
-            "encrypted backup payload length is invalid: {error}"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_LENGTH_INVALID,
+            format!("encrypted backup payload length is invalid: {error}"),
+        )
     })?;
     if read == 0 {
         return Ok(None);
     }
 
     reader.read_exact(&mut len[1..]).map_err(|error| {
-        AppError::Validation(format!(
-            "encrypted backup payload length is truncated: {error}"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_LENGTH_TRUNCATED,
+            format!("encrypted backup payload length is truncated: {error}"),
+        )
     })?;
     let chunk_len = u32::from_be_bytes(len) as usize;
     if !(BACKUP_ENCRYPTION_TAG_LEN..=BACKUP_ENCRYPTION_MAX_CIPHERTEXT_CHUNK_LEN)
         .contains(&chunk_len)
     {
-        return Err(AppError::Validation(
-            "encrypted backup payload length is invalid".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_LENGTH_INVALID,
+            "encrypted backup payload length is invalid",
         ));
     }
     Ok(Some(chunk_len))
 }
 
 fn app_error_to_io_error(error: AppError) -> io::Error {
-    io::Error::other(error.to_string())
+    io::Error::other(error)
 }
 
 #[cfg(feature = "runtime-backups")]
@@ -2030,33 +2092,53 @@ where
 {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(&error);
     while let Some(source) = current {
-        let message = source.to_string();
-        if let Some(validation) = message.strip_prefix("validation: ") {
-            return AppError::Validation(validation.to_string());
+        if let Some(app_error) = source.downcast_ref::<AppError>() {
+            return app_error.clone();
         }
-        if let Some(repository) = message.strip_prefix("repository: ") {
-            return AppError::Repository(repository.to_string());
-        }
-        current = source.source();
+        // io::Error::source skips its immediate custom payload. Walk that
+        // payload explicitly so AEAD errors survive nested IO and tar wrappers.
+        current = if let Some(io_error) = source.downcast_ref::<io::Error>() {
+            io_error
+                .get_ref()
+                .map(|inner| inner as &(dyn std::error::Error + 'static))
+                .or_else(|| source.source())
+        } else {
+            source.source()
+        };
     }
+    // Unknown streaming-library diagnostics are relayed without interpreting prose.
     AppError::Validation(format!("{fallback}: {error}"))
 }
 
 fn load_manifest(root: &Path) -> AppResult<BackupBundleManifest> {
     let path = root.join(MANIFEST_FILENAME);
-    let file = File::open(&path)
-        .map_err(|error| AppError::Validation(format!("backup manifest missing: {error}")))?;
-    serde_json::from_reader(BufReader::new(file))
-        .map_err(|error| AppError::Validation(format!("backup manifest is invalid: {error}")))
+    let file = File::open(&path).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_MANIFEST_MISSING,
+            format!("backup manifest missing: {error}"),
+        )
+    })?;
+    serde_json::from_reader(BufReader::new(file)).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_MANIFEST_INVALID,
+            format!("backup manifest is invalid: {error}"),
+        )
+    })
 }
 
 fn load_instance_secrets(root: &Path) -> AppResult<BackupInstanceSecrets> {
     let path = root.join(INSTANCE_SECRETS_FILENAME);
     let file = File::open(&path).map_err(|error| {
-        AppError::Validation(format!("backup secrets payload missing: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_MISSING,
+            format!("backup secrets payload missing: {error}"),
+        )
     })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|error| {
-        AppError::Validation(format!("backup secrets payload is invalid: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_INVALID,
+            format!("backup secrets payload is invalid: {error}"),
+        )
     })
 }
 
@@ -2070,6 +2152,7 @@ fn expected_bundle_parts(manifest: &BackupBundleManifest) -> BTreeSet<String> {
 }
 
 fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
+    crate::check_restore_deadline()?;
     std::fs::create_dir_all(target).map_err(|error| {
         AppError::Repository(format!(
             "failed to create prepared backup directory {}: {error}",
@@ -2095,18 +2178,27 @@ fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
                 entry.path().display()
             ))
         })?;
+        crate::check_restore_deadline()?;
         let destination = target.join(entry.file_name());
         if file_type.is_dir() {
             copy_directory_contents(&entry.path(), &destination)?;
         } else if file_type.is_file() {
-            std::fs::copy(entry.path(), &destination).map_err(|error| {
+            let copy = (|| -> std::io::Result<()> {
+                let source = File::open(entry.path())?;
+                let permissions = source.metadata()?.permissions();
+                let mut source = crate::RestoreReader::new(source);
+                let mut target = File::create(&destination)?;
+                std::io::copy(&mut source, &mut target)?;
+                target.set_permissions(permissions)
+            })();
+            copy.map_err(|error| {
                 AppError::Repository(format!(
                     "failed to stage prepared backup file {}: {error}",
                     destination.display()
                 ))
             })?;
         } else {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::security::PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY, format!(
                 "prepared backup directory contains unsupported entry {}",
                 entry.path().display()
             )));
@@ -2118,10 +2210,13 @@ fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
 
 fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> AppResult<()> {
     if manifest.format_version != BACKUP_FORMAT_VERSION {
-        return Err(AppError::Validation(format!(
-            "unsupported backup format version {}",
-            manifest.format_version
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_FORMAT_VERSION_UNSUPPORTED,
+            format!(
+                "unsupported backup format version {}",
+                manifest.format_version
+            ),
+        ));
     }
 
     let canonical_root = root.canonicalize().map_err(|error| {
@@ -2134,41 +2229,52 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
     for (part, expected_checksum) in &manifest.part_checksums {
         let part_path = Path::new(part);
         if part_path.is_absolute() {
-            return Err(AppError::Validation(format!(
-                "backup part path must be relative: {part}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                format!("backup part path must be relative: {part}"),
+            ));
         }
         if part_path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
         {
-            return Err(AppError::Validation(format!(
-                "backup part path escapes the bundle root: {part}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_ESCAPES_BUNDLE_ROOT,
+                format!("backup part path escapes the bundle root: {part}"),
+            ));
         }
 
         let canonical_part = root.join(part_path).canonicalize().map_err(|error| {
-            AppError::Validation(format!("backup part path is invalid: {part}: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                format!("backup part path is invalid: {part}: {error}"),
+            )
         })?;
         if !canonical_part.starts_with(&canonical_root) {
-            return Err(AppError::Validation(format!(
-                "backup part path escapes the bundle root: {part}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_ESCAPES_BUNDLE_ROOT,
+                format!("backup part path escapes the bundle root: {part}"),
+            ));
         }
         let metadata = std::fs::metadata(&canonical_part).map_err(|error| {
-            AppError::Validation(format!("backup part path is unreadable: {part}: {error}"))
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_UNREADABLE,
+                format!("backup part path is unreadable: {part}: {error}"),
+            )
         })?;
         if !metadata.is_file() {
-            return Err(AppError::Validation(format!(
-                "backup part path must be a regular file: {part}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                format!("backup part path must be a regular file: {part}"),
+            ));
         }
 
         let actual_checksum = checksum_hex(&canonical_part)?;
         if &actual_checksum != expected_checksum {
-            return Err(AppError::Validation(format!(
-                "backup checksum mismatch for {part}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_CHECKSUM_MISMATCH,
+                format!("backup checksum mismatch for {part}"),
+            ));
         }
     }
 
@@ -2187,11 +2293,14 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
             .difference(&expected_parts)
             .cloned()
             .collect::<Vec<_>>();
-        return Err(AppError::Validation(format!(
-            "backup checksum manifest is incomplete: missing [{}], unexpected [{}]",
-            missing.join(", "),
-            unexpected.join(", ")
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::security::BACKUP_CHECKSUM_MANIFEST_INCOMPLETE,
+            format!(
+                "backup checksum manifest is incomplete: missing [{}], unexpected [{}]",
+                missing.join(", "),
+                unexpected.join(", ")
+            ),
+        ));
     }
 
     Ok(())
@@ -2293,6 +2402,24 @@ mod tests {
                 entry.table
             );
             assert!(!entry.facets.is_empty(), "{}", entry.table);
+        }
+    }
+
+    #[test]
+    fn background_restore_classifies_transient_listing_ownership() {
+        for table in [
+            "indexer_search_listings",
+            "indexer_search_listing_runs",
+            "indexer_search_listing_readers",
+        ] {
+            assert_eq!(
+                BACKUP_TABLE_CATALOG
+                    .iter()
+                    .find(|entry| entry.table == table)
+                    .map(|entry| entry.classification),
+                Some(BackupTableClassification::ResetOnRestore),
+                "{table}"
+            );
         }
     }
 
@@ -2495,7 +2622,7 @@ mod tests {
         .expect_err("absolute path should fail");
 
         assert!(
-            matches!(error, AppError::Validation(message) if message.contains("must be relative"))
+            matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("must be relative"))
         );
     }
 
@@ -2513,7 +2640,7 @@ mod tests {
         .expect_err("traversal path should fail");
 
         assert!(
-            matches!(error, AppError::Validation(message) if message.contains("escapes the bundle root"))
+            matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("escapes the bundle root"))
         );
     }
 
@@ -2526,7 +2653,9 @@ mod tests {
             validate_extracted_bundle(temp.path(), &manifest_with_part("nested", "ignored"))
                 .expect_err("directories should fail");
 
-        assert!(matches!(error, AppError::Validation(message) if message.contains("regular file")));
+        assert!(
+            matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("regular file"))
+        );
     }
 
     #[test]
@@ -2547,7 +2676,7 @@ mod tests {
             .expect_err("missing secrets checksum should fail");
 
         assert!(
-            matches!(error, AppError::Validation(message) if message.contains(INSTANCE_SECRETS_FILENAME))
+            matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains(INSTANCE_SECRETS_FILENAME))
         );
     }
 
@@ -2567,7 +2696,7 @@ mod tests {
             .expect_err("missing table checksum should fail");
 
         assert!(
-            matches!(error, AppError::Validation(message) if message.contains("tables/titles.ndjson"))
+            matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("tables/titles.ndjson"))
         );
     }
 
@@ -2621,6 +2750,37 @@ mod tests {
 
     #[cfg(feature = "runtime-backups")]
     #[test]
+    fn streaming_backup_errors_preserve_typed_reasons_through_nested_io() {
+        for reason in [
+            crate::error_reasons::security::FAILED_DECRYPT_BACKUP_BUNDLE,
+            crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID,
+            crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_LENGTH_INVALID,
+        ] {
+            let original = AppError::validation_refused(reason, "rewritten diagnostic");
+            let wrapped = io::Error::other(app_error_to_io_error(original.clone()));
+            let recovered = map_streaming_bundle_error(wrapped, "outer diagnostic");
+            assert_eq!(recovered.validation_reason(), Some(reason));
+            assert_eq!(recovered.to_string(), original.to_string());
+        }
+        let repository = AppError::repository_failure(
+            crate::RepositoryErrorKind::StartupWindowExhausted,
+            "rewritten repository diagnostic",
+        );
+        let recovered =
+            map_streaming_bundle_error(app_error_to_io_error(repository), "outer diagnostic");
+        assert_eq!(
+            recovered.repository_kind(),
+            Some(crate::RepositoryErrorKind::StartupWindowExhausted)
+        );
+
+        let untyped = io::Error::other("validation: untyped provider diagnostic");
+        let recovered = map_streaming_bundle_error(untyped, "outer diagnostic");
+        assert!(matches!(recovered, AppError::Validation(_)));
+        assert_eq!(recovered.reason(), None);
+    }
+
+    #[cfg(feature = "runtime-backups")]
+    #[test]
     fn encrypted_backup_rejects_wrong_passphrase() {
         let temp = tempfile::tempdir().expect("tempdir");
         let bundle_path = temp.path().join("wrong-pass.scryer-backup.enc");
@@ -2628,6 +2788,10 @@ mod tests {
 
         let error = inspect_backup_bundle(&bundle_path, Some("wrong"))
             .expect_err("wrong password should fail");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::FAILED_DECRYPT_BACKUP_BUNDLE)
+        );
         assert!(
             error
                 .to_string()
@@ -2714,6 +2878,10 @@ mod tests {
 
         let error = inspect_backup_bundle(&bundle_path, Some("correct"))
             .expect_err("truncated chunk should fail");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID)
+        );
         assert!(
             error
                 .to_string()
@@ -2723,23 +2891,22 @@ mod tests {
 
     #[cfg(feature = "runtime-backups")]
     #[test]
-    fn plaintext_backup_extracts_plain_ndjson_parts() {
+    fn plaintext_backup_is_rejected_even_with_encrypted_extension() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let bundle_path = temp.path().join("plain.scryer-backup.tar.zst");
-        write_legacy_plaintext_test_bundle(&bundle_path).expect("write bundle");
-
-        let summary = inspect_backup_bundle(&bundle_path, None).expect("inspect");
-        assert!(!summary.encrypted);
-
-        let extracted = extract_bundle_to_tempdir(&bundle_path, None).expect("extract");
-        assert!(
-            extracted
-                .path()
-                .join(backup_table_part_relative_path("titles"))
-                .exists()
-        );
-        assert!(!extracted.path().join("tables/titles.ndjson.zst").exists());
-        assert!(!extracted.path().join("payload.tar.zst").exists());
+        for name in ["plain.tar.zst", "renamed.enc"] {
+            let bundle_path = temp.path().join(name);
+            write_legacy_plaintext_test_bundle(&bundle_path).expect("write bundle");
+            for password in [None, Some("password")] {
+                let error =
+                    inspect_backup_bundle(&bundle_path, password).expect_err("plaintext refused");
+                assert_eq!(
+                    error.validation_reason(),
+                    Some(crate::error_reasons::security::BACKUP_BUNDLE_INVALID)
+                );
+                assert!(extract_bundle_to_tempdir(&bundle_path, password).is_err());
+            }
+            assert!(bundle_path.is_file(), "rejection must preserve the input");
+        }
     }
 
     #[test]
@@ -2855,27 +3022,35 @@ mod tests {
     #[test]
     fn inspect_rejects_legacy_bundle_format_version() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let bundle_path = temp.path().join("legacy-format.scryer-backup.tar.zst");
-        write_legacy_plaintext_test_bundle(&bundle_path).expect("write bundle");
+        let bundle_path = temp.path().join("legacy-format.scryer-backup.enc");
+        write_test_bundle(&bundle_path, "password").expect("write bundle");
 
-        let extracted = extract_bundle_to_tempdir(&bundle_path, None).expect("extract");
+        let extracted = extract_bundle_to_tempdir(&bundle_path, Some("password")).expect("extract");
         let mut manifest = load_manifest(extracted.path()).expect("manifest");
         manifest.format_version = "scryer-backup-bundle-v1".to_string();
         write_json_file(&extracted.path().join(MANIFEST_FILENAME), &manifest).expect("rewrite");
 
-        let rebuilt_path = temp.path().join("legacy-rebuilt.scryer-backup.tar.zst");
+        let rebuilt_path = temp.path().join("legacy-rebuilt.scryer-backup.enc");
         let writer = write_bundle_payload(
             extracted.path(),
-            AtomicOutputWriter::new(&rebuilt_path).expect("create output"),
+            AeadChunkWriter::new(
+                AtomicOutputWriter::new(&rebuilt_path).expect("create output"),
+                "password",
+            )
+            .expect("encrypt output"),
         )
         .expect("rebuild bundle");
-        writer.finish().expect("persist rebuilt bundle");
+        writer
+            .finish()
+            .expect("finish encryption")
+            .finish()
+            .expect("persist rebuilt bundle");
 
-        let error = inspect_backup_bundle(&rebuilt_path, None).expect_err("legacy format");
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported backup format version")
+        let error =
+            inspect_backup_bundle(&rebuilt_path, Some("password")).expect_err("legacy format");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::BACKUP_FORMAT_VERSION_UNSUPPORTED)
         );
     }
 
@@ -2901,6 +3076,10 @@ mod tests {
 
         let error = inspect_backup_bundle(&bundle_path, Some("correct"))
             .expect_err("oversized chunk should fail");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::security::ENCRYPTED_BACKUP_PAYLOAD_LENGTH_INVALID)
+        );
         assert!(error.to_string().contains("payload length is invalid"));
     }
 

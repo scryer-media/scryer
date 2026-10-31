@@ -16,12 +16,28 @@ pub const ALL: &[&str] = &[
     PATH_OUTSIDE_ROOTS,
 ];
 
-/// Add context only to uncoded validation; retain typed faults and existing reasons.
+/// Give root availability faults the deletion boundary's existing reason; retain other codes and error classes.
 pub(crate) fn classify_validation(error: crate::AppError, reason: &'static str) -> crate::AppError {
     match error {
         crate::AppError::Validation(message) => {
             crate::AppError::validation_refused(reason, message)
         }
+        crate::AppError::ValidationRefused {
+            message,
+            reason:
+                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNAVAILABLE
+                | crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_SYMLINK
+                | crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY
+                | crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE
+                | crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY,
+            facts,
+            diagnostics,
+        } => crate::AppError::ValidationRefused {
+            message,
+            reason,
+            facts,
+            diagnostics,
+        },
         other => other,
     }
 }
@@ -41,7 +57,12 @@ mod tests {
             crate::AppError::Repository("database unavailable".into()),
             ROOT_UNAVAILABLE,
         );
-        assert!(matches!(error, crate::AppError::Repository(_)));
+        assert!(matches!(
+            error,
+            crate::AppError::Repository(_)
+                | crate::AppError::RepositoryFailure { .. }
+                | crate::AppError::RepositoryFailed { .. }
+        ));
         let error = classify_validation(
             crate::AppError::validation_refused(PREVIEW_STALE, "changed"),
             ROOT_UNAVAILABLE,
@@ -52,6 +73,24 @@ mod tests {
             ROOT_UNAVAILABLE,
         );
         assert_eq!(error.to_string(), "validation: offline");
+    }
+
+    #[test]
+    fn root_availability_codes_keep_the_deletion_boundary_reason_after_rewording() {
+        for source_reason in [
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNAVAILABLE,
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_SYMLINK,
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY,
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE,
+            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY,
+        ] {
+            let error = classify_validation(
+                crate::AppError::validation_refused(source_reason, "rewritten explanation"),
+                ROOT_UNAVAILABLE,
+            );
+            assert_eq!(error.validation_reason(), Some(ROOT_UNAVAILABLE));
+            assert_eq!(error.to_string(), "validation: rewritten explanation");
+        }
     }
 
     #[test]

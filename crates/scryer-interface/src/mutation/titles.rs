@@ -36,14 +36,17 @@ fn queued_download_payload(
     }
 }
 
-fn validation_error(message: impl Into<String>) -> async_graphql::Error {
-    to_gql_error(AppError::Validation(message.into()))
+fn validation_error(reason: &'static str, message: impl Into<String>) -> async_graphql::Error {
+    to_gql_error(AppError::validation_refused(reason, message))
 }
 
 fn normalized_root_folder_id(root_folder_id: &ID) -> GqlResult<&str> {
     let value = root_folder_id.as_ref().trim();
     if value.is_empty() {
-        return Err(validation_error("rootFolderId cannot be empty"));
+        return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_ROOT_FOLDER_REQUIRED,
+            "rootFolderId cannot be empty",
+        ));
     }
     Ok(value)
 }
@@ -94,6 +97,7 @@ fn resolved_title_options(
             let value = value.trim().to_ascii_lowercase();
             if !matches!(value.as_str(), "announced" | "in_cinemas" | "released") {
                 return Err(validation_error(
+                    scryer_interface_core::refusal::INTERFACE_MINIMUM_AVAILABILITY_INVALID,
                     "minimum availability must be announced, in_cinemas, or released",
                 ));
             }
@@ -102,6 +106,7 @@ fn resolved_title_options(
     };
     if facet != &MediaFacet::Movie && min_availability.is_some() {
         return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_MINIMUM_AVAILABILITY_FACET_UNSUPPORTED,
             "minAvailability is only valid for movie titles",
         ));
     }
@@ -113,6 +118,7 @@ fn resolved_title_options(
     };
     if *facet == MediaFacet::Movie && use_season_folders.is_some() {
         return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_SEASON_FOLDERS_FACET_UNSUPPORTED,
             "useSeasonFolders is only valid for series and anime titles",
         ));
     }
@@ -125,6 +131,7 @@ fn resolved_title_options(
     };
     if *facet == MediaFacet::Movie && release_numbering.is_some() {
         return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_RELEASE_NUMBERING_FACET_UNSUPPORTED,
             "releaseNumbering is only valid for series and anime titles",
         ));
     }
@@ -136,6 +143,7 @@ fn resolved_title_options(
     };
     if *facet == MediaFacet::Movie && monitor_selection.is_some() {
         return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_MONITOR_SELECTION_FACET_UNSUPPORTED,
             "monitorSelection is only valid for series and anime titles",
         ));
     }
@@ -152,6 +160,7 @@ fn resolved_title_options(
             .is_some_and(|selection| !selection.normalized().is_empty());
         if !has_selection {
             return Err(validation_error(
+                scryer_interface_core::refusal::INTERFACE_MONITOR_SELECTION_REQUIRED,
                 "monitorSelection with at least one season or series movie is required when monitorType is ADVANCED",
             ));
         }
@@ -162,6 +171,7 @@ fn resolved_title_options(
             .is_some()
     {
         return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_MONITOR_SELECTION_MODE_INVALID,
             "monitorSelection is only valid when monitorType is ADVANCED",
         ));
     }
@@ -187,7 +197,7 @@ fn resolved_title_options(
             MaybeUndefined::Null => Some(None),
             MaybeUndefined::Value(value) => Some(Some(
                 scryer_application::normalize_metadata_language_code(&value).ok_or_else(|| {
-                    validation_error(
+                    validation_error(scryer_interface_core::refusal::INTERFACE_METADATA_LANGUAGE_UNSUPPORTED,
                         "metadataLanguage must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn",
                     )
                 })?,
@@ -233,13 +243,17 @@ fn normalize_search_option_list(
             .map_err(to_gql_error);
     }
     if values.len() > 32 {
-        return Err(validation_error("search options accept at most 32 values"));
+        return Err(validation_error(
+            scryer_interface_core::refusal::INTERFACE_SEARCH_OPTIONS_LIMIT_EXCEEDED,
+            "search options accept at most 32 values",
+        ));
     }
     let mut result = Vec::new();
     for value in values {
         let value = value.trim();
         if value.is_empty() || value.chars().count() > 200 || value.chars().any(char::is_control) {
             return Err(validation_error(
+                scryer_interface_core::refusal::INTERFACE_SEARCH_ALIAS_INVALID,
                 "search aliases must contain 1–200 characters without control characters",
             ));
         }
@@ -280,12 +294,16 @@ async fn resolve_add_title_options(
             let libraries = manageable_libraries_for_facet(app, actor, facet.clone()).await?;
             let (root_library, root) =
                 find_library_root(&libraries, root_folder_id).ok_or_else(|| {
-                    validation_error("rootFolderId must reference a configured library root")
+                    validation_error(
+                        scryer_interface_core::refusal::INTERFACE_ROOT_FOLDER_NOT_FOUND,
+                        "rootFolderId must reference a configured library root",
+                    )
                 })?;
             if let Some(library_id) = library_id.as_deref()
                 && root_library.id != library_id
             {
                 return Err(validation_error(
+                    scryer_interface_core::refusal::INTERFACE_ROOT_FOLDER_LIBRARY_MISMATCH,
                     "rootFolderId must reference a root on the selected library",
                 ));
             }
@@ -320,14 +338,20 @@ async fn resolve_update_title_options(
                 .iter()
                 .find(|library| library.id == title.library_id)
                 .ok_or_else(|| {
-                    validation_error("title library is not available for rootFolderId validation")
+                    validation_error(
+                        scryer_interface_core::refusal::INTERFACE_TITLE_LIBRARY_UNAVAILABLE,
+                        "title library is not available for rootFolderId validation",
+                    )
                 })?;
             let root = library
                 .roots
                 .iter()
                 .find(|root| root.id == root_folder_id)
                 .ok_or_else(|| {
-                    validation_error("rootFolderId must reference a root on the title library")
+                    validation_error(
+                        scryer_interface_core::refusal::INTERFACE_ROOT_FOLDER_LIBRARY_MISMATCH,
+                        "rootFolderId must reference a root on the title library",
+                    )
                 })?;
             root_folder_id_override(root)
         }
@@ -510,7 +534,12 @@ impl TitleMutations {
                 .get_title_for_management(&actor, &title_id)
                 .await
                 .map_err(to_gql_error)?
-                .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title {title_id}"))))?;
+                .ok_or_else(|| {
+                    to_gql_error(AppError::not_found_reason(
+                        scryer_interface_core::refusal::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    ))
+                })?;
             let base_tags = match tags.take() {
                 Some(tags) => tags,
                 None => title.tags.clone(),

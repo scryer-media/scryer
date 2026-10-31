@@ -1,4 +1,8 @@
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -47,7 +51,8 @@ export function TotpCodeForm({
   onSubmit,
   onCancel,
 }: TotpCodeFormProps) {
-  const submitDisabled = disabled || busy || (allowRecoveryCode ? !code.trim() : code.length !== 6);
+  const submitDisabled =
+    disabled || busy || (allowRecoveryCode ? !code.trim() : code.length !== 6);
 
   return (
     <form
@@ -61,8 +66,12 @@ export function TotpCodeForm({
       className={cn("space-y-4", className)}
     >
       <div className="space-y-1 text-center">
-        <h2 className="text-base font-semibold text-[var(--scry-ink)]">{title}</h2>
-        <p className="text-sm leading-6 text-[var(--scry-muted)]">{description}</p>
+        <h2 className="text-base font-semibold text-[var(--scry-ink)]">
+          {title}
+        </h2>
+        <p className="text-sm leading-6 text-[var(--scry-muted)]">
+          {description}
+        </p>
       </div>
       <Input
         {...(allowRecoveryCode ? {} : integerInputProps)}
@@ -73,7 +82,9 @@ export function TotpCodeForm({
         value={code}
         onChange={(event) =>
           onCodeChange(
-            allowRecoveryCode ? event.target.value : sanitizeTotpCode(event.target.value),
+            allowRecoveryCode
+              ? event.target.value
+              : sanitizeTotpCode(event.target.value),
           )
         }
         placeholder={title}

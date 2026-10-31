@@ -133,7 +133,12 @@ pub(super) fn playlist(data: &[u8], id: String) -> Result<DiscTitle> {
         if count > 8192 || 2 + count * 14 > marks.len() {
             return Err(ImageError::Malformed("Blu-ray mark table bounds"));
         }
-        for (index, mark) in marks[2..2 + count * 14].chunks_exact(14).enumerate() {
+        for (index, mark) in marks[2..2 + count * 14]
+            .as_chunks::<14>()
+            .0
+            .iter()
+            .enumerate()
+        {
             let reference = usize::from(u16be(mark, 2)?);
             let segment = title.segments.get(reference).ok_or(ImageError::Malformed(
                 "Blu-ray mark references missing play item",
@@ -184,7 +189,9 @@ pub(super) fn dvd_titles(data: &[u8]) -> Result<Vec<DvdReference>> {
     }
     let table = bounded(table, 8, count * 12)?;
     table
-        .chunks_exact(12)
+        .as_chunks::<12>()
+        .0
+        .iter()
         .enumerate()
         .map(|(index, title)| {
             if title[6] == 0
@@ -254,7 +261,9 @@ pub(super) fn dvd_title(
         .ok_or(ImageError::Malformed("DVD PTT references"))?;
     let pgc_id = u16be(parts, 0)?;
     if parts
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|part| u16be(part, 0).ok() != Some(pgc_id))
     {
         title.report.status = ProbeStatus::Unsupported;
@@ -273,7 +282,7 @@ pub(super) fn dvd_title(
     let entries = bounded(table, 8, pgc_count * 8)?;
     let pgc_at = u32be(entries, (usize::from(pgc_id) - 1) * 8 + 4)? as usize;
     let mut pgc_end = table.len();
-    for entry in entries.chunks_exact(8) {
+    for entry in entries.as_chunks::<8>().0 {
         let offset = u32be(entry, 4)? as usize;
         if offset < 8 + entries.len() || offset >= table.len() {
             return Err(ImageError::Malformed("DVD PGC reference bounds"));
@@ -323,7 +332,7 @@ pub(super) fn dvd_title(
         .copied()
         .ok_or(ImageError::Malformed("DVD starting program outside chain"))?;
     let mut previous_program = None;
-    for part in parts.chunks_exact(4) {
+    for part in parts.as_chunks::<4>().0 {
         let program = u16be(part, 2)?;
         if program == 0
             || usize::from(program) > programs.len()
@@ -351,7 +360,9 @@ pub(super) fn dvd_title(
         if commands[..pre * 8].iter().any(|byte| *byte != 0)
             || commands[(pre + post) * 8..].iter().any(|byte| *byte != 0)
             || commands[pre * 8..(pre + post) * 8]
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .any(|command| !dvd_terminal_post_command(command))
         {
             title.report.status = ProbeStatus::Unsupported;
@@ -374,7 +385,7 @@ pub(super) fn dvd_title(
     let mut cell_starts = Vec::new();
     let mut selected = Vec::new();
     let mut in_angle_block = false;
-    for (index, cell) in cells.chunks_exact(24).enumerate() {
+    for (index, cell) in cells.as_chunks::<24>().0.iter().enumerate() {
         cell_starts.push(duration);
         if index + 1 < usize::from(first_cell) {
             continue;
@@ -436,7 +447,7 @@ pub(super) fn dvd_title(
     if in_angle_block {
         return Err(ImageError::Malformed("unfinished DVD angle block"));
     }
-    for (index, part) in parts.chunks_exact(4).enumerate() {
+    for (index, part) in parts.as_chunks::<4>().0.iter().enumerate() {
         let program = usize::from(u16be(part, 2)?);
         let cell = *programs
             .get(

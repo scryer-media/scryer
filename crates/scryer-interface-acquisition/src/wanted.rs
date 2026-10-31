@@ -124,10 +124,12 @@ impl WantedMutations {
                 || input.facet.is_some()
                 || input.library_ids.is_some())
         {
-            return Err(to_gql_error(scryer_application::AppError::Validation(
-                "Automatic search selects a title and optional season, without Wanted filters"
-                    .into(),
-            )));
+            return Err(to_gql_error(
+                scryer_application::AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_ACQUISITION_SCOPE_INVALID,
+                    "Automatic search selects a title and optional season, without Wanted filters",
+                ),
+            ));
         }
         let request = scryer_application::AcquisitionSearchRequest {
             automatic,

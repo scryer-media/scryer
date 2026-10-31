@@ -25,6 +25,7 @@ pub(super) struct MockReleaseAttemptRepo {
 #[derive(Default)]
 pub(super) struct MockBlocklistRepo {
     pub(super) entries: Arc<Mutex<Vec<BlocklistEntry>>>,
+    pub(super) title_reads: std::sync::atomic::AtomicUsize,
     pub(super) fail_writes: std::sync::atomic::AtomicBool,
     pub(super) fail_reads: std::sync::atomic::AtomicBool,
 }
@@ -202,6 +203,8 @@ impl BlocklistRepository for MockBlocklistRepo {
     }
 
     async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>> {
+        self.title_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut entries: Vec<_> = self
             .entries
             .lock()
@@ -303,8 +306,19 @@ pub(super) async fn title_blocklist_entries(
         .expect("list title blocklist entries")
 }
 
+pub(super) type NotifyHandshake = (Arc<Notify>, Arc<Notify>);
+pub(super) type EnrichmentCall = (&'static str, Vec<ClientJobLocator>);
+
 #[derive(Default, Clone)]
 pub(super) struct TrackingDownloadSubmissionRepo {
+    pub(super) grabbed_names_gate: Arc<Mutex<Option<NotifyHandshake>>>,
+    pub(super) enrichment_canonical_reads: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) enrichment_calls: Arc<Mutex<Vec<EnrichmentCall>>>,
+    pub(super) enrichment_goals: Arc<Mutex<HashMap<ClientJobLocator, crate::PersistedSeedGoals>>>,
+    pub(super) enrichment_failures: Arc<Mutex<HashSet<&'static str>>>,
+    pub(super) enrichment_generation_on_read: Arc<Mutex<Option<Arc<std::sync::atomic::AtomicU64>>>>,
+    pub(super) enrichment_gate: Arc<Mutex<Option<NotifyHandshake>>>,
+    pub(super) presence_scopes: Arc<Mutex<Option<Arc<TrackingAcquisitionScopeStateRepo>>>>,
     pub(super) password_retry_recovery: Arc<Mutex<Vec<DownloadSubmission>>>,
     /// Calls to `list_password_retry_recovery_submissions`.
     pub(super) password_retry_recovery_reads: Arc<std::sync::atomic::AtomicUsize>,
@@ -334,6 +348,8 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     /// in order; a record only, it never feeds `claim_download_cleanup`.
     pub(super) finished_cleanup:
         Arc<Mutex<Vec<(scryer_domain::download_identity::DownloadId, String, bool)>>>,
+    /// The retry delay of every `finish_download_cleanup` call, in order.
+    pub(super) finished_cleanup_retry_seconds: Arc<Mutex<Vec<i64>>>,
     /// Durable cleanup rows that are due: `list_due_download_cleanup` returns
     /// them in order and `claim_download_cleanup` hands each one out as a claim.
     pub(super) claimable_cleanup: Arc<Mutex<Vec<crate::DownloadCleanupRecord>>>,
@@ -348,6 +364,7 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     pub(super) deleted_identity_state_download_ids:
         Arc<Mutex<Vec<scryer_domain::download_identity::DownloadId>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
+    pub(super) active_unbound_title_calls: Arc<Mutex<Vec<String>>>,
     /// Make `list_for_title` skip submissions with no client item id, as the
     /// real store does.
     pub(super) list_for_title_requires_item_id: Arc<std::sync::atomic::AtomicBool>,
@@ -876,6 +893,86 @@ impl TrackingDownloadSubmissionRepo {
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn record_grabbed_file_names(
+        &self,
+        _download_id: &scryer_domain::download_identity::DownloadId,
+        _names: &[crate::GrabbedFileName],
+    ) -> AppResult<()> {
+        let gate = self.grabbed_names_gate.lock().await.take();
+        if let Some((entered, release)) = gate {
+            entered.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(30), release.notified())
+                .await
+                .expect("release filename persistence gate");
+        }
+        Ok(())
+    }
+
+    async fn transition_client_presence(
+        &self,
+        change: &crate::ClientPresenceTransition,
+    ) -> AppResult<bool> {
+        let previous = self
+            .get_identity_tracked_state_for_download(
+                Some(&change.download_id),
+                &change.identity,
+                Some(&change.source),
+            )
+            .await?;
+        let submission_state = self.get_tracked_state(&change.source).await?;
+        if previous != change.expected_state
+            || previous
+                .as_deref()
+                .is_some_and(|state| !matches!(state, "missing" | "downloading"))
+            || submission_state
+                .as_deref()
+                .is_some_and(|state| !matches!(state, "missing" | "downloading"))
+        {
+            return Ok(false);
+        }
+        let scopes = self.presence_scopes.lock().await.clone();
+        if !change.scopes.is_empty() && scopes.is_none() {
+            return Err(AppError::Repository(
+                "test presence scopes not linked".into(),
+            ));
+        }
+        self.upsert_identity_tracked_state_for_download_returning_previous(
+            crate::IdentityTrackedStateTarget {
+                canonical_download_id: Some(&change.download_id),
+                identity: &change.identity,
+                source_identity: Some(&change.source),
+            },
+            change.state.as_str(),
+            &[],
+            change.reason.as_deref(),
+            change.detail.as_deref(),
+        )
+        .await?;
+        self.update_tracked_state(&change.source, change.state.as_str())
+            .await?;
+        if let Some(scopes) = scopes {
+            for update in &change.scopes {
+                let current = scopes
+                    .get_acquisition_scope_state_by_id(&update.previous.id)
+                    .await?;
+                if current.as_ref().is_some_and(|row| {
+                    row.status == update.previous.status
+                        && row.grabbed_release == update.previous.grabbed_release
+                }) {
+                    scopes
+                        .update_acquisition_scope_status(
+                            &update.previous.id,
+                            update.status.as_str(),
+                            update.previous.last_search_at.as_deref(),
+                            Some(&update.grabbed_release),
+                        )
+                        .await?;
+                }
+            }
+        }
+        Ok(true)
+    }
+
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
         self.password_retry_recovery_reads
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1030,11 +1127,15 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         id: &scryer_domain::download_identity::DownloadId,
         outcome: &str,
         complete: bool,
-        _retry_seconds: i64,
+        retry_seconds: i64,
         _history_offset: usize,
         _error: Option<&str>,
     ) -> AppResult<()> {
         let _gate = self.writer_transaction().await;
+        self.finished_cleanup_retry_seconds
+            .lock()
+            .await
+            .push(retry_seconds);
         self.finished_cleanup
             .lock()
             .await
@@ -1128,6 +1229,8 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         &self,
         download_id: &scryer_domain::download_identity::DownloadId,
     ) -> AppResult<Option<DownloadSubmission>> {
+        self.enrichment_canonical_reads
+            .fetch_add(1, Ordering::SeqCst);
         Ok(self
             .store
             .lock()
@@ -1135,6 +1238,24 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .iter()
             .find(|submission| &submission.download_id == download_id)
             .cloned())
+    }
+
+    async fn list_by_download_id_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        client_id: Option<&str>,
+        client_type: &str,
+        download_id: &str,
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        if let Some(id) = canonical_download_id {
+            return Ok(self
+                .find_by_canonical_download_id(id)
+                .await?
+                .into_iter()
+                .collect());
+        }
+        self.list_by_download_id(client_id, client_type, download_id)
+            .await
     }
 
     async fn list_by_download_id(
@@ -1311,23 +1432,58 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         Ok(self.identity_state_details.lock().await.get(&key).cloned())
     }
 
+    async fn get_identity_tracked_state_detail_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &DownloadSubmissionIdentity,
+        source_identity: Option<&ClientJobLocator>,
+    ) -> AppResult<Option<String>> {
+        if let Some(download_id) = canonical_download_id {
+            let mut canonical_identity = identity.clone();
+            canonical_identity.download_id = Some(download_id.to_wire());
+            if let Some(detail) = self
+                .get_identity_tracked_state_detail(&canonical_identity, source_identity)
+                .await?
+            {
+                return Ok(Some(detail));
+            }
+        }
+        self.get_identity_tracked_state_detail(identity, source_identity)
+            .await
+    }
+
     async fn list_for_client_items(
         &self,
         client_items: &[ClientJobLocator],
     ) -> AppResult<Vec<DownloadSubmission>> {
+        self.enrichment_calls
+            .lock()
+            .await
+            .push(("submission", client_items.to_vec()));
+        if self.enrichment_failures.lock().await.contains("submission") {
+            return Err(AppError::Repository(
+                "synthetic submission read failure".into(),
+            ));
+        }
         let entries = self.store.lock().await;
-        Ok(entries
+        let requested: HashSet<_> = client_items.iter().cloned().collect();
+        let result = entries
             .iter()
-            .filter(|entry| {
-                client_items.iter().any(|identity| {
-                    entry.download_client_id.as_deref().unwrap_or("").trim()
-                        == identity.client_id.as_deref().unwrap_or("")
-                        && entry.download_client_type == identity.client_type.as_str()
-                        && entry.download_client_item_id == identity.item_id.as_str()
-                })
-            })
+            .filter(|entry| requested.contains(&ClientJobLocator::from_submission(entry)))
             .cloned()
-            .collect())
+            .collect();
+        drop(entries);
+        let gate = self.enrichment_gate.lock().await.take();
+        if let Some((entered, release)) = gate {
+            entered.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(30), release.notified())
+                .await
+                .expect("enrichment fill released");
+        }
+        if let Some(generation) = self.enrichment_generation_on_read.lock().await.as_ref() {
+            generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        Ok(result)
     }
 
     async fn list_for_title(&self, title_id: &str) -> AppResult<Vec<DownloadSubmission>> {
@@ -1423,6 +1579,10 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<DownloadSubmission>> {
+        self.active_unbound_title_calls
+            .lock()
+            .await
+            .push(title_id.to_owned());
         let entries = self.store.lock().await;
         Ok(entries
             .iter()
@@ -1595,6 +1755,13 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
         &self,
         client_items: &[ClientJobLocator],
     ) -> AppResult<Vec<(ClientJobLocator, String)>> {
+        self.enrichment_calls
+            .lock()
+            .await
+            .push(("state", client_items.to_vec()));
+        if self.enrichment_failures.lock().await.contains("state") {
+            return Err(AppError::Repository("synthetic state read failure".into()));
+        }
         let tracked_states = self.tracked_states.lock().await;
         Ok(client_items
             .iter()
@@ -1605,6 +1772,27 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
                     .map(|state| (identity.clone(), state))
             })
             .collect())
+    }
+
+    async fn list_seed_goals_for_client_items(
+        &self,
+        client_items: &[ClientJobLocator],
+    ) -> AppResult<Vec<(ClientJobLocator, crate::PersistedSeedGoals)>> {
+        self.enrichment_calls
+            .lock()
+            .await
+            .push(("goals", client_items.to_vec()));
+        if self.enrichment_failures.lock().await.contains("goals") {
+            return Err(AppError::Repository("synthetic goal read failure".into()));
+        }
+        let mut out = Vec::new();
+        for identity in client_items {
+            let explicit = self.enrichment_goals.lock().await.get(identity).cloned();
+            if let Some(goals) = explicit.or(self.get_seed_goals(identity).await?) {
+                out.push((identity.clone(), goals));
+            }
+        }
+        Ok(out)
     }
 
     async fn list_client_ids_with_live_downloads(&self) -> AppResult<Vec<String>> {
@@ -1644,9 +1832,13 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
     }
 }
 
+pub(super) type ActiveTitleReads = Vec<(String, Vec<String>)>;
+
 #[derive(Default, Clone)]
 pub(super) struct TrackingPendingReleaseRepo {
     pub(super) store: Arc<Mutex<Vec<PendingRelease>>>,
+    pub(super) title_history_reads: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) active_title_reads: Arc<Mutex<ActiveTitleReads>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
     /// Standby inserts allowed before the store starts refusing them. Models the
@@ -1868,12 +2060,42 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<PendingRelease>> {
+        self.title_history_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .store
             .lock()
             .await
             .iter()
             .filter(|release| release.title_id == title_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_active_pending_releases_for_title(
+        &self,
+        title_id: &str,
+        replay_ids: &[String],
+    ) -> AppResult<Vec<PendingRelease>> {
+        self.active_title_reads
+            .lock()
+            .await
+            .push((title_id.to_owned(), replay_ids.to_vec()));
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .filter(|release| release.title_id == title_id)
+            .filter(|release| {
+                matches!(
+                    release.status,
+                    PendingReleaseStatus::Waiting
+                        | PendingReleaseStatus::Standby
+                        | PendingReleaseStatus::Processing
+                        | PendingReleaseStatus::NeedsReview
+                ) || replay_ids.contains(&release.id)
+            })
             .cloned()
             .collect())
     }
@@ -2273,6 +2495,7 @@ impl StubSubmitError {
 
 #[derive(Default, Clone)]
 pub(super) struct StubDownloadClient {
+    pub(super) grabbed_file_names: Vec<crate::GrabbedFileName>,
     pub(super) password_retry_gate: Arc<Mutex<Option<OneshotGate>>>,
     pub(super) native_data_removal: bool,
     pub(super) observation_error: Arc<Mutex<Option<String>>>,
@@ -2297,6 +2520,9 @@ pub(super) struct StubDownloadClient {
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
+    /// A typed refusal returned for every delete while set, after
+    /// `delete_error`.
+    pub(super) delete_app_error: Arc<Mutex<Option<AppError>>>,
     /// Every delete the client was asked for as `(item id, is_history)`,
     /// recorded before `delete_error` is applied.
     pub(super) delete_attempts: Arc<Mutex<Vec<(String, bool)>>>,
@@ -2427,6 +2653,9 @@ impl StubDownloadClient {
             .push((id.to_string(), is_history));
         if let Some(error) = self.delete_error.lock().await.clone() {
             return Err(AppError::Repository(error));
+        }
+        if let Some(error) = self.delete_app_error.lock().await.clone() {
+            return Err(error);
         }
         self.deleted_requests.lock().await.push((
             client_id.map(str::to_string),
@@ -2591,7 +2820,7 @@ impl DownloadClient for StubDownloadClient {
             client_type: "nzbget".to_string(),
             info_hash: self.grab_info_hash.lock().await.clone(),
             seed_goals: None,
-            grabbed_file_names: Vec::new(),
+            grabbed_file_names: self.grabbed_file_names.clone(),
         })
     }
 

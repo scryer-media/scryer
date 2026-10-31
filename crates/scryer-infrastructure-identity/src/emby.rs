@@ -188,8 +188,12 @@ pub(super) fn client_authorization(connection_id: &str, user_id: Option<&str>) -
 
 fn normalized_candidate(value: &str) -> AppResult<Url> {
     let value = value.trim().trim_end_matches('/');
-    let mut url =
-        Url::parse(value).map_err(|_| AppError::Validation("Emby base URL is invalid".into()))?;
+    let mut url = Url::parse(value).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_BASE_URL_INVALID,
+            "Emby base URL is invalid",
+        )
+    })?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -197,9 +201,9 @@ fn normalized_candidate(value: &str) -> AppResult<Url> {
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(AppError::Validation(
-            "Emby base URL must be an absolute HTTP(S) URL without credentials, query, or fragment"
-                .into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_BASE_URL_UNSAFE,
+            "Emby base URL must be an absolute HTTP(S) URL without credentials, query, or fragment",
         ));
     }
     if !url.path().ends_with('/') {
@@ -210,8 +214,12 @@ fn normalized_candidate(value: &str) -> AppResult<Url> {
 }
 
 fn endpoint(base: &Url, path: &str) -> AppResult<Url> {
-    base.join(path.trim_start_matches('/'))
-        .map_err(|_| AppError::Validation("Emby endpoint URL is invalid".into()))
+    base.join(path.trim_start_matches('/')).map_err(|_| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_ENDPOINT_URL_INVALID,
+            "Emby endpoint URL is invalid",
+        )
+    })
 }
 
 async fn limited_bytes(response: Response, limit: usize, operation: &str) -> AppResult<Vec<u8>> {
@@ -257,12 +265,24 @@ fn identity_from_public(
     api_base_url: &Url,
     info: PublicSystemInfo,
 ) -> AppResult<EmbyServerIdentity> {
-    let server_id = non_empty(info.id)
-        .ok_or_else(|| AppError::Validation("the supplied URL is not an Emby server".into()))?;
-    let server_name = non_empty(info.server_name)
-        .ok_or_else(|| AppError::Validation("the supplied URL is not an Emby server".into()))?;
-    let version = non_empty(info.version)
-        .ok_or_else(|| AppError::Validation("the supplied URL is not an Emby server".into()))?;
+    let server_id = non_empty(info.id).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+            "the supplied URL is not an Emby server",
+        )
+    })?;
+    let server_name = non_empty(info.server_name).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+            "the supplied URL is not an Emby server",
+        )
+    })?;
+    let version = non_empty(info.version).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+            "the supplied URL is not an Emby server",
+        )
+    })?;
     Ok(EmbyServerIdentity {
         api_base_url: api_base_url.as_str().trim_end_matches('/').to_string(),
         server_id,
@@ -309,14 +329,18 @@ pub(super) async fn resolve_api_base(
         .next()
         .is_some_and(|part| part.eq_ignore_ascii_case("emby"))
     {
-        return Err(AppError::Validation(
-            "the supplied URL is not an Emby server".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+            "the supplied URL is not an Emby server",
         ));
     }
     let fallback = endpoint(&base, "emby/")?;
-    probe_public(client, &fallback)
-        .await?
-        .ok_or_else(|| AppError::Validation("the supplied URL is not an Emby server".into()))
+    probe_public(client, &fallback).await?.ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_NOT_RECOGNIZED,
+            "the supplied URL is not an Emby server",
+        )
+    })
 }
 
 async fn authenticated_system_info(
@@ -343,7 +367,10 @@ async fn authenticated_system_info(
     match response.status() {
         status if status.is_success() => {}
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(AppError::Unauthorized("Emby credential is invalid".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CREDENTIAL_INVALID,
+                "Emby credential is invalid",
+            ));
         }
         status => {
             return Err(AppError::Repository(format!(
@@ -370,8 +397,9 @@ fn require_server_id(identity: &EmbyServerIdentity, expected: Option<&str>) -> A
         .filter(|v| !v.is_empty())
         .is_some_and(|expected| expected != identity.server_id)
     {
-        return Err(AppError::Validation(
-            "Emby server identity does not match the saved connection".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_SERVER_IDENTITY_MISMATCH,
+            "Emby server identity does not match the saved connection",
         ));
     }
     Ok(())
@@ -405,8 +433,9 @@ pub(super) async fn test_api_key(
         .map_err(|_| AppError::Repository("failed to validate Emby user-list access".into()))?;
     match response.status() {
         status if status.is_success() => Ok(authenticated),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(AppError::Unauthorized(
-            "Emby API key is invalid or cannot list users".into(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(AppError::unauthorized_reason(
+            crate::error_reasons::IDENTITY_EMBY_USER_LIST_ACCESS_DENIED,
+            "Emby API key is invalid or cannot list users",
         )),
         status => Err(AppError::Repository(format!(
             "Emby user-list validation failed with status {status}"
@@ -435,7 +464,10 @@ async fn authenticate_local(
     match response.status() {
         StatusCode::OK => {}
         StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(AppError::Unauthorized("invalid Emby credentials".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CREDENTIALS_INVALID,
+                "invalid Emby credentials",
+            ));
         }
         status => {
             return Err(AppError::Repository(format!(
@@ -465,7 +497,10 @@ async fn authenticate_local(
         .as_ref()
         .is_some_and(|policy| policy.is_disabled)
     {
-        return Err(AppError::Unauthorized("Emby account is disabled".into()));
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::IDENTITY_EMBY_ACCOUNT_DISABLED,
+            "Emby account is disabled",
+        ));
     }
     Ok(auth)
 }
@@ -508,7 +543,12 @@ async fn delete_api_key(
 ) -> AppResult<()> {
     let mut url = base.clone();
     url.path_segments_mut()
-        .map_err(|_| AppError::Validation("Emby base URL cannot contain path segments".into()))?
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN,
+                "Emby base URL cannot contain path segments",
+            )
+        })?
         .push("Auth")
         .push("Keys")
         .push(api_key);
@@ -587,7 +627,12 @@ async fn get_user(
 ) -> AppResult<UserDto> {
     let mut url = base.clone();
     url.path_segments_mut()
-        .map_err(|_| AppError::Validation("Emby base URL cannot contain path segments".into()))?
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN,
+                "Emby base URL cannot contain path segments",
+            )
+        })?
         .push("Users")
         .push(user_id);
     let response = client
@@ -604,8 +649,9 @@ async fn get_user(
     match response.status() {
         status if status.is_success() => {}
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
-            return Err(AppError::Unauthorized(
-                "Emby user verification failed".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_USER_VERIFICATION_FAILED,
+                "Emby user verification failed",
             ));
         }
         status => {
@@ -621,8 +667,9 @@ async fn get_user(
             .as_ref()
             .is_some_and(|policy| policy.is_disabled)
     {
-        return Err(AppError::Unauthorized(
-            "Emby user verification failed".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::IDENTITY_EMBY_USER_VERIFICATION_FAILED,
+            "Emby user verification failed",
         ));
     }
     Ok(user)
@@ -657,8 +704,9 @@ async fn list_keys(
         match response.status() {
             status if status.is_success() => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "Emby administrator cannot list API keys".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_EMBY_API_KEY_LIST_ACCESS_DENIED,
+                    "Emby administrator cannot list API keys",
                 ));
             }
             status => {
@@ -700,8 +748,9 @@ async fn exchange_admin_session(
         .as_ref()
         .is_some_and(|policy| policy.is_administrator)
     {
-        return Err(AppError::Unauthorized(
-            "Emby account must be a local administrator".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::IDENTITY_EMBY_LOCAL_ADMINISTRATOR_REQUIRED,
+            "Emby account must be a local administrator",
         ));
     }
     let token = non_empty(auth.access_token.clone())
@@ -874,8 +923,9 @@ async fn authenticate_connect(
         | StatusCode::UNAUTHORIZED
         | StatusCode::FORBIDDEN
         | StatusCode::NOT_FOUND => {
-            return Err(AppError::Unauthorized(
-                "invalid Emby Connect credentials".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CONNECT_CREDENTIALS_INVALID,
+                "invalid Emby Connect credentials",
             ));
         }
         status => {
@@ -924,8 +974,9 @@ async fn connect_servers(
     match response.status() {
         status if status.is_success() => {}
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(AppError::Unauthorized(
-                "invalid Emby Connect credentials".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CONNECT_CREDENTIALS_INVALID,
+                "invalid Emby Connect credentials",
             ));
         }
         status => {
@@ -990,7 +1041,11 @@ async fn probe_connect_address(
             EmbyConnectAddressStatus::Reachable,
         ),
         Ok(_) => (None, EmbyConnectAddressStatus::ServerIdMismatch),
-        Err(AppError::Validation(_)) => (None, EmbyConnectAddressStatus::InvalidUrl),
+        Err(
+            AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. },
+        ) => (None, EmbyConnectAddressStatus::InvalidUrl),
         Err(_) => (None, EmbyConnectAddressStatus::Unreachable),
     }
 }
@@ -1167,7 +1222,10 @@ async fn exchange_connect_session(
     match response.status() {
         status if status.is_success() => {}
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
-            return Err(AppError::Unauthorized("Emby Connect sign-in failed".into()));
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CONNECT_SIGN_IN_FAILED,
+                "Emby Connect sign-in failed",
+            ));
         }
         status => {
             return Err(AppError::Repository(format!(
@@ -1206,8 +1264,9 @@ async fn connect_auth_for_server(
         .into_iter()
         .find(|server| server.system_id == expected_server_id)
         .ok_or_else(|| {
-            AppError::Unauthorized(
-                "Emby Connect account cannot access the configured server".into(),
+            AppError::unauthorized_reason(
+                crate::error_reasons::IDENTITY_EMBY_CONNECT_SERVER_ACCESS_DENIED,
+                "Emby Connect account cannot access the configured server",
             )
         })?;
     let mut candidates = vec![base_url.to_string()];
@@ -1239,8 +1298,9 @@ async fn connect_auth_for_server(
                 }
             }
             Ok(_) => {
-                last_error = Some(AppError::Validation(
-                    "Emby server identity does not match the saved connection".into(),
+                last_error = Some(AppError::validation_refused(
+                    crate::error_reasons::IDENTITY_EMBY_SERVER_IDENTITY_MISMATCH,
+                    "Emby server identity does not match the saved connection",
                 ))
             }
             Err(error) => last_error = Some(error),
@@ -1397,8 +1457,9 @@ pub(super) async fn list_users(
         match response.status() {
             status if status.is_success() => {}
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                return Err(AppError::Unauthorized(
-                    "Emby API key is invalid or cannot list users".into(),
+                return Err(AppError::unauthorized_reason(
+                    crate::error_reasons::IDENTITY_EMBY_USER_LIST_ACCESS_DENIED,
+                    "Emby API key is invalid or cannot list users",
                 ));
             }
             status => {
@@ -1485,14 +1546,20 @@ pub(super) async fn fetch_avatar(
     image_tag: &str,
 ) -> AppResult<Option<EmbyAvatar>> {
     if user_id.is_empty() || image_tag.is_empty() || user_id.len() > 256 || image_tag.len() > 256 {
-        return Err(AppError::Validation(
-            "invalid Emby avatar identifier".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::IDENTITY_EMBY_AVATAR_ID_INVALID,
+            "invalid Emby avatar identifier",
         ));
     }
     let base = normalized_candidate(base_url)?;
     let mut url = base.clone();
     url.path_segments_mut()
-        .map_err(|_| AppError::Validation("Emby base URL cannot contain path segments".into()))?
+        .map_err(|_| {
+            AppError::validation_refused(
+                crate::error_reasons::IDENTITY_EMBY_BASE_URL_PATH_FORBIDDEN,
+                "Emby base URL cannot contain path segments",
+            )
+        })?
         .push("Users")
         .push(user_id)
         .push("Images")
@@ -2065,7 +2132,10 @@ mod tests {
         )
         .await
         .expect_err("an existing emby suffix must not be appended twice");
-        assert!(matches!(error, AppError::Validation(_)));
+        assert!(matches!(
+            error,
+            AppError::Validation(_) | AppError::ValidationRefused { .. }
+        ));
         assert!(
             server
                 .received_requests()
@@ -2097,7 +2167,10 @@ mod tests {
                 .await
                 .expect_err("upstream failure must be returned");
             assert!(
-                matches!(error, AppError::Repository(_)),
+                matches!(
+                    error,
+                    AppError::Repository(_) | AppError::RepositoryFailure { .. }
+                ),
                 "status {status}: {error}"
             );
             let requests = server.received_requests().await.expect("recorded requests");
@@ -2242,7 +2315,10 @@ mod tests {
                 Err(error) => error,
             };
             assert_eq!(
-                matches!(error, AppError::Unauthorized(_)),
+                matches!(
+                    error,
+                    AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+                ),
                 unauthorized,
                 "unexpected mapping for {status}: {error}"
             );
@@ -2875,7 +2951,10 @@ mod tests {
             Ok(_) => panic!("empty 404 must be invalid credentials"),
             Err(error) => error,
         };
-        assert!(matches!(error, AppError::Unauthorized(_)));
+        assert!(matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ));
         connect.verify().await;
     }
 

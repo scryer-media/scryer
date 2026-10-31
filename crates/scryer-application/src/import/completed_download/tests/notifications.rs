@@ -60,6 +60,7 @@ async fn check_emits_manual_interaction_notification_once() {
             queued_at: None,
             last_updated_at: None,
             attention_required: false,
+            attention_reason_code: None,
             attention_reason: None,
             download_client_item_id: "dl-2".to_string(),
             download_id: None,

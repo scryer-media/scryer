@@ -1,7 +1,14 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useClient } from "urql";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { File, Folder, FolderOpen, ChevronRight, ArrowUp } from "lucide-react";
+import {
+  File,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  ChevronRight,
+  ArrowUp,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { createFolderMutation } from "@/lib/graphql/mutations";
 import { browsePathQuery } from "@/lib/graphql/queries";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -26,8 +34,7 @@ interface DirectoryEntry {
 }
 
 type BrowserRow =
-  | { kind: "parent"; path: string }
-  | { kind: "entry"; entry: DirectoryEntry };
+  { kind: "parent"; path: string } | { kind: "entry"; entry: DirectoryEntry };
 
 // Rows are uniform by construction: a 2rem icon tile, py-2 padding, a hairline
 // border and the mb-1 gap. A fixed pitch keeps the scrollbar honest without
@@ -76,16 +83,35 @@ export function FolderBrowserDialog({
   // folder they moved to with the one they left, and leave Select disabled
   // because the listing no longer matches the path shown.
   const browseRequest = useRef(0);
+  // null while the new-folder row is closed.
+  const [newFolderName, setNewFolderName] = useState<string | null>(null);
+  const [newFolderError, setNewFolderError] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  // Only a create still tied to the open row may land. Leaving the folder,
+  // editing the path, cancelling or closing the dialog closes the row, and a
+  // late answer must not pull the picker back into the folder it made.
+  const createRequest = useRef(0);
+
+  const closeNewFolder = useCallback(() => {
+    createRequest.current += 1;
+    setNewFolderName(null);
+    setNewFolderError(null);
+    setCreatingFolder(false);
+  }, []);
 
   const browse = useCallback(
     async (path: string) => {
       const nextPath = path.trim() || "/";
       const request = ++browseRequest.current;
+      closeNewFolder();
       setCurrentPath(nextPath);
       setLoading(true);
       setError(null);
       const { data, error: gqlError } = await client
-        .query(browsePathQuery, { path: nextPath, includeFiles: canSelectFiles })
+        .query(browsePathQuery, {
+          path: nextPath,
+          includeFiles: canSelectFiles,
+        })
         .toPromise();
       if (request !== browseRequest.current) {
         return;
@@ -95,21 +121,23 @@ export function FolderBrowserDialog({
         setEntries([]);
         setBrowsedPath(null);
         setError(
-          userFacingGraphQlErrorMessage(gqlError, t("folderBrowser.error")),
+          userFacingGraphQlErrorMessage(gqlError, t("folderBrowser.error"), t),
         );
         return;
       }
       setEntries(data?.browsePath ?? []);
       setBrowsedPath(nextPath);
     },
-    [canSelectFiles, client, t],
+    [canSelectFiles, client, closeNewFolder, t],
   );
 
   useEffect(() => {
     if (open) {
       browse(initialPath || "/");
+    } else {
+      closeNewFolder();
     }
-  }, [open, initialPath, browse]);
+  }, [open, initialPath, browse, closeNewFolder]);
 
   // Keep the deepest segment in view; the row scrolls but has no visible
   // affordance on platforms with overlay scrollbars.
@@ -119,10 +147,42 @@ export function FolderBrowserDialog({
     row.scrollLeft = row.scrollWidth;
   }, [open, currentPath]);
 
-  const parentPath = currentPath === "/" ? null : currentPath.replace(/\/[^/]+\/?$/, "") || "/";
+  const parentPath =
+    currentPath === "/" ? null : currentPath.replace(/\/[^/]+\/?$/, "") || "/";
 
   const pathSegments = currentPath.split("/").filter(Boolean);
   const canSelect = !loading && error === null && browsedPath === currentPath;
+
+  const createFolder = async () => {
+    if (newFolderName === null || creatingFolder || browsedPath === null) {
+      return;
+    }
+    const request = ++createRequest.current;
+    setCreatingFolder(true);
+    setNewFolderError(null);
+    const { data, error: gqlError } = await client
+      .mutation(createFolderMutation, {
+        parentPath: browsedPath,
+        name: newFolderName,
+      })
+      .toPromise();
+    if (request !== createRequest.current) {
+      return;
+    }
+    setCreatingFolder(false);
+    const created = data?.createFolder as DirectoryEntry | undefined;
+    if (gqlError || !created) {
+      setNewFolderError(
+        userFacingGraphQlErrorMessage(
+          gqlError,
+          t("folderBrowser.newFolderFailed"),
+          t,
+        ),
+      );
+      return;
+    }
+    void browse(created.path);
+  };
 
   // A directory can hold hundreds of entries and each row carries its own icon,
   // so render only what the viewport needs. The parent row joins the same list
@@ -163,6 +223,13 @@ export function FolderBrowserDialog({
         onCloseAutoFocus={
           preventCloseAutoFocus ? (event) => event.preventDefault() : undefined
         }
+        onEscapeKeyDown={(event) => {
+          // Escape in the new-folder row closes the row, not the picker.
+          if (newFolderName !== null) {
+            event.preventDefault();
+            if (!creatingFolder) closeNewFolder();
+          }
+        }}
         className="w-[calc(100vw-2rem)] overflow-hidden border-[var(--scry-border)] bg-[var(--scry-surf)] p-0 text-[var(--scry-ink2)] shadow-[0_24px_80px_rgba(0,0,0,0.55)] sm:max-w-[42rem]"
       >
         <DialogHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))] px-4 py-3 sm:px-5">
@@ -199,7 +266,10 @@ export function FolderBrowserDialog({
                 const segPath = "/" + pathSegments.slice(0, i + 1).join("/");
                 const isLast = i === pathSegments.length - 1;
                 return (
-                  <span key={segPath} className="flex shrink-0 items-center gap-1">
+                  <span
+                    key={segPath}
+                    className="flex shrink-0 items-center gap-1"
+                  >
                     <ChevronRight className="h-3 w-3 shrink-0 text-[var(--scry-muted3)]" />
                     <button
                       type="button"
@@ -223,6 +293,7 @@ export function FolderBrowserDialog({
                 id="folder-browser-path-input"
                 value={currentPath}
                 onChange={(e) => {
+                  closeNewFolder();
                   setCurrentPath(e.target.value);
                   setEntries([]);
                   setError(null);
@@ -242,7 +313,98 @@ export function FolderBrowserDialog({
               >
                 {t("folderBrowser.go")}
               </Button>
+              {canSelectFolders ? (
+                <Button
+                  id="folder-browser-new-folder"
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-10 shrink-0 border-[var(--scry-border3)]"
+                  disabled={!canSelect || newFolderName !== null}
+                  onClick={() => {
+                    setNewFolderError(null);
+                    setNewFolderName("");
+                  }}
+                >
+                  <FolderPlus className="h-4 w-4" />
+                  <span className="hidden sm:inline">
+                    {t("folderBrowser.newFolder")}
+                  </span>
+                  <span className="sr-only sm:hidden">
+                    {t("folderBrowser.newFolder")}
+                  </span>
+                </Button>
+              ) : null}
             </div>
+            {newFolderName !== null ? (
+              <div className="mt-2 space-y-1.5">
+                <div className="flex min-w-0 max-w-full gap-2">
+                  <Input
+                    id="folder-browser-new-folder-name"
+                    autoFocus
+                    ignorePasswordManagers
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={t("folderBrowser.newFolderName")}
+                    aria-invalid={newFolderError !== null}
+                    aria-describedby={
+                      newFolderError !== null
+                        ? "folder-browser-new-folder-error"
+                        : undefined
+                    }
+                    placeholder={t("folderBrowser.newFolderName")}
+                    value={newFolderName}
+                    disabled={creatingFolder}
+                    onChange={(event) => {
+                      setNewFolderName(event.target.value);
+                      setNewFolderError(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void createFolder();
+                      }
+                    }}
+                    className="h-10 min-w-0 border-[var(--scry-border3)] bg-[var(--scry-inset)] text-sm text-[var(--scry-ink2)]"
+                  />
+                  <Button
+                    id="folder-browser-new-folder-create"
+                    type="button"
+                    size="sm"
+                    className="h-10 shrink-0"
+                    disabled={
+                      creatingFolder || newFolderName.trim().length === 0
+                    }
+                    onClick={() => void createFolder()}
+                  >
+                    {creatingFolder ? (
+                      <LoadingMark className="h-4 w-4" />
+                    ) : null}
+                    {t("folderBrowser.create")}
+                  </Button>
+                  <Button
+                    id="folder-browser-new-folder-cancel"
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-10 shrink-0 border-[var(--scry-border3)]"
+                    disabled={creatingFolder}
+                    onClick={closeNewFolder}
+                  >
+                    {t("label.cancel")}
+                  </Button>
+                </div>
+                {newFolderError !== null ? (
+                  <p
+                    id="folder-browser-new-folder-error"
+                    role="alert"
+                    className="text-xs text-[var(--scry-danger-text)]"
+                  >
+                    {newFolderError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="h-[22rem] min-w-0 max-w-full overflow-hidden rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]">

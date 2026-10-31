@@ -336,6 +336,14 @@ pub enum HashDomain {
     CandidateSessionIdentity,
     /// Serialized request-rule input document (spec 0003 FR-016).
     RequestRuleInput,
+    /// Ordered result identities of one indexer listing page.
+    IndexerListingPage,
+    /// An indexer id lookup with its episode coordinates left out.
+    IndexerListingFamily,
+    /// Authorized raw-search request and source configuration for page reuse.
+    RawSearchScope,
+    /// Stable source-qualified identity exposed to external indexer clients.
+    IndexerClientRelease,
 }
 
 impl HashDomain {
@@ -359,6 +367,10 @@ impl HashDomain {
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
             Self::CandidateSessionIdentity => "scryer.indexer.candidate-session.v1",
             Self::RequestRuleInput => "scryer.request-rule.input.v1",
+            Self::IndexerListingPage => "scryer.indexer.listing-page.v1",
+            Self::IndexerListingFamily => "scryer.indexer.listing-family.v1",
+            Self::RawSearchScope => "scryer.raw-search.scope.v1",
+            Self::IndexerClientRelease => "scryer.indexer-client.release.v1",
         }
     }
 }
@@ -400,6 +412,31 @@ pub fn blake3_identity_hex(domain: HashDomain, input: impl AsRef<str>) -> String
     hasher.update(&[0u8]);
     hasher.update(input.as_ref().as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+/// Fingerprint of one indexer listing page: its results' identities, in the
+/// order the provider listed them. Each identity is the result's guid, else
+/// its link, else its download URL, else its title, whichever is first
+/// non-empty. Two pages with the same fingerprint list the same releases in
+/// the same order. An empty page has no fingerprint.
+pub fn indexer_listing_page_fingerprint<'a>(
+    identities: impl IntoIterator<Item = [Option<&'a str>; 4]>,
+) -> Option<String> {
+    let mut input = String::new();
+    let mut count = 0usize;
+    for candidates in identities {
+        let identity = candidates
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .unwrap_or_default();
+        input.push_str(identity);
+        input.push('\0');
+        count += 1;
+    }
+    (count > 0)
+        .then(|| blake3_identity_hex(HashDomain::IndexerListingPage, format!("{count}\0{input}")))
 }
 
 pub(crate) fn to_hex(value: &[u8]) -> String {

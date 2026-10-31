@@ -512,6 +512,7 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     lastUpdatedAt
     attentionRequired
     attentionReason
+    attentionReasonCode
     passwordFailureCode
     passwordRetryImportId
     heldImportSources {
@@ -778,6 +779,7 @@ const TITLE_EVENT_FIELDS = `
     clientId
     clientName
     failureReason
+    failureReasonCode
     blocklistReason
     dataJson
     occurredAt
@@ -1366,6 +1368,16 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
     infoHash
     freeleech
     downloadVolumeFactor
+    leechers
+    uploadVolumeFactor
+    minimumSeedRatio
+    minimumSeedTimeMinutes
+    indexerFlags
+    languages
+    subtitles
+    files
+    year
+    posterUrl
     autoEligible
     autoDecisionCode
     autoDecisionSummary`;
@@ -1398,6 +1410,10 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
   interactiveReleaseSearch(id: $id) {
     id
     state
+    nextCursor
+    deadlineReached
+    failureReason
+    failureReasonCode
     results {${RELEASE_SEARCH_RESULT_FIELDS}
     }
     indexers {
@@ -1411,6 +1427,9 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       rateLimited
       skipReason
       skippedUntil
+      capsSource
+      capsReason
+      capsRetryAfterSeconds
     }
     startedAt
     completedAt
@@ -3029,7 +3048,6 @@ export const myUiSettingsQuery = `query MyUiSettings {
     highContrastMode
     reduceMotion
     hideSponsorButton
-    noGlow
     density
     sidebarMode
     defaultLandingView
@@ -3046,6 +3064,17 @@ export const myUiSettingsQuery = `query MyUiSettings {
       deviceClass
       facet
       viewMode
+    }
+    dashboardLayouts {
+      breakpoint
+      columns
+      items {
+        panelId
+        x
+        y
+        w
+        h
+      }
     }
   }
 }`;
@@ -3294,6 +3323,9 @@ export const meQuery = `query Me {
 
 export const authRuntimeStateQuery = `query AuthRuntimeState {
   authRuntimeState {
+    initialAuthenticationStage
+    initialAuthenticationCodeRequired
+    passwordMinLength
     effectiveFormLoginEnabled
     skipLoginForLocalIps
     passkeyEnabled
@@ -4775,6 +4807,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
       skipReason
       retryRequiresPassword
       failureReason
+    failureReasonCode
       blocklistReason
       sourcePath
       destPath
@@ -5677,7 +5710,7 @@ export const listExclusionTitleQuery = `query ListExclusionTitle($id: ID!) {
   }
 }`;
 
-export const listProvidersQuery =`query ListProviders {
+export const listProvidersQuery = `query ListProviders {
   listProviders {
     providerType
     name

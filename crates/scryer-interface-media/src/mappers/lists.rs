@@ -386,12 +386,18 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
         | ListFilterKindValue::RecapPolicy => {
             let facet = input
                 .facet
-                .ok_or_else(|| AppError::Validation("episode policies need a facet".into()))?
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_FACET_REQUIRED,
+                        "episode policies need a facet",
+                    )
+                })?
                 .into_domain();
             let selected = values();
             if selected.len() != 1 || facet == MediaFacet::Movie {
-                return Err(AppError::Validation(
-                    "episode policies need one value and a series or anime facet".into(),
+                return Err(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_LIST_EPISODE_POLICY_INVALID,
+                    "episode policies need one value and a series or anime facet",
                 ));
             }
             match (input.kind, facet.clone(), selected[0].as_str()) {
@@ -418,8 +424,9 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
                     skip: selected[0] == "SKIP_RECAP",
                 },
                 _ => {
-                    return Err(AppError::Validation(
-                        "invalid episode policy for this facet".into(),
+                    return Err(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_EPISODE_POLICY_INVALID,
+                        "invalid episode policy for this facet",
                     ));
                 }
             }
@@ -427,10 +434,18 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
         ListFilterKindValue::Ratings => {
             let facet = input
                 .facet
-                .ok_or_else(|| AppError::Validation("ratings need a facet".into()))?
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_FACET_REQUIRED,
+                        "ratings need a facet",
+                    )
+                })?
                 .into_domain();
             if input.minimums.len() > 32 {
-                return Err(AppError::Validation("too many rating minimums".into()));
+                return Err(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_LIST_RATING_LIMIT_EXCEEDED,
+                    "too many rating minimums",
+                ));
             }
             let minimums = input
                 .minimums
@@ -439,11 +454,11 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
                     let (source, scale) =
                         scryer_application::lists::evaluate::rating_source(&minimum.source)
                             .ok_or_else(|| {
-                                AppError::Validation("unsupported rating source".into())
+                                AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_LIST_RATING_SOURCE_UNSUPPORTED,"unsupported rating source")
                             })?;
                     if !minimum.value.is_finite() || !(0.0..=scale).contains(&minimum.value) {
-                        return Err(AppError::Validation(
-                            "rating minimum is outside its source scale".into(),
+                        return Err(AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_LIST_RATING_OUT_OF_RANGE,
+                            "rating minimum is outside its source scale",
                         ));
                     }
                     Ok(scryer_domain::ListRatingMinimum {
@@ -472,13 +487,19 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
                     .iter()
                     .any(|label| label.len() > 256)
             {
-                return Err(AppError::Validation("invalid canonical exclusions".into()));
+                return Err(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_LIST_EXCLUSIONS_INVALID,
+                    "invalid canonical exclusions",
+                ));
             }
             ListFilter::ExcludeCanonicalTags {
                 facet: input
                     .facet
                     .ok_or_else(|| {
-                        AppError::Validation("canonical exclusions need a facet".into())
+                        AppError::validation_refused(
+                            scryer_interface_core::refusal::INTERFACE_LIST_FACET_REQUIRED,
+                            "canonical exclusions need a facet",
+                        )
                     })?
                     .into_domain(),
                 keys,
@@ -488,7 +509,12 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
         ListFilterKindValue::ExcludeAdult => ListFilter::ExcludeAdult {
             facet: input
                 .facet
-                .ok_or_else(|| AppError::Validation("the adult exclusion needs a facet".into()))?
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_FACET_REQUIRED,
+                        "the adult exclusion needs a facet",
+                    )
+                })?
                 .into_domain(),
         },
         ListFilterKindValue::RatingAtLeast => {
@@ -497,11 +523,21 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|scale| !scale.is_empty())
-                .ok_or_else(|| AppError::Validation("a rating filter needs a scale".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_RATING_SCALE_REQUIRED,
+                        "a rating filter needs a scale",
+                    )
+                })?;
             let value = input
                 .value
                 .filter(|value| value.is_finite())
-                .ok_or_else(|| AppError::Validation("a rating filter needs a value".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_LIST_RATING_VALUE_REQUIRED,
+                        "a rating filter needs a value",
+                    )
+                })?;
             ListFilter::RatingAtLeast {
                 scale: scale.to_string(),
                 value,
@@ -517,8 +553,12 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
             languages: values()
                 .into_iter()
                 .map(|language| {
-                    scryer_application::normalize_search_language_code(&language)
-                        .ok_or_else(|| AppError::Validation("unsupported original language".into()))
+                    scryer_application::normalize_search_language_code(&language).ok_or_else(|| {
+                        AppError::validation_refused(
+                            scryer_interface_core::refusal::INTERFACE_LIST_LANGUAGE_UNSUPPORTED,
+                            "unsupported original language",
+                        )
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         },
@@ -859,8 +899,9 @@ pub fn public_list_input_from_input(
     input: SubscribeListInput,
 ) -> Result<PublicListInput, AppError> {
     if input.scope != ListScopeValue::Public {
-        return Err(AppError::Validation(
-            "only public lists can be followed here".to_string(),
+        return Err(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_LIST_NOT_PUBLIC,
+            "only public lists can be followed here",
         ));
     }
     Ok(PublicListInput {
@@ -914,7 +955,10 @@ pub fn list_exclusion_input_from_input(
         ListExclusionScopeValue::AllLists => ListExclusionScope::AllLists,
         ListExclusionScopeValue::List => ListExclusionScope::List {
             subscription_id: id_or_none(input.subscription_id).ok_or_else(|| {
-                AppError::Validation("a list exclusion needs its list".to_string())
+                AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_LIST_EXCLUSION_TARGET_REQUIRED,
+                    "a list exclusion needs its list",
+                )
             })?,
         },
     };

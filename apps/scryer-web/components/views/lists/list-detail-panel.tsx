@@ -12,7 +12,13 @@ import { LoadingMark } from "@/components/common/loading-mark";
 import { FacetTags } from "@/components/common/facet-select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { ActionTooltip } from "@/components/ui/tooltip";
@@ -27,7 +33,12 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import type { ListMembership, ListPreview, ListProviderManifest, ListSubscription } from "@/lib/types/lists";
+import type {
+  ListMembership,
+  ListPreview,
+  ListProviderManifest,
+  ListSubscription,
+} from "@/lib/types/lists";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
   listIntervalParts,
@@ -96,7 +107,8 @@ export function ListDetailPanel({
     setConfirmUnfollow(false);
   }, [detailId]);
 
-  const formatDate = (value: string | null) => (value ? formatUiDateTime(value, dateTimeFormat) : "—");
+  const formatDate = (value: string | null) =>
+    value ? formatUiDateTime(value, dateTimeFormat) : "—";
 
   const runPreview = async () => {
     if (!subscription) return;
@@ -110,11 +122,20 @@ export function ListDetailPanel({
 
   const memberships = detail?.memberships ?? null;
   const offset = detail?.membershipOffset ?? 0;
-  const interval = subscription ? listIntervalParts(subscription.intervalSeconds) : null;
-  const state = subscription ? (subscription.enabled ? subscription.sync.state : "OFF") : "NEW";
+  const interval = subscription
+    ? listIntervalParts(subscription.intervalSeconds)
+    : null;
+  const state = subscription
+    ? subscription.enabled
+      ? subscription.sync.state
+      : "OFF"
+    : "NEW";
 
   return (
-    <Sheet open={detail !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
+    <Sheet
+      open={detail !== null}
+      onOpenChange={(open) => (!open ? onClose() : undefined)}
+    >
       <SheetContent
         id="list-detail-panel"
         side="right"
@@ -133,8 +154,12 @@ export function ListDetailPanel({
             </div>
             {subscription ? (
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={listSyncStateTone(state)}>{t(listSyncStateLabelKey(state, subscription.sync.lastAt))}</Badge>
-                {subscription.kinds.length > 0 ? <FacetTags values={subscription.kinds} emptyLabel={null} /> : null}
+                <Badge tone={listSyncStateTone(state)}>
+                  {t(listSyncStateLabelKey(state, subscription.sync.lastAt))}
+                </Badge>
+                {subscription.kinds.length > 0 ? (
+                  <FacetTags values={subscription.kinds} emptyLabel={null} />
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -154,9 +179,13 @@ export function ListDetailPanel({
                     size="large"
                     checked={subscription.enabled}
                     disabled={busy}
-                    onCheckedChange={(checked) => onSetEnabled(subscription, checked === true)}
+                    onCheckedChange={(checked) =>
+                      onSetEnabled(subscription, checked === true)
+                    }
                   />
-                  <span className="text-sm font-medium">{t("label.enabled")}</span>
+                  <span className="text-sm font-medium">
+                    {t("label.enabled")}
+                  </span>
                 </label>
                 <TextActionButton
                   id="list-detail-sync"
@@ -195,13 +224,17 @@ export function ListDetailPanel({
               >
                 {subscription.sync.errorMessage}
                 {subscription.sync.errorAt ? (
-                  <span className="block text-[11.5px] opacity-80">{formatDate(subscription.sync.errorAt)}</span>
+                  <span className="block text-[11.5px] opacity-80">
+                    {formatDate(subscription.sync.errorAt)}
+                  </span>
                 ) : null}
               </p>
             ) : null}
             {subscription.sync.pausedUntil ? (
               <p className="text-[12.5px] text-[var(--scry-warning-text)]">
-                {t("lists.detail.pausedUntil", { time: formatDate(subscription.sync.pausedUntil) })}
+                {t("lists.detail.pausedUntil", {
+                  time: formatDate(subscription.sync.pausedUntil),
+                })}
               </p>
             ) : null}
 
@@ -213,24 +246,49 @@ export function ListDetailPanel({
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-3">
                 {(
                   [
-                    ["lists.table.mode", t(listModeLabelKey(subscription.mode))],
-                    ["lists.follow.onLeave", t(listOnLeaveLabelKey(subscription.onLeave))],
+                    [
+                      "lists.table.mode",
+                      t(listModeLabelKey(subscription.mode)),
+                    ],
+                    [
+                      "lists.follow.onLeave",
+                      t(listOnLeaveLabelKey(subscription.onLeave)),
+                    ],
                     [
                       "lists.follow.maxPerSync",
-                      subscription.maxPerSync === null ? t("lists.detail.noCap") : String(subscription.maxPerSync),
+                      subscription.maxPerSync === null
+                        ? t("lists.detail.noCap")
+                        : String(subscription.maxPerSync),
                     ],
-                    ["lists.detail.interval", interval ? t(interval.key, { count: interval.count }) : "—"],
-                    ["lists.table.lastSync", formatDate(subscription.sync.lastAt)],
-                    ["lists.detail.nextSync", formatDate(subscription.sync.nextAt)],
+                    [
+                      "lists.detail.interval",
+                      interval
+                        ? t(interval.key, { count: interval.count })
+                        : "—",
+                    ],
+                    [
+                      "lists.table.lastSync",
+                      formatDate(subscription.sync.lastAt),
+                    ],
+                    [
+                      "lists.detail.nextSync",
+                      formatDate(subscription.sync.nextAt),
+                    ],
                   ] as Array<[string, string]>
                 ).map(([key, value]) => (
                   <div key={key} className="min-w-0">
-                    <dt className="text-[11.5px] text-[var(--scry-muted)]">{t(key)}</dt>
-                    <dd className="truncate text-[var(--scry-ink2)]">{value}</dd>
+                    <dt className="text-[11.5px] text-[var(--scry-muted)]">
+                      {t(key)}
+                    </dt>
+                    <dd className="truncate text-[var(--scry-ink2)]">
+                      {value}
+                    </dd>
                   </div>
                 ))}
               </dl>
-              {subscription.source.provider === "simkl" ? <SimklAttribution /> : null}
+              {subscription.source.provider === "simkl" ? (
+                <SimklAttribution />
+              ) : null}
               {subscription.providerUrl ? (
                 <a
                   href={subscription.providerUrl}
@@ -252,42 +310,78 @@ export function ListDetailPanel({
                 onClick={() => void runPreview()}
                 disabled={previewing}
               >
-                {previewing ? <LoadingMark className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {previewing ? (
+                  <LoadingMark className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
                 {t("lists.preview.run")}
               </Button>
-              {preview ? <ListPreviewSummary preview={preview} idPrefix="list-detail" providerType={subscription.source.provider} /> : null}
+              {preview ? (
+                <ListPreviewSummary
+                  preview={preview}
+                  idPrefix="list-detail"
+                  providerType={subscription.source.provider}
+                />
+              ) : null}
             </LabeledFieldset>
 
-            <LabeledFieldset label={t("lists.detail.titles", { count: memberships?.totalCount ?? 0 })}>
+            <LabeledFieldset
+              label={t("lists.detail.titles", {
+                count: memberships?.totalCount ?? 0,
+              })}
+            >
               {memberships && memberships.items.length > 0 ? (
                 <>
-                  <Table id="list-detail-memberships" density="dense" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
+                  <Table
+                    id="list-detail-memberships"
+                    density="dense"
+                    wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]"
+                  >
                     <TableHeader>
                       <TableRow className={TITLE_TABLE_HEADER_ROW_CLASS}>
-                        <TableHead className={`w-20 text-center ${TITLE_TABLE_HEADER_CELL_CLASS}`}>{t("lists.detail.sourceRank")}</TableHead>
-                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>{t("lists.detail.title")}</TableHead>
-                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>{t("lists.detail.state")}</TableHead>
+                        <TableHead
+                          className={`w-20 text-center ${TITLE_TABLE_HEADER_CELL_CLASS}`}
+                        >
+                          {t("lists.detail.sourceRank")}
+                        </TableHead>
+                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>
+                          {t("lists.detail.title")}
+                        </TableHead>
+                        <TableHead className={TITLE_TABLE_HEADER_CELL_CLASS}>
+                          {t("lists.detail.state")}
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {memberships.items.map((membership) => (
                         <TableRow
                           key={membership.itemKey}
-                          id={listMembershipRowId(subscription.id, membership.itemKey)}
+                          id={listMembershipRowId(
+                            subscription.id,
+                            membership.itemKey,
+                          )}
                           data-item-key={membership.itemKey}
                           data-title-id={membership.titleId ?? undefined}
                           data-membership-state={membership.state}
                           className={TITLE_TABLE_ROW_CLASS}
                         >
-                          <TableCodeCell className="text-center text-[12px] text-[var(--scry-muted)]">{membership.rank ?? "—"}</TableCodeCell>
+                          <TableCodeCell className="text-center text-[12px] text-[var(--scry-muted)]">
+                            {membership.rank ?? "—"}
+                          </TableCodeCell>
                           <TableCell>
                             <div className="text-[13px] font-medium text-[var(--scry-ink)]">
                               <ListMembershipTitle membership={membership} />
                               {membership.year ? (
-                                <span className="font-normal text-[var(--scry-muted)]"> ({membership.year})</span>
+                                <span className="font-normal text-[var(--scry-muted)]">
+                                  {" "}
+                                  ({membership.year})
+                                </span>
                               ) : null}
                             </div>
-                            {subscription.source.provider === "simkl" ? <SimklAttribution itemKey={membership.itemKey} /> : null}
+                            {subscription.source.provider === "simkl" ? (
+                              <SimklAttribution itemKey={membership.itemKey} />
+                            ) : null}
                           </TableCell>
                           <TableCell>
                             <MembershipStateBadge membership={membership} />
@@ -301,7 +395,10 @@ export function ListDetailPanel({
                       <span>
                         {t("lists.detail.pageRange", {
                           from: offset + 1,
-                          to: Math.min(offset + membershipPageSize, memberships.totalCount),
+                          to: Math.min(
+                            offset + membershipPageSize,
+                            memberships.totalCount,
+                          ),
                           total: memberships.totalCount,
                         })}
                       </span>
@@ -311,7 +408,12 @@ export function ListDetailPanel({
                           size="xs"
                           variant="outline"
                           disabled={offset === 0 || detail?.loading}
-                          onClick={() => onPage(subscription.id, Math.max(0, offset - membershipPageSize))}
+                          onClick={() =>
+                            onPage(
+                              subscription.id,
+                              Math.max(0, offset - membershipPageSize),
+                            )
+                          }
                         >
                           {t("lists.detail.previousPage")}
                         </Button>
@@ -319,8 +421,13 @@ export function ListDetailPanel({
                           type="button"
                           size="xs"
                           variant="outline"
-                          disabled={offset + membershipPageSize >= memberships.totalCount || detail?.loading}
-                          onClick={() => onPage(subscription.id, offset + membershipPageSize)}
+                          disabled={
+                            offset + membershipPageSize >=
+                              memberships.totalCount || detail?.loading
+                          }
+                          onClick={() =>
+                            onPage(subscription.id, offset + membershipPageSize)
+                          }
                         >
                           {t("lists.detail.nextPage")}
                         </Button>
@@ -330,7 +437,9 @@ export function ListDetailPanel({
                 </>
               ) : (
                 <p className="text-[12.5px] text-[var(--scry-muted)]">
-                  {detail?.loading ? t("label.loading") : t("lists.detail.noTitles")}
+                  {detail?.loading
+                    ? t("label.loading")
+                    : t("lists.detail.noTitles")}
                 </p>
               )}
             </LabeledFieldset>
@@ -343,8 +452,12 @@ export function ListDetailPanel({
                       key={run.id}
                       className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[8px] border border-[var(--scry-border3)] px-3 py-2 text-[12.5px]"
                     >
-                      <Badge tone={listSyncRunOutcomeTone(run.outcome)}>{t(listSyncRunOutcomeLabelKey(run.outcome))}</Badge>
-                      <span className="text-[var(--scry-ink2)]">{formatDate(run.startedAt)}</span>
+                      <Badge tone={listSyncRunOutcomeTone(run.outcome)}>
+                        {t(listSyncRunOutcomeLabelKey(run.outcome))}
+                      </Badge>
+                      <span className="text-[var(--scry-ink2)]">
+                        {formatDate(run.startedAt)}
+                      </span>
                       <span className="text-[var(--scry-muted)]">
                         {t("lists.detail.runCounts", {
                           total: run.counts.total,
@@ -367,7 +480,9 @@ export function ListDetailPanel({
                   ))}
                 </ul>
               ) : (
-                <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.detail.noRuns")}</p>
+                <p className="text-[12.5px] text-[var(--scry-muted)]">
+                  {t("lists.detail.noRuns")}
+                </p>
               )}
               {detail?.moreRuns ? (
                 <Button
@@ -409,9 +524,17 @@ export function ListDetailPanel({
 }
 
 /** A list entry's state. When the server recorded why, hovering or focusing the badge says it. */
-function MembershipStateBadge({ membership }: { membership: Pick<ListMembership, "state" | "stateReason"> }) {
+function MembershipStateBadge({
+  membership,
+}: {
+  membership: Pick<ListMembership, "state" | "stateReason">;
+}) {
   const t = useTranslate();
-  const badge = <Badge tone={listMembershipStateTone(membership.state)}>{t(listMembershipStateLabelKey(membership.state))}</Badge>;
+  const badge = (
+    <Badge tone={listMembershipStateTone(membership.state)}>
+      {t(listMembershipStateLabelKey(membership.state))}
+    </Badge>
+  );
   if (!membership.stateReason) return badge;
   const reasonKey = listMembershipReasonKey(membership.stateReason);
   return (

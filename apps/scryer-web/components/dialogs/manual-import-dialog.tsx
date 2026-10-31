@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 
 import * as React from "react";
 import { ManualDiscSelectionControl } from "./manual-disc-selection";
@@ -54,7 +55,8 @@ import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { LoadingMark } from "@/components/common/loading-mark";
 
-const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE = "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED";
+const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE =
+  "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED";
 const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_MESSAGE = [
   "This import is blocked because the download contains archive files.",
   "Install, update, or enable the Archive Extraction plugin, then re-import.",
@@ -74,7 +76,9 @@ type FilePreview = {
   suggestedSeriesMovieLinkId: string | null;
 };
 
-function mediaInfoFileForManualImport(facts: ManualImportVideoFacts): MediaInfoFile {
+function mediaInfoFileForManualImport(
+  facts: ManualImportVideoFacts,
+): MediaInfoFile {
   return {
     scanStatus: "scanned",
     videoCodec: facts.videoCodec,
@@ -90,7 +94,14 @@ function mediaInfoFileForManualImport(facts: ManualImportVideoFacts): MediaInfoF
     audioBitrateKbps: null,
     audioLanguages: [],
     audioStreams: facts.audioCodec
-      ? [{ codec: facts.audioCodec, channels: null, language: null, bitrateKbps: null }]
+      ? [
+          {
+            codec: facts.audioCodec,
+            channels: null,
+            language: null,
+            bitrateKbps: null,
+          },
+        ]
       : [],
     subtitleLanguages: [],
     subtitleCodecs: [],
@@ -145,7 +156,8 @@ function suggestedTargetValue(file: FilePreview): string {
       : file.suggestedEpisodeId
         ? [file.suggestedEpisodeId]
         : [];
-  if (suggestedEpisodeIds.length > 0) return episodeTargetValue(suggestedEpisodeIds);
+  if (suggestedEpisodeIds.length > 0)
+    return episodeTargetValue(suggestedEpisodeIds);
   if (file.suggestedSeriesMovieLinkId) {
     return seriesMovieTargetValue(file.suggestedSeriesMovieLinkId);
   }
@@ -226,71 +238,92 @@ export function ManualImportDialog({
   const [loading, setLoading] = React.useState(false);
   const [extractingArchives, setExtractingArchives] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [archivePluginRequired, setArchivePluginRequired] = React.useState(false);
-  const [archiveExtractionNeeded, setArchiveExtractionNeeded] = React.useState(false);
+  const [archivePluginRequired, setArchivePluginRequired] =
+    React.useState(false);
+  const [archiveExtractionNeeded, setArchiveExtractionNeeded] =
+    React.useState(false);
   const [files, setFiles] = React.useState<FilePreview[]>([]);
   const [episodes, setEpisodes] = React.useState<AvailableEpisode[]>([]);
-  const [seriesMovies, setSeriesMovies] = React.useState<AvailableSeriesMovie[]>([]);
+  const [seriesMovies, setSeriesMovies] = React.useState<
+    AvailableSeriesMovie[]
+  >([]);
   const [mappings, setMappings] = React.useState<Record<string, string>>({});
-  const [discSelections, setDiscSelections] = React.useState<Record<string, ManualDiscSelection>>({});
+  const [discSelections, setDiscSelections] = React.useState<
+    Record<string, ManualDiscSelection>
+  >({});
   const [selectionId, setSelectionId] = React.useState<string | null>(null);
   const [importing, setImporting] = React.useState(false);
 
-  const setImportError = React.useCallback((err: unknown, fallback: string) => {
-    if (hasGraphQlErrorCode(err, ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE)) {
-      setArchivePluginRequired(true);
-      setError(ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_MESSAGE);
-      return;
-    }
+  const setImportError = React.useCallback(
+    (err: unknown, fallback: string) => {
+      if (hasGraphQlErrorCode(err, ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE)) {
+        setArchivePluginRequired(true);
+        setError(ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_MESSAGE);
+        return;
+      }
 
-    setArchivePluginRequired(false);
-    setError(err instanceof Error ? err.message : fallback);
-  }, []);
+      setArchivePluginRequired(false);
+      setError(userFacingGraphQlErrorMessage(err, fallback, t));
+    },
+    [t],
+  );
 
   const openArchivePluginSettings = React.useCallback(() => {
     onOpenChange(false);
     navigate(buildViewPath("settings", "downloadClients"));
   }, [navigate, onOpenChange]);
 
-  const loadPreview = React.useCallback((extractArchives = false) => {
-    setLoading(true);
-    setExtractingArchives(extractArchives);
-    setError(null);
-    setArchivePluginRequired(false);
-    return client.mutation(beginManualImportSelectionMutation, {
-      input: {
-        clientId,
-        clientType,
-        downloadClientItemId,
-        titleId,
-        extractArchives,
-      },
-    }).toPromise()
-      .then(({ data, error: queryError }) => {
-        if (queryError) throw queryError;
-        const preview = data.beginManualImportSelection;
-        setSelectionId(preview.selectionId);
-        setFiles(preview.files);
-        setEpisodes(preview.availableEpisodes);
-        setSeriesMovies(preview.availableSeriesMovies ?? []);
-        setArchiveExtractionNeeded(Boolean(preview.archiveExtractionNeeded));
-        // Initialize mappings from suggested matches
-        const initial: Record<string, string> = {};
-        for (const file of preview.files) {
-          initial[file.candidateId] = suggestedTargetValue(file);
-        }
-        setMappings(initial);
-        setDiscSelections({});
-      })
-      .catch((err: unknown) => {
-        setArchiveExtractionNeeded(false);
-        setImportError(err, "Failed to load preview");
-      })
-      .finally(() => {
-        setLoading(false);
-        setExtractingArchives(false);
-      });
-  }, [client, clientId, clientType, downloadClientItemId, setImportError, titleId]);
+  const loadPreview = React.useCallback(
+    (extractArchives = false) => {
+      setLoading(true);
+      setExtractingArchives(extractArchives);
+      setError(null);
+      setArchivePluginRequired(false);
+      return client
+        .mutation(beginManualImportSelectionMutation, {
+          input: {
+            clientId,
+            clientType,
+            downloadClientItemId,
+            titleId,
+            extractArchives,
+          },
+        })
+        .toPromise()
+        .then(({ data, error: queryError }) => {
+          if (queryError) throw queryError;
+          const preview = data.beginManualImportSelection;
+          setSelectionId(preview.selectionId);
+          setFiles(preview.files);
+          setEpisodes(preview.availableEpisodes);
+          setSeriesMovies(preview.availableSeriesMovies ?? []);
+          setArchiveExtractionNeeded(Boolean(preview.archiveExtractionNeeded));
+          // Initialize mappings from suggested matches
+          const initial: Record<string, string> = {};
+          for (const file of preview.files) {
+            initial[file.candidateId] = suggestedTargetValue(file);
+          }
+          setMappings(initial);
+          setDiscSelections({});
+        })
+        .catch((err: unknown) => {
+          setArchiveExtractionNeeded(false);
+          setImportError(err, "Failed to load preview");
+        })
+        .finally(() => {
+          setLoading(false);
+          setExtractingArchives(false);
+        });
+    },
+    [
+      client,
+      clientId,
+      clientType,
+      downloadClientItemId,
+      setImportError,
+      titleId,
+    ],
+  );
 
   // Load preview when dialog opens.
   React.useEffect(() => {
@@ -311,7 +344,10 @@ export function ManualImportDialog({
     void loadPreview();
   }, [loadPreview, open]);
 
-  const groupedEpisodes = React.useMemo(() => groupEpisodesBySeason(episodes), [episodes]);
+  const groupedEpisodes = React.useMemo(
+    () => groupEpisodesBySeason(episodes),
+    [episodes],
+  );
   const targetLabels = React.useMemo(() => {
     const labels = new Map<string, string>([[UNASSIGNED, "Skip (unassigned)"]]);
     seriesMovies.forEach((movie) => {
@@ -321,18 +357,24 @@ export function ManualImportDialog({
       );
     });
     episodes.forEach((episode) => {
-      labels.set(episodeTargetValue([episode.id]), episodeTargetLabel(episode, t));
+      labels.set(
+        episodeTargetValue([episode.id]),
+        episodeTargetLabel(episode, t),
+      );
     });
     return labels;
   }, [episodes, seriesMovies, t]);
-  const handleMappingChange = React.useCallback((candidateId: string, value: string) => {
-    setMappings((previous) => {
-      if (previous[candidateId] === value) {
-        return previous;
-      }
-      return { ...previous, [candidateId]: value };
-    });
-  }, []);
+  const handleMappingChange = React.useCallback(
+    (candidateId: string, value: string) => {
+      setMappings((previous) => {
+        if (previous[candidateId] === value) {
+          return previous;
+        }
+        return { ...previous, [candidateId]: value };
+      });
+    },
+    [],
+  );
 
   // One click fills every file with what the preview resolved for it — the
   // whole set for a file that holds several episodes. A disc the user already
@@ -366,10 +408,14 @@ export function ManualImportDialog({
           return episodeIds.length > 0 ? [{ candidateId, episodeIds }] : [];
         }
         if (target.startsWith(SERIES_MOVIE_TARGET_PREFIX)) {
-          return [{
-            candidateId,
-            seriesMovieLinkId: target.slice(SERIES_MOVIE_TARGET_PREFIX.length),
-          }];
+          return [
+            {
+              candidateId,
+              seriesMovieLinkId: target.slice(
+                SERIES_MOVIE_TARGET_PREFIX.length,
+              ),
+            },
+          ];
         }
         return [];
       });
@@ -379,12 +425,14 @@ export function ManualImportDialog({
     setImporting(true);
     setArchivePluginRequired(false);
     try {
-      const { error: mutationError } = await client.mutation(queueManualImportMutation, {
-        input: {
-          selectionId,
-          files: fileMappings,
-        },
-      }).toPromise();
+      const { error: mutationError } = await client
+        .mutation(queueManualImportMutation, {
+          input: {
+            selectionId,
+            files: fileMappings,
+          },
+        })
+        .toPromise();
       if (mutationError) throw mutationError;
       setGlobalStatus(t("queue.manualImportQueued"), { level: "SUCCESS" });
       onImportQueued?.();
@@ -457,7 +505,8 @@ export function ManualImportDialog({
                   className="flex flex-col items-center gap-3 py-8 text-center"
                 >
                   <p className="text-sm text-muted-foreground">
-                    This download contains archives. Extract them before mapping media files.
+                    This download contains archives. Extract them before mapping
+                    media files.
                   </p>
                   <Button
                     id="activity-manual-import-extract-archives"
@@ -471,7 +520,8 @@ export function ManualImportDialog({
                   id="activity-manual-import-empty"
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
-                  The video files in this download do not have a recognized extension.
+                  The video files in this download do not have a recognized
+                  extension.
                 </p>
               )
             ) : (
@@ -488,7 +538,10 @@ export function ManualImportDialog({
                   {files.map((file) => (
                     <TableRow
                       key={file.candidateId}
-                      id={selectorId("activity-manual-import-file-row", file.candidateId)}
+                      id={selectorId(
+                        "activity-manual-import-file-row",
+                        file.candidateId,
+                      )}
                     >
                       <TableCell>
                         <div className="flex items-start gap-2">
@@ -500,7 +553,9 @@ export function ManualImportDialog({
                             {file.videoFacts ? (
                               <div className="mt-1">
                                 <MediaInfoBadges
-                                  file={mediaInfoFileForManualImport(file.videoFacts)}
+                                  file={mediaInfoFileForManualImport(
+                                    file.videoFacts,
+                                  )}
                                   includeContainer
                                 />
                               </div>
@@ -517,7 +572,9 @@ export function ManualImportDialog({
                             {file.quality}
                           </Badge>
                         ) : (
-                          <span className="text-xs text-muted-foreground/60">—</span>
+                          <span className="text-xs text-muted-foreground/60">
+                            —
+                          </span>
                         )}
                       </TableCell>
                       <TableCell>
@@ -526,16 +583,23 @@ export function ManualImportDialog({
                             disc={file.videoFacts?.disc ?? null}
                             report={file.videoFacts?.report}
                             isMovie={facet === "MOVIE"}
-                            episodes={episodes.map((episode) => ({ id: episode.id, label: episodeTargetLabel(episode, t) }))}
+                            episodes={episodes.map((episode) => ({
+                              id: episode.id,
+                              label: episodeTargetLabel(episode, t),
+                            }))}
                             value={discSelections[file.candidateId] ?? null}
                             onChange={(selection) => {
                               setDiscSelections((previous) => {
                                 const next = { ...previous };
-                                if (selection) next[file.candidateId] = selection;
+                                if (selection)
+                                  next[file.candidateId] = selection;
                                 else delete next[file.candidateId];
                                 return next;
                               });
-                              handleMappingChange(file.candidateId, selection ? "__disc__" : UNASSIGNED);
+                              handleMappingChange(
+                                file.candidateId,
+                                selection ? "__disc__" : UNASSIGNED,
+                              );
                             }}
                           />
                         ) : facet === "MOVIE" ? (
@@ -543,19 +607,30 @@ export function ManualImportDialog({
                             aria-label={file.fileName}
                             className="rounded border bg-background p-2 text-sm"
                             value={mappings[file.candidateId] ?? UNASSIGNED}
-                            onChange={(event) => handleMappingChange(file.candidateId, event.target.value)}
+                            onChange={(event) =>
+                              handleMappingChange(
+                                file.candidateId,
+                                event.target.value,
+                              )
+                            }
                           >
-                            <option value={UNASSIGNED}>{t("mediaInfo.discSkip")}</option>
-                            <option value="__movie__">{t("mediaInfo.discImportMovie")}</option>
+                            <option value={UNASSIGNED}>
+                              {t("mediaInfo.discSkip")}
+                            </option>
+                            <option value="__movie__">
+                              {t("mediaInfo.discImportMovie")}
+                            </option>
                           </select>
-                        ) : <ManualImportTargetSelect
-                          candidateId={file.candidateId}
-                          value={mappings[file.candidateId] ?? UNASSIGNED}
-                          groupedEpisodes={groupedEpisodes}
-                          seriesMovies={seriesMovies}
-                          targetLabels={targetLabels}
-                          onChange={handleMappingChange}
-                        />}
+                        ) : (
+                          <ManualImportTargetSelect
+                            candidateId={file.candidateId}
+                            value={mappings[file.candidateId] ?? UNASSIGNED}
+                            groupedEpisodes={groupedEpisodes}
+                            seriesMovies={seriesMovies}
+                            targetLabels={targetLabels}
+                            onChange={handleMappingChange}
+                          />
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

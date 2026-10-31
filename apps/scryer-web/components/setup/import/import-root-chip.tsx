@@ -138,13 +138,15 @@ export function ImportRootChip({
       <IconButton
         type="button"
         label={
-          library
-            ? t("setup.moveToAnotherLibrary")
-            : t("setup.assignToLibrary")
+          library ? t("setup.moveToAnotherLibrary") : t("setup.assignToLibrary")
         }
         onClick={onAssign}
         tone="accent"
-        className={library ? "h-[30px] w-[30px] flex-none rounded-[8px]" : "h-8 w-8 flex-none rounded-[8px]"}
+        className={
+          library
+            ? "h-[30px] w-[30px] flex-none rounded-[8px]"
+            : "h-8 w-8 flex-none rounded-[8px]"
+        }
       >
         <FolderInput className={library ? "h-[15px] w-[15px]" : "h-4 w-4"} />
       </IconButton>
@@ -188,9 +190,7 @@ export function ImportRootChip({
             style={{
               ...MONO,
               fontSize: 12,
-              color: remapped
-                ? "var(--scry-accent-text)"
-                : "var(--scry-ink2)",
+              color: remapped ? "var(--scry-accent-text)" : "var(--scry-ink2)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -273,8 +273,8 @@ export function ImportRootChip({
             background: invalid
               ? "var(--scry-danger-bg-strong)"
               : remapped
-              ? "rgba(var(--scry-accent-rgb), 0.1)"
-              : "transparent",
+                ? "rgba(var(--scry-accent-rgb), 0.1)"
+                : "transparent",
             border: `1px solid ${
               invalid
                 ? "var(--scry-danger-border-strong)"

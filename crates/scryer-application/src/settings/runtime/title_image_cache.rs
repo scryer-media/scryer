@@ -34,7 +34,7 @@ impl AppUseCase {
             .await?;
 
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             match app.run_title_image_cache_refresh().await {
                 Ok(summary) => {
                     info!(
@@ -64,7 +64,8 @@ impl AppUseCase {
             .title_image_cache_clear_scheduled
             .clone();
         if scheduled.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::settings::TITLE_IMAGE_CACHE_REFRESH_ALREADY_RUNNING,
                 "title image cache refresh is already running".to_string(),
             ));
         }
@@ -322,9 +323,11 @@ impl AppUseCase {
                 "title image cache refresh skipped series artwork update with no usable image URLs"
             );
         }
-        if let Some(update) =
-            title_artwork_update(title, urls.poster_url.as_ref(), urls.background_url.as_ref())
-        {
+        if let Some(update) = title_artwork_update(
+            title,
+            urls.poster_url.as_ref(),
+            urls.background_url.as_ref(),
+        ) {
             title_updates.push(update);
         }
 

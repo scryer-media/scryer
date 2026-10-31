@@ -15,9 +15,15 @@ type TitleTagDefinitionPayload = {
 
 type RegistryListener = (payload?: TitleTagDefinitionPayload[]) => void;
 const registryListeners = new WeakMap<Client, Set<RegistryListener>>();
-const registryRequests = new WeakMap<Client, Promise<TitleTagDefinitionPayload[]>>();
+const registryRequests = new WeakMap<
+  Client,
+  Promise<TitleTagDefinitionPayload[]>
+>();
 
-async function fetchRegistry(client: Client, requestPolicy: "cache-first" | "network-only") {
+async function fetchRegistry(
+  client: Client,
+  requestPolicy: "cache-first" | "network-only",
+) {
   const existing = registryRequests.get(client);
   if (existing) return existing;
   const pending = client
@@ -25,16 +31,21 @@ async function fetchRegistry(client: Client, requestPolicy: "cache-first" | "net
     .toPromise()
     .then((result) => {
       if (result.error) throw result.error;
-      return (result.data?.titleTagDefinitions ?? []) as TitleTagDefinitionPayload[];
+      return (result.data?.titleTagDefinitions ??
+        []) as TitleTagDefinitionPayload[];
     });
   registryRequests.set(client, pending);
   try {
     return await pending;
   } finally {
-    if (registryRequests.get(client) === pending) registryRequests.delete(client);
+    if (registryRequests.get(client) === pending)
+      registryRequests.delete(client);
   }
 }
-export function refreshTitleTagConsumers(client: Client, payload?: TitleTagDefinitionPayload[]) {
+export function refreshTitleTagConsumers(
+  client: Client,
+  payload?: TitleTagDefinitionPayload[],
+) {
   // A read started before creation cannot satisfy the post-creation refresh.
   registryRequests.delete(client);
   registryListeners.get(client)?.forEach((refresh) => refresh(payload));
@@ -70,7 +81,9 @@ export function fromTitleTagDefinitionPayload(
 export function useTitleTagDefinitions(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
   const client = useClient();
-  const [definitions, setDefinitions] = React.useState<TitleTagDefinition[]>([]);
+  const [definitions, setDefinitions] = React.useState<TitleTagDefinition[]>(
+    [],
+  );
   const [loading, setLoading] = React.useState(enabled);
   const [error, setError] = React.useState(false);
   const loadSequence = React.useRef(0);
@@ -103,7 +116,8 @@ export function useTitleTagDefinitions(options?: { enabled?: boolean }) {
 
   React.useEffect(() => {
     if (!enabled) return;
-    const listeners = registryListeners.get(client) ?? new Set<RegistryListener>();
+    const listeners =
+      registryListeners.get(client) ?? new Set<RegistryListener>();
     registryListeners.set(client, listeners);
     const refresh: RegistryListener = (payload) => {
       if (payload) {

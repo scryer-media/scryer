@@ -18,11 +18,12 @@ const FIELD_FACETS: Record<SetupMediaPathField, string> = {
   anime: "ANIME",
 };
 
-export const SETUP_MEDIA_PATH_LABEL_KEYS: Record<SetupMediaPathField, string> = {
-  movies: "setup.moviesPath",
-  series: "setup.seriesPath",
-  anime: "setup.animePath",
-};
+export const SETUP_MEDIA_PATH_LABEL_KEYS: Record<SetupMediaPathField, string> =
+  {
+    movies: "setup.moviesPath",
+    series: "setup.seriesPath",
+    anime: "setup.animePath",
+  };
 
 export type SetupRoot = { path: string; isDefault: boolean };
 export type SetupMediaRoots = Record<SetupMediaPathField, SetupRoot[]>;
@@ -47,7 +48,10 @@ export function bootstrapSetupMediaRoots(): SetupMediaRoots {
 }
 
 export function setupMediaLibraries(
-  libraries: readonly Pick<LibraryRecord, "id" | "facet" | "isDefault" | "roots">[],
+  libraries: readonly Pick<
+    LibraryRecord,
+    "id" | "facet" | "isDefault" | "roots"
+  >[],
 ): SetupMediaLibraries {
   const result: SetupMediaLibraries = {};
   for (const field of SETUP_MEDIA_PATH_FIELDS) {
@@ -99,11 +103,17 @@ export function replaceSetupRoot(
   );
 }
 
-export function removeSetupRoot(roots: SetupRoot[], index: number): SetupRoot[] {
+export function removeSetupRoot(
+  roots: SetupRoot[],
+  index: number,
+): SetupRoot[] {
   return normalizeLibraryRootDrafts(roots.filter((_, i) => i !== index));
 }
 
-export function setDefaultSetupRoot(roots: SetupRoot[], index: number): SetupRoot[] {
+export function setDefaultSetupRoot(
+  roots: SetupRoot[],
+  index: number,
+): SetupRoot[] {
   return roots.map((root, i) => ({ ...root, isDefault: i === index }));
 }
 

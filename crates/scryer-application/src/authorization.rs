@@ -117,7 +117,8 @@ impl AppUseCase {
         {
             Ok(())
         } else {
-            Err(AppError::Unauthorized(
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ))
         }
@@ -135,7 +136,8 @@ impl AppUseCase {
         {
             Ok(())
         } else {
-            Err(AppError::Unauthorized(
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ))
         }
@@ -175,7 +177,8 @@ impl AppUseCase {
         {
             Ok(())
         } else {
-            Err(AppError::Unauthorized(
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::ACTION_PERMISSION_DENIED,
                 "You do not have permission to perform this action".to_string(),
             ))
         }
@@ -193,7 +196,8 @@ impl AppUseCase {
         {
             Ok(())
         } else {
-            Err(AppError::Unauthorized(
+            Err(AppError::unauthorized_reason(
+                crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
                 "You do not have access to this library".to_string(),
             ))
         }

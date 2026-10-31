@@ -2713,7 +2713,11 @@ async fn apply_media_rename_refuses_two_titles_planned_into_one_folder() {
         .await
         .expect_err("a plan sharing one folder between titles is refused");
     assert!(
-        matches!(error, scryer_application::AppError::Validation(_)),
+        matches!(
+            error,
+            scryer_application::AppError::Validation(_)
+                | scryer_application::AppError::ValidationRefused { .. }
+        ),
         "unexpected error: {error}"
     );
 
@@ -2881,7 +2885,11 @@ async fn assert_move_beside_an_untouched_titles_record_is_refused(
     };
     let error = applied.expect_err("a move into another title's folder is refused");
     assert!(
-        matches!(error, scryer_application::AppError::Validation(_)),
+        matches!(
+            error,
+            scryer_application::AppError::Validation(_)
+                | scryer_application::AppError::ValidationRefused { .. }
+        ),
         "unexpected error: {error}"
     );
 

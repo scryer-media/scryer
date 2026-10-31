@@ -27,7 +27,9 @@ export function useTitleSearchAction({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const { startAutomaticSearch, isSearching } = useAutomaticSearch();
-  const [pendingTitleId, setPendingTitleId] = React.useState<string | null>(null);
+  const [pendingTitleId, setPendingTitleId] = React.useState<string | null>(
+    null,
+  );
   // Remembered per title, so the notice goes away on the next title and once a
   // client is configured.
   const [noticeTitleId, setNoticeTitleId] = React.useState<string | null>(null);
@@ -51,13 +53,22 @@ export function useTitleSearchAction({
         current === requestedTitleId ? null : current,
       );
     }
-  }, [hasDownloadClients, setGlobalStatus, startAutomaticSearch, t, titleId, titleName]);
+  }, [
+    hasDownloadClients,
+    setGlobalStatus,
+    startAutomaticSearch,
+    t,
+    titleId,
+    titleName,
+  ]);
 
   return {
     searching:
       titleId !== null && (pendingTitleId === titleId || isSearching(titleId)),
     search,
     showDownloadClientNotice:
-      titleId !== null && noticeTitleId === titleId && hasDownloadClients === false,
+      titleId !== null &&
+      noticeTitleId === titleId &&
+      hasDownloadClients === false,
   };
 }

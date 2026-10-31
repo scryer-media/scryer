@@ -59,7 +59,10 @@ export function TitleBlockedReleasesSection({
   if (empty) {
     return (
       <section
-        className={cn(sectionClassName, "flex min-h-[3.25rem] items-center gap-2.5 px-4")}
+        className={cn(
+          sectionClassName,
+          "flex min-h-[3.25rem] items-center gap-2.5 px-4",
+        )}
       >
         {header}
       </section>
@@ -80,7 +83,10 @@ export function TitleBlockedReleasesSection({
         <CollapsibleContent className="border-t border-[var(--scry-line3)] p-4">
           <div className="space-y-2">
             {entries.map((entry) => {
-              const attemptedAtLabel = formatUiDate(entry.attemptedAt, dateTimeFormat);
+              const attemptedAtLabel = formatUiDate(
+                entry.attemptedAt,
+                dateTimeFormat,
+              );
               const releaseLabel =
                 entry.releaseName.trim() || t("episode.untitledRelease");
               const clearing = clearingEntryId === entry.id;

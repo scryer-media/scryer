@@ -1,7 +1,10 @@
 /// <reference lib="webworker" />
 
 import { translateCustomFormats } from "@/lib/arr-custom-format/translate";
-import type { ImportedCustomFormat, TranslationResult } from "@/lib/arr-custom-format/types";
+import type {
+  ImportedCustomFormat,
+  TranslationResult,
+} from "@/lib/arr-custom-format/types";
 
 type TranslationRequest = {
   type: "translate";

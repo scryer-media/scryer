@@ -12,7 +12,30 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-struct PreparedReleaseScoringInputs {
+/// Preparation belongs to one walk; scope-specific inputs remain on each call.
+#[derive(Default)]
+pub(crate) struct WalkSearchContext {
+    prepared: Option<PreparedReleaseScoringInputs>,
+    search_identity: Option<(String, MediaFacet)>,
+    pub(crate) reads: Option<Arc<crate::acquisition::title_reads::TitleCatalogReads>>,
+    pub(crate) rss_yield: Option<CancellationToken>,
+    pub(crate) interrupted: bool,
+}
+
+impl WalkSearchContext {
+    fn should_yield(&mut self) -> bool {
+        let yielded = self
+            .rss_yield
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled);
+        self.interrupted |= yielded;
+        yielded
+    }
+}
+
+pub(crate) struct PreparedReleaseScoringInputs {
+    quality_profile: QualityProfile,
+    routing_priorities: Vec<(String, i64)>,
     blocklist: TitleReleaseBlocklistSignatures,
     has_usenet_client: bool,
     has_torrent_client: bool,
@@ -21,8 +44,8 @@ struct PreparedReleaseScoringInputs {
     enabled_protocols: Option<(bool, bool)>,
     title: Title,
     canonical_context: crate::quality::canonical_context::ResolvedScoringContext,
-    catalog_episodes: Vec<Episode>,
-    catalog_collections: Vec<Collection>,
+    catalog_episodes: Arc<Vec<Episode>>,
+    catalog_collections: Arc<Vec<Collection>>,
     /// The title's community numbering layout, loaded once per scoring batch.
     /// `None` for every non-anime title and for anime SMG has no bridge for,
     /// which is what keeps their numbering handling byte-for-byte as it was.
@@ -42,7 +65,7 @@ pub(crate) struct ScoredSearchOutcome {
     /// Indexers that could not answer any of the search's queries: no id they
     /// can search the facet by and no usable text query. Nothing was sent.
     pub unsupported_indexer_ids: Vec<String>,
-    pub incomplete_indexer_reasons: HashMap<String, String>,
+    pub incomplete_indexer_reasons: HashMap<String, IncompleteIndexerReason>,
     pub search_session_id: String,
 }
 
@@ -156,6 +179,7 @@ fn release_search_tagged_aliases(title: &Title) -> Vec<TaggedAlias> {
         aliases.push(TaggedAlias {
             name: alias.clone(),
             language: "und".to_string(),
+            country: None,
         });
     }
     aliases
@@ -310,7 +334,9 @@ fn resolve_requested_episode(
 #[cfg(test)]
 fn extract_indexer_http_status(error: &AppError) -> Option<u16> {
     match error {
-        AppError::Repository(message) => extract_http_status_from_message(message),
+        AppError::Repository(message)
+        | AppError::RepositoryFailure { message, .. }
+        | AppError::RepositoryFailed { message, .. } => extract_http_status_from_message(message),
         _ => None,
     }
 }
@@ -544,32 +570,70 @@ fn record_query_coverage_outcomes(
     }
 }
 
-/// Opening words of the reason an indexer that asked Scryer to slow down gets.
-///
-/// The reason travels to the UI as free text, so this constant is the one place
-/// that spells it: [`reason_is_rate_limit`] reads it back to mark the snapshot
-/// row as a cooldown rather than a failure.
+/// The outcome that kept an indexer from covering the search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IncompleteIndexerKind {
+    RateLimited,
+    QueryBudget,
+    Contained,
+    Failed,
+}
+
+/// Human explanation beside the outcome used by the search state machine.
+#[derive(Clone, Debug)]
+pub(crate) struct IncompleteIndexerReason {
+    pub kind: IncompleteIndexerKind,
+    pub message: String,
+}
+impl IncompleteIndexerReason {
+    pub fn failed(message: String) -> Self {
+        Self {
+            kind: IncompleteIndexerKind::Failed,
+            message,
+        }
+    }
+}
+impl std::ops::Deref for IncompleteIndexerReason {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
+}
+
 pub(crate) const RATE_LIMITED_INDEXER_REASON: &str = "indexer is cooling down after a rate limit";
-
-/// Opening words of the reason an indexer skipped by an interactive search
-/// gets when its configured query budget has no slot soon enough.
 pub(crate) const QUERY_BUDGET_INDEXER_REASON: &str = "indexer is over its query budget";
-
-/// Opening words of the reason a contained indexer gets: the provider stopped
-/// at a limit of its own (a result ceiling, a saturated partition), so the
-/// indexer stays uncovered and waits out a backoff before it is asked again.
 pub(crate) const CONTAINED_INDEXER_REASON: &str =
     "indexer search contained at the provider's result limit";
 
-/// Whether an incomplete-indexer reason describes a wait on the indexer's
-/// pacing (a cooldown it asked for, or its own query budget), as opposed to
-/// something that went wrong.
-pub(crate) fn reason_is_rate_limit(reason: &str) -> bool {
-    reason.starts_with(RATE_LIMITED_INDEXER_REASON)
-        || reason.starts_with(QUERY_BUDGET_INDEXER_REASON)
+pub(crate) fn reason_is_rate_limit(reason: &IncompleteIndexerReason) -> bool {
+    matches!(
+        reason.kind,
+        IncompleteIndexerKind::RateLimited | IncompleteIndexerKind::QueryBudget
+    )
 }
 
-pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
+pub(crate) fn incomplete_indexer_reason(
+    outcome: IndexerSearchOutcome,
+) -> Option<IncompleteIndexerReason> {
+    let kind = match outcome {
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::RateLimited),
+            ..
+        } => IncompleteIndexerKind::RateLimited,
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::QueryBudgetExhausted),
+            ..
+        } => IncompleteIndexerKind::QueryBudget,
+        IndexerSearchOutcome::Partial {
+            reason:
+                Some(
+                    IndexerSearchIncompleteReason::PageCeilingReached
+                    | IndexerSearchIncompleteReason::SaturatedPartition,
+                ),
+            ..
+        } => IncompleteIndexerKind::Contained,
+        _ => IncompleteIndexerKind::Failed,
+    };
     let (reason, retry_after) = match outcome {
         IndexerSearchOutcome::Complete { .. } => return None,
         IndexerSearchOutcome::Partial {
@@ -615,9 +679,12 @@ pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option
         IndexerSearchOutcome::Unsupported | IndexerSearchOutcome::BackedOff { .. } => return None,
         IndexerSearchOutcome::Errored => ("indexer search failed", None),
     };
-    Some(match retry_after {
-        Some(delay) => format!("{reason}; retry after {}s", delay.as_secs()),
-        None => reason.to_string(),
+    Some(IncompleteIndexerReason {
+        kind,
+        message: match retry_after {
+            Some(delay) => format!("{reason}; retry after {}s", delay.as_secs()),
+            None => reason.to_string(),
+        },
     })
 }
 
@@ -1015,6 +1082,7 @@ impl AppUseCase {
             .collect()
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn score_release_results(
         &self,
@@ -1041,6 +1109,7 @@ impl AppUseCase {
             episode,
             absolute_episode,
             &mut prepared,
+            None,
             false,
             None,
             now,
@@ -1052,7 +1121,7 @@ impl AppUseCase {
         clippy::too_many_arguments,
         reason = "release scoring needs the full search context to produce deterministic ranking decisions"
     )]
-    async fn score_release_results_with_prepared(
+    pub(crate) async fn score_release_results_with_prepared(
         &self,
         mut raw_results: Vec<IndexerSearchResult>,
         quality_profile: &QualityProfile,
@@ -1070,6 +1139,7 @@ impl AppUseCase {
         episode: Option<u32>,
         absolute_episode: Option<u32>,
         prepared: &mut Option<PreparedReleaseScoringInputs>,
+        catalog_reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
         preserve_duplicate_sources: bool,
         // Set only for an operator's whole-season search: the season whose
         // multi-episode releases are the only ones kept. Applied here, before
@@ -1087,7 +1157,33 @@ impl AppUseCase {
         timer.outcome("error");
         metrics::counter!("scryer_scoring_batch_candidates_total", "purpose" => "live")
             .increment(raw_results.len() as u64);
+        let local_reads = crate::acquisition::title_reads::TitleCatalogReads::new(title_id);
+        let reads = catalog_reads
+            .filter(|reads| reads.covers(title_id))
+            .unwrap_or(&local_reads);
+        let mut routing_priorities = indexer_routing
+            .into_iter()
+            .flat_map(|plan| plan.entries.iter())
+            .map(|(id, entry)| (id.clone(), entry.priority))
+            .collect::<Vec<_>>();
+        routing_priorities.sort();
+        if prepared.as_ref().is_some_and(|inputs| {
+            inputs.title.id != title_id
+                || inputs.quality_profile != *quality_profile
+                || inputs.routing_priorities != routing_priorities
+        }) {
+            *prepared = None;
+        }
+        // RSS evaluates multiple scopes and may block a failed release between
+        // them. Share catalog/policy inputs, but refresh this mutable exclusion.
+        if let Some(prepared) = prepared.as_mut() {
+            prepared.blocklist = self.load_title_release_blocklist_signatures(title_id).await;
+        }
         if prepared.is_none() {
+            #[cfg(test)]
+            reads
+                .scoring_preparations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
             let DownloadSourceCapabilities {
                 has_usenet: has_usenet_client,
@@ -1097,9 +1193,10 @@ impl AppUseCase {
             } = self.download_source_capabilities().await;
             let scored_title = self.services.catalog.titles.get_by_id(title_id).await?;
             let Some(scored_title) = scored_title else {
-                return Err(AppError::NotFound(format!(
-                    "title {title_id} for release scoring"
-                )));
+                return Err(AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id} for release scoring"),
+                ));
             };
             let delay_profiles = self.load_delay_profiles().await;
             let delay_profile = crate::delay_profile::resolve_delay_profile(
@@ -1124,32 +1221,29 @@ impl AppUseCase {
                 &canonical_context
                     .view(crate::quality_profile::CoverageSizeBasis::default(), false),
             );
-            let catalog_episodes = self
-                .services
-                .catalog
-                .shows
-                .list_episodes_for_title(title_id)
-                .await
-                .unwrap_or_default();
-            let catalog_collections = self
-                .services
-                .catalog
-                .shows
-                .list_collections_for_title(title_id)
-                .await
-                .unwrap_or_default();
+            // A reusable RSS snapshot must never turn a failed catalog read
+            // into an empty success retained for every later scope.
+            let (catalog_episodes, catalog_collections) = if catalog_reads.is_some() {
+                (reads.episodes(self).await?, reads.collections(self).await?)
+            } else {
+                (
+                    reads.episodes(self).await.unwrap_or_default(),
+                    reads.collections(self).await.unwrap_or_default(),
+                )
+            };
             // Read once per title and reused for every release scored against
             // it; `None` for every title with no stored bridge.
-            let anime_numbering_bridge = self
-                .services
-                .catalog
-                .shows
-                .get_anime_numbering_bridge(title_id)
-                .await
-                .unwrap_or_default();
+            let bridge = reads.anime_numbering_bridge(self).await;
+            let anime_numbering_bridge = if catalog_reads.is_some() {
+                bridge?
+            } else {
+                bridge.unwrap_or_default()
+            };
             let indexer_priority_by_name =
                 self.build_indexer_priority_by_name(indexer_routing).await;
             *prepared = Some(PreparedReleaseScoringInputs {
+                quality_profile: quality_profile.clone(),
+                routing_priorities,
                 blocklist,
                 has_usenet_client,
                 has_torrent_client,
@@ -1242,20 +1336,16 @@ impl AppUseCase {
                 .as_ref()
                 .is_some_and(|episode| episode.is_series_pack);
             let pack_below_missing_threshold = if is_series_pack {
-                if prepared.primary_episode_ids.is_none() {
+                if prepared.primary_episode_ids.is_none()
+                    || (catalog_reads.is_some()
+                        && matches!(prepared.primary_episode_ids, Some(None)))
+                {
                     prepared.primary_episode_ids = Some(
-                        match self
-                            .services
-                            .library
-                            .media_files
-                            .list_media_files_for_title(title_id)
-                            .await
-                        {
+                        match reads.primary_file_cutoffs(self).await {
                             Ok(files) => Some(
                                 files
-                                    .into_iter()
-                                    .filter(|file| file.role.is_primary())
-                                    .filter_map(|file| file.episode_id)
+                                    .iter()
+                                    .filter_map(|file| file.episode_id.clone())
                                     .collect::<std::collections::HashSet<_>>(),
                             ),
                             Err(error) => {
@@ -1497,9 +1587,10 @@ impl AppUseCase {
     /// all queries. The fired
     /// set — never the routed set — is what background acquisition records as
     /// Convergence coverage.
-    pub(crate) async fn search_and_score_releases(
+    async fn search_and_score_releases_with_context(
         &self,
         request: ReleaseSearchRequest<'_>,
+        context: &mut WalkSearchContext,
     ) -> AppResult<ScoredSearchOutcome> {
         let ReleaseSearchRequest {
             queries,
@@ -1533,6 +1624,11 @@ impl AppUseCase {
             background_value,
             scoring_now,
         } = request;
+        let identity = (title_id.to_string(), owner_facet.clone());
+        if context.reads.is_none() || context.search_identity.as_ref() != Some(&identity) {
+            context.prepared = None;
+            context.search_identity = Some(identity);
+        }
         if cancel_token.is_cancelled() {
             return Err(AppError::canceled("indexer search canceled"));
         }
@@ -1686,6 +1782,15 @@ impl AppUseCase {
         let query_cancel_token = cancel_token.child_token();
         let plan_page_sink = page_sink.clone();
         let plan_indexer_routing = dispatch_indexer_routing;
+        if context.should_yield() {
+            return Ok(ScoredSearchOutcome {
+                results: Vec::new(),
+                complete_indexer_ids: Vec::new(),
+                unsupported_indexer_ids: Vec::new(),
+                incomplete_indexer_reasons: HashMap::new(),
+                search_session_id,
+            });
+        }
         set.spawn(async move {
             indexer_client
                 .search_queries_stream(
@@ -1717,7 +1822,6 @@ impl AppUseCase {
         let mut successful_searches = 0usize;
         let mut first_failure: Option<String> = None;
         let mut scored_results: Vec<IndexerSearchResult> = Vec::new();
-        let mut scoring_inputs = None;
         let mut page_source_open = true;
         let mut search_tasks_open = true;
         // Coverage is an intersection across every effective title/alias
@@ -1822,7 +1926,8 @@ impl AppUseCase {
                     season,
                     episode,
                     absolute_episode,
-                    &mut scoring_inputs,
+                    &mut context.prepared,
+                    context.reads.as_deref(),
                     mode == SearchMode::Auto,
                     multi_episode_season,
                     scoring_now,
@@ -1918,8 +2023,38 @@ impl AppUseCase {
         background_value: Option<f64>,
         scoring_now: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<ScoredSearchOutcome> {
+        self.search_and_evaluate_subject_with_context(
+            title,
+            subject,
+            caller_label,
+            mode,
+            cancel_token,
+            restrict_to_indexer_ids,
+            background_value,
+            scoring_now,
+            &mut WalkSearchContext::default(),
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk shares preparation while each subject keeps its search inputs"
+    )]
+    pub(crate) async fn search_and_evaluate_subject_with_context(
+        &self,
+        title: &Title,
+        subject: &crate::acquisition_release_search::ResolvedReleaseSearchSubject,
+        caller_label: &str,
+        mode: SearchMode,
+        cancel_token: CancellationToken,
+        restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
+        background_value: Option<f64>,
+        scoring_now: chrono::DateTime<chrono::Utc>,
+        context: &mut WalkSearchContext,
+    ) -> AppResult<ScoredSearchOutcome> {
         let mut outcome = self
-            .search_and_score_subject_restricted_with_fired_indexers(
+            .search_and_score_subject_with_context(
                 title,
                 subject,
                 caller_label,
@@ -1928,6 +2063,7 @@ impl AppUseCase {
                 restrict_to_indexer_ids,
                 background_value,
                 scoring_now,
+                context,
             )
             .await?;
         // A background search ties its session to the convergence scope, so
@@ -1941,8 +2077,10 @@ impl AppUseCase {
             )
             .await;
         }
+        let local_reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        let reads = context.reads.as_deref().unwrap_or(&local_reads);
         outcome.results = self
-            .evaluate_search_results_for_subject(
+            .evaluate_search_results_for_subject_with_reads(
                 title,
                 subject,
                 outcome.results,
@@ -1951,6 +2089,7 @@ impl AppUseCase {
                 // runs auto decisioning (`queue_best_release`), and Sonarr
                 // skips the monitored check for exactly those searches.
                 matches!(mode, SearchMode::Interactive) || background_value.is_none(),
+                reads,
             )
             .await?;
         if self
@@ -1972,44 +2111,14 @@ impl AppUseCase {
         Ok(outcome)
     }
 
-    /// Search and score `subject` while leaving admission evaluation to the
-    /// caller. This is used by pack discovery lanes that must group candidates
-    /// by their resolved submission scope before running canonical evaluation.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "background search threads the convergence subset and value hint alongside the subject"
-    )]
-    pub(crate) async fn search_and_score_subject_restricted(
-        &self,
-        title: &Title,
-        subject: &crate::acquisition_release_search::ResolvedReleaseSearchSubject,
-        caller_label: &str,
-        mode: SearchMode,
-        cancel_token: CancellationToken,
-        restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
-        background_value: Option<f64>,
-        scoring_now: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<ScoredSearchOutcome> {
-        self.search_and_score_subject_restricted_with_fired_indexers(
-            title,
-            subject,
-            caller_label,
-            mode,
-            cancel_token,
-            restrict_to_indexer_ids,
-            background_value,
-            scoring_now,
-        )
-        .await
-    }
-
     /// Search and score without writing generic scope coverage. The series-pack
     /// title lane uses this to record its set and qualifying collection keys;
-    /// all normal search callers should use `search_and_score_subject_restricted`.
+    /// callers keep the operation's catalog and scoring preparation together.
     #[expect(
         clippy::too_many_arguments,
         reason = "background search threads the convergence subset and value hint alongside the subject"
     )]
+    #[cfg(test)]
     pub(crate) async fn search_and_score_subject_restricted_with_fired_indexers(
         &self,
         title: &Title,
@@ -2020,6 +2129,36 @@ impl AppUseCase {
         restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
         background_value: Option<f64>,
         scoring_now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<ScoredSearchOutcome> {
+        self.search_and_score_subject_with_context(
+            title,
+            subject,
+            caller_label,
+            mode,
+            cancel_token,
+            restrict_to_indexer_ids,
+            background_value,
+            scoring_now,
+            &mut WalkSearchContext::default(),
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk shares preparation while each subject keeps its search inputs"
+    )]
+    pub(crate) async fn search_and_score_subject_with_context(
+        &self,
+        title: &Title,
+        subject: &crate::acquisition_release_search::ResolvedReleaseSearchSubject,
+        caller_label: &str,
+        mode: SearchMode,
+        cancel_token: CancellationToken,
+        restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
+        background_value: Option<f64>,
+        scoring_now: chrono::DateTime<chrono::Utc>,
+        context: &mut WalkSearchContext,
     ) -> AppResult<ScoredSearchOutcome> {
         let languages = match title.search_languages_override() {
             Some(languages) => languages,
@@ -2038,6 +2177,7 @@ impl AppUseCase {
             .filter_map(|language| crate::normalize_search_language_code(language))
             .collect::<Vec<_>>();
         let names = localized_search_names(title, &languages);
+        let shared_reads = context.reads.clone();
         let mut outcome = self
             .search_and_score_subject_query_round(
                 title,
@@ -2048,6 +2188,7 @@ impl AppUseCase {
                 restrict_to_indexer_ids.clone(),
                 background_value,
                 scoring_now,
+                context,
             )
             .await?;
         let mut listing_keys = outcome
@@ -2056,16 +2197,27 @@ impl AppUseCase {
             .map(|candidate| (candidate.indexer_id.clone(), release_search_key(candidate)))
             .collect::<HashSet<_>>();
         for name in names {
+            if context.should_yield() {
+                // The skipped alias has no answer. Retain candidates already
+                // obtained, but never claim this incomplete scope is covered.
+                outcome.complete_indexer_ids.clear();
+                outcome.unsupported_indexer_ids.clear();
+                break;
+            }
             if cancel_token.is_cancelled() {
                 return Err(AppError::canceled("indexer search canceled"));
             }
             if mode == SearchMode::Auto {
+                let local_reads =
+                    crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+                let reads = shared_reads.as_deref().unwrap_or(&local_reads);
                 let evaluated = self
-                    .evaluate_search_results_for_subject(
+                    .evaluate_search_results_for_subject_with_reads(
                         title,
                         subject,
                         outcome.results.clone(),
                         background_value.is_none(),
+                        reads,
                     )
                     .await?;
                 if evaluated.iter().any(candidate_is_reusable) {
@@ -2094,6 +2246,7 @@ impl AppUseCase {
                     restrict_to_indexer_ids.clone(),
                     background_value,
                     scoring_now,
+                    context,
                 )
                 .await;
             let mut next = match next {
@@ -2101,21 +2254,27 @@ impl AppUseCase {
                 Err(error) if error.is_canceled() => return Err(error),
                 Err(error) => {
                     for id in outcome.complete_indexer_ids.drain(..) {
-                        outcome
-                            .incomplete_indexer_reasons
-                            .insert(id, format!("localized query for {name} failed: {error}"));
+                        outcome.incomplete_indexer_reasons.insert(
+                            id,
+                            IncompleteIndexerReason::failed(format!(
+                                "localized query for {name} failed: {error}"
+                            )),
+                        );
                     }
                     outcome.unsupported_indexer_ids.clear();
                     warn!(title_id = title.id, query_name = name, error = %error, "localized query failed; retaining earlier results");
                     continue;
                 }
             };
+            let local_reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+            let reads = shared_reads.as_deref().unwrap_or(&local_reads);
             let evaluated = self
-                .evaluate_search_results_for_subject(
+                .evaluate_search_results_for_subject_with_reads(
                     title,
                     subject,
                     next.results.clone(),
                     mode == SearchMode::Interactive || background_value.is_none(),
+                    reads,
                 )
                 .await?;
             if !self
@@ -2167,56 +2326,60 @@ impl AppUseCase {
         restrict_to_indexer_ids: Option<HashSet<String>>,
         background_value: Option<f64>,
         scoring_now: chrono::DateTime<chrono::Utc>,
+        context: &mut WalkSearchContext,
     ) -> AppResult<ScoredSearchOutcome> {
         let tagged_aliases = release_search_tagged_aliases(title);
-        self.search_and_score_releases(ReleaseSearchRequest {
-            queries: subject.queries.clone(),
-            imdb_id: subject.imdb_id.clone(),
-            tmdb_id: subject.tmdb_id.clone(),
-            tvdb_id: subject.tvdb_id.clone(),
-            anidb_id: subject.anidb_id.clone(),
-            mal_id: subject.mal_id.clone(),
-            category: Some(subject.category.clone()),
-            owner_facet: subject.owner_facet.clone(),
-            search_facet: subject.search_facet.clone(),
-            id_search_facet: subject.id_search_facet.clone(),
-            newznab_categories: subject.newznab_categories.clone(),
-            title_id: subject.title_id.as_str(),
-            title_tags: &subject.title_tags,
-            library_id: Some(title.library_id.as_str()),
-            caller_label,
-            mode,
-            runtime_minutes: subject.runtime_minutes,
-            // The subject carries season 0 so the acceptance layer can veto a
-            // season-1 release for a special; `&season=0` is not a query an
-            // indexer answers, so it is dropped here and the search runs on the
-            // title/absolute queries the specials lane already builds.
-            season: subject.season.filter(|season| *season > 0),
-            episode: subject.episode,
-            numbering_context: subject.numbering_context.clone(),
-            absolute_episode: subject.absolute_episode,
-            // `title` here is the *search* title — for a series-movie link it is
-            // the derived movie record, whose facet and year both come from the
-            // movie. Reading the year and the facet gate off the same record is
-            // what keeps a series year from ever being sent as a release year.
-            year: (title.facet == MediaFacet::Movie)
-                .then_some(title.year)
-                .flatten(),
-            tagged_aliases: &tagged_aliases,
-            search_subject_kind: subject.subject_kind,
-            // Only an operator's whole-season search narrows its list to
-            // multi-episode releases; the automatic season-pack walk applies
-            // its own pack check when it picks a grab.
-            multi_episode_season: (mode == SearchMode::Interactive
-                && subject.subject_kind == ReleaseSearchSubjectKind::Season)
-                .then_some(subject.season)
-                .flatten(),
-            parse_context: &subject.title_evidence.parse_context,
-            cancel_token,
-            restrict_to_indexer_ids,
-            background_value,
-            scoring_now,
-        })
+        self.search_and_score_releases_with_context(
+            ReleaseSearchRequest {
+                queries: subject.queries.clone(),
+                imdb_id: subject.imdb_id.clone(),
+                tmdb_id: subject.tmdb_id.clone(),
+                tvdb_id: subject.tvdb_id.clone(),
+                anidb_id: subject.anidb_id.clone(),
+                mal_id: subject.mal_id.clone(),
+                category: Some(subject.category.clone()),
+                owner_facet: subject.owner_facet.clone(),
+                search_facet: subject.search_facet.clone(),
+                id_search_facet: subject.id_search_facet.clone(),
+                newznab_categories: subject.newznab_categories.clone(),
+                title_id: subject.title_id.as_str(),
+                title_tags: &subject.title_tags,
+                library_id: Some(title.library_id.as_str()),
+                caller_label,
+                mode,
+                runtime_minutes: subject.runtime_minutes,
+                // The subject carries season 0 so the acceptance layer can veto a
+                // season-1 release for a special; `&season=0` is not a query an
+                // indexer answers, so it is dropped here and the search runs on the
+                // title/absolute queries the specials lane already builds.
+                season: subject.season.filter(|season| *season > 0),
+                episode: subject.episode,
+                numbering_context: subject.numbering_context.clone(),
+                absolute_episode: subject.absolute_episode,
+                // `title` here is the *search* title — for a series-movie link it is
+                // the derived movie record, whose facet and year both come from the
+                // movie. Reading the year and the facet gate off the same record is
+                // what keeps a series year from ever being sent as a release year.
+                year: (title.facet == MediaFacet::Movie)
+                    .then_some(title.year)
+                    .flatten(),
+                tagged_aliases: &tagged_aliases,
+                search_subject_kind: subject.subject_kind,
+                // Only an operator's whole-season search narrows its list to
+                // multi-episode releases; the automatic season-pack walk applies
+                // its own pack check when it picks a grab.
+                multi_episode_season: (mode == SearchMode::Interactive
+                    && subject.subject_kind == ReleaseSearchSubjectKind::Season)
+                    .then_some(subject.season)
+                    .flatten(),
+                parse_context: &subject.title_evidence.parse_context,
+                cancel_token,
+                restrict_to_indexer_ids,
+                background_value,
+                scoring_now,
+            },
+            context,
+        )
         .await
     }
 
@@ -2402,7 +2565,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -2450,7 +2618,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -2463,10 +2636,16 @@ impl AppUseCase {
             .shows
             .get_series_movie_link_by_id(&series_movie_link_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("series movie {series_movie_link_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::SERIES_MOVIE_NOT_FOUND,
+                    format!("series movie {series_movie_link_id}"),
+                )
+            })?;
         if link.series_title_id != title.id {
-            return Err(AppError::Validation(
-                "series movie does not belong to title".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::SERIES_MOVIE_DOES_NOT_BELONG_TITLE,
+                "series movie does not belong to title",
             ));
         }
 
@@ -2516,7 +2695,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -2796,7 +2980,7 @@ impl AppUseCase {
             let profile = crate::settings::runtime::quality_profile_by_id(&catalog, &profile_id)?
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::catalog::CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG, format!(
                         "configured quality profile '{profile_id}' from {} is missing from the catalog",
                         source.as_str()
                     ))
@@ -2809,10 +2993,8 @@ impl AppUseCase {
         }
 
         if !catalog.is_empty() {
-            return Err(AppError::Validation(
-                "no quality profile is configured; choose a global, category, library, or title profile"
-                    .to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::NO_QUALITY_PROFILE_NOT_CONFIGURED, "no quality profile is configured; choose a global, category, library, or title profile"
+                    .to_string()));
         }
 
         let profile = builtin_default_quality_profile();
@@ -3131,6 +3313,7 @@ mod structured_dispatch_query_tests {
 
     fn outcome(indexer_id: &str, outcome: IndexerSearchOutcome) -> IndexerQueryOutcome {
         IndexerQueryOutcome {
+            page: None,
             indexer_id: indexer_id.to_string(),
             outcome,
         }

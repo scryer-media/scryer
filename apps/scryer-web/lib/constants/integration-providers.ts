@@ -14,10 +14,14 @@ export const VISIBLE_EXTERNAL_ACCOUNT_PROVIDERS = [
   "EMBY",
 ] as const satisfies readonly ExternalAccountProvider[];
 
-export type VisibleMediaServerProvider = (typeof VISIBLE_MEDIA_SERVER_PROVIDERS)[number];
-export type VisibleExternalAccountProvider = (typeof VISIBLE_EXTERNAL_ACCOUNT_PROVIDERS)[number];
+export type VisibleMediaServerProvider =
+  (typeof VISIBLE_MEDIA_SERVER_PROVIDERS)[number];
+export type VisibleExternalAccountProvider =
+  (typeof VISIBLE_EXTERNAL_ACCOUNT_PROVIDERS)[number];
 
-const VISIBLE_MEDIA_SERVER_PROVIDER_SET = new Set<string>(VISIBLE_MEDIA_SERVER_PROVIDERS);
+const VISIBLE_MEDIA_SERVER_PROVIDER_SET = new Set<string>(
+  VISIBLE_MEDIA_SERVER_PROVIDERS,
+);
 const VISIBLE_EXTERNAL_ACCOUNT_PROVIDER_SET = new Set<string>(
   VISIBLE_EXTERNAL_ACCOUNT_PROVIDERS,
 );

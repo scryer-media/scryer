@@ -156,8 +156,9 @@ impl SubtitleProviderConfigRepository for SubtitleProviderConfigStore {
         }
 
         if assignments.len() == 1 {
-            return Err(AppError::Validation(
-                "at least one subtitle provider config field must be provided".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_SUBTITLE_PROVIDER_UPDATE_EMPTY,
+                "at least one subtitle provider config field must be provided",
             ));
         }
 
@@ -178,7 +179,7 @@ impl SubtitleProviderConfigRepository for SubtitleProviderConfigStore {
                 Box::pin(async move {
                     let rows = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("subtitle provider config {id}")));
+                        return Err(AppError::not_found_reason(crate::error_reasons::CONFIGURATION_SUBTITLE_PROVIDER_CONFIG_NOT_FOUND, format!("subtitle provider config {id}")));
                     }
                     fetch_optional_subtitle_provider(
                         SqlExec::Tx(tx),
@@ -189,7 +190,7 @@ impl SubtitleProviderConfigRepository for SubtitleProviderConfigStore {
                         encryption_key.as_ref(),
                     )
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("subtitle provider config {id}")))
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::CONFIGURATION_SUBTITLE_PROVIDER_CONFIG_NOT_FOUND, format!("subtitle provider config {id}")))
                 })
             },
         )
@@ -211,7 +212,10 @@ impl SubtitleProviderConfigRepository for SubtitleProviderConfigStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("subtitle provider config {id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::CONFIGURATION_SUBTITLE_PROVIDER_CONFIG_NOT_FOUND,
+                            format!("subtitle provider config {id}"),
+                        ));
                     }
                     Ok(())
                 })

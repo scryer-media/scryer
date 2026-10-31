@@ -329,7 +329,8 @@ impl AppUseCase {
             .await?
             .is_empty()
         {
-            return Err(AppError::Unauthorized(
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::import::DO_NOT_ACCESS_ANY_LIBRARIES,
                 "You do not have access to any libraries".to_string(),
             ));
         }
@@ -347,7 +348,12 @@ impl AppUseCase {
             .active_streams
             .get(stream_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("active import stream {stream_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::import::ACTIVE_IMPORT_STREAM_NOT_FOUND,
+                    format!("active import stream {stream_id}"),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &stream.library_id,
@@ -360,7 +366,10 @@ impl AppUseCase {
             .request_cancel(stream_id)
             .await
             .ok_or_else(|| {
-                AppError::Validation("The import is no longer cancellable".to_string())
+                AppError::validation_refused(
+                    crate::error_reasons::import::UNAVAILABLE,
+                    "The import is no longer cancellable".to_string(),
+                )
             })?;
         Ok(())
     }

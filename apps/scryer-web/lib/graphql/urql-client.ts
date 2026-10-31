@@ -98,11 +98,16 @@ function redirectToLogin() {
 
   const loginPath = basePath === "/" ? "/login" : `${basePath}/login`;
   const params = new URLSearchParams();
-  if (redirectTarget && redirectTarget.startsWith("/") && !redirectTarget.startsWith("//")) {
+  if (
+    redirectTarget &&
+    redirectTarget.startsWith("/") &&
+    !redirectTarget.startsWith("//")
+  ) {
     params.set("redirect", redirectTarget);
   }
 
-  const destination = params.size > 0 ? `${loginPath}?${params.toString()}` : loginPath;
+  const destination =
+    params.size > 0 ? `${loginPath}?${params.toString()}` : loginPath;
   window.location.replace(destination);
 }
 
@@ -135,7 +140,10 @@ function inputPath(input: RequestInfo | URL): string | null {
     return null;
   }
   try {
-    const raw = typeof input === "string" || input instanceof URL ? input.toString() : input.url;
+    const raw =
+      typeof input === "string" || input instanceof URL
+        ? input.toString()
+        : input.url;
     return new URL(raw, window.location.origin).pathname;
   } catch {
     return null;
@@ -150,7 +158,8 @@ async function withAuthlessProof(input: RequestInfo | URL, init?: RequestInit) {
   ) {
     return init;
   }
-  const graphqlPath = new URL(getRuntimeGraphqlUrl(), window.location.origin).pathname;
+  const graphqlPath = new URL(getRuntimeGraphqlUrl(), window.location.origin)
+    .pathname;
   if (inputPath(input) !== graphqlPath) {
     return init;
   }
@@ -179,7 +188,9 @@ function withoutAuthorization(init?: RequestInit): RequestInit | undefined {
   return { ...init, headers };
 }
 
-async function responseRequiresAuthlessProof(response: Response): Promise<boolean> {
+async function responseRequiresAuthlessProof(
+  response: Response,
+): Promise<boolean> {
   if (response.status !== 403) {
     return false;
   }
@@ -195,10 +206,7 @@ export const scryerFetch: typeof fetch = async (input, init) => {
   let response = await fetch(input, await withAuthlessProof(input, init));
   const hadClientAuth =
     headersHaveAuthorization(init?.headers) || getAuthToken() !== null;
-  if (
-    hadClientAuth &&
-    (await responseRequiresAuthlessProof(response))
-  ) {
+  if (hadClientAuth && (await responseRequiresAuthlessProof(response))) {
     clearClientAuthSession();
     response = await fetch(
       input,
@@ -211,6 +219,22 @@ export const scryerFetch: typeof fetch = async (input, init) => {
   }
   if (response.status === MFA_STEP_UP_REQUIRED_STATUS) {
     dispatchMfaStepUpRequired();
+  }
+  if (response.status === 503) {
+    const maintenance = await response
+      .clone()
+      .json()
+      .catch(() => null);
+    if (
+      maintenance?.reason === "RESTORE_MAINTENANCE_ACTIVE" ||
+      maintenance?.errors?.some(
+        (error: { extensions?: { reason?: string } }) =>
+          error.extensions?.reason === "RESTORE_MAINTENANCE_ACTIVE",
+      )
+    ) {
+      window.location.reload();
+      throw new TypeError("Restore is in progress");
+    }
   }
 
   const ct = response.headers.get("content-type") ?? "";
@@ -243,11 +267,7 @@ export function isAbortError(error: unknown): boolean {
   if (errorHasName(error, "AbortError")) {
     return true;
   }
-  if (
-    error != null &&
-    typeof error === "object" &&
-    "networkError" in error
-  ) {
+  if (error != null && typeof error === "object" && "networkError" in error) {
     return errorHasName(
       (error as { networkError?: unknown }).networkError,
       "AbortError",

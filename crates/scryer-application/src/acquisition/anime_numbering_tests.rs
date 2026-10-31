@@ -607,6 +607,7 @@ fn a_cour_name_that_is_also_a_series_alias_still_anchors() {
     series.tagged_aliases = vec![TaggedAlias {
         name: "Lantern Verge: Ember Circuit".to_string(),
         language: "eng".to_string(),
+        country: None,
     }];
 
     let resolution = resolve(

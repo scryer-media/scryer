@@ -7,7 +7,7 @@ import {
   buildOverviewDetailPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
-  indexerSettingsTabs,
+  INDEXER_SETTINGS_TABS,
   listsSectionFromPath,
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
@@ -31,7 +31,13 @@ function redirects(from: string, to: string): void {
 }
 
 test("facet settings sections that consume media settings trigger loading", () => {
-  for (const section of ["library", "general", "quality", "renaming", "routing"] as const) {
+  for (const section of [
+    "library",
+    "general",
+    "quality",
+    "renaming",
+    "routing",
+  ] as const) {
     assert.equal(isMediaSettingsSection(section), true, section);
   }
 
@@ -91,7 +97,10 @@ test("canonical route families resolve to typed application state", () => {
 });
 
 test("media detail and settings routes reject ambiguous or extra segments", () => {
-  assert.equal(canonical("/movies/sample-title").overviewTitleSlug, "sample-title");
+  assert.equal(
+    canonical("/movies/sample-title").overviewTitleSlug,
+    "sample-title",
+  );
   assert.equal(
     canonical("/series/library-a/sample-title").overviewLibrarySlug,
     "library-a",
@@ -144,9 +153,15 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/automation/rules/maintenance/rules", "/automation/rules/maintenance"],
     ["/automation/rules/request-rules", "/automation/rules/request"],
     // Folded panes redirect: exclusions to the candidates, gates to the list.
-    ["/automation/rules/maintenance/exclusions", "/automation/rules/maintenance/candidates"],
+    [
+      "/automation/rules/maintenance/exclusions",
+      "/automation/rules/maintenance/candidates",
+    ],
     ["/automation/rules/maintenance/gates", "/automation/rules/maintenance"],
-    ["/automation/rules/maintenance/runs", "/automation/rules/maintenance/history"],
+    [
+      "/automation/rules/maintenance/runs",
+      "/automation/rules/maintenance/history",
+    ],
     ["/settings/subtitles", "/automation/subtitles"],
     ["/settings/post-processing", "/automation/post-processing"],
     ["/settings/post-procesing", "/automation/post-processing"],
@@ -187,39 +202,46 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
 });
 
 test("redirects preserve query parameters and hashes", () => {
-  assert.deepEqual(resolveAppRoute(
-    "/settings/recycleBin",
-    "?library=library-a&id=title-id",
-    "#items",
-  ), {
-    kind: "redirect",
-    to: "/system/recycle-bin?library=library-a&id=title-id#items",
-  });
+  assert.deepEqual(
+    resolveAppRoute(
+      "/settings/recycleBin",
+      "?library=library-a&id=title-id",
+      "#items",
+    ),
+    {
+      kind: "redirect",
+      to: "/system/recycle-bin?library=library-a&id=title-id#items",
+    },
+  );
   for (const path of [
     "/automation/wanted/history",
     "/wanted/history",
     "/history",
   ]) {
-    assert.deepEqual(resolveAppRoute(
-      path,
-      "?library=library-a&id=title-id",
-      "#items",
-    ), {
-      kind: "redirect",
-      to: "/activity/history?library=library-a&id=title-id#items",
-    });
+    assert.deepEqual(
+      resolveAppRoute(path, "?library=library-a&id=title-id", "#items"),
+      {
+        kind: "redirect",
+        to: "/activity/history?library=library-a&id=title-id#items",
+      },
+    );
   }
 });
 
 test("legacy id-based media routes remain canonical until title lookup replaces them", () => {
-  const resolution = resolveAppRoute("/movies", "?id=title-id&episodeId=episode-id");
+  const resolution = resolveAppRoute(
+    "/movies",
+    "?id=title-id&episodeId=episode-id",
+  );
   assert.equal(resolution.kind, "canonical");
 });
 
 test("unknown roots and invalid sections do not fall back to another page", () => {
   assert.deepEqual(resolveAppRoute("/unknown"), { kind: "not-found" });
   assert.deepEqual(resolveAppRoute("/system/unknown"), { kind: "not-found" });
-  assert.deepEqual(resolveAppRoute("/automation/unknown"), { kind: "not-found" });
+  assert.deepEqual(resolveAppRoute("/automation/unknown"), {
+    kind: "not-found",
+  });
 });
 
 test("the root path defers to the shell instead of resolving by path", () => {
@@ -245,6 +267,7 @@ test("the indexers page carries its panes as a third path segment", () => {
   for (const path of [
     "/integrations/indexers",
     "/integrations/indexers/search",
+    "/integrations/indexers/clients",
     "/integrations/indexers/seeding-profiles",
   ]) {
     const route = canonical(path);
@@ -267,7 +290,12 @@ test("seeding profiles are no longer a settings section of their own", () => {
 });
 
 test("indexer pane paths round-trip through the tab helpers", () => {
-  for (const tab of ["indexers", "search", "seedingProfiles"] as const) {
+  for (const tab of [
+    "indexers",
+    "search",
+    "clients",
+    "seedingProfiles",
+  ] as const) {
     assert.equal(
       indexerSettingsTabFromPath(buildIndexerSettingsPath(tab)),
       tab,
@@ -275,7 +303,10 @@ test("indexer pane paths round-trip through the tab helpers", () => {
     );
   }
   // Anything that is not a known pane segment falls back to the default pane.
-  assert.equal(indexerSettingsTabFromPath("/integrations/indexers"), "indexers");
+  assert.equal(
+    indexerSettingsTabFromPath("/integrations/indexers"),
+    "indexers",
+  );
   assert.equal(
     indexerSettingsTabFromPath("/integrations/indexers/unknown"),
     "indexers",
@@ -317,14 +348,21 @@ test("the rules page carries all three kinds of rule as panes", () => {
   assert.deepEqual(resolveAppRoute("/automation/rules/request/decisions"), {
     kind: "not-found",
   });
-  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/history/extra"), {
-    kind: "not-found",
-  });
+  assert.deepEqual(
+    resolveAppRoute("/automation/rules/maintenance/history/extra"),
+    {
+      kind: "not-found",
+    },
+  );
 });
 
 test("rules pane paths round-trip through the section helpers", () => {
   for (const section of ["scoring", "maintenance", "request"] as const) {
-    assert.equal(rulesSectionFromPath(buildRulesPath(section)), section, section);
+    assert.equal(
+      rulesSectionFromPath(buildRulesPath(section)),
+      section,
+      section,
+    );
   }
   for (const section of ["rules", "candidates", "history"] as const) {
     const path = buildRulesPath("maintenance", section);
@@ -335,22 +373,33 @@ test("rules pane paths round-trip through the section helpers", () => {
   assert.equal(rulesSectionFromPath("/automation/rules"), "scoring");
   assert.equal(rulesSectionFromPath("/automation/rules/unknown"), "scoring");
   assert.equal(rulesSectionFromPath("/settings/profile"), "scoring");
-  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/maintenance"), "rules");
-  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/scoring"), "rules");
+  assert.equal(
+    maintenanceRulesSectionFromPath("/automation/rules/maintenance"),
+    "rules",
+  );
+  assert.equal(
+    maintenanceRulesSectionFromPath("/automation/rules/scoring"),
+    "rules",
+  );
   assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
 });
 
-test("indexerSettingsTabs always offers the search pane", () => {
-  assert.deepEqual(indexerSettingsTabs(), [
+test("indexer settings always offer the search and client panes", () => {
+  assert.deepEqual(INDEXER_SETTINGS_TABS, [
     "indexers",
     "search",
+    "clients",
     "seedingProfiles",
   ]);
   assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
 test("rulesSectionsFor drops maintenance and request rules until experimental features are on", () => {
-  assert.deepEqual(rulesSectionsFor(true), ["scoring", "maintenance", "request"]);
+  assert.deepEqual(rulesSectionsFor(true), [
+    "scoring",
+    "maintenance",
+    "request",
+  ]);
   // One entry left means there is no kind to switch between, which is how the
   // Rules page decides to drop its kind rail.
   assert.deepEqual(rulesSectionsFor(false), ["scoring"]);
@@ -370,9 +419,20 @@ test("the Lists page resolves its panes and redirects the default pane's alias",
   redirects("/lists/provider-apps", "/settings/lists/provider-apps");
   redirects("/lists/public", "/lists");
   assert.deepEqual(resolveAppRoute("/lists/unknown"), { kind: "not-found" });
-  assert.deepEqual(resolveAppRoute("/lists/exclusions/extra"), { kind: "not-found" });
-  for (const section of ["public", "personal", "exclusions", "providerApps"] as const) {
-    assert.equal(listsSectionFromPath(buildListsPath(section)), section, section);
+  assert.deepEqual(resolveAppRoute("/lists/exclusions/extra"), {
+    kind: "not-found",
+  });
+  for (const section of [
+    "public",
+    "personal",
+    "exclusions",
+    "providerApps",
+  ] as const) {
+    assert.equal(
+      listsSectionFromPath(buildListsPath(section)),
+      section,
+      section,
+    );
   }
   assert.equal(listsSectionFromPath("/lists/unknown"), "public");
 });

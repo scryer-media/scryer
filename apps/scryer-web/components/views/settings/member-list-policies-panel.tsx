@@ -43,8 +43,12 @@ export function MemberListPoliciesPanel({
   return (
     <div id="member-list-policies" className={PANEL_CLASS}>
       <div className={PANEL_HEADER_CLASS}>
-        <h3 className="text-[15px] font-semibold text-[var(--scry-ink2)]">{t("lists.policy.heading")}</h3>
-        <p className="mt-0.5 text-[12.5px] text-[var(--scry-muted)]">{t("lists.policy.help")}</p>
+        <h3 className="text-[15px] font-semibold text-[var(--scry-ink2)]">
+          {t("lists.policy.heading")}
+        </h3>
+        <p className="mt-0.5 text-[12.5px] text-[var(--scry-muted)]">
+          {t("lists.policy.help")}
+        </p>
       </div>
       <div className="p-4">
         {loading ? (
@@ -55,35 +59,56 @@ export function MemberListPoliciesPanel({
         ) : error ? (
           <p className="text-sm text-[var(--scry-danger-text)]">{error}</p>
         ) : policies.length === 0 ? (
-          <p className="text-sm text-[var(--scry-muted)]">{t("lists.policy.empty")}</p>
+          <p className="text-sm text-[var(--scry-muted)]">
+            {t("lists.policy.empty")}
+          </p>
         ) : (
           <div className={TABLE_SHELL_CLASS}>
             <Table>
               <TableHeader>
                 <TableRow className={TABLE_HEADER_ROW_CLASS}>
-                  <TableHead className={TABLE_HEADER_CELL_CLASS}>{t("lists.policy.member")}</TableHead>
-                  <TableHead className={TABLE_HEADER_CELL_CLASS}>{t("lists.policy.requests30d")}</TableHead>
-                  <TableHead className={TABLE_HEADER_CELL_CLASS}>{t("lists.policy.policy")}</TableHead>
+                  <TableHead className={TABLE_HEADER_CELL_CLASS}>
+                    {t("lists.policy.member")}
+                  </TableHead>
+                  <TableHead className={TABLE_HEADER_CELL_CLASS}>
+                    {t("lists.policy.requests30d")}
+                  </TableHead>
+                  <TableHead className={TABLE_HEADER_CELL_CLASS}>
+                    {t("lists.policy.policy")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {policies.map((entry) => (
-                  <TableRow key={entry.user.id} id={`member-list-policy-${entry.user.id}`}>
-                    <TableCell className="font-medium text-[var(--scry-ink2)]">{entry.user.username}</TableCell>
-                    <TableCell className="text-[var(--scry-muted)]">{entry.listRequestsLast30d}</TableCell>
+                  <TableRow
+                    key={entry.user.id}
+                    id={`member-list-policy-${entry.user.id}`}
+                  >
+                    <TableCell className="font-medium text-[var(--scry-ink2)]">
+                      {entry.user.username}
+                    </TableCell>
+                    <TableCell className="text-[var(--scry-muted)]">
+                      {entry.listRequestsLast30d}
+                    </TableCell>
                     <TableCell className="w-[220px]">
                       <SingleSelectField
                         id={`member-list-policy-select-${entry.user.id}`}
-                        label={t("lists.policy.policyFor", { name: entry.user.username })}
+                        label={t("lists.policy.policyFor", {
+                          name: entry.user.username,
+                        })}
                         labelClassName="sr-only"
                         className="space-y-0"
                         size="sm"
                         value={entry.policy}
                         options={POLICIES.map((policy) => ({
                           value: policy,
-                          label: t(`lists.policy.value.${policy.toLowerCase()}`),
+                          label: t(
+                            `lists.policy.value.${policy.toLowerCase()}`,
+                          ),
                         }))}
-                        onValueChange={(value) => onChange(entry.user.id, value as ListPolicy)}
+                        onValueChange={(value) =>
+                          onChange(entry.user.id, value as ListPolicy)
+                        }
                         disabled={savingUserId === entry.user.id}
                       />
                     </TableCell>

@@ -484,7 +484,10 @@ fn register_for_restart() {
 /// that was killed, or a tray that did not exit — is asked to stop and
 /// terminated if it does not. Succeeds only when nothing is left running.
 fn shutdown_existing_instance() -> Result<(), String> {
+    let supervisor = ServerSupervisor::new(shared::desktop_profile_dir()?, DEFAULT_PORT);
+    supervisor.ensure_restore_idle()?;
     let tray_result = stop_running_tray();
+    supervisor.ensure_restore_idle()?;
     let install_dir = shared::installation_dir()?;
     let report = stop_product_processes(
         &INSTALLED_EXECUTABLES,
@@ -1157,6 +1160,7 @@ impl TrayState {
                 }
             }
             MENU_EXIT => {
+                self.supervisor.ensure_restore_idle()?;
                 // SAFETY: `window` is the live tray window for this state.
                 unsafe { DestroyWindow(window) };
                 Ok(())
@@ -1235,13 +1239,18 @@ unsafe extern "system" fn window_proc(
                 Ok(())
             }
             SHUTDOWN_MESSAGE => {
+                if state.supervisor.ensure_restore_idle().is_err() {
+                    return 0;
+                }
                 // SAFETY: This is the live window associated with the tray state.
                 unsafe { DestroyWindow(window) };
                 Ok(())
             }
-            // Restart Manager (an installer replacing these files) and a
-            // sign-out both ask first; the tray never objects.
-            WM_QUERYENDSESSION => return 1,
+            // An application-controlled exit must not close the job handle
+            // and terminate a restore worker before its safe handoff.
+            WM_QUERYENDSESSION => {
+                return isize::from(state.supervisor.ensure_restore_idle().is_ok());
+            }
             // `wparam` is nonzero when the session really ends, or when
             // Restart Manager closes the tray (`ENDSESSION_CLOSEAPP` in
             // `lparam`). Either way the tray stops its server and exits now:

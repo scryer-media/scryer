@@ -337,7 +337,7 @@ impl AppUseCase {
                         ))
                     })
             }
-            other => Err(AppError::Validation(format!(
+            other => Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_BUILT_PREPARATION_UNSUPPORTED, format!(
                 "unsupported plugin_type '{}' for built-in preparation",
                 other
             ))),
@@ -423,7 +423,7 @@ impl AppUseCase {
                     })?;
             }
             other => {
-                return Err(AppError::Validation(format!(
+                return Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_BUILT_RESTORE_UNSUPPORTED, format!(
                     "unsupported plugin_type '{}' for built-in restore",
                     other
                 )));

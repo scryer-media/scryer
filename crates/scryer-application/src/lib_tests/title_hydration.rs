@@ -59,7 +59,9 @@ async fn movie_defaults_remain_inherited_and_reject_unassigned_markets() {
                     movie_availability_update(None, Some(market), None),
                 )
                 .await,
-                Err(AppError::Validation(_))
+                Err(AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. })
             ),
             "{market}"
         );
@@ -297,7 +299,9 @@ async fn movie_availability_resolves_title_then_library_then_facet() {
             series_override,
         )
         .await,
-        Err(AppError::Validation(_))
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
     ));
 }
 

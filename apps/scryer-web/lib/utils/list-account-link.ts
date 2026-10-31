@@ -1,8 +1,24 @@
 export const LIST_ACCOUNT_LINK_TYPE = "scryer:list-account-link";
 export const LIST_ACCOUNT_LINK_STORAGE_KEY = "scryer:list-account-link:pending";
 export const LIST_ACCOUNT_RELAY_ORIGIN = "https://smg.scryer.media";
-const PROVIDERS = new Set(["plex", "tmdb", "trakt", "anilist", "mal", "simkl", "mdblist"]);
-const PAYLOAD_KEYS = new Set(["type", "provider", "state", "exchange_code", "code", "iss", "error"]);
+const PROVIDERS = new Set([
+  "plex",
+  "tmdb",
+  "trakt",
+  "anilist",
+  "mal",
+  "simkl",
+  "mdblist",
+]);
+const PAYLOAD_KEYS = new Set([
+  "type",
+  "provider",
+  "state",
+  "exchange_code",
+  "code",
+  "iss",
+  "error",
+]);
 
 export type PendingListAccountLink = {
   sessionId: string;
@@ -26,29 +42,60 @@ function boundedString(value: unknown, max = 8192): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max;
 }
 
-export function parseListAccountPayload(value: unknown): ListAccountLinkPayload | null {
+export function parseListAccountPayload(
+  value: unknown,
+): ListAccountLinkPayload | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
   if (Object.keys(data).some((key) => !PAYLOAD_KEYS.has(key))) return null;
-  if (data.type !== LIST_ACCOUNT_LINK_TYPE || !boundedString(data.provider, 32) || !PROVIDERS.has(data.provider)) return null;
+  if (
+    data.type !== LIST_ACCOUNT_LINK_TYPE ||
+    !boundedString(data.provider, 32) ||
+    !PROVIDERS.has(data.provider)
+  )
+    return null;
   if (!boundedString(data.state)) return null;
   if (data.iss !== undefined && !boundedString(data.iss, 256)) return null;
   if (data.error !== undefined && !boundedString(data.error, 256)) return null;
-  if (data.exchange_code !== undefined && !boundedString(data.exchange_code)) return null;
+  if (data.exchange_code !== undefined && !boundedString(data.exchange_code))
+    return null;
   if (data.code !== undefined && !boundedString(data.code)) return null;
   if (!data.error && !data.exchange_code && !data.code) return null;
   if (data.error && (data.exchange_code || data.code)) return null;
   if (data.exchange_code && data.code) return null;
-  if (data.provider === "simkl" && data.iss !== "https://simkl.com") return null;
+  if (data.provider === "simkl" && data.iss !== "https://simkl.com")
+    return null;
   return data as ListAccountLinkPayload;
 }
 
-export function parsePendingListAccountLink(raw: string | null, origin: string, now = Date.now()): PendingListAccountLink | null {
+export function parsePendingListAccountLink(
+  raw: string | null,
+  origin: string,
+  now = Date.now(),
+): PendingListAccountLink | null {
   try {
-    const value = JSON.parse(raw ?? "null") as Partial<PendingListAccountLink> | null;
-    if (!value || !boundedString(value.sessionId, 256) || !boundedString(value.state) || !boundedString(value.provider, 32) || !PROVIDERS.has(value.provider)) return null;
-    if (value.authorizationOrigin !== origin && value.authorizationOrigin !== LIST_ACCOUNT_RELAY_ORIGIN) return null;
-    if (!boundedString(value.expiresAt, 64) || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= now) return null;
+    const value = JSON.parse(
+      raw ?? "null",
+    ) as Partial<PendingListAccountLink> | null;
+    if (
+      !value ||
+      !boundedString(value.sessionId, 256) ||
+      !boundedString(value.state) ||
+      !boundedString(value.provider, 32) ||
+      !PROVIDERS.has(value.provider)
+    )
+      return null;
+    if (
+      value.authorizationOrigin !== origin &&
+      value.authorizationOrigin !== LIST_ACCOUNT_RELAY_ORIGIN
+    )
+      return null;
+    if (
+      !boundedString(value.expiresAt, 64) ||
+      !Number.isFinite(Date.parse(value.expiresAt)) ||
+      Date.parse(value.expiresAt) <= now
+    )
+      return null;
     return value as PendingListAccountLink;
   } catch {
     return null;
@@ -63,10 +110,25 @@ export function validateListAccountMessage(
   consumed: boolean,
   now = Date.now(),
 ): ListAccountLinkPayload | null {
-  if (consumed || !popup || event.source !== popup || Date.parse(pending.expiresAt) <= now) return null;
-  if (event.origin !== pending.authorizationOrigin && event.origin !== instanceOrigin) return null;
+  if (
+    consumed ||
+    !popup ||
+    event.source !== popup ||
+    Date.parse(pending.expiresAt) <= now
+  )
+    return null;
+  if (
+    event.origin !== pending.authorizationOrigin &&
+    event.origin !== instanceOrigin
+  )
+    return null;
   const payload = parseListAccountPayload(event.data);
-  if (!payload || payload.provider !== pending.provider || payload.state !== pending.state) return null;
+  if (
+    !payload ||
+    payload.provider !== pending.provider ||
+    payload.state !== pending.state
+  )
+    return null;
   return payload;
 }
 
@@ -82,12 +144,25 @@ export function consumeListAccountReturn(
   try {
     if (hash.length > 16000 || query.length > 16000) return null;
     if (location.pathname.endsWith("/lists/oauth/return")) {
-      return parseListAccountPayload(JSON.parse(decodeURIComponent(hash.slice(1))));
+      return parseListAccountPayload(
+        JSON.parse(decodeURIComponent(hash.slice(1))),
+      );
     }
-    if (!location.pathname.endsWith("/lists/oauth/callback") || !pending) return null;
+    if (!location.pathname.endsWith("/lists/oauth/callback") || !pending)
+      return null;
     const params = new URLSearchParams(query);
-    if ([...params.keys()].some((key) => !["state", "code", "iss", "error"].includes(key))) return null;
-    if (["state", "code", "iss", "error"].some((key) => params.getAll(key).length > 1)) return null;
+    if (
+      [...params.keys()].some(
+        (key) => !["state", "code", "iss", "error"].includes(key),
+      )
+    )
+      return null;
+    if (
+      ["state", "code", "iss", "error"].some(
+        (key) => params.getAll(key).length > 1,
+      )
+    )
+      return null;
     return parseListAccountPayload({
       type: LIST_ACCOUNT_LINK_TYPE,
       provider: pending.provider,
@@ -101,8 +176,16 @@ export function consumeListAccountReturn(
   }
 }
 
-export function listAccountReturnMatches(payload: ListAccountLinkPayload | null, pending: PendingListAccountLink | null): boolean {
-  return !!payload && !!pending && payload.provider === pending.provider && payload.state === pending.state;
+export function listAccountReturnMatches(
+  payload: ListAccountLinkPayload | null,
+  pending: PendingListAccountLink | null,
+): boolean {
+  return (
+    !!payload &&
+    !!pending &&
+    payload.provider === pending.provider &&
+    payload.state === pending.state
+  );
 }
 
 export function captureListAccountReturn(
@@ -110,15 +193,28 @@ export function captureListAccountReturn(
   history: Pick<History, "replaceState">,
   readPending: () => string | null,
 ) {
-  const captured = { pathname: location.pathname, search: location.search, hash: location.hash };
+  const captured = {
+    pathname: location.pathname,
+    search: location.search,
+    hash: location.hash,
+  };
   history.replaceState(null, "", captured.pathname);
   let pending: PendingListAccountLink | null = null;
-  try { pending = parsePendingListAccountLink(readPending(), location.origin); }
-  catch { /* Storage can be unavailable; callback material has already been erased. */ }
-  return { pending, payload: consumeListAccountReturn(captured, history, pending) };
+  try {
+    pending = parsePendingListAccountLink(readPending(), location.origin);
+  } catch {
+    /* Storage can be unavailable; callback material has already been erased. */
+  }
+  return {
+    pending,
+    payload: consumeListAccountReturn(captured, history, pending),
+  };
 }
 
-export function listAccountCompletionInput(pending: PendingListAccountLink, payload: ListAccountLinkPayload) {
+export function listAccountCompletionInput(
+  pending: PendingListAccountLink,
+  payload: ListAccountLinkPayload,
+) {
   return {
     sessionId: pending.sessionId,
     state: payload.state,
@@ -134,8 +230,7 @@ const LIST_ACCOUNT_POLL_RATE_LIMITED_MS = 30000;
 
 /** What to do after a poll the instance answered without an account. */
 export type ListAccountPollStep =
-  | { kind: "wait"; delayMs: number; retrying: boolean }
-  | { kind: "failed" };
+  { kind: "wait"; delayMs: number; retrying: boolean } | { kind: "failed" };
 
 /**
  * Pending and in-progress answers keep the normal pace. When the provider or
@@ -146,18 +241,33 @@ export function listAccountPollStep(status: unknown): ListAccountPollStep {
   switch (status) {
     case "PENDING":
     case "BUSY":
-      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false };
+      return {
+        kind: "wait",
+        delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS,
+        retrying: false,
+      };
     case "UNAVAILABLE":
-      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_UNAVAILABLE_MS, retrying: true };
+      return {
+        kind: "wait",
+        delayMs: LIST_ACCOUNT_POLL_UNAVAILABLE_MS,
+        retrying: true,
+      };
     case "RATE_LIMITED":
-      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_RATE_LIMITED_MS, retrying: true };
+      return {
+        kind: "wait",
+        delayMs: LIST_ACCOUNT_POLL_RATE_LIMITED_MS,
+        retrying: true,
+      };
     default:
       return { kind: "failed" };
   }
 }
 
 /** Instance errors that say "not right now" rather than answering for the link. */
-const TRANSIENT_POLL_ERROR_CODES = new Set(["INTERNAL_ERROR", "TEMPORARY_UNAVAILABLE"]);
+const TRANSIENT_POLL_ERROR_CODES = new Set([
+  "INTERNAL_ERROR",
+  "TEMPORARY_UNAVAILABLE",
+]);
 
 /**
  * How long to wait before repeating a failed poll request, or null when the
@@ -168,12 +278,16 @@ const TRANSIENT_POLL_ERROR_CODES = new Set(["INTERNAL_ERROR", "TEMPORARY_UNAVAIL
  */
 export function listAccountPollRetryDelay(reason: unknown): number | null {
   if (!reason || typeof reason !== "object") return null;
-  const { graphQLErrors, networkError } = reason as { graphQLErrors?: unknown; networkError?: unknown };
+  const { graphQLErrors, networkError } = reason as {
+    graphQLErrors?: unknown;
+    networkError?: unknown;
+  };
   if (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0) {
     return networkError ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
   }
   const transient = graphQLErrors.every((error) => {
-    const code = (error as { extensions?: { code?: unknown } } | null)?.extensions?.code;
+    const code = (error as { extensions?: { code?: unknown } } | null)
+      ?.extensions?.code;
     return typeof code === "string" && TRANSIENT_POLL_ERROR_CODES.has(code);
   });
   return transient ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
@@ -196,21 +310,29 @@ export async function finishCurrentListAccountLink(
 
 /** What a member's key form asks the link to do. */
 export type ListAccountKeyEntry =
-  | { kind: "key"; key: string; approval: boolean }
-  | { kind: "missing" };
+  { kind: "key"; key: string; approval: boolean } | { kind: "missing" };
 
 /** Reads what a member typed into a provider's key form. Connecting always takes the member's own key. */
-export function listAccountKeyEntry(memberKey: { approval: boolean }, typed: string): ListAccountKeyEntry {
+export function listAccountKeyEntry(
+  memberKey: { approval: boolean },
+  typed: string,
+): ListAccountKeyEntry {
   const key = typed.trim();
-  return key ? { kind: "key", key, approval: memberKey.approval } : { kind: "missing" };
+  return key
+    ? { kind: "key", key, approval: memberKey.approval }
+    : { kind: "missing" };
 }
 
 /** A provider's "where to find the key" address, when it is a plain https link. */
-export function listAccountKeyHelpUrl(value: string | null | undefined): string | null {
+export function listAccountKeyHelpUrl(
+  value: string | null | undefined,
+): string | null {
   if (!value) return null;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+    return url.protocol === "https:" && !url.username && !url.password
+      ? url.href
+      : null;
   } catch {
     return null;
   }

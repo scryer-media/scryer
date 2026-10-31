@@ -95,7 +95,11 @@ async fn create_user_rejects_password_shorter_than_minimum() {
     .await;
 
     match result {
-        Err(AppError::Validation(message)) => {
+        Err(
+            AppError::Validation(message)
+            | AppError::ValidationRefused { message, .. }
+            | AppError::ValidationRefusedWithCount { message, .. },
+        ) => {
             assert_eq!(message, "password must be at least 8 characters");
         }
         Err(error) => panic!("expected password-length validation error, got {error}"),
@@ -122,7 +126,11 @@ async fn set_user_password_rejects_password_shorter_than_minimum() {
         .await;
 
     match result {
-        Err(AppError::Validation(message)) => {
+        Err(
+            AppError::Validation(message)
+            | AppError::ValidationRefused { message, .. }
+            | AppError::ValidationRefusedWithCount { message, .. },
+        ) => {
             assert_eq!(message, "password must be at least 8 characters");
         }
         Err(error) => panic!("expected password-length validation error, got {error}"),
@@ -180,7 +188,11 @@ async fn self_password_change_rejects_password_shorter_than_minimum() {
         .await;
 
     match result {
-        Err(AppError::Validation(message)) => {
+        Err(
+            AppError::Validation(message)
+            | AppError::ValidationRefused { message, .. }
+            | AppError::ValidationRefusedWithCount { message, .. },
+        ) => {
             assert_eq!(message, "password must be at least 8 characters");
         }
         Err(error) => panic!("expected password-length validation error, got {error}"),
@@ -329,7 +341,11 @@ async fn set_initial_own_password_rejects_password_shorter_than_minimum() {
         .await;
 
     match result {
-        Err(AppError::Validation(message)) => {
+        Err(
+            AppError::Validation(message)
+            | AppError::ValidationRefused { message, .. }
+            | AppError::ValidationRefusedWithCount { message, .. },
+        ) => {
             assert_eq!(message, "password must be at least 8 characters");
         }
         Err(error) => panic!("expected password-length validation error, got {error}"),
@@ -353,7 +369,10 @@ async fn set_initial_own_password_requires_own_account_capability() {
         .set_initial_own_password(&user, "valid-password".to_string())
         .await;
 
-    assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+    ));
 }
 
 #[tokio::test]
@@ -390,7 +409,7 @@ async fn delete_user_rejects_removing_last_full_administrator() {
 
     assert!(matches!(
         result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "cannot delete the default admin; disable its login instead"
     ));
 }
@@ -416,7 +435,7 @@ async fn delete_user_rejects_removing_bootstrap_admin_after_replacement_exists()
 
     assert!(matches!(
         result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "cannot delete the default admin; disable its login instead"
     ));
     assert!(app.find_default_user().await.unwrap().is_some());
@@ -499,7 +518,12 @@ async fn login_status_changes_reject_self_and_recovery_admin() {
     let self_result = app
         .set_user_login_enabled(&stored_admin, &stored_admin.id, false, false)
         .await;
-    assert!(matches!(self_result, Err(AppError::Validation(_))));
+    assert!(matches!(
+        self_result,
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
+    ));
 
     let recovery = app
         .recover_reserved_admin_access("recovery-password")
@@ -510,7 +534,7 @@ async fn login_status_changes_reject_self_and_recovery_admin() {
         .await;
     assert!(matches!(
         recovery_result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "recovery-admin login is managed by the environment"
     ));
 }
@@ -550,7 +574,7 @@ async fn form_login_prevents_disabling_last_usable_full_admin() {
         .await;
     assert!(matches!(
         result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "cannot disable the last usable full administrator"
     ));
 }
@@ -764,7 +788,7 @@ async fn self_app_permission_edit_keeps_the_management_floor() {
         .await;
     assert!(matches!(
         result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "cannot remove your own user-management or permission-management access"
     ));
 
@@ -776,7 +800,12 @@ async fn self_app_permission_edit_keeps_the_management_floor() {
     let result = app
         .set_user_app_permissions(&admin, &admin.id, without_users)
         .await;
-    assert!(matches!(result, Err(AppError::Validation(_))));
+    assert!(matches!(
+        result,
+        Err(AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. })
+    ));
 
     let authorization = app
         .load_user_authorization(&admin)
@@ -835,7 +864,7 @@ async fn last_full_administrator_cannot_demote_self() {
         .await;
     assert!(matches!(
         result,
-        Err(AppError::Validation(message))
+        Err(AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. })
             if message == "cannot demote the last full administrator"
     ));
 

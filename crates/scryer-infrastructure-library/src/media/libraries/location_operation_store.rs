@@ -109,8 +109,9 @@ impl LocationOperationRepository for LocationOperationStore {
             "SELECT staging_path FROM location_recovery_staging WHERE operation_id = {} LIMIT 100001",
             &[SqlArg::Text(operation_id.into())]).await?;
         if rows.len() > 100000 {
-            return Err(AppError::Validation(
-                "Recovery staging evidence limit exceeded".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_RECOVERY_STAGING_EVIDENCE_LIMIT_EXCEEDED,
+                "Recovery staging evidence limit exceeded",
             ));
         }
         rows.into_iter()
@@ -122,7 +123,10 @@ impl LocationOperationRepository for LocationOperationStore {
         let plan: RecoveryPlan =
             serde_json::from_str(plan_json).map_err(|e| AppError::Validation(e.to_string()))?;
         if plan.operation_id() != operation_id {
-            return Err(AppError::Validation("Recovery identity changed".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_RECOVERY_IDENTITY_CHANGED,
+                "Recovery identity changed",
+            ));
         }
         let work = plan.work();
         let operation_id = operation_id.to_owned();
@@ -136,9 +140,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::Text(plan.title.root_folder_id), SqlArg::OptText(plan.destination_root.map(|root| root.id)),
                 SqlArg::I64(work.files_total()), SqlArg::I64(work.bytes_total()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id.clone())]).await?;
         if changed != 1 {
-            return Err(AppError::Validation(
-                "Recovery cannot be replanned in its current state".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_NOT_REPLANNABLE, "Recovery cannot be replanned in its current state"));
         }
         // Retain destination bytes and staging evidence, but never let an old
         // receipt skip verification under a newly accepted plan.
@@ -185,47 +187,47 @@ impl LocationOperationRepository for LocationOperationStore {
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT recovery_committed_at, operation_type, execution_mode, cancel_requested, plan_json FROM location_operations WHERE id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?
-                    .ok_or_else(|| AppError::Validation("Recovery operation no longer exists".into()))?;
+                    .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_OPERATION_NOT_FOUND, "Recovery operation no longer exists"))?;
                 if row.text("operation_type")? != "title_folder_recovery" || row.text("execution_mode")? != "copy_preserve_sources" {
-                    return Err(AppError::Validation("Invalid recovery operation".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_OPERATION_INVALID, "Invalid recovery operation"));
                 }
                 if row.opt_timestamp("recovery_committed_at")?.is_some() { return Ok(None); }
-                if row.bool("cancel_requested")? { return Err(AppError::Validation("Recovery canceled before catalog commit; original mappings preserved".into())); }
+                if row.bool("cancel_requested")? { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_CANCELED_BEFORE_COMMIT, "Recovery canceled before catalog commit; original mappings preserved")); }
                 let persisted: scryer_application::location::title_folder_recovery::RecoveryPlan = serde_json::from_str(&row.text("plan_json")?)
                     .map_err(|e| AppError::Validation(e.to_string()))?;
                 if persisted != plan || plan.unresolved.is_some() {
-                    return Err(AppError::Validation("Recovery plan changed or remains unresolved".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED, "Recovery plan changed or remains unresolved"));
                 }
                 if matches!(tx, crate::queries::sql_runtime::SqlTx::Postgres(_)) {
                     SqlRuntime::execute(SqlExec::Tx(tx), "LOCK TABLE titles, library_roots, media_files IN SHARE ROW EXCLUSIVE MODE", &[]).await?;
                 }
                 let catalog = recovery_catalog_tx(tx).await?;
                 scryer_application::location::title_folder_recovery::validate_catalog(&plan, &catalog)?;
-                let root = plan.destination_root.as_ref().ok_or_else(|| AppError::Validation("Missing recovery root".into()))?;
+                let root = plan.destination_root.as_ref().ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_ROOT_MISSING, "Missing recovery root"))?;
                 let title = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT root_folder_id FROM titles WHERE id = {}", &[SqlArg::Text(plan.title.id.clone())]).await?
-                    .ok_or_else(|| AppError::Validation("Title no longer exists".into()))?;
+                    .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_TITLE_NOT_FOUND, "Title no longer exists"))?;
                 if title.text("root_folder_id")? != plan.title.root_folder_id {
-                    return Err(AppError::Validation("Selected root changed".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::MEDIA_SELECTED_ROOT_CHANGED, "Selected root changed"));
                 }
                 for file in &plan.files {
                     let receipt = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                         "SELECT media_file_id, source_path, size_bytes, applied_depth, fell_back, outcome, full_blake3 FROM location_operation_verifications WHERE operation_id = {} AND title_id = {} AND destination_path = {}",
                         &[SqlArg::Text(operation_id.clone()), SqlArg::Text(plan.title.id.clone()), SqlArg::Text(file.destination.clone())]).await?
-                        .ok_or_else(|| AppError::Validation("Recovery file has no durable verification receipt".into()))?;
+                        .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_VERIFICATION_RECEIPT_REQUIRED, "Recovery file has no durable verification receipt"))?;
                     if receipt.opt_text("media_file_id")?.as_deref() != Some(file.media.id.as_str())
                         || receipt.text("source_path")? != file.media.file_path
                         || receipt.i64("size_bytes")? != file.media.size_bytes
                         || receipt.text("applied_depth")? != "full" || receipt.bool("fell_back")?
                         || receipt.text("outcome")? != "verified"
                         || receipt.opt_text("full_blake3")?.is_none_or(|hash| hash.len() != 64) {
-                        return Err(AppError::Validation("Recovery requires matching full verification receipts".into()));
+                        return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_VERIFICATION_MISMATCH, "Recovery requires matching full verification receipts"));
                     }
                     let changed = SqlRuntime::execute(SqlExec::Tx(tx),
                         "UPDATE media_files SET file_path = {} WHERE id = {} AND title_id = {} AND file_path = {} AND size_bytes = {}",
                         &[SqlArg::Text(file.destination.clone()), SqlArg::Text(file.media.id.clone()),
                           SqlArg::Text(plan.title.id.clone()), SqlArg::Text(file.media.file_path.clone()), SqlArg::I64(file.media.size_bytes)]).await?;
-                    if changed != 1 { return Err(AppError::Validation("Media changed during recovery".into())); }
+                    if changed != 1 { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_MEDIA_CHANGED, "Media changed during recovery")); }
                 }
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE titles SET folder_path = {}, root_folder_id = {}, updated_at = {} WHERE id = {}",
@@ -627,10 +629,10 @@ impl LocationOperationRepository for LocationOperationStore {
         .await?;
 
         if updated == 0 {
-            return Err(AppError::NotFound(format!(
-                "location operation {}",
-                progress.operation_id
-            )));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LOCATION_OPERATION_NOT_FOUND,
+                format!("location operation {}", progress.operation_id),
+            ));
         }
         Ok(())
     }
@@ -655,9 +657,10 @@ impl LocationOperationRepository for LocationOperationStore {
         .await?;
 
         if updated == 0 {
-            return Err(AppError::NotFound(format!(
-                "location operation {operation_id}"
-            )));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_LOCATION_OPERATION_NOT_FOUND,
+                format!("location operation {operation_id}"),
+            ));
         }
         Ok(())
     }
@@ -1170,17 +1173,14 @@ impl LocationOperationStore {
     }
 }
 
-/// Whether a repository error is a unique/primary-key violation.
-///
-/// The SQL runtime flattens every sqlx failure into `AppError::Repository`, so
-/// message matching is the established classification (see the download-identity
-/// stores' `unique_violation` helper). Both dialects' stable texts are covered.
+/// Driver-provided unique facts cover both datastore engines.
 fn is_unique_violation(error: &AppError) -> bool {
     matches!(
-        error,
-        AppError::Repository(message)
-            if message.contains("UNIQUE constraint failed")
-                || message.contains("duplicate key value violates unique constraint")
+        error.repository_kind(),
+        Some(
+            scryer_application::RepositoryErrorKind::UniqueViolation
+                | scryer_application::RepositoryErrorKind::TitleExternalIdConflict
+        )
     )
 }
 
@@ -1407,8 +1407,9 @@ async fn recovery_catalog_tx(
         .into_iter()
         .any(|n| n > MAX_CATALOG_ROWS)
     {
-        return Err(AppError::Validation(
-            "Recovery catalog evidence limit exceeded; no changes made".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_RECOVERY_CATALOG_EVIDENCE_LIMIT_EXCEEDED,
+            "Recovery catalog evidence limit exceeded; no changes made",
         ));
     }
     let roots = root_rows
@@ -1857,7 +1858,7 @@ mod tests {
                         completed_at: None,
                     })
                     .await,
-                Err(AppError::NotFound(_))
+                Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
             ),
             "a progress write for an unknown operation must not silently do nothing"
         );

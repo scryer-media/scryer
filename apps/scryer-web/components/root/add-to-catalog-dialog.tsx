@@ -39,7 +39,10 @@ import {
 } from "@/lib/utils/catalog-add-quality-profile";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { libraryDefaultMovieAvailabilityQuery } from "@/lib/graphql/queries";
-import { MOVIE_AVAILABILITY_VALUES, isMovieAvailabilityValue } from "@/lib/types/settings";
+import {
+  MOVIE_AVAILABILITY_VALUES,
+  isMovieAvailabilityValue,
+} from "@/lib/types/settings";
 
 type AddToCatalogDialogProps = {
   open: boolean;
@@ -131,7 +134,9 @@ export function AddToCatalogDialog({
     buildDefaultDraft(
       facet,
       defaultLibrary(libraries)?.id,
-      defaultRootFolderId(defaultLibrary(libraries)?.roots ?? fallbackRootFolders),
+      defaultRootFolderId(
+        defaultLibrary(libraries)?.roots ?? fallbackRootFolders,
+      ),
     ),
   );
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -161,11 +166,7 @@ export function AddToCatalogDialog({
     }
     draftResetKeyRef.current = draftResetKey;
     setDraft(
-      buildDefaultDraft(
-        facet,
-        nextDefaultLibraryId,
-        nextDefaultRootFolderId,
-      ),
+      buildDefaultDraft(facet, nextDefaultLibraryId, nextDefaultRootFolderId),
     );
     setIsSubmitting(false);
     setMonitorSelectionLoading(false);
@@ -187,18 +188,18 @@ export function AddToCatalogDialog({
   // "use library default" instead, and the server applies the same default
   // on add.
   const selectedLibraryId = selectedLibrary?.id ?? null;
-  const [loadedDefaultAvailability, setLoadedDefaultAvailability] = React.useState<{
-    libraryId: string;
-    value: string | null;
-  } | null>(null);
+  const [loadedDefaultAvailability, setLoadedDefaultAvailability] =
+    React.useState<{
+      libraryId: string;
+      value: string | null;
+    } | null>(null);
   React.useEffect(() => {
     if (!open || facet !== "MOVIE" || !selectedLibraryId) return;
     let current = true;
     void client
-      .query<{ librarySettings?: { defaultMovieAvailability?: string | null } | null }>(
-        libraryDefaultMovieAvailabilityQuery,
-        { libraryId: selectedLibraryId },
-      )
+      .query<{
+        librarySettings?: { defaultMovieAvailability?: string | null } | null;
+      }>(libraryDefaultMovieAvailabilityQuery, { libraryId: selectedLibraryId })
       .toPromise()
       .then(({ data }) => {
         const value = data?.librarySettings?.defaultMovieAvailability;
@@ -218,10 +219,14 @@ export function AddToCatalogDialog({
       ? loadedDefaultAvailability.value
       : null;
   const minAvailabilityValue =
-    draft.minAvailability ?? libraryDefaultAvailability ?? LIBRARY_DEFAULT_AVAILABILITY_VALUE;
+    draft.minAvailability ??
+    libraryDefaultAvailability ??
+    LIBRARY_DEFAULT_AVAILABILITY_VALUE;
   const showNoReleaseDateHint =
     facet === "MOVIE" && !result.year && minAvailabilityValue !== "announced";
-  const qualityProfileValue = catalogQualityProfileSelectValue(draft.qualityProfileId);
+  const qualityProfileValue = catalogQualityProfileSelectValue(
+    draft.qualityProfileId,
+  );
   const inheritedQualityProfileLabel = inheritedCatalogQualityProfileLabel(
     selectedLibrary,
     defaultQualityProfileId,
@@ -236,14 +241,18 @@ export function AddToCatalogDialog({
   const draftRootFolderId = draft.rootFolderId?.trim();
   const effectiveRootFolderId =
     draftRootFolderId &&
-    selectableRootFolders.some((rootFolder) => rootFolder.id === draftRootFolderId)
+    selectableRootFolders.some(
+      (rootFolder) => rootFolder.id === draftRootFolderId,
+    )
       ? draftRootFolderId
       : defaultRootFolderId(selectableRootFolders) || "";
   const libraryRequired = libraries.length > 0;
   const hasCatalogDestination =
     libraries.length > 0 || selectableRootFolders.length > 0;
   const qualityProfileSelectionDisabled =
-    isSubmitting || catalogConfigLoading || catalogQualityProfileOptions.length === 0;
+    isSubmitting ||
+    catalogConfigLoading ||
+    catalogQualityProfileOptions.length === 0;
   const submitAllowed = canSubmitCatalogAdd({
     catalogConfigLoading,
     qualityProfileCount: catalogQualityProfileOptions.length,
@@ -258,11 +267,15 @@ export function AddToCatalogDialog({
 
     setIsSubmitting(true);
     try {
-      const titleId = await onAdd(result, facet, catalogAddOptionsForSubmit({
-        ...draft,
-        libraryId,
-        rootFolderId: effectiveRootFolderId || undefined,
-      }));
+      const titleId = await onAdd(
+        result,
+        facet,
+        catalogAddOptionsForSubmit({
+          ...draft,
+          libraryId,
+          rootFolderId: effectiveRootFolderId || undefined,
+        }),
+      );
       if (titleId) {
         onOpenChange(false);
       }
@@ -288,14 +301,20 @@ export function AddToCatalogDialog({
     [],
   );
 
-  const monitorOptions: Array<{ value: MetadataCatalogMonitorType; label: string }> =
+  const monitorOptions: Array<{
+    value: MetadataCatalogMonitorType;
+    label: string;
+  }> =
     facet === "MOVIE"
       ? [
           { value: "MONITORED", label: t("search.monitorType.monitored") },
           { value: "UNMONITORED", label: t("search.monitorType.unmonitored") },
         ]
       : [
-          { value: "FUTURE_EPISODES", label: t("search.monitorType.futureEpisodes") },
+          {
+            value: "FUTURE_EPISODES",
+            label: t("search.monitorType.futureEpisodes"),
+          },
           {
             value: "MISSING_AND_FUTURE_EPISODES",
             label: t("search.monitorType.missingAndFutureEpisodes"),
@@ -307,7 +326,8 @@ export function AddToCatalogDialog({
 
   // Season metadata is fetched only while ADVANCED is the live choice: the
   // picker is mounted by this condition and nothing prefetches behind it.
-  const advancedSelected = facet !== "MOVIE" && draft.monitorType === "ADVANCED";
+  const advancedSelected =
+    facet !== "MOVIE" && draft.monitorType === "ADVANCED";
   const advancedTvdbId = resultTvdbId(result);
   const advancedSmgId = result.smgId ?? null;
   const advancedBlocksSubmit =
@@ -326,294 +346,323 @@ export function AddToCatalogDialog({
 
         <div className="space-y-6 p-5 sm:p-7">
           <div className="grid gap-4 sm:grid-cols-2">
-          {libraries.length >= 1 ? (
-            <label className="space-y-1 sm:col-span-2">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.addConfigLibrary")}
-              </span>
-              <Select
-                value={selectedLibrary?.id || ""}
-                onValueChange={(v) => {
-                  const library = libraries.find((candidate) => candidate.id === v);
-                  setDraft((previous) =>
-                    draftForCatalogLibrary(
-                      previous,
-                      v,
-                      library?.roots ?? fallbackRootFolders,
-                    ),
-                  );
-                }}
-                disabled={isSubmitting || libraries.length === 1}
-              >
-                <SelectTrigger id="add-to-catalog-library" className="h-12 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {libraries.map((library) => (
-                    <SelectItem key={library.id} value={library.id}>
-                      {library.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          ) : null}
-
-          {(
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.addConfigQualityProfile")}
-              </span>
-              <Select
-                value={catalogQualityProfileOptions.length > 0 ? qualityProfileValue : ""}
-                onValueChange={(v) =>
-                  update({
-                    qualityProfileId:
-                      v === INHERIT_CATALOG_QUALITY_PROFILE_VALUE ? undefined : v,
-                  })
-                }
-                disabled={qualityProfileSelectionDisabled}
-              >
-                <SelectTrigger
-                  id="add-to-catalog-quality-profile"
-                  className="h-12 w-full"
-                  aria-busy={catalogConfigLoading}
+            {libraries.length >= 1 ? (
+              <label className="space-y-1 sm:col-span-2">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("search.addConfigLibrary")}
+                </span>
+                <Select
+                  value={selectedLibrary?.id || ""}
+                  onValueChange={(v) => {
+                    const library = libraries.find(
+                      (candidate) => candidate.id === v,
+                    );
+                    setDraft((previous) =>
+                      draftForCatalogLibrary(
+                        previous,
+                        v,
+                        library?.roots ?? fallbackRootFolders,
+                      ),
+                    );
+                  }}
+                  disabled={isSubmitting || libraries.length === 1}
                 >
-                  <SelectValue placeholder={catalogConfigLoading ? t("label.loading") : undefined} />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalogQualityProfileOptions.length === 0 ? (
-                    <SelectItem value="__none" disabled>
-                      {t("search.addConfigNoQualityProfiles")}
-                    </SelectItem>
-                  ) : (
-                    <>
-                      <SelectItem value={INHERIT_CATALOG_QUALITY_PROFILE_VALUE}>
-                        {inheritedQualityProfileLabel}
+                  <SelectTrigger
+                    id="add-to-catalog-library"
+                    className="h-12 w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {libraries.map((library) => (
+                      <SelectItem key={library.id} value={library.id}>
+                        {library.name}
                       </SelectItem>
-                      {catalogQualityProfileOptions.map((profile) => (
-                        <SelectItem key={profile.id} value={profile.id}>
-                          {profile.name}
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : null}
+
+            {
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("search.addConfigQualityProfile")}
+                </span>
+                <Select
+                  value={
+                    catalogQualityProfileOptions.length > 0
+                      ? qualityProfileValue
+                      : ""
+                  }
+                  onValueChange={(v) =>
+                    update({
+                      qualityProfileId:
+                        v === INHERIT_CATALOG_QUALITY_PROFILE_VALUE
+                          ? undefined
+                          : v,
+                    })
+                  }
+                  disabled={qualityProfileSelectionDisabled}
+                >
+                  <SelectTrigger
+                    id="add-to-catalog-quality-profile"
+                    className="h-12 w-full"
+                    aria-busy={catalogConfigLoading}
+                  >
+                    <SelectValue
+                      placeholder={
+                        catalogConfigLoading ? t("label.loading") : undefined
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {catalogQualityProfileOptions.length === 0 ? (
+                      <SelectItem value="__none" disabled>
+                        {t("search.addConfigNoQualityProfiles")}
+                      </SelectItem>
+                    ) : (
+                      <>
+                        <SelectItem
+                          value={INHERIT_CATALOG_QUALITY_PROFILE_VALUE}
+                        >
+                          {inheritedQualityProfileLabel}
                         </SelectItem>
-                      ))}
-                    </>
-                  )}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
+                        {catalogQualityProfileOptions.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </label>
+            }
 
-          {/* Root Folder */}
-          {selectableRootFolders.length >= 1 ? (
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.addConfigRootFolder")}
-              </span>
-              <Select
-                value={effectiveRootFolderId}
-                onValueChange={(v) => update({ rootFolderId: v })}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger
-                  id="add-to-catalog-root-folder"
-                  className="h-12 w-full font-[var(--font-code)]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {selectableRootFolders.map((rf) => (
-                    <SelectItem key={rf.id} value={rf.id}>
-                      <span className="font-[var(--font-code)]">{rf.path}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          ) : null}
-
-          {/* Season Folder — series + anime */}
-          {facet !== "MOVIE" ? (
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.addConfigSeasonFolder")}
-              </span>
-              <Select
-                value={draft.seasonFolder ? "enabled" : "disabled"}
-                onValueChange={(v) => update({ seasonFolder: v === "enabled" })}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger
-                  id="add-to-catalog-season-folder"
-                  className="h-12 w-full"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="enabled">{t("search.seasonFolder.enabled")}</SelectItem>
-                  <SelectItem value="disabled">{t("search.seasonFolder.disabled")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-          ) : null}
-
-          {/* Minimum availability — movie only */}
-          {facet === "MOVIE" ? (
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("settings.minAvailabilityLabel")}
-              </span>
-              <Select
-                value={minAvailabilityValue}
-                onValueChange={(v) =>
-                  update({
-                    minAvailability: isMovieAvailabilityValue(v) ? v : undefined,
-                  })
-                }
-                disabled={isSubmitting}
-              >
-                <SelectTrigger
-                  id="add-to-catalog-min-availability"
-                  className="h-12 w-full"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {libraryDefaultAvailability ? null : (
-                    <SelectItem value={LIBRARY_DEFAULT_AVAILABILITY_VALUE}>
-                      {t("settings.minAvailability.default")}
-                    </SelectItem>
-                  )}
-                  {MOVIE_AVAILABILITY_VALUES.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {t(`settings.minAvailability.${value}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {showNoReleaseDateHint ? (
-                <span
-                  id="add-to-catalog-min-availability-hint"
-                  className="block text-xs text-muted-foreground"
-                >
-                  {t("search.addConfigMinAvailabilityNoReleaseDate")}
+            {/* Root Folder */}
+            {selectableRootFolders.length >= 1 ? (
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("search.addConfigRootFolder")}
                 </span>
-              ) : null}
-            </label>
-          ) : null}
+                <Select
+                  value={effectiveRootFolderId}
+                  onValueChange={(v) => update({ rootFolderId: v })}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger
+                    id="add-to-catalog-root-folder"
+                    className="h-12 w-full font-[var(--font-code)]"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectableRootFolders.map((rf) => (
+                      <SelectItem key={rf.id} value={rf.id}>
+                        <span className="font-[var(--font-code)]">
+                          {rf.path}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : null}
 
-          {/* Monitored checkbox — movie only */}
-          {facet === "MOVIE" ? (
-            <label className="flex items-center gap-4 rounded-xl border border-primary/30 bg-primary/10 p-4 sm:col-span-2">
-              <Switch
-                id="add-to-catalog-monitored"
-                checked={draft.monitorType === "MONITORED"}
-                onCheckedChange={(v) =>
-                  update({ monitorType: v === true ? "MONITORED" : "UNMONITORED" })
-                }
-                disabled={isSubmitting}
-                size="lg"
-              />
-              <span className="min-w-0">
-                <span className="block text-base font-semibold text-card-foreground">
-                  {t("title.monitored")}
+            {/* Season Folder — series + anime */}
+            {facet !== "MOVIE" ? (
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("search.addConfigSeasonFolder")}
                 </span>
-                <span className="block text-sm text-muted-foreground">
-                  {t("search.monitorType.monitored")}
+                <Select
+                  value={draft.seasonFolder ? "enabled" : "disabled"}
+                  onValueChange={(v) =>
+                    update({ seasonFolder: v === "enabled" })
+                  }
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger
+                    id="add-to-catalog-season-folder"
+                    className="h-12 w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">
+                      {t("search.seasonFolder.enabled")}
+                    </SelectItem>
+                    <SelectItem value="disabled">
+                      {t("search.seasonFolder.disabled")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : null}
+
+            {/* Minimum availability — movie only */}
+            {facet === "MOVIE" ? (
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("settings.minAvailabilityLabel")}
                 </span>
-              </span>
-            </label>
-          ) : (
-            /* Monitor Type — series + anime */
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.addConfigMonitorType")}
-              </span>
-              <Select
-                value={draft.monitorType}
-                onValueChange={(v) => {
-                  const monitorType = v as MetadataCatalogMonitorType;
-                  update({
-                    monitorType,
-                    // A stale selection must never ride along with another type.
-                    monitorSelection:
-                      monitorType === "ADVANCED"
-                        ? draft.monitorSelection
+                <Select
+                  value={minAvailabilityValue}
+                  onValueChange={(v) =>
+                    update({
+                      minAvailability: isMovieAvailabilityValue(v)
+                        ? v
                         : undefined,
-                  });
-                }}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger
-                  id="add-to-catalog-monitor-type"
-                  className="h-12 w-full"
+                    })
+                  }
+                  disabled={isSubmitting}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {monitorOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-          )}
-        </div>
+                  <SelectTrigger
+                    id="add-to-catalog-min-availability"
+                    className="h-12 w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {libraryDefaultAvailability ? null : (
+                      <SelectItem value={LIBRARY_DEFAULT_AVAILABILITY_VALUE}>
+                        {t("settings.minAvailability.default")}
+                      </SelectItem>
+                    )}
+                    {MOVIE_AVAILABILITY_VALUES.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {t(`settings.minAvailability.${value}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {showNoReleaseDateHint ? (
+                  <span
+                    id="add-to-catalog-min-availability-hint"
+                    className="block text-xs text-muted-foreground"
+                  >
+                    {t("search.addConfigMinAvailabilityNoReleaseDate")}
+                  </span>
+                ) : null}
+              </label>
+            ) : null}
 
-        {advancedSelected ? (
-          <MonitorSelectionPicker
-            facet={facet}
-            smgId={advancedSmgId}
-            tvdbId={advancedTvdbId}
-            value={draft.monitorSelection ?? EMPTY_MONITOR_SELECTION}
-            onChange={(monitorSelection) => update({ monitorSelection })}
-            onLoadingChange={setMonitorSelectionLoading}
-            disabled={isSubmitting}
-            idPrefix="add-to-catalog"
-          />
-        ) : null}
-
-        {catalogConfigLoading ? (
-          <div
-            id="add-to-catalog-config-loading"
-            className="flex items-center gap-2 rounded-md border border-dashed border-border/80 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
-          >
-            <LoadingMark className="h-4 w-4 text-primary" />
-            <span>{t("label.loading")}</span>
+            {/* Monitored checkbox — movie only */}
+            {facet === "MOVIE" ? (
+              <label className="flex items-center gap-4 rounded-xl border border-primary/30 bg-primary/10 p-4 sm:col-span-2">
+                <Switch
+                  id="add-to-catalog-monitored"
+                  checked={draft.monitorType === "MONITORED"}
+                  onCheckedChange={(v) =>
+                    update({
+                      monitorType: v === true ? "MONITORED" : "UNMONITORED",
+                    })
+                  }
+                  disabled={isSubmitting}
+                  size="lg"
+                />
+                <span className="min-w-0">
+                  <span className="block text-base font-semibold text-card-foreground">
+                    {t("title.monitored")}
+                  </span>
+                  <span className="block text-sm text-muted-foreground">
+                    {t("search.monitorType.monitored")}
+                  </span>
+                </span>
+              </label>
+            ) : (
+              /* Monitor Type — series + anime */
+              <label className="space-y-1">
+                <span className="block text-xs font-medium text-card-foreground">
+                  {t("search.addConfigMonitorType")}
+                </span>
+                <Select
+                  value={draft.monitorType}
+                  onValueChange={(v) => {
+                    const monitorType = v as MetadataCatalogMonitorType;
+                    update({
+                      monitorType,
+                      // A stale selection must never ride along with another type.
+                      monitorSelection:
+                        monitorType === "ADVANCED"
+                          ? draft.monitorSelection
+                          : undefined,
+                    });
+                  }}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger
+                    id="add-to-catalog-monitor-type"
+                    className="h-12 w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {monitorOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
           </div>
-        ) : null}
+
+          {advancedSelected ? (
+            <MonitorSelectionPicker
+              facet={facet}
+              smgId={advancedSmgId}
+              tvdbId={advancedTvdbId}
+              value={draft.monitorSelection ?? EMPTY_MONITOR_SELECTION}
+              onChange={(monitorSelection) => update({ monitorSelection })}
+              onLoadingChange={setMonitorSelectionLoading}
+              disabled={isSubmitting}
+              idPrefix="add-to-catalog"
+            />
+          ) : null}
+
+          {catalogConfigLoading ? (
+            <div
+              id="add-to-catalog-config-loading"
+              className="flex items-center gap-2 rounded-md border border-dashed border-border/80 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+            >
+              <LoadingMark className="h-4 w-4 text-primary" />
+              <span>{t("label.loading")}</span>
+            </div>
+          ) : null}
 
           <DialogFooter className="items-stretch gap-3 sm:items-center">
-          <Button
-            id="add-to-catalog-cancel"
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isSubmitting}
-            className="h-12 px-8"
-          >
-            {t("label.cancel")}
-          </Button>
-          <Button
-            id="add-to-catalog-submit"
-            type="button"
-            onClick={() => void handleSubmit()}
-            disabled={
-              isSubmitting ||
-              !qualityProfileValue ||
-              !submitAllowed ||
-              advancedBlocksSubmit
-            }
-            className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
-          >
-            {isSubmitting ? (
-              <LoadingMark className="h-4 w-4" />
-            ) : (
-              <Plus className="h-5 w-5" />
-            )}
-            {isSubmitting ? t("search.adding") : t("title.addToCatalog")}
-          </Button>
+            <Button
+              id="add-to-catalog-cancel"
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+              className="h-12 px-8"
+            >
+              {t("label.cancel")}
+            </Button>
+            <Button
+              id="add-to-catalog-submit"
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={
+                isSubmitting ||
+                !qualityProfileValue ||
+                !submitAllowed ||
+                advancedBlocksSubmit
+              }
+              className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
+            >
+              {isSubmitting ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <Plus className="h-5 w-5" />
+              )}
+              {isSubmitting ? t("search.adding") : t("title.addToCatalog")}
+            </Button>
           </DialogFooter>
         </div>
       </DialogContent>

@@ -80,7 +80,10 @@ export function parseIndexerCategoryRoutingFromJson(
     return output;
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn("Failed to parse indexer category routing JSON", { rawValue, error });
+      console.warn("Failed to parse indexer category routing JSON", {
+        rawValue,
+        error,
+      });
     }
     return {};
   }
@@ -92,7 +95,9 @@ export function areIndexerRoutingSettingsEqual(
 ) {
   const categoriesEqual =
     left.categories.length === right.categories.length &&
-    left.categories.every((category, index) => category === right.categories[index]);
+    left.categories.every(
+      (category, index) => category === right.categories[index],
+    );
 
   return (
     categoriesEqual &&
@@ -127,7 +132,9 @@ export function buildIndexerRoutingOrder(
   indexerIds: string[],
   scopeRouting: IndexerRoutingSettingsByIndexer,
 ): string[] {
-  const configuredIds = indexerIds.filter((indexerId) => scopeRouting[indexerId]);
+  const configuredIds = indexerIds.filter(
+    (indexerId) => scopeRouting[indexerId],
+  );
   const missingIds = indexerIds.filter((indexerId) => !scopeRouting[indexerId]);
 
   const hasExplicitPriority = configuredIds.some(
@@ -139,8 +146,10 @@ export function buildIndexerRoutingOrder(
 
   const positionById = new Map(indexerIds.map((id, index) => [id, index]));
   const sorted = [...configuredIds].sort((leftId, rightId) => {
-    const leftPriority = scopeRouting[leftId]?.priority ?? Number.MAX_SAFE_INTEGER;
-    const rightPriority = scopeRouting[rightId]?.priority ?? Number.MAX_SAFE_INTEGER;
+    const leftPriority =
+      scopeRouting[leftId]?.priority ?? Number.MAX_SAFE_INTEGER;
+    const rightPriority =
+      scopeRouting[rightId]?.priority ?? Number.MAX_SAFE_INTEGER;
     if (leftPriority !== rightPriority) {
       return leftPriority - rightPriority;
     }

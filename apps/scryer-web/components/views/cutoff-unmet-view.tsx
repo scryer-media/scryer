@@ -107,7 +107,10 @@ function cutoffOverviewView(facet: Facet): ViewId | null {
   }
 }
 
-function cutoffOverviewHref(item: CutoffUnmetItem, includeEpisode: boolean): string | null {
+function cutoffOverviewHref(
+  item: CutoffUnmetItem,
+  includeEpisode: boolean,
+): string | null {
   const targetView = cutoffOverviewView(item.titleFacet);
   if (!targetView) {
     return null;
@@ -171,7 +174,9 @@ function TitleCell({ item }: { item: CutoffUnmetItem }) {
             {episodeCode}
           </Link>
         ) : (
-          <span className="block text-sm text-muted-foreground">{episodeCode}</span>
+          <span className="block text-sm text-muted-foreground">
+            {episodeCode}
+          </span>
         )
       ) : null}
     </div>
@@ -274,7 +279,9 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                   <ActivityProgressBar
                     percent={
                       searchJob.total > 0
-                        ? Math.round((searchJob.processed / searchJob.total) * 100)
+                        ? Math.round(
+                            (searchJob.processed / searchJob.total) * 100,
+                          )
                         : 0
                     }
                     remainingLabel={
@@ -345,7 +352,9 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
 
         {isMobile ? (
           items.length === 0 && !loading ? (
-            <p className="text-center text-[var(--scry-muted3)]">{t("cutoff.noItems")}</p>
+            <p className="text-center text-[var(--scry-muted3)]">
+              {t("cutoff.noItems")}
+            </p>
           ) : (
             <div className="space-y-3">
               {items.map((item) => {
@@ -402,10 +411,18 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                 <TableRow>
                   <TableHead>{t("cutoff.colTitleEpisode")}</TableHead>
                   <TableHead className="w-36 text-center">Library</TableHead>
-                  <TableHead className="w-36 text-center">{t("cutoff.colCurrentQuality")}</TableHead>
-                  <TableHead className="w-36 text-center">{t("cutoff.colTargetQuality")}</TableHead>
-                  <TableHead className="w-40 text-center">{t("wanted.colConvergence")}</TableHead>
-                  <TableActionsHead className="w-64">{t("label.actions")}</TableActionsHead>
+                  <TableHead className="w-36 text-center">
+                    {t("cutoff.colCurrentQuality")}
+                  </TableHead>
+                  <TableHead className="w-36 text-center">
+                    {t("cutoff.colTargetQuality")}
+                  </TableHead>
+                  <TableHead className="w-40 text-center">
+                    {t("wanted.colConvergence")}
+                  </TableHead>
+                  <TableActionsHead className="w-64">
+                    {t("label.actions")}
+                  </TableActionsHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -465,7 +482,10 @@ export function CutoffUnmetView({ state }: { state: CutoffUnmetViewState }) {
                 })}
                 {items.length === 0 && !loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    <TableCell
+                      colSpan={6}
+                      className="text-center text-muted-foreground"
+                    >
                       {t("cutoff.noItems")}
                     </TableCell>
                   </TableRow>

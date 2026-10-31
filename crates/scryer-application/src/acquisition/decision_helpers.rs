@@ -87,8 +87,8 @@ pub(crate) enum CutoffScope {
 /// list it. When Part 5 makes tiers `(source, resolution)` this needs the
 /// profile — which the callers cannot supply yet, because they resolve the
 /// profile *from* this value.
-pub(crate) fn analyzed_cutoff_quality_for_scope<'a>(
-    existing_files: &'a [TitleMediaFile],
+pub(crate) fn analyzed_cutoff_quality_for_scope<'a, F: CutoffFile>(
+    existing_files: &'a [F],
     scope: &CutoffScope,
 ) -> Option<&'a str> {
     match scope {
@@ -99,7 +99,7 @@ pub(crate) fn analyzed_cutoff_quality_for_scope<'a>(
             let mut weakest: Option<&'a str> = None;
             for episode_id in episode_ids {
                 let member = best_cutoff_quality_for(existing_files, |file| {
-                    file.episode_id.as_deref() == Some(episode_id.as_str())
+                    file.episode_id == Some(episode_id.as_str())
                 })?;
                 // `resolution_rank` is lower-is-better, so the weakest member is
                 // the one with the highest rank.
@@ -111,7 +111,7 @@ pub(crate) fn analyzed_cutoff_quality_for_scope<'a>(
             weakest
         }
         CutoffScope::Episode(episode_id) => best_cutoff_quality_for(existing_files, |file| {
-            file.episode_id.as_deref() == Some(episode_id.as_str())
+            file.episode_id == Some(episode_id.as_str())
         }),
         CutoffScope::SeriesMovieLink(link_id) => best_cutoff_quality_for(existing_files, |file| {
             file.series_movie_link_ids
@@ -125,24 +125,62 @@ pub(crate) fn analyzed_cutoff_quality_for_scope<'a>(
 }
 
 /// The best quality among the primary files a predicate selects.
-fn best_cutoff_quality_for(
-    existing_files: &[TitleMediaFile],
-    matches: impl Fn(&TitleMediaFile) -> bool,
-) -> Option<&str> {
+fn best_cutoff_quality_for<'a, F: CutoffFile>(
+    existing_files: &'a [F],
+    matches: impl Fn(&CutoffFileFacts<'a>) -> bool,
+) -> Option<&'a str> {
     existing_files
         .iter()
-        .filter(|file| file.role.is_primary())
+        .map(CutoffFile::cutoff_facts)
+        .filter(|file| file.primary)
         .filter(|file| matches(file))
         .filter_map(|file| {
-            let quality = file.quality_label.as_deref().map(str::trim)?;
+            let quality = file.quality_label.map(str::trim)?;
             (!quality.is_empty()).then_some((file, quality))
         })
         .min_by(|(left_file, left), (right_file, right)| {
             resolution_rank(left)
                 .cmp(&resolution_rank(right))
-                .then_with(|| right_file.created_at.cmp(&left_file.created_at))
+                .then_with(|| right_file.created_at.cmp(left_file.created_at))
         })
         .map(|(_, quality)| quality)
+}
+
+pub(crate) struct CutoffFileFacts<'a> {
+    episode_id: Option<&'a str>,
+    series_movie_link_ids: &'a [String],
+    quality_label: Option<&'a str>,
+    created_at: &'a str,
+    primary: bool,
+}
+
+/// The cutoff gate reads the same facts from full records and compact rows.
+pub(crate) trait CutoffFile {
+    fn cutoff_facts(&self) -> CutoffFileFacts<'_>;
+}
+
+impl CutoffFile for TitleMediaFile {
+    fn cutoff_facts(&self) -> CutoffFileFacts<'_> {
+        CutoffFileFacts {
+            episode_id: self.episode_id.as_deref(),
+            series_movie_link_ids: &self.series_movie_link_ids,
+            quality_label: self.quality_label.as_deref(),
+            created_at: &self.created_at,
+            primary: self.role.is_primary(),
+        }
+    }
+}
+
+impl CutoffFile for crate::MediaFileCutoffSummary {
+    fn cutoff_facts(&self) -> CutoffFileFacts<'_> {
+        CutoffFileFacts {
+            episode_id: self.episode_id.as_deref(),
+            series_movie_link_ids: &self.series_movie_link_ids,
+            quality_label: self.quality_label.as_deref(),
+            created_at: &self.created_at,
+            primary: true,
+        }
+    }
 }
 
 /// Position of a quality in the resolution ordering; **lower is better**, so it

@@ -915,7 +915,10 @@ async fn create_channel_rejects_empty_name() {
         .create_notification_channel(&user, "".into(), "webhook".into(), "{}".into(), true)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -928,7 +931,10 @@ async fn create_channel_rejects_empty_type() {
         .create_notification_channel(&user, "Slack".into(), "  ".into(), "{}".into(), true)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -941,7 +947,10 @@ async fn create_channel_rejects_non_object_config_json() {
         .create_notification_channel(&user, "Webhook".into(), "webhook".into(), "[]".into(), true)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -960,7 +969,10 @@ async fn test_channel_rejects_provider_without_test_capability() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
     assert!(provider.captured().is_empty());
 }
 
@@ -981,7 +993,10 @@ async fn create_channel_rejects_media_server_provider_type() {
         .await
         .expect_err("media server channels must be managed in Media Servers");
 
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -994,7 +1009,10 @@ async fn update_nonexistent_channel_returns_not_found() {
         .update_notification_channel(&user, "nonexistent".into(), Some("x".into()), None, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(
+        err,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,7 +1146,10 @@ async fn create_subscription_rejects_unknown_event_type() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1148,7 +1169,10 @@ async fn create_subscription_rejects_nonexistent_channel() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::NotFound(_)));
+    assert!(matches!(
+        err,
+        AppError::NotFound(_) | AppError::NotFoundReason { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1185,7 +1209,10 @@ async fn update_subscription_rejects_unknown_event_type() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1210,7 +1237,10 @@ async fn create_subscription_rejects_unsubscribable_event_type() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Validation(_)));
+    assert!(matches!(
+        err,
+        AppError::Validation(_) | AppError::ValidationRefused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -2055,6 +2085,7 @@ async fn notification_dispatcher_delivers_download_failed() {
         schema_version: 1,
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+            reason_code: None,
             canonical_download_id: None,
             title: Some(title_context(
                 "Failed Movie",

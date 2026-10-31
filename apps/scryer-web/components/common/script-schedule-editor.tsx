@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { useEffect, useState, type ReactNode } from "react";
 import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { useClient } from "urql";
@@ -5,7 +6,11 @@ import { useClient } from "urql";
 import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
@@ -34,7 +39,13 @@ import {
   type IntervalUnit,
 } from "@/lib/utils/script-schedule";
 
-const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = ["MANUAL", "INTERVAL", "DAILY", "WEEKLY", "CRON"];
+const SCHEDULE_KINDS: readonly ScriptScheduleKindValue[] = [
+  "MANUAL",
+  "INTERVAL",
+  "DAILY",
+  "WEEKLY",
+  "CRON",
+];
 const INTERVAL_UNITS: readonly IntervalUnit[] = ["minutes", "hours", "days"];
 const VALIDATION_DEBOUNCE_MS = 400;
 const NEXT_RUNS_SHOWN = 3;
@@ -86,7 +97,9 @@ function CronExpressionField({
   const dateTimeFormat = useUiDateTimeFormat();
   const uiLanguage = documentUiLanguage();
   const [, setLoadedLanguage] = useState<string | null>(null);
-  const [validation, setValidation] = useState<CronValidationState | null>(null);
+  const [validation, setValidation] = useState<CronValidationState | null>(
+    null,
+  );
 
   useEffect(() => {
     if (isCronDescriptionLocaleLoaded(uiLanguage)) return;
@@ -112,15 +125,28 @@ function CronExpressionField({
         expression: trimmed,
       });
       void client
-        .query(validateScriptScheduleQuery, { schedule }, { requestPolicy: "network-only" })
+        .query(
+          validateScriptScheduleQuery,
+          { schedule },
+          { requestPolicy: "network-only" },
+        )
         .toPromise()
         .then(({ data, error }) => {
           if (cancelled) return;
           if (error) {
-            setValidation({ expression: trimmed, result: null, failure: error.message });
+            setValidation({
+              expression: trimmed,
+              result: null,
+              failure: userFacingGraphQlErrorMessage(
+                error,
+                t("status.failedToLoad"),
+                t,
+              ),
+            });
             return;
           }
-          const payload = data?.validateScriptSchedule as ScriptScheduleValidation | undefined;
+          const payload = data?.validateScriptSchedule as
+            ScriptScheduleValidation | undefined;
           setValidation({
             expression: trimmed,
             result: payload
@@ -128,7 +154,9 @@ function CronExpressionField({
                   valid: payload.valid === true,
                   error: payload.error ?? null,
                   description: payload.description ?? null,
-                  nextRuns: Array.isArray(payload.nextRuns) ? payload.nextRuns : [],
+                  nextRuns: Array.isArray(payload.nextRuns)
+                    ? payload.nextRuns
+                    : [],
                 }
               : null,
             failure: null,
@@ -139,17 +167,20 @@ function CronExpressionField({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, trimmed]);
+  }, [client, trimmed, t]);
 
   const description = describeCronExpression(expression, uiLanguage, {
     use24HourTimeFormat: dateTimeFormat === "ISO24H" ? true : undefined,
   });
-  const current = trimmed && validation?.expression === trimmed ? validation : null;
+  const current =
+    trimmed && validation?.expression === trimmed ? validation : null;
 
   return (
     <div className="space-y-2">
       <label className="block">
-        <Label className="mb-2 block">{t("script.schedule.cronExpression")}</Label>
+        <Label className="mb-2 block">
+          {t("script.schedule.cronExpression")}
+        </Label>
         <Input
           id="script-schedule-cron"
           value={expression}
@@ -166,29 +197,42 @@ function CronExpressionField({
         className="text-xs text-[var(--scry-ink2)]"
         aria-live="polite"
       >
-        {description ?? (trimmed ? t("script.schedule.cronUnreadable") : t("script.schedule.cronHelp"))}
+        {description ??
+          (trimmed
+            ? t("script.schedule.cronUnreadable")
+            : t("script.schedule.cronHelp"))}
       </p>
       {current ? (
-        <div id="script-schedule-validation" className="space-y-1 text-xs" aria-live="polite">
+        <div
+          id="script-schedule-validation"
+          className="space-y-1 text-xs"
+          aria-live="polite"
+        >
           {current.failure ? (
-            <p className="text-[var(--scry-danger-text-soft)]">{current.failure}</p>
+            <p className="text-[var(--scry-danger-text-soft)]">
+              {current.failure}
+            </p>
           ) : current.result && !current.result.valid ? (
             <p className="text-[var(--scry-danger-text-soft)]">
               {current.result.error ?? t("script.schedule.invalid")}
             </p>
           ) : current.result ? (
             <>
-              <p className="text-muted-foreground">{t("script.schedule.nextRuns")}</p>
+              <p className="text-muted-foreground">
+                {t("script.schedule.nextRuns")}
+              </p>
               <ul className="space-y-0.5">
-                {current.result.nextRuns.slice(0, NEXT_RUNS_SHOWN).map((run, index) => (
-                  <li
-                    key={run}
-                    id={`script-schedule-next-run-${index}`}
-                    className="text-[var(--scry-ink2)]"
-                  >
-                    {formatUiDateTime(run, dateTimeFormat, { fallback: run })}
-                  </li>
-                ))}
+                {current.result.nextRuns
+                  .slice(0, NEXT_RUNS_SHOWN)
+                  .map((run, index) => (
+                    <li
+                      key={run}
+                      id={`script-schedule-next-run-${index}`}
+                      className="text-[var(--scry-ink2)]"
+                    >
+                      {formatUiDateTime(run, dateTimeFormat, { fallback: run })}
+                    </li>
+                  ))}
               </ul>
             </>
           ) : null}
@@ -213,7 +257,9 @@ function IntervalFields({
   // Seconds are offered only to keep a stored interval that is not a whole
   // number of minutes.
   const units: readonly IntervalUnit[] =
-    initial.unit === "seconds" ? ["seconds", ...INTERVAL_UNITS] : INTERVAL_UNITS;
+    initial.unit === "seconds"
+      ? ["seconds", ...INTERVAL_UNITS]
+      : INTERVAL_UNITS;
   const unitLabel = (candidate: IntervalUnit) => {
     if (candidate !== "seconds") return t(`script.schedule.unit.${candidate}`);
     const label = t("unit.seconds");
@@ -232,7 +278,10 @@ function IntervalFields({
     <div className="space-y-3">
       {/* Two equal columns sized by the unit group, so the amount field matches it. */}
       <div className="inline-grid max-w-full grid-cols-2 gap-x-4">
-        <ScheduleField label={t("script.schedule.every")} htmlFor="script-schedule-interval-amount">
+        <ScheduleField
+          label={t("script.schedule.every")}
+          htmlFor="script-schedule-interval-amount"
+        >
           {/* Takes the column's width without widening it. */}
           <div className="w-0 min-w-full">
             <Input
@@ -272,7 +321,9 @@ function IntervalFields({
           }))}
         />
       </div>
-      <p className="text-xs text-muted-foreground">{t("script.schedule.minimumInterval")}</p>
+      <p className="text-xs text-muted-foreground">
+        {t("script.schedule.minimumInterval")}
+      </p>
     </div>
   );
 }
@@ -288,7 +339,11 @@ function TimeField({
 }) {
   const t = useTranslate();
   return (
-    <ScheduleField label={t("script.schedule.time")} htmlFor="script-schedule-time" className="w-48">
+    <ScheduleField
+      label={t("script.schedule.time")}
+      htmlFor="script-schedule-time"
+      className="w-48"
+    >
       <Input
         id="script-schedule-time"
         type="time"
@@ -343,7 +398,11 @@ function WeekdayToggles({
             data-value={day}
             asChild
           >
-            <Button type="button" size="sm" variant={days.includes(day) ? "default" : "ghost"}>
+            <Button
+              type="button"
+              size="sm"
+              variant={days.includes(day) ? "default" : "ghost"}
+            >
               {t(`script.schedule.day.${day.toLowerCase()}`)}
             </Button>
           </ToggleGroupPrimitive.Item>
@@ -381,7 +440,9 @@ export function ScriptScheduleEditor({
         labelHidden
         value={value.kind}
         disabled={disabled}
-        onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKindValue, value))}
+        onValueChange={(kind) =>
+          onChange(scheduleForKind(kind as ScriptScheduleKindValue, value))
+        }
         options={SCHEDULE_KINDS.map((kind) => ({
           value: kind,
           label: t(`script.schedule.kind.${kind.toLowerCase()}`),
@@ -389,7 +450,9 @@ export function ScriptScheduleEditor({
       />
 
       {value.kind === "MANUAL" ? (
-        <p className="text-xs text-muted-foreground">{t("script.schedule.manualHelp")}</p>
+        <p className="text-xs text-muted-foreground">
+          {t("script.schedule.manualHelp")}
+        </p>
       ) : null}
       {value.kind === "INTERVAL" ? (
         <IntervalFields

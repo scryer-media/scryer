@@ -149,7 +149,7 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
     }
 
     let tables_dir = payload.tables_dir();
-    let restore_result = async {
+    let restore_work = async {
         sqlx::query("PRAGMA defer_foreign_keys = ON")
             .execute(&mut *conn)
             .await
@@ -169,6 +169,17 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
                 })?;
         }
 
+        let progress = scryer_application::current_restore_deadline();
+        if let Some(progress) = &progress {
+            progress.begin_import(
+                payload
+                    .manifest()
+                    .row_counts
+                    .values()
+                    .copied()
+                    .fold(0_u64, u64::saturating_add),
+            );
+        }
         for table in export_tables
             .iter()
             .filter(|table| payload.manifest().row_counts.contains_key(*table))
@@ -181,12 +192,18 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
             .await?;
         }
 
+        if let Some(progress) = &progress {
+            progress.finish_import();
+        }
         let violations = foreign_key_violations(&mut conn).await?;
         if !violations.is_empty() {
-            return Err(AppError::Validation(format!(
-                "restored database failed foreign key validation: {}",
-                format_foreign_key_violations(&violations)
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_FOREIGN_KEY_INVALID,
+                format!(
+                    "restored database failed foreign key validation: {}",
+                    format_foreign_key_violations(&violations)
+                ),
+            ));
         }
 
         for table in export_tables
@@ -194,7 +211,7 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
             .filter(|table| payload.manifest().row_counts.contains_key(*table))
         {
             let expected_rows = payload.manifest().row_counts.get(table).ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::DATASTORE_BACKUP_TABLE_SET_MISMATCH, format!(
                     "backup bundle table set does not match the current restore catalog: missing [{}], unexpected []",
                     table
                 ))
@@ -209,17 +226,24 @@ pub async fn restore_backup_bundle_into_sqlite_pool(
                     ))
                 })?;
             if actual_rows as u64 != *expected_rows {
-                return Err(AppError::Validation(format!(
-                    "restored table {table} row count mismatch: expected {expected_rows}, got {actual_rows}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_RESTORED_TABLE_ROW_COUNT_MISMATCH,
+                    format!(
+                        "restored table {table} row count mismatch: expected {expected_rows}, got {actual_rows}"
+                    ),
+                ));
             }
         }
 
         crate::queries::title_search::rebuild_title_search_projection_on_connection(&mut conn)
             .await?;
+        scryer_application::check_restore_deadline()?;
         AppResult::Ok(())
-    }
-    .await;
+    };
+    let restore_result = match scryer_application::current_restore_deadline() {
+        Some(deadline) => deadline.run(restore_work).await,
+        None => restore_work.await,
+    };
 
     let transaction_result = match restore_result {
         Ok(()) => match sqlx::query("COMMIT").execute(&mut *conn).await {
@@ -590,28 +614,35 @@ async fn import_table_part(
     let target_columns = table_columns(conn, table).await?;
 
     let file = File::open(part_path).map_err(|error| {
-        AppError::Validation(format!("backup table payload missing for {table}: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
+            format!("backup table payload missing for {table}: {error}"),
+        )
     })?;
-    let reader = BufReader::new(file);
+    let reader = BufReader::new(scryer_application::RestoreReader::new(file));
+    let progress = scryer_application::current_restore_deadline();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line.map_err(|error| {
-            AppError::Validation(format!(
-                "failed to read backup row {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_UNREADABLE,
+                format!("failed to read backup row {table}:{line_number}: {error}"),
+            )
         })?;
         if line.trim().is_empty() {
             continue;
         }
         let value: JsonValue = serde_json::from_str(&line).map_err(|error| {
-            AppError::Validation(format!(
-                "invalid backup row for {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID,
+                format!("invalid backup row for {table}:{line_number}: {error}"),
+            )
         })?;
         let mut object = value.as_object().cloned().ok_or_else(|| {
-            AppError::Validation(format!(
-                "backup row for {table}:{line_number} is not an object"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_NOT_OBJECT,
+                format!("backup row for {table}:{line_number} is not an object"),
+            )
         })?;
         normalize_import_object_for_target(
             table,
@@ -648,10 +679,14 @@ async fn import_table_part(
             query = bind_json_value(query, value)?;
         }
         query.execute(&mut **conn).await.map_err(|error| {
-            AppError::Validation(format!(
-                "failed to import backup row for {table}:{line_number}: {error}"
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
+                format!("failed to import backup row for {table}:{line_number}: {error}"),
+            )
         })?;
+        if let Some(progress) = &progress {
+            progress.imported_row();
+        }
     }
 
     Ok(())
@@ -784,16 +819,18 @@ fn bind_json_value<'q>(
                 query.bind(value)
             } else if let Some(value) = value.as_u64() {
                 let value = i64::try_from(value).map_err(|_| {
-                    AppError::Validation(
-                        "backup row contains an integer outside SQLite i64 range".into(),
+                    AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_INTEGER_OUT_OF_RANGE,
+                        "backup row contains an integer outside SQLite i64 range",
                     )
                 })?;
                 query.bind(value)
             } else if let Some(value) = value.as_f64() {
                 query.bind(value)
             } else {
-                return Err(AppError::Validation(
-                    "backup row contains an unsupported numeric value".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_NUMBER_UNSUPPORTED,
+                    "backup row contains an unsupported numeric value",
                 ));
             }
         }
@@ -805,10 +842,16 @@ fn bind_json_value<'q>(
                 .get(BLOB_MARKER_BASE64)
                 .and_then(JsonValue::as_str)
                 .ok_or_else(|| {
-                    AppError::Validation("backup blob payload is missing base64 bytes".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_BLOB_BYTES_MISSING,
+                        "backup blob payload is missing base64 bytes",
+                    )
                 })?;
             let bytes = STANDARD.decode(encoded).map_err(|error| {
-                AppError::Validation(format!("backup blob payload is invalid base64: {error}"))
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_BLOB_BASE64_INVALID,
+                    format!("backup blob payload is invalid base64: {error}"),
+                )
             })?;
             query.bind(bytes)
         }
@@ -836,6 +879,41 @@ mod tests {
     use crate::backup_import_normalization::{
         ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
     };
+
+    #[tokio::test]
+    async fn background_restore_import_percentage_counts_inserted_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let part = directory.path().join("rows.jsonl");
+        std::fs::write(&part, "{\"id\":\"one\"}\n{\"id\":\"two\"}\n").unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE restore_fixture (id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        let deadline = scryer_application::RestoreDeadline::new();
+        deadline.begin_import(4);
+        deadline
+            .scope(super::import_table_part(
+                &mut connection,
+                "restore_fixture",
+                &part,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(deadline.import_percent(), Some(50));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM restore_fixture")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+        drop(connection);
+        pool.close().await;
+    }
 
     /// Migrate a throwaway SQLite database to head and hand back its pool.
     ///

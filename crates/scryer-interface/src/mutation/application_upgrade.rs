@@ -31,10 +31,13 @@ impl ApplicationUpgradeMutations {
                 InstallationKind::Portable | InstallationKind::DirectMsi
             )
         {
-            return Err(to_gql_error(AppError::Validation(format!(
-                "application upgrade is not eligible: {}",
-                assessment.reason.as_str()
-            ))));
+            return Err(to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_UPGRADE_INELIGIBLE,
+                format!(
+                    "application upgrade is not eligible: {}",
+                    assessment.reason.as_str()
+                ),
+            )));
         }
         let accepted = app_from_ctx(ctx)?
             .start_application_upgrade_job(

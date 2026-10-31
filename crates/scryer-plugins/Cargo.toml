@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugins"
-version = "0.21.21"
+version = "0.21.23"
 edition.workspace = true
 
 [dependencies]
@@ -33,7 +33,7 @@ tempfile = "3"
 libc = "0.2"
 blake3 = "1"
 # RFC 123 WP1: native wasmtime archive host (crypto ABI + command protocol).
-wasmparser = "0.254"
+wasmparser = "0.262"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 

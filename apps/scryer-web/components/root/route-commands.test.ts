@@ -25,25 +25,32 @@ test("recycle-bin command is visible to either backend-authorized role", () => {
     appPermissions: [APP_PERMISSIONS.manageSystemSettings],
   });
   const titleManager = user({
-    libraryPermissions: [{
-      libraryId: "library-id",
-      permissions: [LIBRARY_PERMISSIONS.manageTitles],
-    }],
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.manageTitles],
+      },
+    ],
   });
   const ordinaryUser = user();
 
   for (const authorizedUser of [systemUser, titleManager]) {
-    assert.ok(buildRouteCommands({
-      t,
-      user: authorizedUser,
-      onNavigate: () => {},
-    }).some((command) => command.id === "system-recycle-bin"));
+    assert.ok(
+      buildRouteCommands({
+        t,
+        user: authorizedUser,
+        onNavigate: () => {},
+      }).some((command) => command.id === "system-recycle-bin"),
+    );
   }
-  assert.equal(buildRouteCommands({
-    t,
-    user: ordinaryUser,
-    onNavigate: () => {},
-  }).some((command) => command.id === "system-recycle-bin"), false);
+  assert.equal(
+    buildRouteCommands({
+      t,
+      user: ordinaryUser,
+      onNavigate: () => {},
+    }).some((command) => command.id === "system-recycle-bin"),
+    false,
+  );
 });
 
 test("recycle-bin command targets the canonical system section", () => {
@@ -51,10 +58,12 @@ test("recycle-bin command targets the canonical system section", () => {
   const command = buildRouteCommands({
     t,
     user: user({
-      libraryPermissions: [{
-        libraryId: "library-id",
-        permissions: [LIBRARY_PERMISSIONS.manageTitles],
-      }],
+      libraryPermissions: [
+        {
+          libraryId: "library-id",
+          permissions: [LIBRARY_PERMISSIONS.manageTitles],
+        },
+      ],
     }),
     onNavigate: (...args) => calls.push(args),
   }).find((candidate) => candidate.id === "system-recycle-bin");
@@ -70,24 +79,31 @@ test("dashboard command is limited to system-settings managers", () => {
     appPermissions: [APP_PERMISSIONS.manageSystemSettings],
   });
   const titleManager = user({
-    libraryPermissions: [{
-      libraryId: "library-id",
-      permissions: [LIBRARY_PERMISSIONS.manageTitles],
-    }],
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.manageTitles],
+      },
+    ],
   });
 
-  assert.ok(buildRouteCommands({
-    t,
-    user: systemUser,
-    onNavigate: () => {},
-  }).some((command) => command.id === "dashboard"));
+  assert.ok(
+    buildRouteCommands({
+      t,
+      user: systemUser,
+      onNavigate: () => {},
+    }).some((command) => command.id === "dashboard"),
+  );
 
   for (const unauthorizedUser of [titleManager, user()]) {
-    assert.equal(buildRouteCommands({
-      t,
-      user: unauthorizedUser,
-      onNavigate: () => {},
-    }).some((command) => command.id === "dashboard"), false);
+    assert.equal(
+      buildRouteCommands({
+        t,
+        user: unauthorizedUser,
+        onNavigate: () => {},
+      }).some((command) => command.id === "dashboard"),
+      false,
+    );
   }
 });
 
@@ -187,10 +203,12 @@ test("hiding maintenance rules leaves the rest of the catalog settings commands"
 
 test("lists command reaches catalog viewers and list managers", () => {
   const viewer = user({
-    libraryPermissions: [{
-      libraryId: "library-id",
-      permissions: [LIBRARY_PERMISSIONS.view],
-    }],
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.view],
+      },
+    ],
   });
   const listManager = user({ appPermissions: [APP_PERMISSIONS.manageLists] });
 
@@ -206,28 +224,39 @@ test("lists command reaches catalog viewers and list managers", () => {
     assert.equal(command.groupLabel, "nav.group.automation");
   }
   assert.equal(
-    buildRouteCommands({ t, user: user(), experimentalFeaturesEnabled: true, onNavigate: () => {} })
-      .some((command) => command.id === "lists"),
+    buildRouteCommands({
+      t,
+      user: user(),
+      experimentalFeaturesEnabled: true,
+      onNavigate: () => {},
+    }).some((command) => command.id === "lists"),
     false,
   );
   // Lists remain available without the experimental switch.
   assert.equal(
-    buildRouteCommands({ t, user: listManager, onNavigate: () => {} })
-      .some((command) => command.id === "lists" || command.id === "lists-exclusions"),
+    buildRouteCommands({ t, user: listManager, onNavigate: () => {} }).some(
+      (command) => command.id === "lists" || command.id === "lists-exclusions",
+    ),
     true,
   );
 });
 
 test("list exclusions command is limited to list managers and opens its pane", () => {
   const viewer = user({
-    libraryPermissions: [{
-      libraryId: "library-id",
-      permissions: [LIBRARY_PERMISSIONS.view],
-    }],
+    libraryPermissions: [
+      {
+        libraryId: "library-id",
+        permissions: [LIBRARY_PERMISSIONS.view],
+      },
+    ],
   });
   assert.equal(
-    buildRouteCommands({ t, user: viewer, experimentalFeaturesEnabled: true, onNavigate: () => {} })
-      .some((command) => command.id === "lists-exclusions"),
+    buildRouteCommands({
+      t,
+      user: viewer,
+      experimentalFeaturesEnabled: true,
+      onNavigate: () => {},
+    }).some((command) => command.id === "lists-exclusions"),
     false,
   );
 

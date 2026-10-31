@@ -38,8 +38,12 @@ const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   envOverrideDescription: null,
 };
 
-function errorMessage(error: unknown, fallback: string) {
-  return userFacingGraphQlErrorMessage(error, fallback);
+function errorMessage(
+  error: unknown,
+  fallback: string,
+  translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
+) {
+  return userFacingGraphQlErrorMessage(error, fallback, translate);
 }
 
 function parsePasswordMinLengthDraft(value: string): number | null {
@@ -71,7 +75,9 @@ export function SettingsSecurityContainer() {
   const [setPasswordOpen, setSetPasswordOpen] = React.useState(false);
   const [newPassword, setNewPassword] = React.useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = React.useState("");
-  const [setPasswordError, setSetPasswordError] = React.useState<string | null>(null);
+  const [setPasswordError, setSetPasswordError] = React.useState<string | null>(
+    null,
+  );
   const enableIntentConsumedRef = React.useRef(false);
   const [confirmBusy, setConfirmBusy] = React.useState(false);
   const [saveBusy, setSaveBusy] = React.useState(false);
@@ -84,8 +90,11 @@ export function SettingsSecurityContainer() {
   const [sessionDurationDraft, setSessionDurationDraft] = React.useState(
     String(DEFAULT_SECURITY_SETTINGS.sessionDurationDays),
   );
-  const [sessionSaveQueue] = React.useState(() => new LatestWinsSaveQueue<string>());
-  const passwordMinLengthSaveQueueRef = React.useRef<LatestWinsSaveQueue<string> | null>(null);
+  const [sessionSaveQueue] = React.useState(
+    () => new LatestWinsSaveQueue<string>(),
+  );
+  const passwordMinLengthSaveQueueRef =
+    React.useRef<LatestWinsSaveQueue<string> | null>(null);
   if (passwordMinLengthSaveQueueRef.current == null) {
     passwordMinLengthSaveQueueRef.current = new LatestWinsSaveQueue<string>();
   }
@@ -93,7 +102,8 @@ export function SettingsSecurityContainer() {
   const canManageExternalInvites =
     user != null && hasAppPermission(user, APP_PERMISSIONS.manageUsers);
   const canManageOAuthApplications =
-    user != null && hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
+    user != null &&
+    hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
 
   React.useEffect(() => {
     settingsRef.current = settings;
@@ -128,7 +138,9 @@ export function SettingsSecurityContainer() {
 
     (async () => {
       try {
-        const securityResult = await client.query(securitySettingsQuery, {}).toPromise();
+        const securityResult = await client
+          .query(securitySettingsQuery, {})
+          .toPromise();
         if (securityResult.error) throw securityResult.error;
         if (cancelled) return;
         setSettings({
@@ -138,7 +150,7 @@ export function SettingsSecurityContainer() {
       } catch (error) {
         if (!cancelled) {
           setSettings(DEFAULT_SECURITY_SETTINGS);
-          toast.error(errorMessage(error, t("settings.securityLoadFailed")));
+          toast.error(errorMessage(error, t("settings.securityLoadFailed"), t));
         }
       } finally {
         if (!cancelled) {
@@ -152,143 +164,155 @@ export function SettingsSecurityContainer() {
     };
   }, [client, t]);
 
-  const applySecuritySettings = React.useCallback(async (
-    formLoginEnabled: boolean,
-    passwordMinLength: number,
-    skipLoginForLocalIps: boolean,
-    mfaRequireConfigStepUp: boolean,
-    mfaRequirePasswordLogin: boolean,
-    mfaRequireJellyfinLogin: boolean,
-    mfaRequireEmbyLogin: boolean = settingsRef.current.mfaRequireEmbyLogin,
-    apiKeysRestrictToSystemSettingsUsers?: boolean,
-    sessionDurationDays?: number,
-  ) => {
-    const { data, error } = await client
-      .mutation(updateSecuritySettingsMutation, {
-        input: {
-          formLoginEnabled,
-          passwordMinLength,
-          ...(sessionDurationDays === undefined ? {} : { sessionDurationDays }),
-          skipLoginForLocalIps,
-          mfaRequireConfigStepUp,
-          mfaRequirePasswordLogin,
-          mfaRequireJellyfinLogin,
-          mfaRequireEmbyLogin,
-          ...(apiKeysRestrictToSystemSettingsUsers === undefined
-            ? {}
-            : { apiKeysRestrictToSystemSettingsUsers }),
-        },
-      })
-      .toPromise();
+  const applySecuritySettings = React.useCallback(
+    async (
+      formLoginEnabled: boolean,
+      passwordMinLength: number,
+      skipLoginForLocalIps: boolean,
+      mfaRequireConfigStepUp: boolean,
+      mfaRequirePasswordLogin: boolean,
+      mfaRequireJellyfinLogin: boolean,
+      mfaRequireEmbyLogin: boolean = settingsRef.current.mfaRequireEmbyLogin,
+      apiKeysRestrictToSystemSettingsUsers?: boolean,
+      sessionDurationDays?: number,
+    ) => {
+      const { data, error } = await client
+        .mutation(updateSecuritySettingsMutation, {
+          input: {
+            formLoginEnabled,
+            passwordMinLength,
+            ...(sessionDurationDays === undefined
+              ? {}
+              : { sessionDurationDays }),
+            skipLoginForLocalIps,
+            mfaRequireConfigStepUp,
+            mfaRequirePasswordLogin,
+            mfaRequireJellyfinLogin,
+            mfaRequireEmbyLogin,
+            ...(apiKeysRestrictToSystemSettingsUsers === undefined
+              ? {}
+              : { apiKeysRestrictToSystemSettingsUsers }),
+          },
+        })
+        .toPromise();
 
-    if (error || !data?.updateSecuritySettings) {
-      throw error ?? new Error(t("settings.securitySaveFailed"));
-    }
-
-    const nextSettings = {
-      ...DEFAULT_SECURITY_SETTINGS,
-      ...data.updateSecuritySettings,
-    } as SecuritySettings;
-    settingsRef.current = nextSettings;
-    return nextSettings;
-  }, [client, t]);
-
-  const runPasswordMinLengthSave = React.useCallback(async (submittedDraft: string) => {
-    const currentSettings = settingsRef.current;
-    const submittedPasswordMinLength = parsePasswordMinLengthDraft(submittedDraft);
-
-    if (submittedPasswordMinLength == null) {
-      setPasswordMinLengthDraft(String(currentSettings.passwordMinLength));
-      passwordMinLengthSaveToastRequestedRef.current = false;
-      toast.error(
-        t("settings.securityPasswordMinLengthInvalid", {
-          min: MIN_PASSWORD_LENGTH,
-        }),
-      );
-      return;
-    }
-
-    if (submittedPasswordMinLength === currentSettings.passwordMinLength) {
-      setPasswordMinLengthDraft(String(submittedPasswordMinLength));
-      passwordMinLengthSaveToastRequestedRef.current = false;
-      return;
-    }
-
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        currentSettings.formLoginEnabled,
-        submittedPasswordMinLength,
-        currentSettings.skipLoginForLocalIps,
-        currentSettings.mfaRequireConfigStepUp,
-        currentSettings.mfaRequirePasswordLogin,
-        currentSettings.mfaRequireJellyfinLogin,
-      );
-      settingsRef.current = nextSettings;
-      setSettings(nextSettings);
-      setPasswordMinLengthDraft(String(nextSettings.passwordMinLength));
-      if (passwordMinLengthSaveToastRequestedRef.current) {
-        toast.success(t("settings.securityPreferenceSaved"));
+      if (error || !data?.updateSecuritySettings) {
+        throw error ?? new Error(t("settings.securitySaveFailed"));
       }
-    } catch (error) {
-      setPasswordMinLengthDraft(String(settingsRef.current.passwordMinLength));
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      passwordMinLengthSaveToastRequestedRef.current = false;
-      setSaveBusy(false);
-    }
-  }, [applySecuritySettings, t]);
 
-  const submitPasswordMinLength = React.useCallback(async (
-    showSuccessToast: boolean,
-    draftOverride?: string,
-  ): Promise<SecuritySettings | null> => {
-    if (showSuccessToast) {
-      passwordMinLengthSaveToastRequestedRef.current = true;
-    }
+      const nextSettings = {
+        ...DEFAULT_SECURITY_SETTINGS,
+        ...data.updateSecuritySettings,
+      } as SecuritySettings;
+      settingsRef.current = nextSettings;
+      return nextSettings;
+    },
+    [client, t],
+  );
 
-    if (loading || confirmBusy) {
-      return null;
-    }
+  const runPasswordMinLengthSave = React.useCallback(
+    async (submittedDraft: string) => {
+      const currentSettings = settingsRef.current;
+      const submittedPasswordMinLength =
+        parsePasswordMinLengthDraft(submittedDraft);
 
-    const submittedDraft = draftOverride ?? passwordMinLengthDraft;
-    await passwordMinLengthSaveQueueRef.current?.enqueue(
-      submittedDraft,
-      runPasswordMinLengthSave,
-    );
-    return settingsRef.current;
-  }, [
-    confirmBusy,
-    loading,
-    passwordMinLengthDraft,
-    runPasswordMinLengthSave,
-  ]);
-
-  const handleToggle = React.useCallback((enabled: boolean) => {
-    if (enabled === settings.formLoginEnabled || confirmBusy || saveBusy) {
-      return;
-    }
-
-    if (enabled) {
-      if (user?.hasPassword === false) {
-        openSetPasswordDialog();
+      if (submittedPasswordMinLength == null) {
+        setPasswordMinLengthDraft(String(currentSettings.passwordMinLength));
+        passwordMinLengthSaveToastRequestedRef.current = false;
+        toast.error(
+          t("settings.securityPasswordMinLengthInvalid", {
+            min: MIN_PASSWORD_LENGTH,
+          }),
+        );
         return;
       }
 
-      setConfirmError(null);
-      setConfirmPassword("");
-      setEnableConfirmOpen(true);
-      return;
-    }
+      if (submittedPasswordMinLength === currentSettings.passwordMinLength) {
+        setPasswordMinLengthDraft(String(submittedPasswordMinLength));
+        passwordMinLengthSaveToastRequestedRef.current = false;
+        return;
+      }
 
-    setDisableConfirmOpen(true);
-  }, [
-    confirmBusy,
-    openSetPasswordDialog,
-    saveBusy,
-    settings.formLoginEnabled,
-    user?.hasPassword,
-  ]);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          currentSettings.formLoginEnabled,
+          submittedPasswordMinLength,
+          currentSettings.skipLoginForLocalIps,
+          currentSettings.mfaRequireConfigStepUp,
+          currentSettings.mfaRequirePasswordLogin,
+          currentSettings.mfaRequireJellyfinLogin,
+        );
+        settingsRef.current = nextSettings;
+        setSettings(nextSettings);
+        setPasswordMinLengthDraft(String(nextSettings.passwordMinLength));
+        if (passwordMinLengthSaveToastRequestedRef.current) {
+          toast.success(t("settings.securityPreferenceSaved"));
+        }
+      } catch (error) {
+        setPasswordMinLengthDraft(
+          String(settingsRef.current.passwordMinLength),
+        );
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        passwordMinLengthSaveToastRequestedRef.current = false;
+        setSaveBusy(false);
+      }
+    },
+    [applySecuritySettings, t],
+  );
+
+  const submitPasswordMinLength = React.useCallback(
+    async (
+      showSuccessToast: boolean,
+      draftOverride?: string,
+    ): Promise<SecuritySettings | null> => {
+      if (showSuccessToast) {
+        passwordMinLengthSaveToastRequestedRef.current = true;
+      }
+
+      if (loading || confirmBusy) {
+        return null;
+      }
+
+      const submittedDraft = draftOverride ?? passwordMinLengthDraft;
+      await passwordMinLengthSaveQueueRef.current?.enqueue(
+        submittedDraft,
+        runPasswordMinLengthSave,
+      );
+      return settingsRef.current;
+    },
+    [confirmBusy, loading, passwordMinLengthDraft, runPasswordMinLengthSave],
+  );
+
+  const handleToggle = React.useCallback(
+    (enabled: boolean) => {
+      if (enabled === settings.formLoginEnabled || confirmBusy || saveBusy) {
+        return;
+      }
+
+      if (enabled) {
+        if (user?.hasPassword === false) {
+          openSetPasswordDialog();
+          return;
+        }
+
+        setConfirmError(null);
+        setConfirmPassword("");
+        setEnableConfirmOpen(true);
+        return;
+      }
+
+      setDisableConfirmOpen(true);
+    },
+    [
+      confirmBusy,
+      openSetPasswordDialog,
+      saveBusy,
+      settings.formLoginEnabled,
+      user?.hasPassword,
+    ],
+  );
 
   // The header's "Enable login" entry lands here with a navigation-state
   // intent so the user sees the same dialog they would get from the button.
@@ -312,97 +336,106 @@ export function SettingsSecurityContainer() {
   // Shared tail of both enable paths: prove the password, then flip the
   // setting and adopt the verified session. Failures land in the confirm
   // dialog either way, because by then the account has a password.
-  const runEnableFormLogin = React.useCallback(async (password: string) => {
-    const showError = (message: string) => {
-      setEnableConfirmOpen(true);
-      setConfirmError(message);
-    };
-    const effectiveChangesNow =
-      !settings.envOverrideActive && !settings.effectiveFormLoginEnabled;
+  const runEnableFormLogin = React.useCallback(
+    async (password: string) => {
+      const showError = (message: string) => {
+        setEnableConfirmOpen(true);
+        setConfirmError(message);
+      };
+      const effectiveChangesNow =
+        !settings.envOverrideActive && !settings.effectiveFormLoginEnabled;
 
-    setConfirmBusy(true);
-    setConfirmError(null);
+      setConfirmBusy(true);
+      setConfirmError(null);
 
-    let verifiedSession: Awaited<ReturnType<typeof login>>;
-    const currentUsername = user?.username.trim();
-    if (!currentUsername) {
-      showError(t("settings.securityCredentialsInvalid"));
-      setConfirmBusy(false);
-      return;
-    }
+      let verifiedSession: Awaited<ReturnType<typeof login>>;
+      const currentUsername = user?.username.trim();
+      if (!currentUsername) {
+        showError(t("settings.securityCredentialsInvalid"));
+        setConfirmBusy(false);
+        return;
+      }
 
-    try {
-      verifiedSession = await login(currentUsername, password, {
-        persistSession: false,
-      });
-    } catch {
-      showError(t("settings.securityCredentialsInvalid"));
-      setConfirmBusy(false);
-      return;
-    }
+      try {
+        verifiedSession = await login(currentUsername, password, {
+          persistSession: false,
+        });
+      } catch {
+        showError(t("settings.securityCredentialsInvalid"));
+        setConfirmBusy(false);
+        return;
+      }
 
-    if (!hasAppPermission(verifiedSession.user, APP_PERMISSIONS.manageUsers)) {
-      showError(t("settings.securityCredentialsInsufficient"));
-      setConfirmBusy(false);
-      return;
-    }
-
-    setEnableConfirmOpen(false);
-    try {
-      await submitPasswordMinLength(false);
-      const nextSettings = await applySecuritySettings(
-        true,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        settings.mfaRequireConfigStepUp,
-        settings.mfaRequirePasswordLogin,
-        settings.mfaRequireJellyfinLogin,
-      );
-      setSettings(nextSettings);
-      toast.success(
-        effectiveChangesNow
-          ? t("settings.securityEnabledSuccess")
-          : t("settings.securityPreferenceSaved"),
-      );
-
-      if (effectiveChangesNow) {
-        adoptSession(verifiedSession.token, verifiedSession.user);
-        disposeWsClient();
-        window.location.reload();
+      if (
+        !hasAppPermission(verifiedSession.user, APP_PERMISSIONS.manageUsers)
+      ) {
+        showError(t("settings.securityCredentialsInsufficient"));
+        setConfirmBusy(false);
         return;
       }
 
       setEnableConfirmOpen(false);
-      setConfirmPassword("");
-      setConfirmError(null);
-    } catch (error) {
-      const saveErrorMessage = errorMessage(error, t("settings.securitySaveFailed"));
-      if (saveErrorMessage === DEFAULT_ADMIN_PASSWORD_FORM_LOGIN_ERROR) {
-        openSetPasswordDialog();
-        return;
-      }
+      try {
+        await submitPasswordMinLength(false);
+        const nextSettings = await applySecuritySettings(
+          true,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+        );
+        setSettings(nextSettings);
+        toast.success(
+          effectiveChangesNow
+            ? t("settings.securityEnabledSuccess")
+            : t("settings.securityPreferenceSaved"),
+        );
 
-      showError(saveErrorMessage);
-      toast.error(saveErrorMessage);
-    } finally {
-      setConfirmBusy(false);
-    }
-  }, [
-    adoptSession,
-    applySecuritySettings,
-    login,
-    openSetPasswordDialog,
-    settings.effectiveFormLoginEnabled,
-    settings.envOverrideActive,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-    effectivePasswordMinLength,
-    user?.username,
-  ]);
+        if (effectiveChangesNow) {
+          adoptSession(verifiedSession.token, verifiedSession.user);
+          disposeWsClient();
+          window.location.reload();
+          return;
+        }
+
+        setEnableConfirmOpen(false);
+        setConfirmPassword("");
+        setConfirmError(null);
+      } catch (error) {
+        const saveErrorMessage = errorMessage(
+          error,
+          t("settings.securitySaveFailed"),
+          t,
+        );
+        if (saveErrorMessage === DEFAULT_ADMIN_PASSWORD_FORM_LOGIN_ERROR) {
+          openSetPasswordDialog();
+          return;
+        }
+
+        showError(saveErrorMessage);
+        toast.error(saveErrorMessage);
+      } finally {
+        setConfirmBusy(false);
+      }
+    },
+    [
+      adoptSession,
+      applySecuritySettings,
+      login,
+      openSetPasswordDialog,
+      settings.effectiveFormLoginEnabled,
+      settings.envOverrideActive,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+      effectivePasswordMinLength,
+      user?.username,
+    ],
+  );
 
   const handleConfirmEnable = React.useCallback(
     () => runEnableFormLogin(confirmPassword),
@@ -423,7 +456,9 @@ export function SettingsSecurityContainer() {
     const password = newPassword;
     if (password.length < effectivePasswordMinLength) {
       setSetPasswordError(
-        t("settings.securityPasswordTooShort", { count: effectivePasswordMinLength }),
+        t("settings.securityPasswordTooShort", {
+          count: effectivePasswordMinLength,
+        }),
       );
       return;
     }
@@ -445,7 +480,7 @@ export function SettingsSecurityContainer() {
         .toPromise();
       if (result.error) throw result.error;
     } catch (error) {
-      setSetPasswordError(errorMessage(error, t("status.failedToUpdate")));
+      setSetPasswordError(errorMessage(error, t("status.failedToUpdate"), t));
       setConfirmBusy(false);
       return;
     }
@@ -506,7 +541,7 @@ export function SettingsSecurityContainer() {
       setDisableConfirmOpen(false);
     } catch (error) {
       setDisableConfirmOpen(true);
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
+      toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
     } finally {
       setConfirmBusy(false);
     }
@@ -532,250 +567,284 @@ export function SettingsSecurityContainer() {
     setDisableConfirmOpen(false);
   }, [confirmBusy]);
 
-  const handleSkipLocalIpsChange = React.useCallback(async (enabled: boolean) => {
-    if (confirmBusy || saveBusy || enabled === settings.skipLoginForLocalIps) {
-      return;
-    }
-
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        enabled,
-        settings.mfaRequireConfigStepUp,
-        settings.mfaRequirePasswordLogin,
-        settings.mfaRequireJellyfinLogin,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-
-      const bypassWasRevoked =
-        settings.effectiveFormLoginEnabled &&
-        settings.skipLoginForLocalIps &&
-        !nextSettings.skipLoginForLocalIps;
-      if (bypassWasRevoked && !token) {
-        logout();
-        disposeWsClient();
-        window.location.reload();
+  const handleSkipLocalIpsChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.skipLoginForLocalIps
+      ) {
+        return;
       }
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    logout,
-    settings.effectiveFormLoginEnabled,
-    settings.formLoginEnabled,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-    token,
-  ]);
 
-  const handleMfaConfigStepUpChange = React.useCallback(async (enabled: boolean) => {
-    if (confirmBusy || saveBusy || enabled === settings.mfaRequireConfigStepUp) {
-      return;
-    }
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          enabled,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
 
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        enabled,
-        settings.mfaRequirePasswordLogin,
-        settings.mfaRequireJellyfinLogin,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    settings.formLoginEnabled,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-  ]);
+        const bypassWasRevoked =
+          settings.effectiveFormLoginEnabled &&
+          settings.skipLoginForLocalIps &&
+          !nextSettings.skipLoginForLocalIps;
+        if (bypassWasRevoked && !token) {
+          logout();
+          disposeWsClient();
+          window.location.reload();
+        }
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      logout,
+      settings.effectiveFormLoginEnabled,
+      settings.formLoginEnabled,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+      token,
+    ],
+  );
 
-  const handleApiKeysRestrictionChange = React.useCallback(async (enabled: boolean) => {
-    if (
-      confirmBusy
-      || saveBusy
-      || enabled === settings.apiKeysRestrictToSystemSettingsUsers
-    ) {
-      return;
-    }
+  const handleMfaConfigStepUpChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.mfaRequireConfigStepUp
+      ) {
+        return;
+      }
 
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        settings.mfaRequireConfigStepUp,
-        settings.mfaRequirePasswordLogin,
-        settings.mfaRequireJellyfinLogin,
-        settings.mfaRequireEmbyLogin,
-        enabled,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    settings.apiKeysRestrictToSystemSettingsUsers,
-    settings.formLoginEnabled,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequireEmbyLogin,
-    settings.mfaRequireJellyfinLogin,
-    settings.mfaRequirePasswordLogin,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    t,
-  ]);
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          enabled,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+    ],
+  );
 
-  const handleMfaPasswordLoginChange = React.useCallback(async (enabled: boolean) => {
-    if (confirmBusy || saveBusy || enabled === settings.mfaRequirePasswordLogin) {
-      return;
-    }
+  const handleApiKeysRestrictionChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.apiKeysRestrictToSystemSettingsUsers
+      ) {
+        return;
+      }
 
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        settings.mfaRequireConfigStepUp,
-        enabled,
-        settings.mfaRequireJellyfinLogin,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    settings.formLoginEnabled,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-  ]);
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+          settings.mfaRequireEmbyLogin,
+          enabled,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.apiKeysRestrictToSystemSettingsUsers,
+      settings.formLoginEnabled,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequireEmbyLogin,
+      settings.mfaRequireJellyfinLogin,
+      settings.mfaRequirePasswordLogin,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      t,
+    ],
+  );
 
-  const handleTotpJellyfinLoginChange = React.useCallback(async (enabled: boolean) => {
-    if (confirmBusy || saveBusy || enabled === settings.mfaRequireJellyfinLogin) {
-      return;
-    }
+  const handleMfaPasswordLoginChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.mfaRequirePasswordLogin
+      ) {
+        return;
+      }
 
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        settings.mfaRequireConfigStepUp,
-        settings.mfaRequirePasswordLogin,
-        enabled,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    settings.formLoginEnabled,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-  ]);
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          enabled,
+          settings.mfaRequireJellyfinLogin,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+    ],
+  );
 
-  const handleTotpEmbyLoginChange = React.useCallback(async (enabled: boolean) => {
-    if (confirmBusy || saveBusy || enabled === settings.mfaRequireEmbyLogin) {
-      return;
-    }
+  const handleTotpJellyfinLoginChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (
+        confirmBusy ||
+        saveBusy ||
+        enabled === settings.mfaRequireJellyfinLogin
+      ) {
+        return;
+      }
 
-    await submitPasswordMinLength(false);
-    setSaveBusy(true);
-    try {
-      const nextSettings = await applySecuritySettings(
-        settings.formLoginEnabled,
-        effectivePasswordMinLength,
-        settings.skipLoginForLocalIps,
-        settings.mfaRequireConfigStepUp,
-        settings.mfaRequirePasswordLogin,
-        settings.mfaRequireJellyfinLogin,
-        enabled,
-      );
-      setSettings(nextSettings);
-      toast.success(t("settings.securityPreferenceSaved"));
-    } catch (error) {
-      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-    } finally {
-      setSaveBusy(false);
-    }
-  }, [
-    applySecuritySettings,
-    confirmBusy,
-    effectivePasswordMinLength,
-    saveBusy,
-    settings.formLoginEnabled,
-    settings.skipLoginForLocalIps,
-    submitPasswordMinLength,
-    settings.mfaRequireConfigStepUp,
-    settings.mfaRequirePasswordLogin,
-    settings.mfaRequireEmbyLogin,
-    settings.mfaRequireJellyfinLogin,
-    t,
-  ]);
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          enabled,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+    ],
+  );
+
+  const handleTotpEmbyLoginChange = React.useCallback(
+    async (enabled: boolean) => {
+      if (confirmBusy || saveBusy || enabled === settings.mfaRequireEmbyLogin) {
+        return;
+      }
+
+      await submitPasswordMinLength(false);
+      setSaveBusy(true);
+      try {
+        const nextSettings = await applySecuritySettings(
+          settings.formLoginEnabled,
+          effectivePasswordMinLength,
+          settings.skipLoginForLocalIps,
+          settings.mfaRequireConfigStepUp,
+          settings.mfaRequirePasswordLogin,
+          settings.mfaRequireJellyfinLogin,
+          enabled,
+        );
+        setSettings(nextSettings);
+        toast.success(t("settings.securityPreferenceSaved"));
+      } catch (error) {
+        toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+      } finally {
+        setSaveBusy(false);
+      }
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      effectivePasswordMinLength,
+      saveBusy,
+      settings.formLoginEnabled,
+      settings.skipLoginForLocalIps,
+      submitPasswordMinLength,
+      settings.mfaRequireConfigStepUp,
+      settings.mfaRequirePasswordLogin,
+      settings.mfaRequireEmbyLogin,
+      settings.mfaRequireJellyfinLogin,
+      t,
+    ],
+  );
 
   const handlePasswordMinLengthSubmit = React.useCallback(
     async (value?: string) => {
@@ -784,37 +853,62 @@ export function SettingsSecurityContainer() {
     [submitPasswordMinLength],
   );
 
-  const handleSessionDurationSubmit = React.useCallback(async (draft: string) => {
-    if (loading || confirmBusy) return;
-    await sessionSaveQueue.enqueue(draft, async (value) => {
-      const days = Number(value);
-      if (!/^\d+$/.test(value.trim()) || !Number.isInteger(days) || days < 1 || days > 365) {
-        setSessionDurationDraft(String(settingsRef.current.sessionDurationDays));
-        toast.error(t("settings.securitySessionDurationInvalid"));
-        return;
-      }
-      if (days === settingsRef.current.sessionDurationDays) return;
-      await submitPasswordMinLength(false);
-      const current = settingsRef.current;
-      setSaveBusy(true);
-      try {
-        const next = await applySecuritySettings(
-          current.formLoginEnabled, current.passwordMinLength, current.skipLoginForLocalIps,
-          current.mfaRequireConfigStepUp, current.mfaRequirePasswordLogin,
-          current.mfaRequireJellyfinLogin, current.mfaRequireEmbyLogin, undefined, days,
-        );
-        settingsRef.current = next;
-        setSettings(next);
-        setSessionDurationDraft(String(next.sessionDurationDays));
-        toast.success(t("settings.securityPreferenceSaved"));
-      } catch (error) {
-        setSessionDurationDraft(String(settingsRef.current.sessionDurationDays));
-        toast.error(errorMessage(error, t("settings.securitySaveFailed")));
-      } finally {
-        setSaveBusy(false);
-      }
-    });
-  }, [applySecuritySettings, confirmBusy, loading, sessionSaveQueue, submitPasswordMinLength, t]);
+  const handleSessionDurationSubmit = React.useCallback(
+    async (draft: string) => {
+      if (loading || confirmBusy) return;
+      await sessionSaveQueue.enqueue(draft, async (value) => {
+        const days = Number(value);
+        if (
+          !/^\d+$/.test(value.trim()) ||
+          !Number.isInteger(days) ||
+          days < 1 ||
+          days > 365
+        ) {
+          setSessionDurationDraft(
+            String(settingsRef.current.sessionDurationDays),
+          );
+          toast.error(t("settings.securitySessionDurationInvalid"));
+          return;
+        }
+        if (days === settingsRef.current.sessionDurationDays) return;
+        await submitPasswordMinLength(false);
+        const current = settingsRef.current;
+        setSaveBusy(true);
+        try {
+          const next = await applySecuritySettings(
+            current.formLoginEnabled,
+            current.passwordMinLength,
+            current.skipLoginForLocalIps,
+            current.mfaRequireConfigStepUp,
+            current.mfaRequirePasswordLogin,
+            current.mfaRequireJellyfinLogin,
+            current.mfaRequireEmbyLogin,
+            undefined,
+            days,
+          );
+          settingsRef.current = next;
+          setSettings(next);
+          setSessionDurationDraft(String(next.sessionDurationDays));
+          toast.success(t("settings.securityPreferenceSaved"));
+        } catch (error) {
+          setSessionDurationDraft(
+            String(settingsRef.current.sessionDurationDays),
+          );
+          toast.error(errorMessage(error, t("settings.securitySaveFailed"), t));
+        } finally {
+          setSaveBusy(false);
+        }
+      });
+    },
+    [
+      applySecuritySettings,
+      confirmBusy,
+      loading,
+      sessionSaveQueue,
+      submitPasswordMinLength,
+      t,
+    ],
+  );
 
   return (
     <SettingsSecuritySection

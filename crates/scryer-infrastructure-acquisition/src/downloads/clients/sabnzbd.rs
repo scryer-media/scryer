@@ -539,6 +539,7 @@ impl SabnzbdDownloadClient {
                 let category = extract_sabnzbd_category(slot);
 
                 Some(DownloadQueueItem {
+                    attention_reason_code: None,
                     id: nzo_id.clone(),
                     title_id: None,
                     episode_id: None,
@@ -613,6 +614,7 @@ impl SabnzbdDownloadClient {
                 let category = extract_sabnzbd_category(slot);
 
                 Some(DownloadQueueItem {
+                    attention_reason_code: None,
                     id: nzo_id.clone(),
                     title_id: None,
                     episode_id: None,
@@ -851,7 +853,8 @@ impl SabnzbdDownloadClient {
                 username: username.clone(),
                 password: password.clone(),
             }),
-            _ => Err(AppError::Validation(
+            _ => Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_SABNZBD_CREDENTIALS_REQUIRED,
                 "sabnzbd requires an API key or username/password".to_string(),
             )),
         }
@@ -1478,8 +1481,9 @@ impl DownloadClient for SabnzbdDownloadClient {
     ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
         use scryer_application::DownloadClientRetryOutcome as Outcome;
         if password.is_empty() || id.is_empty() {
-            return Err(AppError::Validation(
-                "job ID and replacement password are required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::ACQUISITION_PASSWORD_RETRY_INPUT_REQUIRED,
+                "job ID and replacement password are required",
             ));
         }
         let url = self.resolve_addfile_url().await?;
@@ -2036,9 +2040,26 @@ fn redact_key_value(input: &str, key: &str) -> String {
 
 fn map_sabnzbd_auth_validation_error(error: AppError) -> AppError {
     match error {
+        AppError::RepositoryFailure { message, kind } => AppError::repository_failure(
+            kind,
+            format!("sabnzbd authentication validation failed: {message}"),
+        ),
+        AppError::RepositoryFailed { message, reason } => AppError::RepositoryFailed {
+            message: format!("sabnzbd authentication validation failed: {message}"),
+            reason,
+        },
         AppError::Repository(message) => AppError::Repository(format!(
             "sabnzbd authentication validation failed: {message}"
         )),
+        AppError::ValidationRefused {
+            message, reason, ..
+        }
+        | AppError::ValidationRefusedWithCount {
+            message, reason, ..
+        } => AppError::RepositoryFailed {
+            message: format!("sabnzbd authentication validation failed: {message}"),
+            reason,
+        },
         AppError::Validation(message) => AppError::Repository(format!(
             "sabnzbd authentication validation failed: {message}"
         )),
@@ -2050,7 +2071,7 @@ fn map_sabnzbd_response_error(operation: &str, status: StatusCode, body: &str) -
     let detail = extract_sab_error_detail(body);
     if status == StatusCode::UNAUTHORIZED
         || status == StatusCode::FORBIDDEN
-        || is_sab_auth_error_message(&detail)
+        || classify_sab_error_message(&detail) == SabFailureKind::Authentication
     {
         return AppError::Repository(format!("sabnzbd authentication failed: {detail}"));
     }
@@ -2061,7 +2082,7 @@ fn map_sabnzbd_response_error(operation: &str, status: StatusCode, body: &str) -
 fn map_sabnzbd_api_error(operation: &str, status: Option<StatusCode>, detail: &str) -> AppError {
     if status
         .is_some_and(|value| value == StatusCode::UNAUTHORIZED || value == StatusCode::FORBIDDEN)
-        || is_sab_auth_error_message(detail)
+        || classify_sab_error_message(detail) == SabFailureKind::Authentication
     {
         return AppError::Repository(format!("sabnzbd authentication failed: {detail}"));
     }
@@ -2086,7 +2107,7 @@ fn evaluate_sab_api_response(
         let error = map_sabnzbd_response_error(operation, status, body);
         return if status == StatusCode::UNAUTHORIZED
             || status == StatusCode::FORBIDDEN
-            || is_sab_auth_error_message(&detail)
+            || classify_sab_error_message(&detail) == SabFailureKind::Authentication
         {
             SabApiResponseEvaluation::Failure(error)
         } else {
@@ -2162,7 +2183,7 @@ fn evaluate_sab_addfile_response(status: StatusCode, body: &str) -> SabAddfileOu
         let detail = extract_sab_error_detail(body);
         if status == StatusCode::UNAUTHORIZED
             || status == StatusCode::FORBIDDEN
-            || is_sab_auth_error_message(&detail)
+            || classify_sab_error_message(&detail) == SabFailureKind::Authentication
         {
             return SabAddfileOutcome::Auth(format!("sabnzbd authentication failed: {detail}"));
         }
@@ -2191,7 +2212,7 @@ fn evaluate_sab_addfile_response(status: StatusCode, body: &str) -> SabAddfileOu
 
     if sab_api_status_is_false(&json) {
         let detail = sab_api_error_message(&json).unwrap_or("unknown error");
-        if is_sab_auth_error_message(detail) {
+        if classify_sab_error_message(detail) == SabFailureKind::Authentication {
             return SabAddfileOutcome::Auth(format!("sabnzbd authentication failed: {detail}"));
         }
         return SabAddfileOutcome::Rejected(format!("sabnzbd rejected the nzb: {detail}"));
@@ -2388,9 +2409,15 @@ fn extract_sab_error_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(600).collect())
 }
 
-fn is_sab_auth_error_message(message: &str) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SabFailureKind {
+    Authentication,
+    Other,
+}
+
+fn classify_sab_error_message(message: &str) -> SabFailureKind {
     let normalized = message.to_ascii_lowercase();
-    normalized.contains("authentication")
+    let authentication = normalized.contains("authentication")
         || normalized.contains("unauthorized")
         || normalized.contains("forbidden")
         || normalized.contains("api key required")
@@ -2399,7 +2426,12 @@ fn is_sab_auth_error_message(message: &str) -> bool {
         || normalized.contains("apikey incorrect")
         || normalized.contains("login failed")
         || normalized.contains("invalid api key")
-        || normalized.contains("invalid credentials")
+        || normalized.contains("invalid credentials");
+    if authentication {
+        SabFailureKind::Authentication
+    } else {
+        SabFailureKind::Other
+    }
 }
 
 fn sabnzbd_queue_priority(raw_priority: Option<&str>) -> i32 {
@@ -2558,6 +2590,7 @@ fn history_queue_item_from_sab_slot(slot: &Value) -> Option<DownloadQueueItem> {
     let (state, attention_reason) = sabnzbd_history_state(status, fail_message)?;
     let category = extract_sabnzbd_category(slot);
     Some(DownloadQueueItem {
+        attention_reason_code: None,
         id: nzo_id.clone(),
         title_id: None,
         episode_id: None,
@@ -2771,6 +2804,18 @@ fn is_localhost_base_url(base_url: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sab_authentication_diagnostics_have_one_typed_boundary() {
+        assert_eq!(
+            super::classify_sab_error_message("Invalid API key"),
+            super::SabFailureKind::Authentication
+        );
+        assert_eq!(
+            super::classify_sab_error_message("queue unavailable"),
+            super::SabFailureKind::Other
+        );
+    }
+
     use super::{
         SAB_ADDFILE_UPLOAD_FIELD, SabAddfileOutcome, SabApiAuth, SabApiResponseEvaluation,
         SabnzbdDownloadClient, build_sab_api_urls, completed_downloads_from_sab_slots,

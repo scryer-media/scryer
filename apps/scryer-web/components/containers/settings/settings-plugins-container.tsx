@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -36,7 +37,7 @@ import {
 } from "@/lib/utils/plugin-install-state";
 
 type PluginCatalogStatusRecord = {
-  refreshState: 'READY' | 'DEGRADED';
+  refreshState: "READY" | "DEGRADED";
   githubAvailable: boolean;
   lastCheckedAt?: string | null;
   outageMessage?: string | null;
@@ -64,32 +65,25 @@ type UpdatePluginAutoUpdateSettingsResult = {
   updatePluginAutoUpdateSettings?: PluginAutoUpdateSettings | null;
 };
 
-function extractPluginMutationErrorMessage(error: unknown): string | null {
-  if (error && typeof error === "object" && "graphQLErrors" in error) {
-    const graphQLErrors = (error as { graphQLErrors?: Array<{ message?: string }> }).graphQLErrors;
-    const message = graphQLErrors?.find((entry) => typeof entry.message === "string")?.message;
-    if (message?.trim()) {
-      return message.trim();
-    }
-  }
-
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-
-  return null;
+function extractPluginMutationErrorMessage(
+  error: unknown,
+  translate?: Parameters<typeof userFacingGraphQlErrorMessage>[2],
+): string | null {
+  return userFacingGraphQlErrorMessage(error, "", translate) || null;
 }
 
 function extractPluginMutationErrorCode(error: unknown): string | null {
   if (
-    error
-    && typeof error === "object"
-    && "graphQLErrors" in error
-    && Array.isArray((error as { graphQLErrors?: unknown[] }).graphQLErrors)
+    error &&
+    typeof error === "object" &&
+    "graphQLErrors" in error &&
+    Array.isArray((error as { graphQLErrors?: unknown[] }).graphQLErrors)
   ) {
-    const graphQLErrors = (error as {
-      graphQLErrors?: Array<{ extensions?: { code?: unknown } }>;
-    }).graphQLErrors;
+    const graphQLErrors = (
+      error as {
+        graphQLErrors?: Array<{ extensions?: { code?: unknown } }>;
+      }
+    ).graphQLErrors;
     const code = graphQLErrors?.find(
       (entry) => typeof entry.extensions?.code === "string",
     )?.extensions?.code;
@@ -104,26 +98,16 @@ function formatPluginInstallError(
   error: unknown,
   t: ReturnType<typeof useTranslate>,
 ): string {
-  const rawMessage = extractPluginMutationErrorMessage(error);
+  const rawMessage = extractPluginMutationErrorMessage(error, t);
   const normalized = rawMessage
     ?.replace(/^\[GraphQL\]\s*/i, "")
     .replace(/^validation:\s*/i, "")
     .trim();
 
-  if (normalized && /WASM SHA256 mismatch/i.test(normalized)) {
-    return t("status.pluginInstallFailedChecksumMismatch", { name: plugin.name });
-  }
-
-  if (
-    normalized
-    && normalized.includes("has sdk_constraint")
-    && normalized.includes("but registry selected")
-  ) {
-    return t("status.pluginInstallFailedSdkMetadataMismatch", { name: plugin.name });
-  }
-
   if (normalized) {
-    if (extractPluginMutationErrorCode(error) === "PLUGIN_INSTALL_IN_PROGRESS") {
+    if (
+      extractPluginMutationErrorCode(error) === "PLUGIN_INSTALL_IN_PROGRESS"
+    ) {
       return t("status.pluginInstallAlreadyInProgress", { name: plugin.name });
     }
     return t("status.pluginInstallFailedWithReason", {
@@ -159,41 +143,55 @@ export function SettingsPluginsContainer() {
   const t = useTranslate();
   const client = useClient();
   const [plugins, _setPlugins] = useState<RegistryPluginRecord[]>([]);
-  const [catalogStatus, setCatalogStatus] = useState<PluginCatalogStatusRecord | null>(null);
+  const [catalogStatus, setCatalogStatus] =
+    useState<PluginCatalogStatusRecord | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [pluginErrors, setPluginErrors] = useState<Record<string, string>>({});
   const [manualRepoUrl, setManualRepoUrl] = useState("");
-  const [manualPreview, setManualPreview] = useState<ManualPluginPreviewRecord | null>(null);
+  const [manualPreview, setManualPreview] =
+    useState<ManualPluginPreviewRecord | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualPluginFile, setManualPluginFile] = useState<File | null>(null);
   const [pendingManualUpload, setPendingManualUpload] = useState(false);
-  const [manualUploadRiskAccepted, setManualUploadRiskAccepted] = useState(false);
+  const [manualUploadRiskAccepted, setManualUploadRiskAccepted] =
+    useState(false);
   const [showManualInstall, setShowManualInstall] = useState(false);
-  const [headerActionsTarget, setHeaderActionsTarget] = useState<HTMLElement | null>(null);
+  const [headerActionsTarget, setHeaderActionsTarget] =
+    useState<HTMLElement | null>(null);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [autoUpdateLoading, setAutoUpdateLoading] = useState(true);
   const [autoUpdateSaving, setAutoUpdateSaving] = useState(false);
 
-  const setPlugins = useCallback((
-    next:
-      | RegistryPluginRecord[]
-      | ((current: RegistryPluginRecord[]) => RegistryPluginRecord[]),
-  ) => {
-    _setPlugins(next);
-  }, []);
+  const setPlugins = useCallback(
+    (
+      next:
+        | RegistryPluginRecord[]
+        | ((current: RegistryPluginRecord[]) => RegistryPluginRecord[]),
+    ) => {
+      _setPlugins(next);
+    },
+    [],
+  );
   const [mutatingPluginIds, setMutatingPluginIds] = useState<string[]>([]);
-  const [pluginProgress, setPluginProgress] = useState<Record<string, PluginInstallProgressRecord>>({});
+  const [pluginProgress, setPluginProgress] = useState<
+    Record<string, PluginInstallProgressRecord>
+  >({});
   const [refreshing, setRefreshing] = useState(false);
   const [upgradingAll, setUpgradingAll] = useState(false);
-  const [pendingUninstall, setPendingUninstall] = useState<RegistryPluginRecord | null>(null);
+  const [pendingUninstall, setPendingUninstall] =
+    useState<RegistryPluginRecord | null>(null);
   const installProgressSubscriptionsRef = useRef(new Map<string, () => void>());
   const terminalPluginOperationsRef = useRef(new Set<string>());
-  const pluginProgressRef = useRef<Record<string, PluginInstallProgressRecord>>({});
+  const pluginProgressRef = useRef<Record<string, PluginInstallProgressRecord>>(
+    {},
+  );
   const pluginsRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const lastPluginsRefreshCompletedAtRef = useRef(0);
 
   useEffect(() => {
-    setHeaderActionsTarget(document.getElementById(SETTINGS_HEADER_ACTIONS_SLOT_ID));
+    setHeaderActionsTarget(
+      document.getElementById(SETTINGS_HEADER_ACTIONS_SLOT_ID),
+    );
   }, []);
 
   useEffect(() => {
@@ -201,9 +199,9 @@ export function SettingsPluginsContainer() {
   }, [pluginProgress]);
 
   const beginPluginMutation = useCallback((pluginId: string) => {
-    setMutatingPluginIds((current) => (
-      current.includes(pluginId) ? current : [...current, pluginId]
-    ));
+    setMutatingPluginIds((current) =>
+      current.includes(pluginId) ? current : [...current, pluginId],
+    );
   }, []);
 
   const endPluginMutation = useCallback((pluginId: string) => {
@@ -221,57 +219,81 @@ export function SettingsPluginsContainer() {
     });
   }, []);
 
-  const stopPluginInstallProgressSubscription = useCallback((pluginId: string) => {
-    const unsubscribe = installProgressSubscriptionsRef.current.get(pluginId);
-    if (unsubscribe) {
-      unsubscribe();
-      installProgressSubscriptionsRef.current.delete(pluginId);
-    }
-  }, []);
+  const stopPluginInstallProgressSubscription = useCallback(
+    (pluginId: string) => {
+      const unsubscribe = installProgressSubscriptionsRef.current.get(pluginId);
+      if (unsubscribe) {
+        unsubscribe();
+        installProgressSubscriptionsRef.current.delete(pluginId);
+      }
+    },
+    [],
+  );
 
   const applySuccessfulPluginOperation = useCallback(
-    (pluginId: string, operationKind: PluginInstallProgressRecord["operationKind"]) => {
-      setPlugins((current) => current.map((plugin) => (
-        plugin.id === pluginId
-          ? applySuccessfulPluginOperationState(plugin, operationKind)
-          : plugin
-      )));
+    (
+      pluginId: string,
+      operationKind: PluginInstallProgressRecord["operationKind"],
+    ) => {
+      setPlugins((current) =>
+        current.map((plugin) =>
+          plugin.id === pluginId
+            ? applySuccessfulPluginOperationState(plugin, operationKind)
+            : plugin,
+        ),
+      );
     },
     [setPlugins],
   );
 
-  const clearPluginBusyState = useCallback((pluginId: string) => {
-    setPlugins((current) => current.map((plugin) => (
-      plugin.id === pluginId ? { ...plugin, installInProgress: false } : plugin
-    )));
-  }, [setPlugins]);
+  const clearPluginBusyState = useCallback(
+    (pluginId: string) => {
+      setPlugins((current) =>
+        current.map((plugin) =>
+          plugin.id === pluginId
+            ? { ...plugin, installInProgress: false }
+            : plugin,
+        ),
+      );
+    },
+    [setPlugins],
+  );
 
-  const reconcilePluginOperationState = useCallback((nextPlugins: RegistryPluginRecord[]) => {
-    const nextById = new Map(nextPlugins.map((plugin) => [plugin.id, plugin] as const));
-    const trackedPluginIds = new Set([
-      ...installProgressSubscriptionsRef.current.keys(),
-      ...Object.keys(pluginProgressRef.current),
-    ]);
+  const reconcilePluginOperationState = useCallback(
+    (nextPlugins: RegistryPluginRecord[]) => {
+      const nextById = new Map(
+        nextPlugins.map((plugin) => [plugin.id, plugin] as const),
+      );
+      const trackedPluginIds = new Set([
+        ...installProgressSubscriptionsRef.current.keys(),
+        ...Object.keys(pluginProgressRef.current),
+      ]);
 
-    for (const pluginId of trackedPluginIds) {
-      const nextPlugin = nextById.get(pluginId);
-      if (nextPlugin?.installInProgress) {
-        continue;
-      }
-
-      stopPluginInstallProgressSubscription(pluginId);
-      clearPluginProgress(pluginId);
-      endPluginMutation(pluginId);
-      setPluginErrors((current) => {
-        if (!(pluginId in current)) {
-          return current;
+      for (const pluginId of trackedPluginIds) {
+        const nextPlugin = nextById.get(pluginId);
+        if (nextPlugin?.installInProgress) {
+          continue;
         }
-        const next = { ...current };
-        delete next[pluginId];
-        return next;
-      });
-    }
-  }, [clearPluginProgress, endPluginMutation, stopPluginInstallProgressSubscription]);
+
+        stopPluginInstallProgressSubscription(pluginId);
+        clearPluginProgress(pluginId);
+        endPluginMutation(pluginId);
+        setPluginErrors((current) => {
+          if (!(pluginId in current)) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[pluginId];
+          return next;
+        });
+      }
+    },
+    [
+      clearPluginProgress,
+      endPluginMutation,
+      stopPluginInstallProgressSubscription,
+    ],
+  );
 
   useEffect(() => {
     const subscriptions = installProgressSubscriptionsRef.current;
@@ -283,31 +305,39 @@ export function SettingsPluginsContainer() {
     };
   }, []);
 
-  const refreshPlugins = useCallback(async (reportErrors = true) => {
-    if (pluginsRefreshPromiseRef.current) {
-      return pluginsRefreshPromiseRef.current;
-    }
-    const refreshPromise = (async () => {
-      try {
-        const { data, error } = await client.query(pluginsQuery, {}).toPromise();
-        if (error) throw error;
-        const nextPlugins = data.plugins || [];
-        setPlugins(nextPlugins);
-        setCatalogStatus(data.pluginCatalogStatus || null);
-        reconcilePluginOperationState(nextPlugins);
-      } catch (error) {
-        if (reportErrors) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
-        }
-      } finally {
-        setInitialLoading(false);
-        lastPluginsRefreshCompletedAtRef.current = Date.now();
-        pluginsRefreshPromiseRef.current = null;
+  const refreshPlugins = useCallback(
+    async (reportErrors = true) => {
+      if (pluginsRefreshPromiseRef.current) {
+        return pluginsRefreshPromiseRef.current;
       }
-    })();
-    pluginsRefreshPromiseRef.current = refreshPromise;
-    return refreshPromise;
-  }, [client, reconcilePluginOperationState, setGlobalStatus, t, setPlugins]);
+      const refreshPromise = (async () => {
+        try {
+          const { data, error } = await client
+            .query(pluginsQuery, {})
+            .toPromise();
+          if (error) throw error;
+          const nextPlugins = data.plugins || [];
+          setPlugins(nextPlugins);
+          setCatalogStatus(data.pluginCatalogStatus || null);
+          reconcilePluginOperationState(nextPlugins);
+        } catch (error) {
+          if (reportErrors) {
+            setGlobalStatus(
+              userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+              { level: "ERROR" },
+            );
+          }
+        } finally {
+          setInitialLoading(false);
+          lastPluginsRefreshCompletedAtRef.current = Date.now();
+          pluginsRefreshPromiseRef.current = null;
+        }
+      })();
+      pluginsRefreshPromiseRef.current = refreshPromise;
+      return refreshPromise;
+    },
+    [client, reconcilePluginOperationState, setGlobalStatus, t, setPlugins],
+  );
 
   useEffect(() => {
     void refreshPlugins();
@@ -317,12 +347,18 @@ export function SettingsPluginsContainer() {
     setAutoUpdateLoading(true);
     try {
       const { data, error } = await client
-        .query<PluginAutoUpdateSettingsQueryResult>(pluginAutoUpdateSettingsQuery, {})
+        .query<PluginAutoUpdateSettingsQueryResult>(
+          pluginAutoUpdateSettingsQuery,
+          {},
+        )
         .toPromise();
       if (error) throw error;
       setAutoUpdateEnabled(data?.pluginAutoUpdateSettings?.enabled ?? false);
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setAutoUpdateLoading(false);
     }
@@ -332,29 +368,39 @@ export function SettingsPluginsContainer() {
     void fetchAutoUpdateSettings();
   }, [fetchAutoUpdateSettings]);
 
-  const updateAutoUpdateEnabled = useCallback(async (enabled: boolean) => {
-    setAutoUpdateSaving(true);
-    try {
-      const { data, error } = await client
-        .mutation<UpdatePluginAutoUpdateSettingsResult>(
-          updatePluginAutoUpdateSettingsMutation,
-          { input: { enabled } },
-        )
-        .toPromise();
-      if (error) throw error;
-      setAutoUpdateEnabled(data?.updatePluginAutoUpdateSettings?.enabled ?? enabled);
-      setGlobalStatus(t("status.pluginAutoUpdateSettingsSaved"), { level: "SUCCESS" });
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
-    } finally {
-      setAutoUpdateSaving(false);
-    }
-  }, [client, setGlobalStatus, t]);
+  const updateAutoUpdateEnabled = useCallback(
+    async (enabled: boolean) => {
+      setAutoUpdateSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation<UpdatePluginAutoUpdateSettingsResult>(
+            updatePluginAutoUpdateSettingsMutation,
+            { input: { enabled } },
+          )
+          .toPromise();
+        if (error) throw error;
+        setAutoUpdateEnabled(
+          data?.updatePluginAutoUpdateSettings?.enabled ?? enabled,
+        );
+        setGlobalStatus(t("status.pluginAutoUpdateSettingsSaved"), {
+          level: "SUCCESS",
+        });
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
+      } finally {
+        setAutoUpdateSaving(false);
+      }
+    },
+    [client, setGlobalStatus, t],
+  );
 
   useProviderCatalogSubscription(() => {
     if (
-      pluginsRefreshPromiseRef.current
-      || Date.now() - lastPluginsRefreshCompletedAtRef.current < 2_000
+      pluginsRefreshPromiseRef.current ||
+      Date.now() - lastPluginsRefreshCompletedAtRef.current < 2_000
     ) {
       return;
     }
@@ -390,14 +436,22 @@ export function SettingsPluginsContainer() {
             }));
 
             if (snapshot.state === "SUCCEEDED" || snapshot.state === "FAILED") {
-              if (!claimPluginTerminalOperation(terminalPluginOperationsRef.current, plugin.id)) {
+              if (
+                !claimPluginTerminalOperation(
+                  terminalPluginOperationsRef.current,
+                  plugin.id,
+                )
+              ) {
                 return;
               }
               stopPluginInstallProgressSubscription(plugin.id);
               void (async () => {
                 try {
                   if (snapshot.state === "SUCCEEDED") {
-                    applySuccessfulPluginOperation(plugin.id, snapshot.operationKind);
+                    applySuccessfulPluginOperation(
+                      plugin.id,
+                      snapshot.operationKind,
+                    );
                     setPluginErrors((current) => {
                       const next = { ...current };
                       delete next[plugin.id];
@@ -406,9 +460,9 @@ export function SettingsPluginsContainer() {
                     setGlobalStatus(
                       snapshot.operationKind === "UPGRADE"
                         ? t("status.pluginUpgraded", {
-                          name: plugin.name,
-                          version: plugin.latestVersion ?? plugin.version,
-                        })
+                            name: plugin.name,
+                            version: plugin.latestVersion ?? plugin.version,
+                          })
                         : t("status.pluginInstalled", { name: plugin.name }),
                     );
                     await refreshPlugins(false);
@@ -434,7 +488,12 @@ export function SettingsPluginsContainer() {
             }
           },
           error: (error) => {
-            if (!claimPluginTerminalOperation(terminalPluginOperationsRef.current, plugin.id)) {
+            if (
+              !claimPluginTerminalOperation(
+                terminalPluginOperationsRef.current,
+                plugin.id,
+              )
+            ) {
               return;
             }
             stopPluginInstallProgressSubscription(plugin.id);
@@ -456,7 +515,10 @@ export function SettingsPluginsContainer() {
             // leave the row pinned on "Installing" with nothing left to correct
             // it. Reconcile the way reloading the page did.
             if (
-              claimPluginTerminalOperation(terminalPluginOperationsRef.current, plugin.id)
+              claimPluginTerminalOperation(
+                terminalPluginOperationsRef.current,
+                plugin.id,
+              )
             ) {
               clearPluginBusyState(plugin.id);
               clearPluginProgress(plugin.id);
@@ -491,7 +553,10 @@ export function SettingsPluginsContainer() {
       dispatchNavigationBadgesRefresh();
       setGlobalStatus(t("status.catalogRefreshed"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setRefreshing(false);
     }
@@ -516,12 +581,22 @@ export function SettingsPluginsContainer() {
         await refreshPlugins();
         dispatchNavigationBadgesRefresh();
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate"), t),
+          { level: "ERROR" },
+        );
       } finally {
         endPluginMutation(plugin.id);
       }
     },
-    [beginPluginMutation, client, endPluginMutation, refreshPlugins, setGlobalStatus, t],
+    [
+      beginPluginMutation,
+      client,
+      endPluginMutation,
+      refreshPlugins,
+      setGlobalStatus,
+      t,
+    ],
   );
 
   const installPlugin = async (plugin: RegistryPluginRecord) => {
@@ -556,32 +631,35 @@ export function SettingsPluginsContainer() {
     setPendingUninstall(plugin);
   };
 
-  const onManualPluginFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    event.target.value = "";
-    setManualUploadRiskAccepted(false);
-    setPendingManualUpload(false);
-    setPluginErrors((current) => {
-      const next = { ...current };
-      delete next.__manualUpload;
-      return next;
-    });
+  const onManualPluginFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      event.target.value = "";
+      setManualUploadRiskAccepted(false);
+      setPendingManualUpload(false);
+      setPluginErrors((current) => {
+        const next = { ...current };
+        delete next.__manualUpload;
+        return next;
+      });
 
-    if (!file) {
-      setManualPluginFile(null);
-      return;
-    }
+      if (!file) {
+        setManualPluginFile(null);
+        return;
+      }
 
-    if (!manualPluginFileIsSupported(file.name)) {
-      setManualPluginFile(null);
-      const message = t("settings.pluginManualFileUnsupported");
-      setPluginErrors((current) => ({ ...current, __manualUpload: message }));
-      setGlobalStatus(message);
-      return;
-    }
+      if (!manualPluginFileIsSupported(file.name)) {
+        setManualPluginFile(null);
+        const message = t("settings.pluginManualFileUnsupported");
+        setPluginErrors((current) => ({ ...current, __manualUpload: message }));
+        setGlobalStatus(message);
+        return;
+      }
 
-    setManualPluginFile(file);
-  }, [setGlobalStatus, t]);
+      setManualPluginFile(file);
+    },
+    [setGlobalStatus, t],
+  );
 
   const inspectManualPluginRepo = async () => {
     if (!manualRepoUrl.trim()) return;
@@ -600,7 +678,11 @@ export function SettingsPluginsContainer() {
       if (error) throw error;
       setManualPreview(data.inspectManualPluginRepo || null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setPluginErrors((current) => ({ ...current, __manual: message }));
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
@@ -658,7 +740,9 @@ export function SettingsPluginsContainer() {
       await refreshPlugins();
       dispatchNavigationBadgesRefresh();
     } catch (error) {
-      const message = extractPluginMutationErrorMessage(error) ?? t("status.failedToUpdate");
+      const message =
+        extractPluginMutationErrorMessage(error, t) ??
+        t("status.failedToUpdate");
       setPluginErrors((current) => ({ ...current, __manualUpload: message }));
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
@@ -678,7 +762,9 @@ export function SettingsPluginsContainer() {
         })
         .toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.pluginInstalled", { name: preview.plugin.name }));
+      setGlobalStatus(
+        t("status.pluginInstalled", { name: preview.plugin.name }),
+      );
       setManualPreview(null);
       setManualRepoUrl("");
       setShowManualInstall(false);
@@ -732,7 +818,10 @@ export function SettingsPluginsContainer() {
 
   const upgradeAllPlugins = async () => {
     const upgradable = plugins.filter(
-      (plugin) => plugin.isInstalled && plugin.updateAvailable && !mutatingPluginIds.includes(plugin.id),
+      (plugin) =>
+        plugin.isInstalled &&
+        plugin.updateAvailable &&
+        !mutatingPluginIds.includes(plugin.id),
     );
     if (upgradable.length === 0) {
       return;
@@ -740,7 +829,9 @@ export function SettingsPluginsContainer() {
 
     setUpgradingAll(true);
     try {
-      const results = await Promise.all(upgradable.map((plugin) => beginPluginUpgrade(plugin)));
+      const results = await Promise.all(
+        upgradable.map((plugin) => beginPluginUpgrade(plugin)),
+      );
       const startedCount = results.filter(Boolean).length;
       if (startedCount > 0) {
         setGlobalStatus(
@@ -758,7 +849,8 @@ export function SettingsPluginsContainer() {
   const confirmUninstall = async () => {
     if (!pendingUninstall) return;
     const plugin = pendingUninstall;
-    const isBuiltinOverride = plugin.builtin && plugin.sourceKind === "downloaded";
+    const isBuiltinOverride =
+      plugin.builtin && plugin.sourceKind === "downloaded";
     beginPluginMutation(plugin.id);
     try {
       const { error } = await client
@@ -773,7 +865,10 @@ export function SettingsPluginsContainer() {
       await refreshPlugins();
       dispatchNavigationBadgesRefresh();
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToDelete"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToDelete"), t),
+        { level: "ERROR" },
+      );
     } finally {
       endPluginMutation(plugin.id);
       setPendingUninstall(null);
@@ -812,7 +907,9 @@ export function SettingsPluginsContainer() {
           inspectManual: blockedRemoteActions.has("manual_repo_inspection"),
         }}
         onManualRepoUrlChange={setManualRepoUrl}
-        onToggleManualInstall={() => setShowManualInstall((current) => !current)}
+        onToggleManualInstall={() =>
+          setShowManualInstall((current) => !current)
+        }
         onManualPluginFileChange={onManualPluginFileChange}
         onInspectManualPluginRepo={inspectManualPluginRepo}
         onRequestInstallUploadedPlugin={requestInstallUploadedPlugin}
@@ -834,8 +931,12 @@ export function SettingsPluginsContainer() {
         description={
           pendingUninstall
             ? pendingUninstallIsBuiltinOverride
-              ? t("settings.pluginRevertToBundledWarning", { name: pendingUninstall.name })
-              : t("settings.pluginUninstallWarning", { name: pendingUninstall.name })
+              ? t("settings.pluginRevertToBundledWarning", {
+                  name: pendingUninstall.name,
+                })
+              : t("settings.pluginUninstallWarning", {
+                  name: pendingUninstall.name,
+                })
             : ""
         }
         confirmLabel={
@@ -844,7 +945,11 @@ export function SettingsPluginsContainer() {
             : t("settings.pluginUninstall")
         }
         cancelLabel={t("label.cancel")}
-        isBusy={pendingUninstall ? mutatingPluginIds.includes(pendingUninstall.id) : false}
+        isBusy={
+          pendingUninstall
+            ? mutatingPluginIds.includes(pendingUninstall.id)
+            : false
+        }
         onConfirm={confirmUninstall}
         onCancel={() => setPendingUninstall(null)}
       />
@@ -872,7 +977,9 @@ export function SettingsPluginsContainer() {
           <Checkbox
             id="settings-plugins-manual-upload-risk-checkbox"
             checked={manualUploadRiskAccepted}
-            onCheckedChange={(checked) => setManualUploadRiskAccepted(!!checked)}
+            onCheckedChange={(checked) =>
+              setManualUploadRiskAccepted(!!checked)
+            }
           />
           <span>{t("settings.pluginManualUploadConfirmCheckbox")}</span>
         </label>

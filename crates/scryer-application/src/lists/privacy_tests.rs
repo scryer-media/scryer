@@ -52,7 +52,7 @@ fn a_personal_list_is_visible_to_its_owner_only_and_admins_get_not_found() {
     let admin = member("admin-one");
     assert!(matches!(
         ensure_subscription_visible(&admin, &list),
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
     assert!(visible_subscriptions(&admin, vec![list.clone()]).is_empty());
     assert_eq!(
@@ -74,7 +74,7 @@ fn another_members_account_is_not_found() {
     let foreign = account("owner-two", PROVIDER, UserListAccountStatus::Active);
     assert!(matches!(
         ensure_account_owner(&member("owner-one"), &foreign),
-        Err(AppError::NotFound(_))
+        Err(AppError::NotFound(_) | AppError::NotFoundReason { .. })
     ));
 }
 

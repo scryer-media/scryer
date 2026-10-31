@@ -180,28 +180,35 @@ test("a URL pasted into the host box is put where it belongs", () => {
 
   // A scheme the operator wrote sets the SSL box, both ways.
   assert.equal(
-    normalizeDownloadClientDraft(draft({ host: "https://qbit.example.com" })).useSsl,
+    normalizeDownloadClientDraft(draft({ host: "https://qbit.example.com" }))
+      .useSsl,
     true,
   );
   assert.equal(
-    normalizeDownloadClientDraft(draft({ host: "http://qbit.example.com", useSsl: true }))
-      .useSsl,
+    normalizeDownloadClientDraft(
+      draft({ host: "http://qbit.example.com", useSsl: true }),
+    ).useSsl,
     false,
   );
   // Without a scheme the checkbox is the operator's own statement and stands.
   assert.equal(
-    normalizeDownloadClientDraft(draft({ host: "qbit.example.com", useSsl: true })).useSsl,
+    normalizeDownloadClientDraft(
+      draft({ host: "qbit.example.com", useSsl: true }),
+    ).useSsl,
     true,
   );
 
   // A port in the address wins over a stale one in the port box; without one,
   // the port box is kept.
   assert.equal(
-    normalizeDownloadClientDraft(draft({ host: "192.168.1.5:9091", port: "6789" })).port,
+    normalizeDownloadClientDraft(
+      draft({ host: "192.168.1.5:9091", port: "6789" }),
+    ).port,
     "9091",
   );
   assert.equal(
-    normalizeDownloadClientDraft(draft({ host: "192.168.1.5", port: "6789" })).port,
+    normalizeDownloadClientDraft(draft({ host: "192.168.1.5", port: "6789" }))
+      .port,
     "6789",
   );
 
@@ -215,38 +222,66 @@ test("a URL pasted into the host box is put where it belongs", () => {
 
 test("the connection test dials what a save would store", () => {
   assert.equal(
-    buildDownloadClientBaseUrl(draft({ host: "http://192.168.1.5:8080/qbt", port: "", urlBase: "" })),
+    buildDownloadClientBaseUrl(
+      draft({ host: "http://192.168.1.5:8080/qbt", port: "", urlBase: "" }),
+    ),
     "http://192.168.1.5:8080/qbt",
   );
   assert.equal(
-    buildDownloadClientBaseUrl(draft({ host: "https://qbit.example.com", port: "", urlBase: "" })),
+    buildDownloadClientBaseUrl(
+      draft({ host: "https://qbit.example.com", port: "", urlBase: "" }),
+    ),
     "https://qbit.example.com",
   );
 });
 
 test("the connection test runs for a hostless client and still needs an address otherwise", () => {
-  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "http", host: "", port: "" })), null);
-  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "HTTP", host: "", port: "" })), null);
   assert.equal(
-    downloadClientConnectionTestBlocker(draft({ clientType: "http", name: "  ", host: "" })),
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "http", host: "", port: "" }),
+    ),
+    null,
+  );
+  assert.equal(
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "HTTP", host: "", port: "" }),
+    ),
+    null,
+  );
+  assert.equal(
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "http", name: "  ", host: "" }),
+    ),
     "settings.downloadClientValidation",
   );
   assert.equal(
-    downloadClientConnectionTestBlocker(draft({ clientType: "nzbget", host: "" })),
+    downloadClientConnectionTestBlocker(
+      draft({ clientType: "nzbget", host: "" }),
+    ),
     "settings.downloadClientValidation",
   );
-  assert.equal(downloadClientConnectionTestBlocker(draft({ clientType: "nzbget" })), null);
+  assert.equal(
+    downloadClientConnectionTestBlocker(draft({ clientType: "nzbget" })),
+    null,
+  );
 });
 
 test("the built-in HTTP downloader is offered with its own settings and no address", () => {
-  const option = buildDownloadClientTypeOptions([]).find((entry) => entry.value === "http");
+  const option = buildDownloadClientTypeOptions([]).find(
+    (entry) => entry.value === "http",
+  );
   assert.ok(option, "http is a built-in type");
   assert.ok(isHostlessDownloadClientType("HTTP"));
   assert.ok(!isHostlessDownloadClientType("weaver"));
   const fields = option.configFields ?? [];
   assert.deepEqual(
     fields.map((field) => field.key),
-    ["download_dir", "max_concurrent_downloads", "max_connections_per_host", "bandwidth_limit_kbps"],
+    [
+      "download_dir",
+      "max_concurrent_downloads",
+      "max_connections_per_host",
+      "bandwidth_limit_kbps",
+    ],
   );
 
   const values = buildDownloadClientConfigValues(

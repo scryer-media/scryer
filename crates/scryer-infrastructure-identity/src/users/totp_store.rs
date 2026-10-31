@@ -71,7 +71,7 @@ impl TotpRepository for TotpStore {
                     encryption_key.as_ref(),
                 )
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("TOTP credential {}", credential.id)))
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_TOTP_CREDENTIAL_NOT_FOUND, format!("TOTP credential {}", credential.id)))
             })
         })
         .await
@@ -119,7 +119,7 @@ impl TotpRepository for TotpStore {
                         encryption_key.as_ref(),
                     )
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("TOTP challenge {}", challenge.id)))
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_TOTP_CHALLENGE_NOT_FOUND, format!("TOTP challenge {}", challenge.id)))
                 })
             },
         )
@@ -199,7 +199,10 @@ impl TotpRepository for TotpStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("user {user_id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                            format!("user {user_id}"),
+                        ));
                     }
 
                     tx.execute(
@@ -276,9 +279,7 @@ impl TotpRepository for TotpStore {
                     )
                     .await?;
                     if session_rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "TOTP enrollment session is no longer current".into(),
-                        ));
+                        return Err(AppError::unauthorized_reason(crate::error_reasons::IDENTITY_TOTP_ENROLLMENT_SESSION_STALE, "TOTP enrollment session is no longer current"));
                     }
                     let challenge_rows = tx
                         .execute(
@@ -290,7 +291,7 @@ impl TotpRepository for TotpStore {
                         )
                         .await?;
                     if challenge_rows == 0 {
-                        return Err(AppError::NotFound(format!(
+                        return Err(AppError::not_found_reason(crate::error_reasons::IDENTITY_TOTP_CHALLENGE_NOT_FOUND, format!(
                             "TOTP challenge {}",
                             challenge_id
                         )));
@@ -360,8 +361,9 @@ impl TotpRepository for TotpStore {
                         )
                         .await?;
                     if session_rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "TOTP disablement session is no longer current".into(),
+                        return Err(AppError::unauthorized_reason(
+                            crate::error_reasons::IDENTITY_TOTP_DISABLEMENT_SESSION_STALE,
+                            "TOTP disablement session is no longer current",
                         ));
                     }
                     tx.execute(
@@ -421,8 +423,9 @@ impl TotpRepository for TotpStore {
                         )
                         .await?;
                     if session_rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "recovery-code replacement session is no longer current".into(),
+                        return Err(AppError::unauthorized_reason(
+                            crate::error_reasons::IDENTITY_RECOVERY_CODE_SESSION_STALE,
+                            "recovery-code replacement session is no longer current",
                         ));
                     }
                     tx.execute(

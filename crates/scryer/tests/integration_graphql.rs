@@ -2668,7 +2668,7 @@ async fn create_test_series_movie_link(
         .expect("create series movie link")
 }
 
-const LARGE_GRAPHQL_TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+const LARGE_GRAPHQL_TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 fn run_large_stack_graphql_test<F, Fut>(name: &str, test: F)
 where

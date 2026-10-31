@@ -9,7 +9,9 @@ export class QueryTimeoutError extends Error {
 
 /** End the frontend subscription on timeout or scope cancellation. */
 export function boundedQuery<T extends { stale?: boolean; hasNext?: boolean }>(
-  source: { subscribe: (next: (value: T) => void) => { unsubscribe: () => void } },
+  source: {
+    subscribe: (next: (value: T) => void) => { unsubscribe: () => void };
+  },
   signal: AbortSignal,
   timeoutMs = ACTIVITY_READ_TIMEOUT_MS,
 ): Promise<T> {
@@ -25,8 +27,12 @@ export function boundedQuery<T extends { stale?: boolean; hasNext?: boolean }>(
       if (error) reject(error);
       else resolve(value!);
     };
-    const abort = () => finish(undefined, new DOMException("Request canceled", "AbortError"));
-    const timer = setTimeout(() => finish(undefined, new QueryTimeoutError()), timeoutMs);
+    const abort = () =>
+      finish(undefined, new DOMException("Request canceled", "AbortError"));
+    const timer = setTimeout(
+      () => finish(undefined, new QueryTimeoutError()),
+      timeoutMs,
+    );
     if (signal.aborted) {
       abort();
       return;

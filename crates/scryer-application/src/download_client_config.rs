@@ -14,7 +14,10 @@ fn parse_download_client_config_json(raw: &str) -> AppResult<Value> {
         return Ok(json!({}));
     }
     serde_json::from_str::<Value>(trimmed).map_err(|error| {
-        AppError::Validation(format!("invalid download client config JSON: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::download_client_config::JSON_INVALID,
+            format!("invalid download client config JSON: {error}"),
+        )
     })
 }
 

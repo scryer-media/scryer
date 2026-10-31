@@ -84,13 +84,23 @@ export function MediaRenamePlanPanel({
       </div>
       {plan.namingContext?.length ? (
         <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
-          <p>{t("rename.organizingFolderChanges", { count: plan.organizingFolderChanges ?? 0 })}</p>
+          <p>
+            {t("rename.organizingFolderChanges", {
+              count: plan.organizingFolderChanges ?? 0,
+            })}
+          </p>
           {plan.namingContext.map((context) => (
             <div key={context.titleId} className="break-all">
-              <p className="text-muted-foreground">{t("rename.namingLanguage", { language: context.language })}</p>
-              <p className="font-[var(--font-code)] text-xs">{context.currentRelativePath ?? "—"}</p>
+              <p className="text-muted-foreground">
+                {t("rename.namingLanguage", { language: context.language })}
+              </p>
+              <p className="font-[var(--font-code)] text-xs">
+                {context.currentRelativePath ?? "—"}
+              </p>
               <ArrowDown aria-hidden className="my-1 h-3 w-3" />
-              <p className="font-[var(--font-code)] text-xs">{context.proposedRelativePath}</p>
+              <p className="font-[var(--font-code)] text-xs">
+                {context.proposedRelativePath}
+              </p>
             </div>
           ))}
         </div>
@@ -142,7 +152,13 @@ export function MediaRenamePlanPanel({
             {t("label.cancel")}
           </Button>
         ) : null}
-        <Button id={applyButtonId} size="sm" type="button" onClick={onApply} disabled={applyDisabled}>
+        <Button
+          id={applyButtonId}
+          size="sm"
+          type="button"
+          onClick={onApply}
+          disabled={applyDisabled}
+        >
           {applying ? t("rename.applying") : t("rename.applyButton")}
         </Button>
       </div>

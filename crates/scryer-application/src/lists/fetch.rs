@@ -139,6 +139,22 @@ impl ListFailure {
         Self { class, message }
     }
 
+    /// Preserve the typed failure while presenting it through an interactive refusal.
+    pub(crate) fn into_app_error(self) -> AppError {
+        let reason = match self.class {
+            ListFailureClass::Unauthorized => super::refusal::ACCOUNT_RECONNECT_REQUIRED,
+            ListFailureClass::RateLimited { .. } => {
+                crate::error_reasons::lists::SOURCE_RATE_LIMITED
+            }
+            ListFailureClass::NotFound => super::refusal::SOURCE_NOT_OFFERED,
+            ListFailureClass::Unavailable => crate::error_reasons::lists::SOURCE_UNAVAILABLE,
+            ListFailureClass::NotInstalled => super::refusal::PROVIDER_NOT_INSTALLED,
+            ListFailureClass::AccountRequired => super::refusal::ACCOUNT_REQUIRED,
+            ListFailureClass::Failed => crate::error_reasons::lists::SOURCE_FAILED,
+        };
+        AppError::validation_refused(reason, self.message)
+    }
+
     /// Classify a provider-reported plugin error.
     pub fn from_plugin_error(error: &PluginError, provider: &str) -> Self {
         // Codes are compared by their wire string, so a well-known code sent
@@ -159,10 +175,7 @@ impl ListFailure {
             || error.code == PluginErrorCode::Temporary
         {
             ListFailureClass::Unavailable
-        } else if code == plugin_codes::ITEM_NOT_FOUND
-            // Plugins built before `item_not_found` say so only in prose.
-            || (error.code == PluginErrorCode::Permanent && is_not_found(error))
-        {
+        } else if code == plugin_codes::ITEM_NOT_FOUND {
             ListFailureClass::NotFound
         } else {
             ListFailureClass::Failed
@@ -173,19 +186,14 @@ impl ListFailure {
     /// Classify a host-side failure (the exchange itself did not complete).
     pub fn from_app_error(error: &AppError, provider: &str) -> Self {
         let class = match error {
-            AppError::Validation(_) | AppError::ValidationRefused { .. } => {
-                ListFailureClass::AccountRequired
-            }
-            AppError::NotFound(_) => ListFailureClass::NotFound,
+            AppError::Validation(_)
+            | AppError::ValidationRefused { .. }
+            | AppError::ValidationRefusedWithCount { .. } => ListFailureClass::AccountRequired,
+            AppError::NotFound(_) | AppError::NotFoundReason { .. } => ListFailureClass::NotFound,
             _ => ListFailureClass::Unavailable,
         };
         Self::new(class, provider)
     }
-}
-
-fn is_not_found(error: &PluginError) -> bool {
-    let message = error.public_message.to_ascii_lowercase();
-    message.contains("404") || message.contains("not found")
 }
 
 /// What one fetch produced.
@@ -601,6 +609,27 @@ mod tests {
     }
 
     #[test]
+    fn plugin_missing_item_uses_the_guest_code_and_never_its_sentence() {
+        let mut error = PluginError {
+            code: PluginErrorCode::from(plugin_codes::ITEM_NOT_FOUND),
+            public_message: "rewritten provider diagnostic".into(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+        assert_eq!(
+            ListFailure::from_plugin_error(&error, "fixture").class,
+            ListFailureClass::NotFound
+        );
+        error.code = PluginErrorCode::Permanent;
+        error.public_message = "404: not found".into();
+        assert_eq!(
+            ListFailure::from_plugin_error(&error, "fixture").class,
+            ListFailureClass::Failed
+        );
+    }
+
+    #[test]
     fn a_refused_credential_or_account_code_is_unauthorized() {
         for code in [
             "auth_failed",
@@ -646,10 +675,10 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_permanent_not_found_sentence_is_still_not_found() {
+    fn an_uncoded_live_permanent_failure_does_not_infer_not_found_from_its_sentence() {
         assert_eq!(
             class_of("permanent", "list not found", None),
-            ListFailureClass::NotFound
+            ListFailureClass::Failed
         );
         assert_eq!(
             class_of("permanent", "gone", None),

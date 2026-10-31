@@ -1,4 +1,8 @@
-import type { SettingsSection, ContentSettingsSection, ViewId } from "@/components/root/types";
+import type {
+  SettingsSection,
+  ContentSettingsSection,
+  ViewId,
+} from "@/components/root/types";
 
 export type HomePageRouteState = {
   initialView?: ViewId;

@@ -34,7 +34,10 @@ test("collects active episode ids from direct, set, and collection queue scopes"
       }),
     ],
     {
-      "collection-1": [{ id: "episode-collection-1" }, { id: "episode-collection-2" }],
+      "collection-1": [
+        { id: "episode-collection-1" },
+        { id: "episode-collection-2" },
+      ],
     },
   );
 

@@ -39,12 +39,11 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import type {
-  InteractiveSearchIndexerProgress,
-} from "@/lib/graphql/release-search";
+import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
 import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { indexerCapsDiagnostic } from "@/lib/utils/indexer-caps-diagnostic";
 import {
   indexerSearchResultDownloadId,
   indexerSearchResultExpandId,
@@ -103,6 +102,9 @@ export type SettingsIndexerSearchSectionProps = {
   onRemoveSavedSearch: (index: number) => void;
   onSearch: () => void;
   onCancelSearch: () => void;
+  onNextPage?: () => void;
+  hasNextPage?: boolean;
+  deadlineReached?: boolean;
   searching: boolean;
   hasSearched: boolean;
   indexers: InteractiveSearchIndexerProgress[];
@@ -132,8 +134,8 @@ export type SettingsIndexerSearchSectionProps = {
 };
 
 const SORT_COLUMNS = ["release", "indexer", "size", "age", "peers"] as const;
-const SORT_KEYS: IndexerSearchSortKey[] = SORT_COLUMNS.flatMap((column) =>
-  [`${column}-asc`, `${column}-desc`] as IndexerSearchSortKey[],
+const SORT_KEYS: IndexerSearchSortKey[] = SORT_COLUMNS.flatMap(
+  (column) => [`${column}-asc`, `${column}-desc`] as IndexerSearchSortKey[],
 );
 
 const HEALTH_DOT_CLASS: Record<IndexerHealthTone, string> = {
@@ -215,7 +217,9 @@ function ProtocolBadge({ release }: { release: Release }) {
   );
 }
 
-function useReleaseBadges(release: Release): { text: string; tone: BadgeTone }[] {
+function useReleaseBadges(
+  release: Release,
+): { text: string; tone: BadgeTone }[] {
   const t = useTranslate();
   const badges: { text: string; tone: BadgeTone }[] = [];
   const parsed = release.parsedRelease;
@@ -237,6 +241,14 @@ function useReleaseBadges(release: Release): { text: string; tone: BadgeTone }[]
   }
   if (release.freeleech === true) {
     badges.push({ text: t("indexerSearch.facet.freeleech"), tone: "success" });
+  }
+  if (release.uploadVolumeFactor != null && release.uploadVolumeFactor > 1) {
+    badges.push({
+      text: t("indexerSearch.facet.uploadFactor", {
+        factor: release.uploadVolumeFactor,
+      }),
+      tone: "success",
+    });
   }
   if (parsed?.isProperUpload) {
     badges.push({ text: t("indexerSearch.facet.proper"), tone: "warning" });
@@ -387,7 +399,7 @@ function QueryCard({
             type="button"
             disabled={query.trim().length === 0}
             onClick={onSearch}
-            className="h-[46px] rounded-[11px] border-0 bg-[linear-gradient(135deg,var(--scry-accent),var(--scry-accent2))] px-[22px] text-[13.5px] font-semibold text-white shadow-[0_8px_20px_rgba(var(--scry-accent-rgb),calc(0.32*var(--scry-glow)))] hover:opacity-90"
+            className="h-[46px] rounded-[11px] border-0 bg-[linear-gradient(135deg,var(--scry-accent),var(--scry-accent2))] px-[22px] text-[13.5px] font-semibold text-white hover:opacity-90"
           >
             <ScanSearch className="h-4 w-4" />
             {t("label.search")}
@@ -484,7 +496,10 @@ function QueryCard({
             ) : (
               <ul className="space-y-1">
                 {savedSearchLabels.map((label, index) => (
-                  <li key={`${index}:${label}`} className="flex items-center gap-1">
+                  <li
+                    key={`${index}:${label}`}
+                    className="flex items-center gap-1"
+                  >
                     <button
                       id={selectorId("indexer-search-saved-apply", label)}
                       type="button"
@@ -555,7 +570,9 @@ function QueryCard({
             max={RAW_SEARCH_MAX_PAGE_SIZE}
             placeholder={String(RAW_SEARCH_DEFAULT_PAGE_SIZE)}
             value={advanced.limit}
-            onChange={(value) => onAdvancedChange({ ...advanced, limit: value })}
+            onChange={(value) =>
+              onAdvancedChange({ ...advanced, limit: value })
+            }
           />
         </div>
       ) : null}
@@ -577,7 +594,9 @@ function indexerChipTitle(
       return t("indexerSearch.skipReason.indexerDisabled");
     case "TEMPORARILY_DISABLED":
       return until
-        ? t("indexerSearch.skipReason.temporarilyDisabledUntil", { time: until })
+        ? t("indexerSearch.skipReason.temporarilyDisabledUntil", {
+            time: until,
+          })
         : t("indexerSearch.skipReason.temporarilyDisabled");
     case "BACKED_OFF":
       return until
@@ -660,8 +679,18 @@ function HealthLine({
             <button
               key={entry.indexerId}
               id={selectorId("indexer-search-health", entry.name)}
+              data-health-state={tone}
+              data-indexer-status={entry.status}
+              data-result-count={entry.resultCount}
               type="button"
-              title={indexerChipTitle(entry, t, dateTimeFormat)}
+              title={
+                [
+                  indexerChipTitle(entry, t, dateTimeFormat),
+                  indexerCapsDiagnostic(entry, t),
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || undefined
+              }
               aria-pressed={active}
               onClick={() => onToggleFacet(facetKey)}
               className={cn(
@@ -678,16 +707,18 @@ function HealthLine({
               {entry.name}
               <span className={cn("tabular-nums", HEALTH_COUNT_CLASS[tone])}>
                 {tone === "partial"
-                  ? t("indexerSearch.health.partial", { count: entry.resultCount })
+                  ? t("indexerSearch.health.partial", {
+                      count: entry.resultCount,
+                    })
                   : tone === "cooling"
-                  ? t("indexerSearch.health.coolingDown")
-                  : tone === "failed"
-                  ? t("indexerSearch.health.failed")
-                  : tone === "skipped"
-                    ? t("indexerSearch.health.skipped")
-                    : tone === "pending"
-                      ? "…"
-                      : entry.resultCount}
+                    ? t("indexerSearch.health.coolingDown")
+                    : tone === "failed"
+                      ? t("indexerSearch.health.failed")
+                      : tone === "skipped"
+                        ? t("indexerSearch.health.skipped")
+                        : tone === "pending"
+                          ? "…"
+                          : entry.resultCount}
               </span>
             </button>
           );
@@ -765,7 +796,11 @@ function RefineRail({
                   )}
                 >
                   <Checkbox
-                    id={selectorId("indexer-search-facet", group.key, item.value)}
+                    id={selectorId(
+                      "indexer-search-facet",
+                      group.key,
+                      item.value,
+                    )}
                     size="compact"
                     className="size-[15px]"
                     checked={checked}
@@ -843,6 +878,52 @@ function RefineRail({
   );
 }
 
+/** Tracker facts shown only when the indexer reported them. */
+function torrentDetailFields(
+  release: Release,
+  t: ReturnType<typeof useTranslate>,
+): { key: string; label: string; value: string }[] {
+  const fields: { key: string; label: string; value: string }[] = [];
+  if (release.leechers != null) {
+    fields.push({
+      key: "leechers",
+      label: t("indexerSearch.detail.leechers"),
+      value: String(release.leechers),
+    });
+  }
+  if (
+    release.downloadVolumeFactor != null ||
+    release.uploadVolumeFactor != null
+  ) {
+    fields.push({
+      key: "volumeFactors",
+      label: t("indexerSearch.detail.volumeFactors"),
+      value: `${release.downloadVolumeFactor ?? 1}× / ${release.uploadVolumeFactor ?? 1}×`,
+    });
+  }
+  if (release.minimumSeedRatio != null) {
+    fields.push({
+      key: "minimumSeedRatio",
+      label: t("indexerSearch.detail.minimumSeedRatio"),
+      value: String(release.minimumSeedRatio),
+    });
+  }
+  const minutes = release.minimumSeedTimeMinutes;
+  if (minutes != null) {
+    fields.push({
+      key: "minimumSeedTime",
+      label: t("indexerSearch.detail.minimumSeedTime"),
+      value:
+        minutes > 0 && minutes % 1440 === 0
+          ? t("indexerSearch.age.days", { count: minutes / 1440 })
+          : t("indexerSearch.age.hours", {
+              count: Math.round(minutes / 6) / 10,
+            }),
+    });
+  }
+  return fields;
+}
+
 function ReleaseDetail({ release }: { release: Release }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -861,6 +942,7 @@ function ReleaseDetail({ release }: { release: Release }) {
         release.parsedRelease?.releaseGroup ??
         t("indexerSearch.detail.notAvailable"),
     },
+    ...torrentDetailFields(release, t),
   ];
 
   return (
@@ -937,7 +1019,8 @@ function ReleaseRow({
 
   return (
     <div role="rowgroup">
-      <div role="row"
+      <div
+        role="row"
         id={indexerSearchResultRowId(release)}
         data-ui="indexer-search-row"
         className={cn(
@@ -947,13 +1030,15 @@ function ReleaseRow({
             "border-l-[var(--scry-accent)] bg-[rgba(var(--scry-accent-rgb),0.07)]",
         )}
       >
-        <div role="cell"><Checkbox
-          id={indexerSearchResultSelectId(release)}
-          size="table"
-          aria-label={t("indexerSearch.row.select")}
-          checked={selected}
-          onCheckedChange={() => onToggleRow(release)}
-        /></div>
+        <div role="cell">
+          <Checkbox
+            id={indexerSearchResultSelectId(release)}
+            size="table"
+            aria-label={t("indexerSearch.row.select")}
+            checked={selected}
+            onCheckedChange={() => onToggleRow(release)}
+          />
+        </div>
         <div role="cell" className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
             <ProtocolBadge release={release} />
@@ -977,16 +1062,37 @@ function ReleaseRow({
             </div>
           ) : null}
         </div>
-        <div role="cell" className="min-w-0 truncate text-[12.5px] text-[var(--scry-text2)]">
+        <div
+          role="cell"
+          className="min-w-0 truncate text-[12.5px] text-[var(--scry-text2)]"
+        >
           {release.source ?? "—"}
         </div>
-        <span role="cell" className="text-right text-[13px] font-semibold tabular-nums text-[var(--scry-ink3)]">
+        <span
+          role="cell"
+          className="text-right text-[13px] font-semibold tabular-nums text-[var(--scry-ink3)]"
+        >
           {formatReleaseSize(release.sizeBytes)}
         </span>
-        <span role="cell" className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]">
+        <span
+          role="cell"
+          className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]"
+        >
           {age ? t(age.unitKey, { count: age.value }) : "—"}
         </span>
-        <span role="cell" className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]">
+        <span
+          role="cell"
+          className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]"
+          title={
+            release.seeders != null && release.leechers != null
+              ? t("indexerSearch.row.swarm", {
+                  seeders: release.seeders,
+                  leechers: release.leechers,
+                  peers: release.peers ?? release.seeders + release.leechers,
+                })
+              : undefined
+          }
+        >
           {peers}
         </span>
         <div role="cell" className="flex justify-end gap-1.5">
@@ -1032,7 +1138,13 @@ function ReleaseRow({
           </IconButton>
         </div>
       </div>
-      {expanded ? <div role="row"><div role="cell" aria-colspan={7}><ReleaseDetail release={release} /></div></div> : null}
+      {expanded ? (
+        <div role="row">
+          <div role="cell" aria-colspan={7}>
+            <ReleaseDetail release={release} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1084,7 +1196,28 @@ export function SettingsIndexerSearchSection(
             >
               {t("indexerSearch.results.matched", { count: matchedCount })}
             </span>
+            {props.deadlineReached ? (
+              <span
+                id="indexer-search-page-pending"
+                role="status"
+                className="text-[13px] text-[var(--scry-warning-text)]"
+              >
+                {t("indexerSearch.page.pending")}
+              </span>
+            ) : null}
             <div className="min-w-2 flex-1" />
+            {props.onNextPage ? (
+              <Button
+                id="indexer-search-next-page"
+                variant="outline"
+                size="sm"
+                className="h-[34px]"
+                disabled={searching || !props.hasNextPage}
+                onClick={props.onNextPage}
+              >
+                {t("indexerSearch.page.next")}
+              </Button>
+            ) : null}
             <Select
               value={sort}
               onValueChange={(value) =>
@@ -1104,16 +1237,26 @@ export function SettingsIndexerSearchSection(
               <SelectContent>
                 {SORT_KEYS.map((option) => (
                   <SelectItem key={option} value={option}>
-                    {t(`indexerSearch.column.${option.split("-")[0]}`)} {option.endsWith("-desc") ? "↓" : "↑"}
+                    {t(`indexerSearch.column.${option.split("-")[0]}`)}{" "}
+                    {option.endsWith("-desc") ? "↓" : "↑"}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {hasSearched ? (
+              <p
+                id="indexer-search-page-scope"
+                className="basis-full text-[12px] text-[var(--scry-text3)]"
+              >
+                {t("indexerSearch.page.localSort")}
+              </p>
+            ) : null}
           </div>
 
           <div className="w-full min-w-0 max-w-full overflow-x-auto">
             <div role="table" className="min-w-[1020px]">
-              <div role="row"
+              <div
+                role="row"
                 className={cn(
                   RESULT_GRID_CLASS,
                   "border-b border-[var(--scry-border)] py-2.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]",
@@ -1124,17 +1267,40 @@ export function SettingsIndexerSearchSection(
                   const active = sort.startsWith(`${column}-`);
                   const descending = sort.endsWith("-desc");
                   return (
-                    <div key={column} role="columnheader"
-                      aria-sort={active ? descending ? "descending" : "ascending" : "none"}
-                      className={column === "release" || column === "indexer" ? "" : "text-right"}>
-                      <button type="button" className="hover:text-foreground"
-                        onClick={() => onSortChange(`${column}-${active && !descending ? "desc" : "asc"}`)}>
-                        {t(`indexerSearch.column.${column}`)} {active ? descending ? "↓" : "↑" : "↕"}
+                    <div
+                      key={column}
+                      role="columnheader"
+                      aria-sort={
+                        active
+                          ? descending
+                            ? "descending"
+                            : "ascending"
+                          : "none"
+                      }
+                      className={
+                        column === "release" || column === "indexer"
+                          ? ""
+                          : "text-right"
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="hover:text-foreground"
+                        onClick={() =>
+                          onSortChange(
+                            `${column}-${active && !descending ? "desc" : "asc"}`,
+                          )
+                        }
+                      >
+                        {t(`indexerSearch.column.${column}`)}{" "}
+                        {active ? (descending ? "↓" : "↑") : "↕"}
                       </button>
                     </div>
                   );
                 })}
-                <span role="columnheader" className="text-right">{t("label.actions")}</span>
+                <span role="columnheader" className="text-right">
+                  {t("label.actions")}
+                </span>
               </div>
               {rows.map((release) => {
                 const key = indexerSearchRowKey(release);
@@ -1190,7 +1356,8 @@ export function SettingsIndexerSearchSection(
                   count: selectedReleases.length,
                 })}
               </strong>
-              {hasSelection && ` · ${formatReleaseSize(totalReleaseBytes(selectedReleases))}`}
+              {hasSelection &&
+                ` · ${formatReleaseSize(totalReleaseBytes(selectedReleases))}`}
             </span>
             <div className="min-w-2 flex-1" />
             <Button

@@ -797,10 +797,13 @@ async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
             "failed to inspect the destination staging path {}: {error}",
             partial.display()
         ))),
-        Ok(_) => Err(AppError::Validation(format!(
-            "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
-            partial.display()
-        ))),
+        Ok(_) => Err(AppError::validation_refused(
+            crate::error_reasons::location::DESTINATION_OCCUPIED,
+            format!(
+                "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
+                partial.display()
+            ),
+        )),
     }
 }
 

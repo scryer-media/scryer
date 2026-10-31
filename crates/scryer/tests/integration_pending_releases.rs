@@ -265,7 +265,10 @@ async fn direct_wanted_item_lookup_requires_access_to_item_library() {
         .get_wanted_item(&viewer, &wanted.id)
         .await
         .expect_err("viewer should not see another library wanted item");
-    assert!(matches!(error, AppError::Unauthorized(_)));
+    assert!(matches!(
+        error,
+        AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +479,94 @@ async fn pending_release_roundtrips_indexer_provenance() {
         loaded.release_listing_json.as_deref(),
         Some(LATER_SIGHTING_LISTING),
         "a sighting replaces the snapshot; an upsert without one keeps it"
+    );
+}
+
+#[tokio::test]
+async fn rss_pending_query_excludes_history_and_preserves_explicit_replays() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "rss-owner").await;
+    seed_title(&ctx, "rss-foreign").await;
+    let wanted = seed_wanted_item(&ctx, "rss-owner", AcquisitionScopeStatus::Wanted).await;
+    let foreign_wanted =
+        seed_wanted_item(&ctx, "rss-foreign", AcquisitionScopeStatus::Wanted).await;
+    let statuses = [
+        PendingReleaseStatus::Waiting,
+        PendingReleaseStatus::Standby,
+        PendingReleaseStatus::Processing,
+        PendingReleaseStatus::NeedsReview,
+        PendingReleaseStatus::Grabbed,
+        PendingReleaseStatus::Expired,
+        PendingReleaseStatus::Superseded,
+        PendingReleaseStatus::Dismissed,
+    ];
+    let mut seeded = Vec::new();
+    for (index, status) in statuses.into_iter().enumerate() {
+        seeded.push(
+            seed_pending_release(&ctx, &wanted.id, "rss-owner", index as i32, 0, status).await,
+        );
+    }
+    let foreign = seed_pending_release(
+        &ctx,
+        &foreign_wanted.id,
+        "rss-foreign",
+        100,
+        0,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+    let store =
+        scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
+            ctx.db.datastore(),
+            ctx.db.encryption_key_state(),
+        );
+    let active = store
+        .list_active_pending_releases_for_title("rss-owner", &[])
+        .await
+        .unwrap();
+    assert_eq!(active.len(), 4);
+    assert!(
+        seeded[..4]
+            .iter()
+            .all(|row| active.iter().any(|active| active.id == row.id))
+    );
+    store
+        .update_pending_release_status(&seeded[0].id, PendingReleaseStatus::Expired, None)
+        .await
+        .unwrap();
+    let mut replay_ids: Vec<_> = (0..401).map(|i| format!("missing-replay-{i}")).collect();
+    replay_ids.extend([
+        seeded[0].id.clone(),
+        seeded[4].id.clone(),
+        seeded[4].id.clone(),
+        foreign.id,
+    ]);
+    let replayed = store
+        .list_active_pending_releases_for_title("rss-owner", &replay_ids)
+        .await
+        .unwrap();
+    assert_eq!(
+        replayed.len(),
+        5,
+        "three active rows plus two unique explicit replays"
+    );
+    assert!(replayed.iter().all(|row| row.title_id == "rss-owner"));
+    assert_eq!(
+        replayed
+            .iter()
+            .find(|row| row.id == seeded[0].id)
+            .unwrap()
+            .status,
+        PendingReleaseStatus::Expired,
+        "state changes remain visible"
+    );
+    assert_eq!(
+        store
+            .list_active_pending_releases_for_title("rss-owner", &[])
+            .await
+            .unwrap()
+            .len(),
+        3
     );
 }
 
@@ -1154,7 +1245,10 @@ async fn dismiss_nonexistent_returns_error() {
         .dismiss_pending_release(&admin(), "nonexistent-id")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Repository(_)));
+    assert!(matches!(
+        err,
+        AppError::Repository(_) | AppError::RepositoryFailure { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1183,7 +1277,10 @@ async fn dismiss_non_waiting_returns_error() {
         .dismiss_pending_release(&admin(), &pr.id)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Repository(_)));
+    assert!(matches!(
+        err,
+        AppError::Repository(_) | AppError::RepositoryFailure { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,7 +1296,10 @@ async fn force_grab_nonexistent_returns_error() {
         .force_grab_pending_release(&admin(), "nonexistent-id")
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Repository(_)));
+    assert!(matches!(
+        err,
+        AppError::Repository(_) | AppError::RepositoryFailure { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1228,7 +1328,10 @@ async fn force_grab_non_waiting_returns_error() {
         .force_grab_pending_release(&admin(), &pr.id)
         .await
         .unwrap_err();
-    assert!(matches!(err, AppError::Repository(_)));
+    assert!(matches!(
+        err,
+        AppError::Repository(_) | AppError::RepositoryFailure { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------

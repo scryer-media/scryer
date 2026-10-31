@@ -185,9 +185,9 @@ async fn run_route_gate_check(
 fn assert_blocked_for_route_mismatch(td: &TrackedDownload, case: &str) {
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked, "{case}");
     assert!(
-        td.status_messages
-            .iter()
-            .any(|message| message.contains("does not match this title's active route")),
+        td.status_messages.iter().any(|message| message
+            .text
+            .contains("does not match this title's active route")),
         "{case}: {:?}",
         td.status_messages
     );

@@ -9,7 +9,9 @@ export const BUILT_IN_DOWNLOAD_CLIENT_TYPES = [
 ] as const;
 
 /// Built-in clients that are not a server: no host, port or URL to set.
-export const HOSTLESS_DOWNLOAD_CLIENT_TYPES: ReadonlySet<string> = new Set(["http"]);
+export const HOSTLESS_DOWNLOAD_CLIENT_TYPES: ReadonlySet<string> = new Set([
+  "http",
+]);
 
 export const DEFAULT_DOWNLOAD_CLIENT_TYPE = "weaver";
 
@@ -41,7 +43,10 @@ function builtInField(
 
 /// Settings of built-in clients whose form is not host/port/credentials.
 /// Labels and help texts are translation keys.
-export const BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
+export const BUILT_IN_DOWNLOAD_CLIENT_CONFIG_FIELDS: Record<
+  string,
+  ConfigFieldDef[]
+> = {
   http: [
     builtInField({
       key: "download_dir",

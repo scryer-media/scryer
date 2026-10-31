@@ -5,7 +5,9 @@ import type {
 } from "../types/quality-profiles.ts";
 import { qualityProfileEntryToMutationInput } from "./quality-profiles.ts";
 
-export function qualityProfileEditorSaveInput(entry: ParsedQualityProfileEntry) {
+export function qualityProfileEditorSaveInput(
+  entry: ParsedQualityProfileEntry,
+) {
   // Other entries and defaults in the editor's catalog may be stale.
   return {
     profiles: [qualityProfileEntryToMutationInput(entry)],
@@ -58,13 +60,20 @@ function normalizeExclusiveProfileLists(
 } {
   const deniedSet = new Set(dedupeOrdered(deniedValues));
   return {
-    allowed: dedupeOrdered(allowedValues).filter((value) => !deniedSet.has(value)),
+    allowed: dedupeOrdered(allowedValues).filter(
+      (value) => !deniedSet.has(value),
+    ),
     denied: Array.from(deniedSet),
   };
 }
 
-function qualityProfileCatalogEntryFromDraft(draft: QualityProfileDraft): ParsedQualityProfileEntry {
-  const sourceLists = normalizeExclusiveProfileLists(draft.source_allowlist, draft.source_blocklist);
+function qualityProfileCatalogEntryFromDraft(
+  draft: QualityProfileDraft,
+): ParsedQualityProfileEntry {
+  const sourceLists = normalizeExclusiveProfileLists(
+    draft.source_allowlist,
+    draft.source_blocklist,
+  );
   const videoCodecLists = normalizeExclusiveProfileLists(
     draft.video_codec_allowlist,
     draft.video_codec_blocklist,
@@ -128,7 +137,11 @@ export function commitQualityProfileDraftToEntries(
     .filter((entryId) => entryId.length > 0);
   const nextId =
     existingEntry?.id ??
-    (draft.id.trim() || createUniqueProfileId(normalizeProfileIdFromName(trimmedName), existingIds));
+    (draft.id.trim() ||
+      createUniqueProfileId(
+        normalizeProfileIdFromName(trimmedName),
+        existingIds,
+      ));
   const nextDraft: QualityProfileDraft = {
     ...draft,
     id: nextId,

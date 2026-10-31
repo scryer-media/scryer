@@ -150,16 +150,13 @@ test("facet counts are computed over the whole result set", () => {
   );
 
   const source = groups.find((group) => group.key === "source");
-  assert.equal(
-    source?.items.find((item) => item.value === "WEB-DL")?.count,
-    2,
-  );
+  assert.equal(source?.items.find((item) => item.value === "WEB-DL")?.count, 2);
 
   const indexers = groups.find((group) => group.key === "indexer");
-  assert.deepEqual(
-    indexers?.items.map((item) => item.value).sort(),
-    ["NZBgeek", "TorrentLeech"],
-  );
+  assert.deepEqual(indexers?.items.map((item) => item.value).sort(), [
+    "NZBgeek",
+    "TorrentLeech",
+  ]);
 });
 
 test("facets OR within a group and AND across groups", () => {
@@ -300,7 +297,8 @@ test("a rate-limited indexer reads as cooling down, not as a failure", () => {
     name: "indexer-a.example",
     status: "FAILED",
     rateLimited: true,
-    failureReason: "indexer is cooling down after a rate limit; retry after 120s",
+    failureReason:
+      "indexer is cooling down after a rate limit; retry after 120s",
   });
   assert.equal(indexerHealthTone(cooling), "cooling");
   // With results already in hand the row stays partial: the user has
@@ -314,7 +312,9 @@ test("incomplete searches with results are partial and remain retryable", () => 
   const entry = indexer({ name: "partial", status: "FAILED", resultCount: 50 });
   assert.equal(indexerHealthTone(entry), "partial");
   assert.equal(indexerHealthTone({ ...entry, resultCount: 0 }), "failed");
-  assert.deepEqual(summarizeIndexerHealth([entry]).failedIndexerIds, [entry.indexerId]);
+  assert.deepEqual(summarizeIndexerHealth([entry]).failedIndexerIds, [
+    entry.indexerId,
+  ]);
 });
 
 test("the health summary counts what is still outstanding", () => {
@@ -364,7 +364,10 @@ test("size bounds round outwards and ignore sizeless results", () => {
     ]),
     [1.2, 9.2],
   );
-  assert.equal(releaseSizeBoundsGiB([release({ title: "a", sizeBytes: null })]), null);
+  assert.equal(
+    releaseSizeBoundsGiB([release({ title: "a", sizeBytes: null })]),
+    null,
+  );
 });
 
 test("category lists accept commas, spaces and duplicates", () => {
@@ -423,7 +426,12 @@ test("stored saved searches survive junk in localStorage", () => {
   assert.deepEqual(
     parseSavedIndexerSearches(
       JSON.stringify([
-        { query: "dune", kind: "MOVIE", indexerIds: ["a", 2], categories: null },
+        {
+          query: "dune",
+          kind: "MOVIE",
+          indexerIds: ["a", 2],
+          categories: null,
+        },
         { query: "", kind: "MOVIE" },
       ]),
     ),
@@ -465,21 +473,59 @@ test("only http(s) releases can be downloaded to the browser", () => {
   );
 });
 
-
 test("every data column sorts in both directions with missing values last", () => {
-  const a = release({ title: "alpha", source: "alpha", sizeBytes: 2, publishedAt: "2026-01-02", seeders: 2 });
-  const b = release({ title: "Beta", source: "Beta", sizeBytes: 10, publishedAt: "2026-01-01", grabs: 10 });
-  const missing = release({ title: "", source: null, sizeBytes: null, publishedAt: "invalid" });
-  for (const column of ["release", "indexer", "size", "age", "peers"] as const) {
-    assert.deepEqual(sortIndexerSearchReleases([missing, b, a], `${column}-asc`), [a, b, missing], column);
-    assert.deepEqual(sortIndexerSearchReleases([a, missing, b], `${column}-desc`), [b, a, missing], column);
+  const a = release({
+    title: "alpha",
+    source: "alpha",
+    sizeBytes: 2,
+    publishedAt: "2026-01-02",
+    seeders: 2,
+  });
+  const b = release({
+    title: "Beta",
+    source: "Beta",
+    sizeBytes: 10,
+    publishedAt: "2026-01-01",
+    grabs: 10,
+  });
+  const missing = release({
+    title: "",
+    source: null,
+    sizeBytes: null,
+    publishedAt: "invalid",
+  });
+  for (const column of [
+    "release",
+    "indexer",
+    "size",
+    "age",
+    "peers",
+  ] as const) {
+    assert.deepEqual(
+      sortIndexerSearchReleases([missing, b, a], `${column}-asc`),
+      [a, b, missing],
+      column,
+    );
+    assert.deepEqual(
+      sortIndexerSearchReleases([a, missing, b], `${column}-desc`),
+      [b, a, missing],
+      column,
+    );
   }
 });
 
 test("ties use row identity independently of arrival order", () => {
   const a = release({ title: "same", downloadUrl: "https://example.test/a" });
   const b = release({ title: "same", downloadUrl: "https://example.test/b" });
-  for (const key of ["release-asc", "release-desc", "size-asc", "size-desc"] as const) {
-    assert.deepEqual(sortIndexerSearchReleases([b, a], key), sortIndexerSearchReleases([a, b], key));
+  for (const key of [
+    "release-asc",
+    "release-desc",
+    "size-asc",
+    "size-desc",
+  ] as const) {
+    assert.deepEqual(
+      sortIndexerSearchReleases([b, a], key),
+      sortIndexerSearchReleases([a, b], key),
+    );
   }
 });

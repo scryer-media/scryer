@@ -41,7 +41,9 @@ export function usageToneStyle(tone: UsageTone["tone"]): UsageToneStyle {
 }
 
 /** Badge tone for the threshold tag, or null when the tag is not shown. */
-export function usageTagBadgeTone(tag: UsageTag): "warning" | "negative" | null {
+export function usageTagBadgeTone(
+  tag: UsageTag,
+): "warning" | "negative" | null {
   switch (tag) {
     case "low":
       return "warning";

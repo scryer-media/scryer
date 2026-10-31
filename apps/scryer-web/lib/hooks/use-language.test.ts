@@ -18,10 +18,20 @@ type Profile = {
   uiSettingsLoadError: string | null;
 };
 type SaveResult = { error?: Error; data?: { setMyUiSettings?: Settings } };
-type Save = { language: string | undefined; settle: (result: SaveResult) => Promise<unknown> };
-type LanguageApi = { uiLanguage: string; setLanguagePreference: (code: string) => void };
+type Save = {
+  language: string | undefined;
+  settle: (result: SaveResult) => Promise<unknown>;
+};
+type LanguageApi = {
+  uiLanguage: string;
+  setLanguagePreference: (code: string) => void;
+};
 
-const PENDING: Profile = { uiSettings: { language: null }, uiSettingsLoaded: false, uiSettingsLoadError: null };
+const PENDING: Profile = {
+  uiSettings: { language: null },
+  uiSettingsLoaded: false,
+  uiSettingsLoadError: null,
+};
 const FAILED: Profile = { ...PENDING, uiSettingsLoadError: "offline" };
 const loaded = (language: string | null): Profile => ({
   uiSettings: { language },
@@ -56,7 +66,10 @@ type Instance = {
   result?: LanguageApi;
 };
 
-function depsChanged(previous: unknown[] | undefined, next: unknown[] | undefined) {
+function depsChanged(
+  previous: unknown[] | undefined,
+  next: unknown[] | undefined,
+) {
   return (
     !previous ||
     !next ||
@@ -81,7 +94,11 @@ function openTab(options: {
 }) {
   const sessionStorage = new MemoryStorage();
   Object.assign(globalThis, {
-    window: { localStorage: options.localStorage, sessionStorage, location: { pathname: "/" } },
+    window: {
+      localStorage: options.localStorage,
+      sessionStorage,
+      location: { pathname: "/" },
+    },
     document: {
       documentElement: { lang: "" },
       addEventListener() {},
@@ -138,7 +155,11 @@ function openTab(options: {
     try {
       // Like a React commit, every dirty instance renders before any effect
       // of that pass runs, so sibling hooks see the same profile.
-      for (let pass = 0; instances.some((instance) => instance.dirty); pass += 1) {
+      for (
+        let pass = 0;
+        instances.some((instance) => instance.dirty);
+        pass += 1
+      ) {
         assert.ok(pass < 100, "useLanguage keeps re-rendering");
         pendingEffects = [];
         for (const instance of instances) {
@@ -162,10 +183,15 @@ function openTab(options: {
       const state = slot();
       const owner = active!;
       if (!state.set) {
-        state.value = typeof initial === "function" ? (initial as () => unknown)() : initial;
+        state.value =
+          typeof initial === "function"
+            ? (initial as () => unknown)()
+            : initial;
         state.set = (next: unknown) => {
           const value =
-            typeof next === "function" ? (next as (value: unknown) => unknown)(state.value) : next;
+            typeof next === "function"
+              ? (next as (value: unknown) => unknown)(state.value)
+              : next;
           if (Object.is(value, state.value)) return;
           state.value = value;
           owner.dirty = true;
@@ -202,13 +228,19 @@ function openTab(options: {
   };
 
   const cache = new Map<string, Record<string, unknown>>();
-  function load(file: string, overrides: Record<string, unknown>): Record<string, unknown> {
+  function load(
+    file: string,
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
     const cached = cache.get(file);
     if (cached) return cached;
     const module = { exports: {} as Record<string, unknown> };
     cache.set(file, module.exports);
     const code = ts.transpileModule(readFileSync(file, "utf8"), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
     }).outputText;
     const localRequire = (id: string): unknown => {
       if (id === "react") return react;
@@ -217,20 +249,31 @@ function openTab(options: {
       const base = id.startsWith("@/")
         ? path.join(webRoot, id.slice(2))
         : path.resolve(path.dirname(file), id);
-      const resolved = [base, base + ".ts", base + ".tsx", path.join(base, "index.ts")].find(
+      const resolved = [
+        base,
+        base + ".ts",
+        base + ".tsx",
+        path.join(base, "index.ts"),
+      ].find(
         (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
       );
       assert.ok(resolved, id);
       return load(resolved, overrides);
     };
-    new Function("require", "module", "exports", code)(localRequire, module, module.exports);
+    new Function("require", "module", "exports", code)(
+      localRequire,
+      module,
+      module.exports,
+    );
     cache.set(file, module.exports);
     return module.exports;
   }
 
   // Stands in for the context's queued save: the input is built from the
   // profile as it stands when the save goes out.
-  const saveUiSettings = (build: (latest: Settings) => { language?: string }) => {
+  const saveUiSettings = (
+    build: (latest: Settings) => { language?: string },
+  ) => {
     let resolve: (result: SaveResult) => void = () => {};
     const done = new Promise<SaveResult>((settle) => {
       resolve = settle;
@@ -266,10 +309,15 @@ function openTab(options: {
       },
     },
     "@/lib/constants/settings": { URL_PARAM_LANGUAGE: "lang" },
-    "@/lib/graphql/mutations": { setMyUiSettingsMutation: "mutation SetMyUiSettings" },
+    "@/lib/graphql/mutations": {
+      setMyUiSettingsMutation: "mutation SetMyUiSettings",
+    },
     "@/lib/context/ui-settings-context": {
       isSignedOutLoginSurface: () => options.signedOutLogin ?? false,
-      uiSettingsInputFromSettings: (_settings: Settings, language?: string) => ({ language }),
+      uiSettingsInputFromSettings: (
+        _settings: Settings,
+        language?: string,
+      ) => ({ language }),
       useUiSettings: () => ({
         ...profile,
         saveUiSettings,
@@ -282,7 +330,10 @@ function openTab(options: {
     },
     sonner: { toast: { error: (message: string) => toasts.push(message) } },
   };
-  const { useLanguage: renderLanguage } = load(path.join(webRoot, "lib/hooks/use-language.ts"), overrides) as {
+  const { useLanguage: renderLanguage } = load(
+    path.join(webRoot, "lib/hooks/use-language.ts"),
+    overrides,
+  ) as {
     useLanguage: (searchParams: URLSearchParams) => LanguageApi;
   };
 
@@ -291,7 +342,11 @@ function openTab(options: {
     saves,
     toasts,
     mount(search = "") {
-      const instance: Instance = { slots: [], dirty: true, searchParams: new URLSearchParams(search) };
+      const instance: Instance = {
+        slots: [],
+        dirty: true,
+        searchParams: new URLSearchParams(search),
+      };
       instances.push(instance);
       flush();
       return {
@@ -341,16 +396,28 @@ test("a pick on the login page is kept for the next tab", async () => {
   assert.equal(loginPage.uiLanguage, "fra");
   assert.equal(login.saves.length, 0, "there is no profile to save on");
 
-  const next = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const next = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   assert.equal(next.mount().uiLanguage, "fra", "a new tab paints in the pick");
 });
 
 test("a pick while the profile failed to load holds and is kept for the next tab", async () => {
   const localStorage = new MemoryStorage();
   localStorage.setItem(PROFILE_HINT_KEY, "deu");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount();
-  assert.equal(page.uiLanguage, "deu", "the last profile language paints first");
+  assert.equal(
+    page.uiLanguage,
+    "deu",
+    "the last profile language paints first",
+  );
 
   tab.setProfile(FAILED);
   page.pick("ita");
@@ -359,7 +426,11 @@ test("a pick while the profile failed to load holds and is kept for the next tab
   assert.equal(tab.saves.length, 0);
   assert.equal(localStorage.getItem(CHOICE_KEY), "ita");
 
-  const next = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const next = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const nextPage = next.mount();
   next.setProfile(FAILED);
   await next.settle();
@@ -369,17 +440,27 @@ test("a pick while the profile failed to load holds and is kept for the next tab
 test("an empty loaded profile takes over the picked language once", async () => {
   const localStorage = new MemoryStorage();
   localStorage.setItem(CHOICE_KEY, "ita");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount();
   assert.equal(page.uiLanguage, "ita");
-  assert.equal(tab.saves.length, 0, "nothing is saved while the profile is loading");
+  assert.equal(
+    tab.saves.length,
+    0,
+    "nothing is saved while the profile is loading",
+  );
 
   tab.setProfile(loaded(null));
   assert.deepEqual(
     tab.saves.map((save) => save.language),
     ["ita"],
   );
-  await tab.saves[0]!.settle({ data: { setMyUiSettings: { language: "ita" } } });
+  await tab.saves[0]!.settle({
+    data: { setMyUiSettings: { language: "ita" } },
+  });
   await tab.settle();
   assert.equal(page.uiLanguage, "ita");
 
@@ -390,7 +471,11 @@ test("an empty loaded profile takes over the picked language once", async () => 
 test("every mounted language hook shares the one take-over save", () => {
   const localStorage = new MemoryStorage();
   localStorage.setItem(CHOICE_KEY, "ita");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   tab.mount();
   tab.mount();
 
@@ -401,14 +486,22 @@ test("every mounted language hook shares the one take-over save", () => {
 test("a profile language is never replaced by the picked language", async () => {
   const localStorage = new MemoryStorage();
   localStorage.setItem(CHOICE_KEY, "ita");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount();
 
   tab.setProfile(loaded("deu"));
   await tab.settle();
   assert.equal(page.uiLanguage, "deu", "the profile language wins");
   assert.equal(tab.saves.length, 0);
-  assert.equal(localStorage.getItem(CHOICE_KEY), "deu", "an older pick here does not outlive it");
+  assert.equal(
+    localStorage.getItem(CHOICE_KEY),
+    "deu",
+    "an older pick here does not outlive it",
+  );
 
   const login = openTab({
     localStorage,
@@ -416,7 +509,11 @@ test("a profile language is never replaced by the picked language", async () => 
     profile: PENDING,
     signedOutLogin: true,
   });
-  assert.equal(login.mount().uiLanguage, "deu", "signing out keeps the language");
+  assert.equal(
+    login.mount().uiLanguage,
+    "deu",
+    "signing out keeps the language",
+  );
 });
 
 test("a pick whose dictionary arrives after the profile loaded is saved on the profile", async () => {
@@ -444,8 +541,12 @@ test("a pick whose dictionary arrives after the profile loaded is saved on the p
     tab.saves.map((save) => save.language),
     ["ita", "fra"],
   );
-  await tab.saves[0]!.settle({ data: { setMyUiSettings: { language: "ita" } } });
-  await tab.saves[1]!.settle({ data: { setMyUiSettings: { language: "fra" } } });
+  await tab.saves[0]!.settle({
+    data: { setMyUiSettings: { language: "ita" } },
+  });
+  await tab.saves[1]!.settle({
+    data: { setMyUiSettings: { language: "fra" } },
+  });
   await tab.settle();
   assert.equal(page.uiLanguage, "fra");
   assert.equal(localStorage.getItem(CHOICE_KEY), "fra");
@@ -456,9 +557,17 @@ test("a failed profile load saves nothing and shows the picked language", async 
   const localStorage = new MemoryStorage();
   localStorage.setItem(CHOICE_KEY, "ita");
   localStorage.setItem(PROFILE_HINT_KEY, "deu");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount();
-  assert.equal(page.uiLanguage, "deu", "a loading profile paints in its last language");
+  assert.equal(
+    page.uiLanguage,
+    "deu",
+    "a loading profile paints in its last language",
+  );
   assert.equal(tab.saves.length, 0);
 
   tab.setProfile(FAILED);
@@ -471,7 +580,11 @@ test("a failed profile load saves nothing and shows the picked language", async 
 test("a failed take-over save waits for the next profile load", async () => {
   const localStorage = new MemoryStorage();
   localStorage.setItem(CHOICE_KEY, "ita");
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount();
 
   tab.setProfile(loaded(null));
@@ -491,7 +604,11 @@ test("a failed take-over save waits for the next profile load", async () => {
 
 test("a URL language is never kept for other tabs or saved on the profile", async () => {
   const localStorage = new MemoryStorage();
-  const tab = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   const page = tab.mount("lang=fra");
   tab.setProfile(loaded(null));
   await tab.settle();
@@ -500,6 +617,10 @@ test("a URL language is never kept for other tabs or saved on the profile", asyn
   assert.equal(localStorage.getItem(CHOICE_KEY), null);
   assert.equal(localStorage.getItem(PROFILE_HINT_KEY), null);
 
-  const next = openTab({ localStorage, browserLanguage: "es-ES", profile: PENDING });
+  const next = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+  });
   assert.equal(next.mount().uiLanguage, "spa");
 });

@@ -29,7 +29,9 @@ test("options resolve in either stored spelling", () => {
 
 test("options follow the registry order, not the stored order", () => {
   assert.deepEqual(
-    facetSelectOptions(["ANIME", "MOVIE", "SERIES"]).map((option) => option.value),
+    facetSelectOptions(["ANIME", "MOVIE", "SERIES"]).map(
+      (option) => option.value,
+    ),
     ["MOVIE", "SERIES", "ANIME"],
   );
 });

@@ -13,8 +13,9 @@ impl AppUseCase {
             || selection.ids().len() > 1000
             || selection.ids().iter().any(|id| id.trim().is_empty())
         {
-            return Err(AppError::Validation(
-                "select between 1 and 1000 files, seasons, or titles".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::quality::SELECT_BETWEEN_1_1000_FILES_SEASONS_TITLES,
+                "select between 1 and 1000 files, seasons, or titles",
             ));
         }
         let ids: Vec<_> = selection
@@ -38,7 +39,12 @@ impl AppUseCase {
                         .media_files
                         .get_media_file_by_id(id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound("selected file".into()))?
+                        .ok_or_else(|| {
+                            AppError::not_found_reason(
+                                crate::error_reasons::quality::FILE_NOT_FOUND,
+                                "selected file",
+                            )
+                        })?
                         .title_id
                 }
                 ScoreRefreshSelection::Seasons(_) => {
@@ -47,15 +53,22 @@ impl AppUseCase {
                         .shows
                         .get_collection_by_id(id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound("selected season".into()))?
+                        .ok_or_else(|| {
+                            AppError::not_found_reason(
+                                crate::error_reasons::quality::SEASON_NOT_FOUND,
+                                "selected season",
+                            )
+                        })?
                         .title_id
                 }
                 ScoreRefreshSelection::Titles(_) => id.clone(),
             };
-            let title = self
-                .get_title(actor, &title_id)
-                .await?
-                .ok_or_else(|| AppError::NotFound("selected title".into()))?;
+            let title = self.get_title(actor, &title_id).await?.ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::quality::TITLE_NOT_FOUND,
+                    "selected title",
+                )
+            })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -67,7 +80,10 @@ impl AppUseCase {
         let runtime = &self.runtime.jobs.score_refresh;
         let mut active = runtime.cancellations.lock().await;
         if active.len() >= 16 {
-            return Err(AppError::Validation("score refresh queue is full".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::quality::SCORE_REFRESH_QUEUE_FULL,
+                "score refresh queue is full",
+            ));
         }
         let now = self.runtime.environment.now();
         let run = JobRunRecord {
@@ -114,7 +130,7 @@ impl AppUseCase {
             .await;
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let id = run.id.clone();
             if let Err(error) = app
                 .run_score_refresh(&actor, run.clone(), selection, token)
@@ -151,8 +167,9 @@ impl AppUseCase {
             return Ok(false);
         };
         if owner != &actor.id {
-            return Err(AppError::Unauthorized(
-                "score refresh belongs to another user".into(),
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::quality::SCORE_REFRESH_BELONGS_ANOTHER_USER,
+                "score refresh belongs to another user",
             ));
         }
         token.cancel();

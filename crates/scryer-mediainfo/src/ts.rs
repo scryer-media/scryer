@@ -282,7 +282,7 @@ fn parse_program_map<T: Read + Seek>(
                 let data = section
                     .get(8..length.saturating_sub(4))
                     .ok_or_else(|| MediaInfoError::Parse("truncated PAT".into()))?;
-                for entry in data.chunks_exact(4) {
+                for entry in data.as_chunks::<4>().0 {
                     let program = u16::from_be_bytes([entry[0], entry[1]]);
                     let pid = u16::from_be_bytes([entry[2] & 31, entry[3]]);
                     if program == 0 {
@@ -1933,7 +1933,7 @@ fn normalize_dts_core_prefix(data: &[u8]) -> Option<Vec<u8>> {
             let mut bit_buffer = 0u32;
             let mut bits_in_buffer = 0usize;
 
-            for chunk in data.chunks_exact(2) {
+            for chunk in data.as_chunks::<2>().0 {
                 let word = if marker == DTS_SYNCWORD_CORE_14B_BE {
                     u16::from_be_bytes([chunk[0], chunk[1]])
                 } else {
@@ -2663,7 +2663,7 @@ mod tests {
             !state.track_probe_needed(&track),
             "bounded estimates must not force payload scanning for a measured bitrate"
         );
-        for header in data.chunks_exact_mut(7) {
+        for header in data.as_chunks_mut::<7>().0 {
             header[2] |= 1;
             header[3] |= 0xc0;
         }

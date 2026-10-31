@@ -1,3 +1,4 @@
+import { importSkipReasonLabelKey } from "@/lib/utils/import-skip-reason";
 import type { TitleHistoryEvent } from "@/lib/types";
 import { ScoreStat, ScoreValue } from "@/components/common/score-log";
 import { toScoreLogEntries } from "@/lib/utils/score-log";
@@ -54,7 +55,10 @@ const structuredDataKeys = new Set([
 ]);
 
 function formatKey(key: string): string {
-  return friendlyKeys[key] ?? key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    friendlyKeys[key] ??
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
 function formatValue(value: unknown, key?: string): string {
@@ -85,7 +89,11 @@ function parseDataJson(raw: unknown): Record<string, unknown> | null {
   if (!raw) return null;
   try {
     const parsed = raw;
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
       return parsed as Record<string, unknown>;
     }
     return null;
@@ -97,6 +105,10 @@ function parseDataJson(raw: unknown): Record<string, unknown> | null {
 type HistoryEventDetailEntry = {
   key: string;
   value: string;
+};
+
+const DOWNLOAD_REASON_KEYS: Readonly<Record<string, string>> = {
+  DOWNLOAD_CLIENT_ITEM_MISSING: "history.downloadMissing",
 };
 
 export function buildHistoryEventDetail(event: TitleHistoryEvent): {
@@ -111,12 +123,12 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   }
   const structuredDetails = [
     event.importId ? { key: "import_id", value: event.importId } : null,
-    event.downloadId
-      ? { key: "download_id", value: event.downloadId }
-      : null,
+    event.downloadId ? { key: "download_id", value: event.downloadId } : null,
     event.clientId ? { key: "client_id", value: event.clientId } : null,
     event.clientName ? { key: "client_name", value: event.clientName } : null,
-    event.sourceSystem ? { key: "source_system", value: event.sourceSystem } : null,
+    event.sourceSystem
+      ? { key: "source_system", value: event.sourceSystem }
+      : null,
     event.sourceRef ? { key: "source_ref", value: event.sourceRef } : null,
     event.sourceProvider
       ? { key: "source_provider", value: event.sourceProvider }
@@ -134,7 +146,10 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   const rawDetails = Object.entries(data ?? {}).filter(
     ([key]) => !structuredDataKeys.has(key),
   );
-  const hasDetail = Boolean(event.scoring) || structuredDetails.length > 0 || rawDetails.length > 0;
+  const hasDetail =
+    Boolean(event.scoring) ||
+    structuredDetails.length > 0 ||
+    rawDetails.length > 0;
 
   return {
     structuredDetails,
@@ -143,10 +158,15 @@ export function buildHistoryEventDetail(event: TitleHistoryEvent): {
   };
 }
 
-export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent }) {
+export function HistoryEventDetailContent({
+  event,
+}: {
+  event: TitleHistoryEvent;
+}) {
   const t = useTranslate();
   const scoring = event.scoring;
-  const { structuredDetails, rawDetails, hasDetail } = buildHistoryEventDetail(event);
+  const { structuredDetails, rawDetails, hasDetail } =
+    buildHistoryEventDetail(event);
 
   if (!hasDetail) {
     return null;
@@ -154,35 +174,90 @@ export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent 
 
   return (
     <div className="@container/history-detail min-w-0 space-y-3 [overflow-wrap:anywhere]">
-      {scoring ? <div className="space-y-1 text-xs">
-        <ScoreStat
-          id={`history-event-score-${event.id}`}
-          label={t("scoring.score")}
-          score={scoring.candidateScore}
-          entries={toScoreLogEntries(scoring.entries)}
-          meta={scoring.previousScore != null ? <>
-            {t("scoring.previous")} <ScoreValue score={scoring.previousScore} />
-            {scoring.delta != null ? <> · {t("scoring.change")} <ScoreValue score={scoring.delta} /></> : null}
-          </> : scoring.delta != null ? <>{t("scoring.change")} <ScoreValue score={scoring.delta} /></> : null}
-        />
-        <div><span className="text-muted-foreground">{t("scoring.decision")}</span> {scoring.decisionCode === "initial" ? t("history.initial") : scoring.decisionCode === "upgrade" ? t("history.upgrade") : scoring.decisionCode === "manual_override" ? t("scoring.manualOverride") : scoring.decisionCode}</div>
-        {scoring.comparisons.length > 1 ? <ul className="space-y-0.5">{scoring.comparisons.map((comparison) => <li key={comparison.fileId} className="flex flex-wrap items-baseline gap-x-1.5">
-          <span className="text-muted-foreground">{comparison.episodeIds.join(", ") || comparison.fileId}</span>
-          <ScoreValue score={comparison.previousScore} /> → <ScoreValue score={scoring.candidateScore} />
-          (<ScoreValue score={comparison.delta} />)
-        </li>)}</ul> : null}
-      </div> : null}
+      {scoring ? (
+        <div className="space-y-1 text-xs">
+          <ScoreStat
+            id={`history-event-score-${event.id}`}
+            label={t("scoring.score")}
+            score={scoring.candidateScore}
+            entries={toScoreLogEntries(scoring.entries)}
+            meta={
+              scoring.previousScore != null ? (
+                <>
+                  {t("scoring.previous")}{" "}
+                  <ScoreValue score={scoring.previousScore} />
+                  {scoring.delta != null ? (
+                    <>
+                      {" "}
+                      · {t("scoring.change")}{" "}
+                      <ScoreValue score={scoring.delta} />
+                    </>
+                  ) : null}
+                </>
+              ) : scoring.delta != null ? (
+                <>
+                  {t("scoring.change")} <ScoreValue score={scoring.delta} />
+                </>
+              ) : null
+            }
+          />
+          <div>
+            <span className="text-muted-foreground">
+              {t("scoring.decision")}
+            </span>{" "}
+            {scoring.decisionCode === "initial"
+              ? t("history.initial")
+              : scoring.decisionCode === "upgrade"
+                ? t("history.upgrade")
+                : scoring.decisionCode === "manual_override"
+                  ? t("scoring.manualOverride")
+                  : scoring.decisionCode}
+          </div>
+          {scoring.comparisons.length > 1 ? (
+            <ul className="space-y-0.5">
+              {scoring.comparisons.map((comparison) => (
+                <li
+                  key={comparison.fileId}
+                  className="flex flex-wrap items-baseline gap-x-1.5"
+                >
+                  <span className="text-muted-foreground">
+                    {comparison.episodeIds.join(", ") || comparison.fileId}
+                  </span>
+                  <ScoreValue score={comparison.previousScore} /> →{" "}
+                  <ScoreValue score={scoring.candidateScore} />
+                  (<ScoreValue score={comparison.delta} />)
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {structuredDetails.map(({ key, value }) => (
-        <div key={key} className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]">
+        <div
+          key={key}
+          className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
+        >
           <span className="text-muted-foreground">{formatKey(key)}</span>
-          <span className={cn("min-w-0 text-foreground", key.endsWith("_path") && "font-[var(--font-code)]")}>
-            {formatValue(value, key)}
+          <span
+            className={cn(
+              "min-w-0 text-foreground",
+              key.endsWith("_path") && "font-[var(--font-code)]",
+            )}
+          >
+            {key === "reason" && DOWNLOAD_REASON_KEYS[value]
+              ? t(DOWNLOAD_REASON_KEYS[value])
+              : key === "skip_reason" && importSkipReasonLabelKey(String(value))
+                ? t(importSkipReasonLabelKey(String(value))!)
+                : formatValue(value, key)}
           </span>
         </div>
       ))}
       {rawDetails.map(([key, value]) =>
         key === "data" ? (
-          <div key={key} className="min-w-0 max-w-full space-y-1.5 overflow-hidden text-xs">
+          <div
+            key={key}
+            className="min-w-0 max-w-full space-y-1.5 overflow-hidden text-xs"
+          >
             <div className="text-muted-foreground">{formatKey(key)}</div>
             <LazyCodeEditor
               id={`history-event-data-${event.id}`}
@@ -194,9 +269,16 @@ export function HistoryEventDetailContent({ event }: { event: TitleHistoryEvent 
             />
           </div>
         ) : (
-          <div key={key} className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]">
+          <div
+            key={key}
+            className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 text-xs @min-[28rem]/history-detail:grid-cols-[max-content_minmax(0,1fr)]"
+          >
             <span className="text-muted-foreground">{formatKey(key)}</span>
-            <span className="min-w-0 text-foreground">{formatValue(value, key)}</span>
+            <span className="min-w-0 text-foreground">
+              {key === "skip_reason" && importSkipReasonLabelKey(String(value))
+                ? t(importSkipReasonLabelKey(String(value))!)
+                : formatValue(value, key)}
+            </span>
           </div>
         ),
       )}

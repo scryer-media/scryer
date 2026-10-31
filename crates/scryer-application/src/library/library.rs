@@ -460,8 +460,9 @@ pub(crate) fn normalize_library_root_drafts(
         }
         let key = normalize_library_root_path(&root.path);
         if !seen.insert(key) {
-            return Err(AppError::Validation(
-                "library roots must be unique within a library".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_DUPLICATED,
+                "library roots must be unique within a library",
             ));
         }
         if root.is_default {
@@ -531,9 +532,10 @@ impl AppUseCase {
         let conflicts = conflicting_library_names_for_roots(&libraries, current_library_id, roots);
         if let Some((path, library_names)) = conflicts.into_iter().next() {
             let libraries = library_names.join(", ");
-            return Err(AppError::Validation(format!(
-                "library root '{path}' is already used by {libraries}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_ALREADY_ASSIGNED,
+                format!("library root '{path}' is already used by {libraries}"),
+            ));
         }
         Ok(())
     }
@@ -553,9 +555,10 @@ impl AppUseCase {
             )
             .await
         {
-            return Err(AppError::Validation(format!(
-                "library root '{path}' cannot be used: {reason}"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_CANNOT_USED,
+                format!("library root '{path}' cannot be used: {reason}"),
+            ));
         }
         Ok(())
     }
@@ -592,7 +595,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })
     }
 
     pub async fn create_library(
@@ -607,12 +615,16 @@ impl AppUseCase {
             .await?;
         let name = name.trim().to_string();
         if name.is_empty() {
-            return Err(AppError::Validation("library name is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::NAME_REQUIRED,
+                "library name is required",
+            ));
         }
         let roots = normalize_library_root_drafts(roots)?;
         if roots.is_empty() {
-            return Err(AppError::Validation(
-                "libraries require at least one root folder".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_REQUIRED,
+                "libraries require at least one root folder",
             ));
         }
         self.validate_library_root_conflicts(None, &roots).await?;
@@ -644,7 +656,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(&library.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", library.id)))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {}", library.id),
+                )
+            })
     }
 
     pub async fn update_library(
@@ -661,7 +678,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
         self.require_library_management_permission(actor, &existing.id)
             .await?;
         let name = name
@@ -692,8 +714,9 @@ impl AppUseCase {
                 .collect(),
         };
         if roots_were_provided && roots.is_empty() {
-            return Err(AppError::Validation(
-                "libraries require at least one root folder".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOT_REQUIRED,
+                "libraries require at least one root folder",
             ));
         }
         let previous_roots = if roots_were_provided {
@@ -748,7 +771,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(&library.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", library.id)))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {}", library.id),
+                )
+            })
     }
 
     pub async fn delete_library(&self, actor: &User, library_id: &str) -> AppResult<bool> {
@@ -758,12 +786,18 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
         if library.is_default {
-            return Err(AppError::Validation(
-                "default libraries cannot be deleted".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::DEFAULT_LIBRARIES_CANNOT_DELETED,
+                "default libraries cannot be deleted",
             ));
         }
         // Deleting the library retires every root it configures (FR-084).
@@ -924,7 +958,12 @@ impl AppUseCase {
             .library_scan_tracker
             .get_session(session_id)
             .await
-            .ok_or_else(|| AppError::NotFound(format!("library scan session {session_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::SCAN_SESSION_NOT_FOUND,
+                    format!("library scan session {session_id}"),
+                )
+            })?;
         if let Some(library_id) = session.library_id.as_deref() {
             self.require_library_management_permission(actor, library_id)
                 .await?;
@@ -934,15 +973,21 @@ impl AppUseCase {
         }
 
         if session.mode != LibraryScanMode::Full {
-            return Err(AppError::Validation(
-                "only full library scans can be canceled".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::SCAN_CANCEL_UNAVAILABLE,
+                "only full library scans can be canceled",
             ));
         }
 
         let token = self
             .library_scan_cancellation_token(session_id)
             .await
-            .ok_or_else(|| AppError::Validation("library scan session is not cancelable".into()))?;
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::library::SCAN_CANCEL_UNAVAILABLE,
+                    "library scan session is not cancelable",
+                )
+            })?;
         token.cancel();
 
         Ok(CancelLibraryScanResult {
@@ -993,7 +1038,7 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         let session_id = session.session_id.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let request = StartedLibraryScanRequest {
                 actor,
                 facet: facet.clone(),
@@ -1042,7 +1087,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
         let library_paths = configured_library_scan_paths(&library)?;
@@ -1065,7 +1115,7 @@ impl AppUseCase {
         let session_id = session.session_id.clone();
         let facet = library.facet.clone();
         let library_id = library.id.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let request = StartedLibraryScanRequest {
                 actor,
                 facet: facet.clone(),
@@ -1135,7 +1185,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
         let library_paths = configured_library_scan_paths(&library)?;
@@ -1285,10 +1340,10 @@ impl AppUseCase {
         }
 
         if roots.is_empty() {
-            return Err(AppError::Validation(format!(
-                "{} library roots are not configured",
-                facet.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOTS_NOT_CONFIGURED,
+                format!("{} library roots are not configured", facet.as_str()),
+            ));
         }
 
         Ok(roots)
@@ -1329,16 +1384,16 @@ impl AppUseCase {
 
         if valid_roots.is_empty() {
             if let Some(invalid_root) = invalid_roots.first() {
-                return Err(AppError::Validation(format!(
-                    "library path is not a directory: {}",
-                    invalid_root.path
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::PATH_NOT_DIRECTORY,
+                    format!("library path is not a directory: {}", invalid_root.path),
+                ));
             }
 
-            return Err(AppError::Validation(format!(
-                "{} library roots are not configured",
-                facet.as_str()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOTS_NOT_CONFIGURED,
+                format!("{} library roots are not configured", facet.as_str()),
+            ));
         }
 
         let mut summary = LibraryScanSummary::default();
@@ -1478,7 +1533,12 @@ impl AppUseCase {
             .libraries
             .default_for_facet(facet.clone())
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("default {} library", facet.as_str())))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::DEFAULT_LIBRARY_NOT_FOUND,
+                    format!("default {} library", facet.as_str()),
+                )
+            })?;
         self.background_library_refresh_single_library_with_tracking(actor, &library, session_id)
             .await
     }
@@ -1495,7 +1555,12 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::library::RESOURCE_NOT_FOUND,
+                    format!("library {library_id}"),
+                )
+            })?;
         self.background_library_refresh_single_library_with_tracking(actor, &library, session_id)
             .await
     }
@@ -1515,10 +1580,10 @@ impl AppUseCase {
             .filter(|path| !path.is_empty())
             .collect::<Vec<_>>();
         if library_paths.is_empty() {
-            return Err(AppError::Validation(format!(
-                "{} library roots are not configured",
-                library.name
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::ROOTS_NOT_CONFIGURED,
+                format!("{} library roots are not configured", library.name),
+            ));
         }
 
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
@@ -1568,8 +1633,9 @@ fn configured_library_scan_paths(library: &scryer_domain::Library) -> AppResult<
         .filter(|path| !path.is_empty())
         .collect::<Vec<_>>();
     if library_paths.is_empty() {
-        return Err(AppError::Validation(
-            "library roots are not configured".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::ROOTS_NOT_CONFIGURED,
+            "library roots are not configured",
         ));
     }
     Ok(library_paths)

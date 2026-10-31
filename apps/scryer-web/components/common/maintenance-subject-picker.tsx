@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
@@ -58,7 +59,9 @@ export function MaintenanceSubjectPicker({
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          setError(error.message);
+          setError(
+            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          );
           return;
         }
         setCollections(
@@ -77,7 +80,7 @@ export function MaintenanceSubjectPicker({
     return () => {
       cancelled = true;
     };
-  }, [client, title, scope]);
+  }, [client, title, scope, t]);
   React.useEffect(() => {
     if (!collectionId || scope !== "EPISODE") return;
     let cancelled = false;
@@ -88,7 +91,9 @@ export function MaintenanceSubjectPicker({
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          setError(error.message);
+          setError(
+            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          );
           return;
         }
         setEpisodes(data?.collectionById?.episodes ?? []);
@@ -99,7 +104,7 @@ export function MaintenanceSubjectPicker({
     return () => {
       cancelled = true;
     };
-  }, [client, collectionId, scope]);
+  }, [client, collectionId, scope, t]);
   return (
     <div className="grid gap-3 md:grid-cols-3">
       <TitleAutocompletePicker

@@ -1190,6 +1190,7 @@ mod expected_episode_release_title_tests {
                 queued_at: None,
                 last_updated_at: None,
                 attention_required: false,
+                attention_reason_code: None,
                 attention_reason: None,
                 download_client_item_id: "dl-1".to_string(),
                 download_id: None,

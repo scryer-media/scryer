@@ -196,7 +196,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The root-scoped refusal code the server attached, when it attached one. */
-export function rootRefusalCode(error: unknown): LocationRootRefusalCode | null {
+export function rootRefusalCode(
+  error: unknown,
+): LocationRootRefusalCode | null {
   if (!isRecord(error) || !Array.isArray(error.graphQLErrors)) {
     return null;
   }
@@ -420,11 +422,13 @@ export function rootIdentityStatement(
   }
   return {
     keepsRootId: retention.keepsRootId,
-    keepsDefault: retention.wasLibraryDefault && retention.remainsLibraryDefault,
+    keepsDefault:
+      retention.wasLibraryDefault && retention.remainsLibraryDefault,
     // A root that was the default and is not one afterwards is a fact worth
     // saying out loud; nothing in a root change should do this, so if it ever
     // does the dialog says so rather than hiding it.
-    losesDefault: retention.wasLibraryDefault && !retention.remainsLibraryDefault,
+    losesDefault:
+      retention.wasLibraryDefault && !retention.remainsLibraryDefault,
     titleAssignments: toCount(retention.retainedTitleAssignments),
   };
 }

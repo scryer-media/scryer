@@ -25,16 +25,16 @@ const CUSTOM_JOB_EVENT: &str = "scheduled_job";
 
 fn ensure_runnable_custom_job(script: &PostProcessingScript) -> AppResult<()> {
     if script.trigger != ScriptTrigger::Schedule {
-        return Err(AppError::Validation(format!(
-            "script \"{}\" is not a scheduled script",
-            script.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::SCRIPT_NOT_SCHEDULED_SCRIPT,
+            format!("script \"{}\" is not a scheduled script", script.name),
+        ));
     }
     if !script.enabled {
-        return Err(AppError::Validation(format!(
-            "scheduled script \"{}\" is disabled",
-            script.name
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::jobs::SCHEDULED_SCRIPT_DISABLED,
+            format!("scheduled script \"{}\" is disabled", script.name),
+        ));
     }
     Ok(())
 }
@@ -150,7 +150,12 @@ impl AppUseCase {
             .pp_scripts
             .get_script(script_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("script {script_id} not found")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::jobs::SCRIPT_NOT_FOUND,
+                    format!("script {script_id} not found"),
+                )
+            })?;
         ensure_runnable_custom_job(&script)?;
         self.start_custom_job_run(
             &script.id,
@@ -159,7 +164,12 @@ impl AppUseCase {
             Some(actor),
         )
         .await?
-        .ok_or_else(|| AppError::Validation(format!("\"{}\" is already running", script.name)))
+        .ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::jobs::ALREADY_RUNNING,
+                format!("\"{}\" is already running", script.name),
+            )
+        })
     }
 
     /// Runs of one scheduled script, newest first.
@@ -266,7 +276,8 @@ impl AppUseCase {
                 .await
         {
             if actor.is_some() {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::jobs::SCHEDULED_SCRIPT_ALREADY_RUNNING,
                     "this scheduled script is already running".to_string(),
                 ));
             }
@@ -340,7 +351,10 @@ impl AppUseCase {
     ) -> AppResult<JobExecutionOutcome> {
         let script_id =
             custom_job_id_from_operation_type(&run.operation_type).ok_or_else(|| {
-                AppError::Validation("custom job run does not name a script".to_string())
+                AppError::validation_refused(
+                    crate::error_reasons::jobs::CUSTOM_JOB_RUN_DOES_NOT_NAME_SCRIPT,
+                    "custom job run does not name a script".to_string(),
+                )
             })?;
         let script = self
             .services
@@ -349,7 +363,10 @@ impl AppUseCase {
             .get_script(script_id)
             .await?
             .ok_or_else(|| {
-                AppError::Validation(format!("scheduled script {script_id} no longer exists"))
+                AppError::validation_refused(
+                    crate::error_reasons::jobs::SCHEDULED_SCRIPT_NO_LONGER_EXISTS,
+                    format!("scheduled script {script_id} no longer exists"),
+                )
             })?;
         ensure_runnable_custom_job(&script)?;
 

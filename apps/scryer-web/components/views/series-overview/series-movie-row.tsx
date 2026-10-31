@@ -52,10 +52,19 @@ export type SeriesMovieTimelineContentProps = {
   seriesMovieSearchAttemptedByLink: Record<string, boolean>;
   searchBlockedBySeriesMovie: Record<string, boolean>;
   onRunSeriesMovieSearch?: (link: SeriesMovieLink) => void;
-  onQueueFromSeriesMovieSearch?: (link: SeriesMovieLink, release: Release) => Promise<void> | void;
-  onQueueAdditionalFromSeriesMovieSearch?: (link: SeriesMovieLink, release: Release) => Promise<void> | void;
+  onQueueFromSeriesMovieSearch?: (
+    link: SeriesMovieLink,
+    release: Release,
+  ) => Promise<void> | void;
+  onQueueAdditionalFromSeriesMovieSearch?: (
+    link: SeriesMovieLink,
+    release: Release,
+  ) => Promise<void> | void;
   onAutoSearchSeriesMovie?: (link: SeriesMovieLink) => void;
-  onSetSeriesMovieMonitored?: (seriesMovieLinkId: string, monitored: boolean) => Promise<void>;
+  onSetSeriesMovieMonitored?: (
+    seriesMovieLinkId: string,
+    monitored: boolean,
+  ) => Promise<void>;
   /// Reloads the series detail after a series-movie tag save. Present only when
   /// the viewer may manage this series' titles, which is what gates the picker.
   onSeriesMovieTagsChanged?: () => Promise<void> | void;
@@ -137,32 +146,37 @@ function SeriesMovieSearchResults({
       {!searchBlockedForMovie && searchLoading ? (
         <div className="flex flex-col items-center justify-center gap-4 py-16">
           <LoadingMark className="h-10 w-10 text-[var(--scry-accent-text)]" />
-          <p className="text-lg text-muted-foreground">{t("label.searching")}</p>
+          <p className="text-lg text-muted-foreground">
+            {t("label.searching")}
+          </p>
         </div>
       ) : null}
-      {!searchBlockedForMovie
-      && !searchLoading
-      && searchResults
-      && searchResults.length > 0
-      && onQueueFromSeriesMovieSearch ? (
+      {!searchBlockedForMovie &&
+      !searchLoading &&
+      searchResults &&
+      searchResults.length > 0 &&
+      onQueueFromSeriesMovieSearch ? (
         <SearchResultBuckets
-            titleId={link.seriesTitleId}
-            ownedScope={{ seriesMovieLinkId: link.id }}
-            results={searchResults}
-            onQueue={(release) => onQueueFromSeriesMovieSearch(link, release)}
-            onQueueAdditional={onQueueAdditionalFromSeriesMovieSearch
-              ? (release) => onQueueAdditionalFromSeriesMovieSearch(link, release)
-              : undefined}
-            canQueueAdditional={(release) =>
-              releaseSupportsAdditionalFileQueue(release, null)
-            }
-            requireCandidateToken
-          />
+          titleId={link.seriesTitleId}
+          ownedScope={{ seriesMovieLinkId: link.id }}
+          results={searchResults}
+          onQueue={(release) => onQueueFromSeriesMovieSearch(link, release)}
+          onQueueAdditional={
+            onQueueAdditionalFromSeriesMovieSearch
+              ? (release) =>
+                  onQueueAdditionalFromSeriesMovieSearch(link, release)
+              : undefined
+          }
+          canQueueAdditional={(release) =>
+            releaseSupportsAdditionalFileQueue(release, null)
+          }
+          requireCandidateToken
+        />
       ) : null}
-      {!searchBlockedForMovie
-      && !searchLoading
-      && searchAttempted
-      && (!searchResults || searchResults.length === 0) ? (
+      {!searchBlockedForMovie &&
+      !searchLoading &&
+      searchAttempted &&
+      (!searchResults || searchResults.length === 0) ? (
         <p className="text-xs text-muted-foreground">
           {t("title.noReleasesFound", { name: link.movie.title })}
         </p>
@@ -190,7 +204,7 @@ function getSeriesMovieMediaFiles(
   mediaFilesBySeriesMovieLink: Record<string, EpisodeMediaFile[]>,
 ) {
   const linkedEpisodeFiles = link.linkedEpisodeId
-    ? mediaFilesByEpisode[link.linkedEpisodeId] ?? EMPTY_EPISODE_FILES
+    ? (mediaFilesByEpisode[link.linkedEpisodeId] ?? EMPTY_EPISODE_FILES)
     : EMPTY_EPISODE_FILES;
   const seriesMovieFiles =
     mediaFilesBySeriesMovieLink[link.id] ?? EMPTY_EPISODE_FILES;
@@ -209,7 +223,9 @@ function getMediaFilesSizeLabel(mediaFiles: EpisodeMediaFile[]) {
   return matchedSizeBytes > 0 ? formatFileSize(matchedSizeBytes) : null;
 }
 
-export function SeriesMovieTimelineSection(props: SeriesMovieTimelineContentProps) {
+export function SeriesMovieTimelineSection(
+  props: SeriesMovieTimelineContentProps,
+) {
   const {
     expanded,
     link,
@@ -231,7 +247,8 @@ export function SeriesMovieTimelineSection(props: SeriesMovieTimelineContentProp
     mediaFilesBySeriesMovieLink,
   );
   const sizeLabel = getMediaFilesSizeLabel(mediaFiles);
-  const autoSearchLoading = props.autoSearchSeriesMovieLoadingByLink[link.id] === true;
+  const autoSearchLoading =
+    props.autoSearchSeriesMovieLoadingByLink[link.id] === true;
   const searchLoading = props.seriesMovieSearchLoadingByLink[link.id] === true;
 
   const loadSeriesMovieDetail = React.useCallback(() => {
@@ -252,8 +269,9 @@ export function SeriesMovieTimelineSection(props: SeriesMovieTimelineContentProp
       }
 
       setSeriesMovieToggling(true);
-      onSetSeriesMovieMonitored(link.id, !link.monitored)
-        .finally(() => setSeriesMovieToggling(false));
+      onSetSeriesMovieMonitored(link.id, !link.monitored).finally(() =>
+        setSeriesMovieToggling(false),
+      );
     },
     [link.id, link.monitored, onSetSeriesMovieMonitored],
   );

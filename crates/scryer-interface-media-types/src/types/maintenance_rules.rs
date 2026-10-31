@@ -378,6 +378,8 @@ pub struct DeleteMaintenanceRuleSetPayload {
 /// Result of validating maintenance rule source without saving it.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceRuleValidationPayload {
+    /// Structured conditions and source locations.
+    pub diagnostics: Vec<super::rules::RuleValidationDiagnosticPayload>,
     /// Whether the source is valid.
     pub valid: bool,
     /// Validation errors; empty when valid.

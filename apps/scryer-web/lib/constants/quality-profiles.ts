@@ -12,7 +12,11 @@ export const QUALITY_TIER_CHOICES = [
   { value: "360P", label: "360P" },
 ] as const;
 
-export const DEFAULT_QUALITY_PROFILE_QUALITY_TIERS = ["2160P", "1080P", "720P"] as const;
+export const DEFAULT_QUALITY_PROFILE_QUALITY_TIERS = [
+  "2160P",
+  "1080P",
+  "720P",
+] as const;
 
 export const QUALITY_SOURCE_CHOICES = [
   { value: "WEB-DL", label: "WEB-DL" },
@@ -73,11 +77,38 @@ export const SCORING_OVERRIDE_KEYS = [
   "block_upscaled",
 ] as const;
 
-export const PERSONA_OVERRIDE_DEFAULTS: Record<ScoringPersonaId, Record<string, boolean>> = {
-  BALANCED: { allow_x265_non4k: false, block_dv_without_fallback: false, prefer_compact_encodes: false, prefer_lossless_audio: false, block_upscaled: true },
-  AUDIOPHILE: { allow_x265_non4k: false, block_dv_without_fallback: false, prefer_compact_encodes: false, prefer_lossless_audio: true, block_upscaled: true },
-  EFFICIENT: { allow_x265_non4k: true, block_dv_without_fallback: false, prefer_compact_encodes: true, prefer_lossless_audio: false, block_upscaled: true },
-  COMPATIBLE: { allow_x265_non4k: false, block_dv_without_fallback: false, prefer_compact_encodes: false, prefer_lossless_audio: false, block_upscaled: true },
+export const PERSONA_OVERRIDE_DEFAULTS: Record<
+  ScoringPersonaId,
+  Record<string, boolean>
+> = {
+  BALANCED: {
+    allow_x265_non4k: false,
+    block_dv_without_fallback: false,
+    prefer_compact_encodes: false,
+    prefer_lossless_audio: false,
+    block_upscaled: true,
+  },
+  AUDIOPHILE: {
+    allow_x265_non4k: false,
+    block_dv_without_fallback: false,
+    prefer_compact_encodes: false,
+    prefer_lossless_audio: true,
+    block_upscaled: true,
+  },
+  EFFICIENT: {
+    allow_x265_non4k: true,
+    block_dv_without_fallback: false,
+    prefer_compact_encodes: true,
+    prefer_lossless_audio: false,
+    block_upscaled: true,
+  },
+  COMPATIBLE: {
+    allow_x265_non4k: false,
+    block_dv_without_fallback: false,
+    prefer_compact_encodes: false,
+    prefer_lossless_audio: false,
+    block_upscaled: true,
+  },
 };
 
 export const PERSONA_DESCRIPTION_KEYS: Record<ScoringPersonaId, string> = {

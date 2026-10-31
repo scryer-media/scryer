@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "./graphql/error-message.ts";
 import type { ExternalImportMonitorWarmupStatus } from "@/lib/types/external-import";
 
 export function continueExternalImportFromConnect(
@@ -14,8 +15,7 @@ export function isProwlarrDiscoveryReady(
   status: ExternalImportMonitorWarmupStatus | null,
 ): boolean {
   return (
-    !hasConnectedProwlarr ||
-    (Boolean(sessionId) && status === "COMPLETED")
+    !hasConnectedProwlarr || (Boolean(sessionId) && status === "COMPLETED")
   );
 }
 
@@ -58,9 +58,11 @@ export interface FinalizeStatusSample {
 
 export interface FinalizePollDeps {
   /** Read the tracked apply session; `null` means the read itself failed. */
-  fetchStatus: (
-    sessionId: string,
-  ) => Promise<{ sample: FinalizeStatusSample | null; error: string | null }>;
+  fetchStatus: (sessionId: string) => Promise<{
+    sample: FinalizeStatusSample | null;
+    error: string | null;
+    sessionGone?: boolean;
+  }>;
   /** Called for every successful read so the view can redraw. */
   onSample: (sample: FinalizeStatusSample) => void;
   /** Injected so tests don't wait on real timers. */
@@ -80,15 +82,15 @@ export const FINALIZE_POLL_MAX_INTERVAL_MS = 5000;
 export async function pollExternalImportFinalize(
   sessionId: string,
   deps: FinalizePollDeps,
-): Promise<{ ok: boolean; error: string | null }> {
+): Promise<{ ok: boolean; error: string | null; sessionGone?: boolean }> {
   let errorWaitMs = FINALIZE_POLL_INTERVAL_MS;
   for (;;) {
     if (deps.isStopped?.()) return { ok: false, error: null };
-    const { sample, error } = await deps.fetchStatus(sessionId);
+    const { sample, error, sessionGone } = await deps.fetchStatus(sessionId);
     if (deps.isStopped?.()) return { ok: false, error: null };
     if (!sample) {
       const message = error ?? "Failed to load import progress";
-      if (/no warmup session/i.test(message)) {
+      if (sessionGone) {
         return { ok: false, error: message };
       }
       await deps.wait(errorWaitMs);
@@ -118,9 +120,13 @@ export async function pollExternalImportFinalize(
  * wizard's Finish button disabled with nothing on screen to explain it.
  */
 export async function runFinalizeStart(
-  start: () => Promise<{ ok: boolean; error: string | null }>,
+  start: () => Promise<{
+    ok: boolean;
+    error: string | null;
+    sessionGone?: boolean;
+  }>,
   onFailure: (message: string) => void,
-): Promise<{ ok: boolean; error: string | null }> {
+): Promise<{ ok: boolean; error: string | null; sessionGone?: boolean }> {
   try {
     const outcome = await start();
     if (!outcome.ok) {
@@ -129,7 +135,7 @@ export async function runFinalizeStart(
     return outcome;
   } catch (error) {
     const message =
-      (error instanceof Error ? error.message : String(error)) ||
+      userFacingGraphQlErrorMessage(error, String(error)) ||
       "Failed to finalize import";
     onFailure(message);
     return { ok: false, error: message };

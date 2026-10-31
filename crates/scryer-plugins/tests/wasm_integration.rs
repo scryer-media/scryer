@@ -37,6 +37,7 @@ fn fixtures_dir() -> std::path::PathBuf {
 fn test_config(provider_type: &str) -> IndexerConfig {
     initialize_wasm_runtime_for_tests();
     IndexerConfig {
+        last_error_code: None,
         id: "idx-1".to_string(),
         name: "Test".to_string(),
         provider_type: provider_type.to_string(),
@@ -138,6 +139,7 @@ async fn test_indexer_search() {
 
 fn challenge_config(base_url: &str, answer: &str) -> IndexerConfig {
     IndexerConfig {
+        last_error_code: None,
         config_json: Some(
             serde_json::json!({ "base_url": base_url, "challenge_answer": answer }).to_string(),
         ),

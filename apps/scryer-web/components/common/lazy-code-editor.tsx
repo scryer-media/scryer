@@ -8,11 +8,7 @@ import type {
 
 const CodeEditor = lazy(() => import("./code-editor"));
 
-export type {
-  CodeEditorDiagnostic,
-  CodeEditorLanguage,
-  CodeEditorProps,
-};
+export type { CodeEditorDiagnostic, CodeEditorLanguage, CodeEditorProps };
 
 function TextareaFallback({
   id,

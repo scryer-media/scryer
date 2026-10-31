@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { toast } from "sonner";
+import {
+  ERROR_REASON_KEYS,
+  hasGraphQlErrorReason,
+} from "@/lib/graphql/error-message";
 import { backendClient } from "@/lib/graphql/urql-client";
 import {
   smgScryerUpdateNoticeQuery,
@@ -8,10 +13,14 @@ import {
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
 import { scheduleAfterFirstPaint } from "@/lib/utils/scheduling";
 import type {
+  Translate,
   SmgScryerUpdateNotice,
   SmgVersionCompatibilityNotice,
 } from "@/components/root/types";
 
+const CLOCK_SKEW_REASON = "METADATA_GATEWAY_CLOCK_SKEW";
+const CLOCK_SKEW_TOAST_ID = "metadata-gateway-clock-skew";
+const CLOCK_NOTICE_REFRESH_INTERVAL_MS = 30_000;
 const SMG_VERSION_COMPATIBILITY_NOTICE_KEY = "smg.version_compatibility_notice";
 const SMG_SCRYER_UPDATE_NOTICE_KEY = "smg.scryer_update_notice";
 const SMG_SCRYER_UPDATE_DISMISSED_KEY = "scryer.smgUpdate.dismissed";
@@ -43,8 +52,7 @@ function readSmgNoticeSessionCache(): SmgNoticeSessionCache | null {
     }
     return {
       refreshedAt: parsed.refreshedAt,
-      versionCompatibilityNotice:
-        parsed.versionCompatibilityNotice ?? null,
+      versionCompatibilityNotice: parsed.versionCompatibilityNotice ?? null,
       scryerUpdateNotice: parsed.scryerUpdateNotice ?? null,
     };
   } catch {
@@ -81,10 +89,25 @@ function buildSmgScryerUpdateDismissalValue(
 }
 
 export function useSmgNotices({
+  t,
   settingsSubscriptionEnabled = true,
 }: {
+  t: Translate;
   settingsSubscriptionEnabled?: boolean;
-} = {}) {
+}) {
+  const [clockSkewActive, setClockSkewActive] = useState(false);
+  useEffect(() => {
+    if (!clockSkewActive) {
+      toast.dismiss(CLOCK_SKEW_TOAST_ID);
+      return;
+    }
+    toast.error(t(ERROR_REASON_KEYS[CLOCK_SKEW_REASON]), {
+      id: CLOCK_SKEW_TOAST_ID,
+      duration: Infinity,
+      closeButton: true,
+    });
+  }, [clockSkewActive, t]);
+
   const initialSessionCache = useMemo(() => readSmgNoticeSessionCache(), []);
   const [smgVersionCompatibilityNotice, setSmgVersionCompatibilityNotice] =
     useState<SmgVersionCompatibilityNotice | null>(
@@ -102,9 +125,7 @@ export function useSmgNotices({
       if (typeof window === "undefined") {
         return "";
       }
-      return (
-        window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY) ?? ""
-      );
+      return window.localStorage.getItem(SMG_SCRYER_UPDATE_DISMISSED_KEY) ?? "";
     },
   );
 
@@ -113,19 +134,42 @@ export function useSmgNotices({
       const { data, error } = await backendClient
         .query<{
           smgVersionCompatibilityNotice?: SmgVersionCompatibilityNotice | null;
-        }>(smgVersionCompatibilityNoticeQuery, {})
+        }>(
+          smgVersionCompatibilityNoticeQuery,
+          {},
+          { requestPolicy: "network-only" },
+        )
         .toPromise();
       if (error) {
         throw error;
       }
+      setClockSkewActive(false);
       const notice = data?.smgVersionCompatibilityNotice ?? null;
       setSmgVersionCompatibilityNotice(notice);
       return notice;
     } catch (error) {
-      console.warn("Failed to refresh SMG version compatibility notice", error);
+      if (hasGraphQlErrorReason(error, CLOCK_SKEW_REASON, "VALIDATION_ERROR")) {
+        setClockSkewActive(true);
+      } else {
+        console.warn(
+          "Failed to refresh SMG version compatibility notice",
+          error,
+        );
+      }
       return null;
     }
   }, []);
+
+  // This reads local notice state, not SMG. Background sync failures must become
+  // visible even when there is no foreground metadata request or settings event.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    void refreshSmgVersionCompatibilityNotice();
+    const interval = window.setInterval(() => {
+      void refreshSmgVersionCompatibilityNotice();
+    }, CLOCK_NOTICE_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshSmgVersionCompatibilityNotice]);
 
   const refreshSmgScryerUpdateNotice = useCallback(async () => {
     try {
@@ -152,8 +196,7 @@ export function useSmgNotices({
       if (!force) {
         const sessionCache = readSmgNoticeSessionCache();
         if (sessionCache) {
-          lastRoutineSmgNoticeRefreshAtRef.current =
-            sessionCache.refreshedAt;
+          lastRoutineSmgNoticeRefreshAtRef.current = sessionCache.refreshedAt;
           setSmgVersionCompatibilityNotice(
             sessionCache.versionCompatibilityNotice,
           );
@@ -169,10 +212,11 @@ export function useSmgNotices({
         return;
       }
       lastRoutineSmgNoticeRefreshAtRef.current = now;
-      const [versionCompatibilityNotice, scryerUpdateNotice] = await Promise.all([
-        refreshSmgVersionCompatibilityNotice(),
-        refreshSmgScryerUpdateNotice(),
-      ]);
+      const [versionCompatibilityNotice, scryerUpdateNotice] =
+        await Promise.all([
+          refreshSmgVersionCompatibilityNotice(),
+          refreshSmgScryerUpdateNotice(),
+        ]);
       writeSmgNoticeSessionCache({
         refreshedAt: now,
         versionCompatibilityNotice,
@@ -192,6 +236,7 @@ export function useSmgNotices({
     useCallback(
       (changedKeys) => {
         if (
+          changedKeys.includes("smg.clock_skew_notice") ||
           changedKeys.includes(SMG_VERSION_COMPATIBILITY_NOTICE_KEY) ||
           changedKeys.includes(SMG_SCRYER_UPDATE_NOTICE_KEY)
         ) {

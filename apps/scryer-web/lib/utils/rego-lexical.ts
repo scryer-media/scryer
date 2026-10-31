@@ -4,15 +4,16 @@ export function regoCodeAt(source: string, position: number): boolean {
   let state: "code" | "comment" | "string" | "raw" = "code";
   for (let i = 0; i < position; i++) {
     const ch = source[i];
-    if (state === "comment") { if (ch === "\n") state = "code"; }
-    else if (state === "string") {
+    if (state === "comment") {
+      if (ch === "\n") state = "code";
+    } else if (state === "string") {
       if (ch === "\\") i++;
       else if (ch === '"') state = "code";
-    } else if (state === "raw") { if (ch === "`") state = "code"; }
-    else if (ch === "#") state = "comment";
+    } else if (state === "raw") {
+      if (ch === "`") state = "code";
+    } else if (ch === "#") state = "comment";
     else if (ch === '"') state = "string";
     else if (ch === "`") state = "raw";
   }
   return state === "code";
 }
-

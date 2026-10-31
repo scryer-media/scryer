@@ -15,7 +15,12 @@ test("a manager can reopen a dismissed request and nothing else", () => {
 });
 
 test("a requester never sees reopen, even on their own dismissed request", () => {
-  for (const status of ["PENDING", "APPROVED", "REJECTED", "CANCELED"] as const) {
+  for (const status of [
+    "PENDING",
+    "APPROVED",
+    "REJECTED",
+    "CANCELED",
+  ] as const) {
     assert.equal(mediaRequestRowActions("mine", status).reopen, false, status);
     assert.equal(mediaRequestRowActions("mine", status).resolve, false, status);
   }

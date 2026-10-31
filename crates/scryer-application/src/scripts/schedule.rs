@@ -48,7 +48,7 @@ impl ScheduleError {
 
 impl ScheduleError {
     pub fn into_app_error(self) -> AppError {
-        AppError::Validation(self.0)
+        AppError::validation_refused(crate::error_reasons::scripts::SCHEDULE_INVALID, self.0)
     }
 }
 

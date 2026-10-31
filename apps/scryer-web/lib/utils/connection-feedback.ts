@@ -49,7 +49,7 @@ export async function runConnectionFeedback({
     // errors the server really did mask.
     const message = t
       ? pluginErrorMessage(error, t, failureFallbackMessage)
-      : userFacingGraphQlErrorMessage(error, failureFallbackMessage);
+      : userFacingGraphQlErrorMessage(error, failureFallbackMessage, t);
     setGlobalStatus(message, { level: "ERROR" });
     throw new ReportedConnectionFeedbackError(message);
   }

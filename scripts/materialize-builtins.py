@@ -108,6 +108,7 @@ def verify_sigstore(
         "--timeout",
         SIGSTORE_TRUST_ROOT_TIMEOUT,
         "verify-blob",
+        "--new-bundle-format",
         "--bundle",
         str(bundle),
         "--trusted-root",

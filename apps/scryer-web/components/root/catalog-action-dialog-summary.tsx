@@ -42,7 +42,10 @@ const MEDIA_SITE_LOGOS: Record<string, string> = {
 };
 
 function normalizeSource(value: string) {
-  return value.trim().toLowerCase().replace(/[\s_.-]+/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_.-]+/g, "");
 }
 
 const EXTERNAL_SOURCE_ALIASES: Record<string, string> = {
@@ -66,7 +69,9 @@ const EXTERNAL_SOURCE_ALIASES: Record<string, string> = {
 };
 
 function canonicalExternalSource(value: string) {
-  return EXTERNAL_SOURCE_ALIASES[normalizeSource(value)] ?? normalizeSource(value);
+  return (
+    EXTERNAL_SOURCE_ALIASES[normalizeSource(value)] ?? normalizeSource(value)
+  );
 }
 
 function externalIdMap(result: MetadataTvdbSearchItem) {
@@ -109,7 +114,10 @@ function tvdbPathForFacet(facet: Facet, type: string | null | undefined) {
   return "series";
 }
 
-function externalLinks(result: MetadataTvdbSearchItem, facet: Facet): ExternalSiteLink[] {
+function externalLinks(
+  result: MetadataTvdbSearchItem,
+  facet: Facet,
+): ExternalSiteLink[] {
   const ids = externalIdMap(result);
   const links: ExternalSiteLink[] = [];
   const seen = new Set<string>();

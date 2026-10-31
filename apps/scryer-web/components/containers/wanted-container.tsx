@@ -1,5 +1,10 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { OverviewTitleTarget, ViewId, WantedSection } from "@/components/root/types";
+import type {
+  OverviewTitleTarget,
+  ViewId,
+  WantedSection,
+} from "@/components/root/types";
 import { useClient, useMutation } from "urql";
 import { WantedView } from "@/components/views/wanted-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
@@ -116,7 +121,9 @@ function cutoffConflictMessage(item: CutoffUnmetItem) {
 }
 
 function cutoffQueueScope(item: CutoffUnmetItem) {
-  return item.episodeId?.trim() ? { episode: item.episodeId.trim() } : { title: true };
+  return item.episodeId?.trim()
+    ? { episode: item.episodeId.trim() }
+    : { title: true };
 }
 
 export const WantedContainer = memo(function WantedContainer({
@@ -124,7 +131,9 @@ export const WantedContainer = memo(function WantedContainer({
   wantedSection,
   onOpenOverview,
 }: WantedContainerProps) {
-  const [lastNavigationCounts] = useState(() => navigationCountsForScope(authorizationSignature));
+  const [lastNavigationCounts] = useState(() =>
+    navigationCountsForScope(authorizationSignature),
+  );
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
@@ -145,27 +154,42 @@ export const WantedContainer = memo(function WantedContainer({
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<ReleaseDecisionItem[]>([]);
   const [decisionsLoading, setDecisionsLoading] = useState(false);
-  const [standbyReleases, setStandbyReleases] = useState<PendingReleaseItem[]>([]);
+  const [standbyReleases, setStandbyReleases] = useState<PendingReleaseItem[]>(
+    [],
+  );
   const [standbyLoading, setStandbyLoading] = useState(false);
 
-  const [, executeTriggerAcquisitionSearch] = useMutation(triggerAcquisitionSearchMutation);
-  const [, executeCancelAcquisitionSearch] = useMutation(cancelAcquisitionSearchMutation);
+  const [, executeTriggerAcquisitionSearch] = useMutation(
+    triggerAcquisitionSearchMutation,
+  );
+  const [, executeCancelAcquisitionSearch] = useMutation(
+    cancelAcquisitionSearchMutation,
+  );
   const [, executePause] = useMutation(pauseWantedItemMutation);
   const [, executeResume] = useMutation(resumeWantedItemMutation);
-  const [, executeMismatchRecovery] = useMutation(triggerTitleMismatchRecoverySearchMutation);
+  const [, executeMismatchRecovery] = useMutation(
+    triggerTitleMismatchRecoverySearchMutation,
+  );
 
   // --- Cutoff (Upgrades) state ---
   const [cutoffItems, setCutoffItems] = useState<CutoffUnmetItem[]>([]);
-  const [cutoffTotal, setCutoffTotal] = useState(() => lastNavigationCounts.cutoff);
+  const [cutoffTotal, setCutoffTotal] = useState(
+    () => lastNavigationCounts.cutoff,
+  );
   const [cutoffOffset, setCutoffOffset] = useState(0);
   const [cutoffLoading, setCutoffLoading] = useState(false);
-  const [cutoffFacetFilter, setCutoffFacetFilter] = useState<string | undefined>(undefined);
-  const [cutoffAutoSearchingId, setCutoffAutoSearchingId] = useState<string | null>(null);
-  const [cutoffInteractiveSearchingId, setCutoffInteractiveSearchingId] = useState<string | null>(null);
-  const [cutoffActiveInteractiveItemId, setCutoffActiveInteractiveItemId] = useState<string | null>(null);
-  const [cutoffSearchResultsByItemId, setCutoffSearchResultsByItemId] = useState<
-    Record<string, Release[]>
-  >({});
+  const [cutoffFacetFilter, setCutoffFacetFilter] = useState<
+    string | undefined
+  >(undefined);
+  const [cutoffAutoSearchingId, setCutoffAutoSearchingId] = useState<
+    string | null
+  >(null);
+  const [cutoffInteractiveSearchingId, setCutoffInteractiveSearchingId] =
+    useState<string | null>(null);
+  const [cutoffActiveInteractiveItemId, setCutoffActiveInteractiveItemId] =
+    useState<string | null>(null);
+  const [cutoffSearchResultsByItemId, setCutoffSearchResultsByItemId] =
+    useState<Record<string, Release[]>>({});
 
   // --- Interactive acquisition-search job ---
   const [searchJob, setSearchJob] = useState<AcquisitionSearchJob | null>(null);
@@ -174,7 +198,9 @@ export const WantedContainer = memo(function WantedContainer({
 
   // --- Pending releases state ---
   const [pendingItems, setPendingItems] = useState<PendingReleaseItem[]>([]);
-  const [pendingTotal, setPendingTotal] = useState(() => lastNavigationCounts.pending);
+  const [pendingTotal, setPendingTotal] = useState(
+    () => lastNavigationCounts.pending,
+  );
   const [pendingHasMore, setPendingHasMore] = useState(false);
   const [pendingNextOffset, setPendingNextOffset] = useState(0);
   const [pendingLoading, setPendingLoading] = useState(false);
@@ -231,11 +257,19 @@ export const WantedContainer = memo(function WantedContainer({
       const page = data?.pendingReleases ?? {};
       const nextItems = (page.items ?? []) as PendingReleaseItem[];
       setPendingItems(nextItems);
-      setPendingTotal(typeof page.totalCount === "number" ? page.totalCount : nextItems.length);
+      setPendingTotal(
+        typeof page.totalCount === "number"
+          ? page.totalCount
+          : nextItems.length,
+      );
       setPendingHasMore(Boolean(page.hasMore));
       setPendingNextOffset(nextItems.length);
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setPendingLoading(false);
@@ -243,7 +277,11 @@ export const WantedContainer = memo(function WantedContainer({
   }, [client, t, setGlobalStatus]);
 
   const loadMorePending = useCallback(async () => {
-    if (!pendingHasMore || pendingLoadingMore || pendingLoadInFlightRef.current) {
+    if (
+      !pendingHasMore ||
+      pendingLoadingMore ||
+      pendingLoadInFlightRef.current
+    ) {
       return;
     }
 
@@ -269,11 +307,17 @@ export const WantedContainer = memo(function WantedContainer({
         const seen = new Set(current.map((item) => item.id));
         return [...current, ...nextItems.filter((item) => !seen.has(item.id))];
       });
-      setPendingTotal(typeof page.totalCount === "number" ? page.totalCount : pendingTotal);
+      setPendingTotal(
+        typeof page.totalCount === "number" ? page.totalCount : pendingTotal,
+      );
       setPendingHasMore(Boolean(page.hasMore));
       setPendingNextOffset(pendingNextOffset + nextItems.length);
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
       pendingLoadInFlightRef.current = false;
@@ -299,7 +343,10 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { data, error } = await executeForceGrab({ id });
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else if (data?.forceGrabPendingRelease?.grabbed === false) {
         setGlobalStatus(t("pending.grabRejected"), { level: "ERROR" });
         void refreshPending();
@@ -315,7 +362,10 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { error } = await executeDismiss({ id });
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else {
         setGlobalStatus(t("pending.dismissed"));
         void refreshPending();
@@ -354,7 +404,10 @@ export const WantedContainer = memo(function WantedContainer({
       })
       .catch((error) => {
         if (!cancelled) {
-          setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+            { level: "ERROR" },
+          );
         }
       })
       .finally(() => {
@@ -386,7 +439,11 @@ export const WantedContainer = memo(function WantedContainer({
       setItems(data?.wantedItems?.items ?? []);
       setTotal(data?.wantedItems?.totalCount ?? 0);
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setLoading(false);
@@ -421,12 +478,23 @@ export const WantedContainer = memo(function WantedContainer({
       setCutoffItems(data?.cutoffUnmetTitlesPage?.items ?? []);
       setCutoffTotal(data?.cutoffUnmetTitlesPage?.totalCount ?? 0);
     } catch (error) {
-      const message = error instanceof Error ? error.message : t("status.failedToLoad");
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.failedToLoad"),
+        t,
+      );
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
       setCutoffLoading(false);
     }
-  }, [client, cutoffFacetFilter, cutoffOffset, selectedLibraryIds, t, setGlobalStatus]);
+  }, [
+    client,
+    cutoffFacetFilter,
+    cutoffOffset,
+    selectedLibraryIds,
+    t,
+    setGlobalStatus,
+  ]);
 
   useEffect(() => {
     if (wantedSection === "cutoff") {
@@ -447,7 +515,9 @@ export const WantedContainer = memo(function WantedContainer({
       setStandbyLoading(standbyCount > 0);
       try {
         const [decisionsResult, standbyResult] = await Promise.all([
-          client.query(releaseDecisionsQuery, { wantedItemId, limit: 20 }).toPromise(),
+          client
+            .query(releaseDecisionsQuery, { wantedItemId, limit: 20 })
+            .toPromise(),
           standbyCount > 0
             ? client
                 .query(pendingReleasesQuery, {
@@ -460,7 +530,9 @@ export const WantedContainer = memo(function WantedContainer({
         ]);
         if (decisionsResult.error) throw decisionsResult.error;
         if (standbyResult.error) throw standbyResult.error;
-        setDecisions(decisionsResult.data?.wantedItem?.releaseDecisions?.items ?? []);
+        setDecisions(
+          decisionsResult.data?.wantedItem?.releaseDecisions?.items ?? [],
+        );
         setStandbyReleases(standbyResult.data?.pendingReleases?.items ?? []);
       } catch {
         setDecisions([]);
@@ -494,7 +566,9 @@ export const WantedContainer = memo(function WantedContainer({
                 grabbed: job.grabbedCount,
                 failed: job.failedCount,
               }),
-          job.state === "CANCELLED" ? undefined : { level: job.failedCount > 0 ? "ERROR" : "SUCCESS" },
+          job.state === "CANCELLED"
+            ? undefined
+            : { level: job.failedCount > 0 ? "ERROR" : "SUCCESS" },
         );
       }
     },
@@ -510,9 +584,12 @@ export const WantedContainer = memo(function WantedContainer({
     }) => {
       setSearchJobStarting(true);
       try {
-        const { data, error } = await executeTriggerAcquisitionSearch({ input });
+        const { data, error } = await executeTriggerAcquisitionSearch({
+          input,
+        });
         if (error) throw error;
-        const job = data?.triggerAcquisitionSearch as AcquisitionSearchJob | undefined;
+        const job = data?.triggerAcquisitionSearch as
+          AcquisitionSearchJob | undefined;
         if (job) {
           searchJobIdRef.current = job.id;
           storeAcquisitionSearchJobId(job.id);
@@ -520,7 +597,9 @@ export const WantedContainer = memo(function WantedContainer({
           setGlobalStatus(t("wanted.searchJobStarted"));
         }
       } catch (error) {
-        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+          level: "ERROR",
+        });
       } finally {
         setSearchJobStarting(false);
       }
@@ -547,7 +626,8 @@ export const WantedContainer = memo(function WantedContainer({
           .toPromise();
         if (cancelled) return;
         if (error) throw error;
-        const job = (data?.acquisitionSearchJob ?? null) as AcquisitionSearchJob | null;
+        const job = (data?.acquisitionSearchJob ??
+          null) as AcquisitionSearchJob | null;
         applySearchJobSnapshot(job);
         if (job && job.state !== "RUNNING") {
           void refreshItems();
@@ -557,12 +637,22 @@ export const WantedContainer = memo(function WantedContainer({
         // transient poll failure — keep polling
       }
     };
-    const interval = window.setInterval(() => void poll(), ACQUISITION_SEARCH_POLL_INTERVAL_MS);
+    const interval = window.setInterval(
+      () => void poll(),
+      ACQUISITION_SEARCH_POLL_INTERVAL_MS,
+    );
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applySearchJobSnapshot, client, refreshCutoff, refreshItems, searchJob?.id, searchJob?.state]);
+  }, [
+    applySearchJobSnapshot,
+    client,
+    refreshCutoff,
+    refreshItems,
+    searchJob?.id,
+    searchJob?.state,
+  ]);
 
   useEffect(() => {
     const storedId = storedAcquisitionSearchJobId();
@@ -571,10 +661,15 @@ export const WantedContainer = memo(function WantedContainer({
     }
     searchJobIdRef.current = storedId;
     void client
-      .query(acquisitionSearchJobQuery, { id: storedId }, { requestPolicy: "network-only" })
+      .query(
+        acquisitionSearchJobQuery,
+        { id: storedId },
+        { requestPolicy: "network-only" },
+      )
       .toPromise()
       .then(({ data }) => {
-        const job = (data?.acquisitionSearchJob ?? null) as AcquisitionSearchJob | null;
+        const job = (data?.acquisitionSearchJob ??
+          null) as AcquisitionSearchJob | null;
         if (job && job.state === "RUNNING") {
           setSearchJob(job);
         } else {
@@ -595,9 +690,12 @@ export const WantedContainer = memo(function WantedContainer({
     }
     const { error } = await executeCancelAcquisitionSearch({ id });
     if (error) {
-      setGlobalStatus(error.message, { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+        { level: "ERROR" },
+      );
     }
-  }, [executeCancelAcquisitionSearch, searchJob?.id, setGlobalStatus]);
+  }, [executeCancelAcquisitionSearch, searchJob?.id, setGlobalStatus, t]);
 
   // Per-item "Search now": one-scope interactive job — the id is the scope
   // identity (state-row id or convergence scope key), resolved server-side.
@@ -612,31 +710,40 @@ export const WantedContainer = memo(function WantedContainer({
     async (id: string) => {
       const { error } = await executePause({ id });
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else {
         void refreshItems();
       }
     },
-    [executePause, refreshItems, setGlobalStatus],
+    [executePause, refreshItems, setGlobalStatus, t],
   );
 
   const resumeItem = useCallback(
     async (id: string) => {
       const { error } = await executeResume({ id });
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else {
         void refreshItems();
       }
     },
-    [executeResume, refreshItems, setGlobalStatus],
+    [executeResume, refreshItems, setGlobalStatus, t],
   );
 
   const triggerMismatchRecovery = useCallback(
     async (titleId: string) => {
       const { data, error } = await executeMismatchRecovery({ titleId });
       if (error) {
-        setGlobalStatus(error.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } else {
         setGlobalStatus(
           t("status.mismatchRecoveryQueued", {
@@ -661,7 +768,9 @@ export const WantedContainer = memo(function WantedContainer({
         titleId: cutoffItem.titleId,
         scope: cutoffQueueScope(cutoffItem),
       };
-      const submit = async (nextInput: typeof input & { replaceInProgress?: boolean }) => {
+      const submit = async (
+        nextInput: typeof input & { replaceInProgress?: boolean },
+      ) => {
         const { data, error } = await client
           .mutation(queueBestReleaseMutation, { input: nextInput })
           .toPromise();
@@ -677,7 +786,9 @@ export const WantedContainer = memo(function WantedContainer({
           )
         : await submit(input);
       assertNoReplaceConflict(payload, cutoffConflictMessage(cutoffItem));
-      setGlobalStatus(t("cutoff.searchTriggered", { name: cutoffItemLabel(cutoffItem) }));
+      setGlobalStatus(
+        t("cutoff.searchTriggered", { name: cutoffItemLabel(cutoffItem) }),
+      );
     },
     [client, confirmReplaceConflict, t, setGlobalStatus],
   );
@@ -687,9 +798,15 @@ export const WantedContainer = memo(function WantedContainer({
       const itemKey = cutoffItemKey(item);
       setCutoffAutoSearchingId(itemKey);
       try {
-        await searchAndQueueCutoffItem(item, { allowReplaceConfirmation: true });
+        await searchAndQueueCutoffItem(item, {
+          allowReplaceConfirmation: true,
+        });
       } catch (error) {
-        const outcome = autoSearchOutcomeMessage(error, t, cutoffItemLabel(item));
+        const outcome = autoSearchOutcomeMessage(
+          error,
+          t,
+          cutoffItemLabel(item),
+        );
         if (outcome) {
           setGlobalStatus(outcome, { level: "WARNING" });
         } else {
@@ -724,14 +841,23 @@ export const WantedContainer = memo(function WantedContainer({
           const season = item.seasonNumber?.trim();
           const episode = item.episodeNumber?.trim();
           if (!season || !episode) {
-            throw new Error("Episode search is unavailable because the episode numbers are missing.");
+            throw new Error(
+              "Episode search is unavailable because the episode numbers are missing.",
+            );
           }
-          const results = await runIterativeReleaseSearch(client, {
-            titleId: item.titleId,
-            season,
-            episode,
-          }, { onUpdate });
-          setCutoffSearchResultsByItemId((current) => ({ ...current, [itemKey]: results }));
+          const results = await runIterativeReleaseSearch(
+            client,
+            {
+              titleId: item.titleId,
+              season,
+              episode,
+            },
+            { onUpdate },
+          );
+          setCutoffSearchResultsByItemId((current) => ({
+            ...current,
+            [itemKey]: results,
+          }));
           setCutoffActiveInteractiveItemId(itemKey);
           setGlobalStatus(t("status.foundNzb", { count: results.length }));
         } else {
@@ -740,12 +866,18 @@ export const WantedContainer = memo(function WantedContainer({
             { titleId: item.titleId },
             { onUpdate },
           );
-          setCutoffSearchResultsByItemId((current) => ({ ...current, [itemKey]: results }));
+          setCutoffSearchResultsByItemId((current) => ({
+            ...current,
+            [itemKey]: results,
+          }));
           setCutoffActiveInteractiveItemId(itemKey);
           setGlobalStatus(t("status.foundNzb", { count: results.length }));
         }
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setCutoffInteractiveSearchingId(null);
       }
@@ -782,9 +914,13 @@ export const WantedContainer = memo(function WantedContainer({
           confirmReplaceConflict,
         );
         assertNoReplaceConflict(payload, conflictMessage);
-        setGlobalStatus(t("status.queueSuccess", { name: release.title }), { level: "SUCCESS" });
+        setGlobalStatus(t("status.queueSuccess", { name: release.title }), {
+          level: "SUCCESS",
+        });
       } catch (error) {
-        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), { level: "ERROR" });
+        setGlobalStatus(grabErrorMessage(error, t, t("status.queueFailed")), {
+          level: "ERROR",
+        });
       }
     },
     [client, confirmReplaceConflict, setGlobalStatus, t],
@@ -800,10 +936,13 @@ export const WantedContainer = memo(function WantedContainer({
     });
   }, [cutoffFacetFilter, selectedLibraryIds, startAcquisitionSearch]);
 
-  const handleCutoffFacetFilterChange = useCallback((value: string | undefined) => {
-    setCutoffOffset(0);
-    setCutoffFacetFilter(value);
-  }, []);
+  const handleCutoffFacetFilterChange = useCallback(
+    (value: string | undefined) => {
+      setCutoffOffset(0);
+      setCutoffFacetFilter(value);
+    },
+    [],
+  );
 
   const handleCutoffLibraryIdsChange = useCallback((libraryIds: string[]) => {
     setCutoffOffset(0);
@@ -813,71 +952,71 @@ export const WantedContainer = memo(function WantedContainer({
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
-      <WantedView
-        section={wantedSection}
-        onOpenOverview={onOpenOverview}
-        wantedState={{
-          items,
-          total,
-          loading,
-          selectedTitle,
-          setSelectedTitle: handleSelectedTitleChange,
-          libraries,
-          librariesLoading,
-          selectedLibraryIds,
-          setSelectedLibraryIds,
-          offset,
-          setOffset,
-          limit,
-          refreshItems,
-          expandedItemId,
-          decisions,
-          decisionsLoading,
-          standbyReleases,
-          standbyLoading,
-          loadItemDetails,
-          triggerSearch,
-          pauseItem,
-          resumeItem,
-          triggerMismatchRecovery,
-        }}
-        cutoffState={{
-          items: cutoffItems,
-          total: cutoffTotal,
-          offset: cutoffOffset,
-          setOffset: setCutoffOffset,
-          limit: CUTOFF_PAGE_SIZE,
-          loading: cutoffLoading,
-          facetFilter: cutoffFacetFilter,
-          setFacetFilter: handleCutoffFacetFilterChange,
-          libraries,
-          librariesLoading,
-          selectedLibraryIds,
-          setSelectedLibraryIds: handleCutoffLibraryIdsChange,
-          autoSearchingId: cutoffAutoSearchingId,
-          interactiveSearchingId: cutoffInteractiveSearchingId,
-          activeInteractiveItemId: cutoffActiveInteractiveItemId,
-          searchResultsByItemId: cutoffSearchResultsByItemId,
-          searchJob,
-          searchJobStarting,
-          triggerBulkSearch: cutoffBulkSearch,
-          cancelBulkSearch: cancelAcquisitionSearch,
-          triggerAutoSearch: cutoffTriggerAutoSearch,
-          triggerInteractiveSearch: cutoffTriggerInteractiveSearch,
-          queueRelease: cutoffQueueRelease,
-        }}
-        pendingState={{
-          items: pendingItems,
-          total: pendingTotal,
-          loading: pendingLoading,
-          hasMore: pendingHasMore,
-          loadingMore: pendingLoadingMore,
-          refreshItems: refreshPending,
-          loadMoreItems: loadMorePending,
-          forceGrab: forceGrabPending,
-          dismiss: dismissPending,
-        }}
-      />
+        <WantedView
+          section={wantedSection}
+          onOpenOverview={onOpenOverview}
+          wantedState={{
+            items,
+            total,
+            loading,
+            selectedTitle,
+            setSelectedTitle: handleSelectedTitleChange,
+            libraries,
+            librariesLoading,
+            selectedLibraryIds,
+            setSelectedLibraryIds,
+            offset,
+            setOffset,
+            limit,
+            refreshItems,
+            expandedItemId,
+            decisions,
+            decisionsLoading,
+            standbyReleases,
+            standbyLoading,
+            loadItemDetails,
+            triggerSearch,
+            pauseItem,
+            resumeItem,
+            triggerMismatchRecovery,
+          }}
+          cutoffState={{
+            items: cutoffItems,
+            total: cutoffTotal,
+            offset: cutoffOffset,
+            setOffset: setCutoffOffset,
+            limit: CUTOFF_PAGE_SIZE,
+            loading: cutoffLoading,
+            facetFilter: cutoffFacetFilter,
+            setFacetFilter: handleCutoffFacetFilterChange,
+            libraries,
+            librariesLoading,
+            selectedLibraryIds,
+            setSelectedLibraryIds: handleCutoffLibraryIdsChange,
+            autoSearchingId: cutoffAutoSearchingId,
+            interactiveSearchingId: cutoffInteractiveSearchingId,
+            activeInteractiveItemId: cutoffActiveInteractiveItemId,
+            searchResultsByItemId: cutoffSearchResultsByItemId,
+            searchJob,
+            searchJobStarting,
+            triggerBulkSearch: cutoffBulkSearch,
+            cancelBulkSearch: cancelAcquisitionSearch,
+            triggerAutoSearch: cutoffTriggerAutoSearch,
+            triggerInteractiveSearch: cutoffTriggerInteractiveSearch,
+            queueRelease: cutoffQueueRelease,
+          }}
+          pendingState={{
+            items: pendingItems,
+            total: pendingTotal,
+            loading: pendingLoading,
+            hasMore: pendingHasMore,
+            loadingMore: pendingLoadingMore,
+            refreshItems: refreshPending,
+            loadMoreItems: loadMorePending,
+            forceGrab: forceGrabPending,
+            dismiss: dismissPending,
+          }}
+        />
       </div>
       {replaceConflictDialog}
     </>

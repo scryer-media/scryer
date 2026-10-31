@@ -143,7 +143,7 @@ async fn assert_refused_end_releases_the_job(end: RunEnd, expected_status: JobRu
         .expect_err("the store error reaches the caller");
 
     assert!(
-        matches!(&error, AppError::Repository(message) if message.contains("refused the terminal write")),
+        matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } | AppError::RepositoryFailed { message, .. } if message.contains("refused the terminal write")),
         "{error:?}"
     );
     assert_eq!(

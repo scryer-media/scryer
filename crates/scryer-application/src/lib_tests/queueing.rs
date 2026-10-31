@@ -1,6 +1,81 @@
 use super::*;
 
 #[tokio::test]
+async fn manual_grab_retains_scope_history_when_client_item_disappears() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let scopes = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    *submissions.presence_scopes.lock().await = Some(scopes.clone());
+    let (base_app, user) = bootstrap_with_acquisition_tracking(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        scopes.clone(),
+    );
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Manual Missing History".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let release_title = "Manual.Missing.History.2026.1080p.WEB-DL";
+    app.queue_existing_title_download(
+        &user,
+        &title.id,
+        QueuedReleaseSelection {
+            indexer_id: None,
+            source_hint: Some("https://example.invalid/manual-missing.nzb".into()),
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some(release_title.into()),
+            source_password: None,
+            info_hash_hint: None,
+            size_bytes: None,
+            seeders: None,
+        },
+        SubmissionScope::Title,
+        SubmissionConflictPolicy::Abort,
+    )
+    .await
+    .unwrap();
+    let submission = submissions.store.lock().await[0].clone();
+    let locator = ClientJobLocator::new(
+        submission.download_client_id.as_deref(),
+        &submission.download_client_type,
+        &submission.download_client_item_id,
+    );
+    registry.bind(locator.clone(), submission.download_id).await;
+    let claimed = scopes.store.lock().await[0].clone();
+    assert_eq!(claimed.status, AcquisitionScopeStatus::Grabbed);
+    assert!(!claimed.id.is_empty());
+    let original: serde_json::Value =
+        serde_json::from_str(claimed.grabbed_release.as_deref().unwrap()).unwrap();
+    assert_eq!(original["title"], release_title);
+    assert_eq!(
+        original["download_id"],
+        serde_json::json!(submission.download_id)
+    );
+
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &locator).await;
+    crate::app_usecase_integration::drop_source_removed_from_client(&app, &locator).await;
+    let reopened = scopes.store.lock().await[0].clone();
+    assert_eq!(reopened.id, claimed.id);
+    assert_eq!(reopened.status, AcquisitionScopeStatus::Wanted);
+    let retained: serde_json::Value =
+        serde_json::from_str(reopened.grabbed_release.as_deref().unwrap()).unwrap();
+    assert_eq!(retained["grabbed_at"], original["grabbed_at"]);
+    assert_eq!(retained["title"], original["title"]);
+    assert_eq!(retained["missing_download_id"], original["download_id"]);
+}
+
+#[tokio::test]
 async fn location_move_drains_an_already_admitted_download_submission() {
     let client = Arc::new(StubDownloadClient::default());
     let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -272,6 +347,8 @@ async fn canonical_submission_holds_artifact_lease_until_client_accepts() {
     let (mut app, user) = bootstrap();
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     app.services.workflow.download_submissions = download_submissions.clone();
+    app.services.workflow.acquisition_scope_states =
+        Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let active = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     app.services.integrations.indexer_artifact_resolver = Some(Arc::new(Resolver {
@@ -318,6 +395,10 @@ async fn canonical_submission_holds_artifact_lease_until_client_accepts() {
 #[tokio::test]
 async fn add_title_and_queue_sends_download_job() {
     let (app, user) = bootstrap();
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_acquisition_scope_states(Arc::new(TrackingAcquisitionScopeStateRepo::default()))
+    });
     let (title, job_id) = app
         .add_title_and_queue_download(
             &user,
@@ -345,6 +426,10 @@ async fn add_title_and_queue_sends_download_job() {
 #[tokio::test]
 async fn queueing_an_accepted_release_records_a_grab_for_its_indexer() {
     let (app, user, grabs) = bootstrap_with_grab_recorder();
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_acquisition_scope_states(Arc::new(TrackingAcquisitionScopeStateRepo::default()))
+    });
 
     let (_title, _job_id) = app
         .add_title_and_queue_download(
@@ -383,6 +468,10 @@ async fn queueing_an_accepted_release_records_a_grab_for_its_indexer() {
 #[tokio::test]
 async fn queueing_without_an_indexer_identity_records_no_grab() {
     let (app, user, grabs) = bootstrap_with_grab_recorder();
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_acquisition_scope_states(Arc::new(TrackingAcquisitionScopeStateRepo::default()))
+    });
 
     app.add_title_and_queue_download(
         &user,
@@ -1019,6 +1108,10 @@ async fn a_deleted_download_stops_conflicting_new_submissions_for_its_scope() {
         pending_releases,
         download_queue_commands.clone(),
     );
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_acquisition_scope_states(Arc::new(TrackingAcquisitionScopeStateRepo::default()))
+    });
     let title = app
         .add_title(
             &user,

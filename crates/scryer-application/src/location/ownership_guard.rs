@@ -549,7 +549,10 @@ impl LocationOwnershipDenied {
     /// conversion into [`AppError`] makes `Ok(())` ambiguous in the crate's many
     /// inferred-error closures.
     pub fn into_app_error(self) -> AppError {
-        AppError::Validation(self.message())
+        AppError::validation_refused(
+            crate::error_reasons::location::OWNERSHIP_BUSY,
+            self.message(),
+        )
     }
 }
 

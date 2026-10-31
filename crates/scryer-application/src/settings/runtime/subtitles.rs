@@ -144,28 +144,20 @@ impl AppUseCase {
             .await?;
 
         if input.search_interval_hours < 1 {
-            return Err(AppError::Validation(
-                "subtitle search interval must be at least 1 hour".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SUBTITLE_SEARCH_INTERVAL_OUT_OF_RANGE, "subtitle search interval must be at least 1 hour".to_string()));
         }
         if !(0..=100).contains(&input.minimum_score_series)
             || !(0..=100).contains(&input.minimum_score_movie)
         {
-            return Err(AppError::Validation(
-                "subtitle minimum score percentages must be between 0 and 100".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SUBTITLE_MINIMUM_SCORE_PERCENTAGES_OUT_OF_RANGE, "subtitle minimum score percentages must be between 0 and 100".to_string()));
         }
         if !(0..=100).contains(&input.sync_threshold_series)
             || !(0..=100).contains(&input.sync_threshold_movie)
         {
-            return Err(AppError::Validation(
-                "subtitle sync threshold percentages must be between 0 and 100".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SUBTITLE_SYNC_THRESHOLD_PERCENTAGES_OUT_OF_RANGE, "subtitle sync threshold percentages must be between 0 and 100".to_string()));
         }
         if input.sync_max_offset_seconds < 0 {
-            return Err(AppError::Validation(
-                "subtitle sync max offset cannot be negative".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SUBTITLE_SYNC_MAX_OFFSET_CANNOT_NEGATIVE, "subtitle sync max offset cannot be negative".to_string()));
         }
 
         let languages = normalize_subtitle_languages(input.languages);

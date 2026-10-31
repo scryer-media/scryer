@@ -18,7 +18,9 @@ export type ProviderCatalogFamily =
   | "DOWNLOAD_CLIENT"
   | "ARCHIVE_EXTRACTOR";
 
-function isProviderCatalogFamily(value: string): value is ProviderCatalogFamily {
+function isProviderCatalogFamily(
+  value: string,
+): value is ProviderCatalogFamily {
   return PROVIDER_CATALOG_FAMILIES.has(value as ProviderCatalogFamily);
 }
 
@@ -40,7 +42,8 @@ export function useProviderCatalogSubscription(
     request: { query: providerCatalogChangedSubscription },
     onNext(result) {
       const families =
-        result.data?.providerCatalogChanged?.filter(isProviderCatalogFamily) ?? [];
+        result.data?.providerCatalogChanged?.filter(isProviderCatalogFamily) ??
+        [];
       if (families.length > 0) {
         onChangedRef.current(families);
       }

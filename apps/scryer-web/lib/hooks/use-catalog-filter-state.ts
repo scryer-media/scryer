@@ -80,11 +80,13 @@ export function useCatalogFilterState(activeFacet: Facet) {
     [update],
   );
   const setTitleQuickFilters = useCallback(
-    (next: SetStateAction<CatalogFilterState["quick"]>) => update("quick", next),
+    (next: SetStateAction<CatalogFilterState["quick"]>) =>
+      update("quick", next),
     [update],
   );
   const setAdvancedTitleFilters = useCallback(
-    (next: SetStateAction<CatalogFilterState["advanced"]>) => update("advanced", next),
+    (next: SetStateAction<CatalogFilterState["advanced"]>) =>
+      update("advanced", next),
     [update],
   );
   const clearFilters = useCallback(() => {

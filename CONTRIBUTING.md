@@ -30,6 +30,10 @@ Keep the pull request description current. Explain the problem, the chosen
 boundary, behavior changes, migrations or compatibility effects, and the exact
 validation performed. Call out anything relevant that was not run.
 
+For pull requests with UX changes, include screenshots in the pull request
+description so reviewers can assess the affected screens and states. Include
+before-and-after screenshots when changing an existing experience.
+
 ## Local Validation
 
 Follow the [validation cadence in AGENTS.md](AGENTS.md#validation-cadence).
@@ -52,24 +56,78 @@ cargo xtask ci clippy
 cargo nextest run --workspace --locked --no-fail-fast
 ```
 
-For frontend changes, use the affected scripts and focused tests from
-`apps/scryer-web`. Select checks for the changed behavior; the full frontend
-validation belongs at the completed integration checkpoint when relevant:
-
-```bash
-npm run lint
-npm run check:react-compiler
-npm run test:graphql-compat
-npm run build
-```
-
-Use the checked-in package lock when installing dependencies. Documentation-only
-changes need diff, link, and consistency checks rather than application builds
+Documentation-only changes need diff, link, and consistency checks rather than application builds
 or test sweeps. Report the validation performed and the checks deferred under
 the cadence; expected deferral does not block review.
 
 Platform, migration, plugin SDK, release, and end-to-end changes have additional
 tasks discoverable through `cargo xtask --help` and current CI.
+
+### Testing The Web App
+
+Use the Node version configured in the `web` job of
+[the CI workflow](.github/workflows/scryer.yml) (currently Node 25). From the
+repository root, install the exact dependencies in the checked-in lockfile:
+
+```bash
+cd apps/scryer-web
+npm ci
+```
+
+Run the following commands from `apps/scryer-web`. During implementation, select
+the checks relevant to the change and run individual test files, for example:
+
+```bash
+npm run typecheck
+node --test lib/i18n/index.test.ts
+npx prettier --check lib/i18n/index.ts lib/i18n/index.test.ts
+```
+
+Replace those example paths with the files you changed and their relevant tests.
+For translation changes, also run `npm run check:i18n`. Add behavioral regression
+tests for fixes; a successful build does not exercise the application.
+
+At the completed integration checkpoint, reproduce the web CI checks:
+
+```bash
+npm run lint
+npm run format:check
+npm test
+SCRYER_GRAPHQL_URL=/graphql \
+  SCRYER_METADATA_GATEWAY_GRAPHQL_URL=https://smg.scryer.media/graphql \
+  npm run build
+test -f dist/index.html
+```
+
+The environment-variable syntax above is for a POSIX shell; in other shells,
+set those variables before running `npm run build`.
+
+- `lint` runs TypeScript checking, translation-key validation, tests of that
+  validator, and ESLint. `build` does not replace these checks.
+- `format:check` verifies formatting without rewriting files.
+- `npm test` runs the tests under `lib/`; it does not run browser end-to-end tests.
+- `build` creates the production bundle in `dist/`, including React Compiler
+  processing and the chunk report. Verify that `dist/index.html` exists and
+  investigate build errors and unexpected chunk changes.
+
+Also run `npm run check:react-compiler` for compiler-related changes and
+`npm run test:graphql-compat` for changes to the GraphQL compatibility checker.
+Include both in full frontend integration validation. These are separate scripts;
+neither is included in `npm test` or the current web CI job.
+
+Inspect changed UI behavior in a browser against your own development instance.
+From the repository root, `cargo xtask serve` starts the backend and Vite together;
+use `cargo xtask serve --help` for its options. Check the affected workflow,
+refresh and direct navigation, relevant loading/error/empty states, keyboard
+access, and narrow layouts. Vite development mode does not exercise the production
+React Compiler, so a working development page is not proof that the production
+build works. `npm run preview` serves the built assets for a production-bundle
+smoke check, but does not start a Scryer backend; backend-dependent flows require
+a correctly connected development backend as well.
+
+In the pull request, distinguish automated checks, production-bundle checks,
+and browser checks actually performed. Report deferred checks and failures;
+do not describe a build-only check as end-to-end validation.
 
 ## Tests And Test Data
 

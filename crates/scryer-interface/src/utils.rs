@@ -84,9 +84,12 @@ pub(crate) fn normalize_title_tags(tags: Vec<String>) -> GqlResult<Vec<String>> 
         .into_iter()
         .find(|prefix| tags.iter().any(|tag| tag.starts_with(prefix)))
     {
-        return Err(to_gql_error(scryer_application::AppError::Validation(
-            format!("tags cannot set {prefix}*; use the title options instead"),
-        )));
+        return Err(to_gql_error(
+            scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_RESERVED_TAG,
+                format!("tags cannot set {prefix}*; use the title options instead"),
+            ),
+        ));
     }
     Ok(tags)
 }

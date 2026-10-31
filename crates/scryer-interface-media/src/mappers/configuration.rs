@@ -136,8 +136,9 @@ pub fn provider_config_values_to_json(
     for value in values {
         let key = value.key.trim();
         if key.is_empty() {
-            return Err(scryer_application::AppError::Validation(
-                "config value key is required".to_string(),
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_CONFIG_KEY_REQUIRED,
+                "config value key is required",
             ));
         }
 
@@ -157,9 +158,10 @@ pub fn provider_config_values_to_json(
             continue;
         }
         if provided_count > 1 {
-            return Err(scryer_application::AppError::Validation(format!(
-                "config value '{key}' must provide exactly one value"
-            )));
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_CONFIG_VALUE_AMBIGUOUS,
+                format!("config value '{key}' must provide exactly one value"),
+            ));
         }
 
         let json_value = if value.clear_secret.unwrap_or(false) {
@@ -176,9 +178,10 @@ pub fn provider_config_values_to_json(
             serde_json::Number::from_f64(value.float_value.unwrap_or_default())
                 .map(Value::Number)
                 .ok_or_else(|| {
-                    scryer_application::AppError::Validation(format!(
-                        "config value '{key}' has an invalid float value"
-                    ))
+                    scryer_application::AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_CONFIG_NUMBER_INVALID,
+                        format!("config value '{key}' has an invalid float value"),
+                    )
                 })?
         };
 

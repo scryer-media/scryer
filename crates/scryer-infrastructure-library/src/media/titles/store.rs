@@ -211,7 +211,8 @@ impl TitleStore {
                     match title_ids.as_slice() {
                         [] => Ok(None),
                         [existing_id] => load_title_tx(tx, existing_id, true).await,
-                        _ => Err(AppError::Validation(
+                        _ => Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_EXTERNAL_ID_AMBIGUOUS,
                             "external ids already map to multiple titles".to_string(),
                         )),
                     }
@@ -2883,7 +2884,8 @@ impl TitleRepository for TitleStore {
         root_folder_id: Option<String>,
     ) -> AppResult<Title> {
         if name.is_none() && facet.is_none() && tags.is_none() && root_folder_id.is_none() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TITLE_UPDATE_EMPTY,
                 "at least one title field must be provided".to_string(),
             ));
         }
@@ -2906,18 +2908,14 @@ impl TitleRepository for TitleStore {
                 if let Some(name) = name {
                     let normalized = name.trim();
                     if normalized.is_empty() {
-                        return Err(AppError::Validation(
-                            "title name cannot be empty".to_string(),
-                        ));
+                        return Err(AppError::validation_refused(crate::error_reasons::MEDIA_TITLE_NAME_EMPTY, "title name cannot be empty".to_string()));
                     }
                     title.name = normalized.to_string();
                 }
                 if let Some(facet) = facet {
                     if facet != title.facet {
-                        return Err(AppError::Validation(
-                            "changing a title facet is not supported because titles cannot move between libraries"
-                                .to_string(),
-                        ));
+                        return Err(AppError::validation_refused(crate::error_reasons::MEDIA_TITLE_FACET_CHANGE_UNSUPPORTED, "changing a title facet is not supported because titles cannot move between libraries"
+                                .to_string()));
                     }
                     title.facet = facet;
                 }
@@ -3101,7 +3099,10 @@ impl TitleRepository for TitleStore {
                 )
                 .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("title {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::TITLE_NOT_FOUND,
+                        format!("title {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -3154,7 +3155,8 @@ impl TitleRepository for TitleStore {
         let root_folder_id = root_folder_id.trim().to_string();
         let drop_tag_prefixes = drop_tag_prefixes.to_vec();
         if library_id.is_empty() || root_folder_id.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_TRANSFER_DESTINATION_REQUIRED,
                 "a transfer needs both a destination library and a destination root".to_string(),
             ));
         }
@@ -3172,9 +3174,10 @@ impl TitleRepository for TitleStore {
                 )
                 .await?;
                 if library.is_none() {
-                    return Err(AppError::Validation(format!(
-                        "library {library_id} does not exist"
-                    )));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_DESTINATION_LIBRARY_NOT_FOUND,
+                        format!("library {library_id} does not exist"),
+                    ));
                 }
 
                 // Facet compatibility is the classifier's rule (FR-017) and is
@@ -3309,9 +3312,10 @@ fn single_slug_match(mut titles: Vec<Title>, slug: &str) -> AppResult<Option<Tit
     match titles.len() {
         0 => Ok(None),
         1 => Ok(titles.pop()),
-        _ => Err(AppError::Validation(format!(
-            "slug '{slug}' maps to multiple titles"
-        ))),
+        _ => Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_SLUG_AMBIGUOUS,
+            format!("slug '{slug}' maps to multiple titles"),
+        )),
     }
 }
 
@@ -3738,9 +3742,17 @@ fn merge_optional_title_text(target: &mut Option<String>, incoming: Option<Strin
 }
 
 fn merge_title_external_ids(target: &mut Vec<ExternalId>, incoming: Vec<ExternalId>) {
+    // Replace each provider's previous set once, not once per incoming id:
+    // a provider can supply several identities with distinct entity kinds.
+    target.retain(|candidate| {
+        !incoming
+            .iter()
+            .any(|external_id| external_id.source == candidate.source)
+    });
     for external_id in incoming {
-        target.retain(|candidate| candidate.source != external_id.source);
-        target.push(external_id);
+        if !target.contains(&external_id) {
+            target.push(external_id);
+        }
     }
 }
 
@@ -3788,7 +3800,10 @@ fn decode_title_tag_definition(row: &SqlRow) -> AppResult<TitleTagDefinition> {
 }
 
 fn duplicate_title_tag_label_error(label: &str) -> AppError {
-    AppError::Validation(format!("a tag named '{label}' already exists"))
+    AppError::validation_refused(
+        crate::error_reasons::TAG_ALREADY_EXISTS,
+        format!("a tag named '{label}' already exists"),
+    )
 }
 
 /// `EXISTS` predicate over one title's tag bag, comparing every element against
@@ -3857,9 +3872,12 @@ async fn load_title_tag_definition_tx_or_not_found(
     tx: &mut SqlTx<'_>,
     id: &str,
 ) -> AppResult<TitleTagDefinition> {
-    load_title_tag_definition_tx(tx, id)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))
+    load_title_tag_definition_tx(tx, id).await?.ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::MEDIA_TITLE_TAG_NOT_FOUND,
+            format!("title tag {id}"),
+        )
+    })
 }
 
 async fn load_title_tag_definition_by_label_tx(
@@ -4026,9 +4044,12 @@ pub(crate) fn apply_user_tag_patch(
         .filter(|tag| !is_reserved_title_tag(tag))
         .count();
     if user_tag_count > MAX_USER_TAGS_PER_TITLE {
-        return Err(AppError::Validation(format!(
-            "a title can carry at most {MAX_USER_TAGS_PER_TITLE} tags; this change would leave it with {user_tag_count}"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_TITLE_TAG_LIMIT_EXCEEDED,
+            format!(
+                "a title can carry at most {MAX_USER_TAGS_PER_TITLE} tags; this change would leave it with {user_tag_count}"
+            ),
+        ));
     }
     Ok(())
 }
@@ -5566,7 +5587,9 @@ async fn load_title_tx_or_not_found(
 ) -> AppResult<Title> {
     load_title_tx(tx, id, include_external_ids)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("title {id}")))
+        .ok_or_else(|| {
+            AppError::not_found_reason(crate::error_reasons::TITLE_NOT_FOUND, format!("title {id}"))
+        })
 }
 
 async fn load_title_canonical_tx_or_not_found(
@@ -5581,7 +5604,9 @@ async fn load_title_canonical_tx_or_not_found(
         PersistedTitleReadMode::Canonical,
     )
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("title {id}")))
+    .ok_or_else(|| {
+        AppError::not_found_reason(crate::error_reasons::TITLE_NOT_FOUND, format!("title {id}"))
+    })
 }
 
 async fn list_existing_title_ids_for_external_ids_tx(
@@ -5638,7 +5663,8 @@ async fn find_existing_title_for_create_tx(
             [] => {}
             [existing_id] => return load_title_tx(tx, existing_id, true).await,
             _ => {
-                return Err(AppError::Validation(
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::MEDIA_EXTERNAL_ID_AMBIGUOUS,
                     "external ids already map to multiple titles".to_string(),
                 ));
             }
@@ -5702,8 +5728,9 @@ pub(crate) async fn create_or_get_title_preserving_options_tx(
                     args.push(SqlArg::Text(id.value.clone()));
                 }
                 if conditions.is_empty() {
-                    return Err(AppError::Validation(
-                        "selected movie has no supported identity".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_MOVIE_IDENTITY_UNSUPPORTED,
+                        "selected movie has no supported identity",
                     ));
                 }
                 let present = SqlRuntime::fetch_optional(SqlExec::Tx(tx), &format!(
@@ -5771,11 +5798,14 @@ async fn create_title_tx(tx: &mut SqlTx<'_>, title: &Title) -> AppResult<()> {
     )
     .await?;
     if library.is_none() {
-        return Err(AppError::Validation(format!(
-            "library {} does not exist for facet {}",
-            title.library_id,
-            title.facet.as_str()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_FACET_LIBRARY_NOT_FOUND,
+            format!(
+                "library {} does not exist for facet {}",
+                title.library_id,
+                title.facet.as_str()
+            ),
+        ));
     }
 
     let args = title_write_args(title, scheduled_hydration_attempt(title), 0);
@@ -5806,10 +5836,13 @@ async fn resolve_pending_import_for_created_title_tx(
         )
         .await?;
         if rows != 1 {
-            return Err(AppError::Validation(format!(
-                "pending import {pending_import_id} could not be resolved for title {}",
-                title.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::MEDIA_PENDING_IMPORT_UNRESOLVED,
+                format!(
+                    "pending import {pending_import_id} could not be resolved for title {}",
+                    title.id
+                ),
+            ));
         }
         return Ok(());
     }
@@ -5840,10 +5873,13 @@ async fn resolve_pending_import_for_created_title_tx(
     )
     .await?;
     if rows != 1 {
-        return Err(AppError::Validation(format!(
-            "pending import {pending_import_id} could not be resolved for title {}",
-            title.id
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_PENDING_IMPORT_UNRESOLVED,
+            format!(
+                "pending import {pending_import_id} could not be resolved for title {}",
+                title.id
+            ),
+        ));
     }
     Ok(())
 }
@@ -6146,10 +6182,11 @@ async fn load_title_ratings_batch(
 
 fn is_title_external_id_conflict_error(error: &AppError) -> bool {
     matches!(
-        error,
-        AppError::Repository(message)
-            if message.contains("UNIQUE constraint failed")
-                || message.contains("duplicate key value violates unique constraint")
+        error.repository_kind(),
+        Some(
+            scryer_application::RepositoryErrorKind::UniqueViolation
+                | scryer_application::RepositoryErrorKind::TitleExternalIdConflict
+        )
     )
 }
 
@@ -6336,6 +6373,29 @@ mod tests {
     use super::*;
 
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[test]
+    fn external_id_merge_preserves_all_incoming_provider_identities() {
+        let tvdb = ExternalId::with_kind("tvdb", "series", "4242");
+        let series = ExternalId::with_kind("tmdb", "series", "136315");
+        let movie = ExternalId::with_kind("tmdb", "movie", "9001");
+        let another_movie = ExternalId::with_kind("tmdb", "movie", "9002");
+        let mut stored = vec![tvdb.clone(), ExternalId::new("tmdb", "obsolete")];
+        let incoming = vec![
+            series.clone(),
+            movie.clone(),
+            another_movie.clone(),
+            series.clone(),
+        ];
+
+        merge_title_external_ids(&mut stored, incoming.clone());
+        assert_eq!(stored, vec![tvdb, series, movie, another_movie]);
+        let first = stored.clone();
+        merge_title_external_ids(&mut stored, incoming);
+        assert_eq!(stored, first, "repeated hydration must be idempotent");
+        merge_title_external_ids(&mut stored, vec![]);
+        assert_eq!(stored, first, "absent metadata must preserve stored ids");
+    }
 
     #[tokio::test]
     async fn external_id_lookup_in_facet_respects_the_id_kind() {
@@ -7047,7 +7107,10 @@ mod tests {
         let error = TitleRepository::delete(&store, "missing-title")
             .await
             .expect_err("missing title should report not found");
-        assert!(matches!(error, AppError::NotFound(_)));
+        assert!(matches!(
+            error,
+            AppError::NotFound(_) | AppError::NotFoundReason { .. }
+        ));
         assert_eq!(learning_count(&pool, "missing-title").await, 1);
     }
 

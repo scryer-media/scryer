@@ -50,7 +50,9 @@ export function ListTitleFlyoutBody({
   footer,
 }: ListTitleFlyoutBodyProps) {
   const art = backgroundUrl ?? posterUrl ?? null;
-  const facts = [kindLabel, year, formatRuntimeFromMinutes(runtimeMinutes)].filter(Boolean).join(" · ");
+  const facts = [kindLabel, year, formatRuntimeFromMinutes(runtimeMinutes)]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div data-ui="list-title-flyout">
@@ -72,7 +74,11 @@ export function ListTitleFlyoutBody({
         <div className="relative flex items-end gap-3 px-4 pb-3 pt-4">
           {posterUrl ? (
             <div className="w-[84px] flex-none overflow-hidden rounded-[8px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] shadow-lg">
-              <TitlePoster src={posterUrl} alt="" className="aspect-[2/3] h-full w-full object-cover" />
+              <TitlePoster
+                src={posterUrl}
+                alt=""
+                className="aspect-[2/3] h-full w-full object-cover"
+              />
             </div>
           ) : null}
           <div className="min-w-0 space-y-1.5">
@@ -82,14 +88,19 @@ export function ListTitleFlyoutBody({
                 {facts}
               </p>
             ) : null}
-            <h3 className="font-display text-base font-semibold leading-snug">{title}</h3>
+            <h3 className="font-display text-base font-semibold leading-snug">
+              {title}
+            </h3>
             <TitleRatingsDisplay externalRatings={externalRatings} />
           </div>
         </div>
       </div>
       <div className="space-y-2.5 px-4 pb-4 pt-1">
         {overview ? (
-          <p data-ui="list-title-flyout-overview" className="line-clamp-6 text-sm leading-relaxed text-[var(--scry-ink2)]">
+          <p
+            data-ui="list-title-flyout-overview"
+            className="line-clamp-6 text-sm leading-relaxed text-[var(--scry-ink2)]"
+          >
             {overview}
           </p>
         ) : null}
@@ -111,7 +122,9 @@ export function ListTitleFlyoutBody({
             <time dateTime={releaseDate}>{releaseDate}</time>
           </p>
         ) : null}
-        {footer ? <div className="text-xs text-[var(--scry-muted)]">{footer}</div> : null}
+        {footer ? (
+          <div className="text-xs text-[var(--scry-muted)]">{footer}</div>
+        ) : null}
       </div>
     </div>
   );

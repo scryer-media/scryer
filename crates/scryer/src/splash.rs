@@ -22,6 +22,7 @@ pub(crate) enum BootstrapStatus {
 pub(crate) struct SplashState {
     pub(crate) status_rx: watch::Receiver<BootstrapStatus>,
     pub(crate) migration_progress: MigrationProgress,
+    pub(crate) restore: std::sync::Arc<scryer_application::RestoreCoordinator>,
 }
 
 /// The `migrations` object the health check adds while bootstrapping, once the
@@ -54,6 +55,18 @@ fn migration_progress_json(progress: &MigrationProgress) -> serde_json::Value {
 /// Automation that needs the *API* up (not just the process) uses
 /// `GET /health/ready` (see [`splash_ready_handler`]).
 pub(crate) async fn splash_health_handler(State(state): State<SplashState>) -> Response {
+    if state.restore.blocks_application() {
+        let job = state.restore.snapshot();
+        return Json(serde_json::json!({
+            "status": "restoring", "ready": false,
+            "importPercent": job.as_ref().and_then(|job| job.import_percent),
+            "phase": job.as_ref().map(|job| job.phase),
+            "canRetry": matches!(*state.status_rx.borrow(), BootstrapStatus::Ready(_))
+                && state.restore.can_retry(),
+            "recoveryRequired": job.as_ref().is_some_and(|job| matches!(job.phase,
+                scryer_application::RestoreJobPhase::Failed | scryer_application::RestoreJobPhase::Interrupted)),
+        })).into_response();
+    }
     let status = state.status_rx.borrow().clone();
     match status {
         BootstrapStatus::Migrating => Json(serde_json::json!({
@@ -83,6 +96,13 @@ pub(crate) async fn splash_health_handler(State(state): State<SplashState>) -> R
 /// `startupProbe` pointed here would kill a long migration; those belong on
 /// `/health`.
 pub(crate) async fn splash_ready_handler(State(state): State<SplashState>) -> Response {
+    if state.restore.blocks_application() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "restoring", "ready": false})),
+        )
+            .into_response();
+    }
     let status = state.status_rx.borrow().clone();
     match status {
         BootstrapStatus::Migrating => (
@@ -144,6 +164,51 @@ pub(crate) async fn splash_fallback_handler(
     request: axum::extract::Request,
 ) -> Response {
     let status = state.status_rx.borrow().clone();
+    let control_route = (request.uri().path() == "/graphql"
+        && request.method() == axum::http::Method::POST)
+        || request.uri().path() == "/authless-client";
+    let _admission =
+        if !control_route && matches!(status, BootstrapStatus::Ready(_)) {
+            match state.restore.admit_request().await {
+                Ok(guard) => Some(guard),
+                Err(_) => {
+                    if request.method() == axum::http::Method::GET
+                        && request
+                            .headers()
+                            .get(header::ACCEPT)
+                            .and_then(|value| value.to_str().ok())
+                            .is_some_and(|value| value.contains("text/html"))
+                    {
+                        return Html(maintenance_html(None, true)).into_response();
+                    }
+                    return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+                    "reason": scryer_application::restore_refusal::RESTORE_MAINTENANCE_ACTIVE,
+                    "ready": false
+                }))).into_response();
+                }
+            }
+        } else {
+            None
+        };
+    if state.restore.blocks_application() && !matches!(status, BootstrapStatus::Ready(_)) {
+        if request.method() == axum::http::Method::GET
+            && request
+                .headers()
+                .get(header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/html"))
+        {
+            return Html(maintenance_html(None, true)).into_response();
+        }
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "reason": scryer_application::restore_refusal::RESTORE_MAINTENANCE_ACTIVE,
+                "ready": false
+            })),
+        )
+            .into_response();
+    }
     match status {
         BootstrapStatus::Ready(router) => router
             .oneshot(request)
@@ -192,12 +257,19 @@ pub(crate) fn build_splash_router(
 /// database…" with a bar and a count while migrations are being applied, and
 /// "Starting up…" otherwise, then keeps both current from the health check.
 fn splash_html(migration_progress: Option<(usize, usize)>) -> String {
+    maintenance_html(migration_progress, false)
+}
+
+fn maintenance_html(migration_progress: Option<(usize, usize)>, restoring: bool) -> String {
     let base_path = BasePath::from_env();
     let health_url = base_path.join("/health");
     let loading_mark_url = base_path.join(SPLASH_LOADING_MARK_PATH);
     let loading_mark_still_url = base_path.join(SPLASH_LOADING_MARK_STILL_PATH);
     let wordmark_url = base_path.join(SPLASH_WORDMARK_PATH);
+    let graphql_url = base_path.join("/graphql");
+    let proof_url = base_path.join("/authless-client");
     let (status_text, progress_hidden, completed, total) = match migration_progress {
+        _ if restoring => ("Restoring backup&hellip;", " hidden", 0, 0),
         Some((completed, total)) if completed < total => {
             ("Upgrading database&hellip;", "", completed, total)
         }
@@ -231,6 +303,13 @@ fn splash_html(migration_progress: Option<(usize, usize)>) -> String {
     </div>
     <div class="progress-count">{completed} of {total} migrations applied</div>
   </div>
+  <form id="restore-retry" hidden>
+    <p class="detail">Restore stopped safely. Enter the backup password to try again.</p>
+    <label>Backup password <input id="restore-password" type="password" autocomplete="off"/></label>
+    <label>Setup code (if your first-run restore requires one) <input id="restore-setup-code" autocomplete="one-time-code" maxlength="32"/></label>
+    <button type="submit">Retry restore</button>
+    <p id="retry-message" class="detail" role="status"></p>
+  </form>
 </main>
 <script>
 (function() {{
@@ -239,6 +318,52 @@ fn splash_html(migration_progress: Option<(usize, usize)>) -> String {
   var track = document.querySelector(".progress-track");
   var fill = document.querySelector(".progress-fill");
   var count = document.querySelector(".progress-count");
+  var retry = document.getElementById("restore-retry");
+  var retrying = false;
+  retry.addEventListener("submit", async function(event) {{
+    event.preventDefault();
+    if (retrying) return;
+    retrying = true;
+    var button = retry.querySelector("button");
+    var message = document.getElementById("retry-message");
+    button.disabled = true;
+    message.textContent = "Starting restore…";
+    try {{
+      var headers = {{"Content-Type": "application/json"}};
+      var setupCode = document.getElementById("restore-setup-code").value.trim() || null;
+      var token = sessionStorage.getItem("scryer_auth_token") || localStorage.getItem("scryer_auth_token_persistent");
+      if (token) headers.Authorization = "Bearer " + token;
+      else if (!setupCode) {{
+        var proofResponse = await fetch("{proof_url}", {{credentials: "include", signal: AbortSignal.timeout(10000)}});
+        // First-run setup has no web-client proof; the server decides from here.
+        if (proofResponse.ok) {{
+          var proof = await proofResponse.json();
+          headers["x-scryer-web-client"] = proof.proof;
+        }}
+      }}
+      async function request(query, variables) {{
+        var response = await fetch("{graphql_url}", {{method: "POST", credentials: "include", headers: headers, signal: AbortSignal.timeout(10000),
+          body: JSON.stringify({{query: query, variables: variables}})}});
+        var result = await response.json();
+        if (!response.ok || result.errors) throw new Error("The restore could not be started. Check authentication and retry.");
+        return result.data;
+      }}
+      var current = await request("query($setupCode: String) {{ restoreStatus(setupCode: $setupCode) {{ uploadId }} }}", {{setupCode: setupCode}});
+      if (!current.restoreStatus) throw new Error("The restore attempt is no longer available.");
+      var password = document.getElementById("restore-password");
+      var value = password.value;
+      password.value = "";
+      await request("mutation($id: ID!, $password: String, $setupCode: String) {{ startApplyRestoreBundle(uploadId: $id, password: $password, setupCode: $setupCode) {{ id }} }}",
+        {{id: current.restoreStatus.uploadId, password: value || null, setupCode: setupCode}});
+      retry.hidden = true;
+      message.textContent = "";
+    }} catch (error) {{
+      message.textContent = error.message;
+    }} finally {{
+      retrying = false;
+      button.disabled = false;
+    }}
+  }});
   function showProgress(m) {{
     var upgrading = !!m && m.completed < m.total;
     status.textContent = upgrading ? "Upgrading database…" : "Starting up…";
@@ -254,6 +379,25 @@ fn splash_html(migration_progress: Option<(usize, usize)>) -> String {
       .then(function(r) {{ return r.json(); }})
       .then(function(d) {{
         if (d.status === "ok") {{ location.reload(); return; }}
+        if (d.status === "restoring") {{
+          retry.hidden = !d.canRetry;
+          var percent = d.importPercent;
+          var importing = typeof percent === "number" && percent < 100;
+          progress.hidden = !importing || d.recoveryRequired || d.phase === "cancelling";
+          status.textContent = d.recoveryRequired ? "Restore needs recovery" :
+            d.phase === "cancelling" ? "Cancelling safely… Keep Scryer running." :
+            importing ? "Importing database… " + percent + "%" :
+            percent === 100 ? "Finalizing…" : "Restoring backup… Keep Scryer running.";
+          if (importing && !d.recoveryRequired) {{
+            fill.style.width = percent + "%";
+            track.setAttribute("aria-label", "Database import");
+            track.setAttribute("aria-valuemax", "100");
+            track.setAttribute("aria-valuenow", percent);
+            count.textContent = "";
+          }}
+          setTimeout(poll, 1000);
+          return;
+        }}
         if (d.status === "error") {{
           document.querySelector(".loading-mark").style.display = "none";
           progress.hidden = true;
@@ -311,12 +455,8 @@ const SPLASH_STYLE: &str = r#"
 body {
   min-height: 100vh;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-  /* The web UI's dark shell background: indigo, sky and emerald glows over the page gradient. */
-  background:
-    radial-gradient(circle at 14% 10%, rgba(91, 100, 255, 0.1), transparent 26rem),
-    radial-gradient(circle at 86% 14%, rgba(56, 189, 248, 0.06), transparent 28rem),
-    radial-gradient(circle at 60% 92%, rgba(16, 185, 129, 0.05), transparent 34rem),
-    linear-gradient(180deg, #070d1d 0%, #040814 42%, #02050c 100%);
+  /* The web UI's dark shell background. */
+  background: linear-gradient(180deg, #070d1d 0%, #040814 42%, #02050c 100%);
   background-attachment: fixed;
   color: #dbe5ff;
   display: grid;
@@ -332,7 +472,7 @@ main {
   max-width: 70vw;
   height: auto;
   margin: 0 auto 1.5rem;
-  filter: drop-shadow(0 6px 14px rgba(2, 6, 23, 0.7)) drop-shadow(0 0 18px rgba(91, 100, 255, 0.18));
+  filter: drop-shadow(0 6px 14px rgba(2, 6, 23, 0.7));
 }
 .status {
   font-size: 0.95rem;
@@ -419,6 +559,7 @@ mod tests {
             SplashState {
                 status_rx,
                 migration_progress,
+                restore: Default::default(),
             },
             CorsConfig {
                 allow_all: false,
@@ -444,6 +585,115 @@ mod tests {
             .expect("body");
         let payload = serde_json::from_slice(&bytes).expect("json body");
         (status, payload)
+    }
+
+    #[tokio::test]
+    async fn background_restore_keeps_liveness_but_blocks_readiness_and_normal_routes() {
+        let directory = tempfile::tempdir().unwrap();
+        let restore = std::sync::Arc::new(scryer_application::RestoreCoordinator::default());
+        restore
+            .start(
+                directory.path(),
+                "fixture",
+                scryer_application::RestoreJobKind::Apply,
+            )
+            .unwrap();
+        let deadline = scryer_application::RestoreDeadline::new();
+        deadline.begin_import(4);
+        deadline.imported_row();
+        restore.track_deadline(&deadline);
+        let (status_tx, status_rx) = watch::channel(BootstrapStatus::Ready(
+            Router::new().route("/api/control", get(|| async { StatusCode::OK })),
+        ));
+        let app = build_splash_router(
+            SplashState {
+                status_rx,
+                migration_progress: Default::default(),
+                restore,
+            },
+            CorsConfig {
+                allow_all: false,
+                allowed_origins: vec![],
+            },
+            BasePath::from_raw(Some("/scryer/")),
+        );
+        let (status, body) = get_json(app.clone(), "/scryer/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "restoring");
+        assert_eq!(body["ready"], false);
+        assert_eq!(body["importPercent"], 25);
+        // Import completion is not readiness: validation and startup still own
+        // maintenance access after the percentage reaches 100.
+        deadline.finish_import();
+        let (status, body) = get_json(app.clone(), "/scryer/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["importPercent"], 100);
+        assert_eq!(body["ready"], false);
+        assert_eq!(
+            get_json(app.clone(), "/scryer/health/ready").await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let (status, body) = get_json(app.clone(), "/scryer/api/control").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["reason"], "RESTORE_MAINTENANCE_ACTIVE");
+        // Credentials and different callers cannot skip the outer maintenance
+        // boundary, even when the normal router has already been initialized.
+        for method in ["GET", "POST", "DELETE"] {
+            for (header, credential) in [
+                ("authorization", "Bearer fixture-session"),
+                ("x-api-key", "fixture-key"),
+                ("cookie", "session=fixture-session"),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri("/scryer/api/control")
+                            .header(header, credential)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+        for path in ["/scryer/", "/scryer/settings", "/scryer/library"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("accept", "text/html")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                response.headers()[axum::http::header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html")
+            );
+        }
+        status_tx.send(BootstrapStatus::Migrating).unwrap();
+        let (status, body) = get_json(app.clone(), "/scryer/api/control").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["reason"], "RESTORE_MAINTENANCE_ACTIVE");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/scryer/graphql")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

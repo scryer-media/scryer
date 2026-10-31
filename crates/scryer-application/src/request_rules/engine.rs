@@ -234,9 +234,10 @@ impl AppUseCase {
                     }
                 });
                 RequestRulesEngine::build(&policies).map_err(|error| {
-                    AppError::Validation(format!(
-                        "failed to build the request rules engine: {error}"
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::request_rules::FAILED_BUILD_REQUEST_RULES_ENGINE,
+                        format!("failed to build the request rules engine: {error}"),
+                    )
                 })?
             }
         };

@@ -25,7 +25,7 @@ use scryer_interface::RequestLoaders;
 use scryer_interface::context::{
     ApiKeyManagementSession, AuthRuntimeStateHandle, AuthlessDefaultSession, ConnectionAuthEpoch,
     InteractiveSession, LoginAttemptLimiter, MfaVerification, OAuthActorSession, RequestClientIp,
-    RequestSessionPersistence,
+    RequestSessionPersistence, to_gql_error,
 };
 use scryer_logging::{ActorContext, LogContext, RequestContext, context_span, update_context};
 use std::collections::HashMap;
@@ -1046,7 +1046,9 @@ pub(crate) async fn graphql_ws_handler(
 
     let initial_actor = match resolve_actor(&state, &headers, Some(remote_addr)).await {
         Ok(actor) => actor,
-        Err(AppError::Unauthorized(_)) => return oauth_access_revoked_http_response(),
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+            return oauth_access_revoked_http_response();
+        }
         Err(error) => {
             tracing::error!(error = %error, "failed to resolve GraphQL WebSocket actor");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -1095,6 +1097,10 @@ pub(crate) async fn graphql_ws_handler(
         .max_frame_size(GRAPHQL_MAX_MESSAGE_BYTES)
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| async move {
+            let restore = app.restore_coordinator().clone();
+            let Ok(_admission) = restore.admit_request().await else {
+                return;
+            };
             // Held for the whole connection: every exit path drops this future, so the live
             // gauge is balanced even when the connection dies without a clean close.
             let _ws_connection = crate::http_metrics::WsConnectionGuard::accept();
@@ -1153,21 +1159,23 @@ pub(crate) async fn graphql_ws_handler(
                         if let Some(value) = value.get(api_explorer::HEADER) {
                             let mode =
                                 api_explorer::AccessMode::parse(value.as_str().unwrap_or(""))
-                                    .map_err(|error| {
-                                        async_graphql::Error::new(error.to_string())
-                                    })?;
+                                    .map_err(to_gql_error)?;
                             if mode == api_explorer::AccessMode::ApiKey {
-                                return Err(async_graphql::Error::new(
+                                return Err(to_gql_error(AppError::unauthorized_reason(
+                                    crate::error_reasons::HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
                                     "API keys are not supported for WebSocket connections",
-                                ));
+                                )));
                             }
                             let actor = actor.as_mut().ok_or_else(|| {
-                                async_graphql::Error::new("API explorer requires a web session")
+                                to_gql_error(AppError::unauthorized_reason(
+                                    crate::error_reasons::HTTP_API_EXPLORER_WEB_SESSION_REQUIRED,
+                                    "API explorer requires a web session",
+                                ))
                             })?;
                             let original = actor.clone();
                             api_explorer::masquerade(&app_for_init, actor, mode)
                                 .await
-                                .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+                                .map_err(to_gql_error)?;
                             let _ = explorer_sender.send(Some(original));
                         }
                         *oauth_session
@@ -1196,6 +1204,8 @@ pub(crate) async fn graphql_ws_handler(
                 .serve()
                 .instrument(connection_span);
             tokio::select! {
+                biased;
+                _ = restore.shutdown_workers.cancelled() => {}
                 _ = connection => {}
                 _ = api_explorer::until_revoked(app, explorer_session) => {}
             }
@@ -1546,6 +1556,241 @@ pub(crate) struct AuthState {
     pub(crate) authless_web_client_proof: AuthlessWebClientProofState,
 }
 
+/// Which kinds of top-level fields one GraphQL request selects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RestoreRequestShape {
+    /// Selects restore control or sign-in fields, which bypass ordinary admission.
+    control: bool,
+    /// Selects ordinary application fields, which hold an admission lease.
+    ordinary: bool,
+    /// Selects the compatibility apply operation, which waits in-request for
+    /// a drain that itself waits for every ordinary admission lease.
+    waits_for_drain: bool,
+}
+
+impl RestoreRequestShape {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            control: self.control || other.control,
+            ordinary: self.ordinary || other.ordinary,
+            waits_for_drain: self.waits_for_drain || other.waits_for_drain,
+        }
+    }
+}
+
+/// Classifies the selected operation's top-level fields through aliases and
+/// fragments. `None` means the request cannot be classified (it does not
+/// parse, names no single operation, or exceeds the analysis bounds); the
+/// schema refuses such requests itself when they reach normal execution.
+fn restore_control_request(request: &GraphQLRequest) -> Option<RestoreRequestShape> {
+    use async_graphql::parser::types::{OperationType, Selection, SelectionSet};
+    let document = async_graphql::parser::parse_query(&request.query).ok()?;
+    let selected = match request.operation_name.as_deref() {
+        Some(name) => document
+            .operations
+            .iter()
+            .find(|(n, _)| n.is_some_and(|n| n.as_str() == name)),
+        None => {
+            let mut operations = document.operations.iter();
+            let first = operations.next();
+            if operations.next().is_some() {
+                return None;
+            }
+            first
+        }
+    };
+    let (_, operation) = selected?;
+    if operation.node.ty == OperationType::Subscription {
+        return Some(RestoreRequestShape {
+            ordinary: true,
+            ..RestoreRequestShape::default()
+        });
+    }
+    fn allowed(
+        set: &SelectionSet,
+        document: &async_graphql::parser::types::ExecutableDocument,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Option<RestoreRequestShape> {
+        if depth > 32 || set.items.is_empty() {
+            return None;
+        }
+        let mut shape = RestoreRequestShape::default();
+        for item in &set.items {
+            *remaining = remaining.checked_sub(1)?;
+            let current = match &item.node {
+                Selection::Field(field) => {
+                    let name = field.node.name.node.as_str();
+                    let control = matches!(
+                        name,
+                        "restoreStatus"
+                            | "startInspectRestoreBundle"
+                            | "startApplyRestoreBundle"
+                            | "inspectRestoreBundle"
+                            | "applyRestoreBundle"
+                            | "login"
+                            | "webauthnAuthenticateStart"
+                            | "webauthnAuthenticateComplete"
+                            | "loginVerificationPasskeyStart"
+                            | "loginVerificationPasskeyComplete"
+                            | "loginVerificationTotpComplete"
+                    );
+                    Some(RestoreRequestShape {
+                        control,
+                        ordinary: !control,
+                        waits_for_drain: name == "applyRestoreBundle",
+                    })
+                }
+                Selection::InlineFragment(fragment) => allowed(
+                    &fragment.node.selection_set.node,
+                    document,
+                    depth + 1,
+                    remaining,
+                ),
+                Selection::FragmentSpread(spread) => document
+                    .fragments
+                    .get(&spread.node.fragment_name.node)
+                    .and_then(|fragment| {
+                        allowed(
+                            &fragment.node.selection_set.node,
+                            document,
+                            depth + 1,
+                            remaining,
+                        )
+                    }),
+            }?;
+            shape = shape.merge(current);
+        }
+        Some(shape)
+    }
+    allowed(&operation.node.selection_set.node, &document, 0, &mut 1024)
+}
+
+#[cfg(test)]
+mod restore_admission_tests {
+    use super::*;
+
+    const CONTROL: RestoreRequestShape = RestoreRequestShape {
+        control: true,
+        ordinary: false,
+        waits_for_drain: false,
+    };
+    const ORDINARY: RestoreRequestShape = RestoreRequestShape {
+        control: false,
+        ordinary: true,
+        waits_for_drain: false,
+    };
+
+    #[test]
+    fn background_restore_admission_checks_fields_through_aliases_and_fragments() {
+        for query in [
+            "query { renamed: restoreStatus { id } }",
+            "query { ...Fields } fragment Fields on Query { restoreStatus { id } }",
+            "query { ... on Query { restoreStatus { id } } }",
+        ] {
+            assert_eq!(
+                restore_control_request(&GraphQLRequest::new(query)),
+                Some(CONTROL)
+            );
+        }
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(
+                "query restoreStatus { titles { id } }"
+            )),
+            Some(ORDINARY)
+        );
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(
+                "query { restoreStatus { id } titles { id } }"
+            )),
+            Some(RestoreRequestShape {
+                control: true,
+                ordinary: true,
+                waits_for_drain: false,
+            })
+        );
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(
+                "mutation { ... on Mutation { renamed: applyRestoreBundle(uploadId: \"x\") { summary { totalRows } } } }"
+            )),
+            Some(RestoreRequestShape {
+                control: true,
+                ordinary: false,
+                waits_for_drain: true,
+            })
+        );
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(
+                "query { ...Loop } fragment Loop on Query { ...Loop }"
+            )),
+            None
+        );
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(
+                "subscription { restoreStatus { id } }"
+            )),
+            Some(ORDINARY)
+        );
+    }
+
+    #[test]
+    fn background_restore_admission_uses_selected_operation() {
+        let query = "query Status { restoreStatus { id } } query Normal { titles { id } }";
+        assert_eq!(restore_control_request(&GraphQLRequest::new(query)), None);
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(query).operation_name("Status")),
+            Some(CONTROL)
+        );
+        assert_eq!(
+            restore_control_request(&GraphQLRequest::new(query).operation_name("Normal")),
+            Some(ORDINARY)
+        );
+    }
+
+    #[tokio::test]
+    async fn background_restore_invalid_operation_does_not_claim_maintenance() {
+        for (active, status, reason) in [
+            (
+                false,
+                StatusCode::BAD_REQUEST,
+                scryer_application::restore_refusal::RESTORE_OPERATION_INVALID,
+            ),
+            (
+                true,
+                StatusCode::SERVICE_UNAVAILABLE,
+                scryer_application::restore_refusal::RESTORE_MAINTENANCE_ACTIVE,
+            ),
+        ] {
+            let response = restore_control_refusal(active);
+            assert_eq!(response.status(), status);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["errors"][0]["extensions"]["reason"], reason);
+        }
+    }
+}
+
+fn restore_maintenance_response() -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({
+        "errors": [{"message": "Restore or recovery is in progress", "extensions": {
+            "code": "VALIDATION_ERROR", "reason": scryer_application::restore_refusal::RESTORE_MAINTENANCE_ACTIVE
+        }}]
+    }))).into_response()
+}
+
+fn restore_control_refusal(maintenance_active: bool) -> Response {
+    if maintenance_active {
+        return restore_maintenance_response();
+    }
+    (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({
+        "errors": [{"message": "Send one unambiguous restore operation separately from normal application operations", "extensions": {
+            "code": "VALIDATION_ERROR", "reason": scryer_application::restore_refusal::RESTORE_OPERATION_INVALID
+        }}]
+    }))).into_response()
+}
+
 /// GraphQL handler that returns a streaming response body.
 ///
 /// When the client disconnects (e.g. via `AbortController.abort()` in the browser),
@@ -1556,6 +1801,7 @@ pub(crate) async fn graphql_handler(
     State(state): State<AuthState>,
     headers: HeaderMap,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    setup_admission: Option<axum::Extension<crate::initial_auth::SetupAdmission>>,
     body: async_graphql_axum::GraphQLBatchRequest,
 ) -> Response {
     let batch = body.into_inner();
@@ -1564,8 +1810,61 @@ pub(crate) async fn graphql_handler(
     if batch.iter().count() > GRAPHQL_MAX_BATCH_OPERATIONS {
         return graphql_batch_limit_response(GRAPHQL_MAX_BATCH_OPERATIONS);
     }
-    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
+    let setup = match setup_admission {
+        Some(axum::Extension(admission)) => Ok(admission.0),
+        None => crate::initial_auth::setup_state(&state).await,
+    };
+    let setup = match setup {
+        Ok(state) => state.filter(|state| state.is_pending()),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Some(stage) = setup.as_ref()
+        && batch
+            .iter()
+            .any(|request| !crate::initial_auth::allows_graphql(request, stage))
+    {
+        return crate::initial_auth::refused(scryer_application::initial_auth::refusal::REQUIRED);
+    }
     let rate_limit_provenance = rate_limit_provenance(&headers, remote_addr, &state.rate_limiter);
+    let initial_authentication_request = scryer_interface::InitialAuthenticationRequest {
+        client_ip: rate_limit_provenance.client_ip,
+    };
+    let batch = match batch {
+        async_graphql::BatchRequest::Single(request) => {
+            async_graphql::BatchRequest::Single(request.data(initial_authentication_request))
+        }
+        async_graphql::BatchRequest::Batch(requests) => async_graphql::BatchRequest::Batch(
+            requests
+                .into_iter()
+                .map(|request| request.data(initial_authentication_request))
+                .collect(),
+        ),
+    };
+    // Only a pure restore control request bypasses ordinary admission; while
+    // restore owns the application, admission refuses everything else.
+    // Outside restore, unclassifiable and mixed requests take the normal path
+    // (a malformed one gets the schema's own error), except a mixed request
+    // that waits for an apply: it would hold the admission lease its own
+    // drain waits for.
+    let shape = batch
+        .iter()
+        .map(restore_control_request)
+        .try_fold(RestoreRequestShape::default(), |shape, current| {
+            current.map(|current| shape.merge(current))
+        });
+    let control_only = shape.is_some_and(|shape| shape.control && !shape.ordinary);
+    if !control_only && shape.is_some_and(|shape| shape.waits_for_drain) {
+        return restore_control_refusal(state.app.restore_coordinator().blocks_application());
+    }
+    let _restore_admission = if !control_only {
+        match state.app.restore_coordinator().admit_request().await {
+            Ok(guard) => Some(guard),
+            Err(_) => return restore_maintenance_response(),
+        }
+    } else {
+        None
+    };
+    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
     let rate_limit_class = classify_graphql(&batch);
     let authentication_requests = batch
         .iter()
@@ -1601,12 +1900,31 @@ pub(crate) async fn graphql_handler(
         .ok()
         .flatten()
         .is_some_and(is_api_key_bearer);
-    let actor = match resolve_actor(&state, &headers, Some(remote_addr)).await {
+    // Public first-run metadata and the code-authorized choice must also work
+    // when this browser retains a token from an earlier database.
+    let actor_result = if setup.is_some()
+        && (authorization_token_from_headers(&headers)
+            .ok()
+            .flatten()
+            .is_none()
+            || batch.iter().all(|request| {
+                crate::initial_auth::allows_graphql(
+                    request,
+                    &scryer_application::initial_auth::SetupState::Choice,
+                )
+            })) {
+        Ok(None)
+    } else {
+        resolve_actor(&state, &headers, Some(remote_addr)).await
+    };
+    let actor = match actor_result {
         Ok(actor) => actor,
-        Err(AppError::Unauthorized(_)) if api_key_bearer => {
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) if api_key_bearer => {
             return api_key_unauthorized_graphql_response();
         }
-        Err(AppError::Unauthorized(_)) => return oauth_access_revoked_graphql_response(),
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
+            return oauth_access_revoked_graphql_response();
+        }
         Err(error) => {
             tracing::error!(error = %error, "failed to resolve GraphQL actor");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -1757,16 +2075,21 @@ pub(crate) async fn graphql_handler(
             graphql_execution_timeout_response()
         }
     };
-    if let Err(error) = state
-        .app
-        .image_proxy_repository()
-        .flush_image_proxy_sources()
-        .instrument(request_span)
-        .await
+    if !control_only
+        && let Err(error) = state
+            .app
+            .image_proxy_repository()
+            .flush_image_proxy_sources()
+            .instrument(request_span)
+            .await
     {
         tracing::error!(error = %error, "failed to durably register GraphQL image proxy sources");
+        // The source flush is an internal durability invariant. Keep its detail
+        // in the log, and use the same masked GraphQL mapping as repository failures.
+        let error =
+            unpositioned_graphql_error(to_gql_error(AppError::Repository(error.to_string())));
         let body = serde_json::to_vec(&serde_json::json!({
-            "errors": [{"message": "failed to register image sources"}]
+            "errors": [error]
         }))
         .unwrap_or_else(|_| b"{}".to_vec());
         return Response::builder()
@@ -1821,13 +2144,13 @@ pub(crate) async fn emby_avatar_handler(
         .await
     {
         Ok(Some(avatar)) => avatar,
-        Err(AppError::Unauthorized(_)) => {
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => {
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Body::empty())
                 .unwrap();
         }
-        Ok(None) | Err(AppError::NotFound(_)) => {
+        Ok(None) | Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::empty())
@@ -1860,6 +2183,19 @@ pub(crate) async fn enforce_authless_access_guard(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    if request
+        .extensions()
+        .get::<crate::initial_auth::PendingSetup>()
+        .is_some()
+    {
+        return next.run(request).await;
+    }
+    // These exact routes authenticate their own client key or narrow encrypted
+    // artifact reference even when browser login is disabled. No user bypass
+    // applies, and the normal API abuse limiter still covers both endpoints.
+    if crate::nab_api::is_endpoint(request.uri().path()) {
+        return next.run(request).await;
+    }
     let decision = authless_access_decision_with_allowlist(
         &state.auth_runtime.snapshot(),
         state.policy,
@@ -1912,6 +2248,15 @@ fn authless_web_client_forbidden_response(message: &str) -> Response {
         Json(ErrorResponse::new(message.to_string())),
     )
         .into_response()
+}
+
+/// Transport-level failures have no document position, but keep the same
+/// extension and source information as errors raised during execution.
+fn unpositioned_graphql_error(error: async_graphql::Error) -> ServerError {
+    let mut server_error = ServerError::new(error.message, None);
+    server_error.source = error.source;
+    server_error.extensions = error.extensions;
+    server_error
 }
 
 fn graphql_response_has_error_code(response: &async_graphql::BatchResponse, code: &str) -> bool {
@@ -2255,9 +2600,12 @@ async fn resolve_ws_connection_init_actor(
 
     if let Some(raw) = auth_value {
         return match parse_bearer_token(raw) {
-            Some(token) if is_api_key_bearer(token) => Err(async_graphql::Error::new(
-                "API keys are not supported for WebSocket connections",
-            )),
+            Some(token) if is_api_key_bearer(token) => {
+                Err(to_gql_error(AppError::unauthorized_reason(
+                    crate::error_reasons::HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
+                    "API keys are not supported for WebSocket connections",
+                )))
+            }
             Some(token) => match app.authenticate_token_with_claims(token).await {
                 Ok((user, token_claims)) => attach_resolved_actor(
                     app,
@@ -2271,12 +2619,13 @@ async fn resolve_ws_connection_init_actor(
                     touch_oauth_grant_last_used_background(app, &actor);
                     Some(actor)
                 })
-                .map_err(|e| async_graphql::Error::new(format!("authentication failed: {e}"))),
-                Err(e) => Err(async_graphql::Error::new(format!(
-                    "authentication failed: {e}"
-                ))),
+                .map_err(to_gql_error),
+                Err(error) => Err(to_gql_error(error)),
             },
-            None => Err(async_graphql::Error::new("invalid authorization header")),
+            None => Err(to_gql_error(AppError::unauthorized_reason(
+                crate::error_reasons::HTTP_AUTHORIZATION_HEADER_INVALID,
+                "invalid authorization header",
+            ))),
         };
     }
 
@@ -2289,9 +2638,10 @@ async fn resolve_ws_connection_init_actor(
     }
 
     if authless_proof_required && !proof_state.validate_headers(headers, proof_value) {
-        return Err(async_graphql::Error::new(
+        return Err(to_gql_error(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED,
             "Scryer web client proof is required for unauthenticated websocket access",
-        ));
+        )));
     }
 
     if !auth_enabled || local_bypass_active {
@@ -2447,11 +2797,18 @@ fn authorization_token_from_headers(headers: &HeaderMap) -> Result<Option<&str>,
         return Ok(None);
     };
 
-    let raw = auth_header
-        .to_str()
-        .map_err(|_| AppError::Unauthorized("invalid authorization header".into()))?;
-    let token = parse_bearer_token(raw)
-        .ok_or_else(|| AppError::Unauthorized("invalid authorization header".into()))?;
+    let raw = auth_header.to_str().map_err(|_| {
+        AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_AUTHORIZATION_HEADER_INVALID,
+            "invalid authorization header",
+        )
+    })?;
+    let token = parse_bearer_token(raw).ok_or_else(|| {
+        AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_AUTHORIZATION_HEADER_INVALID,
+            "invalid authorization header",
+        )
+    })?;
 
     Ok(Some(token))
 }
@@ -2991,6 +3348,7 @@ fn classify_http_rate_limit(_method: &Method, path: &str) -> Option<HttpRateLimi
         return Some(HttpRateLimitClass::OAuth);
     }
     if path.starts_with("/backups/")
+        || crate::nab_api::is_endpoint(path)
         || path == "/api"
         || path.starts_with("/api/")
         || path.starts_with("/compat/sonarr/api/")
@@ -3010,7 +3368,7 @@ fn classify_http_rate_limit(_method: &Method, path: &str) -> Option<HttpRateLimi
 
 pub(crate) fn map_app_error(error: AppError) -> Response {
     match error {
-        AppError::Unauthorized(message) => {
+        AppError::Unauthorized(message) | AppError::UnauthorizedReason { message, .. } => {
             (StatusCode::UNAUTHORIZED, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::Validation(message) => {
@@ -3019,6 +3377,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         // The refusal code is a GraphQL-side contract; over REST this stays the
         // validation failure it is.
         AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. }
         | AppError::LocationPlanRefused { message, .. }
         | AppError::LocationRootRefused { message, .. }
         | AppError::PublicUrlRejected { message, .. } => {
@@ -3044,7 +3403,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             Json(ErrorResponse::new(error.to_string())),
         )
             .into_response(),
-        AppError::NotFound(message) => {
+        AppError::NotFound(message) | AppError::NotFoundReason { message, .. } => {
             (StatusCode::NOT_FOUND, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::DownloadFeedbackTimeout(message) => (
@@ -3141,7 +3500,8 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         }
         AppError::ImportEvidenceUnavailable(message)
         | AppError::Repository(message)
-        | AppError::RepositoryFailed { message, .. } => {
+        | AppError::RepositoryFailed { message, .. }
+        | AppError::RepositoryFailure { message, .. } => {
             let error_id = Id::new().0;
             tracing::error!(
                 error_id = %error_id,
@@ -3470,7 +3830,7 @@ mod tests {
         );
         assert!(matches!(
             context.app.totp_enrollment_start(&actor.user).await,
-            Err(AppError::Unauthorized(_))
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
         ));
 
         context
@@ -3547,7 +3907,7 @@ mod tests {
                 Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 3000))),
             )
             .await,
-            Err(AppError::Unauthorized(_))
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
         ));
 
         let router = Router::new()
@@ -3602,7 +3962,144 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        assert!(matches!(
+            result,
+            Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn background_restore_http_gate_blocks_aliases_fragments_batches_and_api_keys() {
+        tokio::time::timeout(Duration::from_secs(120), async {
+        use scryer_application::LibraryRepository;
+        let context = common::TestContext::new().await;
+        let administrator = context.app.find_or_create_default_user().await.unwrap();
+        context
+            .libraries
+            .set_app_permission_mask_for_user(
+                &administrator.id,
+                scryer_domain::AppPermissionMask::MANAGE_SYSTEM_SETTINGS,
+            )
+            .await
+            .unwrap();
+        let proof = AuthlessWebClientProofState::new();
+        let state = AuthState {
+            app: context.app.clone(),
+            schema: context.schema.clone(),
+            auth_runtime: AuthRuntimeStateHandle::new(auth_disabled_snapshot()),
+            rate_limiter: ScryerRateLimiter::from_env(Default::default()),
+            ws_origin_policy: WebSocketOriginPolicy::default(),
+            list_account_origin_policy: Default::default(),
+            authless_web_client_proof: proof.clone(),
+        };
+        let router = Router::new()
+            .route("/graphql", post(graphql_handler))
+            .with_state(state);
+        let request = |payload: Value| {
+            let mut request = request_with_peer_and_authless_proof(
+                "/graphql",
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 3000)),
+                &proof,
+            );
+            *request.method_mut() = Method::POST;
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            *request.body_mut() = Body::from(payload.to_string());
+            request
+        };
+        let response = router.clone().oneshot(request(serde_json::json!({
+            "query": "mutation { createMyApiKey(input: { label: \"restore-fixture\", expiry: DAYS_90 }) { apiKey } }"
+        }))).await.unwrap();
+        let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let key = body["data"]["createMyApiKey"]["apiKey"]
+            .as_str()
+            .expect("fixture key");
+        // Outside restore, unclassifiable and mixed requests reach the schema
+        // and get its ordinary answer, never a restore refusal.
+        for payload in [
+            serde_json::json!({"query": "query {"}),
+            serde_json::json!({"query": "query A { titles { id } } query B { titles { id } }"}),
+            serde_json::json!({"query": "query { restoreStatus { id } titles { id } }"}),
+            serde_json::json!([{ "query": "{ restoreStatus { id } }" }, { "query": "{ titles { id } }" }]),
+        ] {
+            let response = router.clone().oneshot(request(payload.clone())).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{payload}");
+            let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            for item in body.as_array().cloned().unwrap_or_else(|| vec![body.clone()]) {
+                for error in item["errors"].as_array().cloned().unwrap_or_default() {
+                    assert!(error["extensions"]["reason"].is_null(), "{payload}: {body}");
+                }
+            }
+        }
+        // A mixed request that waits for an apply would hold the admission
+        // lease its own drain waits for, so it is refused even outside restore.
+        let response = router
+            .clone()
+            .oneshot(request(serde_json::json!({
+                "query": "mutation { applyRestoreBundle(uploadId: \"fixture\") { summary { totalRows } } __typename }"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"],
+            "RESTORE_OPERATION_INVALID"
+        );
+        let (attempt, _) = context
+            .app
+            .restore_coordinator()
+            .start(
+                context.app_data_dir.path(),
+                "fixture",
+                scryer_application::RestoreJobKind::Apply,
+            )
+            .unwrap();
+        for payload in [
+            serde_json::json!({"query": "query {"}),
+            serde_json::json!({"query": "query A { titles { id } } query B { titles { id } }"}),
+            serde_json::json!({"query": "query restoreStatus { renamed: titles { id } }"}),
+            serde_json::json!({"query": "query { ...Fields } fragment Fields on Query { titles { id } }"}),
+            serde_json::json!({"query": "query { restoreStatus { id } titles { id } }"}),
+            serde_json::json!([{ "query": "{ restoreStatus { id } }" }, { "query": "{ titles { id } }" }]),
+        ] {
+            for api_key in [false, true] {
+                let mut request = request(payload.clone());
+                if api_key {
+                    request.headers_mut().insert(
+                        header::AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+                    );
+                }
+                let response = router.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    body["errors"][0]["extensions"]["reason"],
+                    "RESTORE_MAINTENANCE_ACTIVE"
+                );
+            }
+        }
+        for _ in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(request(serde_json::json!({
+                    "query": "{ restoreStatus { id phase } }"
+                })))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["data"]["restoreStatus"]["id"], attempt.id, "{body}");
+        }
+        }).await.expect("HTTP restore fixture must finish");
     }
 
     #[tokio::test]
@@ -3683,7 +4180,84 @@ mod tests {
             Ok(_) => panic!("invalid WebSocket credentials must not fall back to authless access"),
             Err(error) => error,
         };
-        assert!(error.message.contains("authentication failed"));
+        let wire = serde_json::to_value(unpositioned_graphql_error(error)).unwrap();
+        assert_eq!(wire["extensions"]["code"], "UNAUTHORIZED");
+    }
+
+    #[tokio::test]
+    async fn websocket_connection_init_rejections_name_the_condition() {
+        let context = common::TestContext::new().await;
+        let proof_state = AuthlessWebClientProofState::new();
+        let (headers, proof) = authless_ws_proof_headers(&proof_state);
+        let admin = context
+            .app
+            .find_or_create_default_user()
+            .await
+            .expect("isolated administrator");
+        let issued_key = context
+            .app
+            .create_api_key(
+                &admin,
+                scryer_application::CreateApiKey {
+                    label: "WebSocket refusal fixture".into(),
+                    expiry: scryer_application::ApiKeyExpiryPreset::Never,
+                },
+            )
+            .await
+            .expect("isolated API key");
+        assert!(
+            context
+                .app
+                .authenticate_api_key(&issued_key.raw_key)
+                .await
+                .is_ok()
+        );
+        assert!(is_api_key_bearer(&issued_key.raw_key));
+        assert!(proof_state.validate_headers(&headers, Some(&proof)));
+        assert!(!proof_state.validate_headers(&headers, None));
+        let api_key = format!("Bearer {}", issued_key.raw_key);
+        for (auth, proof_value, reason) in [
+            (
+                Some(api_key.as_str()),
+                Some(proof.as_str()),
+                crate::error_reasons::HTTP_WEBSOCKET_API_KEY_UNSUPPORTED,
+            ),
+            (
+                Some("Basic invalid"),
+                Some(proof.as_str()),
+                crate::error_reasons::HTTP_AUTHORIZATION_HEADER_INVALID,
+            ),
+            (
+                None,
+                None,
+                crate::error_reasons::HTTP_WEBSOCKET_CLIENT_PROOF_REQUIRED,
+            ),
+        ] {
+            let result = resolve_ws_connection_init_actor(
+                &context.app,
+                WsConnectionInitActorRequest {
+                    auth_enabled: false,
+                    local_bypass_active: false,
+                    initial_actor: Some(authless_ws_test_actor()),
+                    auth_value: auth,
+                    authless_proof_required: true,
+                    proof_state: &proof_state,
+                    headers: &headers,
+                    proof_value,
+                },
+            )
+            .await;
+            let error = match result {
+                Ok(_) => {
+                    panic!("refused WebSocket initialization must not acquire authless access")
+                }
+                Err(error) => error,
+            };
+            let wire = serde_json::to_value(unpositioned_graphql_error(error)).unwrap();
+            assert_eq!(wire["extensions"]["code"], "UNAUTHORIZED");
+            assert_eq!(wire["extensions"]["reason"], reason);
+            assert!(wire.get("locations").is_none());
+        }
     }
 
     #[tokio::test]
@@ -4087,6 +4661,60 @@ mod tests {
         );
         assert!(!body_text.contains("database password"));
         assert!(!body_text.contains("upstream detail"));
+    }
+
+    #[test]
+    fn unpositioned_graphql_error_keeps_masking_and_extensions_without_a_location() {
+        let error = to_gql_error(AppError::Repository("private durability detail".into()));
+        let wire = serde_json::to_value(unpositioned_graphql_error(error)).unwrap();
+        assert_eq!(wire["message"], INTERNAL_SERVER_ERROR_MESSAGE);
+        assert_eq!(wire["extensions"]["code"], "INTERNAL_ERROR");
+        assert!(
+            wire["extensions"]["errorId"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+        assert!(wire.get("locations").is_none());
+        assert!(wire.get("path").is_none());
+        assert!(!wire.to_string().contains("private durability detail"));
+    }
+
+    #[tokio::test]
+    async fn coded_errors_preserve_rest_status_and_repository_masking() {
+        for (error, status) in [
+            (
+                AppError::unauthorized_reason("HTTP_TEST_AUTH", "diagnostic"),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                AppError::not_found_reason("HTTP_TEST_ABSENT", "diagnostic"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                AppError::validation_refused("HTTP_TEST_INVALID", "diagnostic"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                AppError::repository_failure(
+                    scryer_application::RepositoryErrorKind::UniqueViolation,
+                    "private database detail",
+                ),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                AppError::RepositoryFailed {
+                    message: "private filesystem detail".into(),
+                    reason: "IMPORT_PERMISSION_DENIED",
+                },
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ] {
+            let response = map_app_error(error);
+            assert_eq!(response.status(), status);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(!body.contains("private"));
+        }
     }
 
     #[tokio::test]
@@ -4866,6 +5494,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nab_authless_exemption_still_requires_client_auth_and_is_exact() {
+        use scryer_application::{
+            SettingsRepository, indexer_clients::*, testing::AppUseCaseTestExt,
+        };
+        use scryer_infrastructure_acquisition::indexers::client_store::IndexerClientStore;
+        use scryer_infrastructure_crypto::{
+            EncryptionKey, artifact_reference::ArtifactReferenceCipher,
+        };
+
+        let context = common::TestContext::new().await;
+        context
+            .settings_store
+            .batch_ensure_setting_definitions(vec![
+                scryer_infrastructure_sql::types::SettingDefinitionSeed {
+                    category: "ui".into(),
+                    scope: scryer_application::SETTINGS_SCOPE_SYSTEM.into(),
+                    key_name: scryer_application::EXPERIMENTAL_FEATURES_ENABLED_KEY.into(),
+                    data_type: "boolean".into(),
+                    default_value_json: "true".into(),
+                    is_sensitive: false,
+                    validation_json: None,
+                },
+            ])
+            .await
+            .unwrap();
+        context
+            .settings_store
+            .upsert_setting_json(
+                scryer_application::SETTINGS_SCOPE_SYSTEM,
+                scryer_application::EXPERIMENTAL_FEATURES_ENABLED_KEY,
+                None,
+                "true".into(),
+                "test",
+                None,
+            )
+            .await
+            .unwrap();
+        let store = Arc::new(IndexerClientStore::new(context.db.datastore()));
+        let key = issue_indexer_client_key("test-salt").unwrap();
+        let now = chrono::Utc::now();
+        store
+            .save(
+                &IndexerClientRecord {
+                    id: "public-client".into(),
+                    configuration: IndexerClientConfiguration {
+                        name: "Public client fixture".into(),
+                        enabled: true,
+                        protocols: vec![
+                            IndexerClientProtocol::Newznab,
+                            IndexerClientProtocol::Torznab,
+                        ],
+                        grants: vec![],
+                    },
+                    lookup_id: Some(key.lookup_id),
+                    secret_hash: Some(key.secret_hash),
+                    key_generation: 1,
+                    revision: 1,
+                    last_used_at: None,
+                    last_outcome_code: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let app = context
+            .app
+            .with_test_overrides(|builder| builder.with_indexer_client_repository(store));
+        assert!(app.authenticate_api_key(&key.raw_key).await.is_err());
+        let graphql = Router::new()
+            .route("/graphql", post(graphql_handler))
+            .with_state(AuthState {
+                app: app.clone(),
+                schema: context.schema.clone(),
+                auth_runtime: AuthRuntimeStateHandle::new(auth_enabled_snapshot()),
+                rate_limiter: ScryerRateLimiter::from_env(Default::default()),
+                ws_origin_policy: WebSocketOriginPolicy::default(),
+                list_account_origin_policy: Default::default(),
+                authless_web_client_proof: AuthlessWebClientProofState::new(),
+            });
+        let mut request =
+            request_with_peer("/graphql", SocketAddr::from((Ipv4Addr::LOCALHOST, 3000)));
+        *request.method_mut() = Method::POST;
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", key.raw_key)).unwrap(),
+        );
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        *request.body_mut() = Body::from(r#"{"query":"{ titles { id } }"}"#);
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(60), graphql.oneshot(request))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let router = crate::nab_api::router(crate::nab_api::NabState {
+            app,
+            cipher: Arc::new(ArtifactReferenceCipher::new(&EncryptionKey::from_bytes(
+                [42; 32],
+            ))),
+            base_path: String::new(),
+            tls: false,
+        })
+        .route(
+            "/newznab/api/extra",
+            get(|| async { "must remain guarded" }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            AuthlessAccessGuardState {
+                auth_runtime: AuthRuntimeStateHandle::new(auth_disabled_snapshot()),
+                policy: protected_authless_policy(),
+                allowlist: AuthlessAccessAllowlist::default(),
+            },
+            enforce_authless_access_guard,
+        ));
+        for prefix in ["", "/scryer"] {
+            let mounted = crate::base_path::mount_router(
+                router.clone(),
+                &crate::base_path::BasePath::from_raw(Some(prefix)),
+            );
+            for path in ["/newznab/api", "/torznab/api"] {
+                for ip in [Ipv4Addr::new(8, 8, 8, 8), Ipv4Addr::LOCALHOST] {
+                    for authorized in [false, true] {
+                        let mut request = request_with_peer(
+                            &format!("{prefix}{path}?t=caps"),
+                            SocketAddr::from((ip, 3000)),
+                        );
+                        if authorized {
+                            request
+                                .headers_mut()
+                                .insert("x-api-key", HeaderValue::from_str(&key.raw_key).unwrap());
+                        }
+                        let response = tokio::time::timeout(
+                            std::time::Duration::from_secs(60),
+                            mounted.clone().oneshot(request),
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                        assert_eq!(
+                            response.status(),
+                            if authorized {
+                                StatusCode::OK
+                            } else {
+                                StatusCode::UNAUTHORIZED
+                            }
+                        );
+                    }
+                }
+            }
+        }
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            router.oneshot(request_with_peer(
+                "/newznab/api/extra",
+                SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 3000)),
+            )),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn authless_guard_middleware_rejects_public_websocket_route_before_handler() {
         let app = authless_guard_test_app(auth_disabled_snapshot(), protected_authless_policy());
 
@@ -5579,6 +6376,12 @@ mod tests {
 
     #[test]
     fn ticket_download_and_api_routes_consume_http_api_quota() {
+        for path in ["/newznab/api", "/torznab/api"] {
+            assert_eq!(
+                classify_http_rate_limit(&Method::GET, path),
+                Some(HttpRateLimitClass::Api)
+            );
+        }
         assert!(!skip_http_rate_limit(
             &Method::GET,
             "/backups/scryer.scryer-backup.enc/download"

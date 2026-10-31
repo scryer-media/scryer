@@ -19,7 +19,8 @@ export type ActivitySection = "activity" | "import" | "history";
 export type WantedSection = "wanted" | "cutoff" | "pending";
 /// Panes of the Lists page. Public lists are the default and have no segment
 /// of their own, so `/lists` keeps meaning the list table.
-export type ListsSection = "public" | "personal" | "exclusions" | "providerApps";
+export type ListsSection =
+  "public" | "personal" | "exclusions" | "providerApps";
 export type SettingsSection =
   | "profile"
   | "general"
@@ -62,7 +63,8 @@ export type MaintenanceRulesSection = "rules" | "candidates" | "history";
 /// in their own settings section because a profile is only ever reached
 /// through the indexer that applies it. Proxies used to be a pane too; they
 /// are a settings section of their own now that download clients assign them.
-export type IndexerSettingsTab = "indexers" | "search" | "seedingProfiles";
+export type IndexerSettingsTab =
+  "indexers" | "search" | "clients" | "seedingProfiles";
 export type ContentSettingsSection =
   | "overview"
   | "import"

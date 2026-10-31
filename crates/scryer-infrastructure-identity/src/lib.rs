@@ -23,3 +23,5 @@ pub mod settings {
 pub mod workflow {
     pub use scryer_infrastructure_workflow::workflow::*;
 }
+
+mod error_reasons;

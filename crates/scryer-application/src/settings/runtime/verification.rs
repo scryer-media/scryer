@@ -49,9 +49,7 @@ impl AppUseCase {
                 .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
                 .await?
         {
-            return Err(AppError::Unauthorized(
-                "You do not have permission to view verification settings".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::VIEW_VERIFICATION_SETTINGS_PERMISSION_DENIED, "You do not have permission to view verification settings".to_string()));
         }
 
         self.load_verification_settings().await

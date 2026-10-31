@@ -33,7 +33,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     personTargeted: true,
     namesRequesters: true,
     regoSource:
-      "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains \"family\" if {\n\tinput.facts.certification_rank <= 1\n}\n",
+      'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains "family" if {\n\tinput.facts.certification_rank <= 1\n}\n',
   },
   {
     id: "short-lease-approval",
@@ -43,7 +43,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     personTargeted: true,
     namesRequesters: true,
     regoSource:
-      "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"bob\"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n",
+      'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "bob"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n',
   },
   {
     id: "low-resolution-approval",
@@ -53,7 +53,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     personTargeted: true,
     namesRequesters: true,
     regoSource:
-      "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"alice\"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n",
+      'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "alice"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n',
   },
   {
     id: "deny-adult-content",
@@ -61,7 +61,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateDenyAdultTitle",
     descriptionKey: "settings.requestTemplateDenyAdultDescription",
     regoSource:
-      "package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains \"adult_content\" if {\n\tinput.facts.is_adult\n}\n",
+      'package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains "adult_content" if {\n\tinput.facts.is_adult\n}\n',
   },
   {
     id: "monthly-approval-quota",
@@ -77,14 +77,15 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateHoldApprovalListsTitle",
     descriptionKey: "settings.requestTemplateHoldApprovalListsDescription",
     regoSource:
-      "package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n",
+      'package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n',
   },
   {
     id: "deny-personal-list-above-1080p",
     name: "deny_personal_list_above_1080p",
     titleKey: "settings.requestTemplateDenyPersonalListAbove1080pTitle",
-    descriptionKey: "settings.requestTemplateDenyPersonalListAbove1080pDescription",
+    descriptionKey:
+      "settings.requestTemplateDenyPersonalListAbove1080pDescription",
     regoSource:
-      "package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n",
+      'package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n',
   },
 ];

@@ -27,7 +27,14 @@ const FOCUSABLE_SELECTOR =
  * until it closes. The page's `GutterPanelButton` opens and closes it. The
  * panel stays mounted so content can be portaled into it.
  */
-export function GutterPanel({ id, label, frame, open, onOpenChange, children }: GutterPanelProps) {
+export function GutterPanel({
+  id,
+  label,
+  frame,
+  open,
+  onOpenChange,
+  children,
+}: GutterPanelProps) {
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange]);
   const context = React.useMemo(() => ({ close }), [close]);
   const panelRef = React.useRef<HTMLElement>(null);
@@ -38,7 +45,9 @@ export function GutterPanel({ id, label, frame, open, onOpenChange, children }: 
   const measureOverflow = React.useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    setHasMoreBelow(element.scrollHeight - element.clientHeight - element.scrollTop > 1);
+    setHasMoreBelow(
+      element.scrollHeight - element.clientHeight - element.scrollTop > 1,
+    );
   }, []);
 
   React.useEffect(() => {
@@ -50,42 +59,58 @@ export function GutterPanel({ id, label, frame, open, onOpenChange, children }: 
     // children as well as the panel itself.
     const resizeObserver = new ResizeObserver(measureOverflow);
     resizeObserver.observe(element);
-    for (const child of Array.from(element.children)) resizeObserver.observe(child);
+    for (const child of Array.from(element.children))
+      resizeObserver.observe(child);
     return () => resizeObserver.disconnect();
   }, [children, measureOverflow]);
 
   const scrollByPage = React.useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: Math.max(element.clientHeight * 0.8, 240), behavior: "smooth" });
+    element.scrollBy({
+      top: Math.max(element.clientHeight * 0.8, 240),
+      behavior: "smooth",
+    });
   }, []);
 
   React.useEffect(() => {
     // Docked, the panel covers nothing, so focus and Escape are left to the page.
     const panel = panelRef.current;
     if (!overlaying || !panel) return;
-    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const returnFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     panel.focus({ preventScroll: true });
     const handleKeyDown = (event: KeyboardEvent) => {
       // A dialog opened from the panel, such as an uninstall confirmation,
       // handles its own keys.
       const target = event.target instanceof Element ? event.target : null;
-      if (target && !panel.contains(target) && target.closest('[role="dialog"], [role="alertdialog"]')) return;
+      if (
+        target &&
+        !panel.contains(target) &&
+        target.closest('[role="dialog"], [role="alertdialog"]')
+      )
+        return;
       if (event.key === "Escape") {
         close();
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        (element) => element.getClientRects().length > 0,
-      );
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((element) => element.getClientRects().length > 0);
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
       if (!first || !last) {
         event.preventDefault();
         panel.focus({ preventScroll: true });
-      } else if (event.shiftKey ? active === first || !panel.contains(active) || active === panel : active === last || !panel.contains(active)) {
+      } else if (
+        event.shiftKey
+          ? active === first || !panel.contains(active) || active === panel
+          : active === last || !panel.contains(active)
+      ) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       }
@@ -136,7 +161,9 @@ export function GutterPanel({ id, label, frame, open, onOpenChange, children }: 
           onScroll={measureOverflow}
           className="scry-scroll min-h-0 flex-1 overflow-y-auto"
         >
-          <GutterPanelContext.Provider value={context}>{children}</GutterPanelContext.Provider>
+          <GutterPanelContext.Provider value={context}>
+            {children}
+          </GutterPanelContext.Provider>
         </div>
         {hasMoreBelow ? (
           <>
@@ -148,7 +175,10 @@ export function GutterPanel({ id, label, frame, open, onOpenChange, children }: 
               type="button"
               aria-label={`${label}: scroll down`}
               onClick={scrollByPage}
-              className={cn(SCROLL_FADE_CONTROL_CLASS, "bottom-3 left-1/2 -translate-x-1/2")}
+              className={cn(
+                SCROLL_FADE_CONTROL_CLASS,
+                "bottom-3 left-1/2 -translate-x-1/2",
+              )}
             >
               <ChevronDown className="size-7 stroke-[3]" aria-hidden="true" />
             </button>
@@ -168,12 +198,19 @@ type GutterPanelButtonProps = {
 };
 
 /** Opens and closes a gutter panel from the page header: solid while the panel is closed, outlined while it is open. */
-export function GutterPanelButton({ panelId, label, icon, open, onOpenChange }: GutterPanelButtonProps) {
+export function GutterPanelButton({
+  panelId,
+  label,
+  icon,
+  open,
+  onOpenChange,
+}: GutterPanelButtonProps) {
   return (
     <Button
       type="button"
       variant={open ? "outline" : "primary"}
       className="h-10 shrink-0 rounded-[10px] px-3 text-[13px]"
+      id={`${panelId}-toggle`}
       aria-controls={panelId}
       aria-expanded={open}
       onClick={() => onOpenChange(!open)}

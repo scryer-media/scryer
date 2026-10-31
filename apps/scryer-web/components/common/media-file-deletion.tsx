@@ -24,7 +24,10 @@ export type DeletableMediaFile = {
  * twice, and the progress and outcome reports are the same on each. The file is
  * deleted by a job; the title is refreshed only once that job has finished.
  */
-export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>({
+export function useMediaFileDeletion<
+  TFile extends DeletableMediaFile,
+  TContext,
+>({
   captureContext,
   onQueued,
   onBeforeDelete,
@@ -36,7 +39,11 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
   /** Runs just before the delete request is sent. */
   onBeforeDelete?: () => void;
   /** Refreshes the title once the deletion job has finished. */
-  onFinished: (run: JobRun, file: TFile, context: TContext) => Promise<void> | void;
+  onFinished: (
+    run: JobRun,
+    file: TFile,
+    context: TContext,
+  ) => Promise<void> | void;
 }): {
   deletingFileIds: ReadonlySet<string>;
   requestDelete: (file: TFile) => void;
@@ -49,9 +56,9 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
   const [target, setTarget] = React.useState<TFile | null>(null);
   const [typedConfirmation, setTypedConfirmation] = React.useState("");
   const [loading, setLoading] = React.useState(false);
-  const [deletingFileIds, setDeletingFileIds] = React.useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  const [deletingFileIds, setDeletingFileIds] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const previewVariables = React.useMemo(
     () => (target ? { fileId: target.id } : null),
     [target],
@@ -66,9 +73,19 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
     previewVariables,
     target !== null,
   );
-  const handlersRef = React.useRef({ captureContext, onQueued, onBeforeDelete, onFinished });
+  const handlersRef = React.useRef({
+    captureContext,
+    onQueued,
+    onBeforeDelete,
+    onFinished,
+  });
   React.useEffect(() => {
-    handlersRef.current = { captureContext, onQueued, onBeforeDelete, onFinished };
+    handlersRef.current = {
+      captureContext,
+      onQueued,
+      onBeforeDelete,
+      onFinished,
+    };
   });
 
   const requestDelete = React.useCallback(
@@ -100,14 +117,17 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
     try {
       handlersRef.current.onBeforeDelete?.();
       const { data, error } = await client
-        .mutation<{ deleteMediaFile?: { jobRun?: unknown } }>(deleteMediaFileMutation, {
-          input: {
-            fileId: file.id,
-            deleteFromDisk: true,
-            previewFingerprint: preview.fingerprint,
-            typedConfirmation: typedConfirmation.trim() || undefined,
+        .mutation<{ deleteMediaFile?: { jobRun?: unknown } }>(
+          deleteMediaFileMutation,
+          {
+            input: {
+              fileId: file.id,
+              deleteFromDisk: true,
+              previewFingerprint: preview.fingerprint,
+              typedConfirmation: typedConfirmation.trim() || undefined,
+            },
           },
-        })
+        )
         .toPromise();
       if (error) {
         throw error;
@@ -125,9 +145,14 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
           return next;
         });
         void Promise.resolve()
-          .then(() => handlersRef.current.onFinished(terminalRun, file, context))
+          .then(() =>
+            handlersRef.current.onFinished(terminalRun, file, context),
+          )
           .catch((refreshError: unknown) => {
-            console.error("[media-file-deletion] refresh after deletion failed:", refreshError);
+            console.error(
+              "[media-file-deletion] refresh after deletion failed:",
+              refreshError,
+            );
           })
           .finally(() => {
             setGlobalStatus(
@@ -136,7 +161,9 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
                 : (terminalRun.errorText ??
                     terminalRun.summaryText ??
                     t("status.apiError")),
-              { level: terminalRun.status === "COMPLETED" ? "SUCCESS" : "ERROR" },
+              {
+                level: terminalRun.status === "COMPLETED" ? "SUCCESS" : "ERROR",
+              },
             );
           });
       });
@@ -144,17 +171,28 @@ export function useMediaFileDeletion<TFile extends DeletableMediaFile, TContext>
       setTarget(null);
       setTypedConfirmation("");
     } catch (error: unknown) {
-      setGlobalStatus(deleteErrorMessage(error, t, t("status.apiError")), { level: "ERROR" });
+      setGlobalStatus(deleteErrorMessage(error, t, t("status.apiError")), {
+        level: "ERROR",
+      });
     } finally {
       setLoading(false);
     }
-  }, [client, preview, setGlobalStatus, t, target, trackJobRun, typedConfirmation]);
+  }, [
+    client,
+    preview,
+    setGlobalStatus,
+    t,
+    target,
+    trackJobRun,
+    typedConfirmation,
+  ]);
 
   const confirmDisabled =
     previewLoading ||
     Boolean(previewError) ||
     !preview ||
-    (preview.requiresTypedConfirmation && typedConfirmation.trim() !== "DELETE");
+    (preview.requiresTypedConfirmation &&
+      typedConfirmation.trim() !== "DELETE");
 
   const dialog = (
     <ConfirmDialog

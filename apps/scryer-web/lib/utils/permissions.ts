@@ -21,17 +21,20 @@ export const LIBRARY_PERMISSIONS = {
  * camelCase tokens (the map keys) even though wire values are SCREAMING_SNAKE.
  */
 export const PERMISSION_ID_TOKENS: Record<string, string> = Object.fromEntries(
-  [...Object.entries(APP_PERMISSIONS), ...Object.entries(LIBRARY_PERMISSIONS)].map(
-    ([key, value]) => [value, key],
-  ),
+  [
+    ...Object.entries(APP_PERMISSIONS),
+    ...Object.entries(LIBRARY_PERMISSIONS),
+  ].map(([key, value]) => [value, key]),
 );
 
 export function permissionIdToken(value: string): string {
   return PERMISSION_ID_TOKENS[value] ?? value.toLowerCase();
 }
 
-export type AppPermission = (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
-export type LibraryPermission = (typeof LIBRARY_PERMISSIONS)[keyof typeof LIBRARY_PERMISSIONS];
+export type AppPermission =
+  (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
+export type LibraryPermission =
+  (typeof LIBRARY_PERMISSIONS)[keyof typeof LIBRARY_PERMISSIONS];
 
 export type LibraryPermissionGrant = {
   libraryId: string;
@@ -49,7 +52,9 @@ type RawLibraryPermissionGrant = {
 };
 
 const APP_PERMISSION_VALUES = new Set<string>(Object.values(APP_PERMISSIONS));
-const LIBRARY_PERMISSION_VALUES = new Set<string>(Object.values(LIBRARY_PERMISSIONS));
+const LIBRARY_PERMISSION_VALUES = new Set<string>(
+  Object.values(LIBRARY_PERMISSIONS),
+);
 
 function normalizePermissionClaim(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -80,9 +85,7 @@ function normalizePermissionList<T extends string>(
 export function normalizeJwtPermissionClaims(
   appPermissions: readonly unknown[] | null | undefined,
   libraryPermissions:
-    | ReadonlyArray<RawLibraryPermissionGrant | null>
-    | null
-    | undefined,
+    ReadonlyArray<RawLibraryPermissionGrant | null> | null | undefined,
 ): PermissionUser {
   const grantsByLibrary = new Map<string, Set<LibraryPermission>>();
 
@@ -100,7 +103,8 @@ export function normalizeJwtPermissionClaims(
       grant.permissions,
       LIBRARY_PERMISSION_VALUES,
     );
-    const combined = grantsByLibrary.get(libraryId) ?? new Set<LibraryPermission>();
+    const combined =
+      grantsByLibrary.get(libraryId) ?? new Set<LibraryPermission>();
     for (const permission of permissions) {
       combined.add(permission);
     }
@@ -112,10 +116,13 @@ export function normalizeJwtPermissionClaims(
       appPermissions,
       APP_PERMISSION_VALUES,
     ),
-    libraryPermissions: Array.from(grantsByLibrary, ([libraryId, permissions]) => ({
-      libraryId,
-      permissions: Array.from(permissions),
-    })),
+    libraryPermissions: Array.from(
+      grantsByLibrary,
+      ([libraryId, permissions]) => ({
+        libraryId,
+        permissions: Array.from(permissions),
+      }),
+    ),
   };
 }
 
@@ -128,7 +135,9 @@ export function authorizationCacheSignature(
   const libraryPermissions = (user?.libraryPermissions ?? [])
     .map((grant) => {
       const libraryId = grant.libraryId.trim();
-      const permissions = Array.from(new Set(grant.permissions)).sort().join(",");
+      const permissions = Array.from(new Set(grant.permissions))
+        .sort()
+        .join(",");
       return `${libraryId}:${permissions}`;
     })
     .sort()
@@ -136,7 +145,10 @@ export function authorizationCacheSignature(
   return `app=${appPermissions};libraries=${libraryPermissions}`;
 }
 
-export function hasAppPermission(user: PermissionUser | null | undefined, permission: AppPermission): boolean {
+export function hasAppPermission(
+  user: PermissionUser | null | undefined,
+  permission: AppPermission,
+): boolean {
   return user?.appPermissions.includes(permission) === true;
 }
 
@@ -154,7 +166,9 @@ const ADMIN_LIBRARY_PERMISSIONS = Object.values(LIBRARY_PERMISSIONS);
  * the fallback for libraries without an explicit grant. Explicit grants win,
  * matching the backend's `UserAuthorization::library_permissions` lookup.
  */
-function isLibraryAdministrator(user: PermissionUser | null | undefined): boolean {
+function isLibraryAdministrator(
+  user: PermissionUser | null | undefined,
+): boolean {
   return hasAppPermission(user, APP_PERMISSIONS.managePermissions);
 }
 
@@ -166,7 +180,9 @@ export function hasLibraryPermission(
   if (!user || !libraryId) {
     return false;
   }
-  const explicitGrant = user.libraryPermissions.find((grant) => grant.libraryId === libraryId);
+  const explicitGrant = user.libraryPermissions.find(
+    (grant) => grant.libraryId === libraryId,
+  );
   if (explicitGrant) {
     return libraryPermissionMatches(explicitGrant.permissions, permission);
   }
@@ -190,8 +206,11 @@ export function canManageLibrarySubtitles(
   libraryId: string | null | undefined,
 ): boolean {
   return (
-    hasLibraryPermission(user, libraryId, LIBRARY_PERMISSIONS.manageSubtitles) ||
-    hasAppPermission(user, APP_PERMISSIONS.manageCatalogSettings)
+    hasLibraryPermission(
+      user,
+      libraryId,
+      LIBRARY_PERMISSIONS.manageSubtitles,
+    ) || hasAppPermission(user, APP_PERMISSIONS.manageCatalogSettings)
   );
 }
 
@@ -213,7 +232,9 @@ export function hasAnyLibraryPermission(
  * Titles implies Auto-Approve Requests, Request, and Manage Subtitles, and
  * Auto-Approve Requests implies Request.
  */
-export function libraryPermissionsWithRequestShadowing(values: string[]): string[] {
+export function libraryPermissionsWithRequestShadowing(
+  values: string[],
+): string[] {
   const next = new Set(values);
   if (next.has(LIBRARY_PERMISSIONS.manageTitles)) {
     next.add(LIBRARY_PERMISSIONS.autoApproveRequests);
@@ -226,7 +247,9 @@ export function libraryPermissionsWithRequestShadowing(values: string[]): string
 }
 
 /** Strip shadowed bits before writing, mirroring `normalized_for_storage`. */
-export function normalizeLibraryPermissionsForStorage(values: string[]): string[] {
+export function normalizeLibraryPermissionsForStorage(
+  values: string[],
+): string[] {
   const next = new Set(values);
   if (next.has(LIBRARY_PERMISSIONS.manageTitles)) {
     next.delete(LIBRARY_PERMISSIONS.autoApproveRequests);
@@ -281,7 +304,9 @@ function libraryPermissionMatches(
     // the same shadow, so the UI must agree or a title manager sees no button
     // for something the server would let them do.
     case LIBRARY_PERMISSIONS.manageSubtitles:
-      return libraryPermissionsWithRequestShadowing(values).includes(permission);
+      return libraryPermissionsWithRequestShadowing(values).includes(
+        permission,
+      );
     default:
       return explicit.has(permission);
   }

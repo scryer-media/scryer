@@ -130,10 +130,8 @@ impl AppUseCase {
         else {
             // One generic sentence covered three different operator actions.
             // Say which one this is.
-            return Err(AppError::Validation(
-                self.component_blocker_reason(&installation, &resolutions)
-                    .await,
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::COMPONENT_UPGRADE_BLOCKED, self.component_blocker_reason(&installation, &resolutions)
+                    .await));
         };
         let reporter = PluginInstallProgressReporter::new(self, "system", &installation.plugin_id);
         let prepared = self
@@ -207,9 +205,7 @@ impl AppUseCase {
         runtime: &RuntimePluginLoad,
     ) -> AppResult<()> {
         if !same_plugin_identity(installation, &runtime.descriptor) {
-            return Err(AppError::Validation(
-                "Component replacement changed plugin identity".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::COMPONENT_REPLACEMENT_CHANGED_PLUGIN_IDENTITY, "Component replacement changed plugin identity"));
         }
         let loader = self.services.customization.plugin_descriptor_loader.clone();
         let bytes = runtime.wasm_bytes.clone();
@@ -221,9 +217,7 @@ impl AppUseCase {
                 })??;
         if serde_json::to_value(&descriptor).ok() != serde_json::to_value(&runtime.descriptor).ok()
         {
-            return Err(AppError::Validation(
-                "Component descriptor differs from its persisted metadata".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA, "Component descriptor differs from its persisted metadata"));
         }
         ensure_host_process_capability_allowed(&descriptor, installation.support_tier)?;
         validate_sdk_contract(
@@ -232,7 +226,7 @@ impl AppUseCase {
             &plugin_descriptor_sdk_constraint(&descriptor),
             SDK_VERSION,
         )
-        .map_err(AppError::Validation)?;
+        .map_err(|message| AppError::validation_refused(crate::error_reasons::plugins::DESCRIPTOR_SDK_INCOMPATIBLE, message))?;
         Ok(())
     }
 
@@ -284,7 +278,7 @@ impl AppUseCase {
             .plugin_component_blocker_for_provider(provider_type)
             .await
         {
-            Some(reason) => Err(AppError::Validation(format!(
+            Some(reason) => Err(AppError::validation_refused(crate::error_reasons::plugins::BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED, format!(
                 "The '{provider_type}' plugin is blocked on this version of Scryer, so it cannot be tested. {reason}"
             ))),
             None => Ok(()),

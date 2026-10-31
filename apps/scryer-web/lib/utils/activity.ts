@@ -21,7 +21,9 @@ function normalizeActivityKind(value: string | undefined): ActivityKind {
     : "system_notice";
 }
 
-function normalizeActivitySeverity(value: string | undefined): ActivitySeverity {
+function normalizeActivitySeverity(
+  value: string | undefined,
+): ActivitySeverity {
   const normalized = (value ?? "").trim().toLowerCase();
   return activitySeveritySet.has(normalized)
     ? (normalized as ActivitySeverity)
@@ -57,7 +59,9 @@ function toActivityEventCandidates(input: unknown): unknown[] {
   return [];
 }
 
-function isActivityEventShape(value: unknown): value is Record<string, unknown> {
+function isActivityEventShape(
+  value: unknown,
+): value is Record<string, unknown> {
   if (!isRecord(value)) {
     return false;
   }
@@ -122,7 +126,9 @@ export function collectActivityEventsFromPayload(payload: unknown): unknown[] {
   return [];
 }
 
-export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityEvent {
+export function normalizeActivityEvent(
+  input: Partial<ActivityEvent>,
+): ActivityEvent {
   const normalizedKind = normalizeActivityKind(input.kind ?? input.eventType);
   const normalizedSeverity = normalizeActivitySeverity(input.severity);
   const normalizedChannels = normalizeActivityChannels(input.channels);
@@ -140,7 +146,9 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
     facet: input.facet ?? null,
     episodeIds: Array.isArray(input.episodeIds)
       ? input.episodeIds
-          .filter((episodeId): episodeId is string => typeof episodeId === "string")
+          .filter(
+            (episodeId): episodeId is string => typeof episodeId === "string",
+          )
           .map((episodeId) => episodeId.trim())
           .filter(Boolean)
       : [],

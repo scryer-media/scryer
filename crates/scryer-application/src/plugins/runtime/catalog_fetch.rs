@@ -626,7 +626,7 @@ async fn decode_rule_pack_manifest_bytes(
             )
             .await
         }
-        _ => Err(AppError::Validation(format!(
+        _ => Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING, format!(
             "rule pack '{pack_id}' selected artifact '{actual_url}' has unsupported encoding"
         ))),
     }
@@ -729,44 +729,44 @@ fn validate_community_catalog_v3_delegate(
     catalog: &CatalogV3,
 ) -> AppResult<()> {
     if source.support_tier != PluginSupportTier::VerifiedCommunity {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID, format!(
             "community catalog source '{}' approved tier must be verified_community",
             source.id
         )));
     }
     if catalog.plugins.len() != 1 {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN, format!(
             "community catalog source '{}' must publish exactly one plugin",
             source.id
         )));
     }
     if !catalog.rule_packs.is_empty() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN, format!(
             "community catalog source '{}' must not publish rule packs",
             source.id
         )));
     }
     if !catalog.community_sources.is_empty() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_SOURCE_NESTING_FORBIDDEN, format!(
             "community catalog source '{}' must not publish nested community sources",
             source.id
         )));
     }
     let plugin = &catalog.plugins[0];
     if plugin.id != source.id {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN, format!(
             "community catalog source '{}' published plugin '{}'",
             source.id, plugin.id
         )));
     }
     if plugin.support_tier != source.support_tier {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER, format!(
             "community catalog source '{}' support tier does not match approved tier",
             source.id
         )));
     }
     if plugin.required_signer.github_repository != repo.slug() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO, format!(
             "community catalog source '{}' signer repo '{}' does not match approved repo '{}'",
             source.id,
             plugin.required_signer.github_repository,
@@ -775,7 +775,7 @@ fn validate_community_catalog_v3_delegate(
     }
     let source_repo = GitHubRepo::parse(&plugin.source_repo)?;
     if source_repo != *repo {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO, format!(
             "community catalog source '{}' source repo '{}' does not match approved repo '{}'",
             source.id,
             source_repo.slug(),
@@ -1062,7 +1062,7 @@ impl AppUseCase {
             let source_url = source.source_url.clone();
             let result = async {
                 let repo_slug = source.github_repo.as_deref().ok_or_else(|| {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::plugins::MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO, format!(
                         "manual plugin catalog source '{}' is missing github repo",
                         source.source_key
                     ))
@@ -1171,9 +1171,7 @@ impl AppUseCase {
     async fn fetch_verified_catalog_v3(&self) -> AppResult<(CatalogV3, String, u64)> {
         let (redirect, redirect_url) = self.fetch_verified_catalog_redirect().await?;
         if redirect.artifacts.is_empty() {
-            return Err(AppError::Validation(
-                "plugin catalog redirect did not contain any artifacts".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::CATALOG_ARTIFACTS_MISSING, "plugin catalog redirect did not contain any artifacts".to_string()));
         }
         // A catalog-v3 redirect is an ordered ladder of projections of one
         // catalog, oldest-tolerating first, newest last. Shipped clients pick a
@@ -1216,9 +1214,7 @@ impl AppUseCase {
             }
         }
         Err(last_error.unwrap_or_else(|| {
-            AppError::Validation(
-                "plugin catalog redirect did not yield a usable catalog".to_string(),
-            )
+            AppError::validation_refused(crate::error_reasons::plugins::CATALOG_REDIRECT_DID_NOT_YIELD_USABLE_CATALOG, "plugin catalog redirect did not yield a usable catalog".to_string())
         }))
     }
 
@@ -1428,7 +1424,8 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Err(AppError::Validation(format!(
+            return Err(// Released startup migration 0002 still reads this sentence; preserve its wording.
+            AppError::validation_refused(crate::error_reasons::plugins::ALREADY_INSTALLED, format!(
                 "plugin '{plugin_id}' is already installed"
             )));
         }
@@ -1441,7 +1438,7 @@ impl AppUseCase {
         if available {
             Ok(())
         } else {
-            Err(AppError::NotFound(format!(
+            Err(AppError::not_found_reason(crate::error_reasons::plugins::NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND, format!(
                 "plugin '{plugin_id}' is not available from the plugin catalog"
             )))
         }
@@ -1454,7 +1451,7 @@ impl AppUseCase {
             .plugin_installations
             .get_plugin_installation(plugin_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RESOURCE_NOT_FOUND, format!("plugin '{plugin_id}' not installed")))?;
         Ok(())
     }
 }
@@ -1518,7 +1515,7 @@ impl AppUseCase {
             .await?;
         let installed =
             semver::Version::parse(installed_version.trim_start_matches('v')).map_err(|error| {
-                AppError::Validation(format!("invalid installed pack version: {error}"))
+                AppError::validation_refused(crate::error_reasons::plugins::INSTALLED_PACK_VERSION_INVALID, format!("invalid installed pack version: {error}"))
             })?;
         let catalog = self.load_rule_pack_catalog().await?;
         let Some(pack) = catalog.rule_packs.iter().find(|pack| pack.id == pack_id) else {
@@ -1554,11 +1551,11 @@ impl AppUseCase {
             .rule_packs
             .iter()
             .find(|candidate| candidate.id == pack_id)
-            .ok_or_else(|| AppError::NotFound(format!("rule pack {pack_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::plugins::RULE_PACK_NOT_FOUND, format!("rule pack {pack_id}")))?;
         let (release, artifact) =
             select_rule_pack_candidate(pack_entry, cpu_class, exact_version, None).ok_or_else(
                 || {
-                    AppError::Validation(format!(
+                    AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_NO_COMPATIBLE_ARTIFACT, format!(
                         "rule pack '{pack_id}' has no compatible artifact"
                     ))
                 },
@@ -1637,13 +1634,13 @@ fn validate_rule_pack_manifest(
     registry: &RulePackRegistryEntry,
 ) -> AppResult<()> {
     if manifest.schema_version != 1 {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION, format!(
             "rule pack '{}' uses unsupported schema version {}",
             registry.id, manifest.schema_version
         )));
     }
     if manifest.id != registry.id || manifest.version != registry.version {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION, format!(
             "rule pack '{}' does not match the catalog id/version",
             registry.id
         )));
@@ -1654,14 +1651,14 @@ fn validate_rule_pack_manifest(
         ("author", manifest.author.as_str()),
     ] {
         if value.trim().is_empty() {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_EMPTY, format!(
                 "rule pack '{}' has an empty {field}",
                 registry.id
             )));
         }
     }
     if manifest.rules.is_empty() {
-        return Err(AppError::Validation(format!(
+        return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_CONTAINS_NO_RULES, format!(
             "rule pack '{}' contains no rules",
             registry.id
         )));
@@ -1674,13 +1671,13 @@ fn validate_rule_pack_manifest(
             || rule.category.trim().is_empty()
             || rule.rego_source.trim().is_empty()
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING, format!(
                 "rule pack '{}' contains a rule with required fields missing",
                 registry.id
             )));
         }
         if !ids.insert(rule.id.as_str()) {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::RULE_PACK_CONTAINS_DUPLICATE_RULE_ID, format!(
                 "rule pack '{}' contains duplicate rule id '{}'",
                 registry.id, rule.id
             )));

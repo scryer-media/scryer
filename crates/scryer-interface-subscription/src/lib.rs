@@ -1315,6 +1315,7 @@ mod tests {
             last_updated_at: Some(Utc::now().timestamp_millis().to_string()),
             attention_required: false,
             attention_reason: None,
+            attention_reason_code: None,
             download_client_item_id: id.to_string(),
             download_id: None,
             import_status: None,

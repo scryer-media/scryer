@@ -180,7 +180,12 @@ test("external-only ratings resolve table column aliases", () => {
 });
 
 test("MAL rating pill reuses the existing media-site logo", () => {
-  for (const source of ["mal", "myanimelist", "my-anime-list", "myanimelist.net"]) {
+  for (const source of [
+    "mal",
+    "myanimelist",
+    "my-anime-list",
+    "myanimelist.net",
+  ]) {
     const info = ratingSourceInfo(source);
     assert.equal(info.label, "MyAnimeList");
     assert.equal(info.logoSrc, "/media-sites/mal.svg");

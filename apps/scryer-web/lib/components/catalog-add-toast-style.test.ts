@@ -16,7 +16,10 @@ test("catalog activity cards retain the standard success border above global CSS
   assert.ok(toaster.includes(`"--success-border": "${successBorder}"`));
   // The unlayered global * border-color rule overrides ordinary Tailwind utilities.
   assert.ok(card.includes(`!border-[${successBorder}]`));
-  assert.ok(card.includes("!border-0"), "the outer Sonner frame stays borderless");
+  assert.ok(
+    card.includes("!border-0"),
+    "the outer Sonner frame stays borderless",
+  );
 });
 
 test("every toast variant paints an opaque surface", () => {
@@ -28,9 +31,9 @@ test("every toast variant paints an opaque surface", () => {
   // default showed.
   for (const variant of ["success", "error", "warning", "info"]) {
     assert.ok(
-      new RegExp(`${variant}:\\s*\\n?\\s*"[^"]*!bg-\\[var\\(--background\\)\\]`).test(
-        toaster,
-      ),
+      new RegExp(
+        `${variant}:\\s*\\n?\\s*"[^"]*!bg-\\[var\\(--background\\)\\]`,
+      ).test(toaster),
       `${variant} toast must force the opaque page surface`,
     );
   }

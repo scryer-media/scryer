@@ -10,7 +10,14 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -148,9 +155,12 @@ export function MoveTitlesDialog({
   );
   const soleSourceLibraryId =
     sourceLibraryIds.length === 1 ? sourceLibraryIds[0] : null;
-  const initialLibraryId = libraries.find((library) =>
-    library.roots.some((root) => root.id === initialRootId),
-  )?.id ?? soleSourceLibraryId ?? "";
+  const initialLibraryId =
+    libraries.find((library) =>
+      library.roots.some((root) => root.id === initialRootId),
+    )?.id ??
+    soleSourceLibraryId ??
+    "";
 
   // A preselected root skips destination selection, never method selection.
   const throughWizard = movesThroughWizard(initialRootId);
@@ -158,9 +168,7 @@ export function MoveTitlesDialog({
     initialMoveStep(initialRootId),
   );
   const [kind, setKind] = React.useState<MoveDestinationKind | null>(null);
-  const [libraryId, setLibraryId] = React.useState<string>(
-    initialLibraryId,
-  );
+  const [libraryId, setLibraryId] = React.useState<string>(initialLibraryId);
   const [rootId, setRootId] = React.useState<string>(initialRootId ?? "");
   const mode = moveWizardRequestMode(open, step);
   const chosenMethod = React.useRef<RequestableMoveMode | null>(null);
@@ -273,7 +281,12 @@ export function MoveTitlesDialog({
     // until the destination is settled and the plan step is on screen.
     // On reopen, the previous step may render before its reset takes effect.
     // Only an explicit choice in this wizard session can start discovery.
-    if (!mode || chosenMethod.current !== mode || !rootId || selection.length === 0) {
+    if (
+      !mode ||
+      chosenMethod.current !== mode ||
+      !rootId ||
+      selection.length === 0
+    ) {
       setPreview(null);
       setPreviewLoading(false);
       return undefined;
@@ -309,13 +322,12 @@ export function MoveTitlesDialog({
         if (error) {
           setPreview(null);
           setPreviewError(
-            userFacingGraphQlErrorMessage(error, t("move.previewFailed")),
+            userFacingGraphQlErrorMessage(error, t("move.previewFailed"), t),
           );
           return;
         }
         const next = data?.locationOperationPreview as
-          | LocationOperationPreview
-          | undefined;
+          LocationOperationPreview | undefined;
         if (!next) {
           setPreview(null);
           setPreviewError(t("move.previewFailed"));
@@ -331,7 +343,7 @@ export function MoveTitlesDialog({
         }
         setPreview(null);
         setPreviewError(
-          userFacingGraphQlErrorMessage(error, t("move.previewFailed")),
+          userFacingGraphQlErrorMessage(error, t("move.previewFailed"), t),
         );
       })
       .finally(() => {
@@ -345,7 +357,17 @@ export function MoveTitlesDialog({
     // `selectionKey` stands in for `selection`: the identity changes on every
     // render, the contents do not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, libraryId, mode, open, previewNonce, rootId, selectionKey, step, t]);
+  }, [
+    client,
+    libraryId,
+    mode,
+    open,
+    previewNonce,
+    rootId,
+    selectionKey,
+    step,
+    t,
+  ]);
 
   // Only the classes this selection actually falls into; an empty class is
   // omitted, not shown as an empty box.
@@ -375,7 +397,10 @@ export function MoveTitlesDialog({
   // plan-item folders are the fallback for the moving titles, whose calculated
   // destination folder only the plan knows.
   const foldersByTitle = React.useMemo(() => {
-    const folders = new Map<string, { source: string | null; destination: string | null }>();
+    const folders = new Map<
+      string,
+      { source: string | null; destination: string | null }
+    >();
     for (const section of preview?.sections ?? []) {
       for (const item of section.items) {
         if (!item.titleId) {
@@ -388,7 +413,8 @@ export function MoveTitlesDialog({
         });
       }
     }
-    for (const folder of preview?.folders ?? []) folders.set(folder.titleId, folder);
+    for (const folder of preview?.folders ?? [])
+      folders.set(folder.titleId, folder);
     return folders;
   }, [preview]);
 
@@ -471,7 +497,7 @@ export function MoveTitlesDialog({
       setKind(value);
       // Staying inside the library pins the destination library to the source;
       // leaving it starts from no library at all, so the picker is a choice.
-      setLibraryId(value === "root" ? soleSourceLibraryId ?? "" : "");
+      setLibraryId(value === "root" ? (soleSourceLibraryId ?? "") : "");
       setRootId("");
     },
     [soleSourceLibraryId],
@@ -508,7 +534,7 @@ export function MoveTitlesDialog({
         // kind itself stays selected, because that is the step's own control.
         // The library follows the kind the way `chooseKind` set it, so a
         // transfer never comes back with the source library silently pinned.
-        setLibraryId(kind === "root" ? soleSourceLibraryId ?? "" : "");
+        setLibraryId(kind === "root" ? (soleSourceLibraryId ?? "") : "");
         setRootId("");
       }
       return previous;
@@ -599,7 +625,9 @@ export function MoveTitlesDialog({
           <div className="space-y-2">
             <RadioGroup
               value={kind ?? ""}
-              onValueChange={(value) => chooseKind(value as MoveDestinationKind)}
+              onValueChange={(value) =>
+                chooseKind(value as MoveDestinationKind)
+              }
               className="space-y-2"
             >
               <label
@@ -767,151 +795,276 @@ export function MoveTitlesDialog({
              card, whose icon is an svg, would sit narrower than the managed
              one, whose icon is an img. */
           <div className="grid min-h-48 content-center gap-3 sm:grid-cols-2">
-            <Button variant="outline" className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6" onClick={() => chooseMethod("MOVE_WITH_SCRYER")}>
-              <img src={`${import.meta.env.BASE_URL}scryer-icon-192.png`} alt="" aria-hidden="true" className="size-10" />
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6"
+              id="move-titles-method-managed"
+              onClick={() => chooseMethod("MOVE_WITH_SCRYER")}
+            >
+              <img
+                src={`${import.meta.env.BASE_URL}scryer-icon-192.png`}
+                alt=""
+                aria-hidden="true"
+                className="size-10"
+              />
               {t("move.methodManaged")}
             </Button>
-            <Button variant="outline" className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6" onClick={() => chooseMethod("USER_MOVED_FILES")}>
-              <User aria-hidden="true" className="size-10 text-[var(--scry-muted2)]" />
+            <Button
+              variant="outline"
+              className="h-auto flex-col gap-3 whitespace-normal p-6 text-base has-[>svg]:px-6"
+              id="move-titles-method-manual"
+              onClick={() => chooseMethod("USER_MOVED_FILES")}
+            >
+              <User
+                aria-hidden="true"
+                className="size-10 text-[var(--scry-muted2)]"
+              />
               {t("move.methodManual")}
             </Button>
           </div>
         ) : previewLoading ? (
-          <div role="status" aria-live="polite" className="flex min-h-64 flex-col items-center justify-center gap-4">
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex min-h-64 flex-col items-center justify-center gap-4"
+          >
             <LoadingMark className="h-9 w-9 text-primary" />
-            <p className="text-sm text-muted-foreground">{t(step === "manual" ? "move.manualLoading" : "move.gatheringInfo")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t(
+                step === "manual" ? "move.manualLoading" : "move.gatheringInfo",
+              )}
+            </p>
           </div>
         ) : step === "manual" ? (
           <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto">
             <p className="font-medium">{t("move.manualInstructions")}</p>
-            <p className="text-sm text-muted-foreground">{t("move.manualStructure")}</p>
-            <LocationOperationErrorNotice id="move-manual-preview-error" message={previewError ?? startError} />
-            {manualMappingChanged && <p role="status" className="text-sm text-[var(--scry-warning-text)]">{t("move.manualMappingChanged")}</p>}
-            {(previewError || planChanged) && <Button variant="outline" onClick={rePreview}>{t("move.retryInstructions")}</Button>}
+            <p className="text-sm text-muted-foreground">
+              {t("move.manualStructure")}
+            </p>
+            <LocationOperationErrorNotice
+              id="move-manual-preview-error"
+              message={previewError ?? startError}
+            />
+            {manualMappingChanged && (
+              <p
+                role="status"
+                className="text-sm text-[var(--scry-warning-text)]"
+              >
+                {t("move.manualMappingChanged")}
+              </p>
+            )}
+            {(previewError || planChanged) && (
+              <Button variant="outline" onClick={rePreview}>
+                {t("move.retryInstructions")}
+              </Button>
+            )}
             <Table>
-              <TableHeader><TableRow><TableHead>{t("label.title")}</TableHead><TableHead>{t("move.manualSource")}</TableHead><TableHead>{t("move.manualDestination")}</TableHead></TableRow></TableHeader>
-              <TableBody>{selection.slice(manualPage * 50, (manualPage + 1) * 50).map((id) => {
-                const folders = foldersByTitle.get(id);
-                const summary = mergesByTitle.get(id);
-                const entry = groups.flatMap((group) => group.titles).find((row) => row.titleId === id);
-                return <React.Fragment key={id}><TableRow>
-                  <TableCell>{titleName(id) ?? id}</TableCell>
-                  <TableCell className="break-all">{folders?.source ?? entry?.sourceFolderPath ?? "—"}</TableCell>
-                  <TableCell className="break-all">{folders?.destination ?? (entry?.class === "NO_OP" ? entry.sourceFolderPath : null) ?? "—"}</TableCell>
-                </TableRow>{summary && entry && <TableRow><TableCell colSpan={3}><MergeNote summary={mergeSummaryPresentation(entry, summary, { resolveTitleName: titleName })} t={t} /></TableCell></TableRow>}</React.Fragment>;
-              })}</TableBody>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("label.title")}</TableHead>
+                  <TableHead>{t("move.manualSource")}</TableHead>
+                  <TableHead>{t("move.manualDestination")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {selection
+                  .slice(manualPage * 50, (manualPage + 1) * 50)
+                  .map((id) => {
+                    const folders = foldersByTitle.get(id);
+                    const summary = mergesByTitle.get(id);
+                    const entry = groups
+                      .flatMap((group) => group.titles)
+                      .find((row) => row.titleId === id);
+                    return (
+                      <React.Fragment key={id}>
+                        <TableRow>
+                          <TableCell>{titleName(id) ?? id}</TableCell>
+                          <TableCell className="break-all">
+                            {folders?.source ?? entry?.sourceFolderPath ?? "—"}
+                          </TableCell>
+                          <TableCell className="break-all">
+                            {folders?.destination ??
+                              (entry?.class === "NO_OP"
+                                ? entry.sourceFolderPath
+                                : null) ??
+                              "—"}
+                          </TableCell>
+                        </TableRow>
+                        {summary && entry && (
+                          <TableRow>
+                            <TableCell colSpan={3}>
+                              <MergeNote
+                                summary={mergeSummaryPresentation(
+                                  entry,
+                                  summary,
+                                  { resolveTitleName: titleName },
+                                )}
+                                t={t}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+              </TableBody>
             </Table>
-            {selection.length > 50 && <div className="flex items-center justify-between text-sm">
-              <Button variant="outline" disabled={manualPage === 0} onClick={() => setManualPage((page) => page - 1)}>{t("move.transferPrevious")}</Button>
-              <span>{manualPage * 50 + 1}–{Math.min((manualPage + 1) * 50, selection.length)} / {selection.length}</span>
-              <Button variant="outline" disabled={(manualPage + 1) * 50 >= selection.length} onClick={() => setManualPage((page) => page + 1)}>{t("move.transferNext")}</Button>
-            </div>}
-            {preview?.warnings.map((warning) => <p key={warning} className="text-sm text-[var(--scry-warning-text)]">{warning}</p>)}
-            {blocked.map((row) => <p key={row.titleId} className="text-sm text-[var(--scry-danger-text)]">{row.reason}</p>)}
+            {selection.length > 50 && (
+              <div className="flex items-center justify-between text-sm">
+                <Button
+                  variant="outline"
+                  disabled={manualPage === 0}
+                  onClick={() => setManualPage((page) => page - 1)}
+                >
+                  {t("move.transferPrevious")}
+                </Button>
+                <span>
+                  {manualPage * 50 + 1}–
+                  {Math.min((manualPage + 1) * 50, selection.length)} /{" "}
+                  {selection.length}
+                </span>
+                <Button
+                  variant="outline"
+                  disabled={(manualPage + 1) * 50 >= selection.length}
+                  onClick={() => setManualPage((page) => page + 1)}
+                >
+                  {t("move.transferNext")}
+                </Button>
+              </div>
+            )}
+            {preview?.warnings.map((warning) => (
+              <p
+                key={warning}
+                className="text-sm text-[var(--scry-warning-text)]"
+              >
+                {warning}
+              </p>
+            ))}
+            {blocked.map((row) => (
+              <p
+                key={row.titleId}
+                className="text-sm text-[var(--scry-danger-text)]"
+              >
+                {row.reason}
+              </p>
+            ))}
           </div>
         ) : (
-        <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto pr-1">
-          <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-            <div className="min-w-0 text-sm">
-              <p className="font-medium">{libraryName(libraryId) ?? libraryId}</p>
-              <p className="break-all text-muted-foreground">{rootPathById.get(rootId) ?? rootId}</p>
-            </div>
-            <Button variant="outline" size="sm" disabled={starting} onClick={() => {
-              setPreview(null);
-              setKind(libraryId === soleSourceLibraryId ? "root" : "library");
-              setStep("destination");
-            }}>{t("move.changeDestination")}</Button>
-          </div>
-
-          {preview && !offersModeSelection(preview) ? (
-            <p
-              id="move-titles-catalog-only"
-              className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground"
-            >
-              {t("move.catalogOnlyFastPath")}
-            </p>
-          ) : null}
-
-          {!rootId ? (
-            <p className="rounded-lg border border-border px-3 py-6 text-sm text-muted-foreground">
-              {t("move.selectDestinationPrompt")}
-            </p>
-          ) : null}
-
-          {previewLoading ? (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoadingMark className="h-4 w-4" />
-              {t("move.previewLoading")}
-            </p>
-          ) : null}
-
-          <LocationOperationErrorNotice
-            id="move-titles-preview-error"
-            message={previewError}
-          />
-
-          {planChanged ? (
-            <div
-              id="move-titles-plan-changed"
-              className="flex items-start justify-between gap-3 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-3 text-sm text-[var(--scry-warning-text)]"
-            >
-              <span>{t("move.planChanged")}</span>
+          <div className="max-h-[65vh] min-h-64 space-y-4 overflow-y-auto pr-1">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+              <div className="min-w-0 text-sm">
+                <p className="font-medium">
+                  {libraryName(libraryId) ?? libraryId}
+                </p>
+                <p className="break-all text-muted-foreground">
+                  {rootPathById.get(rootId) ?? rootId}
+                </p>
+              </div>
               <Button
-                type="button"
                 variant="outline"
                 size="sm"
-                onClick={rePreview}
+                disabled={starting}
+                onClick={() => {
+                  setPreview(null);
+                  setKind(
+                    libraryId === soleSourceLibraryId ? "root" : "library",
+                  );
+                  setStep("destination");
+                }}
               >
-                {t("move.rePreview")}
+                {t("move.changeDestination")}
               </Button>
             </div>
-          ) : null}
 
-          {preview ? (
-            <>
-              <dl className="grid gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm sm:grid-cols-3">
-                <SummaryCell
-                  label={t("move.summaryTitles")}
-                  value={String(toCount(preview.counts.titlesTotal))}
-                />
-                {totalFiles > 0 ? (
-                  <>
-                    <SummaryCell
-                      label={t("move.summaryFiles")}
-                      value={String(totalFiles)}
-                    />
-                    <SummaryCell
-                      label={t("move.summarySize")}
-                      value={formatByteCount(totalBytes)}
-                    />
-                  </>
-                ) : null}
-              </dl>
+            {preview && !offersModeSelection(preview) ? (
+              <p
+                id="move-titles-catalog-only"
+                className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm text-muted-foreground"
+              >
+                {t("move.catalogOnlyFastPath")}
+              </p>
+            ) : null}
 
-              {planKindCounts.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {planKindCounts.map((entry) => (
-                    <Badge key={entry.kind} tone="outline">
-                      {t(planKindLabelKey(entry.kind))} · {entry.count}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
+            {!rootId ? (
+              <p className="rounded-lg border border-border px-3 py-6 text-sm text-muted-foreground">
+                {t("move.selectDestinationPrompt")}
+              </p>
+            ) : null}
 
-              {blocked.length > 0 ? (
-                <div
-                  id="move-titles-blocked"
-                  className="space-y-2 rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3"
+            {previewLoading ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <LoadingMark className="h-4 w-4" />
+                {t("move.previewLoading")}
+              </p>
+            ) : null}
+
+            <LocationOperationErrorNotice
+              id="move-titles-preview-error"
+              message={previewError}
+            />
+
+            {planChanged ? (
+              <div
+                id="move-titles-plan-changed"
+                className="flex items-start justify-between gap-3 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-3 text-sm text-[var(--scry-warning-text)]"
+              >
+                <span>{t("move.planChanged")}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={rePreview}
                 >
-                  <p className="flex items-center gap-2 text-sm font-medium text-[var(--scry-danger-text)]">
-                    <TriangleAlert className="h-4 w-4 shrink-0" />
-                    {t("move.blockedHeading", { count: blocked.length })}
-                  </p>
-                  <p className="text-xs text-[var(--scry-danger-text)]">
-                    {t("move.blockedHelp")}
-                  </p>
-                  <ul className="space-y-1">
-                    {blocked.map((row) => (
+                  {t("move.rePreview")}
+                </Button>
+              </div>
+            ) : null}
+
+            {preview ? (
+              <>
+                <dl className="grid gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm sm:grid-cols-3">
+                  <SummaryCell
+                    label={t("move.summaryTitles")}
+                    value={String(toCount(preview.counts.titlesTotal))}
+                  />
+                  {totalFiles > 0 ? (
+                    <>
+                      <SummaryCell
+                        label={t("move.summaryFiles")}
+                        value={String(totalFiles)}
+                      />
+                      <SummaryCell
+                        label={t("move.summarySize")}
+                        value={formatByteCount(totalBytes)}
+                      />
+                    </>
+                  ) : null}
+                </dl>
+
+                {planKindCounts.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {planKindCounts.map((entry) => (
+                      <Badge key={entry.kind} tone="outline">
+                        {t(planKindLabelKey(entry.kind))} · {entry.count}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+
+                {blocked.length > 0 ? (
+                  <div
+                    id="move-titles-blocked"
+                    className="space-y-2 rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3"
+                  >
+                    <p className="flex items-center gap-2 text-sm font-medium text-[var(--scry-danger-text)]">
+                      <TriangleAlert className="h-4 w-4 shrink-0" />
+                      {t("move.blockedHeading", { count: blocked.length })}
+                    </p>
+                    <p className="text-xs text-[var(--scry-danger-text)]">
+                      {t("move.blockedHelp")}
+                    </p>
+                    <ul className="space-y-1">
+                      {blocked.map((row) => (
                         <li
                           key={row.titleId}
                           className="space-y-1 text-sm text-[var(--scry-danger-text)]"
@@ -941,179 +1094,185 @@ export function MoveTitlesDialog({
                             />
                           ) : null}
                         </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {deselected.size > 0 ? (
+                  <p className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground">
+                    <span>
+                      {t("move.deselectedCount", { count: deselected.size })}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={restoreSelection}
+                      disabled={starting}
+                    >
+                      {t("move.restoreSelection")}
+                    </Button>
+                  </p>
+                ) : null}
+
+                {/* Only the classes with titles in them; the group counts still
+                  sum to the selection, so nothing reads as dropped. */}
+                {groups.length > 0 ? (
+                  <div className="space-y-2">
+                    {groups.map((group) => (
+                      <ClassificationGroup
+                        key={group.class}
+                        groupClass={group.class}
+                        count={toCount(group.count)}
+                        entries={group.titles}
+                        titleName={(titleId) =>
+                          titleById.get(titleId)?.name ?? titleId
+                        }
+                        currentLibraryName={(entry) =>
+                          libraryById.get(entry.sourceLibraryId)?.name ??
+                          titleById.get(entry.titleId)?.libraryName ??
+                          null
+                        }
+                        placement={(entry) =>
+                          classifiedTitlePlacement(entry, {
+                            planFolders: foldersByTitle,
+                            rootPathById,
+                          })
+                        }
+                        files={filesByTitle}
+                        destinationLibraryName={libraryName}
+                        mergeSummary={(entry) =>
+                          mergeSummaryPresentation(
+                            entry,
+                            mergesByTitle.get(entry.titleId) ?? null,
+                            { resolveTitleName: titleName },
+                          )
+                        }
+                        onDeselect={deselect}
+                        deselectDisabled={starting}
+                        t={t}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+
+                {sections.length > 0 ? (
+                  <div className="space-y-2">
+                    {sections.map((section) => (
+                      <details
+                        key={section.kind}
+                        className="rounded-lg border border-border bg-muted/10 px-3 py-2"
+                      >
+                        <summary className="cursor-pointer text-sm text-foreground">
+                          {t(planKindLabelKey(section.kind))} ·{" "}
+                          {toCount(section.itemsTotal)} ·{" "}
+                          {formatByteCount(toCount(section.bytesTotal))}
+                          {section.complete
+                            ? ""
+                            : ` · ${t("move.sampledItems")}`}
+                        </summary>
+                        <ul className="mt-2 space-y-1">
+                          {section.items.map((item, index) => (
+                            <PlanItemRow
+                              key={`${section.kind}-${index}`}
+                              item={item}
+                            />
+                          ))}
+                        </ul>
+                      </details>
+                    ))}
+                  </div>
+                ) : null}
+
+                {freeSpaceNote ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm">
+                    <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 space-y-0.5">
+                      {freeSpaceNote.sameVolumeMove ? null : (
+                        <p className="text-foreground">
+                          {t("move.freeSpaceRequired", {
+                            required: formatByteCount(
+                              toCount(
+                                freeSpaceNote.destinationTotalRequiredBytes,
+                              ),
+                            ),
+                            available:
+                              freeSpaceNote.destinationAvailableBytes === null
+                                ? t("move.freeSpaceUnknown")
+                                : formatByteCount(
+                                    toCount(
+                                      freeSpaceNote.destinationAvailableBytes,
+                                    ),
+                                  ),
+                          })}
+                        </p>
+                      )}
+                      {freeSpaceNote.sufficient === false ? (
+                        <p className="text-xs text-[var(--scry-danger-text)]">
+                          {t("move.freeSpaceInsufficient")}
+                        </p>
+                      ) : null}
+                      {!freeSpaceNote.probed ? (
+                        <p className="text-xs text-muted-foreground">
+                          {t("move.freeSpaceNotProbed")}
+                        </p>
+                      ) : null}
+                      {freeSpaceNote.recycleOnOtherVolume ? (
+                        <p className="text-xs text-muted-foreground">
+                          {t("move.freeSpaceRecycleOtherVolume", {
+                            required: formatByteCount(
+                              toCount(freeSpaceNote.recycleRequiredBytes),
+                            ),
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {preview.warnings.length > 0 ? (
+                  <ul
+                    id="move-titles-warnings"
+                    className="space-y-1 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-3 text-sm text-[var(--scry-warning-text)]"
+                  >
+                    {preview.warnings.map((warning) => (
+                      <li key={warning} className="flex items-start gap-2">
+                        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{warning}</span>
+                      </li>
                     ))}
                   </ul>
-                </div>
-              ) : null}
+                ) : null}
 
-              {deselected.size > 0 ? (
-                <p className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground">
-                  <span>
-                    {t("move.deselectedCount", { count: deselected.size })}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={restoreSelection}
-                    disabled={starting}
-                  >
-                    {t("move.restoreSelection")}
-                  </Button>
-                </p>
-              ) : null}
-
-              {/* Only the classes with titles in them; the group counts still
-                  sum to the selection, so nothing reads as dropped. */}
-              {groups.length > 0 ? (
-                <div className="space-y-2">
-                  {groups.map((group) => (
-                    <ClassificationGroup
-                      key={group.class}
-                      groupClass={group.class}
-                      count={toCount(group.count)}
-                      entries={group.titles}
-                      titleName={(titleId) =>
-                        titleById.get(titleId)?.name ?? titleId
-                      }
-                      currentLibraryName={(entry) =>
-                        libraryById.get(entry.sourceLibraryId)?.name ??
-                        titleById.get(entry.titleId)?.libraryName ??
-                        null
-                      }
-                      placement={(entry) =>
-                        classifiedTitlePlacement(entry, {
-                          planFolders: foldersByTitle,
-                          rootPathById,
-                        })
-                      }
-                      files={filesByTitle}
-                      destinationLibraryName={libraryName}
-                      mergeSummary={(entry) =>
-                        mergeSummaryPresentation(
-                          entry,
-                          mergesByTitle.get(entry.titleId) ?? null,
-                          { resolveTitleName: titleName },
-                        )
-                      }
-                      onDeselect={deselect}
-                      deselectDisabled={starting}
-                      t={t}
-                    />
-                  ))}
-                </div>
-              ) : null}
-
-              {sections.length > 0 ? (
-                <div className="space-y-2">
-                  {sections.map((section) => (
-                    <details
-                      key={section.kind}
-                      className="rounded-lg border border-border bg-muted/10 px-3 py-2"
+                {preview.confirmation.requirement === "TYPED" ? (
+                  <div className="space-y-1">
+                    <label
+                      className="block text-xs font-medium text-muted-foreground"
+                      htmlFor="move-titles-typed-confirmation"
                     >
-                      <summary className="cursor-pointer text-sm text-foreground">
-                        {t(planKindLabelKey(section.kind))} ·{" "}
-                        {toCount(section.itemsTotal)} ·{" "}
-                        {formatByteCount(toCount(section.bytesTotal))}
-                        {section.complete ? "" : ` · ${t("move.sampledItems")}`}
-                      </summary>
-                      <ul className="mt-2 space-y-1">
-                        {section.items.map((item, index) => (
-                          <PlanItemRow
-                            key={`${section.kind}-${index}`}
-                            item={item}
-                          />
-                        ))}
-                      </ul>
-                    </details>
-                  ))}
-                </div>
-              ) : null}
-
-              {freeSpaceNote ? (
-                <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-sm">
-                  <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 space-y-0.5">
-                    {freeSpaceNote.sameVolumeMove ? null : (
-                      <p className="text-foreground">
-                        {t("move.freeSpaceRequired", {
-                          required: formatByteCount(
-                            toCount(freeSpaceNote.destinationTotalRequiredBytes),
-                          ),
-                          available:
-                            freeSpaceNote.destinationAvailableBytes === null
-                              ? t("move.freeSpaceUnknown")
-                              : formatByteCount(
-                                  toCount(freeSpaceNote.destinationAvailableBytes),
-                                ),
-                        })}
-                      </p>
-                    )}
-                    {freeSpaceNote.sufficient === false ? (
-                      <p className="text-xs text-[var(--scry-danger-text)]">
-                        {t("move.freeSpaceInsufficient")}
-                      </p>
-                    ) : null}
-                    {!freeSpaceNote.probed ? (
-                      <p className="text-xs text-muted-foreground">
-                        {t("move.freeSpaceNotProbed")}
-                      </p>
-                    ) : null}
-                    {freeSpaceNote.recycleOnOtherVolume ? (
-                      <p className="text-xs text-muted-foreground">
-                        {t("move.freeSpaceRecycleOtherVolume", {
-                          required: formatByteCount(
-                            toCount(freeSpaceNote.recycleRequiredBytes),
-                          ),
-                        })}
-                      </p>
-                    ) : null}
+                      {preview.confirmation.typedPrompt ??
+                        t("move.typedConfirmationPrompt")}
+                    </label>
+                    <Input
+                      id="move-titles-typed-confirmation"
+                      value={typedConfirmation}
+                      onChange={(event) =>
+                        setTypedConfirmation(event.target.value)
+                      }
+                      placeholder={preview.confirmation.typedPhrase ?? ""}
+                      disabled={starting}
+                    />
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </>
+            ) : null}
 
-              {preview.warnings.length > 0 ? (
-                <ul
-                  id="move-titles-warnings"
-                  className="space-y-1 rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-3 text-sm text-[var(--scry-warning-text)]"
-                >
-                  {preview.warnings.map((warning) => (
-                    <li key={warning} className="flex items-start gap-2">
-                      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{warning}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              {preview.confirmation.requirement === "TYPED" ? (
-                <div className="space-y-1">
-                  <label
-                    className="block text-xs font-medium text-muted-foreground"
-                    htmlFor="move-titles-typed-confirmation"
-                  >
-                    {preview.confirmation.typedPrompt ??
-                      t("move.typedConfirmationPrompt")}
-                  </label>
-                  <Input
-                    id="move-titles-typed-confirmation"
-                    value={typedConfirmation}
-                    onChange={(event) =>
-                      setTypedConfirmation(event.target.value)
-                    }
-                    placeholder={preview.confirmation.typedPhrase ?? ""}
-                    disabled={starting}
-                  />
-                </div>
-              ) : null}
-            </>
-          ) : null}
-
-          <LocationOperationErrorNotice
-            id="move-titles-start-error"
-            message={startError}
-          />
-        </div>
+            <LocationOperationErrorNotice
+              id="move-titles-start-error"
+              message={startError}
+            />
+          </div>
         )}
 
         <DialogFooter>
@@ -1135,7 +1294,10 @@ export function MoveTitlesDialog({
               {/* Back exists wherever there is a step behind this one: always on
                   the destination step, and on the plan step only when the
                   wizard is what got us there (a bulk edit opened on the plan). */}
-              {step === "destination" || step === "plan" || step === "manual" || (step === "method" && throughWizard) ? (
+              {step === "destination" ||
+              step === "plan" ||
+              step === "manual" ||
+              (step === "method" && throughWizard) ? (
                 <Button
                   id="move-titles-back"
                   type="button"
@@ -1487,7 +1649,8 @@ function MergeNote({
                         >
                           {change.episodeLabel ? (
                             <span className="text-foreground">
-                              {change.episodeLabel}{" · "}
+                              {change.episodeLabel}
+                              {" · "}
                             </span>
                           ) : null}
                           {change.fileName ??
@@ -1584,4 +1747,3 @@ function BlockedIdentityDetail({
     </div>
   );
 }
-

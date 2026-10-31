@@ -81,17 +81,34 @@ export function BulkRenamePreviewSummary({
             })}
           </div>
           <div className="max-h-64 space-y-2 overflow-auto text-xs">
-            <p>{t("rename.organizingFolderChanges", {
-              count: Object.values(plansByTitleId).reduce((count, plan) => count + (plan.organizingFolderChanges ?? 0), 0),
-            })}</p>
-            {titles.flatMap((title) => (plansByTitleId[title.id]?.namingContext ?? []).map((context) => (
-              <div key={context.titleId} className="break-all rounded border border-border p-2">
-                <p>{title.name} · {t("rename.namingLanguage", { language: context.language })}</p>
-                <p className="font-[var(--font-code)]">{context.currentRelativePath ?? "—"}</p>
-                <ArrowDown aria-hidden className="my-1 h-3 w-3" />
-                <p className="font-[var(--font-code)]">{context.proposedRelativePath}</p>
-              </div>
-            )))}
+            <p>
+              {t("rename.organizingFolderChanges", {
+                count: Object.values(plansByTitleId).reduce(
+                  (count, plan) => count + (plan.organizingFolderChanges ?? 0),
+                  0,
+                ),
+              })}
+            </p>
+            {titles.flatMap((title) =>
+              (plansByTitleId[title.id]?.namingContext ?? []).map((context) => (
+                <div
+                  key={context.titleId}
+                  className="break-all rounded border border-border p-2"
+                >
+                  <p>
+                    {title.name} ·{" "}
+                    {t("rename.namingLanguage", { language: context.language })}
+                  </p>
+                  <p className="font-[var(--font-code)]">
+                    {context.currentRelativePath ?? "—"}
+                  </p>
+                  <ArrowDown aria-hidden className="my-1 h-3 w-3" />
+                  <p className="font-[var(--font-code)]">
+                    {context.proposedRelativePath}
+                  </p>
+                </div>
+              )),
+            )}
           </div>
           {entries.length === 0 ? (
             <p className="rounded border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">

@@ -35,7 +35,7 @@ const WINDOW_EXHAUSTED_PREFIX: &str = "cannot open PostgreSQL database after ret
 /// within the startup window, as opposed to a configuration or migration
 /// failure that a restart would not fix.
 pub fn is_startup_window_exhausted(error: &AppError) -> bool {
-    matches!(error, AppError::Repository(message) if message.starts_with(WINDOW_EXHAUSTED_PREFIX))
+    error.repository_kind() == Some(scryer_application::RepositoryErrorKind::StartupWindowExhausted)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,7 +300,14 @@ pub(super) async fn connect_pool_with_startup_retry(
                     STARTUP_TIMEOUT_ENV
                 );
             }
-            Err(AppError::Repository(startup_failure_message(&failure)))
+            Err(AppError::repository_failure(
+                if failure.window_exhausted {
+                    scryer_application::RepositoryErrorKind::StartupWindowExhausted
+                } else {
+                    scryer_application::RepositoryErrorKind::Other
+                },
+                startup_failure_message(&failure),
+            ))
         }
     }
 }
@@ -571,7 +578,10 @@ mod tests {
             ),
             "{message}"
         );
-        assert!(is_startup_window_exhausted(&AppError::Repository(message)));
+        assert!(is_startup_window_exhausted(&AppError::repository_failure(
+            scryer_application::RepositoryErrorKind::StartupWindowExhausted,
+            message
+        )));
 
         let rejected = RetryFailure {
             error: StartupConnectError::Sqlx(server_error("28P01")),

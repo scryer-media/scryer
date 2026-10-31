@@ -12,7 +12,10 @@ declare global {
   }
 }
 
-function normalizeOptionalValue(value: string | undefined | null, placeholder: string): string | null {
+function normalizeOptionalValue(
+  value: string | undefined | null,
+  placeholder: string,
+): string | null {
   const trimmed = value?.trim();
   if (!trimmed || trimmed === placeholder) {
     return null;
@@ -39,7 +42,10 @@ function defaultGraphqlUrl(basePath: string): string {
 }
 
 function readRuntimeConfig(): { basePath: string; graphqlUrl: string } {
-  const runtime = typeof window !== "undefined" ? window.__SCRYER_RUNTIME_CONFIG__ : undefined;
+  const runtime =
+    typeof window !== "undefined"
+      ? window.__SCRYER_RUNTIME_CONFIG__
+      : undefined;
   const basePath = normalizeBasePath(
     normalizeOptionalValue(runtime?.basePath, BASE_PATH_PLACEHOLDER) ??
       import.meta.env.SCRYER_BASE_PATH,
@@ -71,12 +77,15 @@ export function buildAppUrl(path: string): string {
 export function getRuntimeBackendUrl(path: string): string {
   const suffix = path.startsWith("/") ? path : `/${path}`;
   if (typeof window === "undefined") {
-    const basePath = runtimeConfig.basePath === "/" ? "" : runtimeConfig.basePath;
+    const basePath =
+      runtimeConfig.basePath === "/" ? "" : runtimeConfig.basePath;
     return `${basePath}${suffix}`;
   }
 
   const url = new URL(runtimeConfig.graphqlUrl, window.location.origin);
-  const apiBasePath = url.pathname.replace(/\/graphql\/?$/, "").replace(/\/+$/, "");
+  const apiBasePath = url.pathname
+    .replace(/\/graphql\/?$/, "")
+    .replace(/\/+$/, "");
   url.pathname = `${apiBasePath}${suffix}`;
   url.search = "";
   url.hash = "";

@@ -134,8 +134,9 @@ impl QualityProfileRepository for QualityProfileStore {
     ) -> AppResult<Vec<QualityProfile>> {
         let scope = scope.trim().to_string();
         if scope.is_empty() {
-            return Err(AppError::Validation(
-                "scope is required to list quality profiles".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_QUALITY_PROFILE_SCOPE_REQUIRED,
+                "scope is required to list quality profiles",
             ));
         }
 
@@ -160,8 +161,9 @@ impl QualityProfileRepository for QualityProfileStore {
     ) -> AppResult<()> {
         let scope = scope.trim().to_string();
         if scope.is_empty() {
-            return Err(AppError::Validation(
-                "scope is required to replace quality profiles".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_QUALITY_PROFILE_REPLACEMENT_SCOPE_REQUIRED,
+                "scope is required to replace quality profiles",
             ));
         }
 

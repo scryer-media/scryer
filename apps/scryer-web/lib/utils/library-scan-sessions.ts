@@ -42,7 +42,9 @@ export function activeLibraryScanSessionsForSelection(
     (session) =>
       session.facet === facet &&
       !isTerminalLibraryScanStatus(session.status) &&
-      (session.libraryId == null || selected.size === 0 || selected.has(session.libraryId)),
+      (session.libraryId == null ||
+        selected.size === 0 ||
+        selected.has(session.libraryId)),
   );
 }
 
@@ -69,7 +71,9 @@ export function didActiveLibraryScanSessionEnd(
   );
 }
 
-export function libraryScanProgressKey(sessions: LibraryScanProgress[]): string {
+export function libraryScanProgressKey(
+  sessions: LibraryScanProgress[],
+): string {
   return [...sessions]
     .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
     .map((session) =>

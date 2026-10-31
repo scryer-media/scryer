@@ -65,8 +65,9 @@ fn start_location_target(
                 },
             )),
         }),
-        _ => Err(to_gql_error(AppError::Validation(
-            "name exactly one of a title selection or a root-scoped target".to_string(),
+        _ => Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_LOCATION_TARGET_INVALID,
+            "name exactly one of a title selection or a root-scoped target",
         ))),
     }
 }

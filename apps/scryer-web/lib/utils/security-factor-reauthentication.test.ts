@@ -21,7 +21,10 @@ test("pending actions wait for a later reauthentication generation", () => {
 });
 
 test("a consumed action cannot be reused by a later generation", () => {
-  const pending = queueReauthenticationAction({ kind: "start-totp-enrollment" }, 1);
+  const pending = queueReauthenticationAction(
+    { kind: "start-totp-enrollment" },
+    1,
+  );
   const resumed = consumeReauthenticatedAction(pending, 2);
 
   assert.deepEqual(consumeReauthenticatedAction(resumed.pending, 3), {

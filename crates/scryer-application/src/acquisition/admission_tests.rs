@@ -999,6 +999,8 @@ fn a_manual_pack_grab_still_cannot_fetch_an_unaired_season() {
 
 fn queued(title: &str, tier_index: Option<usize>, revision: i32, score: i32) -> QueuedRelease {
     QueuedRelease {
+        missing_history: false,
+        history_cutoff_reached: false,
         release_group: Some("group".into()),
         title: title.to_string(),
         covers: Vec::new(),
@@ -1014,6 +1016,33 @@ fn grab_policy_with_queue(min_delta: i32) -> AdmissionPolicy {
     AdmissionPolicy {
         applies_to_queue: true,
         ..auto(min_delta)
+    }
+}
+
+#[test]
+fn missing_grab_history_honors_cutoff_without_changing_live_queue_policy() {
+    for at_cutoff in [false, true] {
+        let mut history = queued("Show.S01E01.1080p.WEB-DL-GRP", Some(1), 0, 900);
+        history.history_cutoff_reached = at_cutoff;
+        let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![history]);
+        let policy = grab_policy_with_queue(10);
+        for (tier, revision, score, allowed) in [
+            (1, 0, 900, false),
+            (2, 0, 2000, false),
+            (0, 0, 900, !at_cutoff),
+            (1, 0, 1000, !at_cutoff),
+            (1, 1, 900, true),
+        ] {
+            let candidate = CandidateFacts::new(Some(tier), revision, score)
+                .with_revision_policy(Some("group"), false);
+            assert_eq!(
+                evaluate_admission(&subject, candidate, &policy)
+                    .rejection()
+                    .is_none(),
+                allowed,
+                "cutoff={at_cutoff}, tier={tier}, revision={revision}, score={score}"
+            );
+        }
     }
 }
 

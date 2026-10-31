@@ -187,6 +187,7 @@ async fn run_import(
         if let Ok(result) = &mut result
             && result.decision == ImportDecision::Imported
         {
+            result.skip_reason = Some(ImportSkipReason::SceneSubtitlePending);
             result.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
             // Keep the placed video successful while persisting the cleanup hold.
             if app
@@ -464,7 +465,7 @@ async fn relocate_titleless_archive_workspace_for_title(
             {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
-            Err(AppError::Validation(format!(
+            Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING, format!(
                 "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
                 title_name,
                 extracted_dir.display(),
@@ -770,7 +771,7 @@ async fn try_match_titleless_archive_from_inner_video(
                         .await?
                     })
                     .ok_or_else(|| {
-                        AppError::Validation(format!(
+                        AppError::validation_refused(crate::error_reasons::import::ARCHIVE_REEXTRACTION_FAILED, format!(
                             "archive matched title '{}' but could not be re-extracted under the matched title destination",
                             title.name
                         ))
@@ -819,7 +820,7 @@ async fn resolve_completed_import_target(
         if let Some(submission_title_id) = release_evidence.title_id()
             && submission_title_id != manual_title_id
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE, format!(
                 "manual title {manual_title_id:?} is outside the durable Scryer submission title {submission_title_id:?}"
             )));
         }

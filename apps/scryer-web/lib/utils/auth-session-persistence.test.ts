@@ -34,10 +34,16 @@ test("local MFA enrollment and completion retain a persistent storage choice", (
   });
 
   storeAuthToken("mfa-enrollment-token", true);
-  assert.equal(persistent.getItem(PERSISTENT_STORAGE_KEY), "mfa-enrollment-token");
+  assert.equal(
+    persistent.getItem(PERSISTENT_STORAGE_KEY),
+    "mfa-enrollment-token",
+  );
   assert.equal(session.getItem(SESSION_STORAGE_KEY), null);
 
   storeAuthToken("full-session-token", true);
-  assert.equal(persistent.getItem(PERSISTENT_STORAGE_KEY), "full-session-token");
+  assert.equal(
+    persistent.getItem(PERSISTENT_STORAGE_KEY),
+    "full-session-token",
+  );
   assert.equal(session.getItem(SESSION_STORAGE_KEY), null);
 });

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseDecisionExplanation, scoringEntryText } from "./release-decision-explanation.ts";
+import {
+  parseDecisionExplanation,
+  scoringEntryText,
+} from "./release-decision-explanation.ts";
 
 test("preserves recoverable penalties and explicit zero-point rejections", () => {
   const entries = parseDecisionExplanation([
@@ -14,10 +17,20 @@ test("preserves recoverable penalties and explicit zero-point rejections", () =>
   assert.equal(entries[0].kind, "score_contribution");
   assert.equal(entries[4].kind, undefined);
   const t = (key: string) => key;
-  assert.deepEqual(entries.map((entry) => scoringEntryText(entry, t)), [
-    "-10000", "+20000", "scoring.mandatoryRejection", "scoring.finalScoreRejection", "-10000",
-  ]);
-  assert.equal(entries.slice(0, 4).reduce((score, entry) => score + entry.delta, 0), 10000);
+  assert.deepEqual(
+    entries.map((entry) => scoringEntryText(entry, t)),
+    [
+      "-10000",
+      "+20000",
+      "scoring.mandatoryRejection",
+      "scoring.finalScoreRejection",
+      "-10000",
+    ],
+  );
+  assert.equal(
+    entries.slice(0, 4).reduce((score, entry) => score + entry.delta, 0),
+    10000,
+  );
 });
 
 test("extracts scoring entries from the full release-decision explanation", () => {
@@ -67,5 +80,8 @@ test("drops malformed explanation entries without hiding valid entries", () => {
     [{ code: "valid", delta: 10 }],
   );
   assert.deepEqual(parseDecisionExplanation(null), []);
-  assert.deepEqual(parseDecisionExplanation({ quality_profile_decision: {} }), []);
+  assert.deepEqual(
+    parseDecisionExplanation({ quality_profile_decision: {} }),
+    [],
+  );
 });

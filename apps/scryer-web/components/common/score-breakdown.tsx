@@ -5,7 +5,12 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { parseScoreLog, toScoreLogEntries } from "@/lib/utils/score-log";
 import type { FileScoreEvaluation } from "@/lib/types/file-score";
 
-export function FileScoreSummary({ evaluation, acquisitionScore, scoringLog, idPrefix }: {
+export function FileScoreSummary({
+  evaluation,
+  acquisitionScore,
+  scoringLog,
+  idPrefix,
+}: {
   evaluation?: FileScoreEvaluation | null;
   acquisitionScore?: number | null;
   /** The log saved when the file was grabbed and imported. */
@@ -25,34 +30,43 @@ export function FileScoreSummary({ evaluation, acquisitionScore, scoringLog, idP
       ].filter((flag): flag is string => flag !== null)
     : [];
 
-  return <div className="space-y-1">
-    {acquisitionScore != null ? (
-      <ScoreStat
-        id={idPrefix ? `${idPrefix}-acquisition-score` : undefined}
-        logId={idPrefix ? `${idPrefix}-acquisition-scoring-log` : undefined}
-        label={t("mediaInfo.acquisitionScore")}
-        score={acquisitionScore}
-        entries={acquisitionLog.entries}
-        total={acquisitionLog.total ?? acquisitionScore}
-      />
-    ) : null}
-    {evaluation ? (
-      <ScoreStat
-        id={idPrefix ? `${idPrefix}-current-score` : undefined}
-        logId={idPrefix ? `${idPrefix}-current-scoring-log` : undefined}
-        label={t("scoring.current")}
-        score={evaluation.score}
-        entries={toScoreLogEntries(evaluation.entries)}
-        meta={<>
-          <time dateTime={evaluation.evaluatedAt}>{formatUiDateTime(evaluation.evaluatedAt, dateTimeFormat)}</time>
-          {flags.length ? ` · ${flags.join(" · ")}` : ""}
-        </>}
-      />
-    ) : null}
-    {evaluation?.rejectionCodes.length ? (
-      <div className="text-xs text-[var(--scry-danger-text-soft)]">
-        {t("scoring.rejected")}: <span className="font-[var(--font-code)]">{evaluation.rejectionCodes.join(", ")}</span>
-      </div>
-    ) : null}
-  </div>;
+  return (
+    <div className="space-y-1">
+      {acquisitionScore != null ? (
+        <ScoreStat
+          id={idPrefix ? `${idPrefix}-acquisition-score` : undefined}
+          logId={idPrefix ? `${idPrefix}-acquisition-scoring-log` : undefined}
+          label={t("mediaInfo.acquisitionScore")}
+          score={acquisitionScore}
+          entries={acquisitionLog.entries}
+          total={acquisitionLog.total ?? acquisitionScore}
+        />
+      ) : null}
+      {evaluation ? (
+        <ScoreStat
+          id={idPrefix ? `${idPrefix}-current-score` : undefined}
+          logId={idPrefix ? `${idPrefix}-current-scoring-log` : undefined}
+          label={t("scoring.current")}
+          score={evaluation.score}
+          entries={toScoreLogEntries(evaluation.entries)}
+          meta={
+            <>
+              <time dateTime={evaluation.evaluatedAt}>
+                {formatUiDateTime(evaluation.evaluatedAt, dateTimeFormat)}
+              </time>
+              {flags.length ? ` · ${flags.join(" · ")}` : ""}
+            </>
+          }
+        />
+      ) : null}
+      {evaluation?.rejectionCodes.length ? (
+        <div className="text-xs text-[var(--scry-danger-text-soft)]">
+          {t("scoring.rejected")}:{" "}
+          <span className="font-[var(--font-code)]">
+            {evaluation.rejectionCodes.join(", ")}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
 }

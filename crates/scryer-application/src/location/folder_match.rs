@@ -297,7 +297,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
         // FR-083: management permission on the library that owns the title. Both
         // titles in a swap or takeover live in that same library, so one check
         // covers the whole operation.
@@ -310,18 +315,27 @@ impl AppUseCase {
             .libraries
             .get_by_id(&title.library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {}", title.library_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::location::LIBRARY_NOT_FOUND,
+                    format!("library {}", title.library_id),
+                )
+            })?;
 
         let selected_folder = folder_path.trim();
         if selected_folder.is_empty() {
-            return Err(AppError::Validation("folder path is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::FOLDER_PATH_REQUIRED,
+                "folder path is required",
+            ));
         }
         // The root check below compares spellings, so `root/../elsewhere`
         // would pass for a folder inside the root.
         if crate::title_folder_rules::path_has_dot_segments(selected_folder) {
-            return Err(AppError::Validation(format!(
-                "folder {selected_folder} must not contain . or .. components"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::PATH_COMPONENT_INVALID,
+                format!("folder {selected_folder} must not contain . or .. components"),
+            ));
         }
         let selected_folder = path_to_stored_string(stored_path_to_path_buf(selected_folder));
 
@@ -332,18 +346,24 @@ impl AppUseCase {
             .find(|root| library_path_is_under_root(&selected_folder, &root.path))
             .cloned()
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "folder {} is not inside a root of library {}",
-                    crate::stored_paths::stored_path_to_display_string(&selected_folder),
-                    library.name
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::location::FOLDER_NOT_INSIDE_ROOT_LIBRARY,
+                    format!(
+                        "folder {} is not inside a root of library {}",
+                        crate::stored_paths::stored_path_to_display_string(&selected_folder),
+                        library.name
+                    ),
+                )
             })?;
 
         if crate::folder_ownership::folder_spans_a_library_root(self, &selected_folder).await? {
-            return Err(AppError::Validation(format!(
-                "folder {} is a library root, not a title folder",
-                crate::stored_paths::stored_path_to_display_string(&selected_folder)
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::FOLDER_NOT_TITLE_BOUNDARY,
+                format!(
+                    "folder {} is a library root, not a title folder",
+                    crate::stored_paths::stored_path_to_display_string(&selected_folder)
+                ),
+            ));
         }
 
         let selected_path = stored_path_to_path_buf(&selected_folder);
@@ -351,8 +371,9 @@ impl AppUseCase {
         let resolved = crate::folder_ownership::resolved_folder_identity(&selected_path)?;
         let resolved_root = crate::folder_ownership::resolved_folder_identity(&root_path)?;
         if resolved == resolved_root || !resolved.starts_with(&resolved_root) {
-            return Err(AppError::Validation(
-                "selected folder resolves outside its library root".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::PATH_OUTSIDE_LIBRARY_ROOT,
+                "selected folder resolves outside its library root",
             ));
         }
         if !title_owns_folder(&title, &selected_path) {
@@ -375,9 +396,9 @@ impl AppUseCase {
                 && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
                 && crate::folder_ownership::title_folders_overlap(&selected_folder, &folder)?
             {
-                return Err(AppError::Validation(
-                    "selected folder overlaps another title's folder; no ownership was changed"
-                        .into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
+                    "selected folder overlaps another title's folder; no ownership was changed",
                 ));
             }
         }
@@ -529,20 +550,28 @@ impl AppUseCase {
             (FolderMatchOwnership::Unowned, FolderMatchResolution::Assign) => {
                 self.apply_folder_assignment(actor, context).await
             }
-            (FolderMatchOwnership::Unowned, resolution) => Err(AppError::Validation(format!(
-                "folder {} is not owned by another title; resolution {} does not apply",
-                crate::stored_paths::stored_path_to_display_string(&context.selected_folder),
-                resolution.as_str()
-            ))),
+            (FolderMatchOwnership::Unowned, resolution) => Err(AppError::validation_refused(
+                crate::error_reasons::location::FOLDER_NOT_OWNED_ANOTHER_TITLE,
+                format!(
+                    "folder {} is not owned by another title; resolution {} does not apply",
+                    crate::stored_paths::stored_path_to_display_string(&context.selected_folder),
+                    resolution.as_str()
+                ),
+            )),
             // FR-006: never silently stolen. The default resolution refuses and
             // names the owner so the caller can offer swap or take over.
             (FolderMatchOwnership::OwnedByAnotherTitle, FolderMatchResolution::Assign) => {
                 let owner = context.owner.as_ref().expect("owner present");
-                Err(AppError::Validation(format!(
-                    "folder {} is already owned by title {}; choose swap or take over",
-                    crate::stored_paths::stored_path_to_display_string(&context.selected_folder),
-                    owner.name
-                )))
+                Err(AppError::validation_refused(
+                    crate::error_reasons::location::FOLDER_ALREADY_OWNED_TITLE,
+                    format!(
+                        "folder {} is already owned by title {}; choose swap or take over",
+                        crate::stored_paths::stored_path_to_display_string(
+                            &context.selected_folder
+                        ),
+                        owner.name
+                    ),
+                ))
             }
             (FolderMatchOwnership::OwnedByAnotherTitle, FolderMatchResolution::Swap) => {
                 self.apply_folder_swap(actor, context).await
@@ -698,20 +727,26 @@ impl AppUseCase {
         let title_folder = context
             .current_folder()
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "title {} owns no folder to swap; take over the folder instead",
-                    context.title.name
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::location::TITLE_OWNS_NO_FOLDER_SWAP,
+                    format!(
+                        "title {} owns no folder to swap; take over the folder instead",
+                        context.title.name
+                    ),
+                )
             })?
             .to_string();
         // Swapping would hand the library root to the other title, whose
         // rescan would then read every file under it as its own.
         if context.current_folder_spans_a_library_root {
-            return Err(AppError::Validation(format!(
-                "the recorded folder for {} ({}) is a library root, not a folder to swap; take over the folder instead",
-                context.title.name,
-                crate::stored_paths::stored_path_to_display_string(&title_folder)
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::location::RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP,
+                format!(
+                    "the recorded folder for {} ({}) is a library root, not a folder to swap; take over the folder instead",
+                    context.title.name,
+                    crate::stored_paths::stored_path_to_display_string(&title_folder)
+                ),
+            ));
         }
         let owner_folder = title_folder_path(&owner)
             .ok_or_else(|| {
@@ -900,7 +935,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })
     }
 
     async fn clear_folder_match_unmatched_item(

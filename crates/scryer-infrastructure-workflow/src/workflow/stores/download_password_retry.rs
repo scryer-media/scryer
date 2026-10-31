@@ -286,19 +286,19 @@ impl DownloadSubmissionStore {
                      JOIN download_client_bindings b ON b.download_id = s.id AND b.ended_at IS NULL
                      WHERE s.id = {} AND s.password_retry_state IS NOT NULL AND b.client_config_id = {} AND b.client_type_snapshot = {}",
                     &[SqlArg::Text(id.clone()), SqlArg::OptText(claim.source.client_id.clone()), SqlArg::Text(claim.source.client_type.clone())]).await?
-                    .ok_or_else(|| AppError::Validation("download retry no longer owns this job".into()))?;
+                    .ok_or_else(|| AppError::validation_refused(crate::error_reasons::WORKFLOW_DOWNLOAD_RETRY_OWNERSHIP_LOST, "download retry no longer owns this job"))?;
                 let mut detail: serde_json::Value = serde_json::from_str(&row.text("password_retry_state")?)
                     .map_err(|_| AppError::Repository("invalid download retry state".into()))?;
                 let stored: DownloadPasswordRetryClaim = serde_json::from_value(detail["claim"].clone())
                     .map_err(|_| AppError::Repository("invalid download retry ownership".into()))?;
                 if stored.attempt_id != claim.attempt_id || stored.download_id != claim.download_id
                     || stored.source != claim.source || stored.authorized_title_id != claim.authorized_title_id {
-                    return Err(AppError::Validation("download retry no longer owns this job".into()));
+                    return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_DOWNLOAD_RETRY_OWNERSHIP_LOST, "download retry no longer owns this job"));
                 }
                 if detail["confirmed"].as_bool() == Some(true) {
                     if let DownloadClientRetryOutcome::Accepted { item_id } = &outcome {
                         if row.text("native_item_id")? != *item_id {
-                            return Err(AppError::Validation("retry response conflicts with observed progress; reconciliation required".into()));
+                            return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_RETRY_PROGRESS_CONFLICT, "retry response conflicts with observed progress; reconciliation required"));
                         }
                         detail["accepted_item_id"] = serde_json::Value::String(item_id.clone());
                         SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE download_submissions SET password_retry_state = {} WHERE id = {}",
@@ -328,13 +328,13 @@ impl DownloadSubmissionStore {
                         if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                             "SELECT download_id FROM download_client_bindings WHERE client_config_id = {} AND native_item_id = {} AND download_id <> {} AND ended_at IS NULL LIMIT 1",
                             &[SqlArg::OptText(claim.source.client_id.clone()), SqlArg::Text(item_id.clone()), SqlArg::Text(id.clone())]).await?.is_some() {
-                            return Err(AppError::Validation("retry response belongs to another download; reconciliation required".into()));
+                            return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_RETRY_DOWNLOAD_MISMATCH, "retry response belongs to another download; reconciliation required"));
                         }
                         let changed = SqlRuntime::execute(SqlExec::Tx(tx),
                             "UPDATE download_client_bindings SET native_item_id = {} WHERE download_id = {} AND client_config_id = {} AND client_type_snapshot = {} AND native_item_id = {} AND ended_at IS NULL",
                             &[SqlArg::Text(item_id.clone()), SqlArg::Text(id.clone()), SqlArg::OptText(claim.source.client_id.clone()),
                               SqlArg::Text(claim.source.client_type.clone()), SqlArg::Text(claim.source.item_id.clone())]).await?;
-                        if changed != 1 { return Err(AppError::Validation("download binding changed during retry; reconciliation required".into())); }
+                        if changed != 1 { return Err(AppError::validation_refused(crate::error_reasons::WORKFLOW_DOWNLOAD_BINDING_CHANGED_DURING_RETRY, "download binding changed during retry; reconciliation required")); }
                         SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE downloads SET terminal_at = NULL WHERE id = {}",
                             &[SqlArg::Text(id.clone())]).await?;
                         // Acceptance alone is not proof that a cached failed

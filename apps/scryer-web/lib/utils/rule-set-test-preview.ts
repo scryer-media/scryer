@@ -4,6 +4,7 @@ export type RuleSetTestMode = "release" | "storedFile";
 
 /** Listing-fact form fields, as typed. Empty strings mean "unknown". */
 export type RuleSetTestListingDraft = {
+  protocol: string;
   publishedAt: string;
   thumbsUp: string;
   thumbsDown: string;
@@ -16,6 +17,7 @@ export type RuleSetTestListingDraft = {
 };
 
 export const EMPTY_RULE_SET_TEST_LISTING: RuleSetTestListingDraft = {
+  protocol: "",
   publishedAt: "",
   thumbsUp: "",
   thumbsDown: "",
@@ -36,6 +38,7 @@ export type RuleSetTestSelection = {
 
 /** `TestRuleSetInput.listing`. Omitted facts are unknown to rules. */
 export type RuleSetTestListingInput = {
+  protocol?: "usenet" | "torrent" | "http";
   publishedAt?: string;
   thumbsUp?: number;
   thumbsDown?: number;
@@ -46,6 +49,7 @@ export type RuleSetTestListingInput = {
 
 /** `TestRuleSetPayload.listing`: the listing facts the rules read. */
 export type RuleSetTestListingFacts = {
+  protocol?: "usenet" | "torrent" | "http" | null;
   publishedAt?: string | null;
   ageDays?: number | null;
   thumbsUp?: number | null;
@@ -96,7 +100,13 @@ export function buildRuleSetTestInput({
   // A stored file is scored from its own size and frozen listing facts.
   const selection = mediaFileId
     ? { titleId, episodeId, mediaFileId }
-    : { titleId, episodeId, releaseName, sizeBytes, ...(listing ? { listing } : {}) };
+    : {
+        titleId,
+        episodeId,
+        releaseName,
+        sizeBytes,
+        ...(listing ? { listing } : {}),
+      };
   return testRuleSetId
     ? { ...selection, testRuleSetId }
     : {
@@ -125,6 +135,13 @@ export function listingInputFromDraft(
   draft: RuleSetTestListingDraft,
 ): { value: RuleSetTestListingInput | undefined } | { error: string } {
   const value: RuleSetTestListingInput = {};
+  if (
+    draft.protocol === "usenet" ||
+    draft.protocol === "torrent" ||
+    draft.protocol === "http"
+  ) {
+    value.protocol = draft.protocol;
+  }
   const publishedAt = draft.publishedAt.trim();
   if (publishedAt) {
     const normalized = DATE_ONLY.test(publishedAt)
@@ -162,7 +179,11 @@ export function listingInputFromDraft(
     } catch {
       return { error: "settings.ruleTestListingExtraInvalid" };
     }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
       return { error: "settings.ruleTestListingExtraInvalid" };
     }
     value.extra = parsed as Record<string, unknown>;
@@ -222,7 +243,13 @@ export function ruleSetTestFingerprint(
   copySourceRuleSetId: string | null,
   testRuleSetId: string | null,
 ): string {
-  return JSON.stringify({ draft, selection, editRuleSetId, copySourceRuleSetId, testRuleSetId });
+  return JSON.stringify({
+    draft,
+    selection,
+    editRuleSetId,
+    copySourceRuleSetId,
+    testRuleSetId,
+  });
 }
 
 export function canTestRuleSet(
@@ -237,7 +264,10 @@ export function canTestRuleSet(
   );
 }
 
-export function isCurrentRuleSetTest(request: number, currentRequest: number): boolean {
+export function isCurrentRuleSetTest(
+  request: number,
+  currentRequest: number,
+): boolean {
   return request === currentRequest;
 }
 
@@ -276,10 +306,9 @@ export class RuleSetTestRequestController {
   }
 }
 
-export function sizeBytesFromGib(value: string):
-  | { value: undefined }
-  | { value: number }
-  | { error: string } {
+export function sizeBytesFromGib(
+  value: string,
+): { value: undefined } | { value: number } | { error: string } {
   if (value.trim() === "") return { value: undefined };
   const gib = Number(value);
   if (!Number.isFinite(gib) || gib < 0) {

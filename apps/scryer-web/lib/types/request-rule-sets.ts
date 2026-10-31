@@ -26,11 +26,7 @@ export type LifecycleClaimKind = "RETAIN_UNTIL";
 /// started, because the title has not imported yet; `CONVERTED` is a lease that
 /// was replaced by a permanent hold and kept as history.
 export type LifecycleClaimState =
-  | "DORMANT"
-  | "ACTIVE"
-  | "EXPIRED"
-  | "RELEASED"
-  | "CONVERTED";
+  "DORMANT" | "ACTIVE" | "EXPIRED" | "RELEASED" | "CONVERTED";
 
 export type RequestRuleSetRecord = {
   id: string;
@@ -66,6 +62,7 @@ export type RequestRuleSetDetail = {
 export type RequestRuleValidationResult = {
   valid: boolean;
   errors: string[];
+  diagnostics?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
 };
 
 /// The whole vocabulary a requester is permitted to see about why a rule

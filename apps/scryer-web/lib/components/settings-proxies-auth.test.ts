@@ -9,33 +9,36 @@ import type { SettingsProxiesSectionProps } from "@/components/views/settings/se
 import { PROXY_INITIAL_DRAFT } from "../types/proxies.ts";
 
 async function withProxySection(
-  run: (
-    props: SettingsProxiesSectionProps,
-    render: () => string,
-  ) => void,
+  run: (props: SettingsProxiesSectionProps, render: () => string) => void,
 ) {
   const server = await createServer({
     root: fileURLToPath(new URL("../..", import.meta.url)),
     server: { middlewareMode: true },
     appType: "custom",
     logLevel: "silent",
-    plugins: [{
-      name: "proxy-form-date-format-fixture",
-      enforce: "pre",
-      load(id) {
-        if (id.endsWith("/lib/context/ui-settings-context.tsx")) {
-          return 'export function useUiDateTimeFormat() { return "LOCALE"; }';
-        }
+    plugins: [
+      {
+        name: "proxy-form-date-format-fixture",
+        enforce: "pre",
+        load(id) {
+          if (id.endsWith("/lib/context/ui-settings-context.tsx")) {
+            return 'export function useUiDateTimeFormat() { return "LOCALE"; }';
+          }
+        },
       },
-    }],
+    ],
   });
   try {
     const [view, translation] = await Promise.all([
-      server.ssrLoadModule("/components/views/settings/settings-proxies-section.tsx"),
+      server.ssrLoadModule(
+        "/components/views/settings/settings-proxies-section.tsx",
+      ),
       server.ssrLoadModule("/lib/context/translate-context.tsx"),
     ]);
-    const Component = view.SettingsProxiesSection as ComponentType<SettingsProxiesSectionProps>;
-    const TranslateContext = translation.TranslateContext as Context<Translate | null>;
+    const Component =
+      view.SettingsProxiesSection as ComponentType<SettingsProxiesSectionProps>;
+    const TranslateContext =
+      translation.TranslateContext as Context<Translate | null>;
     const props: SettingsProxiesSectionProps = {
       proxyConfigs: [],
       proxyDraft: { ...PROXY_INITIAL_DRAFT, providerType: "ssh_tunnel" },
@@ -56,10 +59,14 @@ async function withProxySection(
       requestResetHostKey: () => {},
       copyTunnelPublicKey: () => {},
     };
-    const render = () => renderToStaticMarkup(
-      createElement(TranslateContext.Provider, { value: (key) => key },
-        createElement(Component, props)),
-    );
+    const render = () =>
+      renderToStaticMarkup(
+        createElement(
+          TranslateContext.Provider,
+          { value: (key) => key },
+          createElement(Component, props),
+        ),
+      );
     run(props, render);
   } finally {
     await server.close();
@@ -70,13 +77,22 @@ test("SSH editor requires a key and never offers password or key removal control
   await withProxySection((props, render) => {
     const fresh = render();
     assert.doesNotMatch(fresh, /id="settings-indexer-proxy-password"/);
-    assert.match(fresh, /<textarea[^>]*id="settings-indexer-proxy-private-key"[^>]*required=""/);
+    assert.match(
+      fresh,
+      /<textarea[^>]*id="settings-indexer-proxy-private-key"[^>]*required=""/,
+    );
 
     props.proxyDraft.hasStoredPrivateKey = true;
     props.proxyDraft.hasStoredCredentials = true;
     const saved = render();
-    assert.doesNotMatch(saved, /id="settings-indexer-proxy-(?:password|clear-password|clear-private-key)"/);
-    assert.doesNotMatch(saved, /<textarea[^>]*id="settings-indexer-proxy-private-key"[^>]*required=""/);
+    assert.doesNotMatch(
+      saved,
+      /id="settings-indexer-proxy-(?:password|clear-password|clear-private-key)"/,
+    );
+    assert.doesNotMatch(
+      saved,
+      /<textarea[^>]*id="settings-indexer-proxy-private-key"[^>]*required=""/,
+    );
 
     props.proxyDraft.providerType = "http3";
     const http3 = render();

@@ -108,7 +108,11 @@ function FieldError({ id, message }: { id: string; message?: string }) {
     return null;
   }
   return (
-    <p id={id} role="alert" className="text-xs text-[var(--scry-danger-text-soft)]">
+    <p
+      id={id}
+      role="alert"
+      className="text-xs text-[var(--scry-danger-text-soft)]"
+    >
       {message}
     </p>
   );
@@ -303,7 +307,9 @@ export function SettingsSeedingProfilesSection({
             {t("settings.seedingProfileDefaultTitle")}
           </h2>
         </div>
-        <div className={`${SEEDING_PANEL_BODY_CLASS} grid gap-4 sm:grid-cols-2`}>
+        <div
+          className={`${SEEDING_PANEL_BODY_CLASS} grid gap-4 sm:grid-cols-2`}
+        >
           <div className="space-y-1.5">
             <FieldLabel
               htmlFor="settings-seeding-profile-default"
@@ -404,13 +410,19 @@ export function SettingsSeedingProfilesSection({
                     >
                       {t("settings.seedingProfileNameLabel")}
                     </TableHead>
-                    <TableHead className={`w-24 ${SEEDING_TABLE_HEADER_CELL_CLASS}`}>
+                    <TableHead
+                      className={`w-24 ${SEEDING_TABLE_HEADER_CELL_CLASS}`}
+                    >
                       {t("settings.seedingProfileRatioLabel")}
                     </TableHead>
-                    <TableHead className={`w-28 ${SEEDING_TABLE_HEADER_CELL_CLASS}`}>
+                    <TableHead
+                      className={`w-28 ${SEEDING_TABLE_HEADER_CELL_CLASS}`}
+                    >
                       {t("settings.seedingProfileSeedTimeLabel")}
                     </TableHead>
-                    <TableHead className={`w-[40%] ${SEEDING_TABLE_HEADER_CELL_CLASS}`}>
+                    <TableHead
+                      className={`w-[40%] ${SEEDING_TABLE_HEADER_CELL_CLASS}`}
+                    >
                       {t("settings.seedingProfileBehaviorColumn")}
                     </TableHead>
                     <TableActionsHead className="w-24">
@@ -422,7 +434,10 @@ export function SettingsSeedingProfilesSection({
                   {profiles.map((profile) => (
                     <TableRow
                       key={profile.id}
-                      id={selectorId("settings-seeding-profile-row", profile.id)}
+                      id={selectorId(
+                        "settings-seeding-profile-row",
+                        profile.id,
+                      )}
                       data-ui="settings-table-row"
                       className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                     >
@@ -434,20 +449,28 @@ export function SettingsSeedingProfilesSection({
                           </span>
                         ) : null}
                       </TableCell>
-                      <TableCell className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}>
+                      <TableCell
+                        className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}
+                      >
                         {formatSeedingProfileRatio(profile.ratio)}
                       </TableCell>
-                      <TableCell className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}>
+                      <TableCell
+                        className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}
+                      >
                         {formatSeedingProfileSeedTime(profile.seedTimeMinutes)}
                       </TableCell>
-                      <TableCell className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}>
+                      <TableCell
+                        className={`text-center ${SEEDING_MUTED_TEXT_CLASS}`}
+                      >
                         {/* One glanceable summary instead of four policy
                             columns: the headline disposition, then only the
                             deviations from the defaults that deserve ink. */}
                         <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
                           {handsOffAfterImport(profile.postImportTracking) ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] px-2 py-0.5 text-xs font-medium text-[var(--scry-info-text)]">
-                              {t("settings.seedingProfilePostImportTrackingHandOffBadge")}
+                              {t(
+                                "settings.seedingProfilePostImportTrackingHandOffBadge",
+                              )}
                             </span>
                           ) : profile.neverRemove ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2 py-0.5 text-xs font-medium text-[var(--scry-warning-text)]">
@@ -455,7 +478,11 @@ export function SettingsSeedingProfilesSection({
                             </span>
                           ) : (
                             <span className="text-[var(--scry-ink2)]">
-                              {t(GOAL_MET_ACTION_LABEL_KEY[profile.goalMetAction])}
+                              {t(
+                                GOAL_MET_ACTION_LABEL_KEY[
+                                  profile.goalMetAction
+                                ],
+                              )}
                             </span>
                           )}
                           {profile.seasonPackMode === "OVERRIDE" ? (
@@ -551,10 +578,14 @@ export function SettingsSeedingProfilesSection({
                   <Input
                     id="settings-seeding-profile-name"
                     value={draft.name}
-                    onChange={(event) => updateField("name", event.target.value)}
+                    onChange={(event) =>
+                      updateField("name", event.target.value)
+                    }
                     onBlur={() => markTouched("name")}
                     aria-invalid={errorFor("name") ? true : undefined}
-                    aria-describedby={errorFor("name") ? errorId("name") : undefined}
+                    aria-describedby={
+                      errorFor("name") ? errorId("name") : undefined
+                    }
                     placeholder={t("settings.seedingProfileNamePlaceholder")}
                   />
                   <FieldError id={errorId("name")} message={errorFor("name")} />
@@ -573,7 +604,10 @@ export function SettingsSeedingProfilesSection({
                       {...decimalInputProps}
                       value={draft.ratio}
                       onChange={(event) =>
-                        updateField("ratio", sanitizeDecimal(event.target.value))
+                        updateField(
+                          "ratio",
+                          sanitizeDecimal(event.target.value),
+                        )
                       }
                       onBlur={() => markTouched("ratio")}
                       aria-invalid={errorFor("ratio") ? true : undefined}
@@ -582,7 +616,10 @@ export function SettingsSeedingProfilesSection({
                       }
                       placeholder={t("settings.seedingProfileGoalPlaceholder")}
                     />
-                    <FieldError id={errorId("ratio")} message={errorFor("ratio")} />
+                    <FieldError
+                      id={errorId("ratio")}
+                      message={errorFor("ratio")}
+                    />
                   </div>
                   <div className="space-y-1.5">
                     <FieldLabel
@@ -590,12 +627,16 @@ export function SettingsSeedingProfilesSection({
                       label={t("settings.seedingProfileSeedTimeLabel")}
                       info={
                         <>
-                          <p>{t("settings.seedingProfileSeedTimeFormatHint")}</p>
+                          <p>
+                            {t("settings.seedingProfileSeedTimeFormatHint")}
+                          </p>
                           <p className="mt-1.5">
                             {t("settings.seedingProfileSeedTimeHelp")}
                           </p>
                           <p className="mt-1.5">
-                            {t("settings.seedingProfileSeedTimeTransmissionHelp")}
+                            {t(
+                              "settings.seedingProfileSeedTimeTransmissionHelp",
+                            )}
                           </p>
                         </>
                       }
@@ -607,7 +648,9 @@ export function SettingsSeedingProfilesSection({
                         updateField("seedTimeMinutes", event.target.value)
                       }
                       onBlur={() => markTouched("seedTimeMinutes")}
-                      aria-invalid={errorFor("seedTimeMinutes") ? true : undefined}
+                      aria-invalid={
+                        errorFor("seedTimeMinutes") ? true : undefined
+                      }
                       aria-describedby={
                         errorFor("seedTimeMinutes")
                           ? errorId("seedTimeMinutes")
@@ -631,13 +674,19 @@ export function SettingsSeedingProfilesSection({
                       <>
                         <p>{t("settings.seedingProfileMinimumSeedersHelp")}</p>
                         <p className="mt-1.5">
-                          {t("settings.seedingProfileMinimumSeedersUnknownHelp")}
+                          {t(
+                            "settings.seedingProfileMinimumSeedersUnknownHelp",
+                          )}
                         </p>
                         <p className="mt-1.5">
-                          {t("settings.seedingProfileMinimumSeedersRoutingHelp")}
+                          {t(
+                            "settings.seedingProfileMinimumSeedersRoutingHelp",
+                          )}
                         </p>
                         <p className="mt-1.5">
-                          {t("settings.seedingProfileMinimumSeedersInheritHelp")}
+                          {t(
+                            "settings.seedingProfileMinimumSeedersInheritHelp",
+                          )}
                         </p>
                       </>
                     }
@@ -707,7 +756,9 @@ export function SettingsSeedingProfilesSection({
                   </Select>
                   {isHandOff ? (
                     <p className="text-xs text-[var(--scry-warning-text)]">
-                      {t("settings.seedingProfilePostImportTrackingHandOffHelp")}
+                      {t(
+                        "settings.seedingProfilePostImportTrackingHandOffHelp",
+                      )}
                     </p>
                   ) : null}
                 </div>
@@ -759,7 +810,9 @@ export function SettingsSeedingProfilesSection({
                   label={t("settings.seedingProfileHonorTrackerMinimumsLabel")}
                   labelAccessory={
                     <FieldInfo
-                      content={t("settings.seedingProfileHonorTrackerMinimumsHelp")}
+                      content={t(
+                        "settings.seedingProfileHonorTrackerMinimumsHelp",
+                      )}
                     />
                   }
                   className="text-[var(--scry-ink2)]"
@@ -804,7 +857,9 @@ export function SettingsSeedingProfilesSection({
                         label={t("settings.seedingProfileSeasonPackModeLabel")}
                         info={
                           <>
-                            <p>{t("settings.seedingProfileSeasonPackModeHelp")}</p>
+                            <p>
+                              {t("settings.seedingProfileSeasonPackModeHelp")}
+                            </p>
                             <p className="mt-1.5">
                               {t("settings.seedingProfileSeasonPackGoalsHelp")}
                             </p>
@@ -888,7 +943,9 @@ export function SettingsSeedingProfilesSection({
                         </Label>
                         <Input
                           id="settings-seeding-profile-season-pack-seed-time"
-                          onBlur={() => markTouched("seasonPackSeedTimeMinutes")}
+                          onBlur={() =>
+                            markTouched("seasonPackSeedTimeMinutes")
+                          }
                           aria-invalid={
                             errorFor("seasonPackSeedTimeMinutes")
                               ? true

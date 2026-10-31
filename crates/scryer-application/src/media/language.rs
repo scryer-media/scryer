@@ -199,7 +199,7 @@ pub fn normalize_metadata_language_code(code: &str) -> Option<String> {
     let normalized = code.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "eng" | "spa" | "fra" | "deu" | "ita" | "por" | "kor" | "zho" | "jpn" | "nld"
+        "eng" | "spa" | "fra" | "deu" | "ita" | "por" | "kor" | "zho" | "jpn" | "nld" | "ces"
     )
     .then_some(normalized)
 }
@@ -246,7 +246,7 @@ pub fn normalize_search_languages(
     let mut normalized = Vec::new();
     for language in languages {
         let code = normalize_search_language_code(&language).ok_or_else(|| {
-            crate::AppError::Validation(format!(
+            crate::AppError::validation_refused(crate::error_reasons::media::SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN, format!(
                 "unknown search language {:?}; choose a language offered by the search language picker",
                 language.trim()
             ))
@@ -256,9 +256,10 @@ pub fn normalize_search_languages(
         }
     }
     if normalized.len() > MAX_SEARCH_LANGUAGES {
-        return Err(crate::AppError::Validation(format!(
-            "at most {MAX_SEARCH_LANGUAGES} search languages are allowed"
-        )));
+        return Err(crate::AppError::validation_refused(
+            crate::error_reasons::media::MOST_SEARCH_LANGUAGES_ALLOWED,
+            format!("at most {MAX_SEARCH_LANGUAGES} search languages are allowed"),
+        ));
     }
     Ok(normalized)
 }
@@ -435,7 +436,7 @@ mod tests {
     #[test]
     fn normalizes_only_metadata_picker_languages() {
         for language in [
-            "eng", "spa", "fra", "deu", "ita", "por", "kor", "zho", "jpn", "nld",
+            "eng", "spa", "fra", "deu", "ita", "por", "kor", "zho", "jpn", "nld", "ces",
         ] {
             assert_eq!(
                 normalize_metadata_language_code(&language.to_ascii_uppercase()).as_deref(),

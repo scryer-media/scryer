@@ -34,7 +34,10 @@ function parseReason(value: unknown): AutoSearchRejectionReason | null {
       ? Math.max(0, Math.trunc(value.count))
       : 0;
   const blockCodes = Array.isArray(value.blockCodes)
-    ? value.blockCodes.filter((code): code is string => typeof code === "string" && code.trim() !== "")
+    ? value.blockCodes.filter(
+        (code): code is string =>
+          typeof code === "string" && code.trim() !== "",
+      )
     : [];
   return {
     code: value.code,
@@ -48,7 +51,9 @@ function parseReason(value: unknown): AutoSearchRejectionReason | null {
  * Extract the automatic-search rejection diagnostics from a failed
  * `queueBestRelease` mutation, or `null` when the error is something else.
  */
-export function autoSearchRejectionFromError(error: unknown): AutoSearchRejection | null {
+export function autoSearchRejectionFromError(
+  error: unknown,
+): AutoSearchRejection | null {
   if (!isRecord(error) || !Array.isArray(error.graphQLErrors)) {
     return null;
   }
@@ -74,9 +79,10 @@ export function autoSearchRejectionFromError(error: unknown): AutoSearchRejectio
 }
 
 function formatReason(reason: AutoSearchRejectionReason): string {
-  const label = reason.blockCodes.length > 0
-    ? `${reason.summary}: ${reason.blockCodes.join(", ")}`
-    : reason.summary;
+  const label =
+    reason.blockCodes.length > 0
+      ? `${reason.summary}: ${reason.blockCodes.join(", ")}`
+      : reason.summary;
   return `${label} (${reason.count})`;
 }
 

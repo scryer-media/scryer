@@ -4,8 +4,15 @@ import { Input, decimalInputProps } from "@/components/ui/input";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
-import { selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  selectContentClassName,
+  selectTriggerClassName,
+} from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { ChevronDown } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useCanonicalVocabulary } from "@/lib/hooks/use-canonical-vocabulary";
@@ -160,127 +167,167 @@ export function ListFacetFilters({
   return (
     <div className="grid gap-3 border-t border-[var(--scry-border3)] pt-4 sm:grid-cols-2">
       <div className="min-w-0 space-y-1.5">
-      <span id={`${idPrefix}-rating-match-label`} className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.filter.match")}</span>
-      <ToggleGroupPrimitive.Root type="single"
-        className="inline-flex max-w-full flex-wrap rounded-md border border-border p-1"
-        aria-labelledby={`${idPrefix}-rating-match-label`}
-        value={ratingMatch}
-        disabled={disabled}
-        onValueChange={(value) => { if (value) setFacet("RATINGS", { matchAny: value === "any", minimums }); }}
-      >
-        {(["all", "any"] as const).map((value) => (
-          <ToggleGroupPrimitive.Item key={value} value={value} asChild>
-            <Button type="button" size="sm" variant={value === ratingMatch ? "default" : "ghost"}>
-              {t(`lists.filter.${value}`)}
-            </Button>
-          </ToggleGroupPrimitive.Item>
-        ))}
-      </ToggleGroupPrimitive.Root>
+        <span
+          id={`${idPrefix}-rating-match-label`}
+          className="block text-sm font-medium text-[var(--scry-ink2)]"
+        >
+          {t("lists.filter.match")}
+        </span>
+        <ToggleGroupPrimitive.Root
+          type="single"
+          className="inline-flex max-w-full flex-wrap rounded-md border border-border p-1"
+          aria-labelledby={`${idPrefix}-rating-match-label`}
+          value={ratingMatch}
+          disabled={disabled}
+          onValueChange={(value) => {
+            if (value)
+              setFacet("RATINGS", { matchAny: value === "any", minimums });
+          }}
+        >
+          {(["all", "any"] as const).map((value) => (
+            <ToggleGroupPrimitive.Item key={value} value={value} asChild>
+              <Button
+                type="button"
+                size="sm"
+                id={`${idPrefix}-rating-match-${value}`}
+                variant={value === ratingMatch ? "default" : "ghost"}
+              >
+                {t(`lists.filter.${value}`)}
+              </Button>
+            </ToggleGroupPrimitive.Item>
+          ))}
+        </ToggleGroupPrimitive.Root>
       </div>
       <div className="min-w-0 space-y-1.5">
-      <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
-        {t("lists.filter.canonical")}
-      </h4>
-      {error ? (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 text-sm text-[var(--scry-danger-text)]"
-        >
-          {t("lists.filter.vocabularyError")}{" "}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={loading || disabled}
-            onClick={() => void retry()}
+        <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
+          {t("lists.filter.canonical")}
+        </h4>
+        {error ? (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-3 text-sm text-[var(--scry-danger-text)]"
           >
-            {t("lists.filter.retry")}
-          </Button>
-        </div>
-      ) : null}
-      {keys
-        .filter(
-          (key) => !vocabulary?.entries.some((entry) => entry.key === key),
-        )
-        .map((key) => (
+            {t("lists.filter.vocabularyError")}{" "}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loading || disabled}
+              onClick={() => void retry()}
+            >
+              {t("lists.filter.retry")}
+            </Button>
+          </div>
+        ) : null}
+        {keys
+          .filter(
+            (key) => !vocabulary?.entries.some((entry) => entry.key === key),
+          )
+          .map((key) => (
+            <CheckboxField
+              key={key}
+              id={`${idPrefix}-${key}`}
+              checked
+              label={t("lists.filter.unavailable", { label: key })}
+              disabled={disabled}
+              onCheckedChange={() =>
+                setExclusions(keys.filter((value) => value !== key))
+              }
+            />
+          ))}
+        {unresolved.map((label) => (
           <CheckboxField
-            key={key}
-            id={`${idPrefix}-${key}`}
+            key={label}
+            id={`${idPrefix}-legacy-${label}`}
             checked
-            label={t("lists.filter.unavailable", { label: key })}
+            label={t("lists.filter.unresolved", { label })}
             disabled={disabled}
             onCheckedChange={() =>
-              setExclusions(keys.filter((value) => value !== key))
+              setExclusions(
+                keys,
+                unresolved.filter((value) => value !== label),
+              )
             }
           />
         ))}
-      {unresolved.map((label) => (
-        <CheckboxField
-          key={label}
-          id={`${idPrefix}-legacy-${label}`}
-          checked
-          label={t("lists.filter.unresolved", { label })}
-          disabled={disabled}
-          onCheckedChange={() =>
-            setExclusions(
-              keys,
-              unresolved.filter((value) => value !== label),
-            )
-          }
-        />
-      ))}
-      {vocabulary ? (
-        <Popover modal onOpenChange={(open) => { if (!open) setSearch(""); }}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              id={`${idPrefix}-canonical-picker`}
-              aria-label={t("lists.filter.canonical")}
-              disabled={disabled}
-              // As tall as the rating match group beside it.
-              className={selectTriggerClassName({ className: "h-10.5 w-full" })}
+        {vocabulary ? (
+          <Popover
+            modal
+            onOpenChange={(open) => {
+              if (!open) setSearch("");
+            }}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                id={`${idPrefix}-canonical-picker`}
+                aria-label={t("lists.filter.canonical")}
+                disabled={disabled}
+                // As tall as the rating match group beside it.
+                className={selectTriggerClassName({
+                  className: "h-10.5 w-full",
+                })}
+              >
+                <span
+                  className={`min-w-0 truncate text-left ${keys.length ? "" : "text-muted-foreground"}`}
+                >
+                  {keys.length
+                    ? keys
+                        .map(
+                          (key) =>
+                            vocabulary.entries.find(
+                              (entry) => entry.key === key,
+                            )?.name ?? key,
+                        )
+                        .join(", ")
+                    : t("lists.filter.searchCanonical")}
+                </span>
+                <ChevronDown
+                  className="size-4 shrink-0 text-muted-foreground"
+                  aria-hidden="true"
+                />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className={selectContentClassName(
+                "w-[var(--radix-popover-trigger-width)] space-y-2 p-2",
+              )}
             >
-              <span className={`min-w-0 truncate text-left ${keys.length ? "" : "text-muted-foreground"}`}>
-                {keys.length
-                  ? keys.map((key) => vocabulary.entries.find((entry) => entry.key === key)?.name ?? key).join(", ")
-                  : t("lists.filter.searchCanonical")}
-              </span>
-              <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className={selectContentClassName("w-[var(--radix-popover-trigger-width)] space-y-2 p-2")}>
-            <Input
-              aria-label={t("lists.filter.searchCanonical")}
-              placeholder={t("lists.filter.searchCanonical")}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              disabled={disabled}
-            />
-            <MultiSelectOptionList
-              groups={[
-                {
-                  options: visibleEntries.map((entry) => ({
-                    value: entry.key,
-                    label: entry.name,
-                  })),
-                },
-              ]}
-              selectedValues={keys}
-              disabled={disabled}
-              optionIdPrefix={idPrefix}
-              maxHeightClassName="max-h-48"
-              onSelectedValuesChange={(values) =>
-                setExclusions([
-                  ...keys.filter(
-                    (key) => !visibleEntries.some((entry) => entry.key === key),
-                  ),
-                  ...values,
-                ])
-              }
-            />
-          </PopoverContent>
-        </Popover>
-      ) : null}
+              <Input
+                id={`${idPrefix}-canonical-search`}
+                aria-label={t("lists.filter.searchCanonical")}
+                placeholder={t("lists.filter.searchCanonical")}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                disabled={disabled}
+              />
+              <MultiSelectOptionList
+                groups={[
+                  {
+                    options: visibleEntries.map((entry) => ({
+                      value: entry.key,
+                      label: entry.name,
+                    })),
+                  },
+                ]}
+                selectedValues={keys}
+                disabled={disabled}
+                optionIdPrefix={idPrefix}
+                maxHeightClassName="max-h-48"
+                onSelectedValuesChange={(values) =>
+                  setExclusions([
+                    ...keys.filter(
+                      (key) =>
+                        !visibleEntries.some((entry) => entry.key === key),
+                    ),
+                    ...values,
+                  ])
+                }
+              />
+            </PopoverContent>
+          </Popover>
+        ) : null}
       </div>
       {facet === "ANIME" ? (
         <CheckboxField
@@ -294,7 +341,13 @@ export function ListFacetFilters({
             onChange([
               ...filters.filter((filter) => !isExcludeAdult(filter)),
               ...(checked === true
-                ? [{ ...EMPTY_LIST_FILTER, kind: "EXCLUDE_ADULT" as const, facet }]
+                ? [
+                    {
+                      ...EMPTY_LIST_FILTER,
+                      kind: "EXCLUDE_ADULT" as const,
+                      facet,
+                    },
+                  ]
                 : []),
             ])
           }
@@ -320,6 +373,7 @@ export function ListFacetFilters({
                 {...decimalInputProps}
                 className="w-20"
                 disabled={disabled}
+                id={`${idPrefix}-rating-${source}`}
                 aria-label={info.label}
                 placeholder={`0–${SCALES[source] ?? 10}`}
                 value={listRatingInputText(

@@ -161,8 +161,9 @@ pub fn validate_recycle_entry_id(entry_id: &str) -> AppResult<()> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
-        return Err(AppError::Validation(
-            "recycle entry id is not a valid opaque id".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID,
+            "recycle entry id is not a valid opaque id",
         ));
     }
     Ok(())
@@ -476,16 +477,22 @@ async fn recycle_file_inner(
     // stale/corrupt/out-of-root source path.
     ensure_source_within_roots(config, source_path)?;
     if source_metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "refusing to delete {} because it is a symlink",
-            source_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::SYMLINK_REFUSED,
+            format!(
+                "refusing to delete {} because it is a symlink",
+                source_path.display()
+            ),
+        ));
     }
     if !source_metadata.is_file() {
-        return Err(AppError::Validation(format!(
-            "refusing to delete {} because it is not a regular file",
-            source_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::REGULAR_FILE_REQUIRED,
+            format!(
+                "refusing to delete {} because it is not a regular file",
+                source_path.display()
+            ),
+        ));
     }
 
     if !config.enabled {
@@ -494,14 +501,17 @@ async fn recycle_file_inner(
     }
 
     if !config.cleanup_enabled {
-        return Err(AppError::Validation(format!(
-            "refusing to recycle {} because the recycle bin path is unsafe: {}",
-            source_path.display(),
-            config
-                .validation_error
-                .as_deref()
-                .unwrap_or("invalid recycle bin configuration")
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::RECYCLE_BIN_PATH_UNSAFE,
+            format!(
+                "refusing to recycle {} because the recycle bin path is unsafe: {}",
+                source_path.display(),
+                config
+                    .validation_error
+                    .as_deref()
+                    .unwrap_or("invalid recycle bin configuration")
+            ),
+        ));
     }
 
     // Build timestamped directory name: YYYYMMDD_HHMMSSmmm_<6-char-id>
@@ -719,18 +729,24 @@ pub(crate) fn restore_destination_is_under_configured_roots(
 
 fn ensure_restore_destination_within_roots(destination: &Path, roots: &[PathBuf]) -> AppResult<()> {
     if roots.is_empty() {
-        return Err(AppError::Validation(format!(
-            "refusing to restore {} because no configured media roots are available",
-            destination.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::MEDIA_ROOT_REQUIRED,
+            format!(
+                "refusing to restore {} because no configured media roots are available",
+                destination.display()
+            ),
+        ));
     }
     if restore_destination_is_under_configured_roots(destination, roots) {
         return Ok(());
     }
-    Err(AppError::Validation(format!(
-        "refusing to restore {} because it is outside the configured media roots",
-        destination.display()
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::library::PATH_OUTSIDE_LIBRARY_ROOT,
+        format!(
+            "refusing to restore {} because it is outside the configured media roots",
+            destination.display()
+        ),
+    ))
 }
 
 pub(crate) fn source_file_is_under_configured_root(path: &Path, root: &Path) -> bool {
@@ -750,10 +766,13 @@ pub(crate) fn ensure_source_within_roots(
     source_path: &Path,
 ) -> AppResult<()> {
     if config.source_roots.is_empty() {
-        return Err(AppError::Validation(format!(
-            "refusing to delete {} because no configured media roots are available",
-            source_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::MEDIA_ROOT_REQUIRED,
+            format!(
+                "refusing to delete {} because no configured media roots are available",
+                source_path.display()
+            ),
+        ));
     }
     if config
         .source_roots
@@ -762,10 +781,13 @@ pub(crate) fn ensure_source_within_roots(
     {
         return Ok(());
     }
-    Err(AppError::Validation(format!(
-        "refusing to delete {} because it is outside the configured media roots",
-        source_path.display()
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::library::PATH_OUTSIDE_LIBRARY_ROOT,
+        format!(
+            "refusing to delete {} because it is outside the configured media roots",
+            source_path.display()
+        ),
+    ))
 }
 
 /// Build restore destination candidates: original path first, then
@@ -938,11 +960,14 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
     ensure_recycled_restore_source_is_regular(recycled_path).await?;
     match tokio::fs::symlink_metadata(destination).await {
         Ok(_) => {
-            return Err(AppError::Validation(format!(
-                "refusing to restore recycled file {} because destination is occupied: {}",
-                recycled_path.display(),
-                destination.display()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::DESTINATION_OCCUPIED,
+                format!(
+                    "refusing to restore recycled file {} because destination is occupied: {}",
+                    recycled_path.display(),
+                    destination.display()
+                ),
+            ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -1092,16 +1117,22 @@ pub(crate) async fn ensure_recycled_restore_source_is_regular(
         }
     };
     if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "refusing to restore recycled file {} because it is a symlink",
-            recycled_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::SYMLINK_REFUSED,
+            format!(
+                "refusing to restore recycled file {} because it is a symlink",
+                recycled_path.display()
+            ),
+        ));
     }
     if !metadata.is_file() {
-        return Err(AppError::Validation(format!(
-            "refusing to restore recycled file {} because it is not a regular file",
-            recycled_path.display()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::REGULAR_FILE_REQUIRED,
+            format!(
+                "refusing to restore recycled file {} because it is not a regular file",
+                recycled_path.display()
+            ),
+        ));
     }
     Ok(())
 }

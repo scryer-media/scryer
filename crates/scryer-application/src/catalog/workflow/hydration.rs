@@ -146,20 +146,82 @@ pub(crate) struct HydrationTarget {
 #[derive(Default)]
 pub(crate) struct HydrationBatchOutcome {
     pub(crate) hydrated_titles: HashMap<String, Title>,
-    pub(crate) failed_titles: HashMap<String, String>,
+    pub(crate) failed_titles: HydrationFailures,
 }
 
-/// Does this hydration failure reproduce identically on every retry?
-///
-/// A title external id that another title in the same library already owns is
-/// deterministic: the same write replays into the same unique index, so
-/// backing off burns the whole retry budget without ever succeeding. The store
-/// now skips such an id instead of failing the write, so this is a backstop
-/// for the paths that still surface the raw constraint violation.
-pub(crate) fn is_non_retryable_hydration_failure(reason: &str) -> bool {
-    (reason.contains("UNIQUE constraint failed")
-        || reason.contains("duplicate key value violates unique constraint"))
-        && reason.contains("title_external_ids")
+/// A hydration failure retains its repository classification through batching.
+#[derive(Clone, Debug)]
+pub(crate) struct HydrationFailure {
+    pub(crate) message: String,
+    pub(crate) repository_kind: Option<crate::RepositoryErrorKind>,
+}
+impl HydrationFailure {
+    pub(crate) fn into_app_error(self) -> AppError {
+        match self.repository_kind {
+            Some(kind) => AppError::repository_failure(kind, self.message),
+            None => AppError::Repository(self.message),
+        }
+    }
+}
+impl From<String> for HydrationFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            repository_kind: None,
+        }
+    }
+}
+impl From<AppError> for HydrationFailure {
+    fn from(error: AppError) -> Self {
+        Self {
+            repository_kind: error.repository_kind(),
+            message: error.to_string(),
+        }
+    }
+}
+impl std::ops::Deref for HydrationFailure {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
+}
+impl std::fmt::Display for HydrationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+#[derive(Debug, Default)]
+pub(crate) struct HydrationFailures(HashMap<String, HydrationFailure>);
+impl HydrationFailures {
+    fn insert(
+        &mut self,
+        title_id: String,
+        failure: impl Into<HydrationFailure>,
+    ) -> Option<HydrationFailure> {
+        self.0.insert(title_id, failure.into())
+    }
+}
+impl std::ops::Deref for HydrationFailures {
+    type Target = HashMap<String, HydrationFailure>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for HydrationFailures {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl IntoIterator for HydrationFailures {
+    type Item = (String, HydrationFailure);
+    type IntoIter = std::collections::hash_map::IntoIter<String, HydrationFailure>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+pub(crate) fn is_non_retryable_hydration_failure(failure: &HydrationFailure) -> bool {
+    failure.repository_kind == Some(crate::RepositoryErrorKind::TitleExternalIdConflict)
 }
 
 /// Derive a numbering bridge from the episode orders TVDB publishes.
@@ -433,7 +495,10 @@ impl AppUseCase {
         library_id: String,
     ) -> AppResult<Title> {
         if request.name.trim().is_empty() {
-            return Err(AppError::Validation("title name is required".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::catalog::TITLE_NAME_REQUIRED,
+                "title name is required",
+            ));
         }
         let root_folder_id = self
             .resolve_title_root_folder_id_for_library(
@@ -855,12 +920,16 @@ const SERIES_METADATA_MISSING_TITLE: &str = "series metadata response missing ti
 /// The failure reported for a series SMG's title surface does not have.
 fn series_missing_from_gateway(reference: &SeriesTitleRef) -> AppError {
     match reference.smg_id {
-        Some(smg_id) => AppError::NotFound(format!(
-            "{SERIES_METADATA_MISSING_TITLE}: SMG has no series for title id {smg_id}"
-        )),
-        None => AppError::NotFound(format!(
-            "{SERIES_METADATA_MISSING_TITLE}: SMG could not resolve the series from its external ids"
-        )),
+        Some(smg_id) => AppError::not_found_reason(
+            crate::error_reasons::catalog::SMG_NO_SERIES_NOT_FOUND,
+            format!("{SERIES_METADATA_MISSING_TITLE}: SMG has no series for title id {smg_id}"),
+        ),
+        None => AppError::not_found_reason(
+            crate::error_reasons::catalog::SMG_NO_SERIES_NOT_FOUND,
+            format!(
+                "{SERIES_METADATA_MISSING_TITLE}: SMG could not resolve the series from its external ids"
+            ),
+        ),
     }
 }
 
@@ -1041,7 +1110,7 @@ impl AppUseCase {
                                 self.emit_hydration_failed(&target.title, &reason).await;
                                 outcome
                                     .failed_titles
-                                    .insert(target.title.id.clone(), reason.clone());
+                                    .insert(target.title.id.clone(), error.clone());
                             }
                         }
                     }
@@ -1089,14 +1158,13 @@ impl AppUseCase {
                         let (series, redirects) = match fetched {
                             Ok(fetched) => fetched,
                             Err(reason) => {
-                                if reason == "bulk metadata response missing title" {
-                                    warn!(
-                                        hydration_source = title_source.as_str(),
-                                        facet = title_facet.as_str(),
-                                        title_id = %title_id,
-                                        "title hydration failed: bulk metadata response missing series title"
-                                    );
-                                }
+                                warn!(
+                                    hydration_source = title_source.as_str(),
+                                    facet = title_facet.as_str(),
+                                    title_id = %title_id,
+                                    reason = %reason,
+                                    "title hydration failed during bulk series lookup"
+                                );
                                 self.emit_hydration_failed(&target.title, &reason).await;
                                 outcome.failed_titles.insert(title_id, reason);
                                 continue;
@@ -1110,7 +1178,7 @@ impl AppUseCase {
                         {
                             Ok(refreshed) => refreshed,
                             Err(error) => {
-                                outcome.failed_titles.insert(title_id, error.to_string());
+                                outcome.failed_titles.insert(title_id, error);
                                 continue;
                             }
                         };
@@ -1177,7 +1245,7 @@ impl AppUseCase {
                     )
                     .await?;
                 let movie = result.by_ref_index.get(&0).cloned().ok_or_else(|| {
-                    AppError::NotFound("movie metadata response missing title".to_string())
+                    AppError::not_found_reason(crate::error_reasons::catalog::MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND, "movie metadata response missing title".to_string())
                 })?;
                 let redirects = result.redirects;
                 let refreshed = self
@@ -1445,7 +1513,7 @@ impl AppUseCase {
             sync_wanted_after_completion: false,
             source: HydrationSource::Interactive,
         };
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             let title_id = target.title.id.clone();
             if let Err(error) = app.hydrate_title_single_apq(target).await {
                 warn!(
@@ -1557,8 +1625,11 @@ impl AppUseCase {
                             .release_market,
                     )
                 {
-                    self.services.catalog.titles
-                        .mark_title_metadata_hydration_due_now(&updated.id).await?;
+                    self.services
+                        .catalog
+                        .titles
+                        .mark_title_metadata_hydration_due_now(&updated.id)
+                        .await?;
                     self.runtime.catalog.title_hydration_wake.notify_one();
                 }
                 updated
@@ -1575,7 +1646,9 @@ impl AppUseCase {
                 // retry scheduler can stop instead of replaying the identical
                 // write; transient failures keep today's tolerant behaviour
                 // and continue with the pre-hydration title.
-                if is_non_retryable_hydration_failure(&err.to_string()) {
+                if err.repository_kind()
+                    == Some(crate::RepositoryErrorKind::TitleExternalIdConflict)
+                {
                     return Err(err);
                 }
                 title
@@ -1766,7 +1839,7 @@ impl AppUseCase {
 
         for worker_index in 0..TITLE_RECOMMENDATION_REFRESH_WORKER_COUNT {
             let app = self.clone();
-            tokio::spawn(async move {
+            self.restore_coordinator().spawn_task(async move {
                 app.run_title_recommendation_refresh_worker(worker_index)
                     .await;
             });
@@ -1775,12 +1848,14 @@ impl AppUseCase {
 
     async fn run_title_recommendation_refresh_worker(&self, worker_index: usize) {
         loop {
+            if self.restore_coordinator().shutdown_workers.is_cancelled() {
+                return;
+            }
             let Some(job) = self.take_next_title_recommendation_refresh_job().await else {
-                self.runtime
-                    .catalog
-                    .title_recommendation_refresh_wake
-                    .notified()
-                    .await;
+                tokio::select! {
+                    _ = self.restore_coordinator().shutdown_workers.cancelled() => return,
+                    _ = self.runtime.catalog.title_recommendation_refresh_wake.notified() => {},
+                }
                 continue;
             };
             let title_id = job.title.id.clone();
@@ -2000,7 +2075,8 @@ impl AppUseCase {
             .await?;
 
         let language = crate::normalize_metadata_language_code(language).ok_or_else(|| {
-            AppError::Validation(
+            AppError::validation_refused(
+                crate::error_reasons::catalog::METADATA_LANGUAGE_INVALID,
                 "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
                     .to_string(),
             )
@@ -2031,7 +2107,7 @@ impl AppUseCase {
         self.invalidate_monitored_title_matcher().await;
         let discovery_app = self.clone();
         let discovery_language = language.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             match discovery_app
                 .refresh_public_discovery_feed_now(JobTriggerSource::SystemInternal)
                 .await
@@ -2052,7 +2128,7 @@ impl AppUseCase {
             }
         });
         let app = self.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             match app.hydrate_all_titles_for_current_language().await {
                 Ok(refreshed) => {
                     info!(

@@ -1,12 +1,5 @@
 import * as React from "react";
-import {
-  CalendarDays,
-  Clock3,
-  Eye,
-  EyeOff,
-  Search,
-  Zap,
-} from "lucide-react";
+import { CalendarDays, Clock3, Eye, EyeOff, Search, Zap } from "lucide-react";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,7 +40,10 @@ import {
   formatFileSize,
   formatRuntimeFromSeconds,
 } from "./helpers";
-import { EpisodePanelContent, EpisodeSearchResults } from "./episode-panel-content";
+import {
+  EpisodePanelContent,
+  EpisodeSearchResults,
+} from "./episode-panel-content";
 import { InteractiveSearchDialog } from "@/components/common/interactive-search-dialog";
 import {
   EpisodeTableActionButton,
@@ -137,11 +133,20 @@ export type EpisodeRowProps = {
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   onAssignFileToEpisode?: (fileId: string) => void;
   onOpenHistory?: (episode: CollectionEpisode) => void;
-  onQueueFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
-  onQueueAdditionalFromEpisodeSearch?: (episode: CollectionEpisode, release: Release) => Promise<void> | void;
+  onQueueFromEpisodeSearch?: (
+    episode: CollectionEpisode,
+    release: Release,
+  ) => Promise<void> | void;
+  onQueueAdditionalFromEpisodeSearch?: (
+    episode: CollectionEpisode,
+    release: Release,
+  ) => Promise<void> | void;
   onRefreshSubtitles?: () => Promise<void> | void;
   onRunEpisodeSearch?: (episode: CollectionEpisode) => void;
-  onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
+  onSetEpisodeMonitored?: (
+    episodeId: string,
+    monitored: boolean,
+  ) => Promise<void>;
   /** Present only when the viewer can manage the title; enables the delete-selection checkbox. */
   onToggleSelected?: (episodeId: string) => void;
   selected?: boolean;
@@ -259,7 +264,13 @@ export const EpisodeRow = React.memo(function EpisodeRow({
     if (searchBlocked || !hasSearchResults) {
       onRunEpisodeSearch(episode);
     }
-  }, [episode, hasSearchResults, onQueueFromEpisodeSearch, onRunEpisodeSearch, searchBlocked]);
+  }, [
+    episode,
+    hasSearchResults,
+    onQueueFromEpisodeSearch,
+    onRunEpisodeSearch,
+    searchBlocked,
+  ]);
 
   const handleEpisodeTabChange = React.useCallback(
     (tab: EpisodePanelTab | "history") => {
@@ -287,8 +298,9 @@ export const EpisodeRow = React.memo(function EpisodeRow({
     }
 
     setEpisodeToggling(true);
-    onSetEpisodeMonitored(episode.id, !episode.monitored)
-      .finally(() => setEpisodeToggling(false));
+    onSetEpisodeMonitored(episode.id, !episode.monitored).finally(() =>
+      setEpisodeToggling(false),
+    );
   }, [episode.id, episode.monitored, onSetEpisodeMonitored]);
 
   const panelContent = isPanelOpen ? (
@@ -404,7 +416,10 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-3">
               <button
-                id={selectorId("series-overview-episode-details-toggle", episode.id)}
+                id={selectorId(
+                  "series-overview-episode-details-toggle",
+                  episode.id,
+                )}
                 type="button"
                 className="min-w-0 flex-1 text-left"
                 onClick={handleToggleEpisodeDetails}
@@ -425,9 +440,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                 {qualityCell}
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {episodeTypeBadges}
-            </div>
+            <div className="mt-2 flex flex-wrap gap-2">{episodeTypeBadges}</div>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <CalendarDays className="h-3.5 w-3.5" />
@@ -489,9 +502,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
           </div>
         </div>
         {isPanelOpen ? (
-          <div className="mt-3 border-t border-border pt-3">
-            {panelContent}
-          </div>
+          <div className="mt-3 border-t border-border pt-3">{panelContent}</div>
         ) : null}
         {searchDialog}
       </div>
@@ -509,11 +520,16 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         )}
         data-episode-id={episode.id}
         data-ui="episode-row"
-        className={cn("cv-auto-row-sm", !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.5)]")}
+        className={cn(
+          "cv-auto-row-sm",
+          !episode.monitored && "opacity-[var(--scry-unmonitored-opacity,0.5)]",
+        )}
       >
         {selectionCheckbox ? (
           <TableCell className="px-2 text-center align-middle">
-            <div className="flex items-center justify-center">{selectionCheckbox}</div>
+            <div className="flex items-center justify-center">
+              {selectionCheckbox}
+            </div>
           </TableCell>
         ) : null}
         <TableCell className="px-2 text-center align-middle">
@@ -636,9 +652,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             colSpan={selectionCheckbox ? 8 : 7}
             className="border-t border-border bg-background/40 p-0"
           >
-            <div className="px-4 py-3">
-              {panelContent}
-            </div>
+            <div className="px-4 py-3">{panelContent}</div>
           </TableCell>
         </TableRow>
       ) : null}

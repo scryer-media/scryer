@@ -241,6 +241,7 @@ async fn find_monitored_movie_title_from_release_matches_tagged_alias_variant() 
     title.tagged_aliases = vec![scryer_domain::TaggedAlias {
         name: "Nightfall Heavy Chorus Dark Lantern".to_string(),
         language: "eng".to_string(),
+        country: None,
     }];
 
     let parsed =

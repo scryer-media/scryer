@@ -74,15 +74,16 @@ async function renderFieldGroup(loginChallenge?: LoginChallengeStatus) {
   });
   try {
     const [sectionModule, contextModule] = await Promise.all([
-      server.ssrLoadModule("/components/views/settings/settings-indexers-section.tsx"),
+      server.ssrLoadModule(
+        "/components/views/settings/settings-indexers-section.tsx",
+      ),
       server.ssrLoadModule("/lib/context/translate-context.tsx"),
     ]);
     const Group = sectionModule.ProviderConfigFieldGroup as ComponentType<
       Record<string, unknown>
     >;
-    const TranslateContext = contextModule.TranslateContext as Context<
-      Translate | null
-    >;
+    const TranslateContext =
+      contextModule.TranslateContext as Context<Translate | null>;
     return renderToStaticMarkup(
       createElement(
         MemoryRouter,
@@ -115,7 +116,10 @@ test("an informational field is shown as text and never as an input", async () =
   assert.match(note[1], /About cookies/);
   assert.match(note[1], /Sign in with a browser first\./);
   assert.doesNotMatch(note[1], /<input|<textarea|<select/);
-  assert.doesNotMatch(html, /name="info_cookie"|<input[^>]*id="settings-indexer-field-info-cookie"/);
+  assert.doesNotMatch(
+    html,
+    /name="info_cookie"|<input[^>]*id="settings-indexer-field-info-cookie"/,
+  );
 });
 
 test("the sign-in image is shown beside the field that takes its answer", async () => {
@@ -125,7 +129,9 @@ test("the sign-in image is shown beside the field that takes its answer", async 
     imageData: "iVBORw==",
   });
 
-  const answerInput = html.indexOf('id="settings-indexer-field-cardiganncaptcha"');
+  const answerInput = html.indexOf(
+    'id="settings-indexer-field-cardiganncaptcha"',
+  );
   const image = html.indexOf('id="settings-indexer-login-challenge-image"');
   assert.ok(answerInput >= 0, "the answer field renders");
   assert.ok(image > answerInput, "the image follows the answer field");
@@ -140,7 +146,10 @@ test("a sign-in image that could not be fetched says why and offers another", as
     message: "The sign-in image is too large to show.",
   });
 
-  assert.match(html, /id="settings-indexer-login-challenge-error" role="alert"/);
+  assert.match(
+    html,
+    /id="settings-indexer-login-challenge-error" role="alert"/,
+  );
   assert.match(html, /settings\.indexerLoginChallengeError/);
   assert.match(html, /id="settings-indexer-login-challenge-refresh"/);
   assert.doesNotMatch(html, /settings-indexer-login-challenge-image/);

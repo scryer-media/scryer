@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { ChevronDown, ChevronUp, RefreshCcw, TextSearch } from "lucide-react";
 import { useClient } from "urql";
@@ -31,8 +32,7 @@ const AUDIT_PANEL_TITLE_CLASS =
   "text-[15px] font-semibold text-[var(--scry-ink2)]";
 const AUDIT_PANEL_BODY_CLASS = "p-4 sm:p-5";
 const AUDIT_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
-const AUDIT_TABLE_HEADER_CELL_CLASS =
-  "font-semibold text-[var(--scry-muted3)]";
+const AUDIT_TABLE_HEADER_CELL_CLASS = "font-semibold text-[var(--scry-muted3)]";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -52,12 +52,16 @@ function normalizeAuditEvent(value: unknown): AuditLogEvent | null {
       value.actorKind === "SYSTEM"
         ? value.actorKind
         : "SYSTEM",
-    actorUserId: typeof value.actorUserId === "string" ? value.actorUserId : null,
+    actorUserId:
+      typeof value.actorUserId === "string" ? value.actorUserId : null,
     actorDisplayName:
-      typeof value.actorDisplayName === "string" ? value.actorDisplayName : "System",
+      typeof value.actorDisplayName === "string"
+        ? value.actorDisplayName
+        : "System",
     titleId: typeof value.titleId === "string" ? value.titleId : null,
     facet: typeof value.facet === "string" ? value.facet : null,
-    eventType: typeof value.eventType === "string" ? value.eventType : "unknown",
+    eventType:
+      typeof value.eventType === "string" ? value.eventType : "unknown",
     streamKind:
       value.streamKind === "GLOBAL" ||
       value.streamKind === "TITLE" ||
@@ -71,7 +75,10 @@ function normalizeAuditEvent(value: unknown): AuditLogEvent | null {
   };
 }
 
-function formatTimestamp(value: string, dateTimeFormat: UiDateTimeFormat): string {
+function formatTimestamp(
+  value: string,
+  dateTimeFormat: UiDateTimeFormat,
+): string {
   return formatUiDateTime(value, dateTimeFormat);
 }
 
@@ -126,7 +133,10 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
       setEvents(nextEvents);
       setGlobalStatus(t("system.auditLoaded"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setLoading(false);
     }
@@ -148,7 +158,10 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
       });
       setGlobalStatus(t("system.auditLoaded"));
     } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"), { level: "ERROR" });
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      );
     } finally {
       setLoadingOlder(false);
     }
@@ -171,7 +184,9 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
         <div className={AUDIT_PANEL_HEADER_CLASS}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-1">
-              <h2 className={`flex items-center gap-2 ${AUDIT_PANEL_TITLE_CLASS}`}>
+              <h2
+                className={`flex items-center gap-2 ${AUDIT_PANEL_TITLE_CLASS}`}
+              >
                 <TextSearch className="h-4 w-4 text-[var(--scry-accent-text)]" />
                 {t("system.auditTitle")}
               </h2>
@@ -203,17 +218,38 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
               <TableHeader>
                 <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
                   <TableHead className="w-10 text-center" />
-                  <TableHead className={`w-44 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}>{t("history.date")}</TableHead>
-                  <TableHead className={`w-48 ${AUDIT_TABLE_HEADER_CELL_CLASS}`}>{t("history.event")}</TableHead>
-                  <TableHead className={`w-36 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}>{t("history.actor")}</TableHead>
-                  <TableHead className={`w-48 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}>{t("system.auditTarget")}</TableHead>
-                  <TableHead className={AUDIT_TABLE_HEADER_CELL_CLASS}>{t("system.auditStream")}</TableHead>
+                  <TableHead
+                    className={`w-44 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}
+                  >
+                    {t("history.date")}
+                  </TableHead>
+                  <TableHead
+                    className={`w-48 ${AUDIT_TABLE_HEADER_CELL_CLASS}`}
+                  >
+                    {t("history.event")}
+                  </TableHead>
+                  <TableHead
+                    className={`w-36 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}
+                  >
+                    {t("history.actor")}
+                  </TableHead>
+                  <TableHead
+                    className={`w-48 text-center ${AUDIT_TABLE_HEADER_CELL_CLASS}`}
+                  >
+                    {t("system.auditTarget")}
+                  </TableHead>
+                  <TableHead className={AUDIT_TABLE_HEADER_CELL_CLASS}>
+                    {t("system.auditStream")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {events.length === 0 && !loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className={`py-6 text-sm ${AUDIT_MUTED_TEXT_CLASS}`}>
+                    <TableCell
+                      colSpan={6}
+                      className={`py-6 text-sm ${AUDIT_MUTED_TEXT_CLASS}`}
+                    >
                       {t("system.auditEmpty")}
                     </TableCell>
                   </TableRow>
@@ -248,7 +284,9 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
                             )}
                           </button>
                         </TableCell>
-                        <TableCell className={`align-top text-center text-sm ${AUDIT_MUTED_TEXT_CLASS}`}>
+                        <TableCell
+                          className={`align-top text-center text-sm ${AUDIT_MUTED_TEXT_CLASS}`}
+                        >
                           {formatTimestamp(event.occurredAt, dateTimeFormat)}
                         </TableCell>
                         <TableCell className="align-top">
@@ -262,7 +300,9 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
                           >
                             {formatLabel(event.eventType)}
                           </div>
-                          <div className={`mt-1 text-xs ${AUDIT_MUTED_TEXT_CLASS}`}>
+                          <div
+                            className={`mt-1 text-xs ${AUDIT_MUTED_TEXT_CLASS}`}
+                          >
                             #{event.sequence}
                           </div>
                         </TableCell>
@@ -278,24 +318,32 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
                           >
                             {event.actorDisplayName}
                           </div>
-                          <div className={`mt-1 text-xs ${AUDIT_MUTED_TEXT_CLASS}`}>
+                          <div
+                            className={`mt-1 text-xs ${AUDIT_MUTED_TEXT_CLASS}`}
+                          >
                             {formatLabel(event.actorKind)}
                           </div>
                         </TableCell>
-                        <TableCell className={`align-top text-center text-sm ${AUDIT_MUTED_TEXT_CLASS}`}>
+                        <TableCell
+                          className={`align-top text-center text-sm ${AUDIT_MUTED_TEXT_CLASS}`}
+                        >
                           <span
                             id={selectorId(
                               "system-audit-event-target",
                               event.eventType,
                               event.eventId,
                             )}
-                            data-audit-target={event.titleId ?? event.facet ?? ""}
+                            data-audit-target={
+                              event.titleId ?? event.facet ?? ""
+                            }
                             className="block truncate"
                           >
                             {event.titleId ?? event.facet ?? "\u2014"}
                           </span>
                         </TableCell>
-                        <TableCell className={`align-top text-sm ${AUDIT_MUTED_TEXT_CLASS}`}>
+                        <TableCell
+                          className={`align-top text-sm ${AUDIT_MUTED_TEXT_CLASS}`}
+                        >
                           <span className="block truncate">
                             {event.streamKind}
                             {event.streamId ? ` / ${event.streamId}` : ""}
@@ -304,7 +352,10 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
                       </TableRow>
                       {isExpanded ? (
                         <TableRow className="border-[var(--scry-border3)]">
-                          <TableCell colSpan={6} className="bg-[var(--scry-card2)] p-3">
+                          <TableCell
+                            colSpan={6}
+                            className="bg-[var(--scry-card2)] p-3"
+                          >
                             <pre
                               className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-bg)] p-4 text-xs text-[var(--scry-ink2)]"
                               style={{ fontFamily: CODE_FONT }}

@@ -24,7 +24,9 @@ export function useActiveImportStreams(enabled: boolean) {
     }
     setLoading(true);
     try {
-      const { data, error } = await client.query(activeImportStreamsQuery, {}).toPromise();
+      const { data, error } = await client
+        .query(activeImportStreamsQuery, {})
+        .toPromise();
       if (error) {
         throw error;
       }
@@ -38,7 +40,11 @@ export function useActiveImportStreams(enabled: boolean) {
 
   const scheduleRefresh = useCallback(() => {
     pendingSyncRef.current = true;
-    if (!enabled || document.visibilityState !== "visible" || timerRef.current) {
+    if (
+      !enabled ||
+      document.visibilityState !== "visible" ||
+      timerRef.current
+    ) {
       return;
     }
     timerRef.current = setTimeout(() => {

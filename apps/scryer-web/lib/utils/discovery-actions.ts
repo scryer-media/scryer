@@ -63,7 +63,10 @@ const EXTERNAL_ID_SOURCE_ALIASES: Record<string, string> = {
 };
 
 function normalizedExternalIdSource(value: string | null | undefined) {
-  const normalized = value?.trim().toLowerCase().replace(/[\s_.-]+/g, "");
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[\s_.-]+/g, "");
   return normalized ? (EXTERNAL_ID_SOURCE_ALIASES[normalized] ?? null) : null;
 }
 
@@ -102,9 +105,7 @@ function externalIdFromUrl(value: string): DiscoveryResolvedExternalId | null {
       ? {
           source: "tvdb",
           value: match[2],
-          kind: match[1].toLowerCase().startsWith("movie")
-            ? "movie"
-            : "series",
+          kind: match[1].toLowerCase().startsWith("movie") ? "movie" : "series",
           key: value,
         }
       : null;
@@ -130,7 +131,9 @@ function externalIdFromUrl(value: string): DiscoveryResolvedExternalId | null {
   return null;
 }
 
-function externalIdFromDiscoveryKey(value: string): DiscoveryResolvedExternalId | null {
+function externalIdFromDiscoveryKey(
+  value: string,
+): DiscoveryResolvedExternalId | null {
   const urlExternalId = externalIdFromUrl(value);
   if (urlExternalId) {
     return urlExternalId;
@@ -228,15 +231,17 @@ export function metadataResultForDiscoveryItem(
 ): MetadataTvdbSearchItem {
   const externalIds = externalIdsForDiscoveryItem(item);
   return {
-    smgId: Number(
-      externalIds.find((externalId) => externalId.source === "smg")?.value,
-    ) || null,
+    smgId:
+      Number(
+        externalIds.find((externalId) => externalId.source === "smg")?.value,
+      ) || null,
     tvdbId:
       externalIds.find((externalId) => externalId.source === "tvdb")?.value ??
       "",
-    tmdbId: Number(
-      externalIds.find((externalId) => externalId.source === "tmdb")?.value,
-    ) || null,
+    tmdbId:
+      Number(
+        externalIds.find((externalId) => externalId.source === "tmdb")?.value,
+      ) || null,
     name: discoveryItemDisplayTitle(item),
     imdbId:
       externalIds.find((externalId) => externalId.source === "imdb")?.value ??

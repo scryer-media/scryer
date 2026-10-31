@@ -11,7 +11,10 @@ import {
   rulePackSettingsInput,
 } from "./setup-recommendations.ts";
 
-function plugin(id: string, overrides: Partial<RegistryPluginRecord> = {}): RegistryPluginRecord {
+function plugin(
+  id: string,
+  overrides: Partial<RegistryPluginRecord> = {},
+): RegistryPluginRecord {
   return {
     id,
     name: id,
@@ -31,7 +34,9 @@ function plugin(id: string, overrides: Partial<RegistryPluginRecord> = {}): Regi
   };
 }
 
-function pack(overrides: Partial<TrackedRulePackRecord> = {}): TrackedRulePackRecord {
+function pack(
+  overrides: Partial<TrackedRulePackRecord> = {},
+): TrackedRulePackRecord {
   return {
     packId: "pack",
     name: "Pack",
@@ -44,9 +49,36 @@ function pack(overrides: Partial<TrackedRulePackRecord> = {}): TrackedRulePackRe
     lastError: null,
     lastUpdated: null,
     members: [
-      { templateId: "a", ruleSetId: "ra", removed: false, enabled: true, priority: 5, name: null, description: null, appliedFacets: [] },
-      { templateId: "b", ruleSetId: "rb", removed: false, enabled: false, priority: null, name: null, description: null, appliedFacets: [] },
-      { templateId: "gone", ruleSetId: "rg", removed: true, enabled: true, priority: 1, name: null, description: null, appliedFacets: [] },
+      {
+        templateId: "a",
+        ruleSetId: "ra",
+        removed: false,
+        enabled: true,
+        priority: 5,
+        name: null,
+        description: null,
+        appliedFacets: [],
+      },
+      {
+        templateId: "b",
+        ruleSetId: "rb",
+        removed: false,
+        enabled: false,
+        priority: null,
+        name: null,
+        description: null,
+        appliedFacets: [],
+      },
+      {
+        templateId: "gone",
+        ruleSetId: "rg",
+        removed: true,
+        enabled: true,
+        priority: 1,
+        name: null,
+        description: null,
+        appliedFacets: [],
+      },
     ],
     ...overrides,
   };
@@ -75,7 +107,10 @@ test("the full list hides built-ins and anything already recommended", () => {
     plugin("emby"),
     plugin("community", { official: false }),
   ]);
-  assert.deepEqual(others.map((p) => p.id), ["discord"]);
+  assert.deepEqual(
+    others.map((p) => p.id),
+    ["discord"],
+  );
 });
 
 test("a pack's switch follows whether any live rule is on", () => {
@@ -84,7 +119,10 @@ test("a pack's switch follows whether any live rule is on", () => {
   assert.equal(
     rulePackEnabled(
       pack({
-        members: pack().members.map((member) => ({ ...member, enabled: member.removed })),
+        members: pack().members.map((member) => ({
+          ...member,
+          enabled: member.removed,
+        })),
       }),
     ),
     false,
@@ -99,7 +137,10 @@ test("turning a pack on uses its defaults, or every rule when it marks none", ()
     ]),
     ["core"],
   );
-  assert.deepEqual(defaultRulePackTemplateIds([{ id: "only", defaultEnabled: false }]), ["only"]);
+  assert.deepEqual(
+    defaultRulePackTemplateIds([{ id: "only", defaultEnabled: false }]),
+    ["only"],
+  );
 });
 
 test("settings keep priorities and auto-update and skip removed rules", () => {

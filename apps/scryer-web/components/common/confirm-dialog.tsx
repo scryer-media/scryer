@@ -67,7 +67,9 @@ export function ConfirmDialog({
               // Keep focus off the confirm button so a stray Enter cannot confirm.
               event.preventDefault();
               restoreFocusRef.current =
-                document.activeElement instanceof HTMLElement ? document.activeElement : null;
+                document.activeElement instanceof HTMLElement
+                  ? document.activeElement
+                  : null;
               contentRef.current?.focus();
             }}
             onCloseAutoFocus={(event) => {
@@ -100,7 +102,11 @@ export function ConfirmDialog({
                   {description}
                 </DialogPrimitive.Description>
               ) : null}
-              {children ? <div className="mb-4 min-h-0 overflow-y-auto overscroll-contain">{children}</div> : null}
+              {children ? (
+                <div className="mb-4 min-h-0 overflow-y-auto overscroll-contain">
+                  {children}
+                </div>
+              ) : null}
               <div className="flex shrink-0 justify-end gap-2">
                 <Button
                   id={cancelButtonId}

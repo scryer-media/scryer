@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useTheme } from "next-themes";
@@ -5,7 +6,10 @@ import { Fingerprint, KeyRound } from "lucide-react";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { useAuth, type AuthUser } from "@/lib/hooks/use-auth";
 import { useLanguage } from "@/lib/hooks/use-language";
-import { TotpCodeForm, sanitizeTotpCode } from "@/components/auth/totp-code-form";
+import {
+  TotpCodeForm,
+  sanitizeTotpCode,
+} from "@/components/auth/totp-code-form";
 import { Input, integerInputProps } from "@/components/ui/input";
 import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
 import { BackendRestartOverlay } from "@/components/common/backend-restart-overlay";
@@ -83,9 +87,11 @@ function graphQlErrorCode(error: unknown): string | null {
     "graphQLErrors" in error &&
     Array.isArray((error as { graphQLErrors?: unknown[] }).graphQLErrors)
   ) {
-    const graphQLErrors = (error as {
-      graphQLErrors?: Array<{ extensions?: { code?: unknown } }>;
-    }).graphQLErrors;
+    const graphQLErrors = (
+      error as {
+        graphQLErrors?: Array<{ extensions?: { code?: unknown } }>;
+      }
+    ).graphQLErrors;
     const code = graphQLErrors?.find(
       (entry) => typeof entry.extensions?.code === "string",
     )?.extensions?.code;
@@ -95,11 +101,16 @@ function graphQlErrorCode(error: unknown): string | null {
   return null;
 }
 
-function loginVerificationFromError(error: unknown): LoginVerificationChallenge | null {
-  if (!error || typeof error !== "object" || !("graphQLErrors" in error)) return null;
-  const graphQLErrors = (error as {
-    graphQLErrors?: Array<{ extensions?: Record<string, unknown> }>;
-  }).graphQLErrors;
+function loginVerificationFromError(
+  error: unknown,
+): LoginVerificationChallenge | null {
+  if (!error || typeof error !== "object" || !("graphQLErrors" in error))
+    return null;
+  const graphQLErrors = (
+    error as {
+      graphQLErrors?: Array<{ extensions?: Record<string, unknown> }>;
+    }
+  ).graphQLErrors;
   const extensions = graphQLErrors?.find(
     (entry) => entry.extensions?.code === "MFA_STEP_UP_REQUIRED",
   )?.extensions;
@@ -227,13 +238,16 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [loginVerification, setLoginVerification] =
     useState<LoginVerificationChallenge | null>(null);
-  const [verificationFactor, setVerificationFactor] = useState<"passkey" | "totp">("passkey");
+  const [verificationFactor, setVerificationFactor] = useState<
+    "passkey" | "totp"
+  >("passkey");
   const [verificationTotpCode, setVerificationTotpCode] = useState("");
   const [verificationPasskeyBusy, setVerificationPasskeyBusy] = useState(false);
   const [verificationPasskeyStatus, setVerificationPasskeyStatus] = useState<
     "waiting" | "cancelled" | "failed"
   >("waiting");
-  const [verificationPasskeyAttempt, setVerificationPasskeyAttempt] = useState(0);
+  const [verificationPasskeyAttempt, setVerificationPasskeyAttempt] =
+    useState(0);
   const [passkeySubmitting, setPasskeySubmitting] = useState(false);
   const [jellyfinSubmitting, setJellyfinSubmitting] = useState(false);
   const [embySubmitting, setEmbySubmitting] = useState(false);
@@ -250,10 +264,14 @@ export default function LoginPage() {
   const [jellyfinMfaSetupActive, setJellyfinMfaSetupActive] = useState(false);
   const [jellyfinMfaEnrollment, setJellyfinMfaEnrollment] =
     useState<TotpEnrollmentStart | null>(null);
-  const [jellyfinMfaEnrollmentCode, setJellyfinMfaEnrollmentCode] = useState("");
-  const [jellyfinMfaRecoveryCodes, setJellyfinMfaRecoveryCodes] = useState<string[]>([]);
+  const [jellyfinMfaEnrollmentCode, setJellyfinMfaEnrollmentCode] =
+    useState("");
+  const [jellyfinMfaRecoveryCodes, setJellyfinMfaRecoveryCodes] = useState<
+    string[]
+  >([]);
   const [jellyfinMfaBusy, setJellyfinMfaBusy] = useState(false);
-  const [loginEnrollmentPasskeyBusy, setLoginEnrollmentPasskeyBusy] = useState(false);
+  const [loginEnrollmentPasskeyBusy, setLoginEnrollmentPasskeyBusy] =
+    useState(false);
   const [plexSubmitting, setPlexSubmitting] = useState(false);
   const redirectTarget = resolveRedirectTarget(searchParams.get("redirect"));
 
@@ -269,23 +287,26 @@ export default function LoginPage() {
       replacementPasswordInput.current?.focus();
     }
   }, [passwordChangeRequired]);
-  const jellyfinConnections =
-    externalAuthSettings?.loginProviders.includes("JELLYFIN")
-      ? externalAuthSettings.connections.filter(
-          (connection) => connection.provider === "JELLYFIN" && connection.loginEnabled,
-        )
-      : [];
-  const embyConnections =
-    externalAuthSettings?.loginProviders.includes("EMBY")
-      ? externalAuthSettings.connections.filter(
-          (connection) => connection.provider === "EMBY" && connection.loginEnabled,
-        )
-      : [];
+  const jellyfinConnections = externalAuthSettings?.loginProviders.includes(
+    "JELLYFIN",
+  )
+    ? externalAuthSettings.connections.filter(
+        (connection) =>
+          connection.provider === "JELLYFIN" && connection.loginEnabled,
+      )
+    : [];
+  const embyConnections = externalAuthSettings?.loginProviders.includes("EMBY")
+    ? externalAuthSettings.connections.filter(
+        (connection) =>
+          connection.provider === "EMBY" && connection.loginEnabled,
+      )
+    : [];
   const plexConnections =
     isVisibleExternalAccountProvider("PLEX") &&
     externalAuthSettings?.loginProviders.includes("PLEX")
       ? externalAuthSettings.connections.filter(
-          (connection) => connection.provider === "PLEX" && connection.loginEnabled,
+          (connection) =>
+            connection.provider === "PLEX" && connection.loginEnabled,
         )
       : [];
   const plexLoginAvailable = plexConnections.length > 0;
@@ -398,7 +419,9 @@ export default function LoginPage() {
           setVerificationPasskeyStatus("cancelled");
         } else {
           setVerificationPasskeyStatus("failed");
-          setError("Passkey verification could not be completed. Try again or use another factor.");
+          setError(
+            "Passkey verification could not be completed. Try again or use another factor.",
+          );
         }
       } finally {
         if (!controller.signal.aborted) setVerificationPasskeyBusy(false);
@@ -481,17 +504,18 @@ export default function LoginPage() {
         setExternalAuthSettings(settings);
         const firstJellyfinConnectionId =
           settings?.connections.find(
-            (connection) => connection.provider === "JELLYFIN" && connection.loginEnabled,
-          )?.id ??
-          "";
+            (connection) =>
+              connection.provider === "JELLYFIN" && connection.loginEnabled,
+          )?.id ?? "";
         if (firstJellyfinConnectionId) {
-          setJellyfinConnectionId((current) =>
-            current || firstJellyfinConnectionId,
+          setJellyfinConnectionId(
+            (current) => current || firstJellyfinConnectionId,
           );
         }
         const firstEmbyConnectionId =
           settings?.connections.find(
-            (connection) => connection.provider === "EMBY" && connection.loginEnabled,
+            (connection) =>
+              connection.provider === "EMBY" && connection.loginEnabled,
           )?.id ?? "";
         if (firstEmbyConnectionId) {
           setEmbyConnectionId((current) => current || firstEmbyConnectionId);
@@ -499,9 +523,9 @@ export default function LoginPage() {
         if (isVisibleExternalAccountProvider("PLEX")) {
           const firstPlexConnectionId =
             settings?.connections.find(
-              (connection) => connection.provider === "PLEX" && connection.loginEnabled,
-            )?.id ??
-            "";
+              (connection) =>
+                connection.provider === "PLEX" && connection.loginEnabled,
+            )?.id ?? "";
           if (firstPlexConnectionId) {
             setPlexConnectionId((current) => current || firstPlexConnectionId);
           }
@@ -516,33 +540,30 @@ export default function LoginPage() {
     };
   }, []);
 
-  const handlePasskeySignIn = useCallback(
-    async () => {
-      setError(null);
-      setPasskeySubmitting(true);
-      try {
-        const result = await authenticateWithPasskey(undefined, persistSession);
-        adoptSession(result.token, result.user, result.persistSession);
-        navigate(redirectTarget, { replace: true });
-      } catch (err) {
-        if (err instanceof PasskeyClientError) {
-          if (err.code === "unsupported") {
-            setError(t("auth.passkeyUnsupported"));
-          } else if (err.code === "cancelled") {
-            setError(t("auth.passkeyCancelled"));
-          } else {
-            setError(primaryLoginFailureMessage(t, err));
-          }
-          return;
+  const handlePasskeySignIn = useCallback(async () => {
+    setError(null);
+    setPasskeySubmitting(true);
+    try {
+      const result = await authenticateWithPasskey(undefined, persistSession);
+      adoptSession(result.token, result.user, result.persistSession);
+      navigate(redirectTarget, { replace: true });
+    } catch (err) {
+      if (err instanceof PasskeyClientError) {
+        if (err.code === "unsupported") {
+          setError(t("auth.passkeyUnsupported"));
+        } else if (err.code === "cancelled") {
+          setError(t("auth.passkeyCancelled"));
+        } else {
+          setError(primaryLoginFailureMessage(t, err));
         }
-
-        setError(primaryLoginFailureMessage(t, err));
-      } finally {
-        setPasskeySubmitting(false);
+        return;
       }
-    },
-    [adoptSession, navigate, persistSession, redirectTarget, t],
-  );
+
+      setError(primaryLoginFailureMessage(t, err));
+    } finally {
+      setPasskeySubmitting(false);
+    }
+  }, [adoptSession, navigate, persistSession, redirectTarget, t]);
 
   const startJellyfinMfaEnrollment = useCallback(async () => {
     setJellyfinMfaBusy(true);
@@ -560,7 +581,9 @@ export default function LoginPage() {
       }
       setJellyfinMfaEnrollment(data.totpEnrollmentStart);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("auth.mfaSetupStartFailed"));
+      setError(
+        userFacingGraphQlErrorMessage(err, t("auth.mfaSetupStartFailed"), t),
+      );
     } finally {
       setJellyfinMfaBusy(false);
     }
@@ -578,7 +601,9 @@ export default function LoginPage() {
       }
     } catch (err) {
       if (err instanceof PasskeyClientError && err.code === "cancelled") {
-        setError("Passkey enrollment was cancelled. Choose an authenticator app instead or try again.");
+        setError(
+          "Passkey enrollment was cancelled. Choose an authenticator app instead or try again.",
+        );
       } else {
         setError("Passkey enrollment could not be completed.");
       }
@@ -600,7 +625,11 @@ export default function LoginPage() {
         if (result.mfaEnrollmentRequired) {
           setPassword("");
           setJellyfinMfaSetupActive(true);
-          adoptSession(result.token, result.user ?? null, result.persistSession);
+          adoptSession(
+            result.token,
+            result.user ?? null,
+            result.persistSession,
+          );
           return;
         }
         if (result.passwordChangeRequired) {
@@ -630,7 +659,8 @@ export default function LoginPage() {
   );
 
   const completeJellyfinMfaEnrollment = useCallback(async () => {
-    if (!jellyfinMfaEnrollment || jellyfinMfaEnrollmentCode.length !== 6) return;
+    if (!jellyfinMfaEnrollment || jellyfinMfaEnrollmentCode.length !== 6)
+      return;
 
     setError(null);
     setJellyfinMfaBusy(true);
@@ -653,12 +683,16 @@ export default function LoginPage() {
       if (error || !data?.completeLoginMfaEnrollment) {
         throw error ?? new Error(t("auth.mfaSetupCompleteFailed"));
       }
-      setJellyfinMfaRecoveryCodes(data.completeLoginMfaEnrollment.recoveryCodes);
+      setJellyfinMfaRecoveryCodes(
+        data.completeLoginMfaEnrollment.recoveryCodes,
+      );
       setJellyfinMfaEnrollment(null);
       setJellyfinMfaEnrollmentCode("");
       adoptCompletedLogin(data.completeLoginMfaEnrollment.login);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("auth.mfaSetupCompleteFailed"));
+      setError(
+        userFacingGraphQlErrorMessage(err, t("auth.mfaSetupCompleteFailed"), t),
+      );
     } finally {
       setJellyfinMfaBusy(false);
     }
@@ -686,63 +720,60 @@ export default function LoginPage() {
     setError(null);
   }, [logout]);
 
-  const handleJellyfinSignIn = useCallback(
-    async () => {
-      if (!jellyfinConnectionId || !jellyfinUsername || !jellyfinPassword) return;
+  const handleJellyfinSignIn = useCallback(async () => {
+    if (!jellyfinConnectionId || !jellyfinUsername || !jellyfinPassword) return;
 
-      setError(null);
-      setJellyfinSubmitting(true);
-      try {
-        const { data, error } = await backendClient
-          .mutation(loginWithJellyfinMutation, {
-            input: {
-              connectionId: jellyfinConnectionId,
-              username: jellyfinUsername,
-              password: jellyfinPassword,
-              totpCode: null,
-              persistSession,
-            },
-          })
-          .toPromise();
-        if (error || !data?.loginWithJellyfin) {
-          throw error ?? new Error(t("auth.jellyfinFailed"));
-        }
-        const loginPayload = data.loginWithJellyfin;
-        if (loginPayload.mfaEnrollmentRequired) {
-          setJellyfinMfaSetupActive(true);
-          adoptSession(
-            loginPayload.token,
-            loginPayload.user ?? null,
-            loginPayload.persistSession,
-          );
-          return;
-        }
+    setError(null);
+    setJellyfinSubmitting(true);
+    try {
+      const { data, error } = await backendClient
+        .mutation(loginWithJellyfinMutation, {
+          input: {
+            connectionId: jellyfinConnectionId,
+            username: jellyfinUsername,
+            password: jellyfinPassword,
+            totpCode: null,
+            persistSession,
+          },
+        })
+        .toPromise();
+      if (error || !data?.loginWithJellyfin) {
+        throw error ?? new Error(t("auth.jellyfinFailed"));
+      }
+      const loginPayload = data.loginWithJellyfin;
+      if (loginPayload.mfaEnrollmentRequired) {
+        setJellyfinMfaSetupActive(true);
         adoptSession(
           loginPayload.token,
           loginPayload.user ?? null,
           loginPayload.persistSession,
         );
-        navigate(redirectTarget, { replace: true });
-      } catch (err) {
-        if (!beginLoginVerification(err)) {
-          setError(primaryLoginFailureMessage(t));
-        }
-      } finally {
-        setJellyfinSubmitting(false);
+        return;
       }
-    },
-    [
-      adoptSession,
-      beginLoginVerification,
-      jellyfinConnectionId,
-      jellyfinPassword,
-      jellyfinUsername,
-      navigate,
-      persistSession,
-      redirectTarget,
-      t,
-    ],
-  );
+      adoptSession(
+        loginPayload.token,
+        loginPayload.user ?? null,
+        loginPayload.persistSession,
+      );
+      navigate(redirectTarget, { replace: true });
+    } catch (err) {
+      if (!beginLoginVerification(err)) {
+        setError(primaryLoginFailureMessage(t));
+      }
+    } finally {
+      setJellyfinSubmitting(false);
+    }
+  }, [
+    adoptSession,
+    beginLoginVerification,
+    jellyfinConnectionId,
+    jellyfinPassword,
+    jellyfinUsername,
+    navigate,
+    persistSession,
+    redirectTarget,
+    t,
+  ]);
 
   const handleEmbySignIn = useCallback(async () => {
     if (!embyConnectionId || !embyUsername || !embyPassword) return;
@@ -800,51 +831,55 @@ export default function LoginPage() {
     redirectTarget,
   ]);
 
-  const handlePlexSignIn = useCallback(
-    async () => {
-      if (!plexConnectionId) return;
+  const handlePlexSignIn = useCallback(async () => {
+    if (!plexConnectionId) return;
 
-      setError(null);
-      setPlexSubmitting(true);
-      try {
-        const plexAuthToken = await authenticateWithPlexPin();
-        const { data, error } = await backendClient
-          .mutation(loginWithPlexMutation, {
-            input: {
-              connectionId: plexConnectionId,
-              plexAuthToken,
-              persistSession,
-            },
-          })
-          .toPromise();
-        if (error || !data?.loginWithPlex) {
-          throw error ?? new Error(t("auth.plexFailed"));
-        }
-        adoptSession(
-          data.loginWithPlex.token,
-          data.loginWithPlex.user ?? null,
-          data.loginWithPlex.persistSession,
-        );
-        navigate(redirectTarget, { replace: true });
-      } catch (err) {
-        setError(primaryLoginFailureMessage(t, err));
-      } finally {
-        setPlexSubmitting(false);
+    setError(null);
+    setPlexSubmitting(true);
+    try {
+      const plexAuthToken = await authenticateWithPlexPin();
+      const { data, error } = await backendClient
+        .mutation(loginWithPlexMutation, {
+          input: {
+            connectionId: plexConnectionId,
+            plexAuthToken,
+            persistSession,
+          },
+        })
+        .toPromise();
+      if (error || !data?.loginWithPlex) {
+        throw error ?? new Error(t("auth.plexFailed"));
       }
-    },
-    [adoptSession, navigate, persistSession, plexConnectionId, redirectTarget, t],
-  );
+      adoptSession(
+        data.loginWithPlex.token,
+        data.loginWithPlex.user ?? null,
+        data.loginWithPlex.persistSession,
+      );
+      navigate(redirectTarget, { replace: true });
+    } catch (err) {
+      setError(primaryLoginFailureMessage(t, err));
+    } finally {
+      setPlexSubmitting(false);
+    }
+  }, [
+    adoptSession,
+    navigate,
+    persistSession,
+    plexConnectionId,
+    redirectTarget,
+    t,
+  ]);
 
   const handleRequiredPasswordChange = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
       if (!replacementPassword) {
-        setError("Enter a new password.");
+        setError(t("setup.passwordRequired"));
         replacementPasswordInput.current?.focus();
         return;
       }
       if (replacementPassword !== replacementPasswordConfirmation) {
-        setError("The new passwords do not match.");
+        setError(t("initialAuth.mismatch"));
         return;
       }
 
@@ -858,7 +893,7 @@ export default function LoginPage() {
           )
           .toPromise();
         if (error || !data?.completeRequiredPasswordChange) {
-          throw error ?? new Error("Password replacement failed.");
+          throw error ?? new Error(t("initialAuth.saveFailed"));
         }
         const result = data.completeRequiredPasswordChange;
         adoptSession(result.token, result.user ?? null, result.persistSession);
@@ -868,10 +903,12 @@ export default function LoginPage() {
       } catch (err) {
         if (graphQlErrorCode(err) === "PASSWORD_CHANGE_REQUIRED") {
           logout();
-          setError("This temporary session has expired. Sign in again to continue.");
+          setError(t("initialAuth.sessionExpired"));
           return;
         }
-        setError("Your new password could not be saved. Check the requirements and try again.");
+        setError(
+          userFacingGraphQlErrorMessage(err, t("initialAuth.saveFailed"), t),
+        );
       } finally {
         setSubmitting(false);
       }
@@ -883,6 +920,7 @@ export default function LoginPage() {
       redirectTarget,
       replacementPassword,
       replacementPasswordConfirmation,
+      t,
     ],
   );
 
@@ -899,7 +937,8 @@ export default function LoginPage() {
   }
 
   if (loginVerification) {
-    const passkeyOnly = loginVerification.hasPasskey && !loginVerification.hasTotp;
+    const passkeyOnly =
+      loginVerification.hasPasskey && !loginVerification.hasTotp;
     return (
       <div className={AUTH_PAGE_CLASS}>
         <div className={AUTH_MFA_PANEL_CLASS}>
@@ -920,7 +959,11 @@ export default function LoginPage() {
                   : ""}
           </div>
 
-          {error ? <div id="login-error" className={AUTH_ERROR_CLASS}>{error}</div> : null}
+          {error ? (
+            <div id="login-error" className={AUTH_ERROR_CLASS}>
+              {error}
+            </div>
+          ) : null}
 
           {verificationFactor === "totp" ? (
             <TotpCodeForm
@@ -959,8 +1002,14 @@ export default function LoginPage() {
                 disabled={verificationPasskeyBusy}
                 className={AUTH_PRIMARY_BUTTON_CLASS}
               >
-                {verificationPasskeyBusy ? <LoadingMark className="h-4 w-4" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
-                {verificationPasskeyBusy ? "Waiting for passkey" : "Try passkey again"}
+                {verificationPasskeyBusy ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <Fingerprint className="h-4 w-4" aria-hidden="true" />
+                )}
+                {verificationPasskeyBusy
+                  ? "Waiting for passkey"
+                  : "Try passkey again"}
               </button>
               {loginVerification.hasTotp ? (
                 <button
@@ -978,7 +1027,8 @@ export default function LoginPage() {
               ) : null}
               {passkeyOnly && !verificationPasskeyBusy ? (
                 <p className={AUTH_MUTED_TEXT_CLASS}>
-                  Can&apos;t use your passkey? Contact an administrator to recover your account.
+                  Can&apos;t use your passkey? Contact an administrator to
+                  recover your account.
                 </p>
               ) : null}
               <button
@@ -1002,7 +1052,9 @@ export default function LoginPage() {
         <div className={AUTH_MFA_PANEL_CLASS}>
           <div className="space-y-2 text-center">
             <h1 className={AUTH_HEADING_CLASS}>{t("auth.mfaSetupTitle")}</h1>
-            <p className={AUTH_MUTED_TEXT_CLASS}>{t("auth.mfaSetupDescription")}</p>
+            <p className={AUTH_MUTED_TEXT_CLASS}>
+              {t("auth.mfaSetupDescription")}
+            </p>
           </div>
 
           {error ? (
@@ -1045,7 +1097,9 @@ export default function LoginPage() {
                   {t("profile.totpOpenSetupLink")}
                 </a>
                 <div className="w-full space-y-1">
-                  <div className="text-xs text-[var(--scry-muted)]">{t("profile.totpSecret")}</div>
+                  <div className="text-xs text-[var(--scry-muted)]">
+                    {t("profile.totpSecret")}
+                  </div>
                   <code
                     id="jellyfin-mfa-enrollment-secret"
                     className="block break-all rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 font-[var(--font-code)] text-xs text-[var(--scry-ink2)]"
@@ -1061,7 +1115,11 @@ export default function LoginPage() {
                   autoComplete="one-time-code"
                   maxLength={6}
                   value={jellyfinMfaEnrollmentCode}
-                  onChange={(event) => setJellyfinMfaEnrollmentCode(sanitizeTotpCode(event.target.value))}
+                  onChange={(event) =>
+                    setJellyfinMfaEnrollmentCode(
+                      sanitizeTotpCode(event.target.value),
+                    )
+                  }
                   placeholder={t("auth.totpCode")}
                   className={AUTH_INPUT_CLASS}
                 />
@@ -1069,7 +1127,9 @@ export default function LoginPage() {
                   id="jellyfin-mfa-enrollment-submit"
                   type="button"
                   onClick={completeJellyfinMfaEnrollment}
-                  disabled={jellyfinMfaBusy || jellyfinMfaEnrollmentCode.length !== 6}
+                  disabled={
+                    jellyfinMfaBusy || jellyfinMfaEnrollmentCode.length !== 6
+                  }
                   className={AUTH_PRIMARY_BUTTON_CLASS}
                 >
                   {jellyfinMfaBusy ? <LoadingMark className="h-4 w-4" /> : null}
@@ -1108,6 +1168,7 @@ export default function LoginPage() {
               ) : null}
               <button
                 type="button"
+                id="login-mfa-enrollment-authenticator"
                 onClick={() => void startJellyfinMfaEnrollment()}
                 disabled={jellyfinMfaBusy || loginEnrollmentPasskeyBusy}
                 className={AUTH_SECONDARY_BUTTON_CLASS}
@@ -1134,21 +1195,27 @@ export default function LoginPage() {
       <div className={AUTH_PAGE_CLASS}>
         <div className={AUTH_PANEL_CLASS}>
           <div className="space-y-2 text-center">
-            <h1 className={AUTH_HEADING_CLASS}>Choose a new password</h1>
+            <h1 className={AUTH_HEADING_CLASS}>
+              {t("initialAuth.replacementTitle")}
+            </h1>
             <p className={AUTH_MUTED_TEXT_CLASS}>
-              Your administrator supplied a temporary password. Choose a new password that only you know.
+              {t("initialAuth.replacementDescription")}
             </p>
           </div>
 
           <div aria-live="polite" className="sr-only">
             {error ?? ""}
           </div>
-          {error ? <div id="login-error" className={AUTH_ERROR_CLASS}>{error}</div> : null}
+          {error ? (
+            <div id="login-error" className={AUTH_ERROR_CLASS}>
+              {error}
+            </div>
+          ) : null}
 
           <form onSubmit={handleRequiredPasswordChange} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="required-password" className={AUTH_LABEL_CLASS}>
-                New password
+                {t("initialAuth.password")}
               </label>
               <Input
                 ref={replacementPasswordInput}
@@ -1162,8 +1229,11 @@ export default function LoginPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="required-password-confirmation" className={AUTH_LABEL_CLASS}>
-                Confirm new password
+              <label
+                htmlFor="required-password-confirmation"
+                className={AUTH_LABEL_CLASS}
+              >
+                {t("initialAuth.confirm")}
               </label>
               <Input
                 id="required-password-confirmation"
@@ -1171,7 +1241,9 @@ export default function LoginPage() {
                 autoComplete="new-password"
                 required
                 value={replacementPasswordConfirmation}
-                onChange={(event) => setReplacementPasswordConfirmation(event.target.value)}
+                onChange={(event) =>
+                  setReplacementPasswordConfirmation(event.target.value)
+                }
                 className={AUTH_INPUT_CLASS}
               />
             </div>
@@ -1179,9 +1251,11 @@ export default function LoginPage() {
               <input
                 type="checkbox"
                 checked={showReplacementPassword}
-                onChange={(event) => setShowReplacementPassword(event.target.checked)}
+                onChange={(event) =>
+                  setShowReplacementPassword(event.target.checked)
+                }
               />
-              Show passwords
+              {t("initialAuth.showPasswords")}
             </label>
             <button
               id="complete-required-password-change"
@@ -1190,7 +1264,7 @@ export default function LoginPage() {
               className={AUTH_PRIMARY_BUTTON_CLASS}
             >
               {submitting ? <LoadingMark className="h-4 w-4" /> : null}
-              {submitting ? "Saving password" : "Save new password"}
+              {t(submitting ? "initialAuth.saving" : "initialAuth.continue")}
             </button>
           </form>
 
@@ -1200,7 +1274,7 @@ export default function LoginPage() {
             disabled={submitting}
             className={AUTH_SECONDARY_BUTTON_CLASS}
           >
-            Sign out
+            {t("initialAuth.signOut")}
           </button>
         </div>
       </div>
@@ -1239,74 +1313,70 @@ export default function LoginPage() {
           {localPasswordAvailable ? (
             <>
               {passwordFormVisible ? (
-                <form id="login-form" onSubmit={handleSubmit} className="space-y-5">
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="username"
-                        className={AUTH_LABEL_CLASS}
-                      >
-                        {t("auth.username")}
-                      </label>
-                      <Input
-                        id="username"
-                        type="text"
-                        autoComplete="username"
-                        required
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        placeholder={t("auth.username")}
-                        className={AUTH_INPUT_CLASS}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="password"
-                        className={AUTH_LABEL_CLASS}
-                      >
-                        {t("auth.password")}
-                      </label>
-                      <Input
-                        id="password"
-                        type="password"
-                        autoComplete="current-password"
-                        required
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder={t("auth.password")}
-                        className={AUTH_INPUT_CLASS}
-                      />
-                    </div>
-
-                    <label className="flex items-center gap-2 text-sm text-[var(--scry-muted)]">
-                      <input
-                        id="persist-session"
-                        type="checkbox"
-                        checked={persistSession}
-                        onChange={(event) => {
-                          persistSessionInitialized.current = true;
-                          setPersistSession(event.target.checked);
-                        }}
-                        disabled={anySubmitting}
-                      />
-                      Keep me signed in
+                <form
+                  id="login-form"
+                  onSubmit={handleSubmit}
+                  className="space-y-5"
+                >
+                  <div className="space-y-1.5">
+                    <label htmlFor="username" className={AUTH_LABEL_CLASS}>
+                      {t("auth.username")}
                     </label>
+                    <Input
+                      id="username"
+                      type="text"
+                      autoComplete="username"
+                      required
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder={t("auth.username")}
+                      className={AUTH_INPUT_CLASS}
+                    />
+                  </div>
 
-                    <button
-                      id="login-submit"
-                      type="submit"
+                  <div className="space-y-1.5">
+                    <label htmlFor="password" className={AUTH_LABEL_CLASS}>
+                      {t("auth.password")}
+                    </label>
+                    <Input
+                      id="password"
+                      type="password"
+                      autoComplete="current-password"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={t("auth.password")}
+                      className={AUTH_INPUT_CLASS}
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 text-sm text-[var(--scry-muted)]">
+                    <input
+                      id="persist-session"
+                      type="checkbox"
+                      checked={persistSession}
+                      onChange={(event) => {
+                        persistSessionInitialized.current = true;
+                        setPersistSession(event.target.checked);
+                      }}
                       disabled={anySubmitting}
-                      className={AUTH_PRIMARY_BUTTON_CLASS}
-                    >
-                      {submitting ? <LoadingMark className="h-4 w-4" /> : null}
-                      {submitting ? t("auth.signingIn") : t("auth.signIn")}
-                    </button>
+                    />
+                    Keep me signed in
+                  </label>
+
+                  <button
+                    id="login-submit"
+                    type="submit"
+                    disabled={anySubmitting}
+                    className={AUTH_PRIMARY_BUTTON_CLASS}
+                  >
+                    {submitting ? <LoadingMark className="h-4 w-4" /> : null}
+                    {submitting ? t("auth.signingIn") : t("auth.signIn")}
+                  </button>
                 </form>
               ) : null}
             </>
           ) : null}
-
-
 
           {jellyfinLoginAvailable ? (
             <>
@@ -1327,7 +1397,9 @@ export default function LoginPage() {
                       id="login-jellyfin-connection"
                       className={AUTH_SELECT_CLASS}
                       value={jellyfinConnectionId}
-                      onChange={(event) => setJellyfinConnectionId(event.target.value)}
+                      onChange={(event) =>
+                        setJellyfinConnectionId(event.target.value)
+                      }
                     >
                       {jellyfinConnections.map((connection) => (
                         <option
@@ -1348,7 +1420,9 @@ export default function LoginPage() {
                     type="text"
                     ignorePasswordManagers
                     value={jellyfinUsername}
-                    onChange={(event) => setJellyfinUsername(event.target.value)}
+                    onChange={(event) =>
+                      setJellyfinUsername(event.target.value)
+                    }
                     placeholder={t("auth.username")}
                     className={AUTH_INPUT_CLASS}
                   />
@@ -1357,7 +1431,9 @@ export default function LoginPage() {
                     type="password"
                     ignorePasswordManagers
                     value={jellyfinPassword}
-                    onChange={(event) => setJellyfinPassword(event.target.value)}
+                    onChange={(event) =>
+                      setJellyfinPassword(event.target.value)
+                    }
                     placeholder={t("auth.password")}
                     className={AUTH_INPUT_CLASS}
                   />
@@ -1375,7 +1451,9 @@ export default function LoginPage() {
                     {jellyfinSubmitting ? (
                       <LoadingMark className="h-4 w-4" />
                     ) : null}
-                    {jellyfinSubmitting ? t("auth.signingIn") : t("auth.signIn")}
+                    {jellyfinSubmitting
+                      ? t("auth.signingIn")
+                      : t("auth.signIn")}
                   </button>
                 </form>
               ) : null}
@@ -1403,12 +1481,16 @@ export default function LoginPage() {
                         (connection) => connection.id === nextId,
                       );
                       setEmbyConnectionId(nextId);
-                      if (!nextConnection?.embyConnectEnabled) setEmbyMode("LOCAL");
+                      if (!nextConnection?.embyConnectEnabled)
+                        setEmbyMode("LOCAL");
                     }}
                   >
                     {embyConnections.map((connection) => (
                       <option
-                        id={selectorId("login-emby-connection-option", connection.id)}
+                        id={selectorId(
+                          "login-emby-connection-option",
+                          connection.id,
+                        )}
                         key={connection.id}
                         value={connection.id}
                       >
@@ -1445,7 +1527,9 @@ export default function LoginPage() {
                     value={embyUsername}
                     onChange={(event) => setEmbyUsername(event.target.value)}
                     placeholder={
-                      embyMode === "CONNECT" ? "Emby Connect username or email" : t("auth.username")
+                      embyMode === "CONNECT"
+                        ? "Emby Connect username or email"
+                        : t("auth.username")
                     }
                     className={AUTH_INPUT_CLASS}
                   />
@@ -1461,10 +1545,17 @@ export default function LoginPage() {
                   <button
                     id="login-emby-submit"
                     type="submit"
-                    disabled={anySubmitting || !embyConnectionId || !embyUsername || !embyPassword}
+                    disabled={
+                      anySubmitting ||
+                      !embyConnectionId ||
+                      !embyUsername ||
+                      !embyPassword
+                    }
                     className={AUTH_PRIMARY_BUTTON_CLASS}
                   >
-                    {embySubmitting ? <LoadingMark className="h-4 w-4" /> : null}
+                    {embySubmitting ? (
+                      <LoadingMark className="h-4 w-4" />
+                    ) : null}
                     {embySubmitting ? t("auth.signingIn") : t("auth.signIn")}
                   </button>
                 </form>
@@ -1472,7 +1563,9 @@ export default function LoginPage() {
             </>
           ) : null}
 
-          {localPasswordAvailable && showLoginMethodChooser && !passwordFormVisible ? (
+          {localPasswordAvailable &&
+          showLoginMethodChooser &&
+          !passwordFormVisible ? (
             <button
               id="login-password-method"
               type="button"
@@ -1487,7 +1580,9 @@ export default function LoginPage() {
             </button>
           ) : null}
 
-          {jellyfinLoginAvailable && showLoginMethodChooser && !jellyfinFormVisible ? (
+          {jellyfinLoginAvailable &&
+          showLoginMethodChooser &&
+          !jellyfinFormVisible ? (
             <button
               id="login-jellyfin-method"
               type="button"
@@ -1540,7 +1635,9 @@ export default function LoginPage() {
               ) : (
                 <Fingerprint className="h-4 w-4" aria-hidden="true" />
               )}
-              {passkeySubmitting ? t("auth.passkeySigningIn") : "Sign in with a passkey"}
+              {passkeySubmitting
+                ? t("auth.passkeySigningIn")
+                : "Sign in with a passkey"}
             </button>
           ) : null}
 
@@ -1555,7 +1652,10 @@ export default function LoginPage() {
                 >
                   {plexConnections.map((connection) => (
                     <option
-                      id={selectorId("login-plex-connection-option", connection.id)}
+                      id={selectorId(
+                        "login-plex-connection-option",
+                        connection.id,
+                      )}
                       key={connection.id}
                       value={connection.id}
                     >
@@ -1570,7 +1670,9 @@ export default function LoginPage() {
                 onClick={handlePlexSignIn}
                 disabled={anySubmitting || !plexConnectionId}
                 className={AUTH_SECONDARY_BUTTON_CLASS}
-                title={plexSubmitting ? t("auth.plexPinFlowPending") : undefined}
+                title={
+                  plexSubmitting ? t("auth.plexPinFlowPending") : undefined
+                }
               >
                 {plexSubmitting ? (
                   <LoadingMark className="h-4 w-4" />
@@ -1582,7 +1684,9 @@ export default function LoginPage() {
                     className="h-4 w-4"
                   />
                 )}
-                {plexSubmitting ? t("auth.plexPinFlowPending") : t("auth.signInWithPlex")}
+                {plexSubmitting
+                  ? t("auth.plexPinFlowPending")
+                  : t("auth.signInWithPlex")}
               </button>
             </div>
           ) : null}

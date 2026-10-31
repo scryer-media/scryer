@@ -356,7 +356,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -365,12 +370,16 @@ impl AppUseCase {
         .await?;
 
         if title.facet != facet {
-            return Err(AppError::Validation(
-                "requested facet does not match title facet".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::REQUESTED_FACET_DOES_NOT_MATCH_TITLE_FACET,
+                "requested facet does not match title facet",
             ));
         }
         if !self.resolve_rename_enabled(&facet).await? {
-            return Err(AppError::Validation("renamer_disabled".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAMER_DISABLED,
+                "renamer_disabled",
+            ));
         }
 
         let settings = self.read_rename_plan_settings(&facet).await?;
@@ -410,7 +419,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", title_id),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -418,15 +432,19 @@ impl AppUseCase {
             )
             .await?;
             if title.facet != facet {
-                return Err(AppError::Validation(
-                    "requested facet does not match title facet".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::REQUESTED_FACET_DOES_NOT_MATCH_TITLE_FACET,
+                    "requested facet does not match title facet",
                 ));
             }
             titles.push(title);
         }
 
         if !self.resolve_rename_enabled(&facet).await? {
-            return Err(AppError::Validation("renamer_disabled".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAMER_DISABLED,
+                "renamer_disabled",
+            ));
         }
         let settings = self.read_rename_plan_settings(&facet).await?;
         let effective_languages = self.resolve_metadata_languages_for_titles(&titles).await;
@@ -462,7 +480,10 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         if !self.resolve_rename_enabled(&facet).await? {
-            return Err(AppError::Validation("renamer_disabled".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAMER_DISABLED,
+                "renamer_disabled",
+            ));
         }
 
         let settings = self.read_rename_plan_settings(&facet).await?;
@@ -513,7 +534,12 @@ impl AppUseCase {
             .titles
             .get_by_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", title_id),
+                )
+            })?;
         let effective_languages = self
             .resolve_metadata_languages_for_titles(std::slice::from_ref(&title))
             .await;
@@ -591,7 +617,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", title_id),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -701,7 +732,10 @@ impl AppUseCase {
         plan_fingerprint: &str,
     ) -> AppResult<RenameApplyResult> {
         if preview.fingerprint != plan_fingerprint {
-            return Err(AppError::Validation("rename_stale_plan".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAME_STALE_PLAN,
+                "rename_stale_plan",
+            ));
         }
 
         self.apply_rename_plan(actor, preview).await
@@ -1303,12 +1337,15 @@ impl AppUseCase {
                 .rename_title_folder_root_violation(&title, folder_path)
                 .await?
             {
-                return Err(AppError::Validation(format!(
-                    "refusing to rename {}: its destination folder {} is not a title folder ({})",
-                    title.name,
-                    folder_path,
-                    violation.as_str()
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::FOLDER_NOT_TITLE_BOUNDARY,
+                    format!(
+                        "refusing to rename {}: its destination folder {} is not a title folder ({})",
+                        title.name,
+                        folder_path,
+                        violation.as_str()
+                    ),
+                ));
             }
             crate::folder_ownership::ensure_folder_move_available_to_title(
                 self,
@@ -1421,17 +1458,20 @@ impl AppUseCase {
                     .rename_title_display_name(&overlap.inner.folder.title_id)
                     .await,
             );
-            return Err(AppError::Validation(if overlap.nested {
-                format!(
-                    "refusing to rename: {inner} ({}) is inside {outer} ({})",
-                    overlap.inner.folder.folder_path, overlap.outer.folder.folder_path
-                )
-            } else {
-                format!(
-                    "refusing to rename: {outer} and {inner} are the same folder ({})",
-                    overlap.outer.folder.folder_path
-                )
-            }));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAME_FOLDERS_OVERLAP,
+                if overlap.nested {
+                    format!(
+                        "refusing to rename: {inner} ({}) is inside {outer} ({})",
+                        overlap.inner.folder.folder_path, overlap.outer.folder.folder_path
+                    )
+                } else {
+                    format!(
+                        "refusing to rename: {outer} and {inner} are the same folder ({})",
+                        overlap.outer.folder.folder_path
+                    )
+                },
+            ));
         }
     }
 
@@ -1676,7 +1716,14 @@ impl AppUseCase {
             return Ok(());
         };
         let planned_path = stored_path_to_path_buf(&planned.folder_path);
-        let folder_path = Self::resolve_existing_path_spelling(&planned_path).await;
+        let folder_path = if Self::rename_folder_differs_only_by_case(
+            title.folder_path.as_deref(),
+            &planned.folder_path,
+        ) {
+            Self::resolve_existing_path_spelling(&planned_path).await
+        } else {
+            planned_path
+        };
         let folder_path = path_to_stored_string(&folder_path);
         let folder_path = folder_path.as_str();
         if title
@@ -1750,6 +1797,15 @@ impl AppUseCase {
             .titles
             .set_folder_path(&title.id, folder_path)
             .await
+    }
+
+    /// The on-disk spelling lookup scans the planned folder's parent, which is
+    /// the library root for a bulk rename. Only a planned folder that differs
+    /// from the recorded one by letter case alone needs it.
+    pub(crate) fn rename_folder_differs_only_by_case(current: Option<&str>, planned: &str) -> bool {
+        current.is_some_and(|current| {
+            current != planned && crate::stored_paths::paths_match_ignoring_case(current, planned)
+        })
     }
 
     async fn resolve_existing_path_spelling(path: &Path) -> PathBuf {
@@ -2153,11 +2209,17 @@ impl AppUseCase {
                 .filter(|root| proposed != *root && proposed.starts_with(root))
                 .max_by_key(|root| root.components().count())
                 .ok_or_else(|| {
-                    AppError::Validation("planned title folder is outside its library roots".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::library::PATH_OUTSIDE_LIBRARY_ROOT,
+                        "planned title folder is outside its library roots",
+                    )
                 })?;
-            let after = proposed
-                .strip_prefix(&root)
-                .map_err(|error| AppError::Validation(error.to_string()))?;
+            let after = proposed.strip_prefix(&root).map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::library::RENAME_PATH_OUTSIDE_ROOT,
+                    error.to_string(),
+                )
+            })?;
             let before = title
                 .folder_path
                 .as_deref()
@@ -3118,7 +3180,10 @@ pub(crate) fn validate_title_folder_rendering(title: &Title, template: &str) -> 
             .iter()
             .any(|component| component.trim().is_empty())
     {
-        return Err(AppError::Validation("title folder template renders an empty path component; supply the missing metadata or choose another template".into()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PATH_COMPONENT_INVALID,
+            "title folder template renders an empty path component; supply the missing metadata or choose another template",
+        ));
     }
     Ok(())
 }
@@ -3131,7 +3196,8 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
             .split('/')
             .any(|component| matches!(component.trim(), "." | ".."))
     {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::PATH_COMPONENT_INVALID,
             "folder template must contain only relative, non-empty path components".to_string(),
         ));
     }
@@ -3159,7 +3225,8 @@ pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
         &mut state,
     )?;
     if !state.saw_identity_token {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::TEMPLATE_IDENTITY_TOKEN_REQUIRED,
             "folder template's last folder must include a title or external ID token".to_string(),
         ));
     }
@@ -3205,7 +3272,10 @@ pub(crate) fn episode_folder_discovery_pattern(template: &str) -> AppResult<rege
                 cursor += 2;
             } else if ch == '{' && chars.get(cursor + 1) == Some(&'?') {
                 let group = parse_rename_template_optional_group(&chars, cursor).map_err(|_| {
-                    AppError::Validation("invalid episode folder optional group".into())
+                    AppError::validation_refused(
+                        crate::error_reasons::library::EPISODE_FOLDER_OPTIONAL_GROUP_INVALID,
+                        "invalid episode folder optional group",
+                    )
                 })?;
                 // Optional text cannot establish a folder boundary when absent.
                 pattern.push_str(&format!("(?:{})?", fragment(&group.body)?.0));
@@ -3214,7 +3284,12 @@ pub(crate) fn episode_folder_discovery_pattern(template: &str) -> AppResult<rege
                 let end = chars[cursor + 1..]
                     .iter()
                     .position(|ch| *ch == '}')
-                    .ok_or_else(|| AppError::Validation("unclosed episode folder token".into()))?
+                    .ok_or_else(|| {
+                        AppError::validation_refused(
+                            crate::error_reasons::library::UNCLOSED_EPISODE_FOLDER_TOKEN,
+                            "unclosed episode folder token",
+                        )
+                    })?
                     + cursor
                     + 1;
                 let token: String = chars[cursor + 1..end].iter().collect();
@@ -3250,8 +3325,12 @@ pub(crate) fn episode_folder_discovery_pattern(template: &str) -> AppResult<rege
     } else {
         r"\b\B".to_owned()
     };
-    regex::Regex::new(&pattern)
-        .map_err(|error| AppError::Validation(format!("invalid episode folder pattern: {error}")))
+    regex::Regex::new(&pattern).map_err(|error| {
+        AppError::validation_refused(
+            crate::error_reasons::library::EPISODE_FOLDER_PATTERN_INVALID,
+            format!("invalid episode folder pattern: {error}"),
+        )
+    })
 }
 
 fn is_illegal_folder_template_literal(ch: char) -> bool {
@@ -3298,7 +3377,10 @@ fn invalid_optional_group_error(
             format!("{template_label} template does not support optional-group fallback branches")
         }
     };
-    AppError::Validation(message)
+    AppError::validation_refused(
+        crate::error_reasons::library::TEMPLATE_OPTIONAL_GROUP_INVALID,
+        message,
+    )
 }
 
 fn validate_rename_template_fragment<F>(
@@ -3334,15 +3416,19 @@ where
                 cursor += 1;
                 continue;
             }
-            return Err(AppError::Validation(format!(
-                "{template_label} template contains an unmatched '}}'"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TEMPLATE_BRACES_UNBALANCED,
+                format!("{template_label} template contains an unmatched '}}'"),
+            ));
         }
         if ch != '{' {
             if is_illegal_literal.is_some_and(|is_illegal| is_illegal(ch)) {
-                return Err(AppError::Validation(format!(
-                    "{template_label} template contains an illegal filesystem character: {ch:?}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::PATH_COMPONENT_INVALID,
+                    format!(
+                        "{template_label} template contains an illegal filesystem character: {ch:?}"
+                    ),
+                ));
             }
             cursor += 1;
             continue;
@@ -3352,10 +3438,13 @@ where
             let group = parse_rename_template_optional_group(&chars, cursor)
                 .map_err(|error| invalid_optional_group_error(template_label, error))?;
             if !is_supported_token(&group.guard) {
-                return Err(AppError::Validation(format!(
-                    "unsupported {template_label} template token: {{{}}}",
-                    group.guard
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::TEMPLATE_TOKEN_UNSUPPORTED,
+                    format!(
+                        "unsupported {template_label} template token: {{{}}}",
+                        group.guard
+                    ),
+                ));
             }
             state.saw_token = true;
             if required_token.is_some_and(|required| group.guard == required) {
@@ -3377,28 +3466,36 @@ where
         }
 
         let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
-            return Err(AppError::Validation(format!(
-                "{template_label} template contains an unmatched '{{'"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TEMPLATE_BRACES_UNBALANCED,
+                format!("{template_label} template contains an unmatched '{{'"),
+            ));
         };
         let end_index = cursor + 1 + end;
         let token_spec: String = chars[cursor + 1..end_index].iter().collect();
         if token_spec.contains('{') {
-            return Err(AppError::Validation(format!(
-                "{template_label} template contains an unmatched '{{'"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TEMPLATE_BRACES_UNBALANCED,
+                format!("{template_label} template contains an unmatched '{{'"),
+            ));
         }
         let Some(parsed_token) = parse_rename_template_token_spec(token_spec.trim()) else {
-            return Err(AppError::Validation(format!(
-                "unsupported {template_label} template token: {{{}}}",
-                token_spec.trim()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TEMPLATE_TOKEN_UNSUPPORTED,
+                format!(
+                    "unsupported {template_label} template token: {{{}}}",
+                    token_spec.trim()
+                ),
+            ));
         };
         if !is_supported_token(&parsed_token.name) {
-            return Err(AppError::Validation(format!(
-                "unsupported {template_label} template token: {{{}}}",
-                token_spec.trim()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TEMPLATE_TOKEN_UNSUPPORTED,
+                format!(
+                    "unsupported {template_label} template token: {{{}}}",
+                    token_spec.trim()
+                ),
+            ));
         }
         state.saw_token = true;
         if state.optional_depth == 0 && is_title_identity_token(&parsed_token.name) {
@@ -3424,9 +3521,10 @@ fn validate_folder_component_template(
 ) -> AppResult<()> {
     let trimmed = template.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(format!(
-            "{template_label} template is required"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::TEMPLATE_REQUIRED,
+            format!("{template_label} template is required"),
+        ));
     }
 
     let mut state = RenameTemplateValidationState {
@@ -3441,9 +3539,12 @@ fn validate_folder_component_template(
     for component in components {
         let component = component.trim();
         if component.is_empty() {
-            return Err(AppError::Validation(format!(
-                "{template_label} template must contain only relative, non-empty path components"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::PATH_COMPONENT_INVALID,
+                format!(
+                    "{template_label} template must contain only relative, non-empty path components"
+                ),
+            ));
         }
         validate_rename_template_fragment(
             component,
@@ -3456,15 +3557,19 @@ fn validate_folder_component_template(
     }
 
     if require_any_token && !state.saw_token {
-        return Err(AppError::Validation(format!(
-            "{template_label} template must include at least one supported token"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::TEMPLATE_IDENTITY_TOKEN_REQUIRED,
+            format!("{template_label} template must include at least one supported token"),
+        ));
     }
     if !state.saw_required_token {
-        return Err(AppError::Validation(format!(
-            "{template_label} template must include {{{}}}",
-            required_token.unwrap_or_default()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::TEMPLATE_IDENTITY_TOKEN_REQUIRED,
+            format!(
+                "{template_label} template must include {{{}}}",
+                required_token.unwrap_or_default()
+            ),
+        ));
     }
 
     Ok(())
@@ -3490,7 +3595,8 @@ fn validate_rename_template_with_token_checker(
 ) -> AppResult<()> {
     let trimmed = template.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::library::TEMPLATE_REQUIRED,
             "rename template is required".to_string(),
         ));
     }
@@ -3839,6 +3945,9 @@ struct RenameCommonTokens {
     year: String,
     quality: String,
     source: String,
+    dynamic_range: String,
+    revision: String,
+    is_3d: String,
     video_codec: String,
     audio_codec: String,
     audio_channels: String,
@@ -4233,6 +4342,9 @@ fn insert_common_rename_tokens(tokens: &mut BTreeMap<String, String>, common: Re
     tokens.insert("year".to_string(), common.year);
     tokens.insert("quality".to_string(), common.quality);
     tokens.insert("source".to_string(), common.source);
+    tokens.insert("dynamic_range".to_string(), common.dynamic_range);
+    tokens.insert("revision".to_string(), common.revision);
+    tokens.insert("is_3d".to_string(), common.is_3d);
     tokens.insert("video_codec".to_string(), common.video_codec);
     tokens.insert("audio_codec".to_string(), common.audio_codec);
     tokens.insert("audio_channels".to_string(), common.audio_channels);
@@ -4262,6 +4374,9 @@ fn is_supported_rename_template_token(token: &str) -> bool {
             | "quality"
             | "edition"
             | "source"
+            | "dynamic_range"
+            | "revision"
+            | "is_3d"
             | "video_codec"
             | "audio_codec"
             | "audio_channels"
@@ -4286,6 +4401,9 @@ fn is_supported_rename_template_token_for_facet(token: &str, facet: &MediaFacet)
             | "year"
             | "quality"
             | "source"
+            | "dynamic_range"
+            | "revision"
+            | "is_3d"
             | "video_codec"
             | "audio_codec"
             | "audio_channels"
@@ -4351,7 +4469,11 @@ fn title_external_id_value(title: &Title, source: &str) -> Option<String> {
     title
         .external_ids
         .iter()
-        .find(|id| id.source.eq_ignore_ascii_case(source))
+        .find(|id| {
+            id.source.eq_ignore_ascii_case(source)
+                && crate::normalize::external_id_kind_fits_facet(id, &title.facet)
+                && !id.value.trim().is_empty()
+        })
         .map(|id| id.value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
@@ -4366,6 +4488,8 @@ pub(crate) struct RenameMediaEvidence {
     analyzed: crate::media::release_labels::ResolvedAnalysisReleaseLabels,
     quality_label: Option<String>,
     source_type: Option<String>,
+    video_hdr_format: Option<String>,
+    dovi_profile: Option<u8>,
     video_codec_parsed: Option<crate::release_parser::VideoCodec>,
     audio_codec_parsed: Option<String>,
     audio_channels_parsed: Option<String>,
@@ -4388,6 +4512,8 @@ impl RenameMediaEvidence {
             ),
             quality_label: non_empty_owned(media_file.quality_label.clone()),
             source_type: non_empty_owned(media_file.source_type.clone()),
+            video_hdr_format: non_empty_owned(media_file.video_hdr_format.clone()),
+            dovi_profile: media_file.dovi_profile,
             video_codec_parsed: media_file.video_codec_parsed,
             audio_codec_parsed: non_empty_owned(media_file.audio_codec_parsed.clone()),
             audio_channels_parsed: non_empty_owned(media_file.audio_channels_parsed.clone()),
@@ -4410,6 +4536,8 @@ impl RenameMediaEvidence {
                 &analysis.audio_streams,
                 &analysis.details,
             ),
+            video_hdr_format: non_empty_owned(analysis.video_hdr_format.clone()),
+            dovi_profile: analysis.dovi_profile,
             ..Self::default()
         }
     }
@@ -4446,6 +4574,8 @@ fn resolve_rename_common_metadata_from_evidence(
         analyzed,
         quality_label,
         source_type,
+        video_hdr_format,
+        dovi_profile,
         video_codec_parsed,
         audio_codec_parsed,
         audio_channels_parsed,
@@ -4461,6 +4591,18 @@ fn resolve_rename_common_metadata_from_evidence(
     let source = source_type
         .or_else(|| parsed_current.source.as_ref().map(ToString::to_string))
         .unwrap_or_default();
+    let dynamic_range =
+        dynamic_range_label(video_hdr_format.as_deref(), dovi_profile, parsed_current);
+    let revision = if parsed_current.revision <= 0 {
+        String::new()
+    } else if parsed_current.is_repack {
+        "REPACK".to_string()
+    } else {
+        "Proper".to_string()
+    };
+    let is_3d = parsed_current
+        .stereoscopy
+        .is_some_and(|stereoscopy| stereoscopy.has_3d());
     let video_codec = analyzed
         .video_codec
         .or_else(|| video_codec_parsed.map(|codec| codec.to_string()))
@@ -4495,6 +4637,9 @@ fn resolve_rename_common_metadata_from_evidence(
             year: year_token.unwrap_or_default().to_string(),
             quality,
             source,
+            dynamic_range,
+            revision,
+            is_3d: if is_3d { "3D" } else { "" }.to_string(),
             video_codec,
             audio_codec,
             audio_channels,
@@ -4503,6 +4648,60 @@ fn resolve_rename_common_metadata_from_evidence(
         },
         edition,
     }
+}
+
+fn dynamic_range_label(
+    video_hdr_format: Option<&str>,
+    dovi_profile: Option<u8>,
+    parsed: &ParsedReleaseMetadata,
+) -> String {
+    if let Some(format) = video_hdr_format {
+        let compact = format
+            .chars()
+            .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '_'))
+            .collect::<String>()
+            .to_ascii_uppercase();
+        if compact == "SDR" {
+            return String::new();
+        }
+        if compact == "DV" || compact.contains("DOLBYVISION") || compact.contains("DOVI") {
+            return "DV".to_string();
+        }
+        if compact.contains("HDR10+") || compact.contains("HDR10PLUS") || compact.contains("HDR10P")
+        {
+            return "HDR10+".to_string();
+        }
+        if compact.contains("HDR10") {
+            return "HDR10".to_string();
+        }
+        if compact.contains("HLG") {
+            return "HLG".to_string();
+        }
+        if compact == "HDR" {
+            return "HDR".to_string();
+        }
+        return format.trim().to_string();
+    }
+    if dovi_profile.is_some() {
+        return "DV".to_string();
+    }
+
+    let mut labels = Vec::new();
+    if parsed.is_dolby_vision {
+        labels.push("DV");
+    }
+    if parsed.is_hdr10plus {
+        labels.push("HDR10+");
+    } else if parsed.has_hdr_fallback {
+        labels.push("HDR10");
+    }
+    if parsed.is_hlg {
+        labels.push("HLG");
+    }
+    if labels.is_empty() && parsed.detected_hdr {
+        labels.push("HDR");
+    }
+    labels.join(" ")
 }
 
 /// The tokens every rename template can use for `title`'s file: title, year,
@@ -5628,21 +5827,26 @@ impl AppUseCase {
         facet: MediaFacet,
     ) -> AppResult<RenameTitlesJobAccepted> {
         if title_ids.is_empty() {
-            return Err(AppError::Validation(
-                "at least one title is required for renaming".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::TITLE_REQUIRED,
+                "at least one title is required for renaming",
             ));
         }
         if !self.resolve_rename_enabled(&facet).await? {
-            return Err(AppError::Validation("renamer_disabled".into()));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::library::RENAMER_DISABLED,
+                "renamer_disabled",
+            ));
         }
 
         let mut seen = HashSet::new();
         let mut titles = Vec::with_capacity(title_ids.len());
         for title_id in title_ids {
             if !seen.insert(title_id.clone()) {
-                return Err(AppError::Validation(format!(
-                    "duplicate title id in rename request: {title_id}"
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::TITLE_ID_RENAME_REQUEST_DUPLICATED,
+                    format!("duplicate title id in rename request: {title_id}"),
+                ));
             }
             let title = self
                 .services
@@ -5650,7 +5854,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {title_id}"),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -5658,8 +5867,9 @@ impl AppUseCase {
             )
             .await?;
             if title.facet != facet {
-                return Err(AppError::Validation(
-                    "requested facet does not match title facet".into(),
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::REQUESTED_FACET_DOES_NOT_MATCH_TITLE_FACET,
+                    "requested facet does not match title facet",
                 ));
             }
             titles.push(title);
@@ -5676,7 +5886,10 @@ impl AppUseCase {
                 .try_acquire(&title_rename_guard_key(&title.id))
                 .await
                 .ok_or_else(|| {
-                    AppError::Validation(format!("a rename is already running for {}", title.name))
+                    AppError::validation_refused(
+                        crate::error_reasons::library::RENAME_ALREADY_RUNNING,
+                        format!("a rename is already running for {}", title.name),
+                    )
                 })?;
             guards.push(guard);
         }

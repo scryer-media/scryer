@@ -49,3 +49,12 @@ pub use sqlite::SqliteServices;
 pub mod sql {
     pub mod spellfix_retirement;
 }
+
+mod error_reasons;
+
+#[cfg(test)]
+pub(crate) mod postgres_history_test_support {
+    use crate as datastore;
+
+    include!("../tests/support/postgres_history.rs");
+}

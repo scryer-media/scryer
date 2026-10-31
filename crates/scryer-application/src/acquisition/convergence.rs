@@ -1229,17 +1229,19 @@ impl AppUseCase {
     /// Uncovered indexers whose latest background search for this scope ended
     /// contained and is not yet due, with the instant each becomes due. They
     /// are never covered, but asking them before then repeats the same capped
-    /// answer, so the gates leave them out. A failed read holds nothing.
+    /// answer, so the gates leave them out. An indexer that background
+    /// searches leave out of `search_facet` (it was learned to carry nothing
+    /// for it) is held the same way until it may be asked again; when both
+    /// hold, the later instant wins. A failed read holds nothing.
     pub(crate) async fn contained_indexer_holds(
         &self,
         coverage_scope_key: &str,
+        search_facet: &str,
         indexer_ids: &[String],
         now: DateTime<Utc>,
     ) -> std::collections::HashMap<String, DateTime<Utc>> {
-        match self
-            .services
-            .integrations
-            .indexer_client
+        let indexer_client = &self.services.integrations.indexer_client;
+        let mut holds = match indexer_client
             .contained_search_holds(coverage_scope_key, indexer_ids, now)
             .await
         {
@@ -1252,7 +1254,27 @@ impl AppUseCase {
                 );
                 std::collections::HashMap::new()
             }
+        };
+        match indexer_client
+            .facet_suppression_holds(search_facet, indexer_ids, now)
+            .await
+        {
+            Ok(facet_holds) => {
+                for (indexer_id, until) in facet_holds {
+                    let held = holds.entry(indexer_id).or_insert(until);
+                    *held = (*held).max(until);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    scope_key = coverage_scope_key,
+                    facet = search_facet,
+                    error = %error,
+                    "failed to read facet suppression holds; treating every uncovered indexer as due"
+                );
+            }
         }
+        holds
     }
 
     /// Ties a background search session to the convergence scope it searched
@@ -1482,6 +1504,7 @@ mod tests {
             managed_metadata_json: None,
             caps_snapshot_json: None,
             last_health_status: None,
+            last_error_code: None,
             last_error_message: None,
             last_error_at: None,
             config_json: None,

@@ -149,7 +149,13 @@ async fn updating_verification_depth_requires_system_settings_permission() {
         .await
         .expect_err("viewer must not be able to change verification");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "got {error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "got {error:?}"
+    );
     assert_eq!(
         app.resolve_verification_depth().await,
         VerificationDepth::Quick

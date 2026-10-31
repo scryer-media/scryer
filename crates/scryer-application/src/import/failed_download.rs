@@ -65,14 +65,18 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
             .await
             .is_err()
         {
-            td.status_messages = vec!["Could not record password failure; awaiting retry".into()];
+            td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+                "Could not record password failure; awaiting retry",
+            )];
             return;
         }
         // Retain the existing release for an operator password retry. A
         // credential failure is not evidence to blocklist or replace it.
         td.state = TrackedDownloadState::Failed;
         td.status = TrackedDownloadStatus::Error;
-        td.status_messages = vec![failure.message().into()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+            failure.message(),
+        )];
         td.skip_reacquire_on_failure = true;
         return;
     }
@@ -117,8 +121,9 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
     )
     .await;
     if outcome == FailureHandlingOutcome::RecordingFailed {
-        td.status_messages =
-            vec!["Could not confirm blocklist entry; download preserved for retry".into()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+            "Could not confirm blocklist entry; download preserved for retry",
+        )];
         return;
     }
     if outcome == FailureHandlingOutcome::MissingBlocklistKey {
@@ -132,7 +137,9 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         .await;
         td.state = TrackedDownloadState::ImportBlocked;
         td.status = TrackedDownloadStatus::Error;
-        td.status_messages = vec![message.into()];
+        td.status_messages = vec![crate::tracked_downloads::TrackedStatusMessage::from(
+            message,
+        )];
         td.blocklist_confirmation_failed = true;
         td.manual_failure_cleanup = false;
         td.import_attempted = true;
@@ -141,10 +148,11 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
     if td.skip_reacquire_on_failure
         && !matches!(outcome, FailureHandlingOutcome::RecordedNoReacquire)
     {
-        td.status_messages.push(
+        td.status_messages
+            .push(crate::tracked_downloads::TrackedStatusMessage::from(
             "Failure was recorded, but Scryer could not confirm that reacquisition was disabled."
                 .to_string(),
-        );
+        ));
     }
     crate::fail_active_manual_import_for_source(app, td, failure_reason).await;
 

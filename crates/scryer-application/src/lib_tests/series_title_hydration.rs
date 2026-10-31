@@ -507,7 +507,10 @@ async fn a_series_missing_from_smg_without_a_tvdb_id_fails_clearly() {
         .await
         .expect("the batch should run");
     assert_eq!(
-        outcome.failed_titles.get(&created.id).map(String::as_str),
+        outcome
+            .failed_titles
+            .get(&created.id)
+            .map(|failure| failure.message.as_str()),
         Some("bulk metadata response missing title")
     );
     assert!(gateway.metadata_bulk_calls.lock().await.is_empty());

@@ -5,6 +5,7 @@ export const SearchContext = createContext<UseGlobalSearchResult | null>(null);
 
 export function useSearchContext(): UseGlobalSearchResult {
   const ctx = useContext(SearchContext);
-  if (!ctx) throw new Error("useSearchContext must be used within SearchProvider");
+  if (!ctx)
+    throw new Error("useSearchContext must be used within SearchProvider");
   return ctx;
 }

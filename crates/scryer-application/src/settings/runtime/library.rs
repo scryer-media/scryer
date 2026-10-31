@@ -46,9 +46,7 @@ fn normalize_root_folders(entries: Vec<RootFolderEntry>) -> AppResult<Vec<RootFo
     for entry in entries {
         let path = entry.path.trim().to_string();
         if path.is_empty() {
-            return Err(AppError::Validation(
-                "root folder path is required".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ROOT_FOLDER_PATH_REQUIRED, "root folder path is required".to_string()));
         }
         if !seen_paths.insert(path.clone()) {
             continue;
@@ -63,9 +61,7 @@ fn normalize_root_folders(entries: Vec<RootFolderEntry>) -> AppResult<Vec<RootFo
     }
 
     if normalized.is_empty() {
-        return Err(AppError::Validation(
-            "at least one root folder is required".to_string(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::settings::ROOT_REQUIRED, "at least one root folder is required".to_string()));
     }
 
     let default_index = default_index.unwrap_or(0);
@@ -313,7 +309,7 @@ impl AppUseCase {
             .default_for_facet(facet.clone())
             .await?
         else {
-            return Err(AppError::NotFound(format!(
+            return Err(AppError::not_found_reason(crate::error_reasons::settings::DEFAULT_LIBRARY_NOT_FOUND, format!(
                 "default {} library",
                 facet.as_str()
             )));
@@ -405,7 +401,7 @@ impl AppUseCase {
                 .libraries
                 .default_for_facet(facet.clone())
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("default {} library", facet.as_str())))?;
+                .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::DEFAULT_LIBRARY_NOT_FOUND, format!("default {} library", facet.as_str())))?;
 
             let canonical_roots = root_folder_entries_from_library_roots(&library.roots);
             let legacy_roots = self.read_legacy_root_folders_for_facet(&facet).await?;
@@ -679,7 +675,7 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
 
         let can_request = self
             .has_library_permission(
@@ -702,9 +698,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManagePermissions)
             .await?;
         if !can_request && !can_manage && !can_manage_catalog && !can_manage_permissions {
-            return Err(AppError::Unauthorized(
-                "You do not have access to this library".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
 
         self.effective_request_quality_profile_settings_for_library(&library)
@@ -722,7 +716,7 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
         let can_manage_titles = self
             .has_library_permission(
                 actor,
@@ -734,9 +728,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         if !can_manage_titles && !can_manage_catalog {
-            return Err(AppError::Unauthorized(
-                "You do not have access to this library".to_string(),
-            ));
+            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
 
         self.resolve_quality_profile_id(Some(&library.id), Some(library.facet.as_str()))
@@ -754,7 +746,7 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
 
@@ -1090,7 +1082,7 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
         let _profile_reference_guard = self
@@ -1102,15 +1094,11 @@ impl AppUseCase {
 
         let is_anime_library = library.facet == MediaFacet::Anime;
         if !is_anime_library && settings.monitor_specials.is_some() {
-            return Err(AppError::Validation(
-                "monitor_specials is only valid for anime libraries".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::MONITOR_SPECIALS_ONLY_VALID_ANIME_LIBRARIES, "monitor_specials is only valid for anime libraries".to_string()));
         }
         if library.facet == MediaFacet::Movie && settings.plexmatch_write_on_import.is_some() {
-            return Err(AppError::Validation(
-                "plexmatch_write_on_import is only valid for series and anime libraries"
-                    .to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES, "plexmatch_write_on_import is only valid for series and anime libraries"
+                    .to_string()));
         }
 
         let mut changed_keys = Vec::new();
@@ -1355,7 +1343,7 @@ impl AppUseCase {
                         changed_keys.push(FOLDER_CHMOD_KEY.to_string());
                     }
                     Ok(None) => {}
-                    Err(AppError::Validation(reason)) => {
+                    Err(AppError::Validation(reason) | AppError::ValidationRefused { message: reason, .. } | AppError::ValidationRefusedWithCount { message: reason, .. }) => {
                         push_external_import_auto_apply_skip(
                             &mut skipped_keys,
                             FOLDER_CHMOD_KEY,
@@ -1396,7 +1384,7 @@ impl AppUseCase {
                         changed_keys.push(CHOWN_GROUP_KEY.to_string());
                     }
                     Ok(None) => {}
-                    Err(AppError::Validation(reason)) => {
+                    Err(AppError::Validation(reason) | AppError::ValidationRefused { message: reason, .. } | AppError::ValidationRefusedWithCount { message: reason, .. }) => {
                         push_external_import_auto_apply_skip(
                             &mut skipped_keys,
                             CHOWN_GROUP_KEY,
@@ -1447,7 +1435,7 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
         let previous_indexer_routing = self
@@ -1465,10 +1453,8 @@ impl AppUseCase {
         let metadata_language_override = normalize_optional_string(settings.metadata_language.clone())
             .map(|value| {
                 crate::normalize_metadata_language_code(&value).ok_or_else(|| {
-                    AppError::Validation(
-                        "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
-                            .to_string(),
-                    )
+                    AppError::validation_refused(crate::error_reasons::settings::METADATA_LANGUAGE_INVALID, "metadata language must be one of eng, spa, fra, deu, ita, por, kor, zho, or jpn"
+                            .to_string())
                 })
             })
             .transpose()?;
@@ -1485,26 +1471,18 @@ impl AppUseCase {
                 || settings.inter_season_movies.is_some()
                 || settings.monitor_filler_movies.is_some())
         {
-            return Err(AppError::Validation(
-                "anime-specific settings require an anime library".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::ANIME_SPECIFIC_SETTINGS_REQUIRE_ANIME_LIBRARY, "anime-specific settings require an anime library".to_string()));
         }
         if library.facet == MediaFacet::Movie && settings.use_season_folders.is_some() {
-            return Err(AppError::Validation(
-                "season folders are only valid for series and anime libraries".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::SEASON_FOLDERS_ONLY_VALID_SERIES_ANIME_LIBRARIES, "season folders are only valid for series and anime libraries".to_string()));
         }
         if library.facet == MediaFacet::Movie && settings.plexmatch_write_on_import.is_some() {
-            return Err(AppError::Validation(
-                "plexmatch_write_on_import is only valid for series and anime libraries"
-                    .to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME_LIBRARIES, "plexmatch_write_on_import is only valid for series and anime libraries"
+                    .to_string()));
         }
         let movie_availability = settings.movie_availability.clone().normalized()?;
         if library.facet != MediaFacet::Movie && !movie_availability.is_empty() {
-            return Err(AppError::Validation(
-                "movie availability settings require a movie library".to_string(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::settings::MOVIE_AVAILABILITY_SETTINGS_REQUIRE_MOVIE_LIBRARY, "movie availability settings require a movie library".to_string()));
         }
         let movie_availability_before = if library.facet == MediaFacet::Movie {
             Some(self.movie_availability_policies().await?)
@@ -1606,7 +1584,7 @@ impl AppUseCase {
                     .iter()
                     .find(|profile_id| !catalog_profile_ids.contains(*profile_id))
                 {
-                    return Err(AppError::Validation(format!(
+                    return Err(AppError::validation_refused(crate::error_reasons::settings::REQUEST_QUALITY_PROFILE_UNKNOWN, format!(
                         "unknown request quality profile {missing_profile_id}"
                     )));
                 }

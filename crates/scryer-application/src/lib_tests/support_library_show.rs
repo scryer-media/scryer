@@ -307,6 +307,7 @@ pub(super) struct MockShowRepo {
     pub(super) episode_external_id_reads: std::sync::atomic::AtomicUsize,
     pub(super) title_episode_external_id_reads: std::sync::atomic::AtomicUsize,
     pub(super) absolute_scale_reads: std::sync::atomic::AtomicUsize,
+    pub(super) anime_bridge_reads: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait]
@@ -315,6 +316,8 @@ impl ShowRepository for MockShowRepo {
         &self,
         title_id: &str,
     ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        self.anime_bridge_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if *self.fail_anime_bridge.lock().await {
             return Err(crate::AppError::Repository(
                 "anime numbering bridge is unavailable".into(),

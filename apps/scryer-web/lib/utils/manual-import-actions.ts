@@ -79,7 +79,9 @@ export function allowsManualImport(item: {
 }
 
 /** Series and anime files have to be matched to episodes in the dialog. */
-export function manualImportNeedsMapping(facet: string | null | undefined): boolean {
+export function manualImportNeedsMapping(
+  facet: string | null | undefined,
+): boolean {
   const normalizedFacet = facet?.trim().toLowerCase() ?? "";
   return normalizedFacet === "series" || normalizedFacet === "anime";
 }

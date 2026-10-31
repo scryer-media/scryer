@@ -167,13 +167,19 @@ test("global search filter selection is additive with All as clear", () => {
 
   selected = toggleGlobalSearchFilterSelection(selected, "MOVIE", tabs);
   assert.deepEqual(selected, ["actions"]);
-  assert.deepEqual(toggleGlobalSearchFilterSelection(selected, "all", tabs), []);
+  assert.deepEqual(
+    toggleGlobalSearchFilterSelection(selected, "all", tabs),
+    [],
+  );
 
   assert.deepEqual(
-    normalizeGlobalSearchFilterSelection(["MOVIE", "actions"], [
-      { key: "all", label: "All", count: 0 },
-      { key: "MOVIE", label: "Movies", count: 0 },
-    ]),
+    normalizeGlobalSearchFilterSelection(
+      ["MOVIE", "actions"],
+      [
+        { key: "all", label: "All", count: 0 },
+        { key: "MOVIE", label: "Movies", count: 0 },
+      ],
+    ),
     ["MOVIE"],
   );
 });
@@ -206,11 +212,7 @@ test("selection-aware catalog results add selected filters", () => {
     ["MOVIE:m1", "SERIES:s1", "MOVIE:m2"],
   );
   assert.equal(
-    countHiddenCatalogResultsForFilters(
-      ["MOVIE", "SERIES"],
-      3,
-      selectedRows,
-    ),
+    countHiddenCatalogResultsForFilters(["MOVIE", "SERIES"], 3, selectedRows),
     0,
   );
 
@@ -280,10 +282,7 @@ test("getVisibleRouteCommandResults previews commands in All and shows all comma
     ),
     0,
   );
-  assert.equal(
-    countHiddenRouteCommandResults("MOVIE", commands, []),
-    0,
-  );
+  assert.equal(countHiddenRouteCommandResults("MOVIE", commands, []), 0);
   assert.deepEqual(
     getVisibleRouteCommandResultsForFilters(["MOVIE", "actions"], commands).map(
       (command) => command.id,
@@ -348,15 +347,15 @@ test("getVisibleMetadataResults previews rails in All and expands type tabs", ()
     countHiddenMetadataResults("all", results, allPreview),
     results.length - GLOBAL_SEARCH_ALL_METADATA_RESULT_LIMIT,
   );
-  assert.equal(
-    countHiddenMetadataResults("SERIES", results, results),
-    0,
-  );
+  assert.equal(countHiddenMetadataResults("SERIES", results, results), 0);
   assert.deepEqual(
     getVisibleMetadataResultsForFilters(["MOVIE", "SERIES"], results),
     results,
   );
-  assert.deepEqual(getVisibleMetadataResultsForFilters(["library"], results), []);
+  assert.deepEqual(
+    getVisibleMetadataResultsForFilters(["library"], results),
+    [],
+  );
   assert.equal(
     countHiddenMetadataResultsForFilters(["MOVIE"], results, results),
     0,
@@ -507,13 +506,17 @@ function library(id: string, facet: Facet, isDefault = false): LibraryRecord {
 
 test("a copy that was just added to a second library does not become the card's face", () => {
   const settled = {
-    ...libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", { tvdbId: "424536" }),
+    ...libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
+      tvdbId: "424536",
+    }),
     posterUrl: "/posters/sample.jpg",
     metadataFetchedAt: "2026-01-01T00:00:00Z",
     createdAt: "2025-12-01T00:00:00Z",
   };
   const fresh = {
-    ...libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", { tvdbId: "424536" }),
+    ...libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", {
+      tvdbId: "424536",
+    }),
     createdAt: "2026-09-11T00:00:00Z",
   };
   // The new row can come back first from the search; the card still wears
@@ -525,11 +528,18 @@ test("a copy that was just added to a second library does not become the card's 
   );
   // With nothing to choose between them, the older copy stands for both.
   const bare = { ...fresh, createdAt: "2026-09-12T00:00:00Z" };
-  const older = { ...libraryTitle("t-old", "Sample Show", "ANIME", "anime-old", { tvdbId: "424536" }), createdAt: "2026-09-10T00:00:00Z" };
+  const older = {
+    ...libraryTitle("t-old", "Sample Show", "ANIME", "anime-old", {
+      tvdbId: "424536",
+    }),
+    createdAt: "2026-09-10T00:00:00Z",
+  };
   assert.equal(representativeCatalogMember([bare, older]).id, "t-old");
   // Both libraries are still listed for the View picker.
   assert.deepEqual(
-    buildCatalogLibraryMembers([fresh, settled])[catalogTitleIdentityKey(settled)].map((m) => m.id),
+    buildCatalogLibraryMembers([fresh, settled])[
+      catalogTitleIdentityKey(settled)
+    ].map((m) => m.id),
     ["t-kids", "t-main"],
   );
 });
@@ -538,18 +548,36 @@ test("a title held by several libraries is one In Library result", () => {
   const primary = libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
     tvdbId: "424536",
   });
-  const secondary = libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", {
-    tvdbId: "424536",
-  });
+  const secondary = libraryTitle(
+    "t-kids",
+    "Sample Show",
+    "ANIME",
+    "anime-kids",
+    {
+      tvdbId: "424536",
+    },
+  );
   // The same show catalogued as a series is its own result: series libraries
   // are offered under the series section, not the anime one.
-  const asSeries = libraryTitle("t-series", "Sample Show", "SERIES", "series-main", {
-    tvdbId: "424536",
-  });
+  const asSeries = libraryTitle(
+    "t-series",
+    "Sample Show",
+    "SERIES",
+    "series-main",
+    {
+      tvdbId: "424536",
+    },
+  );
   const loner = libraryTitle("t-alone", "Sample Loner", "ANIME", "anime-main");
 
-  assert.equal(catalogTitleIdentityKey(primary), catalogTitleIdentityKey(secondary));
-  assert.notEqual(catalogTitleIdentityKey(primary), catalogTitleIdentityKey(asSeries));
+  assert.equal(
+    catalogTitleIdentityKey(primary),
+    catalogTitleIdentityKey(secondary),
+  );
+  assert.notEqual(
+    catalogTitleIdentityKey(primary),
+    catalogTitleIdentityKey(asSeries),
+  );
   // Without any metadata id the row can only stand for itself.
   assert.equal(catalogTitleIdentityKey(loner), "ANIME|title:t-alone");
   // An SMG id wins over the TVDB id, matching how the metadata lookup keys.
@@ -563,7 +591,13 @@ test("a title held by several libraries is one In Library result", () => {
     "MOVIE|smg:77",
   );
 
-  const members = buildCatalogLibraryMembers([primary, secondary, asSeries, loner, secondary]);
+  const members = buildCatalogLibraryMembers([
+    primary,
+    secondary,
+    asSeries,
+    loner,
+    secondary,
+  ]);
   assert.deepEqual(
     members[catalogTitleIdentityKey(primary)]?.map((member) => member.id),
     ["t-main", "t-kids"],
@@ -574,7 +608,10 @@ test("a title held by several libraries is one In Library result", () => {
     ),
     ["t-main", "t-series", "t-alone"],
   );
-  const sections = buildCatalogSearchSections([primary, secondary, asSeries, loner], "");
+  const sections = buildCatalogSearchSections(
+    [primary, secondary, asSeries, loner],
+    "",
+  );
   assert.deepEqual(
     sections.ANIME.map((entry) => entry.id),
     ["t-main", "t-alone"],
@@ -592,9 +629,15 @@ test("an In Library card offers the libraries that do not hold the title yet", (
   const held = libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
     tvdbId: "424536",
   });
-  const alsoHeld = libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", {
-    tvdbId: "424536",
-  });
+  const alsoHeld = libraryTitle(
+    "t-kids",
+    "Sample Show",
+    "ANIME",
+    "anime-kids",
+    {
+      tvdbId: "424536",
+    },
+  );
   const libraryMembers = buildCatalogLibraryMembers([held, alsoHeld]);
 
   // A manager adds; the library it already sits in is never offered.
@@ -743,7 +786,12 @@ test("a catalog row becomes the search item the add and request dialogs take", (
 });
 
 test("a series row known only by its TMDB id can still be added or requested", () => {
-  const row: TitleRecord = libraryTitle("t-tmdb", "Sample Series", "SERIES", "series-main");
+  const row: TitleRecord = libraryTitle(
+    "t-tmdb",
+    "Sample Series",
+    "SERIES",
+    "series-main",
+  );
   row.externalIds = [{ source: "tmdb", kind: "series", value: "4242" }];
 
   const item = metadataSearchItemFromCatalogTitle(row);
@@ -753,7 +801,12 @@ test("a series row known only by its TMDB id can still be added or requested", (
   assert.equal(item.tmdbId, 4242);
 
   // An anime row whose only TMDB id belongs to a mapped movie has no identity of its own.
-  const mappedOnly: TitleRecord = libraryTitle("t-mapped", "Sample Anime", "ANIME", "anime-main");
+  const mappedOnly: TitleRecord = libraryTitle(
+    "t-mapped",
+    "Sample Anime",
+    "ANIME",
+    "anime-main",
+  );
   mappedOnly.externalIds = [{ source: "tmdb", kind: "movie", value: "5151" }];
   assert.equal(metadataSearchItemFromCatalogTitle(mappedOnly), null);
 });

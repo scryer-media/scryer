@@ -28,7 +28,9 @@ import {
   validateSeedingProfileFields,
 } from "./seeding-profiles.ts";
 
-function draft(overrides: Partial<SeedingProfileDraft> = {}): SeedingProfileDraft {
+function draft(
+  overrides: Partial<SeedingProfileDraft> = {},
+): SeedingProfileDraft {
   return { ...buildSeedingProfileTemplate(), name: "Private", ...overrides };
 }
 
@@ -53,10 +55,7 @@ test("post-import tracking round-trips and drives the moot-field helper", () => 
     draft({ postImportTracking: "HAND_OFF" }),
   );
   assert.equal(input.postImportTracking, "HAND_OFF");
-  assert.equal(
-    toCreateSeedingProfileInput(draft()).postImportTracking,
-    "PARK",
-  );
+  assert.equal(toCreateSeedingProfileInput(draft()).postImportTracking, "PARK");
 });
 
 test("a stored profile round-trips through the draft", () => {
@@ -172,9 +171,10 @@ test("each bad field reports under itself, not as one banner message", () => {
   // A valid draft leaves every field clean.
   assert.deepEqual(validateSeedingProfileFields(draft()), {});
   // One bad field does not implicate its neighbours.
-  assert.deepEqual(Object.keys(validateSeedingProfileFields(draft({ ratio: "x" }))), [
-    "ratio",
-  ]);
+  assert.deepEqual(
+    Object.keys(validateSeedingProfileFields(draft({ ratio: "x" }))),
+    ["ratio"],
+  );
 });
 
 test("season-pack goals are only validated in override mode", () => {
@@ -233,7 +233,11 @@ test("table cells fall back to a dash when a goal defers to the client", () => {
   assert.equal(formatSeedingProfileSeedTime(60), "1h");
   assert.equal(
     formatSeasonPackSummary(
-      { seasonPackMode: "INHERIT", seasonPackRatio: 2, seasonPackSeedTimeMinutes: 60 },
+      {
+        seasonPackMode: "INHERIT",
+        seasonPackRatio: 2,
+        seasonPackSeedTimeMinutes: 60,
+      },
       "Inherit",
     ),
     "Inherit",
@@ -359,7 +363,16 @@ test("seed-time durations parse into the minutes the API stores", () => {
   assert.equal(minutes(""), null);
   assert.equal(minutes("  "), null);
 
-  for (const bad of ["0", "-5", "2x", "2w rubbish", "rubbish", "1.5d", "1d 1d", "0m"]) {
+  for (const bad of [
+    "0",
+    "-5",
+    "2x",
+    "2w rubbish",
+    "rubbish",
+    "1.5d",
+    "1d 1d",
+    "0m",
+  ]) {
     assert.equal(parseSeedDuration(bad).ok, false, bad);
   }
 });
@@ -402,8 +415,12 @@ test("the behavior cell only inks a minimum that deviates from the floor", () =>
 
   // Explicitly off stays visible even when the floor itself is off: it is an
   // opt-out that survives the floor being raised again.
-  assert.deepEqual(seedingProfileMinimumSeedersChip(0, 1), { kind: "disabled" });
-  assert.deepEqual(seedingProfileMinimumSeedersChip(0, 0), { kind: "disabled" });
+  assert.deepEqual(seedingProfileMinimumSeedersChip(0, 1), {
+    kind: "disabled",
+  });
+  assert.deepEqual(seedingProfileMinimumSeedersChip(0, 0), {
+    kind: "disabled",
+  });
 
   // Tighter and looser than the floor both deviate; the looser one is the
   // reason this is not a `> floor` test.
@@ -475,7 +492,11 @@ test("the inherit option names Prowlarr's imported minimum", () => {
   for (const managed of [false, true]) {
     for (const minimum of [null, 0, 1, 4]) {
       const key = seedingProfileInheritOptionKey(managed, minimum);
-      assert.equal(typeof en[key], "string", `missing English string for ${key}`);
+      assert.equal(
+        typeof en[key],
+        "string",
+        `missing English string for ${key}`,
+      );
     }
   }
 });

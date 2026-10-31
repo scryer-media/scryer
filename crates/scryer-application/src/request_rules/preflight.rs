@@ -66,11 +66,14 @@ impl AppUseCase {
             .libraries
             .get_by_id(input.library_id.trim())
             .await?
-            .ok_or_else(|| AppError::NotFound("library not found".into()))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::request_rules::LIBRARY_NOT_FOUND,
+                    "library not found",
+                )
+            })?;
         if library.facet != input.facet {
-            return Err(AppError::Validation(
-                "library facet does not match requested media facet".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::request_rules::LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET, "library facet does not match requested media facet"));
         }
         self.require_library_permission(actor, &library.id, LibraryPermission::Request)
             .await?;
@@ -78,8 +81,9 @@ impl AppUseCase {
         let external_ids =
             crate::media_requests::normalize_media_request_external_ids(input.external_ids)?;
         if external_ids.is_empty() {
-            return Err(AppError::Validation(
-                "media requests must include SMG external identifiers".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::request_rules::MEDIA_REQUESTS_INVALID,
+                "media requests must include SMG external identifiers",
             ));
         }
         let requested_lease_days =

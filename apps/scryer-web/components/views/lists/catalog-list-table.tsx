@@ -66,7 +66,9 @@ export function CatalogListTable({
 }) {
   const t = useTranslate();
   const [sort, setSort] = React.useState<CatalogSort | null>(null);
-  const [previews, setPreviews] = React.useState<Readonly<Record<string, RowPreview>>>({});
+  const [previews, setPreviews] = React.useState<
+    Readonly<Record<string, RowPreview>>
+  >({});
   const showSchedule = rows.some((row) => row.intervalSeconds != null);
   const showPreview = rows.some((row) => row.onPreview && !row.followed);
   const showAccount = rows.some((row) => row.account);
@@ -76,18 +78,31 @@ export function CatalogListTable({
     if (!sort) return rows;
     const factor = sort.descending ? -1 : 1;
     const byName = (a: CatalogListRow, b: CatalogListRow) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
-    const type = (row: CatalogListRow) => row.kinds.map((kind) => t(listKindLabelKey(kind))).join(" ");
+      a.name.localeCompare(b.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+    const type = (row: CatalogListRow) =>
+      row.kinds.map((kind) => t(listKindLabelKey(kind))).join(" ");
     return [...rows].sort((a, b) => {
       if (sort.key === "name") return byName(a, b) * factor;
       if (sort.key === "account") {
-        return (a.account ?? "").localeCompare(b.account ?? "", undefined, { sensitivity: "base", numeric: true }) * factor || byName(a, b);
+        return (
+          (a.account ?? "").localeCompare(b.account ?? "", undefined, {
+            sensitivity: "base",
+            numeric: true,
+          }) * factor || byName(a, b)
+        );
       }
       return type(a).localeCompare(type(b)) * factor || byName(a, b);
     });
   }, [rows, sort, t]);
 
-  const sortableHead = (key: CatalogSortKey, label: string, className?: string) => {
+  const sortableHead = (
+    key: CatalogSortKey,
+    label: string,
+    className?: string,
+  ) => {
     const active = sort?.key === key;
     return (
       <SortableHead
@@ -96,7 +111,9 @@ export function CatalogListTable({
         className={className}
         active={active}
         descending={active && sort.descending}
-        onSort={() => setSort({ key, descending: active ? !sort.descending : false })}
+        onSort={() =>
+          setSort({ key, descending: active ? !sort.descending : false })
+        }
       />
     );
   };
@@ -116,7 +133,10 @@ export function CatalogListTable({
           const { [row.key]: _failed, ...rest } = open;
           return rest;
         }
-        return { ...open, [row.key]: { titles: preview.wouldAdd.slice(0, PREVIEW_TITLES) } };
+        return {
+          ...open,
+          [row.key]: { titles: preview.wouldAdd.slice(0, PREVIEW_TITLES) },
+        };
       });
     });
   };
@@ -131,10 +151,22 @@ export function CatalogListTable({
       <TableHeader>
         <TableRow>
           {sortableHead("name", t("lists.table.list"))}
-          {showAccount ? sortableHead("account", t("label.account"), "w-[1%] whitespace-nowrap") : null}
-          {sortableHead("type", t("label.type"), "hidden w-[1%] whitespace-nowrap sm:table-cell")}
+          {showAccount
+            ? sortableHead(
+                "account",
+                t("label.account"),
+                "w-[1%] whitespace-nowrap",
+              )
+            : null}
+          {sortableHead(
+            "type",
+            t("label.type"),
+            "hidden w-[1%] whitespace-nowrap sm:table-cell",
+          )}
           {showSchedule ? (
-            <TableHead className="hidden w-[1%] whitespace-nowrap md:table-cell">{t("lists.detail.interval")}</TableHead>
+            <TableHead className="hidden w-[1%] whitespace-nowrap md:table-cell">
+              {t("lists.detail.interval")}
+            </TableHead>
           ) : null}
           <TableHead className="w-[1%] text-right">
             <span className="sr-only">{t("label.actions")}</span>
@@ -143,30 +175,53 @@ export function CatalogListTable({
       </TableHeader>
       <TableBody>
         {sorted.map((row) => {
-          const interval = row.intervalSeconds != null ? listIntervalParts(row.intervalSeconds) : null;
+          const interval =
+            row.intervalSeconds != null
+              ? listIntervalParts(row.intervalSeconds)
+              : null;
           const canPreview = Boolean(row.onPreview) && !row.followed;
           const preview = canPreview ? previews[row.key] : undefined;
           const previewId = `${row.followId}-preview`;
           return (
             <React.Fragment key={row.key}>
-              <TableRow data-ui="list-catalog-row" className={preview ? "border-b-0" : undefined}>
+              <TableRow
+                data-ui="list-catalog-row"
+                className={preview ? "border-b-0" : undefined}
+              >
                 <TableCell>
-                  <p className="text-[13.5px] font-semibold text-[var(--scry-ink)]">{row.name}</p>
+                  <p className="text-[13.5px] font-semibold text-[var(--scry-ink)]">
+                    {row.name}
+                  </p>
                   {row.description ? (
-                    <p className="text-[12px] text-[var(--scry-muted)]">{row.description}</p>
+                    <p className="text-[12px] text-[var(--scry-muted)]">
+                      {row.description}
+                    </p>
                   ) : null}
                 </TableCell>
                 {showAccount ? (
-                  <TableCell data-ui="list-catalog-account" className="whitespace-nowrap text-[13px] text-[var(--scry-ink2)]">
+                  <TableCell
+                    data-ui="list-catalog-account"
+                    className="whitespace-nowrap text-[13px] text-[var(--scry-ink2)]"
+                  >
                     {row.account}
                   </TableCell>
                 ) : null}
                 <TableCell className="hidden sm:table-cell">
-                  {row.kinds.length > 0 ? <FacetTags values={row.kinds} emptyLabel={null} className="flex-nowrap" /> : null}
+                  {row.kinds.length > 0 ? (
+                    <FacetTags
+                      values={row.kinds}
+                      emptyLabel={null}
+                      className="flex-nowrap"
+                    />
+                  ) : null}
                 </TableCell>
                 {showSchedule ? (
                   <TableCell className="hidden whitespace-nowrap text-[12px] text-[var(--scry-muted)] md:table-cell">
-                    {interval ? t("lists.catalog.every", { interval: t(interval.key, { count: interval.count }) }) : null}
+                    {interval
+                      ? t("lists.catalog.every", {
+                          interval: t(interval.key, { count: interval.count }),
+                        })
+                      : null}
                   </TableCell>
                 ) : null}
                 <TableCell className="text-right">
@@ -195,8 +250,16 @@ export function CatalogListTable({
                       disabled={row.followed}
                       onClick={row.onFollow}
                     >
-                      {row.followed ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                      {t(row.followed ? "lists.catalog.followed" : "lists.catalog.follow")}
+                      {row.followed ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                      {t(
+                        row.followed
+                          ? "lists.catalog.followed"
+                          : "lists.catalog.follow",
+                      )}
                     </Button>
                   </div>
                 </TableCell>
@@ -205,20 +268,30 @@ export function CatalogListTable({
                 <TableRow id={previewId} data-ui="list-catalog-preview">
                   <TableCell colSpan={columns} className="pb-3 pt-0">
                     {preview.titles === null ? (
-                      <p role="status" className="flex items-center gap-2 text-[12.5px] text-[var(--scry-muted)]">
+                      <p
+                        role="status"
+                        className="flex items-center gap-2 text-[12.5px] text-[var(--scry-muted)]"
+                      >
                         <LoadingMark className="h-4 w-4" />
                         {t("label.loading")}
                       </p>
                     ) : preview.titles.length === 0 ? (
-                      <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.preview.nothingToAdd")}</p>
+                      <p className="text-[12.5px] text-[var(--scry-muted)]">
+                        {t("lists.preview.nothingToAdd")}
+                      </p>
                     ) : (
                       <div className="space-y-2">
                         {providerType === "simkl" ? <SimklAttribution /> : null}
                         <ul className="grid max-w-[560px] grid-cols-5 gap-2">
                           {preview.titles.map((title) => (
                             <li key={title.itemKey} className="min-w-0">
-                              <ListPreviewPoster item={title} />
-                              {providerType === "simkl" ? <SimklAttribution itemKey={title.itemKey} /> : null}
+                              <ListPreviewPoster
+                                item={title}
+                                idPrefix={previewId}
+                              />
+                              {providerType === "simkl" ? (
+                                <SimklAttribution itemKey={title.itemKey} />
+                              ) : null}
                             </li>
                           ))}
                         </ul>

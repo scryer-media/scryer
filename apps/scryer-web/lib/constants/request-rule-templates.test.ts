@@ -17,19 +17,19 @@ import { REQUEST_RULE_TEMPLATES } from "./request-rule-templates.ts";
 /// and a template that diverges from them is a template that will not save.
 const PINNED_SOURCES: Record<string, string> = {
   "named-requesters-family-rated":
-    "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains \"family\" if {\n\tinput.facts.certification_rank <= 1\n}\n",
+    'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains "family" if {\n\tinput.facts.certification_rank <= 1\n}\n',
   "short-lease-approval":
-    "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"bob\"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n",
+    'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "bob"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n',
   "low-resolution-approval":
-    "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"alice\"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n",
+    'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "alice"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n',
   "deny-adult-content":
-    "package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains \"adult_content\" if {\n\tinput.facts.is_adult\n}\n",
+    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains "adult_content" if {\n\tinput.facts.is_adult\n}\n',
   "monthly-approval-quota":
     "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n",
   "hold-approval-policy-list-requests":
-    "package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n",
+    'package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n',
   "deny-personal-list-above-1080p":
-    "package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n",
+    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n',
 };
 
 test("the gallery ships the seven worked examples exactly once, in order", () => {
@@ -124,10 +124,7 @@ test("the user picker rewrites both ways a template names people", () => {
   )!;
   assert.equal(
     applyRequestersToSource(set.regoSource, ["dana"]),
-    set.regoSource.replace(
-      '{"alice", "bob", "carol"}',
-      '{"dana"}',
-    ),
+    set.regoSource.replace('{"alice", "bob", "carol"}', '{"dana"}'),
   );
 
   const literal = REQUEST_RULE_TEMPLATES.find(

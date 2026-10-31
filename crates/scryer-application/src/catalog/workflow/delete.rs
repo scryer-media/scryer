@@ -234,7 +234,12 @@ impl AppUseCase {
             .titles
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -350,7 +355,12 @@ impl AppUseCase {
                 .titles
                 .get_by_id(&item.title_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+                .ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", item.title_id),
+                    )
+                })?;
             self.require_library_permission(
                 actor,
                 &title.library_id,
@@ -430,7 +440,7 @@ impl AppUseCase {
 
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_delete_titles_job(run, actor, request, deletion_guard)
                 .await;
         });
@@ -581,7 +591,12 @@ impl AppUseCase {
             .titles
             .get_by_id(&item.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", item.title_id),
+                )
+            })?;
         // A job can outlive its admission permissions. Resolve current grants.
         let mut current_actor = actor.clone();
         current_actor.authorization = self.load_user_authorization(actor).await?;
@@ -632,7 +647,9 @@ impl AppUseCase {
         )
         .await
         .map_err(|error| match error {
-            AppError::Repository(message) => AppError::RepositoryFailed {
+            AppError::Repository(message)
+            | AppError::RepositoryFailure { message, .. }
+            | AppError::RepositoryFailed { message, .. } => AppError::RepositoryFailed {
                 message,
                 reason: deletion_reason::CATALOG_CLEANUP_FAILED,
             },
@@ -858,9 +875,10 @@ impl AppUseCase {
             .try_acquire(&guard_key)
             .await
             .ok_or_else(|| {
-                AppError::Validation(format!(
-                    "a media file deletion is already running for {file_id}"
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::catalog::MEDIA_FILE_DELETION_ALREADY_RUNNING,
+                    format!("a media file deletion is already running for {file_id}"),
+                )
             })?;
         let library_id = self
             .validate_delete_media_file_job_request(
@@ -919,7 +937,7 @@ impl AppUseCase {
         let app = self.clone();
         let actor = actor.clone();
         let file_id = file_id.to_string();
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_delete_media_file_job(
                 run,
                 actor_event,
@@ -948,14 +966,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         let library_id = self
             .services
             .catalog
             .libraries
             .title_library_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &library_id,
@@ -975,9 +1003,7 @@ impl AppUseCase {
             )
             .await?;
         } else if delete_from_disk {
-            return Err(AppError::Validation(
-                "delete preview confirmation is required before deleting files on disk".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::catalog::DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK, "delete preview confirmation is required before deleting files on disk"));
         }
 
         Ok(library_id)
@@ -1100,14 +1126,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {}", file_id),
+                )
+            })?;
         let library_id = self
             .services
             .catalog
             .libraries
             .title_library_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &library_id,
@@ -1116,9 +1152,7 @@ impl AppUseCase {
         .await?;
         let disk_deletion = if delete_from_disk {
             MediaFileDiskDeletion::DeleteConfirmed(delete_confirmation.ok_or_else(|| {
-                AppError::Validation(
-                    "delete preview confirmation is required before deleting files on disk".into(),
-                )
+                AppError::validation_refused(crate::error_reasons::catalog::DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK, "delete preview confirmation is required before deleting files on disk")
             })?)
         } else {
             MediaFileDiskDeletion::Keep
@@ -1287,9 +1321,7 @@ impl AppUseCase {
                 preview_fingerprint,
                 typed_confirmation,
             } = delete_confirmation.ok_or_else(|| {
-                AppError::Validation(
-                    "delete preview confirmation is required before deleting files on disk".into(),
-                )
+                AppError::validation_refused(crate::error_reasons::catalog::DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK, "delete preview confirmation is required before deleting files on disk")
             })?;
             crate::library::user_delete::ensure_aggregate_delete_confirmation(
                 &preview.preview,
@@ -1304,7 +1336,12 @@ impl AppUseCase {
             .libraries
             .title_library_id(title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
 
         // Take every per-file guard before the run is created. A busy file aborts
         // the whole request and the guards taken so far are dropped here, so a
@@ -1318,10 +1355,13 @@ impl AppUseCase {
                 .try_acquire(&format!("media-file:{}", item.file_id))
                 .await
                 .ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "a media file deletion is already running for {}",
-                        item.file_id
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::catalog::MEDIA_FILE_DELETION_ALREADY_RUNNING,
+                        format!(
+                            "a media file deletion is already running for {}",
+                            item.file_id
+                        ),
+                    )
                 })?;
             deletion_guards.push(guard);
         }
@@ -1385,7 +1425,7 @@ impl AppUseCase {
         let actor = actor.clone();
         let title_id = title_id.to_string();
         let items = preview.items;
-        tokio::spawn(async move {
+        self.restore_coordinator().spawn_task(async move {
             app.run_delete_episode_files_job(
                 run,
                 actor_event,
@@ -1772,7 +1812,12 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         let disk_deletion = if delete_from_disk {
             MediaFileDiskDeletion::DeletePreapproved
         } else {

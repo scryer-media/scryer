@@ -33,11 +33,19 @@ test("returns null for errors that are not automatic-search rejections", () => {
   assert.equal(autoSearchRejectionFromError(new Error("network down")), null);
   assert.equal(
     autoSearchRejectionFromError({
-      graphQLErrors: [{ message: "validation: bad", extensions: { code: "VALIDATION_ERROR" } }],
+      graphQLErrors: [
+        {
+          message: "validation: bad",
+          extensions: { code: "VALIDATION_ERROR" },
+        },
+      ],
     }),
     null,
   );
-  assert.equal(autoSearchOutcomeMessage(new Error("network down"), t, "Silver Horizon"), null);
+  assert.equal(
+    autoSearchOutcomeMessage(new Error("network down"), t, "Silver Horizon"),
+    null,
+  );
 });
 
 test("names the blocking rule when every candidate was quality-blocked", () => {
@@ -69,7 +77,10 @@ test("names the blocking rule when every candidate was quality-blocked", () => {
 });
 
 test("reports an empty candidate set separately from a rejected one", () => {
-  const error = rejectionError({ autoCandidateCount: 0, autoDecisionReasons: [] });
+  const error = rejectionError({
+    autoCandidateCount: 0,
+    autoDecisionReasons: [],
+  });
   const message = autoSearchOutcomeMessage(error, t, "Silver Horizon");
   assert.equal(
     message,
@@ -106,7 +117,10 @@ test("a search that found nothing to grab is reported as a warning, not a failur
     "Silver Horizon",
   );
   assert.deepEqual(reported, [
-    ["No release found for Silver Horizon: no indexer returned a candidate.", "WARNING"],
+    [
+      "No release found for Silver Horizon: no indexer returned a candidate.",
+      "WARNING",
+    ],
   ]);
 });
 
@@ -115,11 +129,16 @@ test("a search that could not run is reported as an error whatever the server sa
   reportAutomaticSearchFailure(
     (status, options) => reported.push([status, options?.level]),
     t,
-    new Error("category_mismatch: indexer category 'TV > HD' contradicts the movie subject"),
+    new Error(
+      "category_mismatch: indexer category 'TV > HD' contradicts the movie subject",
+    ),
     "Silver Horizon",
   );
   assert.deepEqual(reported, [
-    ["category_mismatch: indexer category 'TV > HD' contradicts the movie subject", "ERROR"],
+    [
+      "category_mismatch: indexer category 'TV > HD' contradicts the movie subject",
+      "ERROR",
+    ],
   ]);
 });
 
@@ -131,8 +150,12 @@ test("a search a plugin refused names the plugin's reason in the reader's langua
     {
       graphQLErrors: [
         {
-          message: "indexer grab: plugin error Other(\"item_not_found\"): release is gone",
-          extensions: { code: "PLUGIN_FAILED", reason: "PLUGIN_ITEM_NOT_FOUND" },
+          message:
+            'indexer grab: plugin error Other("item_not_found"): release is gone',
+          extensions: {
+            code: "PLUGIN_FAILED",
+            reason: "PLUGIN_ITEM_NOT_FOUND",
+          },
         },
       ],
     },

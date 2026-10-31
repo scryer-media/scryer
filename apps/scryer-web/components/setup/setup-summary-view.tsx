@@ -13,7 +13,10 @@ import type {
   ExternalImportMonitorWarmupProgress,
 } from "@/lib/types/external-import";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
-import type { FacetQualityPrefs, ViewCategoryId } from "@/lib/types/quality-profiles";
+import type {
+  FacetQualityPrefs,
+  ViewCategoryId,
+} from "@/lib/types/quality-profiles";
 
 interface SummaryItem {
   label: string;
@@ -54,7 +57,9 @@ function formatFacetPrefs(
     .map((facet) => {
       const p = facetPrefs[facet];
       const quality = formatQualityTarget(p.quality);
-      const personaChoice = SCORING_PERSONA_CHOICES.find((choice) => choice.value === p.persona);
+      const personaChoice = SCORING_PERSONA_CHOICES.find(
+        (choice) => choice.value === p.persona,
+      );
       const persona = personaChoice ? t(personaChoice.labelKey) : p.persona;
       return `${FACET_LABELS[facet]}: ${quality} ${persona}`;
     })
@@ -141,28 +146,42 @@ export function SetupSummaryView({
   finishing,
   finishingAction,
 }: SetupSummaryViewProps) {
-  const isImportPath = importedDcCount !== undefined || importedIdxCount !== undefined;
-  const mediaPathsSummary = [...moviesPaths, ...seriesPaths, ...(animePaths ?? [])].join(", ");
+  const isImportPath =
+    importedDcCount !== undefined || importedIdxCount !== undefined;
+  const mediaPathsSummary = [
+    ...moviesPaths,
+    ...seriesPaths,
+    ...(animePaths ?? []),
+  ].join(", ");
   const warmupPhaseState = monitorWarmupProgress
     ? activeWarmupPhaseState(monitorWarmupProgress, t)
     : null;
   const showWarmupCard = Boolean(
     isImportPath &&
-      (monitorWarmupError ||
-        (monitorWarmupProgress && monitorWarmupProgress.status !== "COMPLETED")),
+    (monitorWarmupError ||
+      (monitorWarmupProgress && monitorWarmupProgress.status !== "COMPLETED")),
   );
   const warmupPercent =
     warmupPhaseState &&
     warmupPhaseState.totalKnown &&
     warmupPhaseState.phaseProgress.total > 0
       ? Math.round(
-          (warmupPhaseState.phaseProgress.completed / warmupPhaseState.phaseProgress.total) * 100,
+          (warmupPhaseState.phaseProgress.completed /
+            warmupPhaseState.phaseProgress.total) *
+            100,
         )
       : null;
 
   const items: SummaryItem[] = [
-    { label: t("setup.summaryPersona"), value: formatFacetPrefs(facetPrefs, t) },
-    { label: t("setup.summaryMediaPaths"), value: mediaPathsSummary, code: true },
+    {
+      label: t("setup.summaryPersona"),
+      value: formatFacetPrefs(facetPrefs, t),
+    },
+    {
+      label: t("setup.summaryMediaPaths"),
+      value: mediaPathsSummary,
+      code: true,
+    },
   ];
 
   if (isImportPath) {
@@ -179,7 +198,10 @@ export function SetupSummaryView({
       });
     }
   } else {
-    items.push({ label: t("setup.summaryDownloadClient"), value: downloadClientName });
+    items.push({
+      label: t("setup.summaryDownloadClient"),
+      value: downloadClientName,
+    });
     items.push({ label: t("setup.summaryIndexer"), value: indexerName });
   }
 
@@ -197,7 +219,13 @@ export function SetupSummaryView({
               <Check className="mt-0.5 h-4 w-4 flex-none text-[var(--scry-success-text-soft)]" />
               <div>
                 <p className="text-sm font-medium">{item.label}</p>
-                <p className={item.code ? "font-[var(--font-code)] text-sm text-muted-foreground" : "text-sm text-muted-foreground"}>
+                <p
+                  className={
+                    item.code
+                      ? "font-[var(--font-code)] text-sm text-muted-foreground"
+                      : "text-sm text-muted-foreground"
+                  }
+                >
                   {item.value}
                 </p>
               </div>
@@ -209,22 +237,26 @@ export function SetupSummaryView({
         <Card className="mx-auto w-full max-w-md border-[var(--scry-success-border)]">
           <CardContent className="flex flex-col gap-3 p-5">
             <div className="space-y-1">
-              <p className="text-sm font-medium">{t("setup.monitorWarmupTitle")}</p>
+              <p className="text-sm font-medium">
+                {t("setup.monitorWarmupTitle")}
+              </p>
               <p className="text-sm text-muted-foreground">
                 {monitorWarmupError
                   ? t("setup.monitorWarmupFailed")
                   : monitorWarmupProgress?.status === "FAILED"
-                  ? t("setup.monitorWarmupFailed")
-                  : monitorWarmupProgress?.status === "CANCELED"
-                    ? t("setup.monitorWarmupCanceled")
-                    : t("setup.monitorWarmupDescription")}
+                    ? t("setup.monitorWarmupFailed")
+                    : monitorWarmupProgress?.status === "CANCELED"
+                      ? t("setup.monitorWarmupCanceled")
+                      : t("setup.monitorWarmupDescription")}
               </p>
             </div>
             {monitorWarmupProgress && warmupPhaseState ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium">{warmupPhaseState.label}</span>
-                  {warmupPercent !== null ? <span>{warmupPercent}%</span> : null}
+                  {warmupPercent !== null ? (
+                    <span>{warmupPercent}%</span>
+                  ) : null}
                 </div>
                 <Progress
                   value={warmupPercent ?? undefined}
@@ -264,14 +296,22 @@ export function SetupSummaryView({
                 ? t("setup.importing")
                 : t("setup.importOnly")}
             </Button>
-            <Button id="setup-summary-import-and-scan" onClick={onImportAndScan} disabled={finishing}>
+            <Button
+              id="setup-summary-import-and-scan"
+              onClick={onImportAndScan}
+              disabled={finishing}
+            >
               {finishingAction === "importAndScan"
                 ? t("setup.importing")
                 : t("setup.importAndScan")}
             </Button>
           </div>
         ) : (
-          <SetupPrimaryButton id="setup-summary-finish" onClick={onFinish} disabled={finishing}>
+          <SetupPrimaryButton
+            id="setup-summary-finish"
+            onClick={onFinish}
+            disabled={finishing}
+          >
             {finishing ? t("label.saving") : t("setup.finish")}
           </SetupPrimaryButton>
         )}

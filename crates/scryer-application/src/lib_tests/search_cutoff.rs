@@ -929,6 +929,7 @@ async fn search_indexers_for_title_uses_tagged_aliases_for_auto_evaluation() {
                 tagged_aliases: vec![scryer_domain::TaggedAlias {
                     name: "Nightfall Heavy Chorus Dark Lantern".to_string(),
                     language: "eng".to_string(),
+                    country: None,
                 }],
                 ..Default::default()
             },
@@ -2042,6 +2043,8 @@ async fn a_queued_releases_announced_size_affects_fit_without_creating_score_upg
     );
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
+            missing_history: false,
+            history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
             covers: Vec::new(),
@@ -2158,6 +2161,8 @@ async fn a_queued_release_the_profile_now_vetoes_still_holds_its_scope() {
 
     let subject =
         AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![QueuedRelease {
+            missing_history: false,
+            history_cutoff_reached: false,
             release_group: Some("group".into()),
             title: release.to_string(),
             covers: Vec::new(),

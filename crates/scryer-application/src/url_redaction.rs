@@ -44,7 +44,8 @@ fn query_param_regex() -> &'static Regex {
     REGEX.get_or_init(|| {
         // Only consume the name so nested assignments can be scanned once,
         // without recursively rescanning their entire remaining value.
-        Regex::new(r#"\b(?P<name>[A-Za-z0-9_-]+)="#).expect("query parameter regex should compile")
+        Regex::new(r#"(?P<name>(?:[A-Za-z0-9_.+-]|%[0-9A-Fa-f]{2})+)="#)
+            .expect("query parameter regex should compile")
     })
 }
 
@@ -64,7 +65,7 @@ fn encoded_query_param_regex() -> &'static Regex {
         // link's `tr=` announce URL: `%3F`/`%26` start a parameter, `%3D`
         // ends its name, and the value runs to the next `&` or `%26`.
         Regex::new(
-            r#"(?i)(?P<prefix>(?:%3F|%26)(?P<name>[A-Za-z0-9_-]+)%3D)(?P<value>%5Bredacted%5D|(?:[^&#;%\s"'<>),\]}]|%(?:[013-9a-f][0-9a-f]|2[0-57-9a-f]))+)"#,
+            r#"(?i)(?P<prefix>(?:%3F|%26)(?P<name>(?:[A-Za-z0-9_.+-]|%[0-9a-f]{2})+?)%3D)(?P<value>%5Bredacted%5D|(?:[^&#;%\s"'<>),\]}]|%(?:[013-9a-f][0-9a-f]|2[0-57-9a-f]))+)"#,
         )
         .expect("encoded query parameter regex should compile")
     })
@@ -88,13 +89,19 @@ fn url_userinfo_regex() -> &'static Regex {
 /// unchanged, so this is safe to run over free-form strings and values that
 /// may already have been redacted.
 pub fn redact_url_credentials(raw: &str) -> String {
+    redact_url_credentials_with_parameter(raw, None)
+}
+
+/// Redact common credential names plus the effective name from an indexer's
+/// host-resolved profile. Only secret values change; public URL metadata stays intact.
+pub fn redact_url_credentials_with_parameter(raw: &str, parameter: Option<&str>) -> String {
     let without_userinfo = url_userinfo_regex().replace_all(raw, |captures: &Captures<'_>| {
         format!("{}{REDACTED_SECRET}@", &captures["scheme"])
     });
-    let plain = redact_plain_query_params(&without_userinfo);
+    let plain = redact_plain_query_params(&without_userinfo, parameter);
     encoded_query_param_regex()
         .replace_all(&plain, |captures: &Captures<'_>| {
-            if is_credential_parameter_name(&captures["name"]) {
+            if matches_credential_parameter(&captures["name"], parameter) {
                 format!("{}%5Bredacted%5D", &captures["prefix"])
             } else {
                 captures[0].to_string()
@@ -103,14 +110,24 @@ pub fn redact_url_credentials(raw: &str) -> String {
         .into_owned()
 }
 
-fn redact_plain_query_params(raw: &str) -> String {
+fn matches_credential_parameter(name: &str, parameter: Option<&str>) -> bool {
+    let decoded = url::form_urlencoded::parse(name.as_bytes())
+        .next()
+        .map(|(name, _)| name);
+    let name = decoded.as_deref().unwrap_or(name);
+    is_credential_parameter_name(name)
+        || parameter
+            .is_some_and(|parameter| !parameter.is_empty() && name.eq_ignore_ascii_case(parameter))
+}
+
+fn redact_plain_query_params(raw: &str, parameter: Option<&str>) -> String {
     let mut output = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(captures) = query_param_regex().captures(rest) {
         let prefix = captures.get(0).expect("matched parameter");
         output.push_str(&rest[..prefix.end()]);
         rest = &rest[prefix.end()..];
-        if is_credential_parameter_name(&captures["name"])
+        if matches_credential_parameter(&captures["name"], parameter)
             && let Some(value) = query_value_regex().find(rest)
         {
             output.push_str(REDACTED_SECRET);
@@ -160,6 +177,46 @@ impl std::fmt::Debug for RedactedUrl<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redacts_configured_parameter_without_changing_public_metadata() {
+        for (name, wire_name) in [
+            ("key", "KeY"),
+            ("key", "%6bey"),
+            ("access.key", "access%2Ekey"),
+        ] {
+            let raw = format!(
+                "https://user:secret@host.invalid/details?{wire_name}=custom-secret&id=42&user=reader&other_key=keep&apikey=common-secret"
+            );
+            let clean = redact_url_credentials_with_parameter(&raw, Some(name));
+            assert!(!clean.contains("secret"), "{clean}");
+            assert!(
+                clean.contains("id=42&user=reader&other_key=keep"),
+                "{clean}"
+            );
+            assert_eq!(
+                redact_url_credentials_with_parameter(&clean, Some(name)),
+                clean
+            );
+
+            let raw = format!(
+                "https://host.invalid/?next=https%3A%2F%2Fother.invalid%2F%3F{wire_name}%3Dcustom-secret%26id%3D42"
+            );
+            let clean = redact_url_credentials_with_parameter(&raw, Some(name));
+            assert!(!clean.contains("custom-secret"), "{clean}");
+            assert!(clean.contains("%26id%3D42"), "{clean}");
+            assert_eq!(
+                redact_url_credentials_with_parameter(&clean, Some(name)),
+                clean
+            );
+        }
+        let ordinary = "https://host.invalid/?key=public&monkey=keep";
+        assert_eq!(redact_url_credentials(ordinary), ordinary);
+        assert_eq!(
+            redact_url_credentials_with_parameter(ordinary, Some("other")),
+            ordinary
+        );
+    }
 
     #[test]
     fn redacts_every_credential_parameter_name() {

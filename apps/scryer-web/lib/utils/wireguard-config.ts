@@ -79,7 +79,9 @@ const EMPTY_IMPORT: WireguardConfigImport = {
  * Returns `null` when nothing in the text was recognisable, which is how the
  * caller tells "not a WireGuard configuration" from "a sparse one".
  */
-export function parseWireguardConfig(text: string): WireguardConfigImport | null {
+export function parseWireguardConfig(
+  text: string,
+): WireguardConfigImport | null {
   const result: WireguardConfigImport = { ...EMPTY_IMPORT, ignored: [] };
   const addresses: string[] = [];
   const dnsServers: string[] = [];

@@ -48,11 +48,14 @@ export function buildTitleEditChanges(
 ): TitleOptionUpdates {
   const changes: TitleOptionUpdates = {};
   const changed = (key: keyof TitleEditDraft) =>
-    draft[key] !== initialDraft[key] && draft[key] !== UNCHANGED_TITLE_EDIT_VALUE;
+    draft[key] !== initialDraft[key] &&
+    draft[key] !== UNCHANGED_TITLE_EDIT_VALUE;
 
   if (changed("qualityProfileId")) {
     changes.qualityProfileId =
-      draft.qualityProfileId === INHERIT_TITLE_EDIT_VALUE ? null : draft.qualityProfileId;
+      draft.qualityProfileId === INHERIT_TITLE_EDIT_VALUE
+        ? null
+        : draft.qualityProfileId;
   }
   if (changed("metadataLanguage")) {
     changes.metadataLanguage =
@@ -73,14 +76,18 @@ export function buildTitleEditChanges(
         : draft.useSeasonFolders === ENABLED_TITLE_EDIT_VALUE;
   }
   if (changed("monitorSpecials")) {
-    changes.monitorSpecials = draft.monitorSpecials === ENABLED_TITLE_EDIT_VALUE;
+    changes.monitorSpecials =
+      draft.monitorSpecials === ENABLED_TITLE_EDIT_VALUE;
   }
   if (changed("interSeasonMovies")) {
-    changes.interSeasonMovies = draft.interSeasonMovies === ENABLED_TITLE_EDIT_VALUE;
+    changes.interSeasonMovies =
+      draft.interSeasonMovies === ENABLED_TITLE_EDIT_VALUE;
   }
   if (changed("fillerPolicy")) {
     changes.fillerPolicy =
-      draft.fillerPolicy === INHERIT_TITLE_EDIT_VALUE ? null : draft.fillerPolicy;
+      draft.fillerPolicy === INHERIT_TITLE_EDIT_VALUE
+        ? null
+        : draft.fillerPolicy;
   }
   if (changed("recapPolicy")) {
     changes.recapPolicy =
@@ -101,7 +108,9 @@ type TitleOptionSnapshot = {
   recapPolicy?: string | null;
 };
 
-function normalizedOptionalString(value: string | null | undefined): string | null {
+function normalizedOptionalString(
+  value: string | null | undefined,
+): string | null {
   return value?.trim() || null;
 }
 
@@ -119,7 +128,8 @@ export function titleMatchesOptionUpdates(
   for (const field of stringFields) {
     if (
       changes[field] !== undefined &&
-      normalizedOptionalString(title[field]) !== normalizedOptionalString(changes[field])
+      normalizedOptionalString(title[field]) !==
+        normalizedOptionalString(changes[field])
     ) {
       return false;
     }

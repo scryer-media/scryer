@@ -29,7 +29,9 @@ export function normalizeTitleTagLabel(label: string): string {
 
 /// User-visible tags on a title: reserved entries stripped, normalized,
 /// deduplicated, and sorted so a picker renders the same order every time.
-export function userTitleTags(tags: readonly string[] | null | undefined): string[] {
+export function userTitleTags(
+  tags: readonly string[] | null | undefined,
+): string[] {
   if (!tags || tags.length === 0) {
     return [];
   }
@@ -89,7 +91,9 @@ export function availableTitleTagLabels(
 /// intent to strip a label is the destructive half and silently adding it
 /// back would be the surprising outcome. The dialog also hides a label from
 /// one picker once the other holds it, so this is a defensive floor.
-export function buildBulkTitleTagsDelta(draft: BulkTitleTagsDraft): TitleTagsDelta {
+export function buildBulkTitleTagsDelta(
+  draft: BulkTitleTagsDraft,
+): TitleTagsDelta {
   const remove = userTitleTags(draft.remove);
   const removeSet = new Set(remove);
   const add = userTitleTags(draft.add).filter((label) => !removeSet.has(label));

@@ -2,7 +2,11 @@ import type * as React from "react";
 import { ChevronDown } from "lucide-react";
 
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { selectTriggerClassName } from "@/components/ui/select";
 import type { LibraryRecord } from "@/lib/types";
 import {
@@ -35,21 +39,36 @@ type FacetPermissionDropdownProps = {
   onLibraryChange: (changes: LibraryPermissionDrafts) => void;
 };
 
-export const APP_PERMISSION_OPTIONS: Array<{ value: AppPermission; label: string }> = [
+export const APP_PERMISSION_OPTIONS: Array<{
+  value: AppPermission;
+  label: string;
+}> = [
   { value: APP_PERMISSIONS.manageUsers, label: "Manage Users" },
   { value: APP_PERMISSIONS.managePermissions, label: "Manage Permissions" },
-  { value: APP_PERMISSIONS.manageSystemSettings, label: "Manage System Settings" },
-  { value: APP_PERMISSIONS.manageCatalogSettings, label: "Manage Catalog Settings" },
+  {
+    value: APP_PERMISSIONS.manageSystemSettings,
+    label: "Manage System Settings",
+  },
+  {
+    value: APP_PERMISSIONS.manageCatalogSettings,
+    label: "Manage Catalog Settings",
+  },
   { value: APP_PERMISSIONS.manageLists, label: "Manage Lists" },
 ];
 
-export const LIBRARY_PERMISSION_OPTIONS: Array<{ value: LibraryPermission; label: string }> = [
+export const LIBRARY_PERMISSION_OPTIONS: Array<{
+  value: LibraryPermission;
+  label: string;
+}> = [
   { value: LIBRARY_PERMISSIONS.view, label: "View" },
   { value: LIBRARY_PERMISSIONS.manageTitles, label: "Manage Titles" },
   { value: LIBRARY_PERMISSIONS.resolveImports, label: "Resolve Imports" },
   { value: LIBRARY_PERMISSIONS.manageLibrary, label: "Manage Library" },
   { value: LIBRARY_PERMISSIONS.request, label: "Request" },
-  { value: LIBRARY_PERMISSIONS.autoApproveRequests, label: "Auto-Approve Requests" },
+  {
+    value: LIBRARY_PERMISSIONS.autoApproveRequests,
+    label: "Auto-Approve Requests",
+  },
   { value: LIBRARY_PERMISSIONS.manageSubtitles, label: "Manage Subtitles" },
 ];
 
@@ -60,10 +79,15 @@ const FACET_OPTIONS: Array<{ value: LibraryRecord["facet"]; label: string }> = [
 ];
 
 function permissionLabel(permission: string, options: PermissionOption[]) {
-  return options.find((option) => option.value === permission)?.label ?? permission;
+  return (
+    options.find((option) => option.value === permission)?.label ?? permission
+  );
 }
 
-function permissionOptions(permissions: string[] | undefined, options: PermissionOption[]) {
+function permissionOptions(
+  permissions: string[] | undefined,
+  options: PermissionOption[],
+) {
   if (!permissions) {
     return options;
   }
@@ -74,7 +98,10 @@ function permissionOptions(permissions: string[] | undefined, options: Permissio
   }));
 }
 
-export function togglePermissionValue(current: string[], value: string): string[] {
+export function togglePermissionValue(
+  current: string[],
+  value: string,
+): string[] {
   const next = new Set(current);
   if (next.has(value)) {
     next.delete(value);
@@ -159,7 +186,8 @@ function AppPermissionDropdown({
   const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS);
   const allPermissions = options.map((option) => option.value);
   const allSelected =
-    allPermissions.length > 0 && allPermissions.every((permission) => selected.includes(permission));
+    allPermissions.length > 0 &&
+    allPermissions.every((permission) => selected.includes(permission));
 
   return (
     <Popover>
@@ -177,22 +205,28 @@ function AppPermissionDropdown({
         className="w-max min-w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-2"
       >
         <MultiSelectOptionList
-          groups={[{
-            options: options.map((permission) => ({
-              ...permission,
-              id: idPrefix
-                ? `${idPrefix}-app-${permissionIdToken(permission.value)}`
-                : undefined,
-            })),
-          }]}
+          groups={[
+            {
+              options: options.map((permission) => ({
+                ...permission,
+                id: idPrefix
+                  ? `${idPrefix}-app-${permissionIdToken(permission.value)}`
+                  : undefined,
+              })),
+            },
+          ]}
           selectedValues={selected}
           onSelectedValuesChange={onChange}
-          allOption={showSelectAll ? {
-            id: idPrefix ? `${idPrefix}-app-select-all` : undefined,
-            label: allSelected ? "Unselect all" : "Select all",
-            selected: allSelected,
-            onSelect: () => onChange(allSelected ? [] : allPermissions),
-          } : undefined}
+          allOption={
+            showSelectAll
+              ? {
+                  id: idPrefix ? `${idPrefix}-app-select-all` : undefined,
+                  label: allSelected ? "Unselect all" : "Select all",
+                  selected: allSelected,
+                  onSelect: () => onChange(allSelected ? [] : allPermissions),
+                }
+              : undefined
+          }
           allOptionClassName="mb-1 rounded-b-none border-b border-[var(--scry-line2)] pb-2"
           disabled={disabled}
           optionClassName="min-w-max"
@@ -224,12 +258,16 @@ function FacetPermissionDropdown({
       const selected = libraryPermissionsWithRequestShadowing(
         selectedByLibrary[library.id] ?? [],
       );
-      return allPermissions.every((permission) => selected.includes(permission));
+      return allPermissions.every((permission) =>
+        selected.includes(permission),
+      );
     });
   const selectedCount = facetLibraries.reduce(
     (count, library) =>
       count +
-      libraryPermissionsWithRequestShadowing(selectedByLibrary[library.id] ?? []).length,
+      libraryPermissionsWithRequestShadowing(
+        selectedByLibrary[library.id] ?? [],
+      ).length,
     0,
   );
 
@@ -237,7 +275,9 @@ function FacetPermissionDropdown({
     <Popover>
       <PopoverTrigger asChild>
         <PermissionDropdownTrigger
-          id={idPrefix ? `${idPrefix}-${facet.toLowerCase()}-trigger` : undefined}
+          id={
+            idPrefix ? `${idPrefix}-${facet.toLowerCase()}-trigger` : undefined
+          }
           label={label}
           count={selectedCount}
           disabled={facetLibraries.length === 0}
@@ -255,7 +295,9 @@ function FacetPermissionDropdown({
               selectedValues={[]}
               onSelectedValuesChange={() => {}}
               allOption={{
-                id: idPrefix ? `${idPrefix}-${facet.toLowerCase()}-select-all` : undefined,
+                id: idPrefix
+                  ? `${idPrefix}-${facet.toLowerCase()}-select-all`
+                  : undefined,
                 label: allSelected ? "Unselect all" : "Select all",
                 selected: allSelected,
                 onSelect: () =>
@@ -277,35 +319,44 @@ function FacetPermissionDropdown({
           ) : null}
           {facetLibraries.map((library) => {
             const selected = selectedByLibrary[library.id] ?? [];
-            const effectiveSelected = libraryPermissionsWithRequestShadowing(selected);
+            const effectiveSelected =
+              libraryPermissionsWithRequestShadowing(selected);
             return (
               <div key={library.id} className="space-y-1">
                 <div className="truncate px-2 text-xs font-semibold uppercase text-muted-foreground">
                   {library.name}
                 </div>
                 <MultiSelectOptionList
-                  groups={[{
-                    options: options.map((permission) => {
-                      const shadowSource = libraryPermissionShadowSource(
-                        selected,
-                        permission.value,
-                      );
-                      return {
-                        ...permission,
-                        id: idPrefix
-                          ? `${idPrefix}-${facet.toLowerCase()}-${library.id}-${permissionIdToken(permission.value)}`
-                          : undefined,
-                        disabled: shadowSource !== null,
-                        title: shadowTitle(shadowSource),
-                      };
-                    }),
-                  }]}
+                  groups={[
+                    {
+                      options: options.map((permission) => {
+                        const shadowSource = libraryPermissionShadowSource(
+                          selected,
+                          permission.value,
+                        );
+                        return {
+                          ...permission,
+                          id: idPrefix
+                            ? `${idPrefix}-${facet.toLowerCase()}-${library.id}-${permissionIdToken(permission.value)}`
+                            : undefined,
+                          disabled: shadowSource !== null,
+                          title: shadowTitle(shadowSource),
+                        };
+                      }),
+                    },
+                  ]}
                   selectedValues={effectiveSelected}
                   onSelectedValuesChange={(next) => {
-                    const permission = changedPermissionValue(effectiveSelected, next);
+                    const permission = changedPermissionValue(
+                      effectiveSelected,
+                      next,
+                    );
                     if (permission) {
                       onLibraryChange({
-                        [library.id]: togglePermissionValue(selected, permission),
+                        [library.id]: togglePermissionValue(
+                          selected,
+                          permission,
+                        ),
                       });
                     }
                   }}

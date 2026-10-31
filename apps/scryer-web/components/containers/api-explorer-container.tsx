@@ -15,7 +15,10 @@ import { getAuthToken } from "@/lib/hooks/use-auth";
 import { getAuthlessWebClientProof } from "@/lib/authless-web-client";
 import { getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 import { scryerFetch } from "@/lib/graphql/urql-client";
-import { createApiExplorerTransport, type ApiExplorerMode } from "@/lib/graphql/api-explorer-transport";
+import {
+  createApiExplorerTransport,
+  type ApiExplorerMode,
+} from "@/lib/graphql/api-explorer-transport";
 
 type ExplorerTransport = ReturnType<typeof createApiExplorerTransport>;
 
@@ -31,10 +34,16 @@ function Editor({ mode }: { mode: ApiExplorerMode }) {
       // Retain in-memory editing when browser privacy policies block storage.
       const values = new Map<string, string>();
       return {
-        get length() { return values.size; },
+        get length() {
+          return values.size;
+        },
         getItem: (key: string) => values.get(key) ?? null,
-        setItem: (key: string, value: string) => { values.set(key, value); },
-        removeItem: (key: string) => { values.delete(key); },
+        setItem: (key: string, value: string) => {
+          values.set(key, value);
+        },
+        removeItem: (key: string) => {
+          values.delete(key);
+        },
         clear: () => values.clear(),
       };
     }
@@ -46,7 +55,9 @@ function Editor({ mode }: { mode: ApiExplorerMode }) {
       fetch: scryerFetch,
       getToken: getAuthToken,
       getProof: getAuthlessWebClientProof,
-      onUnavailable: () => { void refresh(); },
+      onUnavailable: () => {
+        void refresh();
+      },
     });
     setTransport(next);
     return () => next.dispose();
@@ -72,7 +83,10 @@ export default function ApiExplorerContainer() {
   const t = useTranslate();
   const [mode, setMode] = useState<ApiExplorerMode>("api-key");
   return (
-    <section className="scryer-api-explorer flex h-[calc(100dvh-5rem)] min-h-[32rem] flex-col gap-4 p-4 sm:p-6" aria-label="API explorer">
+    <section
+      className="scryer-api-explorer flex h-[calc(100dvh-5rem)] min-h-[32rem] flex-col gap-4 p-4 sm:p-6"
+      aria-label="API explorer"
+    >
       <div className="flex flex-wrap items-center gap-x-6 gap-y-4 rounded-xl border border-border bg-card px-5 py-4">
         <div className="flex items-center gap-3">
           <span className="flex size-10 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
@@ -83,7 +97,9 @@ export default function ApiExplorerContainer() {
         <SingleSelectField
           label={t("apiExplorer.accessMode")}
           value={mode}
-          onValueChange={(value) => { if (value === "api-key" || value === "oauth") setMode(value); }}
+          onValueChange={(value) => {
+            if (value === "api-key" || value === "oauth") setMode(value);
+          }}
           options={[
             { value: "api-key", label: t("apiExplorer.apiKey") },
             { value: "oauth", label: t("apiExplorer.oauth") },
@@ -91,7 +107,13 @@ export default function ApiExplorerContainer() {
           triggerClassName="w-48"
         />
         <div className="min-w-0 flex-1 space-y-1 text-sm text-muted-foreground">
-          <p>{t(mode === "api-key" ? "apiExplorer.apiKeyHelp" : "apiExplorer.oauthHelp")}</p>
+          <p>
+            {t(
+              mode === "api-key"
+                ? "apiExplorer.apiKeyHelp"
+                : "apiExplorer.oauthHelp",
+            )}
+          </p>
           <p className="text-xs">{t("apiExplorer.sessionHelp")}</p>
         </div>
       </div>

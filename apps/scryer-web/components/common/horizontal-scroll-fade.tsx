@@ -117,7 +117,10 @@ export function HorizontalRail({
             aria-label={scrollBackControlLabel}
             onClick={() => scrollByPage(-1)}
             style={{ borderColor: "var(--scry-ink2)" }}
-            className={cn(SCROLL_FADE_CONTROL_CLASS, "top-1/2 left-3 -translate-y-1/2")}
+            className={cn(
+              SCROLL_FADE_CONTROL_CLASS,
+              "top-1/2 left-3 -translate-y-1/2",
+            )}
           >
             <ChevronLeft className="size-7 stroke-[3]" aria-hidden="true" />
           </button>
@@ -137,7 +140,10 @@ export function HorizontalRail({
             aria-label={scrollControlLabel}
             onClick={() => scrollByPage(1)}
             style={{ borderColor: "var(--scry-ink2)" }}
-            className={cn(SCROLL_FADE_CONTROL_CLASS, "top-1/2 right-3 -translate-y-1/2")}
+            className={cn(
+              SCROLL_FADE_CONTROL_CLASS,
+              "top-1/2 right-3 -translate-y-1/2",
+            )}
           >
             <ChevronRight className="size-7 stroke-[3]" aria-hidden="true" />
           </button>

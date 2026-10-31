@@ -301,22 +301,36 @@ impl GitHubRepo {
             return Self::from_parts(owner, name);
         }
 
-        let url = Url::parse(trimmed)
-            .map_err(|e| AppError::Validation(format!("invalid GitHub repository URL: {e}")))?;
+        let url = Url::parse(trimmed).map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::plugins::GITHUB_REPOSITORY_URL_INVALID,
+                format!("invalid GitHub repository URL: {e}"),
+            )
+        })?;
         if url.host_str() != Some("github.com") {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::MANUAL_PLUGIN_REPOSITORIES_INVALID,
                 "manual plugin repositories must be hosted on github.com".to_string(),
             ));
         }
-        let mut segments = url
-            .path_segments()
-            .ok_or_else(|| AppError::Validation("invalid GitHub repository URL".to_string()))?;
-        let owner = segments
-            .next()
-            .ok_or_else(|| AppError::Validation("GitHub owner is missing".to_string()))?;
-        let name = segments
-            .next()
-            .ok_or_else(|| AppError::Validation("GitHub repo name is missing".to_string()))?;
+        let mut segments = url.path_segments().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::plugins::GITHUB_REPOSITORY_URL_INVALID,
+                "invalid GitHub repository URL".to_string(),
+            )
+        })?;
+        let owner = segments.next().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::plugins::GITHUB_OWNER_REQUIRED,
+                "GitHub owner is missing".to_string(),
+            )
+        })?;
+        let name = segments.next().ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::plugins::GITHUB_REPO_NAME_REQUIRED,
+                "GitHub repo name is missing".to_string(),
+            )
+        })?;
         Self::from_parts(owner, name)
     }
 
@@ -350,7 +364,8 @@ impl GitHubRepo {
         let owner = owner.trim();
         let name = name.trim().trim_end_matches(".git");
         if owner.is_empty() || name.is_empty() {
-            return Err(AppError::Validation(
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::GITHUB_REPOSITORY_INVALID,
                 "GitHub repository must include owner and repo".to_string(),
             ));
         }
@@ -373,15 +388,23 @@ pub fn parse_and_validate_child_catalog(
 }
 
 pub fn parse_and_validate_catalog_v3(raw: &[u8]) -> AppResult<CatalogV3> {
-    let catalog: CatalogV3 = serde_json::from_slice(raw)
-        .map_err(|e| AppError::Validation(format!("invalid plugin catalog v3 JSON: {e}")))?;
+    let catalog: CatalogV3 = serde_json::from_slice(raw).map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_V3_JSON_INVALID,
+            format!("invalid plugin catalog v3 JSON: {e}"),
+        )
+    })?;
     validate_catalog_v3(&catalog)?;
     Ok(catalog)
 }
 
 pub fn parse_and_validate_catalog_v3_redirect(raw: &[u8]) -> AppResult<CatalogV3Redirect> {
-    let redirect: CatalogV3Redirect = serde_json::from_slice(raw)
-        .map_err(|e| AppError::Validation(format!("invalid plugin catalog redirect JSON: {e}")))?;
+    let redirect: CatalogV3Redirect = serde_json::from_slice(raw).map_err(|e| {
+        AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_REDIRECT_JSON_INVALID,
+            format!("invalid plugin catalog redirect JSON: {e}"),
+        )
+    })?;
     validate_catalog_v3_redirect(&redirect)?;
     Ok(redirect)
 }
@@ -395,14 +418,16 @@ pub async fn verify_signed_blob(
     _bundle_raw: Vec<u8>,
     _required_signer: RequiredSigner,
 ) -> AppResult<()> {
-    Err(AppError::Validation(
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET,
         "plugin signature verification is not compiled into this target".to_string(),
     ))
 }
 
 #[cfg(not(feature = "runtime-plugin-trust"))]
 pub async fn prime_sigstore_trust_roots() -> AppResult<()> {
-    Err(AppError::Validation(
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET,
         "plugin signature verification is not compiled into this target".to_string(),
     ))
 }
@@ -414,7 +439,7 @@ fn read_bounded_decompressed<R: Read>(
     label: String,
 ) -> AppResult<Vec<u8>> {
     let max_output_len = usize::try_from(max_output_bytes).map_err(|_| {
-        AppError::Validation(format!(
+        AppError::validation_refused(crate::error_reasons::plugins::DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE, format!(
             "{label} decompressed size limit {max_output_bytes} exceeds this platform's maximum buffer size"
         ))
     })?;
@@ -435,9 +460,12 @@ fn read_bounded_decompressed<R: Read>(
             return Ok(output);
         }
         if bytes_read > remaining {
-            return Err(AppError::Validation(format!(
-                "{label} decompressed payload exceeds maximum size of {max_output_bytes} bytes"
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES,
+                format!(
+                    "{label} decompressed payload exceeds maximum size of {max_output_bytes} bytes"
+                ),
+            ));
         }
         output.extend_from_slice(&buffer[..bytes_read]);
     }
@@ -449,14 +477,16 @@ pub fn bound_uncompressed_bytes(
     label: &str,
 ) -> AppResult<Vec<u8>> {
     let actual_bytes = u64::try_from(bytes.len()).map_err(|_| {
-        AppError::Validation(format!(
-            "{label} payload is too large to validate decompressed size"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::plugins::PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE,
+            format!("{label} payload is too large to validate decompressed size"),
+        )
     })?;
     if actual_bytes > max_output_bytes {
-        return Err(AppError::Validation(format!(
-            "{label} payload exceeds maximum size of {max_output_bytes} bytes"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES,
+            format!("{label} payload exceeds maximum size of {max_output_bytes} bytes"),
+        ));
     }
     Ok(bytes)
 }
@@ -486,7 +516,8 @@ pub async fn decompress_zstd(
     _max_output_bytes: u64,
     _label: impl Into<String>,
 ) -> AppResult<Vec<u8>> {
-    Err(AppError::Validation(
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::ZSTD_DECOMPRESSION_NOT_COMPILED_INTO_TARGET,
         "plugin zstd decompression is not compiled into this target".to_string(),
     ))
 }
@@ -512,7 +543,8 @@ pub async fn decompress_brotli(
     _max_output_bytes: u64,
     _label: impl Into<String>,
 ) -> AppResult<Vec<u8>> {
-    Err(AppError::Validation(
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::BROTLI_DECOMPRESSION_NOT_COMPILED_INTO_TARGET,
         "plugin brotli decompression is not compiled into this target".to_string(),
     ))
 }
@@ -529,7 +561,8 @@ pub async fn compress_zstd(bytes: Vec<u8>, level: i32) -> AppResult<Vec<u8>> {
 
 #[cfg(not(feature = "runtime-plugin-trust"))]
 pub async fn compress_zstd(_bytes: Vec<u8>, _level: i32) -> AppResult<Vec<u8>> {
-    Err(AppError::Validation(
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET,
         "plugin zstd compression is not compiled into this target".to_string(),
     ))
 }
@@ -540,13 +573,17 @@ pub fn blake3_digest(bytes: &[u8]) -> String {
 
 pub fn parse_digest_string(input: &str) -> AppResult<(String, String)> {
     let trimmed = input.trim();
-    let (algo, digest) = trimmed
-        .split_once(':')
-        .ok_or_else(|| AppError::Validation(format!("invalid digest string '{trimmed}'")))?;
+    let (algo, digest) = trimmed.split_once(':').ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::plugins::DIGEST_STRING_INVALID,
+            format!("invalid digest string '{trimmed}'"),
+        )
+    })?;
     let algo = algo.trim().to_ascii_lowercase();
     let digest = normalize_hex_digest(digest)?;
     if algo.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::DIGEST_ALGORITHM_REQUIRED,
             "digest algorithm is missing".to_string(),
         ));
     }
@@ -567,14 +604,18 @@ pub fn verify_split_digest(
             if actual_digest.eq_ignore_ascii_case(&expected_digest) {
                 Ok(())
             } else {
-                Err(AppError::Validation(format!(
-                    "{label} digest mismatch: expected blake3:{expected_digest}, got blake3:{actual_digest}"
-                )))
+                Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::DIGEST_MISMATCH,
+                    format!(
+                        "{label} digest mismatch: expected blake3:{expected_digest}, got blake3:{actual_digest}"
+                    ),
+                ))
             }
         }
-        _ => Err(AppError::Validation(format!(
-            "{label} uses unsupported digest algorithm '{normalized_algorithm}'"
-        ))),
+        _ => Err(AppError::validation_refused(
+            crate::error_reasons::plugins::USES_UNSUPPORTED_DIGEST_ALGORITHM,
+            format!("{label} uses unsupported digest algorithm '{normalized_algorithm}'"),
+        )),
     }
 }
 
@@ -589,13 +630,15 @@ pub fn verify_digest_set(label: &str, expected_digests: &[String], bytes: &[u8])
         return verify_split_digest(label, &algorithm, &digest_hex, bytes);
     }
     if !expected_digests.is_empty() {
-        return Err(AppError::Validation(format!(
-            "{label} is missing a usable blake3 digest"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::MISSING_USABLE_BLAKE3_DIGEST,
+            format!("{label} is missing a usable blake3 digest"),
+        ));
     }
-    Err(AppError::Validation(format!(
-        "{label} must declare at least one digest"
-    )))
+    Err(AppError::validation_refused(
+        crate::error_reasons::plugins::ARTIFACT_DIGEST_REQUIRED,
+        format!("{label} must declare at least one digest"),
+    ))
 }
 
 pub fn redirect_bundle_url_for(url: &str) -> String {
@@ -696,18 +739,23 @@ fn validate_child_catalog(
 
 fn validate_catalog_v3_redirect(redirect: &CatalogV3Redirect) -> AppResult<()> {
     if redirect.schema_version != CATALOG_V3_REDIRECT_SCHEMA_VERSION {
-        return Err(AppError::Validation(format!(
-            "unsupported plugin catalog redirect schema '{}'",
-            redirect.schema_version
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_REDIRECT_SCHEMA_UNSUPPORTED,
+            format!(
+                "unsupported plugin catalog redirect schema '{}'",
+                redirect.schema_version
+            ),
+        ));
     }
     if redirect.catalog_version == 0 {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_REDIRECT_CATALOG_VERSION_OUT_OF_RANGE,
             "plugin catalog redirect catalog_version must be greater than zero".to_string(),
         ));
     }
     if redirect.artifacts.is_empty() {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_REDIRECT_OUT_OF_RANGE,
             "plugin catalog redirect must include at least one artifact".to_string(),
         ));
     }
@@ -729,13 +777,17 @@ fn validate_catalog_v3_redirect(redirect: &CatalogV3Redirect) -> AppResult<()> {
 
 fn validate_catalog_v3(catalog: &CatalogV3) -> AppResult<()> {
     if catalog.schema_version != CATALOG_V3_SCHEMA_VERSION {
-        return Err(AppError::Validation(format!(
-            "unsupported plugin catalog schema '{}'",
-            catalog.schema_version
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_SCHEMA_UNSUPPORTED,
+            format!(
+                "unsupported plugin catalog schema '{}'",
+                catalog.schema_version
+            ),
+        ));
     }
     if catalog.catalog_version == 0 {
-        return Err(AppError::Validation(
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::CATALOG_VERSION_OUT_OF_RANGE,
             "plugin catalog version must be greater than zero".to_string(),
         ));
     }
@@ -750,19 +802,22 @@ fn validate_catalog_v3(catalog: &CatalogV3) -> AppResult<()> {
         require_non_empty("docs_url", &plugin.docs_url)?;
         require_non_empty("source_repo", &plugin.source_repo)?;
         if !plugin_ids.insert(plugin.id.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate plugin id '{}' in plugin catalog",
-                plugin.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::ID_PLUGIN_CATALOG_DUPLICATED,
+                format!("duplicate plugin id '{}' in plugin catalog", plugin.id),
+            ));
         }
         let source_repo = GitHubRepo::parse(&plugin.source_repo)?;
         if plugin.required_signer.github_repository != source_repo.slug() {
-            return Err(AppError::Validation(format!(
-                "plugin '{}' signer repo '{}' does not match source repo '{}'",
-                plugin.id,
-                plugin.required_signer.github_repository,
-                source_repo.slug()
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO,
+                format!(
+                    "plugin '{}' signer repo '{}' does not match source repo '{}'",
+                    plugin.id,
+                    plugin.required_signer.github_repository,
+                    source_repo.slug()
+                ),
+            ));
         }
         validate_plugin_release_set(plugin)?;
     }
@@ -775,16 +830,22 @@ fn validate_catalog_v3(catalog: &CatalogV3) -> AppResult<()> {
             &source.github_repository,
         )?;
         if source.support_tier != PluginSupportTier::VerifiedCommunity {
-            return Err(AppError::Validation(format!(
-                "community source '{}' support tier must be verified_community",
-                source.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::COMMUNITY_SOURCE_SUPPORT_TIER_INVALID,
+                format!(
+                    "community source '{}' support tier must be verified_community",
+                    source.id
+                ),
+            ));
         }
         if !community_source_ids.insert(source.id.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate community source id '{}' in plugin catalog",
-                source.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED,
+                format!(
+                    "duplicate community source id '{}' in plugin catalog",
+                    source.id
+                ),
+            ));
         }
         GitHubRepo::parse(&source.github_repository)?;
     }
@@ -795,33 +856,42 @@ fn validate_catalog_v3(catalog: &CatalogV3) -> AppResult<()> {
         require_non_empty("rule pack name", &pack.name)?;
         require_non_empty("rule pack author", &pack.author)?;
         if !rule_pack_ids.insert(pack.id.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate rule pack id '{}' in plugin catalog",
-                pack.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED,
+                format!("duplicate rule pack id '{}' in plugin catalog", pack.id),
+            ));
         }
         let mut versions = HashSet::new();
         for release in &pack.releases {
             parse_version(&release.version)?;
             if !versions.insert(release.version.clone()) {
-                return Err(AppError::Validation(format!(
-                    "duplicate rule pack release version '{}' for '{}'",
-                    release.version, pack.id
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::RULE_PACK_RELEASE_VERSION_DUPLICATED,
+                    format!(
+                        "duplicate rule pack release version '{}' for '{}'",
+                        release.version, pack.id
+                    ),
+                ));
             }
             if let Some(min_scryer_version) = release.min_scryer_version.as_deref() {
                 Version::parse(min_scryer_version.trim()).map_err(|error| {
-                    AppError::Validation(format!(
-                        "rule pack '{}' has invalid min_scryer_version '{}': {error}",
-                        pack.id, min_scryer_version
-                    ))
+                    AppError::validation_refused(
+                        crate::error_reasons::plugins::RULE_PACK_INVALID_MIN_SCRYER_VERSION,
+                        format!(
+                            "rule pack '{}' has invalid min_scryer_version '{}': {error}",
+                            pack.id, min_scryer_version
+                        ),
+                    )
                 })?;
             }
             if release.rule_pack_digests.is_empty() {
-                return Err(AppError::Validation(format!(
-                    "rule pack '{}' release '{}' must include rule_pack_digests",
-                    pack.id, release.version
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::RULE_PACK_RELEASE_INVALID,
+                    format!(
+                        "rule pack '{}' release '{}' must include rule_pack_digests",
+                        pack.id, release.version
+                    ),
+                ));
             }
             for digest in &release.rule_pack_digests {
                 require_digest("rule_pack_digest", digest)?;
@@ -838,10 +908,13 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
     for release in &plugin.releases {
         parse_version(&release.version)?;
         VersionReq::parse(&release.sdk_constraint).map_err(|e| {
-            AppError::Validation(format!(
-                "invalid sdk_constraint '{}' for plugin '{}': {e}",
-                release.sdk_constraint, plugin.id
-            ))
+            AppError::validation_refused(
+                crate::error_reasons::plugins::SDK_CONSTRAINT_PLUGIN_INVALID,
+                format!(
+                    "invalid sdk_constraint '{}' for plugin '{}': {e}",
+                    release.sdk_constraint, plugin.id
+                ),
+            )
         })?;
         let min_scryer_version = release
             .min_scryer_version
@@ -851,10 +924,13 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
             .map(Version::parse)
             .transpose()
             .map_err(|error| {
-                AppError::Validation(format!(
-                    "plugin '{}' release '{}' has invalid min_scryer_version: {error}",
-                    plugin.id, release.version
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::plugins::RELEASE_INVALID_MIN_SCRYER_VERSION,
+                    format!(
+                        "plugin '{}' release '{}' has invalid min_scryer_version: {error}",
+                        plugin.id, release.version
+                    ),
+                )
             })?;
         let max_scryer_version = release
             .max_scryer_version
@@ -864,31 +940,40 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
             .map(Version::parse)
             .transpose()
             .map_err(|error| {
-                AppError::Validation(format!(
-                    "plugin '{}' release '{}' has invalid max_scryer_version: {error}",
-                    plugin.id, release.version
-                ))
+                AppError::validation_refused(
+                    crate::error_reasons::plugins::RELEASE_INVALID_MAX_SCRYER_VERSION,
+                    format!(
+                        "plugin '{}' release '{}' has invalid max_scryer_version: {error}",
+                        plugin.id, release.version
+                    ),
+                )
             })?;
         if min_scryer_version
             .zip(max_scryer_version)
             .is_some_and(|(min, max)| min > max)
         {
-            return Err(AppError::Validation(format!(
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION, format!(
                 "plugin '{}' release '{}' has min_scryer_version greater than max_scryer_version",
                 plugin.id, release.version
             )));
         }
         if !versions.insert(release.version.clone()) {
-            return Err(AppError::Validation(format!(
-                "duplicate release version '{}' for plugin '{}'",
-                release.version, plugin.id
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::RELEASE_VERSION_PLUGIN_DUPLICATED,
+                format!(
+                    "duplicate release version '{}' for plugin '{}'",
+                    release.version, plugin.id
+                ),
+            ));
         }
         if release.artifacts.is_empty() {
-            return Err(AppError::Validation(format!(
-                "plugin '{}' release '{}' must include at least one artifact",
-                plugin.id, release.version
-            )));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::plugins::RELEASE_OUT_OF_RANGE,
+                format!(
+                    "plugin '{}' release '{}' must include at least one artifact",
+                    plugin.id, release.version
+                ),
+            ));
         }
         // Capability tolerance, deliberately.
         //
@@ -920,10 +1005,13 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
                 features.join(",")
             );
             if !artifact_keys.insert(artifact_key) {
-                return Err(AppError::Validation(format!(
-                    "plugin '{}' release '{}' has duplicate artifact variant/encoding rows",
-                    plugin.id, release.version
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS,
+                    format!(
+                        "plugin '{}' release '{}' has duplicate artifact variant/encoding rows",
+                        plugin.id, release.version
+                    ),
+                ));
             }
             validate_distribution_artifact(
                 &format!("plugin '{}' release '{}'", plugin.id, release.version),
@@ -934,19 +1022,25 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
                 &artifact.digests,
             )?;
             if artifact.wasm_digests.is_empty() {
-                return Err(AppError::Validation(format!(
-                    "plugin '{}' release '{}' artifact '{}' must include wasm_digests",
-                    plugin.id, release.version, artifact.url
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::RELEASE_ARTIFACT_INVALID,
+                    format!(
+                        "plugin '{}' release '{}' artifact '{}' must include wasm_digests",
+                        plugin.id, release.version, artifact.url
+                    ),
+                ));
             }
             for digest in &artifact.wasm_digests {
                 require_digest("wasm_digest", digest)?;
             }
             if artifact.bytes == 0 {
-                return Err(AppError::Validation(format!(
-                    "plugin '{}' release '{}' artifact '{}' bytes must be greater than zero",
-                    plugin.id, release.version, artifact.url
-                )));
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::plugins::RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE,
+                    format!(
+                        "plugin '{}' release '{}' artifact '{}' bytes must be greater than zero",
+                        plugin.id, release.version, artifact.url
+                    ),
+                ));
             }
         }
     }
@@ -959,9 +1053,10 @@ fn validate_distribution_artifacts(
     artifacts: &[CatalogV3DistributionArtifact],
 ) -> AppResult<()> {
     if artifacts.is_empty() {
-        return Err(AppError::Validation(format!(
-            "'{owner_id}' release '{release_version}' must include at least one artifact"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::RELEASE_OUT_OF_RANGE,
+            format!("'{owner_id}' release '{release_version}' must include at least one artifact"),
+        ));
     }
     for artifact in artifacts {
         validate_distribution_artifact(
@@ -993,9 +1088,10 @@ fn validate_distribution_artifact(
         validate_distribution_url(&format!("{label} signature mirror"), mirror)?;
     }
     if digests.is_empty() {
-        return Err(AppError::Validation(format!(
-            "{label} must include at least one digest"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::ARTIFACT_DIGEST_REQUIRED,
+            format!("{label} must include at least one digest"),
+        ));
     }
     for digest in digests {
         require_digest("artifact digest", digest)?;
@@ -1005,13 +1101,17 @@ fn validate_distribution_artifact(
 
 fn validate_distribution_url(label: &str, url: &str) -> AppResult<()> {
     let parsed = Url::parse(url).map_err(|error| {
-        AppError::Validation(format!("{label} URL '{url}' is invalid: {error}"))
+        AppError::validation_refused(
+            crate::error_reasons::plugins::URL_INVALID,
+            format!("{label} URL '{url}' is invalid: {error}"),
+        )
     })?;
     match parsed.scheme() {
         "http" | "https" => Ok(()),
-        scheme => Err(AppError::Validation(format!(
-            "{label} URL '{url}' must use http or https, got '{scheme}'"
-        ))),
+        scheme => Err(AppError::validation_refused(
+            crate::error_reasons::plugins::URL_INVALID,
+            format!("{label} URL '{url}' must use http or https, got '{scheme}'"),
+        )),
     }
 }
 
@@ -1028,34 +1128,45 @@ pub fn artifact_encoding_from_url(url: &str) -> Option<&'static str> {
 
 fn require_non_empty(label: &str, value: &str) -> AppResult<()> {
     if value.trim().is_empty() {
-        return Err(AppError::Validation(format!("{label} is required")));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::FIELD_REQUIRED,
+            format!("{label} is required"),
+        ));
     }
     Ok(())
 }
 
 fn parse_version(version: &str) -> AppResult<Version> {
     Version::parse(version.trim_start_matches('v')).map_err(|e| {
-        AppError::Validation(format!("invalid plugin release version '{version}': {e}"))
+        AppError::validation_refused(
+            crate::error_reasons::plugins::RELEASE_VERSION_INVALID,
+            format!("invalid plugin release version '{version}': {e}"),
+        )
     })
 }
 
 fn require_digest(label: &str, digest: &str) -> AppResult<()> {
     parse_digest_string(digest).map(|_| ()).map_err(|_| {
-        AppError::Validation(format!(
-            "{label} must use a supported <algorithm>:<hex> digest"
-        ))
+        AppError::validation_refused(
+            crate::error_reasons::plugins::MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST,
+            format!("{label} must use a supported <algorithm>:<hex> digest"),
+        )
     })
 }
 
 fn normalize_hex_digest(input: &str) -> AppResult<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation("digest value is missing".to_string()));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::DIGEST_VALUE_REQUIRED,
+            "digest value is missing".to_string(),
+        ));
     }
     if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(AppError::Validation(format!(
-            "digest value '{trimmed}' must be hexadecimal"
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::plugins::DIGEST_VALUE_INVALID,
+            format!("digest value '{trimmed}' must be hexadecimal"),
+        ));
     }
     Ok(trimmed.to_ascii_lowercase())
 }

@@ -1,49 +1,86 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
-  "httpRelease.refusal.detailsUnavailable": "De details van deze release zijn niet meer beschikbaar. Zoek opnieuw om hem op te halen.",
-  "httpRelease.refusal.live": "Deze release is een livestream en kan niet worden gedownload.",
+  "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
+    "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
+  "httpRelease.refusal.detailsUnavailable":
+    "De details van deze release zijn niet meer beschikbaar. Zoek opnieuw om hem op te halen.",
+  "httpRelease.refusal.live":
+    "Deze release is een livestream en kan niet worden gedownload.",
   "httpRelease.refusal.upcoming": "Deze release is nog niet gepubliceerd.",
-  "httpRelease.refusal.removed": "Deze release is door de aanbieder verwijderd.",
-  "httpRelease.refusal.unsupportedTransport": "Deze release wordt niet aangeboden in een vorm die de HTTP-downloader kan ophalen.",
-  "httpRelease.refusal.separateTracks": "Deze release wordt alleen als losse audio- en videosporen aangeboden, die niet kunnen worden samengevoegd.",
-  "httpRelease.refusal.noMediaResource": "Deze release heeft geen mediabestand om te downloaden.",
-  "httpRelease.refusal.noSubtitleResource": "Voor deze release worden geen ondertitels in een gewenste taal aangeboden.",
+  "httpRelease.refusal.removed":
+    "Deze release is door de aanbieder verwijderd.",
+  "httpRelease.refusal.unsupportedTransport":
+    "Deze release wordt niet aangeboden in een vorm die de HTTP-downloader kan ophalen.",
+  "httpRelease.refusal.separateTracks":
+    "Deze release wordt alleen als losse audio- en videosporen aangeboden, die niet kunnen worden samengevoegd.",
+  "httpRelease.refusal.noMediaResource":
+    "Deze release heeft geen mediabestand om te downloaden.",
+  "httpRelease.refusal.noSubtitleResource":
+    "Voor deze release worden geen ondertitels in een gewenste taal aangeboden.",
   "titleDelete.refusal.selection": "Selecteer titels zonder duplicaten.",
   "titleDelete.refusal.busy": "Er wordt al een verwijdering uitgevoerd.",
-  "titleDelete.refusal.preview": "Vernieuw het verwijdervoorbeeld en bevestig het.",
-  "titleDelete.refusal.confirmation": "Typ DELETE om de verwijdering te bevestigen.",
-  "titleDelete.refusal.boundary": "De titelmap moet binnen een bibliotheekhoofdmap liggen, niet de hoofdmap zelf zijn.",
-  "titleDelete.refusal.ownership": "Het eigendom van de map kon niet worden vastgesteld. Bestanden zijn behouden.",
-  "titleDelete.refusal.layout": "De map of inhoud kan niet veilig als één titel worden verwijderd.",
-  "titleDelete.refusal.unavailable": "Een bibliotheekhoofdmap is niet beschikbaar. Herstel de toegang en bekijk een nieuw voorbeeld.",
-  "titleDelete.refusal.outsideRoots": "Het bestandspad ligt buiten alle geconfigureerde bibliotheekhoofdmappen. Corrigeer de bibliotheekhoofdmappen of de titelmap en bekijk een nieuw voorbeeld.",
-  "queue.attention.downloadPasswordRetry": "Een nieuwe wachtwoordpoging voor de download wacht op afstemming. Verwijder deze download als de client de taak niet meer heeft.",
-  "titleDelete.refusal.recycle": "De titel is verwijderd, maar sommige prullenbakitems konden niet worden gewist.",
-  "titleDelete.refusal.retry": "Het opschonen van de catalogus is mislukt. Bekijk een nieuw voorbeeld voordat je opnieuw probeert.",
+  "titleDelete.refusal.preview":
+    "Vernieuw het verwijdervoorbeeld en bevestig het.",
+  "titleDelete.refusal.confirmation":
+    "Typ DELETE om de verwijdering te bevestigen.",
+  "titleDelete.refusal.boundary":
+    "De titelmap moet binnen een bibliotheekhoofdmap liggen, niet de hoofdmap zelf zijn.",
+  "titleDelete.refusal.ownership":
+    "Het eigendom van de map kon niet worden vastgesteld. Bestanden zijn behouden.",
+  "titleDelete.refusal.layout":
+    "De map of inhoud kan niet veilig als één titel worden verwijderd.",
+  "titleDelete.refusal.unavailable":
+    "Een bibliotheekhoofdmap is niet beschikbaar. Herstel de toegang en bekijk een nieuw voorbeeld.",
+  "titleDelete.refusal.outsideRoots":
+    "Het bestandspad ligt buiten alle geconfigureerde bibliotheekhoofdmappen. Corrigeer de bibliotheekhoofdmappen of de titelmap en bekijk een nieuw voorbeeld.",
+  "queue.attention.downloadPasswordRetry":
+    "Een nieuwe wachtwoordpoging voor de download wacht op afstemming. Verwijder deze download als de client de taak niet meer heeft.",
+  "titleDelete.refusal.recycle":
+    "De titel is verwijderd, maar sommige prullenbakitems konden niet worden gewist.",
+  "titleDelete.refusal.retry":
+    "Het opschonen van de catalogus is mislukt. Bekijk een nieuw voorbeeld voordat je opnieuw probeert.",
   "settings.downloadClientHttpDownloadDir": "Downloadmap",
-  "settings.downloadClientHttpDownloadDirHelp": "Waar voltooide bestanden en hun deelbestanden worden geschreven, zoals Scryer het pad ziet. Scryer bewaart de wachtrij van deze downloader in een map .scryer-http daarbinnen.",
-  "settings.downloadClientHttpMaxConcurrentDownloads": "Gelijktijdige downloads",
-  "settings.downloadClientHttpMaxConcurrentDownloadsHelp": "Hoeveel releases tegelijk worden gedownload (1 tot 8).",
+  "settings.downloadClientHttpDownloadDirHelp":
+    "Waar voltooide bestanden en hun deelbestanden worden geschreven, zoals Scryer het pad ziet. Scryer bewaart de wachtrij van deze downloader in een map .scryer-http daarbinnen.",
+  "settings.downloadClientHttpMaxConcurrentDownloads":
+    "Gelijktijdige downloads",
+  "settings.downloadClientHttpMaxConcurrentDownloadsHelp":
+    "Hoeveel releases tegelijk worden gedownload (1 tot 8).",
   "settings.downloadClientHttpMaxConnectionsPerHost": "Verbindingen per host",
-  "settings.downloadClientHttpMaxConnectionsPerHostHelp": "Hoeveel downloads tegelijk van dezelfde server mogen halen (1 tot 8).",
+  "settings.downloadClientHttpMaxConnectionsPerHostHelp":
+    "Hoeveel downloads tegelijk van dezelfde server mogen halen (1 tot 8).",
   "settings.downloadClientHttpBandwidthLimit": "Bandbreedtelimiet (KB/s)",
-  "settings.downloadClientHttpBandwidthLimitHelp": "Gedeeld door alle downloads van deze client. Leeg of 0 betekent onbeperkt.",
+  "settings.downloadClientHttpBandwidthLimitHelp":
+    "Gedeeld door alle downloads van deze client. Leeg of 0 betekent onbeperkt.",
   "settings.publicUrlTitle": "Openbare URL",
-  "settings.publicUrlHelp": "Het adres waarmee mensen en diensten Scryer bereiken, zoals https://scryer.example.com. Accountkoppeling en OAuth gebruiken een wijziging meteen; passkeys pas nadat Scryer opnieuw is gestart.",
+  "settings.publicUrlHelp":
+    "Het adres waarmee mensen en diensten Scryer bereiken, zoals https://scryer.example.com. Accountkoppeling en OAuth gebruiken een wijziging meteen; passkeys pas nadat Scryer opnieuw is gestart.",
   "settings.publicUrlLabel": "Openbare URL",
-  "settings.publicUrlEnvironmentLocked": "Ingesteld door SCRYER_PUBLIC_URL. Wijzig de omgevingsvariabele om dit aan te passen.",
-  "settings.publicUrlInvalid": "De ingestelde openbare URL is ongeldig en wordt niet gebruikt: {{error}}",
-  "settings.publicUrlError.invalid_url": "Voer een absolute http- of https-URL in, zoals https://scryer.example.com.",
-  "settings.publicUrlError.wildcard_host": "De openbare URL moet één host noemen, geen jokerteken.",
-  "settings.publicUrlError.credentials": "De openbare URL mag geen gebruikersnaam of wachtwoord bevatten.",
-  "settings.publicUrlError.query_or_fragment": "De openbare URL mag geen querystring of fragment bevatten.",
-  "settings.publicUrlError.path_not_allowed": "Scryer wordt vanaf de root aangeboden, dus de openbare URL mag geen pad bevatten.",
-  "settings.publicUrlError.path_mismatch": "Het pad van de openbare URL moet leeg zijn of overeenkomen met het basispad van Scryer.",
-  "settings.publicUrlError.environment_locked": "De openbare URL wordt ingesteld door SCRYER_PUBLIC_URL en kan hier niet worden gewijzigd.",
-  "settings.publicUrlError.save_and_reset": "Sla een openbare URL op of wis hem, niet allebei.",
-  "settings.publicUrlError.passkey_acknowledgement_required": "Door deze wijziging werken geregistreerde passkeys niet meer. Bevestig om op te slaan.",
-  "settings.publicUrlPasskeyRestart": "Passkeys nemen een gewijzigde openbare URL over nadat Scryer opnieuw is gestart.",
+  "settings.publicUrlEnvironmentLocked":
+    "Ingesteld door SCRYER_PUBLIC_URL. Wijzig de omgevingsvariabele om dit aan te passen.",
+  "settings.publicUrlInvalid":
+    "De ingestelde openbare URL is ongeldig en wordt niet gebruikt: {{error}}",
+  "settings.publicUrlError.invalid_url":
+    "Voer een absolute http- of https-URL in, zoals https://scryer.example.com.",
+  "settings.publicUrlError.wildcard_host":
+    "De openbare URL moet één host noemen, geen jokerteken.",
+  "settings.publicUrlError.credentials":
+    "De openbare URL mag geen gebruikersnaam of wachtwoord bevatten.",
+  "settings.publicUrlError.query_or_fragment":
+    "De openbare URL mag geen querystring of fragment bevatten.",
+  "settings.publicUrlError.path_not_allowed":
+    "Scryer wordt vanaf de root aangeboden, dus de openbare URL mag geen pad bevatten.",
+  "settings.publicUrlError.path_mismatch":
+    "Het pad van de openbare URL moet leeg zijn of overeenkomen met het basispad van Scryer.",
+  "settings.publicUrlError.environment_locked":
+    "De openbare URL wordt ingesteld door SCRYER_PUBLIC_URL en kan hier niet worden gewijzigd.",
+  "settings.publicUrlError.save_and_reset":
+    "Sla een openbare URL op of wis hem, niet allebei.",
+  "settings.publicUrlError.passkey_acknowledgement_required":
+    "Door deze wijziging werken geregistreerde passkeys niet meer. Bevestig om op te slaan.",
+  "settings.publicUrlPasskeyRestart":
+    "Passkeys nemen een gewijzigde openbare URL over nadat Scryer opnieuw is gestart.",
   "settings.publicUrlClear": "Openbare URL wissen",
   "settings.publicUrlSaved": "Openbare URL opgeslagen.",
   "settings.publicUrlLoadError": "Kan de openbare URL niet laden.",
@@ -63,12 +100,18 @@ const nl: LocaleDictionary = {
   "settings.publicUrlSourceSettings": "Opgeslagen instellingen",
   "settings.publicUrlSourceDefault": "Standaard",
   "settings.publicUrlSourcePublicUrl": "Openbare URL",
-  "settings.publicUrlPasskeyWarningTitle": "Bestaande passkeys werken niet meer",
-  "settings.publicUrlPasskeyWarningChanged": "Er zijn passkeys geregistreerd voor {{rpId}}. Na de volgende herstart gaan passkeys naar {{nextRpId}} en kan geen bestaande passkey meer inloggen.",
-  "settings.publicUrlPasskeyWarningDisabled": "Er zijn passkeys geregistreerd voor {{rpId}}. Deze openbare URL ondersteunt geen passkeys (daarvoor is een https-domeinnaam of localhost nodig), dus na de volgende herstart worden passkeys uitgeschakeld en kan geen bestaande passkey meer inloggen.",
-  "settings.publicUrlPasskeyWarningCounts": "{{users}} gebruikers hebben passkeys. {{passkeyOnly}} van hen hebben geen authenticator-app als tweede factor en worden buitengesloten: ze kunnen pas weer inloggen als hun factoren zijn gereset.",
-  "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer kon de geregistreerde passkeys niet tellen; ga ervan uit dat sommige gebruikers worden buitengesloten.",
-  "settings.publicUrlPasskeyWarningRecovery": "Om de toegang te herstellen kan een beheerder die nog kan inloggen {{users}} openen en {{reset}} gebruiken voor elke buitengesloten gebruiker; of zet de openbare URL terug en start Scryer opnieuw; of start Scryer met SCRYER_RECOVERY_ADMIN_PASSWORD om als herstelbeheerder in te loggen.",
+  "settings.publicUrlPasskeyWarningTitle":
+    "Bestaande passkeys werken niet meer",
+  "settings.publicUrlPasskeyWarningChanged":
+    "Er zijn passkeys geregistreerd voor {{rpId}}. Na de volgende herstart gaan passkeys naar {{nextRpId}} en kan geen bestaande passkey meer inloggen.",
+  "settings.publicUrlPasskeyWarningDisabled":
+    "Er zijn passkeys geregistreerd voor {{rpId}}. Deze openbare URL ondersteunt geen passkeys (daarvoor is een https-domeinnaam of localhost nodig), dus na de volgende herstart worden passkeys uitgeschakeld en kan geen bestaande passkey meer inloggen.",
+  "settings.publicUrlPasskeyWarningCounts":
+    "{{users}} gebruikers hebben passkeys. {{passkeyOnly}} van hen hebben geen authenticator-app als tweede factor en worden buitengesloten: ze kunnen pas weer inloggen als hun factoren zijn gereset.",
+  "settings.publicUrlPasskeyWarningCountsUnknown":
+    "Scryer kon de geregistreerde passkeys niet tellen; ga ervan uit dat sommige gebruikers worden buitengesloten.",
+  "settings.publicUrlPasskeyWarningRecovery":
+    "Om de toegang te herstellen kan een beheerder die nog kan inloggen {{users}} openen en {{reset}} gebruiken voor elke buitengesloten gebruiker; of zet de openbare URL terug en start Scryer opnieuw; of start Scryer met SCRYER_RECOVERY_ADMIN_PASSWORD om als herstelbeheerder in te loggen.",
   "settings.publicUrlPasskeyWarningConfirm": "Toch opslaan",
   "label.ready": "Klaar",
   "label.moreInfo": "Meer informatie",
@@ -101,15 +144,56 @@ const nl: LocaleDictionary = {
   "label.cancel": "Annuleren",
   "folderBrowser.selectPath": "Pad selecteren",
   "folderBrowser.go": "Ga",
-  "folderBrowser.descriptionFileOrFolder": "Blader door paden op de Scryer-host en selecteer een bestand of map.",
-  "folderBrowser.descriptionFile": "Blader door paden op de Scryer-host en selecteer een bestand.",
-  "folderBrowser.descriptionFolder": "Blader door paden op de Scryer-host en selecteer een map.",
+  "folderBrowser.descriptionFileOrFolder":
+    "Blader door paden op de Scryer-host en selecteer een bestand of map.",
+  "folderBrowser.descriptionFile":
+    "Blader door paden op de Scryer-host en selecteer een bestand.",
+  "folderBrowser.descriptionFolder":
+    "Blader door paden op de Scryer-host en selecteer een map.",
   "folderBrowser.loading": "Mappen laden",
   "folderBrowser.emptyFilesAndFolders": "Geen bestanden of submappen",
   "folderBrowser.emptyFolders": "Geen submappen",
   "folderBrowser.error": "Kan pad niet doorbladeren.",
   "folderBrowser.browseRoot": "Blader door /",
   "folderBrowser.selectFolder": "Map selecteren",
+  "folderBrowser.newFolder": "Nieuwe map",
+  "folderBrowser.newFolderName": "Mapnaam",
+  "folderBrowser.create": "Maken",
+  "folderBrowser.newFolderFailed": "De map kon niet worden gemaakt.",
+  "error.reason.FOLDER_CREATE_NAME_REQUIRED": "Voer een mapnaam in.",
+  "error.reason.FOLDER_CREATE_NAME_RESERVED":
+    "Deze naam is gereserveerd en kan niet voor een map worden gebruikt.",
+  "error.reason.FOLDER_CREATE_NAME_INVALID_CHARACTERS":
+    'Mapnamen mogen geen / \\ : * ? " < > | of besturingstekens bevatten.',
+  "error.reason.FOLDER_CREATE_NAME_TRAILING_DOT":
+    "Mapnamen mogen niet op een punt eindigen.",
+  "error.reason.FOLDER_CREATE_NAME_HIDDEN":
+    "Mapnamen mogen niet met een punt beginnen, want dan zou de map verborgen zijn.",
+  "error.reason.FOLDER_CREATE_NAME_TOO_LONG":
+    "Deze naam is te lang voor deze schijf.",
+  "error.reason.FOLDER_CREATE_NAME_NOT_ALLOWED":
+    "Deze schijf accepteert deze naam niet. Probeer een eenvoudigere naam.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_ABSOLUTE": "Kies een absoluut mappad.",
+  "error.reason.FOLDER_CREATE_PARENT_MISSING":
+    "De huidige map bestaat niet meer of is niet bereikbaar.",
+  "error.reason.FOLDER_CREATE_PARENT_NOT_DIRECTORY":
+    "Het huidige pad is een bestand, geen map.",
+  "error.reason.FOLDER_CREATE_ALREADY_EXISTS":
+    "Hier staat al een bestand of map met deze naam. Sommige schijven maken geen onderscheid tussen hoofdletters en kleine letters.",
+  "error.reason.FOLDER_CREATE_PERMISSION_DENIED":
+    "Scryer mag hier geen mappen maken. Controleer de rechten van de map voor de gebruiker waaronder Scryer draait (PUID en PGID in Docker).",
+  "error.reason.FOLDER_CREATE_READ_ONLY":
+    "Deze schijf is alleen-lezen. Draait Scryer in Docker, controleer dan of het volume niet alleen-lezen (:ro) is gekoppeld.",
+  "error.reason.FOLDER_CREATE_DISK_FULL":
+    "De schijf is vol of het opslagquotum is op.",
+  "error.reason.FOLDER_CREATE_FOLDER_FULL":
+    "Deze map bevat al zoveel submappen als de schijf toestaat.",
+  "error.reason.FOLDER_CREATE_NOT_SUPPORTED":
+    "Op deze locatie kunnen geen mappen worden gemaakt.",
+  "error.reason.FOLDER_CREATE_DRIVE_UNAVAILABLE":
+    "De schijf of netwerkshare reageert niet. Controleer of die verbonden en gekoppeld is.",
+  "error.reason.FOLDER_CREATE_FAILED":
+    "Scryer kon de map niet maken. Het serverlogboek bevat de details.",
   "label.discard": "Wijzigingen negeren",
   "label.clear": "Wissen",
   "label.add": "Toevoegen",
@@ -258,7 +342,8 @@ const nl: LocaleDictionary = {
   "discovery.tags": "Tags",
   "discovery.selectTags": "Tags selecteren…",
   "discovery.emptyTitle": "Nog geen ontdekkingsitems",
-  "discovery.emptyDescription": "Ontdekkingsfeeds verschijnen hier zodra de sync data heeft.",
+  "discovery.emptyDescription":
+    "Ontdekkingsfeeds verschijnen hier zodra de sync data heeft.",
   "discovery.clearAll": "Alles wissen",
   "discovery.releaseYear": "Uitgavejaar",
   "discovery.minimumRating": "Minimale score",
@@ -283,7 +368,6 @@ const nl: LocaleDictionary = {
   "discovery.updatePending": "Update in behandeling",
   "discovery.updatePendingHint":
     "Nieuwe bibliotheekwijzigingen verschijnen na de volgende sync.",
-
 
   "settings.profile": "Profiel",
   "settings.general": "Algemeen",
@@ -328,7 +412,8 @@ const nl: LocaleDictionary = {
   "settings.securitySetAdminPasswordTitle": "Beheerderswachtwoord instellen",
   "settings.securitySetAdminPasswordDescription":
     "Je account heeft nog geen wachtwoord. Kies er nu een en Scryer schakelt inloggen ermee in.",
-  "settings.securitySetAdminPasswordAction": "Wachtwoord instellen en inschakelen",
+  "settings.securitySetAdminPasswordAction":
+    "Wachtwoord instellen en inschakelen",
   "settings.securitySetAdminPasswordMinLength": "Minstens {{count}} tekens.",
   "settings.securityPasswordTooShort":
     "Wachtwoord moet minstens {{count}} tekens bevatten.",
@@ -345,7 +430,8 @@ const nl: LocaleDictionary = {
   "settings.mfaStepUpSubmit": "Doorgaan",
   "settings.mfaStepUpVerifying": "Verifiëren…",
   "settings.mfaStepUpVerified": "Toegang tot instellingen geverifieerd.",
-  "settings.mfaStepUpFailed": "Die code kon niet worden geverifieerd. Probeer het opnieuw.",
+  "settings.mfaStepUpFailed":
+    "Die code kon niet worden geverifieerd. Probeer het opnieuw.",
   "settings.mfaStepUpRequiredAgain":
     "Je instellingsverificatie is verlopen. Voer een nieuwe authenticatorcode in om door te gaan.",
   "settings.mfaStepUpPolicyLoadFailed":
@@ -367,16 +453,20 @@ const nl: LocaleDictionary = {
   "settings.externalAccountInvites": "Uitnodigingen extern account",
   "settings.externalAccountInviteRequired":
     "Kies een gebruiker en mediaserveraccount.",
-  "settings.externalAccountInviteCreated": "Uitnodiging extern account aangemaakt.",
+  "settings.externalAccountInviteCreated":
+    "Uitnodiging extern account aangemaakt.",
   "settings.externalAccountInviteFailed":
     "Uitnodiging extern account aanmaken mislukt.",
   "settings.mediaServerUser": "Mediaservergebruiker",
   "settings.mediaServerUserSearchPlaceholder": "Mediaservergebruikers zoeken",
-  "settings.mediaServerUserSearchFailed": "Zoeken naar mediaservergebruikers mislukt.",
+  "settings.mediaServerUserSearchFailed":
+    "Zoeken naar mediaservergebruikers mislukt.",
   "settings.mediaServerUserPickerEmpty": "Geen mediaservergebruikers gevonden.",
-  "settings.mediaServerUserPickerServerEmpty": "Geen gebruikers gevonden op deze server.",
+  "settings.mediaServerUserPickerServerEmpty":
+    "Geen gebruikers gevonden op deze server.",
   "settings.previousExternalAccountInvites": "Eerdere uitnodigingen",
-  "settings.noExternalAccountInvites": "Nog geen uitnodigingen voor externe accounts.",
+  "settings.noExternalAccountInvites":
+    "Nog geen uitnodigingen voor externe accounts.",
   "settings.externalAccountInviteStatusDisabled": "Uitgeschakeld",
   "settings.externalAccountInviteStatusLoggedIn": "Ingelogd",
   "settings.externalAccountInviteStatusPending": "In behandeling",
@@ -410,21 +500,24 @@ const nl: LocaleDictionary = {
     "Bron: standaardvoorkeuren (BluRay > WEB-DL > WeRip)",
   "persona.trait.balanced.audio": "Audio: gebalanceerde codec-weging",
   "persona.trait.balanced.x265": "x265: bestraft onder 4K",
-  "persona.trait.balanced.size": "Bestandsgrootte: geeft de voorkeur aan grotere bestanden",
+  "persona.trait.balanced.size":
+    "Bestandsgrootte: geeft de voorkeur aan grotere bestanden",
   "persona.trait.balanced.remux": "Remux: standaard niet geprioriteerd",
   "persona.trait.balanced.hdr": "HDR: Dolby Vision en HDR10 beloond",
   "persona.trait.audiophile.source": "Bron: BluRay sterk geprefereerd",
   "persona.trait.audiophile.audio":
     "Audio: lossless codecs zwaar gewogen (TrueHD, DTS-X, FLAC)",
   "persona.trait.audiophile.x265": "x265: sterk bestraft onder 4K",
-  "persona.trait.audiophile.size": "Bestandsgrootte: grotere bestanden geprefereerd",
+  "persona.trait.audiophile.size":
+    "Bestandsgrootte: grotere bestanden geprefereerd",
   "persona.trait.audiophile.remux": "Remux: zeer hoge bonus",
   "persona.trait.audiophile.hdr": "HDR: Dolby Vision sterk beloond",
   "persona.trait.efficient.source": "Bron: WEB-DL en WEB-Rip geprefereerd",
   "persona.trait.efficient.audio":
     "Audio: lossy codecs acceptabel (DDP geprefereerd)",
   "persona.trait.efficient.x265": "x265: beloond op alle resoluties",
-  "persona.trait.efficient.size": "Bestandsgrootte: compacte encodes geprefereerd",
+  "persona.trait.efficient.size":
+    "Bestandsgrootte: compacte encodes geprefereerd",
   "persona.trait.efficient.remux": "Remux: niet geprioriteerd",
   "persona.trait.efficient.hdr": "HDR: standaard",
   "persona.trait.compatible.source": "Bron: WEB-DL geprefereerd",
@@ -454,7 +547,8 @@ const nl: LocaleDictionary = {
   "settings.libraryDeleted": "Bibliotheek verwijderd.",
   "settings.librarySaveFailed": "Bibliotheek opslaan mislukt.",
   "settings.libraryDeleteFailed": "Bibliotheek verwijderen mislukt.",
-  "settings.librarySettingsLoadFailed": "Bibliotheekinstellingen laden mislukt.",
+  "settings.librarySettingsLoadFailed":
+    "Bibliotheekinstellingen laden mislukt.",
   "settings.libraryRequiredAudioLabel": "Vereiste audio",
   "settings.libraryEffectiveAudio": "Effectief: {{value}}",
   "settings.libraryMetadataLanguageLabel": "Metadatataal",
@@ -463,7 +557,8 @@ const nl: LocaleDictionary = {
   "settings.libraryEffectiveSeasonFolders": "Effectief: {{value}}",
   "settings.libraryInheritGlobal": "Globale standaard overnemen",
   "settings.useSeasonFoldersLabel": "Seizoensmappen gebruiken",
-  "settings.useSeasonFoldersHelp": "Plaats afleveringsbestanden in hun seizoens- of specialsmappen.",
+  "settings.useSeasonFoldersHelp":
+    "Plaats afleveringsbestanden in hun seizoens- of specialsmappen.",
   "settings.libraryQualityProfileLabel": "Kwaliteitsprofiel",
   "settings.libraryRequestQualityProfilesLabel": "Aanvraagprofielen",
   "settings.libraryRequestQualityProfilesHelp":
@@ -488,7 +583,8 @@ const nl: LocaleDictionary = {
     "Scryer kon deze rootmap niet doorbladeren vanaf de host.",
   "settings.rootFolderValidationUnavailable":
     "Validatie van rootmappen is tijdelijk niet beschikbaar. Opgeslagen paden zijn niet als ongeldig gemarkeerd.",
-  "settings.unsavedLibraryChangesTitle": "Niet-opgeslagen bibliotheekwijzigingen",
+  "settings.unsavedLibraryChangesTitle":
+    "Niet-opgeslagen bibliotheekwijzigingen",
   "settings.unsavedLibraryChangesConfirm":
     "Je niet-opgeslagen bibliotheekwijzigingen negeren en deze pagina verlaten?",
   "settings.libraryScanTitle": "Bibliotheekscan",
@@ -549,6 +645,11 @@ const nl: LocaleDictionary = {
   "jobs.column.status": "Status",
   "jobs.action.run": "Uitvoeren",
   "jobs.action.runNow": "Nu uitvoeren",
+  "jobs.cancelSearchRequested":
+    "Annulering aangevraagd. De huidige zoekstap wordt afgerond voordat de overige stappen stoppen.",
+  "jobs.cancelSearchNotRunning":
+    "Deze zoekopdracht wordt niet meer uitgevoerd.",
+  "jobs.cancelSearchFailed": "De zoekopdracht annuleren is mislukt.",
   "jobs.status.idle": "Inactief",
   "jobs.status.queued": "In wachtrij",
   "jobs.status.discovering": "Ontdekken",
@@ -563,7 +664,8 @@ const nl: LocaleDictionary = {
   "jobs.triggerSource.systemInternal": "Systeem intern",
   "deletePreview.counting": "Bestanden tellen om te verwijderen…",
   "deletePreview.error": "Verwijderingsvoorbeeld kon niet worden voorbereid.",
-  "deletePreview.folderUnknown": "Scryer kan niet bepalen in welke map de bestanden van deze titel staan, dus verwijdert het niets van de schijf.",
+  "deletePreview.folderUnknown":
+    "Scryer kan niet bepalen in welke map de bestanden van deze titel staan, dus verwijdert het niets van de schijf.",
   "deletePreview.removeFromCatalogOnly": "Alleen uit catalogus verwijderen",
   "deletePreview.files": "Bestanden",
   "deletePreview.media": "Media",
@@ -572,7 +674,8 @@ const nl: LocaleDictionary = {
   "deletePreview.other": "Overig",
   "deletePreview.folders": "Mappen",
   "deletePreview.samplePaths": "Voorbeeldpaden",
-  "deletePreview.confirmPrompt": "Typ DELETE om deze verwijdering te bevestigen.",
+  "deletePreview.confirmPrompt":
+    "Typ DELETE om deze verwijdering te bevestigen.",
   "settings.movieSettingsSaved": "Filminstellingen opgeslagen.",
   "settings.seriesSettingsSaved": "Seriesinstellingen opgeslagen.",
   "settings.qualityProfileSection": "Kwaliteitsprofiel",
@@ -583,7 +686,8 @@ const nl: LocaleDictionary = {
   "settings.qualityProfileGlobalHelp":
     "Gebruikt wanneer een categorie dit niet overschrijft.",
   "settings.qualityProfileOverrideLabel": "{{category}}-kwaliteitsoverride",
-  "settings.qualityProfileOverridesLabel": "Kwaliteitsprofiel-overrides per categorie",
+  "settings.qualityProfileOverridesLabel":
+    "Kwaliteitsprofiel-overrides per categorie",
   "settings.qualityProfileOverrideHelp":
     "Gebruik overerven om terug te vallen op de globale standaard voor deze inhoudscategorie.",
   "settings.qualityProfileInheritLabel": "Overerven van globaal",
@@ -597,21 +701,29 @@ const nl: LocaleDictionary = {
   "settings.delayProfiles": "Vertragingsprofielen",
   "settings.acquisition": "Ophalen",
   "settings.acquisitionSaved": "Ophaalinstellingen opgeslagen.",
-  "settings.acquisitionIntro": "RSS is het standaard ophaalpad: elk gewenst item wordt actief één keer per indexer doorzocht en daarna gevolgd via RSS. Actief navullen is getimed en eindig.",
+  "settings.acquisitionIntro":
+    "RSS is het standaard ophaalpad: elk gewenst item wordt actief één keer per indexer doorzocht en daarna gevolgd via RSS. Actief navullen is getimed en eindig.",
   "settings.acquisitionEnabled": "Automatisch ophalen inschakelen",
-  "settings.acquisitionEnabledHelp": "Voert de ophaallus op de achtergrond uit: convergentiezoekacties en RSS-matching.",
+  "settings.acquisitionEnabledHelp":
+    "Voert de ophaallus op de achtergrond uit: convergentiezoekacties en RSS-matching.",
   "settings.acquisitionThresholds": "Opwaarderingsdrempels",
-  "settings.acquisitionSameTierMinDelta": "Minimale scoreverschil binnen niveau",
-  "settings.acquisitionSameTierMinDeltaHelp": "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
+  "settings.acquisitionSameTierMinDelta":
+    "Minimale scoreverschil binnen niveau",
+  "settings.acquisitionSameTierMinDeltaHelp":
+    "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
-  "settings.acquisitionPollIntervalSecondsHelp": "Hoe vaak de downloadclients worden gecontroleerd op mislukte downloads.",
+  "settings.acquisitionPollIntervalSecondsHelp":
+    "Hoe vaak de downloadclients worden gecontroleerd op mislukte downloads.",
   "settings.acquisitionWalkIntervalSeconds": "Interval zoekronde (seconden)",
-  "settings.acquisitionWalkIntervalSecondsHelp": "Hoe vaak de bibliotheek wordt gecontroleerd op ontbrekende en te verbeteren media en een reeks titels wordt doorzocht. Een titel toevoegen, een kwaliteitsprofiel bewerken en vergelijkbare wijzigingen starten direct een ronde. Een ronde draait nooit vaker dan het pollinterval.",
+  "settings.acquisitionWalkIntervalSecondsHelp":
+    "Hoe vaak de bibliotheek wordt gecontroleerd op ontbrekende en te verbeteren media en een reeks titels wordt doorzocht. Een titel toevoegen, een kwaliteitsprofiel bewerken en vergelijkbare wijzigingen starten direct een ronde. Een ronde draait nooit vaker dan het pollinterval.",
   "settings.acquisitionMaxScopesPerCycle": "Max. items geëvalueerd per cyclus",
-  "settings.acquisitionMaxScopesPerCycleHelp": "Evaluatielimiet voor één ophaalcyclus. Indexer-rate limits — niet dit aantal — bepalen het werkelijke verzoektarief.",
+  "settings.acquisitionMaxScopesPerCycleHelp":
+    "Evaluatielimiet voor één ophaalcyclus. Indexer-rate limits — niet dit aantal — bepalen het werkelijke verzoektarief.",
   "settings.acquisitionReconvergeDays": "Opnieuw convergeren na (dagen)",
-  "settings.acquisitionReconvergeDaysHelp": "0 schakelt het uit (aanbevolen): geconvergeerde items worden via RSS gevolgd. Schakel alleen in als noodmaatregel wanneer een feed onvolledig blijkt.",
+  "settings.acquisitionReconvergeDaysHelp":
+    "0 schakelt het uit (aanbevolen): geconvergeerde items worden via RSS gevolgd. Schakel alleen in als noodmaatregel wanneer een feed onvolledig blijkt.",
   "settings.delayProfileExisting": "Bestaande vertragingsprofielen",
   "settings.delayProfileNone":
     "Geen vertragingsprofielen geconfigureerd. Releases worden onmiddellijk opgehaald.",
@@ -649,14 +761,16 @@ const nl: LocaleDictionary = {
   "settings.delayProfileBypassPlaceholder": "Laat leeg om nooit te bypassen",
   "settings.delayProfileBypassHelp":
     "Als een release op het gewenste protocol deze drempel scoort of overschrijdt, haal deze onmiddellijk op ongeacht de vertraging.",
-  "settings.delayProfileBypassHighestQualityLabel": "Vertraging bypassen voor hoogste kwaliteit",
+  "settings.delayProfileBypassHighestQualityLabel":
+    "Vertraging bypassen voor hoogste kwaliteit",
   "settings.delayProfileBypassHighestQualityHelp":
     "Haal de hoogstkwalitatieve geschikte release onmiddellijk op wanneer deze op het gewenste protocol staat.",
   "settings.delayProfileFacetsLabel": "Geldt voor",
   "settings.delayProfileFacetsHelp":
     "Voor welke inhoudstypen dit profiel geldt. Laat alles uitgevinkt voor alle typen.",
   "settings.delayProfileLibrariesLabel": "Bibliotheken",
-  "settings.delayProfileLibrariesHelp": "Bibliotheken waarop dit profiel van toepassing is. Laat alles geselecteerd om het op elke bibliotheek toe te passen. Als de laatste bibliotheek van een profiel wordt verwijderd, wordt het profiel uitgeschakeld.",
+  "settings.delayProfileLibrariesHelp":
+    "Bibliotheken waarop dit profiel van toepassing is. Laat alles geselecteerd om het op elke bibliotheek toe te passen. Als de laatste bibliotheek van een profiel wordt verwijderd, wordt het profiel uitgeschakeld.",
   "settings.delayProfileUnknownLibrary": "Onbekende bibliotheek",
   "settings.delayProfileAllFacets": "Alles",
   "settings.delayProfileTagsLabel": "Tags",
@@ -684,11 +798,13 @@ const nl: LocaleDictionary = {
   "settings.seedingProfileDeleteConfirm": "Dit seedingprofiel verwijderen?",
   "settings.seedingProfileNameLabel": "Naam",
   "settings.seedingProfileNamePlaceholder": "bijv. Privé tracker — 1.0 ratio",
-  "settings.seedingProfileGoalPlaceholder": "Laat leeg om de eigen limiet van de client te gebruiken",
+  "settings.seedingProfileGoalPlaceholder":
+    "Laat leeg om de eigen limiet van de client te gebruiken",
   "settings.seedingProfileRatioLabel": "Ratio",
   "settings.seedingProfileRatioHelp":
     "Stop met seeden zodra deze deelratio is bereikt. Leeg geeft de limiet van de downloadclient door.",
-  "settings.seedingProfileSeedTimeFormatHint": "Duur zoals 90m, 36h, 1d, 12h of 2w. Een gewoon getal is minuten.",
+  "settings.seedingProfileSeedTimeFormatHint":
+    "Duur zoals 90m, 36h, 1d, 12h of 2w. Een gewoon getal is minuten.",
   "settings.seedingProfileSeedTimeLabel": "Seedtijd",
   "settings.seedingProfileMinimumSeedersLabel": "Minimale seeders",
   "settings.seedingProfileMinimumSeedersHelp":
@@ -706,7 +822,8 @@ const nl: LocaleDictionary = {
   "settings.seedingMinimumSeedersFloorLabel": "Standaard minimum seeders",
   "settings.seedingMinimumSeedersFloorHelp":
     "Toegepast wanneer geen seedingprofiel de indexer dekt waar een release van komt. Voer 0 in om releases zonder seeders overal toe te staan.",
-  "settings.seedingMinimumSeedersFloorSaved": "Standaard minimum seeders opgeslagen.",
+  "settings.seedingMinimumSeedersFloorSaved":
+    "Standaard minimum seeders opgeslagen.",
   "settings.seedingProfileSeedTimeHelp":
     "Stop met seeden zodra de torrent deze tijd heeft geseed. Leeg geeft de limiet van de downloadclient door.",
   "settings.seedingProfileSeedTimeTransmissionHelp":
@@ -716,25 +833,28 @@ const nl: LocaleDictionary = {
   "settings.seedingProfileIgnoresMinimums": "Negeert tracker-minima",
   "settings.seedingProfileNoneAvailable":
     "Nog geen profielen — maak er een aan onder Instellingen → Seedingprofielen",
-  "settings.seedingProfileSeasonPackAdvanced": "Seizoenspakket-overrides (Geavanceerd)",
+  "settings.seedingProfileSeasonPackAdvanced":
+    "Seizoenspakket-overrides (Geavanceerd)",
   "settings.seedingProfileSeasonPackModeLabel": "Seizoenspakketdoelen",
   "settings.seedingProfileSeasonPackModeHelp":
     "Overnemen gebruikt de doelen hierboven ook voor seizoenspakketten. Override past de seizoenspakketdoelen toe.",
   "settings.seedingProfileSeasonPackInherit": "Overnemen",
   "settings.seedingProfileSeasonPackOverride": "Override",
   "settings.seedingProfileSeasonPackRatioLabel": "Seizoenspakketratio",
-  "settings.seedingProfileSeasonPackSeedTimeLabel":
-    "Seizoenspakket-seedtijd",
+  "settings.seedingProfileSeasonPackSeedTimeLabel": "Seizoenspakket-seedtijd",
   "settings.seedingProfileSeasonPackGoalsHelp":
     "Alleen gebruikt in override-modus. Een leeg veld geeft dat doel door aan de downloadclient.",
-  "settings.seedingProfileHonorTrackerMinimumsLabel": "Tracker-minima respecteren",
+  "settings.seedingProfileHonorTrackerMinimumsLabel":
+    "Tracker-minima respecteren",
   "settings.seedingProfileHonorTrackerMinimumsHelp":
     "Verhoog de opgeloste doelen naar de minimale ratio en seedtijd die een release aangeeft, zodat privé trackers geen hit-and-run registreren.",
   "settings.seedingProfilePostImportTrackingLabel": "Na import",
   "settings.seedingProfilePostImportTrackingHelp":
     "Of Scryer de torrent blijft beheren zodra de bestanden zijn geïmporteerd.",
-  "settings.seedingProfilePostImportTrackingPark": "Blijven beheren tot doelen zijn bereikt",
-  "settings.seedingProfilePostImportTrackingHandOff": "Overdragen aan downloadclient",
+  "settings.seedingProfilePostImportTrackingPark":
+    "Blijven beheren tot doelen zijn bereikt",
+  "settings.seedingProfilePostImportTrackingHandOff":
+    "Overdragen aan downloadclient",
   "settings.seedingProfilePostImportTrackingHandOffBadge": "Overgedragen",
   "settings.seedingProfilePostImportTrackingHandOffHelp":
     "Na import stopt Scryer met het beheren van deze torrent: het item blijft in de client, wordt nooit automatisch verwijderd en verlaat de wachtrij. Seeddoelen en de actie bij bereikt doel gelden niet meer — de eigen limieten van je client nemen het over. Bestanden worden nog steeds geïmporteerd via hardlink of kopie terwijl de torrent seed.",
@@ -749,10 +869,12 @@ const nl: LocaleDictionary = {
     "Blokkeert de automatische verwijdering voor torrents opgehaald onder dit profiel, ook nadat het doel bereikt doel is. Je moet ze zelf verwijderen.",
   "settings.seedingProfileNeverRemoveBadge": "Nooit verwijderd",
   "settings.seedingProfileDefaultTitle": "Standaard seedingprofiel",
-  "settings.seedingProfileDefaultLabel": "Geldt wanneer niets specifieker matcht",
+  "settings.seedingProfileDefaultLabel":
+    "Geldt wanneer niets specifieker matcht",
   "settings.seedingProfileDefaultHelp":
     "Gebruikt voor het ophalen van torrent wanneer noch de indexer noch de routeringsregel van de downloadclient een profiel noemt.",
-  "settings.seedingProfileDefaultNone": "Geen standaard — gebruik de eigen limieten van de client",
+  "settings.seedingProfileDefaultNone":
+    "Geen standaard — gebruik de eigen limieten van de client",
   "settings.seedingProfileDefaultBadge": "Standaard",
   "settings.seedingProfileMissing": 'Ontbrekend profiel "{{id}}"',
   "settings.seedingProfileSaved": "Seedingprofiel opgeslagen.",
@@ -780,7 +902,8 @@ const nl: LocaleDictionary = {
   "settings.seedingProfileRoutingLabel": "Seedingprofiel voor {{name}}",
   "settings.seedingProfileNotApplicable": "Alleen torrent-indexers",
   "status.indexerSeedingProfileSaving": "Seedingprofiel opslaan…",
-  "status.indexerSeedingProfileSaved": 'Seedingprofiel opgeslagen voor "{{name}}".',
+  "status.indexerSeedingProfileSaved":
+    'Seedingprofiel opgeslagen voor "{{name}}".',
   "settings.mediaServersSection": "Mediaserververbindingen",
   "settings.mediaServerCreate": "Mediaserver opslaan",
   "settings.mediaServerCreateNew": "Nieuwe mediaserver verbinden",
@@ -791,7 +914,8 @@ const nl: LocaleDictionary = {
     "Je huidige mediaserverbewerkingen gaan verloren.",
   "settings.mediaServerEnabled": "Mediaserververbinding inschakelen",
   "settings.mediaServerAuthCapabilities": "Rechten",
-  "settings.mediaServerAutoAddEnabled": "Nieuwe geverifieerde gebruikers automatisch toevoegen",
+  "settings.mediaServerAutoAddEnabled":
+    "Nieuwe geverifieerde gebruikers automatisch toevoegen",
   "settings.mediaServerPathMappings": "Padmappings",
   "settings.mediaServerPathMappingsHelp":
     "Elke regel wordt opgeslagen als serverpad => Scryer-pad.",
@@ -896,7 +1020,8 @@ const nl: LocaleDictionary = {
   "settings.indexerRoutingCategoriesPlaceholder": "Categorieën selecteren",
   "settings.indexerRoutingNoIndexers": "Geen indexers gevonden.",
   "settings.indexerRoutingCustomCategories": "Aangepaste codes",
-  "settings.indexerRoutingCustomCategoryPlaceholder": "Numerisch id uit de indexer caps",
+  "settings.indexerRoutingCustomCategoryPlaceholder":
+    "Numerisch id uit de indexer caps",
   "settings.indexerRoutingCustomCategoryAdd": "Toevoegen",
   "settings.indexerRoutingIndexerCategories": "Ook op deze indexer",
   "settings.indexerCategorySeries": "Series",
@@ -921,10 +1046,12 @@ const nl: LocaleDictionary = {
   "settings.folderTemplateRequired": "Maptemplate is verplicht.",
   "settings.seasonFolderTemplateLabel": "Maptemplate voor seizoenen",
   "settings.seasonFolderTemplatePlaceholder": "Seizoen {season}",
-  "settings.seasonFolderTemplateRequired": "Maptemplate voor seizoenen is verplicht.",
+  "settings.seasonFolderTemplateRequired":
+    "Maptemplate voor seizoenen is verplicht.",
   "settings.specialsFolderTemplateLabel": "Maptemplate voor specials",
   "settings.specialsFolderTemplatePlaceholder": "Specials",
-  "settings.specialsFolderTemplateRequired": "Maptemplate voor specials is verplicht.",
+  "settings.specialsFolderTemplateRequired":
+    "Maptemplate voor specials is verplicht.",
   "settings.seasonFolderTemplateMustContainSeason":
     "Maptemplate voor seizoenen moet {season} bevatten.",
   "settings.seasonFolderValidationUnknownToken":
@@ -944,7 +1071,8 @@ const nl: LocaleDictionary = {
   "settings.renameCollisionPolicySkip": "Overslaan",
   "settings.renameCollisionPolicyError": "Fout",
   "settings.renameCollisionPolicyReplaceIfBetter": "Vervangen indien beter",
-  "settings.renameMissingMetadataPolicyLabel": "Beleid bij ontbrekende metadata",
+  "settings.renameMissingMetadataPolicyLabel":
+    "Beleid bij ontbrekende metadata",
   "settings.renameMissingMetadataPolicyFallbackTitle": "Terugvallen op titel",
   "settings.renameMissingMetadataPolicySkip": "Overslaan",
   "settings.renameSectionTitle": "Bestand hernoemen",
@@ -964,17 +1092,23 @@ const nl: LocaleDictionary = {
   "settings.renameFunctionPaddingTitle": "Nummeropvulling",
   "settings.renameFunctionChainTitle": "Koppelen",
   "settings.renameFunctionBracesTitle": "Accolades",
-  "settings.renameTruncateFilterLabel": "Beperk een token tot de eerste N tekens.",
-  "settings.renameNumberPaddingLabel": "Vul numerische tokens aan tot N cijfers.",
-  "settings.renameSpaceUnderscoreFilterLabel": "Vervang witruimte door underscores.",
+  "settings.renameTruncateFilterLabel":
+    "Beperk een token tot de eerste N tekens.",
+  "settings.renameNumberPaddingLabel":
+    "Vul numerische tokens aan tot N cijfers.",
+  "settings.renameSpaceUnderscoreFilterLabel":
+    "Vervang witruimte door underscores.",
   "settings.renameSpaceDotFilterLabel": "Vervang witruimte door punten.",
   "settings.renameSpaceDashFilterLabel": "Vervang witruimte door streepjes.",
-  "settings.renameSpaceRemoveFilterLabel": "Verwijder witruimte uit de tokenwaarde.",
+  "settings.renameSpaceRemoveFilterLabel":
+    "Verwijder witruimte uit de tokenwaarde.",
   "settings.renameFilterChainLabel": "Voer filters van links naar rechts uit.",
   "settings.renameTokenTitle": "Titelnaam",
   "settings.renameTokenYear": "Jaar van uitgave",
-  "settings.renameTokenTitleWithYear": "Titelnaam gevolgd door het jaar, alleen toegevoegd als de naam er nog niet mee eindigt",
-  "settings.renameTokenTitleWithoutYear": "Titelnaam zonder een jaartal aan het einde",
+  "settings.renameTokenTitleWithYear":
+    "Titelnaam gevolgd door het jaar, alleen toegevoegd als de naam er nog niet mee eindigt",
+  "settings.renameTokenTitleWithoutYear":
+    "Titelnaam zonder een jaartal aan het einde",
   "settings.renameTokenQuality": "Kwaliteit (bijv. 1080p)",
   "settings.renameTokenEdition": "Editie (bijv. Director's Cut)",
   "settings.renameTokenImdbId": "IMDb ID",
@@ -984,6 +1118,10 @@ const nl: LocaleDictionary = {
   "settings.renameTokenMalId": "MAL ID",
   "settings.renameTokenAnilistId": "AniList ID",
   "settings.renameTokenSource": "Bron (bijv. BluRay, WEB-DL)",
+  "settings.renameTokenDynamicRange":
+    "Dynamisch bereik (bijv. HDR10, DV, HDR10+)",
+  "settings.renameTokenRevision": "Release-revisie (Proper/REPACK)",
+  "settings.renameTokenIs3d": "3D-aanduiding",
   "settings.renameTokenVideoCodec": "Video-codec (bijv. x265)",
   "settings.renameTokenAudioCodec": "Audio-codec (bijv. DTS)",
   "settings.renameTokenAudioChannels": "Audiokanalen (bijv. 5.1)",
@@ -994,15 +1132,18 @@ const nl: LocaleDictionary = {
   "settings.renameTokenEpisodeTitle": "Afleveringstitel",
   "settings.renameTokenGroup": "Releasegroep",
   "settings.renameTokenExt": "Bestandsextensie",
-  "settings.renameValidationUnmatchedOpen": "Niet-gekoppelde openingsaccolade '{'",
-  "settings.renameValidationUnmatchedClose": "Niet-gekoppelde sluitingsaccolade '}'",
+  "settings.renameValidationUnmatchedOpen":
+    "Niet-gekoppelde openingsaccolade '{'",
+  "settings.renameValidationUnmatchedClose":
+    "Niet-gekoppelde sluitingsaccolade '}'",
   "settings.renameValidationUnknownToken": "Onbekend token: {{token}}",
   "settings.renameValidationInvalidPadding":
     "Voorloopnullen moeten een ASCII-geheel getal tussen 0 en 240 zijn: {{padding}}",
   "settings.renameValidationInvalidFilter": "Ongeldig tokenfilter: {{filter}}",
   "settings.renameValidationEmpty": "Hernoemsjabloon mag niet leeg zijn",
   "settings.renameValidationInvalidOptionalGroup": "Ongeldige optionele groep",
-  "settings.renameValidationNestedOptionalGroup": "Optionele groepen kunnen niet genest worden",
+  "settings.renameValidationNestedOptionalGroup":
+    "Optionele groepen kunnen niet genest worden",
   "settings.renameValidationUnsupportedOptionalFallback":
     "Optionele groepen ondersteunen geen fallback-takken",
   "settings.mediaSettingsSaved": "Media-instellingen opgeslagen.",
@@ -1062,7 +1203,8 @@ const nl: LocaleDictionary = {
     "Deze certificaten breiden HTTPS-vertrouwen uit voor uitgaande plugin-requests. Upload alleen certificaatautoriteitsbestanden die je beheert of expliciet vertrouwt.",
   "settings.pluginHttpTrustUploadButton": "Vertrouwde certificaten uploaden",
   "settings.pluginHttpTrustClearButton": "Alles wissen",
-  "settings.pluginHttpTrustEmpty": "Geen extra vertrouwde certificaten geüpload.",
+  "settings.pluginHttpTrustEmpty":
+    "Geen extra vertrouwde certificaten geüpload.",
   "settings.pluginHttpTrustEntryLabel": "Vertrouwd certificaat",
   "settings.pluginHttpTrustUploadMissingCertificate":
     "Het geüploade bestand bevatte geen PEM-certificaatblok of DER-certificaat.",
@@ -1116,7 +1258,8 @@ const nl: LocaleDictionary = {
   "search.view": "Bekijken",
   "search.viewAll": "Alles bekijken",
   "search.add": "Toevoegen",
-  "search.footerTip": "Niet gevonden? Probeer een andere term of controleer je indexers.",
+  "search.footerTip":
+    "Niet gevonden? Probeer een andere term of controleer je indexers.",
   "search.searchTips": "Zoektips",
   "search.tipTitles":
     "Zoek op film-, serie- of animetitel, catalogusnaam, actie of instelling.",
@@ -1124,7 +1267,8 @@ const nl: LocaleDictionary = {
     "Zoek op film-, serie- of animetitel, actie of instelling.",
   "search.tipTabs":
     "Gebruik tabbladen om resultaten te beperken tot je bibliotheek of één catalogustype.",
-  "search.tipTabsNoLibrary": "Gebruik tabbladen om resultaten te beperken tot één catalogustype.",
+  "search.tipTabsNoLibrary":
+    "Gebruik tabbladen om resultaten te beperken tot één catalogustype.",
   "search.tipIndexers":
     "Gebruik een bredere term voordat je indexers controleert voor titels die niet in metadata-resultaten staan.",
   "search.noMatchesFor": "Geen treffers voor “{{query}}”",
@@ -1149,13 +1293,15 @@ const nl: LocaleDictionary = {
   "search.addConfigRootFolder": "Rootmap",
   "search.addConfigSeasonFolder": "Seizoenmap",
   "search.addConfigMonitorType": "Monitortype",
-  "search.addConfigNoQualityProfiles": "Geen kwaliteitsprofielen geconfigureerd.",
+  "search.addConfigNoQualityProfiles":
+    "Geen kwaliteitsprofielen geconfigureerd.",
   "search.seasonFolder.enabled": "Ingeschakeld",
   "search.seasonFolder.disabled": "Uitgeschakeld",
   "search.monitorType.monitored": "Gemonitord",
   "search.monitorType.unmonitored": "Niet gemonitord",
   "search.monitorType.futureEpisodes": "Toekomstige afleveringen",
-  "search.monitorType.missingAndFutureEpisodes": "Ontbrekend + toekomstige afleveringen",
+  "search.monitorType.missingAndFutureEpisodes":
+    "Ontbrekend + toekomstige afleveringen",
   "search.monitorType.allEpisodes": "Alle afleveringen",
   "search.monitorType.none": "Geen",
   "search.monitorType.advanced": "Geavanceerd",
@@ -1170,7 +1316,8 @@ const nl: LocaleDictionary = {
   "monitorSelection.retry": "Opnieuw proberen",
   "monitorSelection.loading": "Seizoenen laden…",
   "monitorSelection.loadFailed": "Kon seizoenen voor deze titel niet laden.",
-  "monitorSelection.noSeasons": "Er werden geen seizoenen voor deze titel teruggegeven.",
+  "monitorSelection.noSeasons":
+    "Er werden geen seizoenen voor deze titel teruggegeven.",
   "monitorSelection.unavailable":
     "Geavanceerd monitoren vereist een TVDB-match, die dit resultaat niet heeft.",
   "monitorSelection.emptyHint": "Kies minstens één seizoen of seriefilm.",
@@ -1194,7 +1341,8 @@ const nl: LocaleDictionary = {
   "label.close": "Sluiten",
   "label.dismiss": "Negeren",
 
-  "pwa.offline": "Je bent offline. Sommige functies zijn misschien niet beschikbaar.",
+  "pwa.offline":
+    "Je bent offline. Sommige functies zijn misschien niet beschikbaar.",
   "pwa.installApp": "Scryer installeren",
   "pwa.iosInstallHint":
     'Tik op de deelknop en kies "Zet op beginscherm" om te installeren.',
@@ -1252,7 +1400,8 @@ const nl: LocaleDictionary = {
   "title.contextForYouReasonWeekly": "Wekelijks bibliotheeksignaal",
   "title.contextForYouReasonGenre": "Past bij je {{genre}}-plank",
   "title.contextForYouReasonTag": "Past bij je {{tag}}-plank",
-  "title.contextForYouReasonAcclaimed": "Hoog gewaardeerd en niet in je bibliotheek",
+  "title.contextForYouReasonAcclaimed":
+    "Hoog gewaardeerd en niet in je bibliotheek",
   "title.contextForYouReasonCollection": "Deel van een collectie die je hebt",
   "title.contextForYouEmptyTitle": "Nog geen aanbevelingen",
   "title.contextForYouEmptyBody":
@@ -1297,7 +1446,8 @@ const nl: LocaleDictionary = {
   "title.bulkSelectionPanelHint":
     "Kies een actie voor de geselecteerde titels, of wis de selectie.",
   "title.bulkEditTitle": "Geselecteerde titels bewerken",
-  "title.bulkEditDescription": "Wijzigingen toepassen op {{count}} geselecteerde titels.",
+  "title.bulkEditDescription":
+    "Wijzigingen toepassen op {{count}} geselecteerde titels.",
   "title.editOptionsTitle": "Titelopties bewerken",
   "title.editOptionsDescription": "Opties wijzigen voor {{name}}.",
   "title.bulkDeleteTitle": "Geselecteerde titels verwijderen",
@@ -1313,12 +1463,14 @@ const nl: LocaleDictionary = {
   "title.seriesMovieMonitored": "Seriefilm gemonitord",
   "title.deleteFilesOnDisk": "Bestanden permanent van schijf verwijderen",
   "title.seasonsAndEpisodes": "Seizoenen en afleveringen",
-  "title.noTrackedSeasons": "Er worden nog geen seizoenen voor deze show gevolgd.",
+  "title.noTrackedSeasons":
+    "Er worden nog geen seizoenen voor deze show gevolgd.",
   "title.fetchingData": "Gegevens ophalen",
   "title.filesOnDisk": "Bestanden op schijf",
   "title.files": "Bestanden",
   "title.noFilesTracked": "Geen bestanden gevolgd.",
-  "title.noFilesTrackedHint": "Voer een bibliotheekscan uit om bestanden op schijf te detecteren.",
+  "title.noFilesTrackedHint":
+    "Voer een bibliotheekscan uit om bestanden op schijf te detecteren.",
   "title.configureRootFoldersHint":
     "Configureer je root-datamappen in facetinstellingen voordat je deze bibliotheek scant.",
   "title.invalidRootFoldersTitle": "Eén of meer rootmappen zijn ongeldig.",
@@ -1333,7 +1485,6 @@ const nl: LocaleDictionary = {
   "title.episodeRange": "Afleveringen {{start}} - {{end}}",
   "title.episodeCountOne": "{{count}} aflevering",
   "title.episodeCountOther": "{{count}} afleveringen",
-  "title.searchingReleases": "Indexers doorzoeken naar releases…",
   "title.contextReleaseSearchSummary":
     "{{releaseCount}} releases · {{indexerCount}} indexers doorzocht",
   "title.contextReleaseSearchProgress":
@@ -1350,7 +1501,8 @@ const nl: LocaleDictionary = {
     "Configureer minstens één downloadclient voordat je zoeken of interactief zoeken gebruikt vanaf deze titelpagina.",
   "title.searchNeedsDownloadClientAction": "Downloadclients openen",
   "title.blockedReleases": "Geblokkeerde releases",
-  "title.noBlockedReleases": "Geen geblokkeerde releases geregistreerd voor deze film.",
+  "title.noBlockedReleases":
+    "Geen geblokkeerde releases geregistreerd voor deze film.",
   "title.qualityProfile": "Kwaliteitsprofiel",
   "title.rootFolder": "Rootmap",
   "title.catalogFilters.allRootFolders": "Alle rootmappen",
@@ -1404,10 +1556,12 @@ const nl: LocaleDictionary = {
   "pendingImports.searchYearLabel": "Jaar",
   "pendingImports.searchYearPlaceholder": "Jaar",
   "pendingImports.searchYearClear": "Jaar wissen",
-  "pendingImports.searchYearHint": "Het jaar komt uit de scan. Wis het om de zoekopdracht te verbreden als het jaartal in de bestandsnaam fout is.",
+  "pendingImports.searchYearHint":
+    "Het jaar komt uit de scan. Wis het om de zoekopdracht te verbreden als het jaartal in de bestandsnaam fout is.",
   "pendingImports.searching": "Metadata zoeken…",
   "pendingImports.searchFailed": "Metadata zoeken mislukt.",
-  "pendingImports.searchRequestFailed": "Metadata-zoekopdracht mislukt: {{error}}",
+  "pendingImports.searchRequestFailed":
+    "Metadata-zoekopdracht mislukt: {{error}}",
   "pendingImports.noSearchResults": "Geen metadata-treffers gevonden.",
   "pendingImports.searchAction": "Zoeken en matchen",
   "pendingImports.match": "Matchen",
@@ -1426,13 +1580,16 @@ const nl: LocaleDictionary = {
   "pendingImports.pageRange": "{{start}}–{{end}} / {{total}}",
   "pendingImports.library": "Bibliotheek:",
   "pendingImports.knownTitle": "Bekende titel:",
-  "pendingImports.reason.title_already_owns_another_folder": "Titel heeft al een andere map",
+  "pendingImports.reason.title_already_owns_another_folder":
+    "Titel heeft al een andere map",
   "pendingImports.ownershipConflictHelp":
     "De media van deze titel staan in een andere map, en een titel heeft precies één map. Verplaats dit bestand naar de map van de titel (of verwijder deze dubbele map) en scan opnieuw; gebruik Negeren om het te verbergen. Als dit een andere film is die alleen de naam deelt (een remake of het origineel), matcht een rescan na update 0.18.13 het vanzelf.",
   "pendingImports.bindEpisodes": "Afleveringen koppelen",
-  "pendingImports.bindPreviewLoadFailed": "Koppelingsvoorvertoning laden mislukt",
+  "pendingImports.bindPreviewLoadFailed":
+    "Koppelingsvoorvertoning laden mislukt",
   "pendingImports.bindFailed": "Openstaande import koppelen mislukt.",
-  "pendingImports.selectAtLeastOneEpisode": "Selecteer minstens één aflevering.",
+  "pendingImports.selectAtLeastOneEpisode":
+    "Selecteer minstens één aflevering.",
   "pendingImports.loadingEpisodeBindings": "Afleveringskoppelingen laden…",
   "pendingImports.parsedHints": "Geparseerde hints:",
   "pendingImports.parsedHintSeason": " seizoen {{season}}",
@@ -1488,7 +1645,8 @@ const nl: LocaleDictionary = {
   "activity.importEmpty": "Geen importitems.",
   "activity.activityEmpty": "Geen actieve downloads.",
   "activity.historyEmpty": "Geen geschiedenisitems.",
-  "activity.queueStale": "Wachtrijgegevens zijn verouderd; laatste succesvolle verversing getoond.",
+  "activity.queueStale":
+    "Wachtrijgegevens zijn verouderd; laatste succesvolle verversing getoond.",
   "queue.title": "Titel",
   "queue.client": "Client",
   "queue.status": "Status",
@@ -1519,7 +1677,8 @@ const nl: LocaleDictionary = {
   "queue.manualImportQueued": "Handmatige import in wachtrij gezet.",
   "queue.manualImportFailed": "Handmatige import mislukt.",
   "queue.manualImportMultipleEpisodes": "Meerdere afleveringen in dit bestand",
-  "queue.manualImportMultipleEpisodesLabel": "Meerdere afleveringen aan dit bestand toewijzen",
+  "queue.manualImportMultipleEpisodesLabel":
+    "Meerdere afleveringen aan dit bestand toewijzen",
   "queue.manualImportApplySuggestions": "Suggesties op alles toepassen",
   "queue.removeFailed": "Mislukte verwijderen",
   "queue.manualImportTooltip":
@@ -1552,7 +1711,8 @@ const nl: LocaleDictionary = {
   "queue.assignTitlePlaceholder": "Titels zoeken…",
   "queue.assignTitleResults": "Overeenkomende titels",
   "queue.assignTitleEmpty": "Geen overeenkomende titels gevonden.",
-  "queue.assignTitleQueued": "Titel toegewezen. Import wordt opnieuw geëvalueerd.",
+  "queue.assignTitleQueued":
+    "Titel toegewezen. Import wordt opnieuw geëvalueerd.",
   "queue.assignTitleFailed": "Titel toewijzen mislukt.",
   "queue.assignTitleBeforeImport":
     "Wijs een titel toe voordat je handmatige import start.",
@@ -1561,31 +1721,50 @@ const nl: LocaleDictionary = {
   "queue.ignoreFailed": "Download negeren mislukt.",
   "queue.releaseHeldSources": "Vastgehouden bronnen vrijgeven",
   "queue.releaseHeldSourcesConfirmTitle": "Vastgehouden bronnen vrijgeven?",
-  "queue.releaseHeldSourcesConfirmDescription": "{{download}} in {{client}} is geïmporteerd, maar de bronnen worden nog vastgehouden. Vrijgeven heft de blokkade op voor elke import van deze download. Tijdelijke uitpakmappen worden alleen verwijderd als elke video erin is geïmporteerd en niets anders ze gebruikt.",
-  "queue.releaseHeldSourcesClientRemoves": "{{client}} is ingesteld om voltooide downloads te verwijderen. Zodra Scryer de import bevestigt, worden deze download en zijn bestanden uit de downloadclient verwijderd.",
-  "queue.releaseHeldSourcesClientKeeps": "{{client}} is ingesteld om voltooide downloads te bewaren, dus deze download blijft in de downloadclient.",
+  "queue.releaseHeldSourcesConfirmDescription":
+    "{{download}} in {{client}} is geïmporteerd, maar de bronnen worden nog vastgehouden. Vrijgeven heft de blokkade op voor elke import van deze download. Tijdelijke uitpakmappen worden alleen verwijderd als elke video erin is geïmporteerd en niets anders ze gebruikt.",
+  "queue.releaseHeldSourcesClientRemoves":
+    "{{client}} is ingesteld om voltooide downloads te verwijderen. Zodra Scryer de import bevestigt, worden deze download en zijn bestanden uit de downloadclient verwijderd.",
+  "queue.releaseHeldSourcesClientKeeps":
+    "{{client}} is ingesteld om voltooide downloads te bewaren, dus deze download blijft in de downloadclient.",
   "queue.releaseHeldSourcesSuccess": "Vastgehouden bronnen vrijgegeven.",
   "queue.releaseHeldSourcesFailed": "Vastgehouden bronnen vrijgeven mislukt.",
-  "queue.releaseHeldSourcesReasonSubtitlesPending": "De bronnen worden bewaard voor ondertitels die nog aandacht nodig hebben. Vrijgeven stopt het wachten en wist de waarschuwing.",
-  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete": "De bronnen worden bewaard omdat het verwijderen van de bestanden die deze import verving niet is voltooid.",
-  "queue.releaseHeldSourcesReasonArchiveExtractionFailed": "Het uitpakken van archieven is voor deze download mislukt en de niet-uitgepakte archieven zijn nooit geïmporteerd. Vrijgeven markeert de download alleen als geïmporteerd, waarna de downloadclient hem mag verwijderen, als bewezen is dat elk verwacht bestand is geïmporteerd; alles wat nooit is geïmporteerd, wordt ermee verwijderd.",
-  "queue.releaseHeldSourcesReasonUnknown": "Scryer weet niet waarom deze bronnen worden vastgehouden. Vrijgeven markeert de download alleen als geïmporteerd, waarna de downloadclient hem mag verwijderen, als bewezen is dat elk verwacht bestand is geïmporteerd; alles wat nooit is geïmporteerd, wordt ermee verwijderd.",
+  "queue.releaseHeldSourcesReasonSubtitlesPending":
+    "De bronnen worden bewaard voor ondertitels die nog aandacht nodig hebben. Vrijgeven stopt het wachten en wist de waarschuwing.",
+  "queue.releaseHeldSourcesReasonSourceCleanupIncomplete":
+    "De bronnen worden bewaard omdat het verwijderen van de bestanden die deze import verving niet is voltooid.",
+  "queue.releaseHeldSourcesReasonArchiveExtractionFailed":
+    "Het uitpakken van archieven is voor deze download mislukt en de niet-uitgepakte archieven zijn nooit geïmporteerd. Vrijgeven markeert de download alleen als geïmporteerd, waarna de downloadclient hem mag verwijderen, als bewezen is dat elk verwacht bestand is geïmporteerd; alles wat nooit is geïmporteerd, wordt ermee verwijderd.",
+  "queue.releaseHeldSourcesReasonUnknown":
+    "Scryer weet niet waarom deze bronnen worden vastgehouden. Vrijgeven markeert de download alleen als geïmporteerd, waarna de downloadclient hem mag verwijderen, als bewezen is dat elk verwacht bestand is geïmporteerd; alles wat nooit is geïmporteerd, wordt ermee verwijderd.",
   "queue.releaseHeldSourcesTitles": "Deze vrijgave betreft: {{titles}}",
-  "queue.releaseHeldSourcesClientRemovesAfterSeeding": "{{client}} verwijdert voltooide downloads zodra aan de seedvereisten is voldaan. Zodra Scryer de import bevestigt, worden deze download en zijn bestanden verwijderd wanneer het seeden klaar is.",
-  "queue.releaseHeldSourcesClientPolicyUnknown": "Scryer kon niet bepalen wat {{client}} na het vrijgeven met deze download doet.",
-  "queue.releaseHeldSourcesAwaitingImport": "Vastgehouden bronnen vrijgegeven. De download is niet volledig geïmporteerd, dus hij is teruggezet naar importeren en er is niets verwijderd.",
-  "queue.releaseHeldSourcesNotSettled": "Vastgehouden bronnen vrijgegeven, maar de download kon niet worden bijgewerkt. Geef opnieuw vrij om af te ronden.",
-  "queue.releaseHeldSourcesUnproven": "Vastgehouden bronnen vrijgegeven, maar niets bewijst dat elk bestand van de download is geïmporteerd, dus hij is niet als geïmporteerd gemarkeerd en er is niets opgeruimd. Importeer de rest of verwijder hem zelf.",
-  "queue.releaseHeldSourcesNotSettledNothingCleaned": "Vastgehouden bronnen vrijgegeven, maar de download is niet afgerond en er is niets opgeruimd.",
-  "queue.releaseHeldSourcesWorkspacesPreserved": "Sommige tijdelijke uitpakmappen zijn behouden: {{reasons}}.",
-  "queue.releaseHeldSourcesPreservedNotOwned": "eigenaarschap kon niet worden bevestigd",
+  "queue.releaseHeldSourcesClientRemovesAfterSeeding":
+    "{{client}} verwijdert voltooide downloads zodra aan de seedvereisten is voldaan. Zodra Scryer de import bevestigt, worden deze download en zijn bestanden verwijderd wanneer het seeden klaar is.",
+  "queue.releaseHeldSourcesClientPolicyUnknown":
+    "Scryer kon niet bepalen wat {{client}} na het vrijgeven met deze download doet.",
+  "queue.releaseHeldSourcesAwaitingImport":
+    "Vastgehouden bronnen vrijgegeven. De download is niet volledig geïmporteerd, dus hij is teruggezet naar importeren en er is niets verwijderd.",
+  "queue.releaseHeldSourcesNotSettled":
+    "Vastgehouden bronnen vrijgegeven, maar de download kon niet worden bijgewerkt. Geef opnieuw vrij om af te ronden.",
+  "queue.releaseHeldSourcesUnproven":
+    "Vastgehouden bronnen vrijgegeven, maar niets bewijst dat elk bestand van de download is geïmporteerd, dus hij is niet als geïmporteerd gemarkeerd en er is niets opgeruimd. Importeer de rest of verwijder hem zelf.",
+  "queue.releaseHeldSourcesNotSettledNothingCleaned":
+    "Vastgehouden bronnen vrijgegeven, maar de download is niet afgerond en er is niets opgeruimd.",
+  "queue.releaseHeldSourcesWorkspacesPreserved":
+    "Sommige tijdelijke uitpakmappen zijn behouden: {{reasons}}.",
+  "queue.releaseHeldSourcesPreservedNotOwned":
+    "eigenaarschap kon niet worden bevestigd",
   "queue.releaseHeldSourcesPreservedUnsafe": "onverwachte of onleesbare inhoud",
-  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo": "bevat een video die nooit is geïmporteerd",
+  "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo":
+    "bevat een video die nooit is geïmporteerd",
   "queue.releaseHeldSourcesPreservedInUse": "nog nodig voor een andere import",
-  "queue.releaseHeldSourcesPreservedUnverified": "geïmporteerde bestanden konden niet worden bevestigd",
+  "queue.releaseHeldSourcesPreservedUnverified":
+    "geïmporteerde bestanden konden niet worden bevestigd",
   "queue.releaseHeldSourcesPreservedRemovalFailed": "verwijderen mislukt",
-  "queue.releaseHeldSourcesPreservedDownloadNotImported": "de download is niet aantoonbaar geïmporteerd",
-  "queue.releaseHeldSourcesPreservedLookupIncomplete": "niet elke map kon worden gecontroleerd",
+  "queue.releaseHeldSourcesPreservedDownloadNotImported":
+    "de download is niet aantoonbaar geïmporteerd",
+  "queue.releaseHeldSourcesPreservedLookupIncomplete":
+    "niet elke map kon worden gecontroleerd",
   "queue.markFailedSearchAgain": "Blokkeer, verwijder gegevens en zoek opnieuw",
   "queue.markFailedOnly": "Blokkeer en verwijder gegevens",
   "queue.markFailedSearchSuccess":
@@ -1594,7 +1773,8 @@ const nl: LocaleDictionary = {
     "Blokkeren en gegevens verwijderen aangevraagd zonder opnieuw te zoeken.",
   "queue.markFailedFailed": "Download als mislukt markeren mislukt.",
   "queue.bulkIgnoreSuccess": "{{count}} downloads genegeerd.",
-  "queue.bulkIgnorePartial": "{{count}} downloads genegeerd; {{failed}} mislukt.",
+  "queue.bulkIgnorePartial":
+    "{{count}} downloads genegeerd; {{failed}} mislukt.",
   "queue.bulkIgnoreFailed": "Geselecteerde downloads negeren mislukt.",
   "queue.pause": "Pauzeren",
   "queue.pauseSuccess": "Download gepauzeerd.",
@@ -1609,7 +1789,8 @@ const nl: LocaleDictionary = {
   "queue.deleteConfirmTitle": "Uit downloader verwijderen",
   "queue.deleteConfirmDescription":
     "Deze download uit de downloader verwijderen? Hij wordt genegeerd nadat de downloader de verwijdering bevestigt.",
-  "queue.bulkDeleteQueued": "Verwijderen uit downloader in wachtrij gezet voor {{count}} downloads.",
+  "queue.bulkDeleteQueued":
+    "Verwijderen uit downloader in wachtrij gezet voor {{count}} downloads.",
   "queue.bulkDeletePartial":
     "Verwijderen in wachtrij gezet voor {{count}} downloads; {{failed}} mislukt.",
   "queue.bulkDeleteFailed": "Geselecteerde downloads verwijderen mislukt.",
@@ -1622,7 +1803,8 @@ const nl: LocaleDictionary = {
     "Te weinig seeders voor het minimum van deze indexer.",
 
   "importHistory.retry": "Import opnieuw proberen",
-  "importHistory.retryHelp": "Beoordeelt de bestaande gedownloade bestanden opnieuw met de huidige toewijzing en het huidige kwaliteitsprofiel. Start geen nieuwe download.",
+  "importHistory.retryHelp":
+    "Beoordeelt de bestaande gedownloade bestanden opnieuw met de huidige toewijzing en het huidige kwaliteitsprofiel. Start geen nieuwe download.",
   "importHistory.retryWithPassword": "Import opnieuw proberen met wachtwoord",
   "importHistory.passwordRequired": "Wachtwoord vereist",
   "importHistory.passwordPlaceholder": "Archiefwachtwoord",
@@ -1659,7 +1841,8 @@ const nl: LocaleDictionary = {
   "settings.createUser": "Gebruiker aanmaken",
   "settings.username": "Gebruikersnaam",
   "settings.password": "Wachtwoord",
-  "settings.passwordMinLengthError": "Wachtwoord moet minstens {{min}} tekens bevatten.",
+  "settings.passwordMinLengthError":
+    "Wachtwoord moet minstens {{min}} tekens bevatten.",
   "settings.permissions": "Rechten",
   "settings.noUsers": "Geen gebruikers geladen.",
   "settings.updatePassword": "Bijwerken",
@@ -1680,7 +1863,8 @@ const nl: LocaleDictionary = {
   "settings.indexerStatus": "Status",
   "settings.indexerDisabledUntil": "Uitgeschakeld tot {{time}}",
   "settings.indexerCoolingDownUntil": "Gepauzeerd · hervat {{time}}",
-  "settings.indexerCoolingDownHelp": "De indexer vroeg Scryer om rustiger aan te doen. Zoeken wordt automatisch hervat.",
+  "settings.indexerCoolingDownHelp":
+    "De indexer vroeg Scryer om rustiger aan te doen. Zoeken wordt automatisch hervat.",
   "settings.indexerLastError": "Fout {{time}}",
   "settings.indexerLastSearched": "Gezocht {{time}}",
   "settings.indexerNoActivity": "Geen activiteit",
@@ -1697,15 +1881,21 @@ const nl: LocaleDictionary = {
   "settings.noIndexersFound": "Geen indexers gevonden.",
   "settings.indexerConfig": "Providerconfiguratie",
   "settings.indexerDynamicFieldsLoading": "Velden voor deze selectie laden…",
-  "settings.indexerDynamicFieldsError": "Kan de velden voor deze selectie niet laden: {{error}}",
+  "settings.indexerDynamicFieldsError":
+    "Kan de velden voor deze selectie niet laden: {{error}}",
   "settings.indexerLoginChallengeLoading": "Aanmeldafbeelding laden…",
   "settings.indexerLoginChallengeImageAlt": "Aanmeldafbeelding",
-  "settings.indexerLoginChallengeError": "Kan de aanmeldafbeelding niet laden: {{error}}",
+  "settings.indexerLoginChallengeError":
+    "Kan de aanmeldafbeelding niet laden: {{error}}",
   "settings.indexerLoginChallengeRefresh": "Nieuwe afbeelding",
-  "settings.indexerLoginChallengeRefusal.malformed": "De aanmeldafbeelding van de plugin kon niet worden gelezen.",
-  "settings.indexerLoginChallengeRefusal.kindUnsupported": "Deze indexer vraagt om een soort aanmeldcontrole die Scryer niet kan tonen.",
-  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported": "De aanmeldafbeelding heeft een formaat dat Scryer niet toont.",
-  "settings.indexerLoginChallengeRefusal.imageTooLarge": "De aanmeldafbeelding is te groot om te tonen.",
+  "settings.indexerLoginChallengeRefusal.malformed":
+    "De aanmeldafbeelding van de plugin kon niet worden gelezen.",
+  "settings.indexerLoginChallengeRefusal.kindUnsupported":
+    "Deze indexer vraagt om een soort aanmeldcontrole die Scryer niet kan tonen.",
+  "settings.indexerLoginChallengeRefusal.imageTypeUnsupported":
+    "De aanmeldafbeelding heeft een formaat dat Scryer niet toont.",
+  "settings.indexerLoginChallengeRefusal.imageTooLarge":
+    "De aanmeldafbeelding is te groot om te tonen.",
   "settings.managedIndexerBadge": "Beheerd",
   "settings.managedByIndexer": "Beheerd door {{name}}",
   "settings.managedByParent": "Beheerd door parent",
@@ -1755,8 +1945,10 @@ const nl: LocaleDictionary = {
   "settings.rules": "Aangepaste regels",
   "settings.noRulesFound": "Geen aangepaste regels geconfigureerd.",
   "settings.trashPacksTitle": "TRaSH Guides Locale Packs",
-  "settings.trashPacksHelp": "Alleen-score packs afgeleid van TRaSH Guides. Selecteer een pack om het vooraf gedefinieerde locale-beleid toe te passen.",
-  "settings.trashPackFrenchConflict": "“{{name}}” is al ingeschakeld. Schakel het uit voordat je een ander Frans pack inschakelt.",
+  "settings.trashPacksHelp":
+    "Alleen-score packs afgeleid van TRaSH Guides. Selecteer een pack om het vooraf gedefinieerde locale-beleid toe te passen.",
+  "settings.trashPackFrenchConflict":
+    "“{{name}}” is al ingeschakeld. Schakel het uit voordat je een ander Frans pack inschakelt.",
   "settings.ruleCreate": "Regel aanmaken",
   "settings.ruleCreateNew": "Nieuwe regel aanmaken",
   "settings.ruleCopyAsCustom": "Kopiëren als aangepaste regel",
@@ -1769,7 +1961,8 @@ const nl: LocaleDictionary = {
   "settings.ruleRegoSource": "Rego Source",
   "settings.rulePriority": "Prioriteit",
   "settings.ruleAppliedFacets": "Toegepaste facets",
-  "settings.ruleAppliedFacetsHelp": "Laat leeg om toe te passen op alle mediatypes.",
+  "settings.ruleAppliedFacetsHelp":
+    "Laat leeg om toe te passen op alle mediatypes.",
   "settings.ruleValidate": "Valideren",
   "settings.ruleValidating": "Valideren…",
   "settings.ruleValid": "Regel is geldig.",
@@ -1786,22 +1979,32 @@ const nl: LocaleDictionary = {
     "Plak een Sonarr- of Radarr-custom-format-export om een nieuw Rego-regelconcept te maken.",
   "settings.arrImportSource": "Bronapplicatie",
   "settings.arrImportJson": "Custom-format JSON",
-  "settings.arrImportJsonPlaceholder": "Plak één custom format of een array van custom formats.",
+  "settings.arrImportJsonPlaceholder":
+    "Plak één custom format of een array van custom formats.",
   "settings.arrImportReviewAction": "Formats beoordelen",
   "settings.arrImportReview": "{{count}} custom format(s) klaar om te vertalen",
-  "settings.arrImportNoFormats": "Geen geldige custom formats gevonden in deze JSON.",
-  "settings.arrImportInvalidJson": "Plak geldige JSON geëxporteerd door Sonarr of Radarr.",
-  "settings.arrImportReviewFailed": "Deze custom formats kunnen niet worden beoordeeld.",
+  "settings.arrImportNoFormats":
+    "Geen geldige custom formats gevonden in deze JSON.",
+  "settings.arrImportInvalidJson":
+    "Plak geldige JSON geëxporteerd door Sonarr of Radarr.",
+  "settings.arrImportReviewFailed":
+    "Deze custom formats kunnen niet worden beoordeeld.",
   "settings.arrImportScore": "Score",
-  "settings.arrImportScoreRequired": "Voer een gehele score in voor {{name}} voordat je vertaalt.",
+  "settings.arrImportScoreRequired":
+    "Voer een gehele score in voor {{name}} voordat je vertaalt.",
   "settings.arrImportSuggestedScore": "Voorgestelde score: {{score}}.",
   "settings.arrImportUseSuggestion": "Suggestie gebruiken",
   "settings.arrImportScoreReasonExported": "Gebruikt de score uit de export.",
-  "settings.arrImportScoreReasonDefault": "Gebruikt de standaardscore uit de export; andere profielkeuzes staan hieronder.",
-  "settings.arrImportScoreReasonPreference": "De formatnaam drukt een voorkeur uit.",
-  "settings.arrImportScoreReasonPenalty": "De formatnaam identificeert iets ongewensts.",
-  "settings.arrImportScoreReasonExtras": "Het format lijkt extras of samples te identificeren.",
-  "settings.arrImportScoreSuggestionHelp": "Suggesties zijn bewerkbare startpunten. Overeenkomende formats tellen hun scores op; op naam gebaseerde suggesties blokkeren een release nooit hard.",
+  "settings.arrImportScoreReasonDefault":
+    "Gebruikt de standaardscore uit de export; andere profielkeuzes staan hieronder.",
+  "settings.arrImportScoreReasonPreference":
+    "De formatnaam drukt een voorkeur uit.",
+  "settings.arrImportScoreReasonPenalty":
+    "De formatnaam identificeert iets ongewensts.",
+  "settings.arrImportScoreReasonExtras":
+    "Het format lijkt extras of samples te identificeren.",
+  "settings.arrImportScoreSuggestionHelp":
+    "Suggesties zijn bewerkbare startpunten. Overeenkomende formats tellen hun scores op; op naam gebaseerde suggesties blokkeren een release nooit hard.",
   "settings.arrImportAmbiguousScore":
     "Dit format heeft meer dan één voorgestelde score. Kies de score die je wilt toepassen.",
   "settings.arrImportBlockScoreHelp":
@@ -1812,7 +2015,8 @@ const nl: LocaleDictionary = {
   "settings.arrImportResultSummary":
     "{{translated}} vertaald; {{disabled}} uitgeschakeld voor handmatige reparatie.",
   "settings.arrImportDraftName": "Geïmporteerde Arr custom formats",
-  "settings.arrImportDraftDescription": "Geïmporteerd uit Arr custom-format JSON.",
+  "settings.arrImportDraftDescription":
+    "Geïmporteerd uit Arr custom-format JSON.",
   "settings.arrImportDiagnostics": "Vertaalnotities",
   "settings.arrImportApply": "Geïmporteerd concept gebruiken",
 
@@ -1836,7 +2040,8 @@ const nl: LocaleDictionary = {
   "settings.refReleaseVideoCodec": "Video-codec (bijv. H.265, H.264, AV1)",
   "settings.refReleaseAudio": "Primaire audio-codec (bijv. DDP, AAC, TrueHD)",
   "settings.refReleaseAudioCodecs": "Alle gedetecteerde audio-codecs als array",
-  "settings.refReleaseGuideFacts": "Guide facts gedetecteerd uit de release-metadata",
+  "settings.refReleaseGuideFacts":
+    "Guide facts gedetecteerd uit de release-metadata",
   "settings.refReleaseAudioChannels":
     "Audiokanaalconfiguratie (bijv. 5.1, 7.1, 2.0)",
   "settings.refReleaseLangsAudio":
@@ -1844,10 +2049,13 @@ const nl: LocaleDictionary = {
   "settings.refReleaseIndexerLanguages":
     "ISO 639-3 audiotaalcodes die de indexer-listing zelf meldde, vastgelegd toen de release werd gegrabd. Nooit afgeleid uit de naam of de titel; leeg als de indexer niets meldde",
   "settings.refReleaseLangsSub": "ISO 639-3 ondertitelingstaalcodes",
-  "settings.refReleaseIsDualAudio": "True wanneer meerdere audiotracks gedetecteerd zijn",
+  "settings.refReleaseIsDualAudio":
+    "True wanneer meerdere audiotracks gedetecteerd zijn",
   "settings.refReleaseIsAtmos": "True wanneer Dolby Atmos-audio aanwezig is",
-  "settings.refReleaseIsDV": "True wanneer Dolby Vision-metadata gedetecteerd is",
-  "settings.refReleaseDetectedHdr": "True wanneer HDR gedetecteerd is (niet-DV)",
+  "settings.refReleaseIsDV":
+    "True wanneer Dolby Vision-metadata gedetecteerd is",
+  "settings.refReleaseDetectedHdr":
+    "True wanneer HDR gedetecteerd is (niet-DV)",
   "settings.refReleaseIsRemux": "True voor volledige remux (geen transcoding)",
   "settings.refReleaseIsBdDisk": "True voor Blu-ray disc-bron",
   "settings.refReleaseIsProper": "True wanneer de release als Proper getagd is",
@@ -1876,8 +2084,7 @@ const nl: LocaleDictionary = {
     "True wanneer de releasenaam retagged of reposted lijkt",
   "settings.refReleaseStreamingService":
     "Gedetecteerde streaming service-tag, indien aanwezig",
-  "settings.refReleaseEdition":
-    "Editietag zoals extended, IMAX of criterion",
+  "settings.refReleaseEdition": "Editietag zoals extended, IMAX of criterion",
   "settings.refReleaseAnimeVersion":
     "Animeversienummer zoals v2 of v3, indien aanwezig",
   "settings.refReleaseEpisodeReleaseType":
@@ -1888,7 +2095,8 @@ const nl: LocaleDictionary = {
     "True wanneer de release meerdere afleveringen lijkt te bevatten",
   "settings.refReleaseGroup": "Releasegroep of uploadernaam",
   "settings.refReleaseYear": "Releasejaar",
-  "settings.refReleaseParseConf": "Betrouwbaarheidsscore voor de parse (0.0 tot 1.0)",
+  "settings.refReleaseParseConf":
+    "Betrouwbaarheidsscore voor de parse (0.0 tot 1.0)",
   "settings.refReleaseSizeBytes":
     "Bestandsgrootte in bytes (gebruik scryer.size_gib() om te converteren)",
   "settings.refReleaseAgeDays":
@@ -1903,12 +2111,14 @@ const nl: LocaleDictionary = {
   "settings.refSectionProfile": "— Actieve kwaliteitsprofielconfiguratie",
   "settings.refProfileId": "Unieke profielidentifier",
   "settings.refProfileName": "Weergavenaam profiel",
-  "settings.refProfileQualityTiers": "Geordende lijst van acceptabele kwaliteitsniveaus",
+  "settings.refProfileQualityTiers":
+    "Geordende lijst van acceptabele kwaliteitsniveaus",
   "settings.refProfileArchivalQuality":
     "Hoogste kwaliteitsniveau beschouwd als archief",
   "settings.refProfileAllowUnknown":
     "Of onherkende kwaliteiten geaccepteerd worden",
-  "settings.refProfileSourceAllow": "Toegestane bronnen (leeg betekent alles toegestaan)",
+  "settings.refProfileSourceAllow":
+    "Toegestane bronnen (leeg betekent alles toegestaan)",
   "settings.refProfileSourceBlock": "Geblokkeerde bronnen",
   "settings.refProfileVCodecAllow":
     "Toegestane video-codecs (leeg betekent alles toegestaan)",
@@ -1920,12 +2130,14 @@ const nl: LocaleDictionary = {
     "Profiel geeft de voorkeur aan Dolby Atmos indien beschikbaar",
   "settings.refProfileDVAllowed": "Dolby Vision-releases worden geaccepteerd",
   "settings.refProfileHdrAllowed": "HDR-releases worden geaccepteerd",
-  "settings.refProfilePreferRemux": "Profiel geeft de voorkeur aan volledige remux-releases",
+  "settings.refProfilePreferRemux":
+    "Profiel geeft de voorkeur aan volledige remux-releases",
   "settings.refProfileAllowBdDisk": "Blu-ray disc-bronnen worden geaccepteerd",
-  "settings.refProfileAllowUpgrades": "Upgraden van bestaande bestanden is toegestaan",
-  "settings.refProfilePreferDualAudio": "Profiel geeft de voorkeur aan dual-audio releases",
-  "settings.refProfileRequiredLangs":
-    "Verplichte audiotalen (ISO 639-3-codes)",
+  "settings.refProfileAllowUpgrades":
+    "Upgraden van bestaande bestanden is toegestaan",
+  "settings.refProfilePreferDualAudio":
+    "Profiel geeft de voorkeur aan dual-audio releases",
+  "settings.refProfileRequiredLangs": "Verplichte audiotalen (ISO 639-3-codes)",
 
   "settings.refSectionContext": "— Titel- en zoekcontext",
   "settings.refCtxTitleId":
@@ -1934,8 +2146,7 @@ const nl: LocaleDictionary = {
     "Opgeloste bibliotheeknaam wanneer evaluatie op een specifieke bibliotheek is begrensd",
   "settings.refCtxMediaType":
     "Mediafacet dat wordt geëvalueerd, doorgaans movie, series of anime",
-  "settings.refCtxCategory":
-    "Categoriehint voor scoring en regelevaluatie",
+  "settings.refCtxCategory": "Categoriehint voor scoring en regelevaluatie",
   "settings.refCtxOriginalLanguage":
     "Genormaliseerde originele titeltaal, wanneer metadata die levert",
   "settings.refCtxOriginalCountry":
@@ -1950,12 +2161,16 @@ const nl: LocaleDictionary = {
   "settings.refCtxSearchMode":
     "Evaluatiemodus. Huidige waarden zijn auto en post_download",
   "settings.refCtxRuntimeMin": "Speelduur van de content in minuten",
-  "settings.refCtxIsAnime": "True wanneer de titel als anime is gecategoriseerd",
-  "settings.refCtxIsFiller": "True wanneer de aflevering als filler is gemarkeerd",
+  "settings.refCtxIsAnime":
+    "True wanneer de titel als anime is gecategoriseerd",
+  "settings.refCtxIsFiller":
+    "True wanneer de aflevering als filler is gemarkeerd",
 
-  "settings.refSectionBuiltinScore": "— Resultaten van de ingebouwde scoring-engine",
+  "settings.refSectionBuiltinScore":
+    "— Resultaten van de ingebouwde scoring-engine",
   "settings.refBuiltinTotal": "Totale score van de ingebouwde scoring-engine",
-  "settings.refBuiltinBlocked": "True wanneer ingebouwde regels deze release hebben geblokkeerd",
+  "settings.refBuiltinBlocked":
+    "True wanneer ingebouwde regels deze release hebben geblokkeerd",
   "settings.refBuiltinCodes":
     "Lijst van toegepaste scoringcodes (bijv. quality_tier_0)",
 
@@ -1979,7 +2194,8 @@ const nl: LocaleDictionary = {
   "settings.refFileAudioProfile":
     "Primair geverifieerd audioprofiel of extensielabel, zoals LC, Dolby TrueHD + Dolby Atmos, of DTS-HD MA + DTS:X IMAX",
   "settings.refFileAudioChannels": "Primair geverifieerd aantal audiokanalen",
-  "settings.refFileAudioBitrateKbps": "Primaire geverifieerde audio bitrate in kbps",
+  "settings.refFileAudioBitrateKbps":
+    "Primaire geverifieerde audio bitrate in kbps",
   "settings.refFileAudioLanguages":
     "Alle gedetecteerde audiotalen uit het daadwerkelijke bestand",
   "settings.refFileAudioStreams":
@@ -2006,7 +2222,8 @@ const nl: LocaleDictionary = {
   "settings.refAudioStreamLanguage": "Taalcode per stroom",
   "settings.refAudioStreamBitrateKbps": "Bitrate in kbps per stroom",
 
-  "settings.refSectionSubtitleStreams": "— Geneste ondertitelstroomvermeldingen",
+  "settings.refSectionSubtitleStreams":
+    "— Geneste ondertitelstroomvermeldingen",
   "settings.refSubtitleStreamCodec": "Ondertitel codec per stroom",
   "settings.refSubtitleStreamLanguage": "Taalcode per stroom",
   "settings.refSubtitleStreamName":
@@ -2061,7 +2278,8 @@ const nl: LocaleDictionary = {
   "settings.subtitleProviderFacets": "Contenttypes",
   "settings.subtitleProviderFacetsHelp":
     "Scryer doorzoekt deze provider alleen voor de geselecteerde contenttypes. Pluginaanbevelingen vullen deze standaardwaarden in, maar beperken je keuzes niet.",
-  "settings.subtitleProviderEmpty": "Nog geen ondertitelproviders geconfigureerd.",
+  "settings.subtitleProviderEmpty":
+    "Nog geen ondertitelproviders geconfigureerd.",
   "settings.subtitleProviderCreate": "Ondertitelprovider toevoegen",
   "settings.subtitleProviderCreateNew": "Nieuwe ondertitelprovider maken",
   "settings.subtitleProviderEdit": "Ondertitelprovider bewerken",
@@ -2078,7 +2296,8 @@ const nl: LocaleDictionary = {
   "settings.subtitleProviderLastError": "Laatste fout {{time}}",
   "settings.subtitleProviderUnknownType":
     "Dit providertype is geïnstalleerd maar het veldschema is nog niet beschikbaar.",
-  "settings.subtitleProviderSecretStored": "Opgeslagen waarde behouden tenzij vervangen",
+  "settings.subtitleProviderSecretStored":
+    "Opgeslagen waarde behouden tenzij vervangen",
   "settings.sub.languages": "Ondertiteltalen",
   "settings.sub.languagePickerAriaLabel": "Ondertiteltalen selecteren",
   "settings.sub.languagePickerSelect": "Talen selecteren…",
@@ -2189,7 +2408,8 @@ const nl: LocaleDictionary = {
   "settings.port": "Poort",
   "settings.baseUrl": "Base URL",
   "settings.externalUrl": "Externe URL",
-  "settings.externalUrlHint": "Browser-URL voor Jellyfin- of Emby-afspeellinks.",
+  "settings.externalUrlHint":
+    "Browser-URL voor Jellyfin- of Emby-afspeellinks.",
   "label.watchIn": "Bekijken in",
   "settings.pluginsInstalled": "Geïnstalleerd",
   "settings.pluginsAvailable": "Beschikbaar",
@@ -2224,7 +2444,6 @@ const nl: LocaleDictionary = {
   "settings.pluginVerifiedCommunity": "Geverifieerde community",
   "settings.pluginUnverified": "Niet geverifieerd",
   "settings.pluginBeta": "Beta",
-  "settings.indexerSearchBetaNotice": "Indexer-zoeken is in bèta. Gedrag en resultaten kunnen tussen releases nog veranderen.",
   "settings.pluginDeprecated": "Verouderd",
   "settings.pluginSource": "Bron",
   "settings.pluginDocs": "Documentatie",
@@ -2235,10 +2454,12 @@ const nl: LocaleDictionary = {
   "settings.pluginManualUploadSelect": "Pluginbestand kiezen",
   "settings.pluginManualUploadInstall": "Bestand bekijken en installeren",
   "settings.pluginManualUploadNoFile": "Geen pluginbestand geselecteerd.",
-  "settings.pluginManualUploadFormats": "Geaccepteerde formaten: .wasm en .wasm.zst",
+  "settings.pluginManualUploadFormats":
+    "Geaccepteerde formaten: .wasm en .wasm.zst",
   "settings.pluginManualFileUnsupported":
     "Handmatige plugin-upload moet een .wasm- of .wasm.zst-bestand zijn.",
-  "settings.pluginManualUploadConfirmTitle": "Lokaal pluginbestand installeren?",
+  "settings.pluginManualUploadConfirmTitle":
+    "Lokaal pluginbestand installeren?",
   "settings.pluginManualUploadConfirmDescription":
     "Je gaat niet-geverifieerde lokale plugincode in Scryer uitvoeren. Installeer alleen bestanden die je zelf hebt gebouwd of expliciet vertrouwt.",
   "settings.pluginManualUploadConfirmCheckbox":
@@ -2253,7 +2474,8 @@ const nl: LocaleDictionary = {
   "settings.pluginVersion": "v{{version}}",
   "settings.pluginUpdateAvailable": "Update: v{{version}}",
   "settings.pluginUpgrade": "Upgraden naar v{{version}}",
-  "settings.pluginOptimizedBuildAvailable": "Geoptimaliseerde build beschikbaar",
+  "settings.pluginOptimizedBuildAvailable":
+    "Geoptimaliseerde build beschikbaar",
   "settings.pluginInstallOptimizedBuild": "Geoptimaliseerde build installeren",
 
   "status.pluginInstalled": "Plugin '{{name}}' geïnstalleerd.",
@@ -2269,8 +2491,10 @@ const nl: LocaleDictionary = {
     "Plugin '{{name}}' teruggezet naar de ingebouwde bundled versie.",
   "status.pluginUninstalled": "Plugin '{{name}}' gedeïnstalleerd.",
   "status.pluginUpgraded": "Plugin '{{name}}' geüpgraded naar v{{version}}.",
-  "status.pluginsUpgradeQueued": "Upgrades in wachtrij gezet voor {{count}} plugins.",
-  "status.pluginAutoUpdateSettingsSaved": "Instelling voor automatische plugin-updates opgeslagen.",
+  "status.pluginsUpgradeQueued":
+    "Upgrades in wachtrij gezet voor {{count}} plugins.",
+  "status.pluginAutoUpdateSettingsSaved":
+    "Instelling voor automatische plugin-updates opgeslagen.",
   "status.pluginToggled": "Plugin '{{name}}' {{state}}.",
   "status.catalogRefreshed": "Plugincatalogus vernieuwd.",
 
@@ -2294,12 +2518,14 @@ const nl: LocaleDictionary = {
   "qualityProfile.profileNameLabel": "Profielnaam",
   "qualityProfile.qualityTiersAndArchival":
     "Kwaliteitslagen en archiefkwaliteit",
-  "qualityProfile.allowedQualityTiers": "Toegestane kwaliteitslagen (geselecteerd)",
+  "qualityProfile.allowedQualityTiers":
+    "Toegestane kwaliteitslagen (geselecteerd)",
   "qualityProfile.noQualityTiersSelected": "Geen kwaliteitslagen geselecteerd.",
   "qualityProfile.removeQualityTier": "{{value}} kwaliteitslaag verwijderen",
   "qualityProfile.addQualityTier": "{{value}} aan selectie toevoegen",
   "qualityProfile.availableQualityTiers": "Beschikbare kwaliteitslagen",
-  "qualityProfile.allQualityTiersSelected": "Alle bekende kwaliteitslagen geselecteerd.",
+  "qualityProfile.allQualityTiersSelected":
+    "Alle bekende kwaliteitslagen geselecteerd.",
   "qualityProfile.archivalQuality": "Archiefkwaliteit",
   "qualityProfile.archivalQualityInfo":
     "Het kwaliteitsniveau om langdurig te bewaren. Scryer kan eerst een hogere kwaliteit downloaden als er nog geen archiefkwaliteit is, en die later vervangen wanneer de release in archiefkwaliteit wordt gevonden.",
@@ -2341,7 +2567,8 @@ const nl: LocaleDictionary = {
     "Standaard geen geblokkeerde audio codecs.",
   "qualityProfile.noSelectedItems": "Niets geselecteerd.",
   "qualityProfile.aboutSection": "Over {{title}}",
-  "qualityProfile.useDefaultQualityFallback": "Standaard kwaliteitsfallback gebruiken",
+  "qualityProfile.useDefaultQualityFallback":
+    "Standaard kwaliteitsfallback gebruiken",
   "qualityProfile.defaultCategoryProfiles": "Standaard categorieprofielen",
   "qualityProfile.scoringAndPreferences": "Scoring & voorkeuren",
   "qualityProfile.scoringAndPreferencesInfo":
@@ -2395,7 +2622,8 @@ const nl: LocaleDictionary = {
   "episode.numberLabel": "Aflevering",
   "episode.quality": "Kwaliteit",
   "episode.missing": "Ontbreekt",
-  "episode.noBlockedReleases": "Geen geblokkeerde releases geregistreerd voor deze aflevering.",
+  "episode.noBlockedReleases":
+    "Geen geblokkeerde releases geregistreerd voor deze aflevering.",
   "episode.untitledRelease": "Naamloze release",
   "episode.filler": "Filler",
   "episode.recap": "Recap",
@@ -2407,10 +2635,13 @@ const nl: LocaleDictionary = {
   "seasonSection.noEpisodeRecords": "Geen afleveringsrecords voor dit seizoen.",
   "seriesOverview.selectColumn": "Selecteren",
   "seriesOverview.selectEpisodeForDelete": "{{name}} selecteren",
-  "seriesOverview.selectSeasonForDelete": "Alle afleveringen in {{name}} selecteren",
+  "seriesOverview.selectSeasonForDelete":
+    "Alle afleveringen in {{name}} selecteren",
   "seriesOverview.clearEpisodeSelection": "Selectie wissen",
-  "seriesOverview.deleteSelectedEpisodeFiles": "{{count}} geselecteerde verwijderen",
-  "seriesOverview.deleteEpisodeFilesTitle": "Geselecteerde afleveringsbestanden verwijderen",
+  "seriesOverview.deleteSelectedEpisodeFiles":
+    "{{count}} geselecteerde verwijderen",
+  "seriesOverview.deleteEpisodeFilesTitle":
+    "Geselecteerde afleveringsbestanden verwijderen",
   "seriesOverview.deleteEpisodeFilesDescription":
     "Dit verwijdert permanent de bestanden op schijf voor de geselecteerde afleveringen. Afleveringsrecords blijven behouden.",
   "seriesOverview.deleteEpisodeFilesSummary":
@@ -2516,7 +2747,8 @@ const nl: LocaleDictionary = {
   "status.requestSubmitted": "Aanvraag ingediend voor {{name}}.",
   "status.queueSuccess": "{{name}} in wachtrij gezet",
   "status.primaryMovieFileUpdated": "Primair filmbestand bijgewerkt",
-  "status.episodeFilesDeleteQueued": "Verwijdering van {{count}} afleveringsbestanden in wachtrij gezet",
+  "status.episodeFilesDeleteQueued":
+    "Verwijdering van {{count}} afleveringsbestanden in wachtrij gezet",
   "status.episodeFilesDeleted": "{{count}} afleveringsbestanden verwijderd",
   "status.queuedLatest": "Laatste release voor {{name}} in wachtrij gezet",
   "status.nothingFound": "Geen resultaten gevonden.",
@@ -2534,7 +2766,8 @@ const nl: LocaleDictionary = {
     "{{name}} uit catalogus verwijderen? Gebruik de optie hieronder om ook lokale bestanden te verwijderen.",
   "status.titleDeleted": "{{name}} uit catalogus verwijderd.",
   "status.bulkMonitorSuccess": "{{count}} titels gemonitord.",
-  "status.bulkMonitorPartial": "{{count}} titels gemonitord; {{failed}} mislukt.",
+  "status.bulkMonitorPartial":
+    "{{count}} titels gemonitord; {{failed}} mislukt.",
   "status.bulkMonitorFailed": "Kon geselecteerde titels niet monitoren.",
   "status.bulkUnmonitorSuccess": "{{count}} titels niet meer gemonitord.",
   "status.bulkUnmonitorPartial":
@@ -2561,7 +2794,8 @@ const nl: LocaleDictionary = {
   "status.editingDownloadClient": "Downloadclient {{name}} bewerken",
   "status.editingSubtitleProvider": "Ondertitelprovider {{name}} bewerken",
   "status.deletingUser": "Gebruiker {{name}} verwijderen?",
-  "status.deletingUserListsWarning": "De lijsten die deze gebruiker volgt en hun synchronisatiegeschiedenis worden ook verwijderd.",
+  "status.deletingUserListsWarning":
+    "De lijsten die deze gebruiker volgt en hun synchronisatiegeschiedenis worden ook verwijderd.",
   "status.userLoginEnabled": "Login ingeschakeld voor {{name}}.",
   "status.userLoginDisabled": "Login uitgeschakeld voor {{name}}.",
   "status.deletingIndexer": "Indexer {{name}} verwijderen?",
@@ -2584,35 +2818,58 @@ const nl: LocaleDictionary = {
   "status.titleMonitoringEnabled": "Titelmonitoring ingeschakeld.",
   "status.titleMonitoringDisabled": "Titelmonitoring uitgeschakeld.",
   "status.indexerDeleted": "Indexer {{name}} verwijderd.",
-  "plugins.failure.invalidConfig": "De plug-in kan deze instellingen niet gebruiken. Controleer ze en probeer het opnieuw.",
-  "plugins.failure.authFailed": "De dienst heeft de inloggegevens geweigerd. Controleer de API-sleutel, gebruikersnaam of het wachtwoord.",
-  "plugins.failure.rateLimited": "De dienst vroeg Scryer om het rustiger aan te doen. Probeer het over een tijdje opnieuw.",
-  "plugins.failure.upstreamUnavailable": "De dienst was niet bereikbaar of gaf geen antwoord. Controleer het adres en probeer het opnieuw.",
+  "plugins.failure.invalidConfig":
+    "De plug-in kan deze instellingen niet gebruiken. Controleer ze en probeer het opnieuw.",
+  "plugins.failure.authFailed":
+    "De dienst heeft de inloggegevens geweigerd. Controleer de API-sleutel, gebruikersnaam of het wachtwoord.",
+  "plugins.failure.rateLimited":
+    "De dienst vroeg Scryer om het rustiger aan te doen. Probeer het over een tijdje opnieuw.",
+  "plugins.failure.upstreamUnavailable":
+    "De dienst was niet bereikbaar of gaf geen antwoord. Controleer het adres en probeer het opnieuw.",
   "plugins.failure.unsupported": "De plug-in ondersteunt dit niet.",
-  "plugins.failure.temporary": "De plug-in liep tegen een tijdelijk probleem aan. Probeer het over een tijdje opnieuw.",
-  "plugins.failure.permanent": "De plug-in kon dit verzoek niet uitvoeren. Opnieuw proberen helpt pas als er iets verandert.",
-  "plugins.failure.hostFailure": "De plug-in is onverwacht gestopt. Het Scryer-logboek bevat de details.",
-  "plugins.failure.timedOut": "De plug-in deed er te lang over om te antwoorden.",
+  "plugins.failure.temporary":
+    "De plug-in liep tegen een tijdelijk probleem aan. Probeer het over een tijdje opnieuw.",
+  "plugins.failure.permanent":
+    "De plug-in kon dit verzoek niet uitvoeren. Opnieuw proberen helpt pas als er iets verandert.",
+  "plugins.failure.hostFailure":
+    "De plug-in is onverwacht gestopt. Het Scryer-logboek bevat de details.",
+  "plugins.failure.timedOut":
+    "De plug-in deed er te lang over om te antwoorden.",
   "plugins.failure.resourceLimit": "De plug-in had onvoldoende geheugen.",
   "plugins.failure.withDetail": "{{reason}} Details: {{detail}}",
-  "plugins.failure.invalidUsernamePassword": "De dienst heeft de gebruikersnaam of het wachtwoord geweigerd. Controleer beide en probeer het opnieuw.",
-  "plugins.failure.invalidApiKey": "De dienst heeft de API-sleutel geweigerd. Controleer de sleutel en probeer het opnieuw.",
-  "plugins.failure.invalidPasskey": "De dienst heeft de passkey geweigerd. Controleer de passkey en probeer het opnieuw.",
-  "plugins.failure.invalidCookie": "De dienst heeft de sessiecookie geweigerd. Kopieer een nieuwe cookie uit je browser en probeer het opnieuw.",
-  "plugins.failure.captchaRequired": "De dienst vraagt om een CAPTCHA. Log één keer in op de website van de dienst en probeer het daarna opnieuw.",
-  "plugins.failure.twoFactorRequired": "De dienst vereist een tweestapsverificatiecode voor deze aanmelding. Gebruik in plaats daarvan een API-sleutel of app-wachtwoord.",
-  "plugins.failure.accountBanned": "De dienst heeft dit account verbannen. Neem contact op met de dienst om dit op te lossen.",
-  "plugins.failure.accountDisabled": "De dienst heeft dit account uitgeschakeld. Controleer het account op de website van de dienst.",
-  "plugins.failure.endpointNotFound": "De dienst is niet gevonden op dit adres. Controleer de URL en het basispad.",
-  "plugins.failure.tlsError": "Een beveiligde verbinding met de dienst is mislukt. Controleer het adres en het certificaat.",
-  "plugins.failure.invalidResponse": "De dienst stuurde een antwoord dat de plug-in niet kon lezen. Controleer of het adres naar de juiste dienst verwijst.",
-  "plugins.failure.quotaExceeded": "Het account heeft zijn quotum bij de dienst opgebruikt. Wacht tot het wordt gereset of verhoog de limiet.",
+  "plugins.failure.invalidUsernamePassword":
+    "De dienst heeft de gebruikersnaam of het wachtwoord geweigerd. Controleer beide en probeer het opnieuw.",
+  "plugins.failure.invalidApiKey":
+    "De dienst heeft de API-sleutel geweigerd. Controleer de sleutel en probeer het opnieuw.",
+  "plugins.failure.invalidPasskey":
+    "De dienst heeft de passkey geweigerd. Controleer de passkey en probeer het opnieuw.",
+  "plugins.failure.invalidCookie":
+    "De dienst heeft de sessiecookie geweigerd. Kopieer een nieuwe cookie uit je browser en probeer het opnieuw.",
+  "plugins.failure.captchaRequired":
+    "De dienst vraagt om een CAPTCHA. Log één keer in op de website van de dienst en probeer het daarna opnieuw.",
+  "plugins.failure.twoFactorRequired":
+    "De dienst vereist een tweestapsverificatiecode voor deze aanmelding. Gebruik in plaats daarvan een API-sleutel of app-wachtwoord.",
+  "plugins.failure.accountBanned":
+    "De dienst heeft dit account verbannen. Neem contact op met de dienst om dit op te lossen.",
+  "plugins.failure.accountDisabled":
+    "De dienst heeft dit account uitgeschakeld. Controleer het account op de website van de dienst.",
+  "plugins.failure.endpointNotFound":
+    "De dienst is niet gevonden op dit adres. Controleer de URL en het basispad.",
+  "plugins.failure.tlsError":
+    "Een beveiligde verbinding met de dienst is mislukt. Controleer het adres en het certificaat.",
+  "plugins.failure.invalidResponse":
+    "De dienst stuurde een antwoord dat de plug-in niet kon lezen. Controleer of het adres naar de juiste dienst verwijst.",
+  "plugins.failure.quotaExceeded":
+    "Het account heeft zijn quotum bij de dienst opgebruikt. Wacht tot het wordt gereset of verhoog de limiet.",
   "plugins.failure.itemNotFound": "De dienst heeft dit item niet meer.",
-  "plugins.failure.downloadRejected": "De downloadclient heeft deze download geweigerd.",
-  "plugins.failure.pathNotWritable": "De plug-in kon niet schrijven naar de ingestelde map. Controleer of de map bestaat en beschrijfbaar is.",
+  "plugins.failure.downloadRejected":
+    "De downloadclient heeft deze download geweigerd.",
+  "plugins.failure.pathNotWritable":
+    "De plug-in kon niet schrijven naar de ingestelde map. Controleer of de map bestaat en beschrijfbaar is.",
   "plugins.failure.unknown": "De plug-in heeft een probleem gemeld: {{code}}.",
   "status.testingIndexerConnection": "Verbinding testen…",
-  "status.indexerConnectionTestPassed": "Verbindingstest voor indexer geslaagd.",
+  "status.indexerConnectionTestPassed":
+    "Verbindingstest voor indexer geslaagd.",
   "status.indexerConnectionTestFailed": "Verbindingstest voor indexer mislukt.",
   "status.testingSubtitleProviderConnection":
     "Verbinding met ondertitelprovider testen…",
@@ -2632,7 +2889,8 @@ const nl: LocaleDictionary = {
   "status.plexServersDiscovered": "Plex-servers geladen.",
   "status.editingMediaServer": "Mediaserver {{name}} bewerken",
   "status.deletingMediaServer": "Mediaserver {{name}} verwijderen?",
-  "status.testingMediaServerConnection": "Verbinding met mediaserver {{server}} testen…",
+  "status.testingMediaServerConnection":
+    "Verbinding met mediaserver {{server}} testen…",
   "status.mediaServerConnectionTestPassed":
     "Verbindingstest voor mediaserver {{server}} geslaagd.",
   "status.mediaServerConnectionTestFailed":
@@ -2650,12 +2908,13 @@ const nl: LocaleDictionary = {
     "{{client}}-verbindingstest geslaagd.",
   "status.downloadClientConnectionTestFailed":
     "{{client}}-verbindingstest mislukt.",
-  "status.autoSearchNoCandidates": "Geen release gevonden voor {{name}}: geen indexer gaf een candidate terug. Controleer indexer routing-categorieën en indexerstatus.",
-  "status.autoSearchAllRejected": "Geen release gevonden voor {{name}}: automatisch zoeken wees alle {{count}} candidates af. {{reasons}}",
+  "status.autoSearchNoCandidates":
+    "Geen release gevonden voor {{name}}: geen indexer gaf een candidate terug. Controleer indexer routing-categorieën en indexerstatus.",
+  "status.autoSearchAllRejected":
+    "Geen release gevonden voor {{name}}: automatisch zoeken wees alle {{count}} candidates af. {{reasons}}",
   "status.queueFailed": "Wachtrijoperatie mislukt.",
   "status.apiError": "Verzoek mislukt",
   "status.permissionDenied": "Je hebt geen permissie voor deze actie.",
-
 
   "user.created": "Gebruiker {{name}} aangemaakt.",
   "user.permissionsUpdated": "Permissies bijgewerkt voor {{name}}.",
@@ -2745,7 +3004,8 @@ const nl: LocaleDictionary = {
   "profile.linkAccountConnection": "Verbinding",
   "profile.linkAccountUsername": "Gebruikersnaam",
   "profile.linkAccountPassword": "Wachtwoord",
-  "profile.linkAccountPasswordlessHint": "Laat leeg als dit Jellyfin-account geen wachtwoord heeft. Accounts zonder wachtwoord kunnen worden gekoppeld, maar niet gebruikt om in te loggen op Scryer.",
+  "profile.linkAccountPasswordlessHint":
+    "Laat leeg als dit Jellyfin-account geen wachtwoord heeft. Accounts zonder wachtwoord kunnen worden gekoppeld, maar niet gebruikt om in te loggen op Scryer.",
   "profile.linkAccountSubmit": "Account koppelen",
   "profile.linkAccountCancel": "Annuleren",
   "profile.linkAccountNoConnections": "Geen geschikte verbinding beschikbaar.",
@@ -2835,14 +3095,18 @@ const nl: LocaleDictionary = {
   "wanted.colIndexers": "Indexers",
   "wanted.convergence.searching": "Zoeken {{covered}}/{{routed}}",
   "wanted.convergence.converged": "RSS volgen",
-  "wanted.convergence.convergedHint": "Alle indexers doorzocht — nieuwe releases komen via RSS. Voer een zoekactie uit om opnieuw te controleren.",
+  "wanted.convergence.convergedHint":
+    "Alle indexers doorzocht — nieuwe releases komen via RSS. Voer een zoekactie uit om opnieuw te controleren.",
   "wanted.convergence.deferred": "Wachten op indexer quota",
-  "wanted.convergence.deferredHint": "Alle resterende indexers zijn aan het afkoelen of zonder quota; zoeken hervat automatisch.",
+  "wanted.convergence.deferredHint":
+    "Alle resterende indexers zijn aan het afkoelen of zonder quota; zoeken hervat automatisch.",
   "wanted.convergence.queuedHot": "In wachtrij · recent",
   "wanted.convergence.queuedCold": "In wachtrij · long tail",
   "wanted.searchJobStarted": "Zoekactie gestart.",
-  "wanted.searchJobComplete": "Zoekactie voltooid: {{processed}} doorzocht, {{grabbed}} opgehaald, {{failed}} mislukt.",
-  "wanted.searchJobCancelled": "Zoekactie geannuleerd na {{processed}} item(s); {{grabbed}} opgehaald.",
+  "wanted.searchJobComplete":
+    "Zoekactie voltooid: {{processed}} doorzocht, {{grabbed}} opgehaald, {{failed}} mislukt.",
+  "wanted.searchJobCancelled":
+    "Zoekactie geannuleerd na {{processed}} item(s); {{grabbed}} opgehaald.",
   "wanted.colPhase": "Fase",
   "wanted.colLatestDecision": "Laatste beslissing",
   "wanted.colScore": "Score",
@@ -2864,7 +3128,8 @@ const nl: LocaleDictionary = {
   "wanted.decision.ambiguousIdentity": "Onduidelijke identiteit",
   "wanted.decision.qualityBlocked": "Geblokkeerd door kwaliteit",
   "wanted.decision.minimumSeeders": "Te weinig seeders",
-  "wanted.decision.packBelowMissingThreshold": "Pack onder drempel voor ontbrekende items",
+  "wanted.decision.packBelowMissingThreshold":
+    "Pack onder drempel voor ontbrekende items",
   "wanted.decision.upgradeRejected": "Upgrade afgewezen",
   "wanted.decision.pendingDelay": "Wacht op vertraging",
   "wanted.decision.alreadyActive": "Al actief",
@@ -2876,8 +3141,10 @@ const nl: LocaleDictionary = {
   "wanted.loadingDecisions": "Releasebeslissingen laden…",
   "wanted.noDecisions": "Nog geen releasebeslissingen vastgelegd.",
   "wanted.standby": "Reserve · {{count}}",
-  "wanted.standbyTooltip": "{{count}} opgeslagen kandidaten worden geprobeerd als de huidige poging om te ophalen mislukt.",
-  "wanted.standbyScopeNote": "Telt rijen binnen dit bereik; seizoenspakketten worden geteld op de ankeraflevering van het seizoen.",
+  "wanted.standbyTooltip":
+    "{{count}} opgeslagen kandidaten worden geprobeerd als de huidige poging om te ophalen mislukt.",
+  "wanted.standbyScopeNote":
+    "Telt rijen binnen dit bereik; seizoenspakketten worden geteld op de ankeraflevering van het seizoen.",
   "wanted.loadingStandby": "Opgeslagen kandidaten laden…",
   "wanted.standbyCandidates": "Standby-kandidaten · {{count}}",
   "wanted.standbyRank": "Rang {{rank}}",
@@ -2891,7 +3158,8 @@ const nl: LocaleDictionary = {
   "wanted.noItems": "Geen gewenste items gevonden.",
   "wanted.context.movie": "Gewenst filmitem",
   "wanted.context.episode": "Gewenst afleveringsitem",
-  "wanted.context.seasonEpisode": "Gewenst afleveringsitem seizoen {{seasonNumber}}",
+  "wanted.context.seasonEpisode":
+    "Gewenst afleveringsitem seizoen {{seasonNumber}}",
   "wanted.context.seriesMovie": "Gewenst seriesfilmitem",
   "wanted.prev": "Vorige",
   "wanted.next": "Volgende",
@@ -2921,7 +3189,6 @@ const nl: LocaleDictionary = {
   "cutoff.filterFacet": "Type",
   "cutoff.allFacets": "Alle types",
   "cutoff.searchTriggered": "Upgrade-zoekactie gestart voor {{name}}",
-
 
   "settings.notifications": "Meldingen",
   "settings.notificationChannels": "Kanalen",
@@ -2975,7 +3242,8 @@ const nl: LocaleDictionary = {
   "settings.notificationEvent.postProcessingCompleted":
     "Post-processing voltooid",
   "settings.notificationEvent.subtitleDownloaded": "Ondertitel gedownload",
-  "settings.notificationEvent.subtitleSearchFailed": "Ondertitelzoekactie mislukt",
+  "settings.notificationEvent.subtitleSearchFailed":
+    "Ondertitelzoekactie mislukt",
   "settings.notificationEvent.mediaRequestSubmitted": "Mediaverzoek ingediend",
   "settings.notificationEvent.mediaRequestApproved": "Mediaverzoek goedgekeurd",
   "settings.notificationEvent.mediaRequestRejected": "Mediaverzoek afgewezen",
@@ -2996,10 +3264,8 @@ const nl: LocaleDictionary = {
   "status.notificationChannelUpdated": "Meldingskanaal bijgewerkt.",
   "status.notificationChannelDeleted": "Meldingskanaal {{name}} verwijderd.",
   "status.notificationSubscriptionCreated": "Meldingsabonnement opgeslagen.",
-  "status.notificationSubscriptionUpdated":
-    "Meldingsabonnement bijgewerkt.",
-  "status.notificationSubscriptionDeleted":
-    "Meldingsabonnement verwijderd.",
+  "status.notificationSubscriptionUpdated": "Meldingsabonnement bijgewerkt.",
+  "status.notificationSubscriptionDeleted": "Meldingsabonnement verwijderd.",
   "status.editingNotificationChannel": "Kanaal {{name}} bewerken",
   "status.deletingNotificationChannel": "Meldingskanaal {{name}} verwijderen?",
   "status.editingNotificationSubscription": "Abonnement bewerken",
@@ -3024,13 +3290,12 @@ const nl: LocaleDictionary = {
   "pending.forceGrab": "Nu ophalen",
   "pending.dismiss": "Negeren",
   "pending.grabbed": "Release opgehaald.",
-  "pending.grabRejected": "Ophalen afgewezen — de release is geblokkeerd of niet beschikbaar.",
+  "pending.grabRejected":
+    "Ophalen afgewezen — de release is geblokkeerd of niet beschikbaar.",
   "pending.dismissed": "Release genegeerd.",
 
-
   "setup.welcomeTitle": "Welkom bij Scryer",
-  "setup.welcomeDescription":
-    "Laten we de basis instellen om te beginnen.",
+  "setup.welcomeDescription": "Laten we de basis instellen om te beginnen.",
   "setup.freshSetup": "Opnieuw instellen",
   "setup.freshSetupDescription":
     "Configureer mediapaden, installeer providers zoals qBittorrent, en voeg clients en indexers stap voor stap toe.",
@@ -3055,14 +3320,14 @@ const nl: LocaleDictionary = {
   "setup.restoreDropTargetTitle": "Sleep een backupbundel hierheen",
   "setup.restoreDropTargetDescription":
     "Kies een backupbestand op je apparaat of sleep het hierheen om te inspecteren voordat je herstelt.",
-  "setup.restoreDropTargetSelected": "Bundel geselecteerd en klaar om te inspecteren.",
+  "setup.restoreDropTargetSelected":
+    "Bundel geselecteerd en klaar om te inspecteren.",
   "setup.restoreDropTargetEncryptedSelected":
     "Versleutelde bundel geselecteerd. Voer het wachtwoord in dat je bij het maken van de backup hebt gebruikt om door te gaan.",
-  "setup.restoreDropTargetFormats": "Ondersteunde formaten: .tar.zst en .enc",
+  "setup.restoreDropTargetFormats":
+    "Alleen versleutelde .enc-back-ups worden ondersteund.",
   "setup.restoreSelectFile": "Bestand selecteren",
   "setup.restoreClearFile": "Selectie wissen",
-  "setup.restorePasswordHelp":
-    "Voer het wachtwoord in dat je hebt gebruikt toen deze versleutelde backup werd gemaakt.",
   "setup.restoreNoFile": "Kies een backupbundel om door te gaan.",
   "setup.restorePasswordRequired":
     "Voer het bundelwachtwoord in voordat je doorgaat.",
@@ -3197,7 +3462,8 @@ const nl: LocaleDictionary = {
   "setup.sourcesDescription":
     "Kies welke downloadclients en indexers je wilt overnemen.",
   "setup.importReadyTitle": "Klaar om te importeren",
-  "setup.importReadyDescription": "Controleer alles voordat Scryer het overneemt.",
+  "setup.importReadyDescription":
+    "Controleer alles voordat Scryer het overneemt.",
   // Connect (instances)
   "setup.addInstance": "{{product}} toevoegen",
   "setup.instanceName": "Instantienaam",
@@ -3264,13 +3530,15 @@ const nl: LocaleDictionary = {
   "setup.qualityNoLibraries":
     "Map minstens één bronroot naar een bibliotheek om de kwaliteit in te stellen.",
   "setup.persona.balanced.name": "Gebalanceerd",
-  "setup.persona.balanced.desc": "Degelijke kwaliteit met een redelijke grootte",
+  "setup.persona.balanced.desc":
+    "Degelijke kwaliteit met een redelijke grootte",
   "setup.persona.audiophile.name": "Audiofiel",
   "setup.persona.audiophile.desc": "Maximale getrouwheid, grotere bestanden",
   "setup.persona.efficient.name": "Efficiënt",
   "setup.persona.efficient.desc": "Kleinere encodes, schijfruimte besparen",
   "setup.persona.compatible.name": "Compatibel",
-  "setup.persona.compatible.desc": "Direct-play vriendelijk, brede ondersteuning",
+  "setup.persona.compatible.desc":
+    "Direct-play vriendelijk, brede ondersteuning",
   // Sources
   "setup.downloadClients": "Downloadclients",
   "setup.indexers": "Indexers",
@@ -3286,11 +3554,13 @@ const nl: LocaleDictionary = {
   "setup.summaryLibraries": "Bibliotheken",
   "setup.summaryLibrariesDetail": "Over films, series en anime",
   "setup.summaryInstancesConnected": "Instanties verbonden",
-  "setup.summaryInstancesConnectedDetail": "{{sonarr}} Sonarr · {{radarr}} Radarr",
+  "setup.summaryInstancesConnectedDetail":
+    "{{sonarr}} Sonarr · {{radarr}} Radarr",
   "setup.summaryRootsMapped": "Bronroots gemapt",
   "setup.summaryRootsMappedDetail": "Doorgestuurd naar een Scryer-bibliotheek",
   "setup.summaryPathsRemapped": "Paden geremapt",
-  "setup.summaryPathsRemappedDetail": "Provenance behouden voor gemonitorde status",
+  "setup.summaryPathsRemappedDetail":
+    "Provenance behouden voor gemonitorde status",
   "setup.summaryClientsMerged": "Samengevoegd over instanties",
   "setup.summaryIndexersEnabled": "Ondersteund en ingeschakeld",
   "setup.fetchingMonitoredStatus": "Gemonitorde status ophalen…",
@@ -3303,7 +3573,8 @@ const nl: LocaleDictionary = {
     "Import kan niet voltooien tot de synchronisatie van de gemonitorde status klaar is.",
   "setup.importGateDoneHint": "Klaar — je kunt de import nu voltooien.",
   "setup.titlesFetched": "{{fetched}} / {{total}} titels",
-  "setup.importWarmupFailedTitle": "Synchronisatie van gemonitorde status mislukt",
+  "setup.importWarmupFailedTitle":
+    "Synchronisatie van gemonitorde status mislukt",
   "setup.importWarmupFailedDetail":
     "Scryer kon de gemonitorde status niet volledig ophalen van je instanties. Controleer de verbindingen en probeer het opnieuw.",
   "setup.importWarmupRetrying": "Synchronisatie opnieuw starten…",
@@ -3348,6 +3619,7 @@ const nl: LocaleDictionary = {
   "history.seedingStarted": "Seeden",
   "history.seedingCompleted": "Seeden voltooid",
   "history.downloadIgnored": "Genegeerd",
+  "history.downloadMissing": "Niet zichtbaar in client",
   "history.facet": "Facet",
   "history.actions": "Acties",
   "history.expandDetails": "Gebeurtenisdetails uitklappen",
@@ -3369,9 +3641,12 @@ const nl: LocaleDictionary = {
   "indexerErrors.loadingResponse": "Vastgelegde response laden…",
   "indexerErrors.loadMore": "Meer laden",
   "indexerErrors.noMore": "Geen vastgelegde responses meer",
-  "indexerErrors.loadError": "Indexer-foutgeschiedenis kon niet worden geladen.",
-  "indexerErrors.detailLoadError": "De vastgelegde response kon niet worden geladen.",
-  "indexerErrors.detailMissing": "Deze vastgelegde response is niet meer beschikbaar.",
+  "indexerErrors.loadError":
+    "Indexer-foutgeschiedenis kon niet worden geladen.",
+  "indexerErrors.detailLoadError":
+    "De vastgelegde response kon niet worden geladen.",
+  "indexerErrors.detailMissing":
+    "Deze vastgelegde response is niet meer beschikbaar.",
   "indexerErrors.empty":
     "Geen indexerfouten vastgelegd in de laatste 30 dagen.",
   "indexerErrors.retentionNotice":
@@ -3387,7 +3662,8 @@ const nl: LocaleDictionary = {
   "indexerErrors.expand": "Vastgelegde response uitklappen",
   "indexerErrors.collapse": "Vastgelegde response inklappen",
   "indexerErrors.response": "Vastgelegde HTTP-response",
-  "indexerErrors.noHttpResponse": "Geen HTTP-response ontvangen; deze transportfout heeft alleen diagnostische details.",
+  "indexerErrors.noHttpResponse":
+    "Geen HTTP-response ontvangen; deze transportfout heeft alleen diagnostische details.",
   "indexerErrors.headers": "Responseheaders",
   "indexerErrors.noHeaders": "Geen responseheaders vastgelegd.",
   "indexerErrors.body": "Responsebody",
@@ -3406,8 +3682,6 @@ const nl: LocaleDictionary = {
 
   // Recycle Bin
   "settings.autoBackupsTitle": "Automatische backups",
-  "settings.autoBackupsDescription":
-    "Schakel één systeembackup per dag in op een serverlokale tijd. Automatische backups time-outen na 30 minuten en Scryer bewaart de laatste 5 succesvolle automatische backups.",
   "settings.autoBackupsDisabledMissingKeyToastTitle":
     "Automatische backups zijn uitgeschakeld",
   "settings.autoBackupsDisabledMissingKeyToastDescription":
@@ -3416,17 +3690,11 @@ const nl: LocaleDictionary = {
   "settings.autoBackupsTime": "Dagelijkse backuptijd",
   "settings.autoBackupsHour": "Uur",
   "settings.autoBackupsMinute": "Minuut",
-  "settings.autoBackupsTimeHelp": "Gebruikt de lokale tijdzone van de server.",
   "settings.autoBackupsNextRun": "Volgende automatische backup",
-  "settings.autoBackupsNextRunHelp":
-    "Sla je wijzigingen op om de planner bij te werken. Uitgeschakelde automatische backups worden niet uitgevoerd.",
   "settings.autoBackupsKeyLabel": "Automatische backupsleutel",
   "settings.autoBackupsKeyHelpLabel": "Over de automatische backupsleutel",
   "settings.autoBackupsSetKey": "Automatische backupsleutel instellen",
   "settings.autoBackupsKeyAlreadySetHint": "(backupsleutel al ingesteld)",
-  "settings.autoBackupsClearKey": "Opgeslagen automatische backupsleutel wissen",
-  "settings.autoBackupsClearKeyHelp":
-    "Verwijdert de opgeslagen sleutel nadat je opslaat. Schakel automatische backups uit voordat je de sleutel wist.",
   "settings.autoBackupsKeyHelp":
     "Laat het veld leeg om de bestaande opgeslagen sleutel te behouden. Voer een nieuwe waarde in van minstens {{count}} niet-witruimtetekens om ze te vervangen.",
   "settings.autoBackupsKeyRequired":
@@ -3435,15 +3703,12 @@ const nl: LocaleDictionary = {
     "Automatische backupsleutels moeten minstens {{count}} niet-witruimtetekens bevatten.",
   "settings.autoBackupsShowKey": "Automatische backupsleutel tonen",
   "settings.autoBackupsHideKey": "Automatische backupsleutel verbergen",
-  "settings.autoBackupsSaved": "Instellingen voor automatische backups opgeslagen.",
+  "settings.autoBackupsSaved":
+    "Instellingen voor automatische backups opgeslagen.",
   "settings.backupLocationTitle": "Backuplocatie",
-  "settings.backupLocationDescription":
-    "Kies waar Scryer backupbundles op de server opslaat.",
   "settings.backupLocationCustomPath": "Aangepast backuppad",
   "settings.backupLocationBrowse": "Bladeren",
   "settings.backupLocationEffectivePath": "Actief pad",
-  "settings.backupLocationHelp":
-    "Gebruik een server- of containerpad. Als je dit wijzigt, wisselt de actieve backupmap; bestaande backups worden niet verplaatst en zijn verborgen tot je terugschakelt.",
   "settings.backupLocationReset": "Standaard gebruiken",
   "settings.backupLocationPickerTitle": "Backupmap selecteren",
   "settings.backupLocationSaved": "Backuplocatie opgeslagen.",
@@ -3454,15 +3719,13 @@ const nl: LocaleDictionary = {
   "settings.backupsCreateTitle": "Backupbundle maken",
   "settings.backupsCreateDescription":
     "Beveilig deze backup met een wachtwoord. Hetzelfde wachtwoord is vereist bij het herstellen.",
-  "settings.backupsRequiredPassword": "Verplichte wachtwoordbeveiliging",
   "settings.backupsConfirmPassword": "Wachtwoord bevestigen",
   "settings.backupsPasswordMismatch": "Wachtwoorden komen niet overeen",
-  "settings.backupsPasswordHelp":
-    "Volledige backupbundles bevatten instantiesecrets en moeten versleuteld zijn.",
   "settings.backupsQueued": "Backup maken gestart op de achtergrond.",
   "settings.backupsDeleted": "Backup verwijderd.",
   "settings.backupsDeletedCount": "{{count}} backup(s) verwijderd.",
-  "settings.backupsDeleteFailedCount": "{{count}} backup(s) verwijderen mislukt.",
+  "settings.backupsDeleteFailedCount":
+    "{{count}} backup(s) verwijderen mislukt.",
   "settings.backupsCreating": "Maken",
   "settings.backupsReady": "Klaar",
   "settings.backupsInvalid": "Ongeldig",
@@ -3505,50 +3768,68 @@ const nl: LocaleDictionary = {
   "settings.recycleBinRecycled": "Gerecycled",
   "settings.recycleBinScheduledDeletion": "Geplande verwijdering",
   "settings.recycleBinFilterPlaceholder": "Filteren op bestands- of titelnaam",
-  "settings.recycleBinFilterAria": "Prullenbakbestanden filteren op bestands- of titelnaam",
+  "settings.recycleBinFilterAria":
+    "Prullenbakbestanden filteren op bestands- of titelnaam",
   "settings.recycleBinSelectedCount": "{{count}} geselecteerd",
   "settings.recycleBinRestoreSelected": "Geselecteerde herstellen",
   "settings.recycleBinDeleteSelected": "Geselecteerde verwijderen",
   "settings.recycleBinClearSelection": "Selectie wissen",
-  "settings.recycleBinNoFilterMatches": "Geen prullenbakbestanden passen bij dit filter.",
-  "settings.recycleBinSelectAllFiltered": "Alle gefilterde prullenbakbestanden selecteren",
+  "settings.recycleBinNoFilterMatches":
+    "Geen prullenbakbestanden passen bij dit filter.",
+  "settings.recycleBinSelectAllFiltered":
+    "Alle gefilterde prullenbakbestanden selecteren",
   "settings.recycleBinSelectTitle": "{{title}} selecteren",
   "settings.recycleBinSelectFile": "{{name}} selecteren",
   "settings.recycleBinUnassociatedFiles": "Niet-gekoppelde bestanden",
   "settings.recycleBinFileCountOne": "{{count}} bestand",
   "settings.recycleBinFileCountOther": "{{count}} bestanden",
-  "settings.recycleBinBatchLimit": "Selecteer maximaal {{count}} prullenbakbestanden per keer.",
-  "settings.recycleBinRestoreQueuedOne": "Herstel in wachtrij gezet voor {{count}} prullenbakbestand.",
-  "settings.recycleBinRestoreQueuedOther": "Herstel in wachtrij gezet voor {{count}} prullenbakbestanden.",
-  "settings.recycleBinDeleteQueuedOne": "Verwijdering in wachtrij gezet voor {{count}} prullenbakbestand.",
-  "settings.recycleBinDeleteQueuedOther": "Verwijdering in wachtrij gezet voor {{count}} prullenbakbestanden.",
+  "settings.recycleBinBatchLimit":
+    "Selecteer maximaal {{count}} prullenbakbestanden per keer.",
+  "settings.recycleBinRestoreQueuedOne":
+    "Herstel in wachtrij gezet voor {{count}} prullenbakbestand.",
+  "settings.recycleBinRestoreQueuedOther":
+    "Herstel in wachtrij gezet voor {{count}} prullenbakbestanden.",
+  "settings.recycleBinDeleteQueuedOne":
+    "Verwijdering in wachtrij gezet voor {{count}} prullenbakbestand.",
+  "settings.recycleBinDeleteQueuedOther":
+    "Verwijdering in wachtrij gezet voor {{count}} prullenbakbestanden.",
   "settings.recycleBinRestoreSelectedTitle": "Prullenbakbestanden herstellen",
   "settings.recycleBinRestoreOccupiedOne":
     "{{count}} bestemming is bezet. Kies of je beide bestanden wilt behouden of het huidige bestand naar de prullenbak wilt verplaatsen voordat je herstelt.",
   "settings.recycleBinRestoreOccupiedOther":
     "{{count}} bestemmingen zijn bezet. Kies of je beide bestanden wilt behouden of het huidige bestand naar de prullenbak wilt verplaatsen voordat je herstelt.",
-  "settings.recycleBinRestoreDescriptionOne": "{{count}} geselecteerd bestand herstellen naar het oorspronkelijke pad.",
-  "settings.recycleBinRestoreDescriptionOther": "{{count}} geselecteerde bestanden herstellen naar hun oorspronkelijke paden.",
+  "settings.recycleBinRestoreDescriptionOne":
+    "{{count}} geselecteerd bestand herstellen naar het oorspronkelijke pad.",
+  "settings.recycleBinRestoreDescriptionOther":
+    "{{count}} geselecteerde bestanden herstellen naar hun oorspronkelijke paden.",
   "settings.recycleBinDeleteSelectedConfirmOne":
     "{{count}} geselecteerd prullenbakbestand definitief verwijderen. Dit kan niet ongedaan worden gemaakt.",
   "settings.recycleBinDeleteSelectedConfirmOther":
     "{{count}} geselecteerde prullenbakbestanden definitief verwijderen. Dit kan niet ongedaan worden gemaakt.",
   "settings.recycleBinKeepBothAndRestore": "Beide behouden en herstellen",
-  "settings.recycleBinReplaceExistingAndRestore": "Bestaande vervangen en herstellen",
+  "settings.recycleBinReplaceExistingAndRestore":
+    "Bestaande vervangen en herstellen",
   "settings.recycleBinKeepBoth": "Beide behouden",
   "settings.recycleBinKeepBothDescription":
     "Conflicterende bestanden herstellen met een -restored-suffix.",
   "settings.recycleBinReplaceExisting": "Bestaande vervangen",
   "settings.recycleBinReplaceExistingDescription":
     "Verplaats elk huidig bestand naar de prullenbak en herstel daarna het geselecteerde bestand op dezelfde plek.",
-  "status.recycleBinEmptied": "Prullenbak geleegd ({{count}} items verwijderd).",
+  "status.recycleBinEmptied":
+    "Prullenbak geleegd ({{count}} items verwijderd).",
   "status.recycleBinSettingsSaved": "Prullenbakinstellingen opgeslagen.",
-  "settings.recycleBinPathExistingItems": "Als je de map wijzigt, worden items die al in de prullenbak staan naar de nieuwe map verplaatst. Een item dat niet kan worden verplaatst, blijft in de vorige map en wordt hier na het opslaan vermeld.",
-  "settings.recycleBinRelocatedOne": "{{count}} item uit de prullenbak naar de nieuwe map verplaatst.",
-  "settings.recycleBinRelocatedOther": "{{count}} items uit de prullenbak naar de nieuwe map verplaatst.",
-  "settings.recycleBinRelocationFailedOne": "{{count}} item uit de prullenbak kon niet worden verplaatst:",
-  "settings.recycleBinRelocationFailedOther": "{{count}} items uit de prullenbak konden niet worden verplaatst:",
-  "status.recycleBinSettingsSavedWithRelocationFailures": "Prullenbakinstellingen opgeslagen, maar sommige items konden niet worden verplaatst.",
+  "settings.recycleBinPathExistingItems":
+    "Als je de map wijzigt, worden items die al in de prullenbak staan naar de nieuwe map verplaatst. Een item dat niet kan worden verplaatst, blijft in de vorige map en wordt hier na het opslaan vermeld.",
+  "settings.recycleBinRelocatedOne":
+    "{{count}} item uit de prullenbak naar de nieuwe map verplaatst.",
+  "settings.recycleBinRelocatedOther":
+    "{{count}} items uit de prullenbak naar de nieuwe map verplaatst.",
+  "settings.recycleBinRelocationFailedOne":
+    "{{count}} item uit de prullenbak kon niet worden verplaatst:",
+  "settings.recycleBinRelocationFailedOther":
+    "{{count}} items uit de prullenbak konden niet worden verplaatst:",
+  "status.recycleBinSettingsSavedWithRelocationFailures":
+    "Prullenbakinstellingen opgeslagen, maar sommige items konden niet worden verplaatst.",
 
   "appUpgrade.title": "Applicatie-upgrade",
   "appUpgrade.subtitle": "Versie- en upgradebeheer",
@@ -3556,10 +3837,12 @@ const nl: LocaleDictionary = {
   "appUpgrade.confirmTitle": "Applicatie upgraden?",
   "appUpgrade.confirmDescription": "Upgraden naar {{version}}?",
   "appUpgrade.confirmAction": "Upgrade starten",
-  "appUpgrade.restartNotice": "Scryer wordt opnieuw gestart tijdens deze upgrade.",
+  "appUpgrade.restartNotice":
+    "Scryer wordt opnieuw gestart tijdens deze upgrade.",
   "appUpgrade.uacNotice": "Windows toont een lokale rechtenverhogingsprompt.",
   "appUpgrade.startFailed": "Upgrade kon niet worden gestart.",
-  "appUpgrade.targetChanged": "De beschikbare update is gewijzigd. Controleer de update en probeer het opnieuw.",
+  "appUpgrade.targetChanged":
+    "De beschikbare update is gewijzigd. Controleer de update en probeer het opnieuw.",
   "appUpgrade.loading": "Upgradestatus laden…",
   "appUpgrade.currentVersion": "Huidige versie",
   "appUpgrade.availableVersion": "Beschikbare versie",
@@ -3570,18 +3853,29 @@ const nl: LocaleDictionary = {
   "appUpgrade.owner.operator": "Operator",
   "appUpgrade.eligibility": "Upgradegeschiktheid",
   "appUpgrade.eligibility.eligible": "Deze installatie kan in de app upgraden.",
-  "appUpgrade.eligibility.managed_by_docker": "Deze installatie wordt beheerd door Docker.",
-  "appUpgrade.eligibility.managed_by_homebrew": "Deze installatie wordt beheerd door Homebrew.",
-  "appUpgrade.eligibility.managed_by_winget": "Deze installatie wordt beheerd door winget.",
-  "appUpgrade.eligibility.windows_supervised": "Deze Windows-installatie wordt extern beheerd.",
-  "appUpgrade.eligibility.disabled_by_operator": "In-app upgrades zijn uitgeschakeld door de operator.",
-  "appUpgrade.eligibility.unsupported_layout": "Deze installatielayout wordt niet ondersteund.",
-  "appUpgrade.eligibility.install_dir_not_writable": "De installatiemap is niet beschrijfbaar.",
-  "appUpgrade.eligibility.app_bundle_translocated": "macOS voert Scryer uit vanaf een tijdelijke kopie. Verplaats Scryer naar de map Programma's en open het daarvandaan.",
-  "appUpgrade.eligibility.app_bundle_read_only_volume": "Scryer draait vanaf een alleen-lezen volume. Sleep Scryer naar de map Programma's en open het daarvandaan.",
-  "appUpgrade.eligibility.app_bundle_not_tray_supervised": "Deze app is niet gestart door de Scryer-app en kan daarom niet opnieuw starten na een update.",
+  "appUpgrade.eligibility.managed_by_docker":
+    "Deze installatie wordt beheerd door Docker.",
+  "appUpgrade.eligibility.managed_by_homebrew":
+    "Deze installatie wordt beheerd door Homebrew.",
+  "appUpgrade.eligibility.managed_by_winget":
+    "Deze installatie wordt beheerd door winget.",
+  "appUpgrade.eligibility.windows_supervised":
+    "Deze Windows-installatie wordt extern beheerd.",
+  "appUpgrade.eligibility.disabled_by_operator":
+    "In-app upgrades zijn uitgeschakeld door de operator.",
+  "appUpgrade.eligibility.unsupported_layout":
+    "Deze installatielayout wordt niet ondersteund.",
+  "appUpgrade.eligibility.install_dir_not_writable":
+    "De installatiemap is niet beschrijfbaar.",
+  "appUpgrade.eligibility.app_bundle_translocated":
+    "macOS voert Scryer uit vanaf een tijdelijke kopie. Verplaats Scryer naar de map Programma's en open het daarvandaan.",
+  "appUpgrade.eligibility.app_bundle_read_only_volume":
+    "Scryer draait vanaf een alleen-lezen volume. Sleep Scryer naar de map Programma's en open het daarvandaan.",
+  "appUpgrade.eligibility.app_bundle_not_tray_supervised":
+    "Deze app is niet gestart door de Scryer-app en kan daarom niet opnieuw starten na een update.",
   "appUpgrade.eligibility.unknown": "Upgradegeschiktheid is niet beschikbaar.",
-  "appUpgrade.rebootRequired": "Start Windows opnieuw om deze upgrade te voltooien.",
+  "appUpgrade.rebootRequired":
+    "Start Windows opnieuw om deze upgrade te voltooien.",
   "appUpgrade.activeRun": "Upgrade bezig",
   "appUpgrade.latestRun": "Laatste upgrade",
   "appUpgrade.runStatusLabel": "Status: {{status}}",
@@ -3603,14 +3897,18 @@ const nl: LocaleDictionary = {
   "appUpgrade.downloadProgress": "{{downloaded}} van {{total}} gedownload",
   "appUpgrade.downloadedBytes": "{{downloaded}} gedownload",
   "appUpgrade.operatorGuidance": "Door operator beheerde upgrade",
-  "appUpgrade.guidance.winget": "Voer dit commando uit in een terminal met verhoogde rechten.",
+  "appUpgrade.guidance.winget":
+    "Voer dit commando uit in een terminal met verhoogde rechten.",
   "appUpgrade.guidance.wingetCommand": "winget upgrade ScryerMedia.Scryer",
-  "appUpgrade.guidance.docker": "Haal de nieuwe image op en maak de container opnieuw aan met je configuratie.",
+  "appUpgrade.guidance.docker":
+    "Haal de nieuwe image op en maak de container opnieuw aan met je configuratie.",
   "appUpgrade.guidance.homebrew": "Voer dit commando uit in een terminal.",
   "appUpgrade.guidance.homebrewCommand": "brew upgrade scryer",
-  "appUpgrade.guidance.disabled": "In-app upgrades zijn uitgeschakeld via een omgevingsinstelling.",
+  "appUpgrade.guidance.disabled":
+    "In-app upgrades zijn uitgeschakeld via een omgevingsinstelling.",
   "appUpgrade.guidance.disabledVariable": "SCRYER_DISABLE_SELF_UPGRADE",
-  "appUpgrade.guidance.other": "Gebruik de upgrademethode die de operator van deze installatie heeft voorzien.",
+  "appUpgrade.guidance.other":
+    "Gebruik de upgrademethode die de operator van deze installatie heeft voorzien.",
   "appUpgrade.installationKind.portable": "Portable",
   "appUpgrade.installationKind.directMsi": "Direct MSI",
   "appUpgrade.installationKind.macosAppBundle": "macOS-app",
@@ -3689,7 +3987,8 @@ const nl: LocaleDictionary = {
   "mediaInfo.colSampleDepth": "Sample depth",
   "mediaInfo.colRoles": "Roles",
   "mediaInfo.colName": "Name",
-  "mediaInfo.inferredLanguageFootnote": "Afgeleid van de tracknaam omdat de track geen taalveld heeft.",
+  "mediaInfo.inferredLanguageFootnote":
+    "Afgeleid van de tracknaam omdat de track geen taalveld heeft.",
   "mediaInfo.colForced": "Forced",
   "mediaInfo.colDefault": "Default",
   "mediaInfo.colStart": "Start",
@@ -3701,10 +4000,12 @@ const nl: LocaleDictionary = {
   "mediaInfo.roleForced": "Forced",
   "mediaInfo.roleOriginal": "Original",
   "nav.lists": "Lijsten",
-  "lists.commandDescription": "Volg openbare lijsten en hitlijsten en voeg hun titels automatisch toe.",
+  "lists.commandDescription":
+    "Volg openbare lijsten en hitlijsten en voeg hun titels automatisch toe.",
   "lists.tab.public": "Openbare lijsten",
   "lists.tab.exclusions": "Uitsluitingen",
-  "lists.exclusions.commandDescription": "Titels die geen enkele lijst mag toevoegen.",
+  "lists.exclusions.commandDescription":
+    "Titels die geen enkele lijst mag toevoegen.",
   "lists.action.enabled": "{{name}} volgen",
   "lists.action.retry": "Opnieuw proberen",
   "lists.action.syncAll": "Alles synchroniseren",
@@ -3713,12 +4014,15 @@ const nl: LocaleDictionary = {
   "lists.url.label": "Een lijst volgen via URL",
   "lists.url.placeholder": "Plak de URL van een lijst of hitlijst",
   "lists.url.submit": "Lijst controleren",
-  "lists.url.help": "Plak het adres van een lijst van een ondersteunde aanbieder.",
+  "lists.url.help":
+    "Plak het adres van een lijst van een ondersteunde aanbieder.",
   "lists.url.recognized": "{{provider}} · {{list}}",
-  "lists.url.unrecognized": "Scryer kan dit adres niet volgen. Bekijk de aanbiederscatalogus hieronder voor ondersteunde lijsten.",
+  "lists.url.unrecognized":
+    "Scryer kan dit adres niet volgen. Bekijk de aanbiederscatalogus hieronder voor ondersteunde lijsten.",
   "lists.followed.heading": "Gevolgde lijsten",
   "lists.followed.empty": "Er worden nog geen openbare lijsten gevolgd.",
-  "lists.followed.emptyManager": "Nog geen openbare lijsten. Plak hierboven een URL of kies er een uit de catalogus hieronder.",
+  "lists.followed.emptyManager":
+    "Nog geen openbare lijsten. Plak hierboven een URL of kies er een uit de catalogus hieronder.",
   "lists.table.list": "Lijst",
   "lists.table.coverage": "Dekking",
   "lists.table.mode": "Modus",
@@ -3741,11 +4045,15 @@ const nl: LocaleDictionary = {
   "lists.mode.hold": "Vasthouden voor goedkeuring",
   "lists.mode.request": "Aanvragen",
   "lists.mode.discover": "Alleen tonen in Ontdekken",
-  "lists.modeHelp.add": "Voegt nieuwe titels toe met de bewaking die per soort is gekozen. Bewaakte titels worden gezocht, onbewaakte niet.",
-  "lists.modeHelp.hold": "Maakt voor elke nieuwe titel een openstaande aanvraag die iemand kan goedkeuren.",
+  "lists.modeHelp.add":
+    "Voegt nieuwe titels toe met de bewaking die per soort is gekozen. Bewaakte titels worden gezocht, onbewaakte niet.",
+  "lists.modeHelp.hold":
+    "Maakt voor elke nieuwe titel een openstaande aanvraag die iemand kan goedkeuren.",
   "lists.modeHelp.request": "Vraagt nieuwe titels aan voor een lid.",
-  "lists.modeHelp.discover": "Legt de titels van de lijst vast zonder iets toe te voegen.",
-  "lists.mode.discoverUnavailable": "Beschikbaar zodra lijsten in Ontdekken verschijnen.",
+  "lists.modeHelp.discover":
+    "Legt de titels van de lijst vast zonder iets toe te voegen.",
+  "lists.mode.discoverUnavailable":
+    "Beschikbaar zodra lijsten in Ontdekken verschijnen.",
   "lists.onLeave.keep": "Titel behouden",
   "lists.onLeave.log": "Vastleggen",
   "lists.onLeave.unmonitor": "Titel niet meer bewaken",
@@ -3781,7 +4089,8 @@ const nl: LocaleDictionary = {
   "lists.follow.submit": "Lijst volgen",
   "lists.follow.sourceHeading": "Lijstgegevens",
   "lists.follow.order": "Volgorde van de lijst",
-  "lists.follow.orderHint": "Titels worden in deze volgorde uit de lijst gelezen.",
+  "lists.follow.orderHint":
+    "Titels worden in deze volgorde uit de lijst gelezen.",
   "lists.follow.orderUnset": "Standaardvolgorde",
   "lists.follow.order.rank": "Eigen rangschikking van de lijst",
   "lists.follow.order.added": "Datum toegevoegd",
@@ -3790,19 +4099,24 @@ const nl: LocaleDictionary = {
   "lists.follow.kinds": "Opnemen",
   "lists.follow.modeHeading": "Als er een nieuwe titel verschijnt",
   "lists.follow.routesHeading": "Waar titels terechtkomen",
-  "lists.follow.routesHelp": "Elk soort titel heeft een bibliotheek nodig. Soorten zonder bibliotheek worden nooit toegevoegd.",
+  "lists.follow.routesHelp":
+    "Elk soort titel heeft een bibliotheek nodig. Soorten zonder bibliotheek worden nooit toegevoegd.",
   "lists.follow.filtersHeading": "Filters",
   "lists.follow.syncHeading": "Synchronisatie",
   "lists.follow.maxPerSync": "Maximaal aantal titels per synchronisatie",
   "lists.follow.maxPerSyncPlaceholder": "Geen limiet",
-  "lists.follow.maxPerSyncHelp": "Titels boven de limiet wachten op de volgende synchronisatie.",
+  "lists.follow.maxPerSyncHelp":
+    "Titels boven de limiet wachten op de volgende synchronisatie.",
   "lists.follow.onLeave": "Als een titel de lijst verlaat",
-  "lists.follow.onLeaveHelp": "Geldt alleen voor titels die deze lijst heeft toegevoegd en die op geen andere lijst meer staan. Lijsten verwijderen nooit titels.",
-  "lists.follow.interval": "De aanbieder bepaalt het schema: elke {{interval}}.",
+  "lists.follow.onLeaveHelp":
+    "Geldt alleen voor titels die deze lijst heeft toegevoegd en die op geen andere lijst meer staan. Lijsten verwijderen nooit titels.",
+  "lists.follow.interval":
+    "De aanbieder bepaalt het schema: elke {{interval}}.",
   "lists.follow.problem.name": "Geef de lijst een naam.",
   "lists.follow.problem.kinds": "Neem minstens één soort titel op.",
   "lists.follow.problem.mode": "Kies wat er met nieuwe titels gebeurt.",
-  "lists.follow.problem.route": "Kies een bibliotheek voor elke opgenomen soort.",
+  "lists.follow.problem.route":
+    "Kies een bibliotheek voor elke opgenomen soort.",
   "lists.follow.problem.maxPerSync": "De limiet moet minstens 1 zijn.",
   "lists.follow.problem.params": "Vul de verplichte lijstgegevens in.",
   "lists.route.heading": "{{kind}}",
@@ -3820,11 +4134,13 @@ const nl: LocaleDictionary = {
   "lists.filter.languages": "Oorspronkelijke talen",
   "lists.filter.languagesPlaceholder": "en, ja",
   "lists.filter.releasedOnly": "Alleen uitgebrachte titels",
-  "lists.filter.releasedOnlyHelp": "Slaat titels over die nog niet zijn uitgebracht. Ze worden bij elke synchronisatie opnieuw gecontroleerd.",
+  "lists.filter.releasedOnlyHelp":
+    "Slaat titels over die nog niet zijn uitgebracht. Ze worden bij elke synchronisatie opnieuw gecontroleerd.",
   "lists.preview.heading": "Voorbeeld",
   "lists.preview.nextSyncHeading": "De volgende synchronisatie zou toevoegen",
   "lists.preview.run": "Voorbeeld",
-  "lists.preview.notRun": "Bekijk een voorbeeld om te zien wat de eerste synchronisatie zou toevoegen.",
+  "lists.preview.notRun":
+    "Bekijk een voorbeeld om te zien wat de eerste synchronisatie zou toevoegen.",
   "lists.preview.failed": "Kan geen voorbeeld van deze lijst tonen.",
   "lists.preview.total": "Op lijst",
   "lists.preview.inLibrary": "In bibliotheek",
@@ -3832,8 +4148,10 @@ const nl: LocaleDictionary = {
   "lists.preview.filtered": "Gefilterd",
   "lists.preview.excluded": "Uitgesloten",
   "lists.preview.unresolved": "Geen overeenkomst",
-  "lists.preview.unresolvedHelp": "{{count}} titels konden nog niet worden gekoppeld. Ze worden bij elke synchronisatie opnieuw geprobeerd.",
-  "lists.preview.wouldAddHeading": "Titels die de volgende synchronisatie zou toevoegen",
+  "lists.preview.unresolvedHelp":
+    "{{count}} titels konden nog niet worden gekoppeld. Ze worden bij elke synchronisatie opnieuw geprobeerd.",
+  "lists.preview.wouldAddHeading":
+    "Titels die de volgende synchronisatie zou toevoegen",
   "lists.preview.nothingToAdd": "Er is nu niets nieuws om toe te voegen.",
   "lists.detail.coverage": "Dekking",
   "lists.detail.settings": "Instellingen",
@@ -3841,7 +4159,8 @@ const nl: LocaleDictionary = {
   "lists.detail.nextSync": "Volgende synchronisatie",
   "lists.detail.noCap": "Geen limiet",
   "lists.detail.openAtProvider": "Openen bij de aanbieder",
-  "lists.detail.pausedUntil": "De aanbieder vroeg Scryer het rustiger aan te doen. Synchronisatie gaat verder na {{time}}.",
+  "lists.detail.pausedUntil":
+    "De aanbieder vroeg Scryer het rustiger aan te doen. Synchronisatie gaat verder na {{time}}.",
   "lists.detail.titles": "Titels ({{count}})",
   "lists.detail.title": "Titel",
   "lists.detail.state": "Status",
@@ -3852,9 +4171,11 @@ const nl: LocaleDictionary = {
   "lists.detail.nextPage": "Volgende",
   "lists.detail.history": "Synchronisatiegeschiedenis",
   "lists.detail.noRuns": "Nog geen synchronisaties.",
-  "lists.detail.runCounts": "{{total}} op lijst · {{added}} toegevoegd · {{held}} vastgehouden",
+  "lists.detail.runCounts":
+    "{{total}} op lijst · {{added}} toegevoegd · {{held}} vastgehouden",
   "lists.unfollow.title": "{{name}} ontvolgen?",
-  "lists.unfollow.description": "Scryer stopt met het synchroniseren van deze lijst. Titels blijven in je bibliotheek en openstaande aanvragen blijven in Aanvragen.",
+  "lists.unfollow.description":
+    "Scryer stopt met het synchroniseren van deze lijst. Titels blijven in je bibliotheek en openstaande aanvragen blijven in Aanvragen.",
   "lists.status.followed": "Je volgt nu {{name}}.",
   "lists.status.updated": "{{name}} opgeslagen.",
   "lists.status.unfollowed": "Je volgt {{name}} niet meer.",
@@ -3871,17 +4192,22 @@ const nl: LocaleDictionary = {
   "lists.exclusions.scopeList": "Alleen {{name}}",
   "lists.exclusions.add": "Uitsluiten",
   "lists.exclusions.added": "{{name}} is uitgesloten van lijsten.",
-  "lists.exclusions.removed": "{{name}} kan weer door lijsten worden toegevoegd.",
+  "lists.exclusions.removed":
+    "{{name}} kan weer door lijsten worden toegevoegd.",
   "lists.exclusions.empty": "Er zijn geen titels uitgesloten.",
   "lists.exclusions.created": "Toegevoegd",
   "lists.exclusions.remove": "Uitsluiting voor {{name}} verwijderen",
   "lists.exclusions.removeTitle": "Uitsluiting voor {{name}} verwijderen?",
-  "lists.exclusions.removeDescription": "Lijsten kunnen deze titel bij hun volgende synchronisatie weer toevoegen.",
+  "lists.exclusions.removeDescription":
+    "Lijsten kunnen deze titel bij hun volgende synchronisatie weer toevoegen.",
   "lists.exclusions.deleteCheckbox": "Ook uitsluiten van lijsten",
-  "lists.exclusions.deleteNoIds": "{{name}} is verwijderd, maar heeft geen externe ID's om van lijsten uit te sluiten.",
-  "lists.exclusions.deleteFailed": "{{name}} is verwijderd, maar uitsluiten van lijsten is mislukt. Voeg de uitsluiting toe op de pagina Lijsten.",
+  "lists.exclusions.deleteNoIds":
+    "{{name}} is verwijderd, maar heeft geen externe ID's om van lijsten uit te sluiten.",
+  "lists.exclusions.deleteFailed":
+    "{{name}} is verwijderd, maar uitsluiten van lijsten is mislukt. Voeg de uitsluiting toe op de pagina Lijsten.",
   "lists.policy.heading": "Lijstbeleid voor leden",
-  "lists.policy.help": "Bepaalt hoe persoonlijke lijsten van leden aanvragen worden.",
+  "lists.policy.help":
+    "Bepaalt hoe persoonlijke lijsten van leden aanvragen worden.",
   "lists.policy.empty": "Geen leden om te tonen.",
   "lists.policy.member": "Lid",
   "lists.policy.requests30d": "Lijstaanvragen (30 dagen)",
@@ -3890,24 +4216,38 @@ const nl: LocaleDictionary = {
   "lists.policy.value.auto": "Automatisch goedkeuren",
   "lists.policy.value.approval": "Goedkeuring nodig",
   "lists.policy.value.none": "Lijsten niet toegestaan",
-  "settings.refMaintFactsListsAddedByList": "Of een lijst, en niet een persoon, het onderwerp aan de bibliotheek heeft toegevoegd",
-  "settings.refMaintFactsListsOnEnabledList": "Of een ingeschakelde lijst, openbaar of persoonlijk, het onderwerp nog bevat",
-  "settings.refMaintFactsListsNames": "Namen van de ingeschakelde openbare lijsten die het onderwerp nog bevatten",
-  "settings.refMaintFactsListsLeftAll": "Of elke lijst die het onderwerp ooit bevatte het heeft laten vallen",
-  "settings.refMaintFactsListsLeftAt": "Wanneer de laatste lijst het onderwerp liet vallen",
-  "settings.refMaintFactsListsLastListName": "De openbare lijst die het onderwerp het laatst verliet",
-  "settings.refMaintFactsListsAddedByListValue": "Waar wanneer een lijstsynchronisatie de titel heeft aangemaakt; onbekend met reden list_store_unreadable als de lijstopslag niet leesbaar was",
-  "settings.refMaintFactsListsOnEnabledListValue": "Waar zolang ten minste één ingeschakelde lijst het onderwerp bevat",
-  "settings.refMaintFactsListsNamesValue": "Alleen namen van openbare lijsten, gesorteerd; de persoonlijke lijst van een lid wordt nooit genoemd",
-  "settings.refMaintFactsListsLeftAllValue": "Waar zodra elke lijst die het onderwerp bevatte het heeft laten vallen; onwaar zolang een lijst het nog bevat of als het nooit op een lijst stond",
-  "settings.refMaintFactsListsLeftAtValue": "RFC3339-tijdstempel; ontbreekt met reden not_left_every_list zolang een lijst het onderwerp nog bevat",
-  "settings.refMaintFactsListsLastListNameValue": "Naam van die openbare lijst; ontbreekt met reden no_public_list_left als het onderwerp nooit een openbare lijst verliet",
+  "settings.refMaintFactsListsAddedByList":
+    "Of een lijst, en niet een persoon, het onderwerp aan de bibliotheek heeft toegevoegd",
+  "settings.refMaintFactsListsOnEnabledList":
+    "Of een ingeschakelde lijst, openbaar of persoonlijk, het onderwerp nog bevat",
+  "settings.refMaintFactsListsNames":
+    "Namen van de ingeschakelde openbare lijsten die het onderwerp nog bevatten",
+  "settings.refMaintFactsListsLeftAll":
+    "Of elke lijst die het onderwerp ooit bevatte het heeft laten vallen",
+  "settings.refMaintFactsListsLeftAt":
+    "Wanneer de laatste lijst het onderwerp liet vallen",
+  "settings.refMaintFactsListsLastListName":
+    "De openbare lijst die het onderwerp het laatst verliet",
+  "settings.refMaintFactsListsAddedByListValue":
+    "Waar wanneer een lijstsynchronisatie de titel heeft aangemaakt; onbekend met reden list_store_unreadable als de lijstopslag niet leesbaar was",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "Waar zolang ten minste één ingeschakelde lijst het onderwerp bevat",
+  "settings.refMaintFactsListsNamesValue":
+    "Alleen namen van openbare lijsten, gesorteerd; de persoonlijke lijst van een lid wordt nooit genoemd",
+  "settings.refMaintFactsListsLeftAllValue":
+    "Waar zodra elke lijst die het onderwerp bevatte het heeft laten vallen; onwaar zolang een lijst het nog bevat of als het nooit op een lijst stond",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339-tijdstempel; ontbreekt met reden not_left_every_list zolang een lijst het onderwerp nog bevat",
+  "settings.refMaintFactsListsLastListNameValue":
+    "Naam van die openbare lijst; ontbreekt met reden no_public_list_left als het onderwerp nooit een openbare lijst verliet",
   "lists.providerSettings.heading": "Providerinstellingen",
-  "lists.providerSettings.copy": "Gedeeld door alle lijsten van deze provider op deze server.",
+  "lists.providerSettings.copy":
+    "Gedeeld door alle lijsten van deze provider op deze server.",
   "lists.providerSettings.required": "Verplicht",
   "lists.providerSettings.secretStored": "Opgeslagen",
   "lists.providerSettings.secretEmpty": "Niet ingesteld",
-  "lists.providerSettings.secretPlaceholder": "Laat leeg om de opgeslagen waarde te behouden",
+  "lists.providerSettings.secretPlaceholder":
+    "Laat leeg om de opgeslagen waarde te behouden",
   "lists.providerSettings.clearSecret": "Wissen",
   "lists.providerSettings.keepSecret": "Behouden",
   "lists.providerSettings.save": "Instellingen opslaan",
@@ -3920,54 +4260,72 @@ const nl: LocaleDictionary = {
     "Dat pad overlapt met de aangepaste prullenbak: het mag de prullenbak niet bevatten en er ook niet in liggen.",
   "lists.tab.personal": "Persoonlijk",
   "lists.accounts.heading": "Je accounts",
-  "lists.accounts.copy": "Verbind een account om je privélijsten en kijklijsten te volgen. Alleen jij kunt je accounts en persoonlijke lijsten zien.",
+  "lists.accounts.copy":
+    "Verbind een account om je privélijsten en kijklijsten te volgen. Alleen jij kunt je accounts en persoonlijke lijsten zien.",
   "lists.accounts.connect": "Verbinden",
   "lists.accounts.connected": "Verbonden",
   "lists.accounts.reconnect": "Opnieuw verbinden",
   "lists.accounts.manage": "Beheren",
   "lists.accounts.manageTitle": "{{provider}}-account beheren",
-  "lists.accounts.private": "Deze lijsten en accountgegevens zijn alleen voor jou zichtbaar.",
-  "lists.accounts.waiting": "Voltooi de toestemming in het venster van de aanbieder. Goedkeuring wordt automatisch gecontroleerd.",
-  "lists.accounts.linkFailed": "Het account kon niet worden verbonden. Start de verbinding opnieuw.",
-  "lists.accounts.pollRetrying": "De goedkeuring kon nu niet worden gecontroleerd. Er wordt opnieuw geprobeerd tot de sessie verloopt.",
-  "lists.accounts.originNotAllowed": "Accounts verbinden is niet beschikbaar via dit adres. Als Scryer bereikt wordt via een gepubliceerde containerpoort, een reverse proxy of een hostnaam, vraag dan een beheerder de openbare URL van Scryer in te stellen; open Scryer anders via localhost of het adres waarop het luistert.",
-  "lists.accounts.linkExpired": "Deze sessie is verlopen. Start een nieuwe verbinding vanuit Lijsten.",
-  "lists.accounts.popupBlocked": "Sta pop-ups toe om dit account goed te keuren en verbind opnieuw.",
+  "lists.accounts.private":
+    "Deze lijsten en accountgegevens zijn alleen voor jou zichtbaar.",
+  "lists.accounts.waiting":
+    "Voltooi de toestemming in het venster van de aanbieder. Goedkeuring wordt automatisch gecontroleerd.",
+  "lists.accounts.linkFailed":
+    "Het account kon niet worden verbonden. Start de verbinding opnieuw.",
+  "lists.accounts.pollRetrying":
+    "De goedkeuring kon nu niet worden gecontroleerd. Er wordt opnieuw geprobeerd tot de sessie verloopt.",
+  "lists.accounts.originNotAllowed":
+    "Accounts verbinden is niet beschikbaar via dit adres. Als Scryer bereikt wordt via een gepubliceerde containerpoort, een reverse proxy of een hostnaam, vraag dan een beheerder de openbare URL van Scryer in te stellen; open Scryer anders via localhost of het adres waarop het luistert.",
+  "lists.accounts.linkExpired":
+    "Deze sessie is verlopen. Start een nieuwe verbinding vanuit Lijsten.",
+  "lists.accounts.popupBlocked":
+    "Sta pop-ups toe om dit account goed te keuren en verbind opnieuw.",
   "lists.accounts.finishing": "Accountverbinding voltooien…",
   "lists.accounts.linked": "Account verbonden.",
   "lists.accounts.returnToLists": "Terug naar je persoonlijke lijsten",
-  "lists.accounts.noProviders": "Geen aanbieders van persoonlijke lijsten geïnstalleerd.",
+  "lists.accounts.noProviders":
+    "Geen aanbieders van persoonlijke lijsten geïnstalleerd.",
   "lists.accounts.ownedLists": "Je lijsten",
   "lists.accounts.statuses": "Beschikbare statussen: {{statuses}}",
   "lists.accounts.unlink": "Account ontkoppelen",
   "lists.accounts.confirmUnlink": "Ontkoppelen bevestigen",
-  "lists.accounts.unlinkHelp": "Ontkoppelen verwijdert abonnementen van dit account. Je bibliotheekbestanden blijven behouden.",
+  "lists.accounts.unlinkHelp":
+    "Ontkoppelen verwijdert abonnementen van dit account. Je bibliotheekbestanden blijven behouden.",
   "lists.accounts.unlinked": "Account ontkoppeld.",
-  "lists.accounts.personalRouting": "Persoonlijke lijsten zijn van jou. Toevoegen en Zoeken vereisen rechten om titels te beheren in elke gekozen bibliotheek. Aanvragen volgen je lijstbeleid en aanvraagregels.",
+  "lists.accounts.personalRouting":
+    "Persoonlijke lijsten zijn van jou. Toevoegen en Zoeken vereisen rechten om titels te beheren in elke gekozen bibliotheek. Aanvragen volgen je lijstbeleid en aanvraagregels.",
   "lists.providerApps.heading": "Aangepaste OAuth",
   "lists.providerApps.settingsLabel": "Lijsten · Aangepaste OAuth",
-  "lists.providerApps.copy": "De projectapps werken zonder registratie. Je kunt je eigen Trakt-, AniList- of MyAnimeList-app registreren om deze instantie rechtstreeks te verbinden.",
+  "lists.providerApps.copy":
+    "De projectapps werken zonder registratie. Je kunt je eigen Trakt-, AniList- of MyAnimeList-app registreren om deze instantie rechtstreeks te verbinden.",
   "lists.providerApps.simklDefault": "Simkl gebruikt de projectapp.",
   "lists.providerApps.useOwn": "Eigen app gebruiken",
   "lists.providerApps.clientId": "Client-ID",
   "lists.providerApps.clientSecret": "Clientgeheim",
-  "lists.providerApps.traktSecretHint": "Optioneel voor Trakt. Trakt meldt leden aan met PKCE; alleen oudere Trakt-apps hebben een geheim nodig.",
+  "lists.providerApps.traktSecretHint":
+    "Optioneel voor Trakt. Trakt meldt leden aan met PKCE; alleen oudere Trakt-apps hebben een geheim nodig.",
   "lists.providerApps.redirectUri": "Omleidings-URI",
-  "lists.providerApps.redirectHelp": "Registreer de URL /lists/oauth/callback van deze instantie bij de aanbieder. Laat het geheim leeg om de opgeslagen waarde te behouden.",
+  "lists.providerApps.redirectHelp":
+    "Registreer de URL /lists/oauth/callback van deze instantie bij de aanbieder. Laat het geheim leeg om de opgeslagen waarde te behouden.",
   "episodeAssign.action": "Opnieuw toewijzen",
   "episodeAssign.dialogTitle": "Toewijzen aan aflevering",
-  "episodeAssign.dialogDescription": "Kies de aflevering waar {{name}} bij hoort. Scryer hernoemt het bestand voor die aflevering en verplaatst het naar zijn plek.",
-  "episodeAssign.pendingDescription": "Scryer kon niet bepalen welke aflevering {{name}} is. Kies de aflevering en Scryer importeert het daar.",
+  "episodeAssign.dialogDescription":
+    "Kies de aflevering waar {{name}} bij hoort. Scryer hernoemt het bestand voor die aflevering en verplaatst het naar zijn plek.",
+  "episodeAssign.pendingDescription":
+    "Scryer kon niet bepalen welke aflevering {{name}} is. Kies de aflevering en Scryer importeert het daar.",
   "episodeAssign.unnamed": "dit bestand",
   "episodeAssign.targetLabel": "Aflevering",
   "episodeAssign.loadingEpisodes": "Afleveringen laden…",
   "episodeAssign.loadFailed": "Afleveringen konden niet worden geladen.",
-  "episodeAssign.unchanged": "Het bestand is al aan deze aflevering toegewezen.",
+  "episodeAssign.unchanged":
+    "Het bestand is al aan deze aflevering toegewezen.",
   "episodeAssign.apply": "Toewijzen en hernoemen",
   "episodeAssign.originalReleaseName": "Oorspronkelijke releasenaam",
   "episodeAssign.applying": "Toewijzen…",
   "episodeAssign.replaceTitle": "Deze aflevering heeft al een bestand",
-  "episodeAssign.replaceDescription": "Door dit bestand toe te wijzen wordt het het primaire bestand van de aflevering. Het huidige bestand blijft als extra bestand op de schijf staan.",
+  "episodeAssign.replaceDescription":
+    "Door dit bestand toe te wijzen wordt het het primaire bestand van de aflevering. Het huidige bestand blijft als extra bestand op de schijf staan.",
   "episodeAssign.replaceApply": "Vervangen en toewijzen",
   "episodeAssign.success": "Bestand toegewezen en hernoemd.",
   "episodeAssign.failed": "Het bestand kon niet worden toegewezen.",
@@ -3978,14 +4336,22 @@ const nl: LocaleDictionary = {
   "episodeAssign.noMatches": "Geen overeenkomende afleveringen.",
   "episodeAssign.selectPlaceholder": "Kies een aflevering…",
   "episodeAssign.refusal.noEpisodes": "Kies minstens één aflevering.",
-  "episodeAssign.refusal.outsideTitle": "Die aflevering hoort bij een andere titel.",
-  "episodeAssign.refusal.primaryConflict": "Deze aflevering heeft al een primair bestand.",
-  "episodeAssign.refusal.notEpisodic": "Alleen serie- en animebestanden kunnen aan afleveringen worden toegewezen.",
-  "episodeAssign.refusal.unsupportedFile": "Dit bestand kan niet tussen afleveringen worden verplaatst. Bestanden van seriefilms en schijfkopieën blijven op hun plek.",
-  "episodeAssign.refusal.destinationOccupied": "Een ander bestand heeft al de naam die deze aflevering oplevert. Verplaats of verwijder het en probeer het opnieuw.",
-  "episodeAssign.refusal.renameRefused": "Scryer kon het bestand voor deze aflevering geen naam geven. Controleer de bibliotheekmap en het naamgevingssjabloon van de titel.",
-  "episodeAssign.refusal.renameFailed": "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
-  "pendingImports.reason.anime_numbering_ambiguous": "Afleveringsnummering is dubbelzinnig",
+  "episodeAssign.refusal.outsideTitle":
+    "Die aflevering hoort bij een andere titel.",
+  "episodeAssign.refusal.primaryConflict":
+    "Deze aflevering heeft al een primair bestand.",
+  "episodeAssign.refusal.notEpisodic":
+    "Alleen serie- en animebestanden kunnen aan afleveringen worden toegewezen.",
+  "episodeAssign.refusal.unsupportedFile":
+    "Dit bestand kan niet tussen afleveringen worden verplaatst. Bestanden van seriefilms en schijfkopieën blijven op hun plek.",
+  "episodeAssign.refusal.destinationOccupied":
+    "Een ander bestand heeft al de naam die deze aflevering oplevert. Verplaats of verwijder het en probeer het opnieuw.",
+  "episodeAssign.refusal.renameRefused":
+    "Scryer kon het bestand voor deze aflevering geen naam geven. Controleer de bibliotheekmap en het naamgevingssjabloon van de titel.",
+  "episodeAssign.refusal.renameFailed":
+    "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
+  "pendingImports.reason.anime_numbering_ambiguous":
+    "Afleveringsnummering is dubbelzinnig",
 };
 
 export default nl;

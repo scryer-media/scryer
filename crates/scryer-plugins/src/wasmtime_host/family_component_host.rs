@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 
-use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::command_host::{CommandHost, CommandHostError};
 
 /// Describe runs reuse the 10s describe budget of every other backing.
 pub(crate) const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -74,20 +74,30 @@ pub(crate) async fn dispatch_host_call(
     match tokio::task::spawn_blocking(move || command_host.call_bytes(&request)).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(error)) => {
-            // A rejected or undecodable request is the guest's fault and is
-            // recoverable by sending a different one; everything else is the
-            // transport failing.
-            let failure = if error.contains("encoded host request exceeds")
-                || error.contains("invalid postcard host request")
-            {
-                HostCallFailure::InvalidRequest
-            } else {
-                HostCallFailure::Failed
+            let failure = match &error {
+                CommandHostError::InvalidRequest(_) => HostCallFailure::InvalidRequest,
+                CommandHostError::Failed(_) => HostCallFailure::Failed,
             };
-            Err(HostCallError::Service { failure, error })
+            Err(HostCallError::Service {
+                failure,
+                error: error.to_string(),
+            })
         }
         Err(error) => Err(HostCallError::Task(error.to_string())),
     }
+}
+
+/// Execute the common HTTP service without flattening its typed host failure.
+pub(crate) async fn dispatch_http_request(
+    command_host: &CommandHost,
+    request: scryer_plugin_sdk::host::PluginHttpRequest,
+) -> Result<scryer_plugin_sdk::host::PluginHttpResponse, crate::plugin_http_host::HostHttpErrorKind>
+{
+    let command_host = command_host.clone();
+    tokio::task::spawn_blocking(move || command_host.http_request(request))
+        .await
+        .map_err(|_| crate::plugin_http_host::HostHttpErrorKind::Transport)?
+        .map_err(|error| error.kind)
 }
 
 /// A host call that did not produce response bytes, and where it went wrong.

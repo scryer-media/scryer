@@ -146,7 +146,7 @@ impl AppUseCase {
                     })
                     .cloned()
                     .ok_or_else(|| {
-                        AppError::NotFound(format!(
+                        AppError::not_found_reason(crate::error_reasons::plugins::NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND, format!(
                             "plugin '{}' is not available from the plugin catalog",
                             target.installation.plugin_id
                         ))

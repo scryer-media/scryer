@@ -192,7 +192,10 @@ export function supportsProxyRemoteDns(providerType: string): boolean {
  * for WireGuard.
  */
 export function supportsProxyPrivateKey(providerType: string): boolean {
-  return isSshTunnelProxyProvider(providerType) || isWireguardProxyProvider(providerType);
+  return (
+    isSshTunnelProxyProvider(providerType) ||
+    isWireguardProxyProvider(providerType)
+  );
 }
 
 /**
@@ -251,10 +254,16 @@ export function looksLikeWireguardKey(value: string): boolean {
  */
 export const ENDPOINT_CONFIG_KEYS = ["endpoint"] as const;
 export const PRIVATE_KEY_CONFIG_KEYS = ["privatekey"] as const;
-export const PEER_PUBLIC_KEY_CONFIG_KEYS = ["publickey", "peerpublickey"] as const;
+export const PEER_PUBLIC_KEY_CONFIG_KEYS = [
+  "publickey",
+  "peerpublickey",
+] as const;
 export const PRESHARED_KEY_CONFIG_KEYS = ["presharedkey"] as const;
 export const MTU_CONFIG_KEYS = ["mtu"] as const;
-export const KEEPALIVE_CONFIG_KEYS = ["persistentkeepalive", "keepalive"] as const;
+export const KEEPALIVE_CONFIG_KEYS = [
+  "persistentkeepalive",
+  "keepalive",
+] as const;
 /**
  * Both list fields answer to either name: a stray `DNS =` pasted into the
  * address box is still an operator pasting a line, and stripping it is kinder
@@ -577,7 +586,10 @@ export function normalizeProxyDraft(draft: ProxyDraft): ProxyDraft {
   return {
     ...draft,
     baseUrl,
-    privateKey: stripConfigAssignment(draft.privateKey, PRIVATE_KEY_CONFIG_KEYS),
+    privateKey: stripConfigAssignment(
+      draft.privateKey,
+      PRIVATE_KEY_CONFIG_KEYS,
+    ),
     peerPublicKey: stripConfigAssignment(
       draft.peerPublicKey,
       PEER_PUBLIC_KEY_CONFIG_KEYS,

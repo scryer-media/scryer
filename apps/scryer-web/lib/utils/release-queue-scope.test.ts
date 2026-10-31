@@ -35,7 +35,12 @@ test("additional-file queue eligibility uses the signed release queue scope", ()
   );
   assert.equal(
     releaseSupportsAdditionalFileQueue(
-      { queueScope: { __typename: "EpisodeScopePayload", episodeId: "episode-1" } },
+      {
+        queueScope: {
+          __typename: "EpisodeScopePayload",
+          episodeId: "episode-1",
+        },
+      },
       "series",
     ),
     true,
@@ -55,30 +60,63 @@ test("additional-file queue eligibility uses the signed release queue scope", ()
 
   const unsupportedScopes: ReleaseQueueScope[] = [
     { __typename: "CollectionScopePayload", collectionId: "season-1" },
-    { __typename: "EpisodeSetScopePayload", episodeIds: ["episode-1", "episode-2"] },
+    {
+      __typename: "EpisodeSetScopePayload",
+      episodeIds: ["episode-1", "episode-2"],
+    },
     { __typename: "OrphanScopePayload", orphaned: true },
   ];
   for (const queueScope of unsupportedScopes) {
-    assert.equal(releaseSupportsAdditionalFileQueue({ queueScope }, "movie"), false);
+    assert.equal(
+      releaseSupportsAdditionalFileQueue({ queueScope }, "movie"),
+      false,
+    );
   }
 
-  assert.equal(releaseSupportsAdditionalFileQueue({ queueScope: null }, "movie"), false);
+  assert.equal(
+    releaseSupportsAdditionalFileQueue({ queueScope: null }, "movie"),
+    false,
+  );
 });
 
 test("an additional file is queued only for a movie, one episode or a series movie", () => {
   // A season subject that bound a single-episode release queues that episode.
-  assert.equal(queueScopeAcceptsAdditionalFile({ episode: "episode-4" }, "series"), true);
-  assert.equal(queueScopeAcceptsAdditionalFile({ seriesMovie: "series-movie-1" }, "anime"), true);
-  assert.equal(queueScopeAcceptsAdditionalFile({ title: true }, " MOVIE "), true);
-
-  assert.equal(queueScopeAcceptsAdditionalFile({ collection: "season-2" }, "series"), false);
-  assert.equal(queueScopeAcceptsAdditionalFile({ episodeSet: ["episode-4"] }, "series"), false);
   assert.equal(
-    queueScopeAcceptsAdditionalFile({ episodeSet: ["episode-4", "episode-5"] }, "anime"),
+    queueScopeAcceptsAdditionalFile({ episode: "episode-4" }, "series"),
+    true,
+  );
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ seriesMovie: "series-movie-1" }, "anime"),
+    true,
+  );
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ title: true }, " MOVIE "),
+    true,
+  );
+
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ collection: "season-2" }, "series"),
     false,
   );
-  assert.equal(queueScopeAcceptsAdditionalFile({ title: true }, "series"), false);
-  assert.equal(queueScopeAcceptsAdditionalFile({ title: true }, "anime"), false);
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ episodeSet: ["episode-4"] }, "series"),
+    false,
+  );
+  assert.equal(
+    queueScopeAcceptsAdditionalFile(
+      { episodeSet: ["episode-4", "episode-5"] },
+      "anime",
+    ),
+    false,
+  );
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ title: true }, "series"),
+    false,
+  );
+  assert.equal(
+    queueScopeAcceptsAdditionalFile({ title: true }, "anime"),
+    false,
+  );
   assert.equal(queueScopeAcceptsAdditionalFile({ title: true }, null), false);
 });
 
@@ -87,13 +125,19 @@ test("manual replacement selection requires an existing primary file", () => {
   assert.equal(hasPrimaryMediaFile([]), false);
   assert.equal(hasPrimaryMediaFile([{ role: "additional" }]), false);
   assert.equal(hasPrimaryMediaFile([{ role: "PRIMARY" }]), true);
-  assert.equal(hasPrimaryMediaFile([{ role: null }, { role: "primary" }]), true);
+  assert.equal(
+    hasPrimaryMediaFile([{ role: null }, { role: "primary" }]),
+    true,
+  );
 });
 
 test("the pack badge follows the signed scope, not the release name", () => {
   const packScopes: ReleaseQueueScope[] = [
     { __typename: "CollectionScopePayload", collectionId: "season-1" },
-    { __typename: "EpisodeSetScopePayload", episodeIds: ["episode-1", "episode-2"] },
+    {
+      __typename: "EpisodeSetScopePayload",
+      episodeIds: ["episode-1", "episode-2"],
+    },
   ];
   for (const queueScope of packScopes) {
     assert.equal(releaseCoversMultipleEpisodes({ queueScope }), true);
@@ -156,8 +200,14 @@ test("a scope replaces a primary judged from every file the title holds", () => 
     { episodeId: "episode-3", role: "additional" },
     { episodeId: null, role: "primary" },
   ];
-  const replaces = (scope: Parameters<typeof queueScopeReplacesPrimaryFromTitleFiles>[0]) =>
-    queueScopeReplacesPrimaryFromTitleFiles(scope, episodesByCollection, titleFiles);
+  const replaces = (
+    scope: Parameters<typeof queueScopeReplacesPrimaryFromTitleFiles>[0],
+  ) =>
+    queueScopeReplacesPrimaryFromTitleFiles(
+      scope,
+      episodesByCollection,
+      titleFiles,
+    );
 
   assert.equal(replaces({ collection: "season-1" }), true);
   assert.equal(replaces({ collection: "season-2" }), false);
@@ -165,10 +215,14 @@ test("a scope replaces a primary judged from every file the title holds", () => 
   assert.equal(replaces({ episodeSet: ["episode-1", "episode-2"] }), true);
   assert.equal(replaces({ title: true }), true);
   assert.equal(
-    queueScopeReplacesPrimaryFromTitleFiles({ title: true }, episodesByCollection, [
-      { episodeId: "episode-3", role: "additional" },
-      { episodeId: null, role: "primary" },
-    ]),
+    queueScopeReplacesPrimaryFromTitleFiles(
+      { title: true },
+      episodesByCollection,
+      [
+        { episodeId: "episode-3", role: "additional" },
+        { episodeId: null, role: "primary" },
+      ],
+    ),
     false,
   );
 });

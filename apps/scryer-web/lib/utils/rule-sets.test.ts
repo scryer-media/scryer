@@ -51,10 +51,17 @@ test("create input round-trips enabled and omits managed metadata", () => {
 });
 
 test("community copies format only the draft and preserve source until explicitly saved", () => {
-  const record = { ...managedRule, regoSource: 'score_entry["bonus"] := 200 if { input.release.is_remux; true }' };
+  const record = {
+    ...managedRule,
+    regoSource:
+      'score_entry["bonus"] := 200 if { input.release.is_remux; true }',
+  };
   const original = structuredClone(record);
   const draft = copyRuleSetDraft(record);
-  assert.equal(draft.regoSource, 'score_entry["bonus"] := 200 if {\n  input.release.is_remux\n  true\n}');
+  assert.equal(
+    draft.regoSource,
+    'score_entry["bonus"] := 200 if {\n  input.release.is_remux\n  true\n}',
+  );
   assert.deepEqual(record, original);
   assert.equal(createRuleSetInput(draft).regoSource, draft.regoSource);
 });
@@ -73,9 +80,12 @@ test("rule input reference exposes parser tokens and retires guide facts", () =>
   );
 
   assert.equal(guideFacts, undefined);
-  assert.deepEqual(releaseSection?.fields.find((field) => field.field === "normalized_tokens"), {
-    field: "normalized_tokens",
-    type: "string[]",
-    descKey: "settings.refReleaseNormalizedTokens",
-  });
+  assert.deepEqual(
+    releaseSection?.fields.find((field) => field.field === "normalized_tokens"),
+    {
+      field: "normalized_tokens",
+      type: "string[]",
+      descKey: "settings.refReleaseNormalizedTokens",
+    },
+  );
 });

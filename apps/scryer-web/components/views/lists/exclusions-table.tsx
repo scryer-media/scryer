@@ -7,7 +7,11 @@ import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import {
+  Input,
+  integerInputProps,
+  sanitizeDigits,
+} from "@/components/ui/input";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -60,7 +64,8 @@ export function ExclusionsTable({
   const [ids, setIds] = React.useState("");
   const [scope, setScope] = React.useState(ALL_LISTS);
   const [adding, setAdding] = React.useState(false);
-  const [pendingRemoval, setPendingRemoval] = React.useState<ListExclusion | null>(null);
+  const [pendingRemoval, setPendingRemoval] =
+    React.useState<ListExclusion | null>(null);
   const parsedIds = parseExternalIdList(ids);
   const canAdd = !adding && title.trim().length > 0 && parsedIds.length > 0;
 
@@ -94,17 +99,24 @@ export function ExclusionsTable({
         onSubmit={(event) => void submit(event)}
         className="space-y-3 rounded-[12px] border border-[var(--scry-border3)] bg-[var(--scry-surf)] p-4"
       >
-        <h2 className="text-[13px] font-semibold text-[var(--scry-ink2)]">{t("lists.exclusions.addHeading")}</h2>
+        <h2 className="text-[13px] font-semibold text-[var(--scry-ink2)]">
+          {t("lists.exclusions.addHeading")}
+        </h2>
         <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)_100px]">
           <SingleSelectField
             id="list-exclusion-kind"
             label={t("lists.exclusions.kindLabel")}
             value={kind}
-            options={LIST_KINDS.map((value) => ({ value, label: t(listKindLabelKey(value)) }))}
+            options={LIST_KINDS.map((value) => ({
+              value,
+              label: t(listKindLabelKey(value)),
+            }))}
             onValueChange={(value) => setKind(value as Facet)}
           />
           <label className="space-y-1.5" htmlFor="list-exclusion-title">
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.exclusions.titleLabel")}</span>
+            <span className="block text-sm font-medium text-[var(--scry-ink2)]">
+              {t("lists.exclusions.titleLabel")}
+            </span>
             <ExclusionTitleSearch
               id="list-exclusion-title"
               value={title}
@@ -119,7 +131,9 @@ export function ExclusionsTable({
             />
           </label>
           <label className="space-y-1.5" htmlFor="list-exclusion-year">
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.exclusions.yearLabel")}</span>
+            <span className="block text-sm font-medium text-[var(--scry-ink2)]">
+              {t("lists.exclusions.yearLabel")}
+            </span>
             <Input
               id="list-exclusion-year"
               {...integerInputProps}
@@ -131,14 +145,18 @@ export function ExclusionsTable({
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1.5" htmlFor="list-exclusion-ids">
-            <span className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.exclusions.idsLabel")}</span>
+            <span className="block text-sm font-medium text-[var(--scry-ink2)]">
+              {t("lists.exclusions.idsLabel")}
+            </span>
             <Input
               id="list-exclusion-ids"
               placeholder="tmdb:603, imdb:tt0133093"
               value={ids}
               onChange={(event) => setIds(event.target.value)}
             />
-            <span className="block text-xs text-[var(--scry-muted)]">{t("lists.exclusions.idsHelp")}</span>
+            <span className="block text-xs text-[var(--scry-muted)]">
+              {t("lists.exclusions.idsHelp")}
+            </span>
           </label>
           <SingleSelectField
             id="list-exclusion-scope"
@@ -148,15 +166,25 @@ export function ExclusionsTable({
               { value: ALL_LISTS, label: t("lists.exclusions.scopeAll") },
               ...subscriptions.map((subscription) => ({
                 value: subscription.id,
-                label: t("lists.exclusions.scopeList", { name: subscription.name }),
+                label: t("lists.exclusions.scopeList", {
+                  name: subscription.name,
+                }),
               })),
             ]}
             onValueChange={setScope}
           />
         </div>
         <div className="flex justify-end">
-          <Button id="list-exclusion-add-submit" type="submit" disabled={!canAdd}>
-            {adding ? <LoadingMark className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+          <Button
+            id="list-exclusion-add-submit"
+            type="submit"
+            disabled={!canAdd}
+          >
+            {adding ? (
+              <LoadingMark className="h-4 w-4" />
+            ) : (
+              <Ban className="h-4 w-4" />
+            )}
             {t("lists.exclusions.add")}
           </Button>
         </div>
@@ -168,18 +196,30 @@ export function ExclusionsTable({
           {t("label.loading")}
         </div>
       ) : exclusions.length === 0 ? (
-        <p id="list-exclusions-empty" className="text-[13px] text-[var(--scry-muted)]">
+        <p
+          id="list-exclusions-empty"
+          className="text-[13px] text-[var(--scry-muted)]"
+        >
           {t("lists.exclusions.empty")}
         </p>
       ) : (
-        <Table id="list-exclusions-table" wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]">
+        <Table
+          id="list-exclusions-table"
+          wrapperClassName="rounded-[12px] border border-[var(--scry-border3)]"
+        >
           <TableHeader>
             <TableRow>
               <TableHead>{t("lists.exclusions.titleLabel")}</TableHead>
-              <TableHead className="hidden sm:table-cell">{t("lists.exclusions.idsLabel")}</TableHead>
+              <TableHead className="hidden sm:table-cell">
+                {t("lists.exclusions.idsLabel")}
+              </TableHead>
               <TableHead>{t("lists.exclusions.scopeLabel")}</TableHead>
-              <TableHead className="hidden md:table-cell">{t("lists.exclusions.created")}</TableHead>
-              <TableHead className="w-[1%] text-right">{t("label.actions")}</TableHead>
+              <TableHead className="hidden md:table-cell">
+                {t("lists.exclusions.created")}
+              </TableHead>
+              <TableHead className="w-[1%] text-right">
+                {t("label.actions")}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -192,22 +232,38 @@ export function ExclusionsTable({
                 <TableCell>
                   <span className="block text-[13.5px] font-medium text-[var(--scry-ink2)]">
                     {exclusion.displayTitle}
-                    {exclusion.year ? <span className="text-[var(--scry-muted)]"> ({exclusion.year})</span> : null}
+                    {exclusion.year ? (
+                      <span className="text-[var(--scry-muted)]">
+                        {" "}
+                        ({exclusion.year})
+                      </span>
+                    ) : null}
                   </span>
-                  <FacetTags values={[exclusion.kind]} emptyLabel={null} className="mt-1" />
+                  <FacetTags
+                    values={[exclusion.kind]}
+                    emptyLabel={null}
+                    className="mt-1"
+                  />
                 </TableCell>
                 <TableCell className="hidden sm:table-cell">
                   <span className="font-[var(--font-code)] text-[12px] text-[var(--scry-muted)]">
-                    {exclusion.externalIds.map((id) => `${id.source}:${id.value}`).join(", ")}
+                    {exclusion.externalIds
+                      .map((id) => `${id.source}:${id.value}`)
+                      .join(", ")}
                   </span>
                 </TableCell>
                 <TableCell>
                   {exclusion.scope === "ALL_LISTS" ? (
-                    <Badge tone="neutral">{t("lists.exclusions.scopeAll")}</Badge>
+                    <Badge tone="neutral">
+                      {t("lists.exclusions.scopeAll")}
+                    </Badge>
                   ) : (
                     <Badge tone="info">
                       {t("lists.exclusions.scopeList", {
-                        name: exclusion.subscriptionName ?? exclusion.subscriptionId ?? "",
+                        name:
+                          exclusion.subscriptionName ??
+                          exclusion.subscriptionId ??
+                          "",
                       })}
                     </Badge>
                   )}
@@ -219,7 +275,9 @@ export function ExclusionsTable({
                   {/* Not `list-exclusion-…`: that id family belongs to the rows alone. */}
                   <IconButton
                     id={`list-exclusions-remove-${exclusion.id}`}
-                    label={t("lists.exclusions.remove", { name: exclusion.displayTitle })}
+                    label={t("lists.exclusions.remove", {
+                      name: exclusion.displayTitle,
+                    })}
                     tone="delete"
                     disabled={busyIds.has(exclusion.id)}
                     onClick={() => setPendingRemoval(exclusion)}
@@ -235,7 +293,9 @@ export function ExclusionsTable({
 
       <ConfirmDialog
         open={pendingRemoval !== null}
-        title={t("lists.exclusions.removeTitle", { name: pendingRemoval?.displayTitle ?? "" })}
+        title={t("lists.exclusions.removeTitle", {
+          name: pendingRemoval?.displayTitle ?? "",
+        })}
         description={t("lists.exclusions.removeDescription")}
         confirmLabel={t("label.remove")}
         cancelLabel={t("label.cancel")}

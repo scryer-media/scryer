@@ -480,8 +480,9 @@ impl AppUseCase {
             ));
         }
         if title.facet == scryer_domain::MediaFacet::Movie {
-            return Err(AppError::Validation(
-                "movie titles do not have an episode inventory".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY,
+                "movie titles do not have an episode inventory",
             ));
         }
         if kind == Scope::Title {
@@ -600,11 +601,16 @@ impl AppUseCase {
         title: &Title,
         files: &[TitleMediaFile],
     ) -> AppResult<MaintenanceSubject> {
-        let kind = Scope::parse_storage(kind)
-            .ok_or_else(|| AppError::Validation("invalid maintenance subject kind".into()))?;
+        let kind = Scope::parse_storage(kind).ok_or_else(|| {
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::SUBJECT_KIND_INVALID,
+                "invalid maintenance subject kind",
+            )
+        })?;
         if subject_id.is_empty() {
-            return Err(AppError::Validation(
-                "maintenance subject ID is required".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::SUBJECT_ID_REQUIRED,
+                "maintenance subject ID is required",
             ));
         }
         self.maintenance_subjects_for_title(kind, title, files)
@@ -612,7 +618,10 @@ impl AppUseCase {
             .into_iter()
             .find(|subject| subject.id == subject_id)
             .ok_or_else(|| {
-                AppError::NotFound("maintenance subject no longer belongs to this title".into())
+                AppError::not_found_reason(
+                    crate::error_reasons::maintenance::SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
+                    "maintenance subject no longer belongs to this title",
+                )
             })
     }
 }

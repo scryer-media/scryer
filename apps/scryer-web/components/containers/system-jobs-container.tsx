@@ -1,9 +1,13 @@
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient } from "urql";
 import { useSearchParams } from "react-router";
 
 import { ScriptEditorDialogs } from "@/components/common/script-editor-dialogs";
-import { SystemJobsView, type CustomJobEntry } from "@/components/views/system-jobs-view";
+import {
+  SystemJobsView,
+  type CustomJobEntry,
+} from "@/components/views/system-jobs-view";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -87,7 +91,8 @@ function normalizeJobDefinition(value: unknown): JobDefinition | null {
   return {
     key: normalizeJobKey(value.key),
     customJobId: normalizeCustomJobId(value.customJobId),
-    displayName: typeof value.displayName === "string" ? value.displayName : value.key,
+    displayName:
+      typeof value.displayName === "string" ? value.displayName : value.key,
     description: typeof value.description === "string" ? value.description : "",
     category: normalizeCategory(value.category),
     section: normalizeSection(value.section),
@@ -95,11 +100,18 @@ function normalizeJobDefinition(value: unknown): JobDefinition | null {
     usesLibraryScanProgress: value.usesLibraryScanProgress === true,
     schedule: {
       kind: normalizeScheduleKind(schedule.kind),
-      description: typeof schedule.description === "string" ? schedule.description : "",
-      intervalSeconds: typeof schedule.intervalSeconds === "number" ? schedule.intervalSeconds : null,
+      description:
+        typeof schedule.description === "string" ? schedule.description : "",
+      intervalSeconds:
+        typeof schedule.intervalSeconds === "number"
+          ? schedule.intervalSeconds
+          : null,
       initialDelaySeconds:
-        typeof schedule.initialDelaySeconds === "number" ? schedule.initialDelaySeconds : null,
-      nextRunAt: typeof schedule.nextRunAt === "string" ? schedule.nextRunAt : null,
+        typeof schedule.initialDelaySeconds === "number"
+          ? schedule.initialDelaySeconds
+          : null,
+      nextRunAt:
+        typeof schedule.nextRunAt === "string" ? schedule.nextRunAt : null,
     },
   };
 }
@@ -119,7 +131,11 @@ function customJobDefinition(
   definition: JobDefinition | undefined,
 ): JobDefinition {
   if (definition) {
-    return { ...definition, displayName: script.name, description: script.description };
+    return {
+      ...definition,
+      displayName: script.name,
+      description: script.description,
+    };
   }
   return {
     key: "CUSTOM_JOB",
@@ -144,19 +160,28 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
-  const { registerInteractiveJobRun } = useJobRunToasts();
+  const { cancelAcquisitionSearch, registerInteractiveJobRun } =
+    useJobRunToasts();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedJobRunId = searchParams.get("jobRun")?.trim() || null;
   const [jobs, setJobs] = useState<JobDefinition[]>([]);
-  const [activeRunsById, setActiveRunsById] = useState<Record<string, JobRun>>({});
+  const [activeRunsById, setActiveRunsById] = useState<Record<string, JobRun>>(
+    {},
+  );
   const [recentRuns, setRecentRuns] = useState<JobRun[]>([]);
   // Per-job state is keyed by `jobInstanceKey`, so each user-defined job is
   // tracked apart from the others that share the CUSTOM_JOB key.
-  const [lastRunsByJob, setLastRunsByJob] = useState<Partial<Record<string, JobRun>>>({});
+  const [lastRunsByJob, setLastRunsByJob] = useState<
+    Partial<Record<string, JobRun>>
+  >({});
   const [selectedJob, setSelectedJob] = useState<JobTarget | null>(null);
-  const [jobHistoryByKey, setJobHistoryByKey] = useState<Partial<Record<string, JobRun[]>>>({});
+  const [jobHistoryByKey, setJobHistoryByKey] = useState<
+    Partial<Record<string, JobRun[]>>
+  >({});
   const [jobHistoryLoading, setJobHistoryLoading] = useState(false);
-  const [triggeringKeys, setTriggeringKeys] = useState<Partial<Record<string, boolean>>>({});
+  const [triggeringKeys, setTriggeringKeys] = useState<
+    Partial<Record<string, boolean>>
+  >({});
   const selectedInstanceKey = selectedJob ? jobInstanceKey(selectedJob) : null;
   const selectedJobKey = selectedJob?.jobKey ?? null;
   const selectedCustomJobId = selectedJob?.customJobId ?? null;
@@ -171,7 +196,11 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
   const scriptEditor = useScriptEditor("SCHEDULE", {
     onChanged: () => void refreshJobs(),
   });
-  const { loadRunsForScript, scriptRuns, scripts: scheduledScripts } = scriptEditor;
+  const {
+    loadRunsForScript,
+    scriptRuns,
+    scripts: scheduledScripts,
+  } = scriptEditor;
 
   useEffect(() => {
     let cancelled = false;
@@ -191,20 +220,31 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
       }
       const firstError = jobsError ?? recentError ?? latestError;
       if (firstError) {
-        setGlobalStatus(firstError.message, { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(firstError, t("status.apiError"), t),
+          { level: "ERROR" },
+        );
         return;
       }
 
       setJobs(normalizeJobs(jobsData?.jobs));
       setRecentRuns(
-        ((Array.isArray(recentData?.recentJobRuns) ? recentData.recentJobRuns : []) as unknown[])
+        (
+          (Array.isArray(recentData?.recentJobRuns)
+            ? recentData.recentJobRuns
+            : []) as unknown[]
+        )
           .map(normalizeJobRun)
           .filter((run): run is JobRun => run !== null),
       );
       // Runs that arrived over the subscription while this loaded are kept
       // when they are newer than what the load returned.
       setLastRunsByJob((current) =>
-        ((Array.isArray(latestData?.latestJobRuns) ? latestData.latestJobRuns : []) as unknown[])
+        (
+          (Array.isArray(latestData?.latestJobRuns)
+            ? latestData.latestJobRuns
+            : []) as unknown[]
+        )
           .map(normalizeJobRun)
           .filter((run): run is JobRun => run !== null)
           .reduce(mergeLatestJobRun, current),
@@ -214,13 +254,15 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     return () => {
       cancelled = true;
     };
-  }, [client, setGlobalStatus]);
+  }, [client, setGlobalStatus, t]);
 
   useEffect(() => {
     if (!selectedJobRunId) {
       return;
     }
-    const run = recentRuns.find((candidate) => candidate.id === selectedJobRunId);
+    const run = recentRuns.find(
+      (candidate) => candidate.id === selectedJobRunId,
+    );
     if (run) {
       setSelectedJob(jobTargetOf(run));
     }
@@ -248,10 +290,18 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
 
       setActiveRunsById((current) => {
         const next = { ...current };
-        if (normalized.completedAt || normalized.status === "COMPLETED" || normalized.status === "WARNING" || normalized.status === "FAILED") {
+        if (
+          normalized.completedAt ||
+          normalized.status === "COMPLETED" ||
+          normalized.status === "WARNING" ||
+          normalized.status === "FAILED"
+        ) {
           delete next[normalized.id];
         } else {
-          next[normalized.id] = preferJobRunSnapshot(current[normalized.id], normalized);
+          next[normalized.id] = preferJobRunSnapshot(
+            current[normalized.id],
+            normalized,
+          );
         }
         return next;
       });
@@ -270,7 +320,10 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         }
         return {
           ...current,
-          [instanceKey]: [normalized, ...history.filter((run) => run.id !== normalized.id)].slice(0, 10),
+          [instanceKey]: [
+            normalized,
+            ...history.filter((run) => run.id !== normalized.id),
+          ].slice(0, 10),
         };
       });
       // A finished user-defined job has new captured output to show.
@@ -298,23 +351,32 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
       void loadRunsForScript(selectedCustomJobId);
     }
     client
-      .query(jobRunsQuery, {
-        jobKey: selectedJobKey,
-        ...(selectedCustomJobId ? { customJobId: selectedCustomJobId } : {}),
-        limit: selectedJobRunId ? 50 : 10,
-      }, { requestPolicy: "network-only" })
+      .query(
+        jobRunsQuery,
+        {
+          jobKey: selectedJobKey,
+          ...(selectedCustomJobId ? { customJobId: selectedCustomJobId } : {}),
+          limit: selectedJobRunId ? 50 : 10,
+        },
+        { requestPolicy: "network-only" },
+      )
       .toPromise()
       .then(({ data, error }) => {
         if (cancelled) {
           return;
         }
         if (error) {
-          setGlobalStatus(error.message, { level: "ERROR" });
+          setGlobalStatus(
+            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
+            { level: "ERROR" },
+          );
           return;
         }
         setJobHistoryByKey((current) => ({
           ...current,
-          [selectedInstanceKey]: ((Array.isArray(data?.jobRuns) ? data.jobRuns : []) as unknown[])
+          [selectedInstanceKey]: (
+            (Array.isArray(data?.jobRuns) ? data.jobRuns : []) as unknown[]
+          )
             .map(normalizeJobRun)
             .filter((run): run is JobRun => run !== null),
         }));
@@ -336,6 +398,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     selectedJobKey,
     selectedJobRunId,
     setGlobalStatus,
+    t,
   ]);
 
   // Fire-and-forget scripts record their output after the job run finishes:
@@ -398,20 +461,33 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         const normalized = normalizeJobRun(data?.triggerJob);
         if (normalized) {
           registerInteractiveJobRun(normalized);
-          setActiveRunsById((current) => ({ ...current, [normalized.id]: normalized }));
-          setRecentRuns((current) => [normalized, ...current.filter((run) => run.id !== normalized.id)].slice(0, 50));
+          setActiveRunsById((current) => ({
+            ...current,
+            [normalized.id]: normalized,
+          }));
+          setRecentRuns((current) =>
+            [
+              normalized,
+              ...current.filter((run) => run.id !== normalized.id),
+            ].slice(0, 50),
+          );
           setLastRunsByJob((current) => mergeLatestJobRun(current, normalized));
           const runKey = jobInstanceKey(normalized);
           setJobHistoryByKey((current) => ({
             ...current,
             [runKey]: [
               normalized,
-              ...(current[runKey] ?? []).filter((run) => run.id !== normalized.id),
+              ...(current[runKey] ?? []).filter(
+                (run) => run.id !== normalized.id,
+              ),
             ].slice(0, 10),
           }));
         }
       } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("jobs.failedToTrigger"), { level: "ERROR" });
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("jobs.failedToTrigger"), t),
+          { level: "ERROR" },
+        );
       } finally {
         setTriggeringKeys((current) => ({ ...current, [instanceKey]: false }));
       }
@@ -427,14 +503,19 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     [activeRunsById],
   );
 
-  const builtInJobs = useMemo(() => jobs.filter((job) => job.key !== "CUSTOM_JOB"), [jobs]);
+  const builtInJobs = useMemo(
+    () => jobs.filter((job) => job.key !== "CUSTOM_JOB"),
+    [jobs],
+  );
   const customJobs = useMemo<CustomJobEntry[]>(
     () =>
       scheduledScripts.map((script) => ({
         script,
         job: customJobDefinition(
           script,
-          jobs.find((job) => job.key === "CUSTOM_JOB" && job.customJobId === script.id),
+          jobs.find(
+            (job) => job.key === "CUSTOM_JOB" && job.customJobId === script.id,
+          ),
         ),
       })),
     [jobs, scheduledScripts],
@@ -450,12 +531,17 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
           lastRunsByJob,
           selectedInstanceKey,
           selectedJobRunId,
-          selectedJobHistory: selectedInstanceKey ? jobHistoryByKey[selectedInstanceKey] ?? [] : [],
-          selectedScriptRuns: selectedCustomJobId ? scriptRuns[selectedCustomJobId] ?? [] : null,
+          selectedJobHistory: selectedInstanceKey
+            ? (jobHistoryByKey[selectedInstanceKey] ?? [])
+            : [],
+          selectedScriptRuns: selectedCustomJobId
+            ? (scriptRuns[selectedCustomJobId] ?? [])
+            : null,
           jobHistoryLoading,
           triggeringKeys,
           onSelectJob,
           onTriggerJob,
+          onCancelAcquisitionSearch: cancelAcquisitionSearch,
           customJobEditor: {
             isOpen: scriptEditor.isEditorOpen,
             isEditing: scriptEditor.editingScriptId !== null,
@@ -476,8 +562,10 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         ids={{
           deleteConfirm: "jobs-custom-delete-confirm",
           inlineShellContent: "settings-post-processing-inline-shell-confirm",
-          inlineShellAccept: "settings-post-processing-inline-shell-confirm-accept",
-          inlineShellCancel: "settings-post-processing-inline-shell-confirm-cancel",
+          inlineShellAccept:
+            "settings-post-processing-inline-shell-confirm-accept",
+          inlineShellCancel:
+            "settings-post-processing-inline-shell-confirm-cancel",
         }}
       />
     </>

@@ -759,7 +759,13 @@ async fn a_title_manager_still_cannot_file_an_ordinary_request() {
         .await
         .expect_err("Manage Titles alone does not make a title requestable");
 
-    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
     assert!(harness.media_requests.requests.lock().await.is_empty());
 }
 

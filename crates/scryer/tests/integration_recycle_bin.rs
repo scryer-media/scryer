@@ -596,22 +596,31 @@ async fn recycle_bin_settings_reject_invalid_path_and_retention_without_writing(
             .update_recycle_bin_settings(&config_actor, bin_settings(Some(&path), 7))
             .await
         {
-            Err(AppError::Validation(message)) => assert!(
-                message.contains(expected),
-                "error for {path} should mention {expected}: {message}"
-            ),
+            Err(AppError::ValidationRefused {
+                reason, message, ..
+            }) => {
+                assert_eq!(
+                    reason,
+                    scryer_application::error_reasons::settings::RECYCLE_BIN_PATH_UNSAFE
+                );
+                assert!(
+                    message.contains(expected),
+                    "error for {path} should mention {expected}: {message}"
+                );
+            }
             other => panic!("path {path} should be rejected, got {other:?}"),
         }
     }
 
     for retention_days in [-1, 0, 3651] {
-        assert!(
-            matches!(
-                ctx.app
-                    .update_recycle_bin_settings(&config_actor, bin_settings(None, retention_days))
-                    .await,
-                Err(AppError::Validation(_))
-            ),
+        let error = ctx
+            .app
+            .update_recycle_bin_settings(&config_actor, bin_settings(None, retention_days))
+            .await
+            .expect_err("invalid retention should be rejected");
+        assert_eq!(
+            error.validation_reason(),
+            Some(scryer_application::error_reasons::settings::RECYCLE_BIN_RETENTION_OUT_OF_RANGE),
             "retention {retention_days} should be rejected"
         );
     }
@@ -762,7 +771,7 @@ async fn recycle_bin_retention_saves_with_an_invalid_stored_path_sent_back() {
             ctx.app
                 .update_recycle_bin_settings(&config_actor, bin_settings(Some(&inside_nested), 21))
                 .await,
-            Err(AppError::Validation(_))
+            Err(AppError::Validation(_) | AppError::ValidationRefused { .. })
         ),
         "a changed path is still validated"
     );

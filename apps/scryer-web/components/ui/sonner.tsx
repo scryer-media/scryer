@@ -3,15 +3,15 @@ import {
   InfoIcon,
   OctagonXIcon,
   TriangleAlertIcon,
-} from "lucide-react"
-import { useTheme } from "next-themes"
-import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
-import { isDarkTheme } from "@/lib/theme"
+} from "lucide-react";
+import { useTheme } from "next-themes";
+import { Toaster as Sonner, toast, type ToasterProps } from "sonner";
+import { isDarkTheme } from "@/lib/theme";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
-  const { resolvedTheme } = useTheme()
-  const isDark = isDarkTheme(resolvedTheme)
+  const { resolvedTheme } = useTheme();
+  const isDark = isDarkTheme(resolvedTheme);
 
   const themeStyle = (
     isDark
@@ -55,7 +55,7 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
           "--info-text": "var(--scry-info-text)",
           "--border-radius": "var(--radius)",
         }
-  ) as React.CSSProperties
+  ) as React.CSSProperties;
 
   return (
     <Sonner
@@ -78,8 +78,7 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
           // showed through. `!` is what beats rich colours.
           warning:
             "border-[var(--scry-warning-border)] !bg-[var(--background)] text-[var(--scry-warning-text)]",
-          info:
-            "border-[var(--scry-info-border)] !bg-[var(--background)] text-[var(--scry-info-text)]",
+          info: "border-[var(--scry-info-border)] !bg-[var(--background)] text-[var(--scry-info-text)]",
         },
         ...toastOptions,
       }}
@@ -93,7 +92,7 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
       style={{ ...themeStyle, ...style } as React.CSSProperties}
       {...props}
     />
-  )
-}
+  );
+};
 
-export { Toaster, toast }
+export { Toaster, toast };

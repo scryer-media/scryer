@@ -47,7 +47,9 @@ export function formatChmodMode(
     .map((digit, digitIndex) => {
       const bits = Number.parseInt(digit, 8);
       return CHMOD_MODE_BITS[digitIndex]
-        .map((symbol, bitIndex) => (bits & (1 << (2 - bitIndex)) ? symbol : "-"))
+        .map((symbol, bitIndex) =>
+          bits & (1 << (2 - bitIndex)) ? symbol : "-",
+        )
         .join("");
     })
     .join("");

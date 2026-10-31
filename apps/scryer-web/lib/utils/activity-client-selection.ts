@@ -9,6 +9,8 @@ export function reconcileActivityClientSelection(
   if (current === null || availableClientIds.length === 0) {
     return current;
   }
-  const next = current.filter((clientId) => availableClientIds.includes(clientId));
+  const next = current.filter((clientId) =>
+    availableClientIds.includes(clientId),
+  );
   return next.length === current.length ? current : next;
 }

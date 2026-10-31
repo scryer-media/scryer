@@ -11,10 +11,8 @@ async fn validate_import_retry_source(
             &record.source_ref,
         )
     {
-        return Err(AppError::Validation(
-            "the import record conflicts with its completed source identity; use manual import"
-                .into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::RECORD_CONFLICTS_COMPLETED_SOURCE_IDENTITY, "the import record conflicts with its completed source identity; use manual import"
+                ));
     }
     let registry = &app.services.workflow.download_registry;
     let binding = registry.find_active_binding_by_locator(&locator).await?;
@@ -25,16 +23,14 @@ async fn validate_import_retry_source(
         .canonical_download_id_for_import(&record.id)
         .await?
         .ok_or_else(|| {
-            AppError::Validation(
-                "the completed source has no trustworthy download identity; use manual import"
-                    .into(),
-            )
+            AppError::validation_refused(crate::error_reasons::import::COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY, "the completed source has no trustworthy download identity; use manual import"
+                    )
         })?;
     if binding
         .as_ref()
         .is_some_and(|binding| binding.download_id != canonical)
     {
-        return Err(AppError::Validation("the client job ID now belongs to a different download; use manual import for the retained files".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::import::CLIENT_JOB_ID_NOW_BELONGS_DIFFERENT_DOWNLOAD, "the client job ID now belongs to a different download; use manual import for the retained files"));
     }
     let submissions = &app.services.workflow.download_submissions;
     let identity = DownloadSubmissionIdentity::default();
@@ -45,25 +41,19 @@ async fn validate_import_retry_source(
         .get_identity_tracked_state_reason_for_download(Some(&canonical), &identity, Some(&locator))
         .await?;
     if reason.as_deref() == Some(crate::IMPORT_RETRY_TRACKED_STATE_REASON) {
-        return Err(AppError::Validation(
-            "this import retry is already running or awaiting reconciliation".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::RETRY_ALREADY_RUNNING_AWAITING_RECONCILIATION, "this import retry is already running or awaiting reconciliation"));
     }
     if matches!(state.as_deref(), Some("failed" | "failed_pending"))
         && reason.as_deref()
             != Some(crate::tracked_downloads::IMPORT_GATE_REJECTED_TRACKED_STATE_REASON)
     {
-        return Err(AppError::Validation(
-            "the download failed; retry the download before importing".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_FAILED, "the download failed; retry the download before importing"));
     }
     if matches!(
         state.as_deref(),
         Some("imported" | "imported_seeding" | "ignored")
     ) {
-        return Err(AppError::Validation(
-            "the download is already settled; refresh its history".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_ALREADY_SETTLED, "the download is already settled; refresh its history"));
     }
     if !completed.client_id.trim().is_empty()
         && let Some(config) = app
@@ -77,9 +67,7 @@ async fn validate_import_retry_source(
             .client_type
             .eq_ignore_ascii_case(&completed.client_type)
         {
-            return Err(AppError::Validation(
-                "the download client configuration no longer matches this source; use manual import".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_CLIENT_CONFIGURATION_NO_LONGER_MATCHES_SOURCE, "the download client configuration no longer matches this source; use manual import"));
         }
         let mut offset = 0;
         let mut established = false;
@@ -98,17 +86,15 @@ async fn validate_import_retry_source(
                         &item.download_client_item_id,
                     ) != locator
                     {
-                        return Err(AppError::Validation(
-                            "the client returned a different download identity; refresh and retry"
-                                .into(),
-                        ));
+                        return Err(AppError::validation_refused(crate::error_reasons::import::CLIENT_RETURNED_DIFFERENT_DOWNLOAD_IDENTITY, "the client returned a different download identity; refresh and retry"
+                                ));
                     }
                     if !matches!(
                         item.state,
                         scryer_domain::DownloadQueueState::Completed
                             | scryer_domain::DownloadQueueState::ImportPending
                     ) {
-                        return Err(AppError::Validation("the client does not report a completed download; import retry cannot restart a failed or active download".into()));
+                        return Err(AppError::validation_refused(crate::error_reasons::import::CLIENT_DOES_NOT_REPORT_COMPLETED_DOWNLOAD, "the client does not report a completed download; import retry cannot restart a failed or active download"));
                     }
                     established = true;
                     break;
@@ -129,11 +115,11 @@ async fn validate_import_retry_source(
             }
         }
         if !established {
-            return Err(AppError::Validation("the client's current download state could not be established; try again when its history is available".into()));
+            return Err(AppError::validation_refused(crate::error_reasons::import::DOWNLOAD_STATE_UNAVAILABLE, "the client's current download state could not be established; try again when its history is available"));
         }
     }
     if !Path::new(&completed.dest_dir).exists() {
-        return Err(AppError::Validation("the import source is no longer available; restore the download or correct its path before retrying".into()));
+        return Err(AppError::validation_refused(crate::error_reasons::import::SOURCE_UNAVAILABLE, "the import source is no longer available; restore the download or correct its path before retrying"));
     }
     Ok(canonical)
 }
@@ -167,9 +153,7 @@ pub(crate) async fn retry_tracked_import(
             return retry_failed_import(app, actor, &record.id, None).await;
         }
     }
-    Err(AppError::Validation(
-        "no completed import attempt is available to retry; use manual import".into(),
-    ))
+    Err(AppError::validation_refused(crate::error_reasons::import::NO_COMPLETED_IMPORT_ATTEMPT_UNAVAILABLE, "no completed import attempt is available to retry; use manual import"))
 }
 
 async fn reconcile_claimed_history_retry(
@@ -196,14 +180,12 @@ async fn reconcile_claimed_history_retry(
             claim,
             td.state,
             reason,
-            td.status_messages.first().map(String::as_str),
+            td.status_messages.first().map(|message| message.text.as_str()),
         )
         .await?
         .is_finalized()
     {
-        return Err(AppError::Validation(
-            "a newer import attempt owns this download; refresh its history".into(),
-        ));
+        return Err(AppError::validation_refused(crate::error_reasons::import::NEWER_IMPORT_ATTEMPT_OWNS_DOWNLOAD, "a newer import attempt owns this download; refresh its history"));
     }
     if td.state.counts_as_imported() {
         crate::completed_download_handler::schedule_non_destructive_import_mark(
@@ -268,7 +250,7 @@ pub(crate) async fn recover_import_retry(
         .imports
         .get_import_by_id(&claim.import_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("retry import record".into()))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::RETRY_IMPORT_RECORD_NOT_FOUND, "retry import record"))?;
     let payload: StoredCompletedImportRequestPayload =
         serde_json::from_str(&record.payload_json)
             .map_err(|e| AppError::Repository(format!("invalid completed import payload: {e}")))?;
@@ -326,7 +308,7 @@ pub(crate) async fn recover_import_retry(
         .imports
         .get_import_by_id(&claim.import_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("retry import record".into()))?;
+        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::import::RETRY_IMPORT_RECORD_NOT_FOUND, "retry import record"))?;
     let id = crate::tracked_downloads::tracked_download_id(
         Some(&completed.client_id),
         &completed.client_type,

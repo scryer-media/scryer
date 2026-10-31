@@ -39,6 +39,44 @@ use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
 };
 
+fn import_io_reason(error: &io::Error) -> &'static str {
+    use scryer_application::error_reasons::import;
+    if let Some(reason) = error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<AppError>())
+        .and_then(AppError::reason)
+    {
+        match reason {
+            import::FILE_NOT_FOUND
+            | import::PERMISSION_DENIED
+            | import::DISK_FULL
+            | import::IO_FAILED => return reason,
+            _ => {}
+        }
+    }
+    match error.kind() {
+        io::ErrorKind::NotFound => import::FILE_NOT_FOUND,
+        io::ErrorKind::PermissionDenied => import::PERMISSION_DENIED,
+        io::ErrorKind::StorageFull => import::DISK_FULL,
+        _ => import::IO_FAILED,
+    }
+}
+
+fn import_io_error(error: &io::Error, message: String) -> AppError {
+    AppError::RepositoryFailed {
+        message,
+        reason: import_io_reason(error),
+    }
+}
+
+/// Context may add diagnostics but must not discard a routed failure fact.
+fn import_error_context(error: &AppError, message: String) -> AppError {
+    match error {
+        AppError::RepositoryFailed { reason, .. } => AppError::RepositoryFailed { message, reason },
+        _ => AppError::Repository(message),
+    }
+}
+
 const TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO: i32 = 9;
 const IMPORT_COPY_MAX_ATTEMPTS: usize = 3;
 const IMPORT_COPY_BUFFER_BYTES: usize = 8 * 1024 * 1024;
@@ -351,18 +389,24 @@ fn cleanup_guard(
     size: u64,
 ) -> AppResult<ImportSourceCleanupGuard> {
     let source_proof = import_content_proof(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to build import source cleanup proof for source {}: {}",
-            source.display(),
-            error
-        ))
+        import_error_context(
+            &error,
+            format!(
+                "failed to build import source cleanup proof for source {}: {}",
+                source.display(),
+                error
+            ),
+        )
     })?;
     let dest_proof = import_content_proof(dest).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to build import source cleanup proof for destination {}: {}",
-            dest.display(),
-            error
-        ))
+        import_error_context(
+            &error,
+            format!(
+                "failed to build import source cleanup proof for destination {}: {}",
+                dest.display(),
+                error
+            ),
+        )
     })?;
     if source_proof.size_bytes != size || dest_proof.size_bytes != size {
         return Err(AppError::Repository(format!(
@@ -477,29 +521,38 @@ fn import_file_identity_from_fingerprint(file: &FileFingerprint) -> ImportFileId
 
 fn fingerprint_import_source(path: &Path) -> AppResult<ImportSourceFingerprint> {
     let link_meta = std::fs::symlink_metadata(path).map_err(|e| {
-        AppError::Repository(format!(
-            "import path not found or inaccessible: {}: {}",
-            path.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "import path not found or inaccessible: {}: {}",
+                path.display(),
+                e
+            ),
+        )
     })?;
     let file_type = link_meta.file_type();
     if file_type.is_symlink() {
         let source_link_target = std::fs::read_link(path).map_err(|e| {
-            AppError::Repository(format!(
-                "failed to read import symlink target: {}: {}",
-                path.display(),
-                e
-            ))
+            import_io_error(
+                &e,
+                format!(
+                    "failed to read import symlink target: {}: {}",
+                    path.display(),
+                    e
+                ),
+            )
         })?;
         let resolved_target = resolve_symlink_target(path, &source_link_target);
         let target_meta = std::fs::metadata(&resolved_target).map_err(|e| {
-            AppError::Repository(format!(
-                "import symlink target not found or inaccessible: {} -> {}: {}",
-                path.display(),
-                resolved_target.display(),
-                e
-            ))
+            import_io_error(
+                &e,
+                format!(
+                    "import symlink target not found or inaccessible: {} -> {}: {}",
+                    path.display(),
+                    resolved_target.display(),
+                    e
+                ),
+            )
         })?;
         return Ok(ImportSourceFingerprint {
             file: fingerprint_from_metadata(&target_meta)?,
@@ -541,11 +594,14 @@ fn fingerprint_from_metadata(metadata: &std::fs::Metadata) -> AppResult<FileFing
 
 fn directory_fingerprint_from_path(path: &Path) -> AppResult<DirectoryFingerprint> {
     let metadata = std::fs::metadata(path).map_err(|e| {
-        AppError::Repository(format!(
-            "failed to stat destination directory {}: {}",
-            path.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "failed to stat destination directory {}: {}",
+                path.display(),
+                e
+            ),
+        )
     })?;
     if !metadata.is_dir() {
         return Err(AppError::Repository(
@@ -566,11 +622,14 @@ fn directory_fingerprint_from_path(path: &Path) -> AppResult<DirectoryFingerprin
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .map_err(|e| {
-                AppError::Repository(format!(
-                    "failed to open destination directory {} for identity check: {}",
-                    path.display(),
-                    e
-                ))
+                import_io_error(
+                    &e,
+                    format!(
+                        "failed to open destination directory {} for identity check: {}",
+                        path.display(),
+                        e
+                    ),
+                )
             })?;
         let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
         let result =
@@ -654,8 +713,8 @@ fn linked_file_identity_mismatch(
     }))
 }
 
-fn io_other(error: impl ToString) -> io::Error {
-    io::Error::other(error.to_string())
+fn io_other(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::other(error)
 }
 
 fn resolve_symlink_target(source: &Path, target: &Path) -> PathBuf {
@@ -1215,18 +1274,24 @@ fn prepare_import_destination(
     let parent = destination_parent_for_guard(dest);
     let missing_dirs = missing_destination_dirs(parent);
     std::fs::create_dir_all(parent).map_err(|e| {
-        AppError::Repository(format!(
-            "failed to create destination directory {}: {}",
-            parent.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "failed to create destination directory {}: {}",
+                parent.display(),
+                e
+            ),
+        )
     })?;
     let approved_parent_canonical = std::fs::canonicalize(parent).map_err(|e| {
-        AppError::Repository(format!(
-            "failed to inspect destination directory {}: {}",
-            parent.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "failed to inspect destination directory {}: {}",
+                parent.display(),
+                e
+            ),
+        )
     })?;
     let approved_parent_fingerprint = directory_fingerprint_from_path(parent)?;
     let destination_guard = ImportDestinationGuard {
@@ -1257,11 +1322,14 @@ fn validate_import_destination_parent(
     }
 
     let current_parent_canonical = std::fs::canonicalize(&guard.parent_path).map_err(|e| {
-        AppError::Repository(format!(
-            "failed to re-check destination directory {}: {}",
-            guard.parent_path.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "failed to re-check destination directory {}: {}",
+                guard.parent_path.display(),
+                e
+            ),
+        )
     })?;
     if current_parent_canonical != guard.approved_parent_canonical {
         return Err(AppError::Repository(format!(
@@ -1298,11 +1366,14 @@ fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
 
 fn validate_import_destination_file(guard: &ImportDestinationGuard) -> AppResult<()> {
     let metadata = std::fs::symlink_metadata(&guard.requested_path).map_err(|e| {
-        AppError::Repository(format!(
-            "failed to inspect imported destination {}: {}",
-            guard.requested_path.display(),
-            e
-        ))
+        import_io_error(
+            &e,
+            format!(
+                "failed to inspect imported destination {}: {}",
+                guard.requested_path.display(),
+                e
+            ),
+        )
     })?;
     let file_type = metadata.file_type();
     if !file_type.is_file() && !file_type.is_symlink() {
@@ -1374,19 +1445,25 @@ fn import_symlink_source(
         };
         let symlink_target = build_destination_symlink_target(dest, resolved_target);
         symlink(&symlink_target, dest).map_err(|e| {
-            AppError::Repository(format!(
-                "failed to create symlink import {} -> {}: {}",
-                dest.display(),
-                symlink_target.display(),
-                e
-            ))
+            import_io_error(
+                &e,
+                format!(
+                    "failed to create symlink import {} -> {}: {}",
+                    dest.display(),
+                    symlink_target.display(),
+                    e
+                ),
+            )
         })?;
         let dest_meta = std::fs::symlink_metadata(dest).map_err(|e| {
-            AppError::Repository(format!(
-                "failed to inspect imported symlink {}: {}",
-                dest.display(),
-                e
-            ))
+            import_io_error(
+                &e,
+                format!(
+                    "failed to inspect imported symlink {}: {}",
+                    dest.display(),
+                    e
+                ),
+            )
         })?;
         if !dest_meta.file_type().is_symlink() {
             let _ = std::fs::remove_file(dest);
@@ -1638,14 +1715,17 @@ fn copy_regular_source_to_destination(
 
     let hashes = loop {
         if let Err(error) = remove_import_temp_file(&temp_dest) {
-            return Err(AppError::Repository(format!(
-                "import copy failed before attempt {}: {} -> {}: cleanup of temporary destination {} failed: {}",
-                attempt,
-                source.display(),
-                dest.display(),
-                temp_dest.display(),
-                error
-            )));
+            return Err(import_io_error(
+                &error,
+                format!(
+                    "import copy failed before attempt {}: {} -> {}: cleanup of temporary destination {} failed: {}",
+                    attempt,
+                    source.display(),
+                    dest.display(),
+                    temp_dest.display(),
+                    error
+                ),
+            ));
         }
 
         match copy_regular_source_to_destination_once(
@@ -1680,13 +1760,16 @@ fn copy_regular_source_to_destination(
                     continue;
                 }
 
-                return Err(AppError::Repository(format!(
-                    "import copy failed after {} attempt(s): {} -> {}: {}",
-                    attempt,
-                    source.display(),
-                    dest.display(),
-                    error
-                )));
+                return Err(import_io_error(
+                    &error.error,
+                    format!(
+                        "import copy failed after {} attempt(s): {} -> {}: {}",
+                        attempt,
+                        source.display(),
+                        dest.display(),
+                        error
+                    ),
+                ));
             }
         }
     };
@@ -2253,16 +2336,22 @@ fn reconcile_existing_destination(
     validate_import_destination_parent(destination_guard, dest)?;
     validate_import_destination_file(destination_guard)?;
     let source_proof = import_content_proof(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to prove import source content {}: {error}",
-            source.display()
-        ))
+        import_error_context(
+            &error,
+            format!(
+                "failed to prove import source content {}: {error}",
+                source.display()
+            ),
+        )
     })?;
     let destination_proof = import_content_proof(dest).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to prove import destination content {}: {error}",
-            dest.display()
-        ))
+        import_error_context(
+            &error,
+            format!(
+                "failed to prove import destination content {}: {error}",
+                dest.display()
+            ),
+        )
     })?;
     if source_proof != destination_proof || source_proof.size_bytes != size {
         return Err(AppError::ManualReconciliationRequired(format!(
@@ -2651,9 +2740,17 @@ enum ImportFileWorkerEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ImportFileWorkerError {
-    Repository { message: String },
-    ManualReconciliationRequired { message: String },
-    Canceled { message: String },
+    Repository {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ManualReconciliationRequired {
+        message: String,
+    },
+    Canceled {
+        message: String,
+    },
 }
 
 impl From<AppError> for ImportFileWorkerError {
@@ -2663,9 +2760,19 @@ impl From<AppError> for ImportFileWorkerError {
                 Self::ManualReconciliationRequired { message }
             }
             AppError::Canceled(message) => Self::Canceled { message },
-            AppError::Repository(message) => Self::Repository { message },
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. } => {
+                Self::Repository {
+                    message,
+                    reason: None,
+                }
+            }
+            AppError::RepositoryFailed { message, reason } => Self::Repository {
+                message,
+                reason: Some(reason.to_string()),
+            },
             other => Self::Repository {
                 message: other.to_string(),
+                reason: None,
             },
         }
     }
@@ -2675,6 +2782,7 @@ impl From<io::Error> for ImportFileWorkerError {
     fn from(error: io::Error) -> Self {
         Self::Repository {
             message: format!("failed to write import worker event: {error}"),
+            reason: Some(import_io_reason(&error).to_string()),
         }
     }
 }
@@ -2682,7 +2790,20 @@ impl From<io::Error> for ImportFileWorkerError {
 impl From<ImportFileWorkerError> for AppError {
     fn from(error: ImportFileWorkerError) -> Self {
         match error {
-            ImportFileWorkerError::Repository { message } => AppError::Repository(message),
+            ImportFileWorkerError::Repository { message, reason } => {
+                use scryer_application::error_reasons::import;
+                let reason = match reason.as_deref() {
+                    Some("IMPORT_FILE_NOT_FOUND") => Some(import::FILE_NOT_FOUND),
+                    Some("IMPORT_PERMISSION_DENIED") => Some(import::PERMISSION_DENIED),
+                    Some("IMPORT_DISK_FULL") => Some(import::DISK_FULL),
+                    Some("IMPORT_IO_FAILED") => Some(import::IO_FAILED),
+                    _ => None,
+                };
+                match reason {
+                    Some(reason) => AppError::RepositoryFailed { message, reason },
+                    None => AppError::Repository(message),
+                }
+            }
             ImportFileWorkerError::ManualReconciliationRequired { message } => {
                 AppError::ManualReconciliationRequired(message)
             }
@@ -2752,7 +2873,10 @@ pub fn run_import_file_worker() -> i32 {
                 &output,
                 &ImportFileWorkerEvent::Error {
                     nonce: 0,
-                    error: ImportFileWorkerError::Repository { message: error },
+                    error: ImportFileWorkerError::Repository {
+                        message: error,
+                        reason: None,
+                    },
                 },
             );
             return 2;
@@ -2766,6 +2890,7 @@ pub fn run_import_file_worker() -> i32 {
                 nonce,
                 error: ImportFileWorkerError::Repository {
                     message: format!("unsupported import worker protocol version {version}"),
+                    reason: None,
                 },
             },
         );
@@ -3811,7 +3936,9 @@ mod tests {
         assert!(matches!(&error, AppError::Canceled(message) if message == "operator stop"));
 
         let error = round_trip_worker_error(AppError::Repository("disk full".into()));
-        assert!(matches!(&error, AppError::Repository(message) if message == "disk full"));
+        assert!(
+            matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } if message == "disk full")
+        );
     }
 
     // Anything the worker's functions do not produce today still crosses as a
@@ -3822,9 +3949,25 @@ mod tests {
         let rendered = AppError::Validation("bad request".into()).to_string();
         let error = round_trip_worker_error(AppError::Validation("bad request".into()));
         assert!(
-            matches!(&error, AppError::Repository(message) if *message == rendered),
+            matches!(&error, AppError::Repository(message) | AppError::RepositoryFailure { message, .. } if *message == rendered),
             "got {error:?}"
         );
+    }
+
+    #[test]
+    fn worker_error_round_trip_preserves_io_kind_without_reading_its_message() {
+        use scryer_application::error_reasons::import;
+        for (kind, reason) in [
+            (io::ErrorKind::NotFound, import::FILE_NOT_FOUND),
+            (io::ErrorKind::PermissionDenied, import::PERMISSION_DENIED),
+            (io::ErrorKind::StorageFull, import::DISK_FULL),
+            (io::ErrorKind::Other, import::IO_FAILED),
+        ] {
+            let error = io::Error::new(kind, "wording has no meaning");
+            let result =
+                round_trip_worker_error(import_io_error(&error, "context may change".into()));
+            assert_eq!(result.reason(), Some(reason));
+        }
     }
 
     #[test]

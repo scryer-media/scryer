@@ -49,14 +49,24 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(file_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         let title = self
             .services
             .catalog
             .titles
             .get_by_id(&media_file.title_id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("title {}", media_file.title_id)))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {}", media_file.title_id),
+                )
+            })?;
         self.require_library_permission(
             actor,
             &title.library_id,
@@ -98,6 +108,21 @@ impl AppUseCase {
                 ))
             })?;
 
+        // Different files can displace each other's primary episode links.
+        // Keep compensation inside the same title-wide critical section.
+        let _title_guard = self
+            .runtime
+            .jobs
+            .interactive_operation_guards
+            .try_acquire(&format!("episode-file-reassign:{}", title.id))
+            .await
+            .ok_or_else(|| {
+                AppError::LocationOperationBusy(format!(
+                    "another operation is already reassigning files for title {}",
+                    title.id
+                ))
+            })?;
+
         let outcome = self
             .services
             .library
@@ -112,7 +137,10 @@ impl AppUseCase {
         let reassignment = match outcome {
             EpisodeFileReassignOutcome::Reassigned(reassignment) => reassignment,
             EpisodeFileReassignOutcome::FileNotFound => {
-                return Err(AppError::NotFound(format!("media file {file_id}")));
+                return Err(AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                ));
             }
             EpisodeFileReassignOutcome::SeriesMovieFile => {
                 return Err(AppError::validation_refused(
@@ -169,7 +197,12 @@ impl AppUseCase {
             .media_files
             .get_media_file_by_id(&media_file.id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::MEDIA_FILE_NOT_FOUND,
+                    format!("media file {file_id}"),
+                )
+            })?;
         let previous_episode_ids = reassignment.previous_episode_ids();
         let demoted_file_ids = reassignment.demoted_file_ids();
         let mut promoted_file_ids = reassignment

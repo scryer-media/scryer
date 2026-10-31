@@ -19,10 +19,11 @@ use scryer_application::{
 };
 
 use super::{
-    catalog_view_update_from_input, from_api_key, from_oauth_client_registration,
-    from_plugin_auto_update_settings, from_recycle_bin_settings, from_title_tag_definition,
-    from_title_tag_rewrite_counts, from_ui_settings, from_verification_settings,
-    into_oauth_client_kind, to_verification_depth, ui_settings_update_from_input,
+    catalog_view_update_from_input, dashboard_layout_from_input, from_api_key,
+    from_oauth_client_registration, from_plugin_auto_update_settings, from_recycle_bin_settings,
+    from_title_tag_definition, from_title_tag_rewrite_counts, from_ui_settings,
+    from_verification_settings, into_oauth_client_kind, to_app_ui_dashboard_breakpoint,
+    to_verification_depth, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
     AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
@@ -199,9 +200,10 @@ fn resolve_mfa_route_requirement(
     if let (Some(generic), Some(legacy)) = (generic, legacy)
         && generic != legacy
     {
-        return Err(to_gql_error(AppError::Validation(format!(
-            "conflicting MFA requirements for {route} login"
-        ))));
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_LOGIN_MFA_CONFLICT,
+            format!("conflicting MFA requirements for {route} login"),
+        )));
     }
     Ok(generic.or(legacy))
 }
@@ -245,8 +247,9 @@ fn ensure_media_server_login_allowed(
     effective_form_login_enabled: bool,
 ) -> Result<(), AppError> {
     if requested_login_enabled.unwrap_or(false) && !effective_form_login_enabled {
-        Err(AppError::Validation(
-            MEDIA_SERVER_LOGIN_REQUIRES_FORM_LOGIN.to_string(),
+        Err(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_LOGIN_FORM_REQUIRED,
+            MEDIA_SERVER_LOGIN_REQUIRES_FORM_LOGIN,
         ))
     } else {
         Ok(())
@@ -705,18 +708,21 @@ fn quality_profile_from_input(
     });
 
     if profile.id.is_empty() {
-        return Err(to_gql_error(AppError::Validation(
-            "quality profile id is required".to_string(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_ID_REQUIRED,
+            "quality profile id is required",
         )));
     }
     if profile.name.is_empty() {
-        return Err(to_gql_error(AppError::Validation(
-            "quality profile name is required".to_string(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_NAME_REQUIRED,
+            "quality profile name is required",
         )));
     }
     if profile.criteria.quality_tiers.is_empty() {
-        return Err(to_gql_error(AppError::Validation(
-            "quality profile must include at least one quality tier".to_string(),
+        return Err(to_gql_error(AppError::validation_refused(
+            scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED,
+            "quality profile must include at least one quality tier",
         )));
     }
 
@@ -732,9 +738,10 @@ fn parse_video_codec_values(
         .map(|value| {
             let trimmed = value.trim().to_string();
             scryer_application::VideoCodec::parse(trimmed.as_str()).ok_or_else(|| {
-                to_gql_error(AppError::Validation(format!(
-                    "invalid value {trimmed:?} for {field}"
-                )))
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_VALUE_INVALID,
+                    format!("invalid value {trimmed:?} for {field}"),
+                ))
             })
         })
         .collect()
@@ -749,9 +756,10 @@ fn parse_source_values(
         .map(|value| {
             let trimmed = value.trim().to_string();
             scryer_application::ReleaseSource::parse(trimmed.as_str()).ok_or_else(|| {
-                to_gql_error(AppError::Validation(format!(
-                    "invalid value {trimmed:?} for {field}"
-                )))
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_VALUE_INVALID,
+                    format!("invalid value {trimmed:?} for {field}"),
+                ))
             })
         })
         .collect()
@@ -766,9 +774,10 @@ fn parse_audio_codec_values(
         .map(|value| {
             let trimmed = value.trim().to_string();
             scryer_application::AudioCodec::parse(trimmed.as_str()).ok_or_else(|| {
-                to_gql_error(AppError::Validation(format!(
-                    "invalid value {trimmed:?} for {field}"
-                )))
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_VALUE_INVALID,
+                    format!("invalid value {trimmed:?} for {field}"),
+                ))
             })
         })
         .collect()
@@ -781,7 +790,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Complete UI settings to save; omitted or null date_time_format, no_glow, language or table_columns keeps its current value."
+            desc = "Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value."
         )]
         input: SetMyUiSettingsInput,
     ) -> GqlResult<UiSettingsPayload> {
@@ -806,6 +815,41 @@ impl SettingsMutations {
         let actor = actor_from_ctx(ctx)?;
         let settings = app
             .set_my_catalog_view(&actor, catalog_view_update_from_input(input))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_ui_settings(settings))
+    }
+
+    /// Replaces the authenticated actor's dashboard layout for one breakpoint, leaving the other breakpoints unchanged.
+    async fn set_my_dashboard_layout(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Complete layout for one breakpoint; an empty item list saves a layout with no panels."
+        )]
+        input: SetMyDashboardLayoutInput,
+    ) -> GqlResult<UiSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .set_my_dashboard_layout(&actor, dashboard_layout_from_input(input))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_ui_settings(settings))
+    }
+
+    /// Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
+    async fn reset_my_dashboard_layout(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Breakpoint to reset; null resets every breakpoint.")] breakpoint: Option<
+            UiDashboardBreakpoint,
+        >,
+    ) -> GqlResult<UiSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .reset_my_dashboard_layout(&actor, breakpoint.map(to_app_ui_dashboard_breakpoint))
             .await
             .map_err(to_gql_error)?;
         Ok(from_ui_settings(settings))
@@ -1133,8 +1177,9 @@ impl SettingsMutations {
             "Jellyfin",
         )?
         .ok_or_else(|| {
-            to_gql_error(AppError::Validation(
-                "an MFA requirement for Jellyfin login is required".into(),
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_LOGIN_MFA_REQUIRED,
+                "an MFA requirement for Jellyfin login is required",
             ))
         })?;
         let emby_mfa_requirement = resolve_mfa_route_requirement(
@@ -1580,7 +1625,12 @@ impl SettingsMutations {
             .map_err(to_gql_error)?
             .into_iter()
             .find(|summary| summary.definition.id == id)
-            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title tag {id}"))))?;
+            .ok_or_else(|| {
+                to_gql_error(AppError::not_found_reason(
+                    scryer_interface_core::refusal::INTERFACE_TAG_NOT_FOUND,
+                    format!("title tag {id}"),
+                ))
+            })?;
         let counts = app
             .delete_title_tag_definition(&actor, &id)
             .await
@@ -2557,6 +2607,60 @@ impl SettingsMutations {
         }
     }
 
+    /// Completes the mandatory authentication decision on a new database.
+    async fn complete_initial_authentication(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The operator's authentication choice and setup authorization.")]
+        input: CompleteInitialAuthenticationInput,
+    ) -> GqlResult<InitialAuthenticationPayload> {
+        use scryer_application::initial_auth::refusal;
+        let request = ctx.data::<scryer_interface_core::InitialAuthenticationRequest>()?;
+        let app = app_from_ctx(ctx)?;
+        let runtime = auth_runtime_from_ctx(ctx);
+        runtime
+            .initial_authentication
+            .verify(request.client_ip, input.setup_code.as_deref())
+            .map_err(to_gql_error)?;
+        let password_mode = input.mode == InitialAuthenticationMode::Password;
+        if password_mode != input.password.is_some()
+            || (runtime.snapshot().env_override_active
+                && runtime.snapshot().effective_form_login_enabled != password_mode)
+        {
+            return Err(to_gql_error(AppError::validation_refused(
+                refusal::MODE_CONFLICT,
+                "the authentication choice conflicts with its password or environment configuration",
+            )));
+        }
+        let user = app
+            .complete_initial_authentication(input.password, input.acknowledge_no_authentication)
+            .await
+            .map_err(to_gql_error)?;
+        runtime.apply_saved_security_settings(password_mode, false);
+        runtime.invalidate_connections();
+        runtime.initial_authentication.consume();
+        let login = if password_mode {
+            Some(
+                login_payload_from_user(
+                    &app,
+                    user,
+                    None,
+                    None,
+                    default_persist_session_from_ctx(ctx),
+                    None,
+                    false,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        Ok(InitialAuthenticationPayload {
+            completed: true,
+            login,
+        })
+    }
+
     /// Replaces an administrator-provided temporary password and issues the full session.
     async fn complete_required_password_change(
         &self,
@@ -2567,6 +2671,19 @@ impl SettingsMutations {
         let app = app_from_ctx(ctx)?;
         let claims = mfa_verification_from_ctx(ctx);
         let actor = password_change_required_actor_from_ctx(ctx)?;
+        if let Some(state) = app
+            .initial_authentication_state()
+            .await
+            .map_err(to_gql_error)?
+        {
+            state
+                .validate_runtime_mode(
+                    auth_runtime_from_ctx(ctx)
+                        .snapshot()
+                        .effective_form_login_enabled,
+                )
+                .map_err(to_gql_error)?;
+        }
         let (user, auth_session_version) = app
             .complete_required_password_change(&actor, input.password, &claims.auth_session_version)
             .await
@@ -2645,7 +2762,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            AppError::Validation(message) if message == MEDIA_SERVER_LOGIN_REQUIRES_FORM_LOGIN
+            AppError::ValidationRefused { message, .. } if message == MEDIA_SERVER_LOGIN_REQUIRES_FORM_LOGIN
         ));
     }
 

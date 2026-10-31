@@ -42,25 +42,19 @@ impl AppUseCase {
                 .discover_plex_servers(token)
                 .await?;
             if servers.is_empty() {
-                return Err(AppError::Validation(
-                    "Plex did not return any accessible servers for that account".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::media_servers::PLEX_DID_NOT_RETURN_ANY_ACCESSIBLE_SERVERS_ACCOUNT, "Plex did not return any accessible servers for that account"));
             }
             let selected = if let Some(selected_server_id) = selected_server_id {
                 servers
                     .iter()
                     .find(|server| server.id == selected_server_id)
                     .ok_or_else(|| {
-                        AppError::Validation(
-                            "The selected Plex server was not returned by Plex discovery".into(),
-                        )
+                        AppError::validation_refused(crate::error_reasons::media_servers::SELECTED_PLEX_SERVER_NOT_RETURNED_PLEX_DISCOVERY, "The selected Plex server was not returned by Plex discovery")
                     })?
             } else if servers.len() == 1 {
                 &servers[0]
             } else {
-                return Err(AppError::Validation(
-                    "Select a Plex server before saving this connection".into(),
-                ));
+                return Err(AppError::validation_refused(crate::error_reasons::media_servers::SELECT_PLEX_SERVER_BEFORE_SAVING_CONNECTION, "Select a Plex server before saving this connection"));
             };
             return Ok(ResolvedPlexServerSelection {
                 machine_id: Some(selected.id.clone()),
@@ -68,8 +62,9 @@ impl AppUseCase {
         }
 
         if selected_server_id.is_some() {
-            return Err(AppError::Validation(
-                "Sign in with Plex before selecting a Plex server".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::media_servers::SIGN_PLEX_BEFORE_SELECTING_PLEX_SERVER,
+                "Sign in with Plex before selecting a Plex server",
             ));
         }
 

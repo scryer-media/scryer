@@ -1,3 +1,6 @@
+import { useSearchParams } from "react-router";
+import { useLanguage } from "@/lib/hooks/use-language";
+import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,40 +53,44 @@ async function submitOAuthDecision(
   token: string | null,
   approved: boolean,
 ): Promise<OAuthDecisionOutcome> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
   if (token) headers.authorization = `Bearer ${token}`;
-  const response = await fetch(getRuntimeBackendUrl("/oauth/authorize/decision"), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      approved,
-      responseType: request.responseType,
-      clientId: request.clientId,
-      redirectUri: request.redirectUri,
-      codeChallenge: request.codeChallenge,
-      codeChallengeMethod: request.codeChallengeMethod,
-      scope: request.scope,
-      state: request.state,
-    }),
-  });
-  const body = (await response.json().catch(() => null)) as
-    | {
-        redirectUri?: string;
-        error?: string;
-        errorDescription?: string;
-        error_description?: string;
-      }
-    | null;
+  const response = await fetch(
+    getRuntimeBackendUrl("/oauth/authorize/decision"),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        approved,
+        responseType: request.responseType,
+        clientId: request.clientId,
+        redirectUri: request.redirectUri,
+        codeChallenge: request.codeChallenge,
+        codeChallengeMethod: request.codeChallengeMethod,
+        scope: request.scope,
+        state: request.state,
+      }),
+    },
+  );
+  const body = (await response.json().catch(() => null)) as {
+    redirectUri?: string;
+    error?: string;
+    errorDescription?: string;
+    error_description?: string;
+  } | null;
   if (response.ok && body?.redirectUri) {
     return { kind: "redirect", redirectUri: body.redirectUri };
   }
-  if (body?.error === "reauthentication_required") return { kind: "reauthenticate" };
+  if (body?.error === "reauthentication_required")
+    return { kind: "reauthenticate" };
   return {
     kind: "error",
     message:
-      body?.error_description
-      ?? body?.errorDescription
-      ?? "Unable to authorize this integration.",
+      body?.error_description ??
+      body?.errorDescription ??
+      "Unable to authorize this integration.",
   };
 }
 
@@ -100,34 +107,50 @@ function loginUrl() {
 }
 
 export default function OAuthAuthorizePage() {
+  const [searchParams] = useSearchParams();
+  const { t } = useLanguage(searchParams);
   const search = window.location.search;
-  const request = useMemo(() => oauthAuthorizationRequestFromSearch(search), [search]);
+  const request = useMemo(
+    () => oauthAuthorizationRequestFromSearch(search),
+    [search],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actorValidationRetry, setActorValidationRetry] = useState(0);
-  const [actorValidationRetryAvailable, setActorValidationRetryAvailable] = useState(false);
+  const [actorValidationRetryAvailable, setActorValidationRetryAvailable] =
+    useState(false);
   const [clientName, setClientName] = useState<string | null>(null);
-  const [authorizationScope, setAuthorizationScope] = useState<string | null>(null);
+  const [authorizationScope, setAuthorizationScope] = useState<string | null>(
+    null,
+  );
   const [actorUsername, setActorUsername] = useState<string | null>(null);
-  const [requestValidationError, setRequestValidationError] = useState<string | null>(null);
-  const [actorValidationError, setActorValidationError] = useState<string | null>(null);
-  const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
+  const [requestValidationError, setRequestValidationError] = useState<
+    string | null
+  >(null);
+  const [actorValidationError, setActorValidationError] = useState<
+    string | null
+  >(null);
+  const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<
+    boolean | null
+  >(null);
   const [completingAuthorization, setCompletingAuthorization] = useState(false);
   const token = getAuthToken();
   const authlessAuthorization = effectiveFormLoginEnabled === false;
   const awaitingAuthenticationCheck =
     !token && !authlessAuthorization && !requestValidationError;
   const approvalPreviewReady =
-    !!clientName && !requestValidationError && (authlessAuthorization || !!actorUsername);
+    !!clientName &&
+    !requestValidationError &&
+    (authlessAuthorization || !!actorUsername);
   const denialReady = !!clientName && !requestValidationError;
   const grantedScopes = authorizationScope?.split(" ") ?? [];
   // The backend narrows an unbacked jellyfin-link request to library-only, so the consent card
   // reports the scope that will actually be granted and says why it shrank.
   const jellyfinLinkScopeDropped =
-    !authlessAuthorization
-    && !!authorizationScope
-    && (request.scope?.split(" ").includes("jellyfin-link") ?? false)
-    && !grantedScopes.includes("jellyfin-link");
+    !authlessAuthorization &&
+    !!authorizationScope &&
+    (request.scope?.split(" ").includes("jellyfin-link") ?? false) &&
+    !grantedScopes.includes("jellyfin-link");
 
   useEffect(() => {
     let cancelled = false;
@@ -136,12 +159,16 @@ export default function OAuthAuthorizePage() {
       try {
         setActorValidationRetryAvailable(false);
         const runtimeResult = await backendClient
-          .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
+          .query<{ authRuntimeState?: AuthRuntimeState | null }>(
+            authRuntimeStateQuery,
+            {},
+          )
           .toPromise();
         if (cancelled) return;
 
         const runtimeState = runtimeResult.data?.authRuntimeState ?? null;
-        const formLoginEnabled = runtimeState?.effectiveFormLoginEnabled !== false;
+        const formLoginEnabled =
+          runtimeState?.effectiveFormLoginEnabled !== false;
         setEffectiveFormLoginEnabled(formLoginEnabled);
         if (formLoginEnabled && !token) {
           window.location.assign(loginUrl());
@@ -151,7 +178,11 @@ export default function OAuthAuthorizePage() {
         const [clientResult, actorResult] = await Promise.all([
           backendClient
             .query<{
-              oauthAuthorizationClient?: { clientId: string; displayName: string; scope: string } | null;
+              oauthAuthorizationClient?: {
+                clientId: string;
+                displayName: string;
+                scope: string;
+              } | null;
             }>(oauthAuthorizationClientQuery, {
               clientId: request.clientId,
               redirectUri: request.redirectUri,
@@ -159,14 +190,21 @@ export default function OAuthAuthorizePage() {
             })
             .toPromise(),
           token
-            ? backendClient.query<{ me?: { username?: string | null } | null }>(meQuery, {}).toPromise()
+            ? backendClient
+                .query<{ me?: { username?: string | null } | null }>(
+                  meQuery,
+                  {},
+                )
+                .toPromise()
             : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
+        const authorizationClient =
+          clientResult.data?.oauthAuthorizationClient ?? null;
         const username = actorResult?.data?.me?.username?.trim() || null;
         const actorVerificationFailed =
-          runtimeState?.effectiveFormLoginEnabled !== false && (!username || actorResult?.error);
+          runtimeState?.effectiveFormLoginEnabled !== false &&
+          (!username || actorResult?.error);
         if (authorizationClient?.displayName) {
           setClientName(authorizationClient.displayName);
           setAuthorizationScope(authorizationClient.scope);
@@ -177,13 +215,21 @@ export default function OAuthAuthorizePage() {
           setAuthorizationScope(null);
           setActorUsername(null);
           setRequestValidationError(
-            clientResult.error?.message ?? "This OAuth request has an invalid client or redirect URI.",
+            userFacingGraphQlErrorMessage(
+              clientResult.error,
+              t(
+                "error.fallback.thisOAuthRequestHasAnInvalidClientOrRedirectURI",
+              ),
+              t,
+            ),
           );
         }
         if (actorVerificationFailed) {
           if (token && isOAuthAuthenticationError(actorResult?.error)) {
             clearClientAuthSession();
-            setActorValidationError("Your Scryer session expired. Sign in again to continue.");
+            setActorValidationError(
+              "Your Scryer session expired. Sign in again to continue.",
+            );
           } else {
             setActorValidationError(
               "Unable to verify the signed-in Scryer account for this OAuth request.",
@@ -197,10 +243,10 @@ export default function OAuthAuthorizePage() {
         // A step-up sign-in already collected consent before the redirect to /login. Finish that
         // approval here rather than showing the same consent card a second time.
         const replayApproval =
-          !!token
-          && !actorVerificationFailed
-          && !!authorizationClient?.displayName
-          && await takePendingOAuthDecision(request);
+          !!token &&
+          !actorVerificationFailed &&
+          !!authorizationClient?.displayName &&
+          (await takePendingOAuthDecision(request));
         if (!replayApproval) return;
         setCompletingAuthorization(true);
         // A replay that cannot complete falls back to the ordinary consent card with an error,
@@ -212,9 +258,11 @@ export default function OAuthAuthorizePage() {
           if (cancelled) return;
           setCompletingAuthorization(false);
           setError(
-            replayError instanceof Error
-              ? replayError.message
-              : "Unable to authorize this integration.",
+            userFacingGraphQlErrorMessage(
+              replayError,
+              t("error.fallback.unableToAuthorizeThisIntegration"),
+              t,
+            ),
           );
           return;
         }
@@ -226,10 +274,12 @@ export default function OAuthAuthorizePage() {
         setCompletingAuthorization(false);
         if (outcome.kind === "reauthenticate") {
           clearClientAuthSession();
-          setError("Your session is no longer fresh. Sign in again to continue.");
+          setError(
+            "Your session is no longer fresh. Sign in again to continue.",
+          );
           return;
         }
-        setError(outcome.message);
+        setError(userFacingGraphQlErrorMessage(outcome, "", t));
       } catch {
         if (!cancelled) {
           setCompletingAuthorization(false);
@@ -247,7 +297,7 @@ export default function OAuthAuthorizePage() {
     return () => {
       cancelled = true;
     };
-  }, [actorValidationRetry, request, token]);
+  }, [actorValidationRetry, request, token, t]);
 
   const decide = async (approved: boolean) => {
     setBusy(true);
@@ -286,10 +336,16 @@ export default function OAuthAuthorizePage() {
         setError("Your session is no longer fresh. Sign in again to continue.");
         return;
       }
-      setError(outcome.message);
+      setError(userFacingGraphQlErrorMessage(outcome, "", t));
     } catch (err) {
       clearPendingOAuthDecision();
-      setError(err instanceof Error ? err.message : "Unable to authorize this integration.");
+      setError(
+        userFacingGraphQlErrorMessage(
+          err,
+          t("error.fallback.unableToAuthorizeThisIntegration"),
+          t,
+        ),
+      );
     } finally {
       setBusy(false);
     }
@@ -331,7 +387,10 @@ export default function OAuthAuthorizePage() {
             <ShieldCheck className="h-5 w-5" />
           </span>
           <div className="min-w-0 space-y-2">
-            <h1 id={selectorId("oauth-authorize-heading")} className={OAUTH_HEADING_CLASS}>
+            <h1
+              id={selectorId("oauth-authorize-heading")}
+              className={OAUTH_HEADING_CLASS}
+            >
               Authorize {clientName ?? "integration"}
             </h1>
             <p className={OAUTH_URI_CLASS}>{request.redirectUri}</p>
@@ -341,12 +400,19 @@ export default function OAuthAuthorizePage() {
           <h2 className="font-medium text-[var(--scry-ink)]">Scopes</h2>
           <ul className="grid gap-2" aria-label="Granted scopes">
             <li className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+              <CheckCircle2
+                className="h-4 w-4 text-emerald-500"
+                aria-hidden="true"
+              />
               Library access
             </li>
-            {!authlessAuthorization && grantedScopes.includes("jellyfin-link") ? (
+            {!authlessAuthorization &&
+            grantedScopes.includes("jellyfin-link") ? (
               <li className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+                <CheckCircle2
+                  className="h-4 w-4 text-emerald-500"
+                  aria-hidden="true"
+                />
                 Jellyfin account linking
               </li>
             ) : null}
@@ -360,7 +426,7 @@ export default function OAuthAuthorizePage() {
             </p>
           ) : null}
         </div>
-        {error ?? requestValidationError ?? actorValidationError ? (
+        {(error ?? requestValidationError ?? actorValidationError) ? (
           <p className={OAUTH_ERROR_CLASS}>
             {error ?? requestValidationError ?? actorValidationError}
           </p>

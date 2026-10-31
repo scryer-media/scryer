@@ -7693,7 +7693,7 @@ async fn cancel_library_scan_rejects_additive_sessions() {
         .await
         .expect_err("additive scan should not be cancelable");
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("only full library scans")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("only full library scans")),
         "unexpected cancel error: {error:?}"
     );
 
@@ -8574,7 +8574,7 @@ async fn recover_reserved_admin_access_creates_recovery_admin() {
     assert!(matches!(
         app.authenticate_credentials("recovery-admin", "new recovery password")
             .await,
-        Err(AppError::Unauthorized(_))
+        Err(AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. })
     ));
     app.set_recovery_admin_login_enabled(true);
     assert_eq!(
@@ -8775,7 +8775,7 @@ async fn update_default_library_rejects_empty_roots_without_persisting_them() {
         .await
         .expect_err("empty default roots should be rejected");
     assert!(
-        matches!(error, AppError::Validation(ref message) if message.contains("libraries require at least one root folder")),
+        matches!(error, AppError::Validation(ref message) | AppError::ValidationRefused { ref message, .. } | AppError::ValidationRefusedWithCount { ref message, .. } if message.contains("libraries require at least one root folder")),
         "unexpected error: {error:?}"
     );
 
@@ -13005,4 +13005,74 @@ async fn series_library_scan_leaves_two_additional_files_when_the_primary_vanish
             MediaFileRole::Additional
         )
     );
+}
+
+#[tokio::test]
+async fn scheduled_library_refresh_defers_until_setup_is_complete() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, _user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+    );
+    assert!(!app.setup_complete().await.expect("read setup state"));
+    app.run_scheduled_job_now(
+        crate::JobKey::BackgroundLibraryRefreshSeries,
+        crate::JobTriggerSource::ScheduledStartup,
+    )
+    .await
+    .expect("defer first-run refresh before creating any scan");
+    assert!(app.active_library_scan_sessions().await.is_empty());
+}
+
+#[tokio::test]
+async fn scheduled_library_refresh_waits_for_pending_import_after_setup() {
+    for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+        let (mut app, user) = bootstrap_with_scan_unmatched_tracking(
+            Arc::new(StoredSettingsRepo::default()),
+            Arc::new(MutableLibraryScanner::default()),
+            Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        );
+        let snapshots = Arc::new(MockExternalImportMonitorSnapshotRepo::default());
+        let jobs = Arc::new(RecordingJobRunRepo::default());
+        app.services.workflow.external_import_monitor_snapshots = snapshots.clone();
+        app.services.events.job_runs = jobs.clone();
+        app.complete_setup(&user).await.expect("complete setup");
+        let library_id = scryer_domain::default_library_id_for_facet(&facet);
+        let session_id = crate::external_import_monitor_apply_session_id_for_library(&library_id);
+        snapshots
+            .append_external_import_monitor_snapshot_chunk(&ExternalImportMonitorSnapshotChunk {
+                session_id: session_id.clone(),
+                facet: facet.clone(),
+                entry_kind: if facet == MediaFacet::Movie {
+                    ExternalImportMonitorSnapshotEntryKind::Movie
+                } else {
+                    ExternalImportMonitorSnapshotEntryKind::Series
+                },
+                chunk_index: 0,
+                payload_ndjson: String::new(),
+                created_at: Utc::now().to_rfc3339(),
+            })
+            .await
+            .expect("seed pending source monitoring state");
+        let job_key = match facet {
+            MediaFacet::Movie => crate::JobKey::BackgroundLibraryRefreshMovies,
+            MediaFacet::Series => crate::JobKey::BackgroundLibraryRefreshSeries,
+            MediaFacet::Anime => crate::JobKey::BackgroundLibraryRefreshAnime,
+        };
+        app.run_scheduled_job_now(job_key, crate::JobTriggerSource::ScheduledStartup)
+            .await
+            .expect("defer automatic scan until hinted scan consumes the snapshot");
+        assert!(jobs.runs.lock().await.is_empty());
+        assert_eq!(snapshots.chunks.lock().await.len(), 1);
+        snapshots
+            .delete_external_import_monitor_snapshot_chunks(&session_id, facet.clone())
+            .await
+            .expect("consume source snapshot");
+        assert!(
+            !app.has_pending_external_import_monitor_snapshot_for_library(&facet, &library_id)
+                .await
+                .expect("read consumed snapshot state")
+        );
+    }
 }

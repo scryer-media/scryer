@@ -690,7 +690,10 @@ impl MediaFileRepository for MediaFileStore {
         )
         .await?;
         if changed != 1 {
-            return Err(AppError::NotFound("media file ownership changed".into()));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::MEDIA_FILE_OWNERSHIP_CHANGED,
+                "media file ownership changed",
+            ));
         }
         Ok(())
     }
@@ -895,6 +898,50 @@ impl MediaFileRepository for MediaFileStore {
             &[SqlArg::Text(title_id.to_string())],
         )
         .await
+    }
+
+    async fn list_primary_file_cutoffs_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<scryer_application::MediaFileCutoffSummary>> {
+        let dialect = dialect_for_datastore(&self.datastore);
+        let sql = format!(
+            "SELECT mf.id, mf.file_path, mf.original_file_path, mf.scene_name,
+                    mf.grabbed_release_title, fem.episode_id, {} AS series_movie_link_ids_json,
+                    mf.quality_id, mf.created_at
+             FROM media_files mf
+             LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
+             WHERE mf.title_id = {{}} AND {}
+               AND COALESCE(fem.role, mf.role) = 'primary'
+             ORDER BY mf.created_at DESC",
+            series_movie_link_ids_aggregate(dialect),
+            live_media_file_predicate(dialect, "mf")
+        );
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(title_id.to_owned())],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(scryer_application::MediaFileCutoffSummary {
+                id: row.text("id")?,
+                file_path: row.text("file_path")?,
+                original_file_path: row.opt_text("original_file_path")?,
+                scene_name: row.opt_text("scene_name")?,
+                grabbed_release_title: row.opt_text("grabbed_release_title")?,
+                episode_id: row.opt_text("episode_id")?,
+                series_movie_link_ids: string_array_from_json_column(
+                    row,
+                    "series_movie_link_ids_json",
+                    "media_files.series_movie_link_ids_json",
+                ),
+                quality_label: row.opt_text("quality_id")?,
+                created_at: timestamp_text(row, "created_at")?,
+            })
+        })
+        .collect()
     }
 
     async fn list_media_files_for_titles(
@@ -1744,14 +1791,16 @@ impl MediaFileRepository for MediaFileStore {
                                 && title.report.status == scryer_media_types::ProbeStatus::Complete
                         })
                     {
-                        return Err(AppError::Validation(
-                            "invalid or incomplete disc episode mapping".into(),
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_DISC_EPISODE_MAPPING_INVALID,
+                            "invalid or incomplete disc episode mapping",
                         ));
                     }
                     for id in &mapping.episode_ids {
                         if !ids.insert(id.clone()) {
-                            return Err(AppError::Validation(
-                                "duplicate disc episode mapping".into(),
+                            return Err(AppError::validation_refused(
+                                crate::error_reasons::MEDIA_DISC_EPISODE_MAPPING_DUPLICATE,
+                                "duplicate disc episode mapping",
                             ));
                         }
                     }
@@ -1787,7 +1836,7 @@ impl MediaFileRepository for MediaFileStore {
                         if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                             "SELECT id FROM episodes WHERE id = {} AND title_id = {}",
                             &[SqlArg::Text(episode_id.clone()), SqlArg::Text(expected.title_id.clone())]).await?.is_none()
-                        { return Err(AppError::Validation("disc episode belongs to a different title or no longer exists".into())); }
+                        { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_DISC_EPISODE_TITLE_MISMATCH, "disc episode belongs to a different title or no longer exists")); }
                     }
                     let mut delete_args = vec![SqlArg::Text(expected.id.clone())];
                     let delete_sql = if episode_ids.is_empty() { "DELETE FROM file_episode_map WHERE file_id = {}".to_string() }
@@ -3484,6 +3533,134 @@ mod tests {
 
     fn media_file_store(services: &SqliteServices) -> MediaFileStore {
         MediaFileStore::new(services.datastore())
+    }
+
+    #[tokio::test]
+    async fn rss_primary_cutoff_projection_matches_live_primary_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("cutoff.db").to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title("cutoff-owner");
+        let foreign = make_test_series_title("cutoff-foreign");
+        title_store(&services).create(title.clone()).await.unwrap();
+        title_store(&services)
+            .create(foreign.clone())
+            .await
+            .unwrap();
+        let shows = show_store(&services);
+        for id in ["cutoff-episode-1", "cutoff-episode-2"] {
+            ShowRepository::create_episode(
+                &shows,
+                Episode {
+                    id: id.into(),
+                    title_id: title.id.clone(),
+                    collection_id: None,
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: None,
+                    season_number: Some("1".into()),
+                    episode_label: None,
+                    title: None,
+                    air_date: None,
+                    duration_seconds: Some(1800),
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: true,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let files = media_file_store(&services);
+        let mut linked_id = String::new();
+        for (owner, path, role) in [
+            (&title.id, "/synthetic/linked.mkv", MediaFileRole::Primary),
+            (&title.id, "/synthetic/movie.mkv", MediaFileRole::Primary),
+            (
+                &title.id,
+                "/synthetic/additional.mkv",
+                MediaFileRole::Additional,
+            ),
+            (
+                &title.id,
+                "/synthetic/.scryer-recycle/recycled.mkv",
+                MediaFileRole::Primary,
+            ),
+            (
+                &title.id,
+                "/synthetic/.scryer-upgrade-replacement-staged.mkv",
+                MediaFileRole::Primary,
+            ),
+            (
+                &foreign.id,
+                "/synthetic/foreign.mkv",
+                MediaFileRole::Primary,
+            ),
+        ] {
+            let id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: owner.clone(),
+                    file_path: path.into(),
+                    role,
+                    quality_label: Some("1080p".into()),
+                    scoring_log: Some("large unused scoring payload".repeat(4096)),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            if path == "/synthetic/linked.mkv" {
+                linked_id = id;
+            }
+        }
+        files
+            .link_file_to_episode(&linked_id, "cutoff-episode-1")
+            .await
+            .unwrap();
+        files
+            .link_file_to_episode(&linked_id, "cutoff-episode-2")
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE file_episode_map SET role = CASE WHEN episode_id = ? THEN 'primary' ELSE 'additional' END WHERE file_id = ?",
+        )
+        .bind("cutoff-episode-1")
+        .bind(&linked_id)
+        .execute(services.pool())
+        .await
+        .unwrap();
+        let full = files.list_media_files_for_title(&title.id).await.unwrap();
+        let mut expected: Vec<_> = full
+            .iter()
+            .filter(|file| file.role.is_primary())
+            .map(scryer_application::MediaFileCutoffSummary::from)
+            .collect();
+        let mut compact = files
+            .list_primary_file_cutoffs_for_title(&title.id)
+            .await
+            .unwrap();
+        expected.sort_by(|a, b| (&a.id, &a.episode_id).cmp(&(&b.id, &b.episode_id)));
+        compact.sort_by(|a, b| (&a.id, &a.episode_id).cmp(&(&b.id, &b.episode_id)));
+        assert_eq!(compact, expected);
+        assert_eq!(
+            compact.len(),
+            2,
+            "one primary episode link and one unlinked file"
+        );
+        assert!(
+            compact
+                .iter()
+                .any(|row| row.episode_id.as_deref() == Some("cutoff-episode-1"))
+        );
+        assert!(compact.iter().any(|row| row.episode_id.is_none()));
     }
 
     #[tokio::test]

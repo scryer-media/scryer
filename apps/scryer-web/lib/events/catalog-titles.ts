@@ -21,7 +21,10 @@ export function dispatchCatalogTitlesRefresh(
   }
 
   window.dispatchEvent(
-    new CustomEvent(CATALOG_TITLES_REFRESH_EVENT, detail ? { detail } : undefined),
+    new CustomEvent(
+      CATALOG_TITLES_REFRESH_EVENT,
+      detail ? { detail } : undefined,
+    ),
   );
 }
 

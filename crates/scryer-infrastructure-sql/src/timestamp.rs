@@ -59,7 +59,7 @@ mod tests {
             .expect_err("invalid timestamp should fail");
 
         match error {
-            AppError::Repository(message) => {
+            AppError::Repository(message) | AppError::RepositoryFailure { message, .. } => {
                 assert!(message.contains("media_files.grabbed_at"));
             }
             other => panic!("unexpected error variant: {other:?}"),

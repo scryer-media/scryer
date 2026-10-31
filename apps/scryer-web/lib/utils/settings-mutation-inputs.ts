@@ -209,10 +209,7 @@ export function buildCreateProxyInput(rawDraft: ProxyDraft) {
   };
 }
 
-export function buildUpdateProxyInput(
-  id: string,
-  rawDraft: ProxyDraft,
-) {
+export function buildUpdateProxyInput(id: string, rawDraft: ProxyDraft) {
   const draft = normalizeProxyDraft(rawDraft);
   return {
     id,
@@ -255,7 +252,9 @@ export function parseUiDateTimeFormat(value: string): UiDateTimeFormat | null {
  * server would not accept. Keeps the GraphQL enum's casing: the value goes
  * straight back into `updateVerificationSettings`.
  */
-export function parseVerificationDepth(value: string): VerificationDepth | null {
+export function parseVerificationDepth(
+  value: string,
+): VerificationDepth | null {
   return value === "FULL" || value === "QUICK" ? value : null;
 }
 

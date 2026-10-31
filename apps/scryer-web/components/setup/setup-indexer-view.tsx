@@ -16,7 +16,13 @@ import {
 } from "./setup-chrome";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { type ConfigFieldDef, visibleIndexerConfigFields } from "@/lib/types";
 import {
   resolveConfigFieldsForValues,
@@ -155,7 +161,9 @@ export function SetupIndexerView({
   saved,
   error,
 }: SetupIndexerViewProps) {
-  const selectedProvider = providerOptions.find((p) => p.value === providerType);
+  const selectedProvider = providerOptions.find(
+    (p) => p.value === providerType,
+  );
   const selectedProviderFields = visibleIndexerConfigFields(
     selectedProvider?.configFields ?? [],
   );
@@ -168,7 +176,9 @@ export function SetupIndexerView({
     isMissingRequiredField(field, configValues),
   );
   const canTest =
-    name.trim().length > 0 && providerType.length > 0 && !hasMissingRequiredField;
+    name.trim().length > 0 &&
+    providerType.length > 0 &&
+    !hasMissingRequiredField;
   const canProceed = saved;
 
   return (
@@ -189,7 +199,9 @@ export function SetupIndexerView({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="setup-indexer-provider">{t("settings.indexerProvider")}</Label>
+          <Label htmlFor="setup-indexer-provider">
+            {t("settings.indexerProvider")}
+          </Label>
           <Select value={providerType} onValueChange={onProviderTypeChange}>
             <SelectTrigger id="setup-indexer-provider">
               <SelectValue placeholder="Select provider">
@@ -256,9 +268,7 @@ export function SetupIndexerView({
             onClick={onTestConnection}
             disabled={!canTest || testing || saving}
           >
-            {testing ? (
-              <LoadingMark className="mr-2 h-4 w-4" />
-            ) : null}
+            {testing ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
             {t("label.testConnection")}
           </Button>
           {testResult === "success" && (
@@ -278,9 +288,18 @@ export function SetupIndexerView({
             </span>
           )}
         </div>
-        {error && <p id="setup-indexer-error" className="text-sm text-destructive">{error}</p>}
+        {error && (
+          <p id="setup-indexer-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         {saved && (
-          <p id="setup-indexer-saved" className="text-sm text-[var(--scry-success-text-soft)]">{t("setup.saved")}</p>
+          <p
+            id="setup-indexer-saved"
+            className="text-sm text-[var(--scry-success-text-soft)]"
+          >
+            {t("setup.saved")}
+          </p>
         )}
       </div>
       <div className="flex items-center justify-between pt-2">
@@ -289,11 +308,20 @@ export function SetupIndexerView({
         </SetupBackButton>
         <div className="flex items-center gap-3">
           {onSkip && (
-            <Button id="setup-indexer-skip" type="button" variant="link" onClick={onSkip}>
+            <Button
+              id="setup-indexer-skip"
+              type="button"
+              variant="link"
+              onClick={onSkip}
+            >
               {t("setup.skip")}
             </Button>
           )}
-          <SetupPrimaryButton id="setup-indexer-next" onClick={onNext} disabled={!canProceed || saving}>
+          <SetupPrimaryButton
+            id="setup-indexer-next"
+            onClick={onNext}
+            disabled={!canProceed || saving}
+          >
             {saving ? t("label.saving") : t("setup.next")}
           </SetupPrimaryButton>
         </div>

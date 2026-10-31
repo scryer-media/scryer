@@ -42,8 +42,10 @@ export function SettingsPostProcessingContainer() {
         state={editor.dialogs}
         ids={{
           inlineShellContent: "settings-post-processing-inline-shell-confirm",
-          inlineShellAccept: "settings-post-processing-inline-shell-confirm-accept",
-          inlineShellCancel: "settings-post-processing-inline-shell-confirm-cancel",
+          inlineShellAccept:
+            "settings-post-processing-inline-shell-confirm-accept",
+          inlineShellCancel:
+            "settings-post-processing-inline-shell-confirm-cancel",
         }}
       />
     </>

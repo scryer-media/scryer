@@ -91,7 +91,12 @@ impl MediaRequestRepository for MediaRequestStore {
 
                 let request = load_media_request_tx(tx, &request.id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("media request {}", request.id)))?;
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::MEDIA_REQUEST_NOT_FOUND,
+                            format!("media request {}", request.id),
+                        )
+                    })?;
                 Ok(MediaRequestSubmissionResult { request, event })
             })
         })
@@ -261,7 +266,10 @@ impl MediaRequestRepository for MediaRequestStore {
                             .requested_monitor_selection
                             .as_ref()
                             .ok_or_else(|| {
-                                AppError::Validation("list movie selection is missing".into())
+                                AppError::validation_refused(
+                                    crate::error_reasons::MEDIA_LIST_MOVIE_SELECTION_MISSING,
+                                    "list movie selection is missing",
+                                )
                             })?;
                     crate::media::titles::store::create_or_get_title_preserving_options_tx(
                         tx, &title, selection,
@@ -274,8 +282,9 @@ impl MediaRequestRepository for MediaRequestStore {
                 // The application guards this identity. A concurrent creation
                 // with another id must retry under the correct title guard.
                 if created.title.id != title.id {
-                    return Err(AppError::Validation(
-                        "request title changed during approval; retry".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
+                        "request title changed during approval; retry",
                     ));
                 }
                 let advanced = created
@@ -303,7 +312,10 @@ impl MediaRequestRepository for MediaRequestStore {
                 };
                 let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
                 if result.updated == 0 {
-                    return Err(AppError::Validation("request is no longer pending".into()));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
+                        "request is no longer pending",
+                    ));
                 }
                 Ok((created, result, event))
             })
@@ -424,14 +436,21 @@ impl MediaRequestRepository for MediaRequestStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::Validation(
-                            "only a dismissed media request can be reopened".into(),
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_NOT_DISMISSED,
+                            "only a dismissed media request can be reopened",
                         ));
                     }
                     let event = append_domain_event_tx(tx, reopened_event).await?;
-                    let request = load_media_request_tx(tx, &request_id)
-                        .await?
-                        .ok_or_else(|| AppError::NotFound(format!("media request {request_id}")))?;
+                    let request =
+                        load_media_request_tx(tx, &request_id)
+                            .await?
+                            .ok_or_else(|| {
+                                AppError::not_found_reason(
+                                    crate::error_reasons::MEDIA_REQUEST_NOT_FOUND,
+                                    format!("media request {request_id}"),
+                                )
+                            })?;
                     Ok(MediaRequestUpdateResult { request, event })
                 })
             },
@@ -1058,8 +1077,9 @@ async fn update_pending_request_preferences_tx(
         )
         .await?;
     if rows == 0 {
-        return Err(AppError::Validation(
-            "media request is no longer pending".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_REQUEST_STATE_NOT_PENDING,
+            "media request is no longer pending",
         ));
     }
 
@@ -1074,7 +1094,12 @@ async fn update_pending_request_preferences_tx(
     let event = append_domain_event_tx(tx, updated_event).await?;
     let request = load_media_request_tx(tx, request_id)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("media request {request_id}")))?;
+        .ok_or_else(|| {
+            AppError::not_found_reason(
+                crate::error_reasons::MEDIA_REQUEST_NOT_FOUND,
+                format!("media request {request_id}"),
+            )
+        })?;
     Ok(MediaRequestUpdateResult { request, event })
 }
 

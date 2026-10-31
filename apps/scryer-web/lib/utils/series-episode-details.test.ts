@@ -30,20 +30,20 @@ test("series overview refresh preserves loaded episode detail fields", () => {
   ];
   const currentEpisodesByCollection = {
     "season-1": [
-        {
-          id: "episode-1",
-          title: "Episode 1",
-          overview: "Loaded overview",
-          imageUrl: "https://example.test/episode-1.jpg",
-          playbackLinks: [
-            {
-              connectionId: "jellyfin-1",
-              displayName: "Jellyfin",
-              provider: "JELLYFIN",
-              href: "https://jellyfin.example.test/web/index.html#!/details?id=episode-1",
-            },
-          ],
-        },
+      {
+        id: "episode-1",
+        title: "Episode 1",
+        overview: "Loaded overview",
+        imageUrl: "https://example.test/episode-1.jpg",
+        playbackLinks: [
+          {
+            connectionId: "jellyfin-1",
+            displayName: "Jellyfin",
+            provider: "JELLYFIN",
+            href: "https://jellyfin.example.test/web/index.html#!/details?id=episode-1",
+          },
+        ],
+      },
       {
         id: "episode-2",
         title: "Episode 2",

@@ -1,3 +1,5 @@
+import { useTranslate } from "../context/translate-context";
+import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
 import * as React from "react";
 import { useClient } from "urql";
 
@@ -18,6 +20,7 @@ type SeedingProfileOptionsResult = {
  * only supplies names for ids.
  */
 export function useSeedingProfileOptions(): SeedingProfileOptionsResult {
+  const t = useTranslate();
   const client = useClient();
   const [options, setOptions] = React.useState<SeedingProfileOption[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -41,11 +44,11 @@ export function useSeedingProfileOptions(): SeedingProfileOptionsResult {
       setOptions(profiles);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(userFacingGraphQlErrorMessage(err, t("status.failedToLoad"), t));
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, t]);
 
   React.useEffect(() => {
     void refresh();

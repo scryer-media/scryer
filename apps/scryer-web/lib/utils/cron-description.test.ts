@@ -9,7 +9,10 @@ import {
 } from "./cron-description.ts";
 
 test("cron expressions are described in English by default", () => {
-  assert.equal(describeCronExpression("*/15 * * * *", "eng"), "Every 15 minutes");
+  assert.equal(
+    describeCronExpression("*/15 * * * *", "eng"),
+    "Every 15 minutes",
+  );
   assert.equal(
     describeCronExpression("30 4 * * 1", null, { use24HourTimeFormat: true }),
     "At 04:30, only on Monday",
@@ -17,9 +20,15 @@ test("cron expressions are described in English by default", () => {
 });
 
 test("an interface language is described in its own locale once loaded", async () => {
-  assert.equal(describeCronExpression("*/15 * * * *", "deu"), "Every 15 minutes");
+  assert.equal(
+    describeCronExpression("*/15 * * * *", "deu"),
+    "Every 15 minutes",
+  );
   await loadCronDescriptionLocale("deu");
-  assert.equal(describeCronExpression("*/15 * * * *", "deu"), "Alle 15 Minuten");
+  assert.equal(
+    describeCronExpression("*/15 * * * *", "deu"),
+    "Alle 15 Minuten",
+  );
 });
 
 test("languages cronstrue does not translate fall back to English", () => {
@@ -37,15 +46,27 @@ test("an unreadable or empty expression has no description", () => {
 
 test("a cron schedule is described locally and other kinds keep the server text", () => {
   assert.equal(
-    describeScriptSchedule({ kind: "CRON", expression: "*/15 * * * *" }, "*/15 * * * *", "eng"),
+    describeScriptSchedule(
+      { kind: "CRON", expression: "*/15 * * * *" },
+      "*/15 * * * *",
+      "eng",
+    ),
     "Every 15 minutes",
   );
   assert.equal(
-    describeScriptSchedule({ kind: "CRON", expression: "0 0 3 * * *" }, "0 0 3 * * *", "eng"),
+    describeScriptSchedule(
+      { kind: "CRON", expression: "0 0 3 * * *" },
+      "0 0 3 * * *",
+      "eng",
+    ),
     "0 0 3 * * *",
   );
   assert.equal(
-    describeScriptSchedule({ kind: "DAILY", expression: null }, "Every day at 03:00", "eng"),
+    describeScriptSchedule(
+      { kind: "DAILY", expression: null },
+      "Every day at 03:00",
+      "eng",
+    ),
     "Every day at 03:00",
   );
   assert.equal(describeScriptSchedule(null, null, "eng"), null);

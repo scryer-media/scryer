@@ -24,7 +24,9 @@ export function facetSelectOptions<T extends string>(
       const facet = facetById(value.trim().toUpperCase());
       return facet ? [{ value, facet }] : [];
     })
-    .sort((a, b) => FACET_IDS.indexOf(a.facet.id) - FACET_IDS.indexOf(b.facet.id));
+    .sort(
+      (a, b) => FACET_IDS.indexOf(a.facet.id) - FACET_IDS.indexOf(b.facet.id),
+    );
 }
 
 export function isFacetSelected<T extends string>(

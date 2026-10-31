@@ -67,12 +67,14 @@ mod http_error;
 mod http_metrics;
 mod indexer_search_routes;
 mod init;
+mod initial_auth;
 mod list_account_origin;
 mod log_buffer;
 mod log_delivery;
 mod metadata_gateway_url;
 mod metrics_setup;
 mod middleware;
+mod nab_api;
 mod oauth_routes;
 mod rate_limit;
 mod runtime_health;
@@ -215,7 +217,8 @@ fn compiled_binary_lane() -> scryer_runtime_info::BinaryLane {
 }
 
 fn spawn_plugin_catalog_refresh_task(app_use_case: AppUseCase) {
-    tokio::spawn(async move {
+    let restore = app_use_case.restore_coordinator().clone();
+    restore.spawn_worker(async move {
         if let Err(error) = app_use_case.refresh_plugin_catalog_internal().await {
             tracing::warn!(error = %error, "failed to refresh plugin catalog in background");
             return;
@@ -230,20 +233,29 @@ fn spawn_plugin_catalog_refresh_task(app_use_case: AppUseCase) {
 }
 
 fn spawn_sigstore_trust_root_prime_task(app_use_case: AppUseCase) {
-    tokio::spawn(async move {
+    let restore = app_use_case.restore_coordinator().clone();
+    let shutdown = restore.shutdown_workers.clone();
+    restore.spawn_worker(async move {
         loop {
-            match app_use_case.prime_plugin_trust_roots_internal().await {
+            if shutdown.is_cancelled() {
+                break;
+            }
+            let delay = match app_use_case.prime_plugin_trust_roots_internal().await {
                 Ok(()) => {
                     tracing::info!("sigstore trust roots refreshed; next refresh in 6 hours");
-                    tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+                    Duration::from_secs(6 * 60 * 60)
                 }
                 Err(error) => {
                     tracing::warn!(
                         error = %error,
                         "failed to prime sigstore trust roots; retrying in 5 minutes"
                     );
-                    tokio::time::sleep(Duration::from_secs(300)).await;
+                    Duration::from_secs(300)
                 }
+            };
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(delay) => {},
             }
         }
     });
@@ -286,12 +298,16 @@ fn restore_datastore_handle() -> RestoreDatastoreHandle {
                 ))
             })?;
 
-        runtime.block_on(restore_backup_bundle_to_datastore_path(
+        let work = restore_backup_bundle_to_datastore_path(
             &target_db_path,
             restore_migration_mode_to_infra(migration_mode),
             &bundle_path,
             passphrase.as_deref(),
-        ))
+        );
+        match scryer_application::current_restore_deadline() {
+            Some(deadline) => runtime.block_on(deadline.scope(work)),
+            None => runtime.block_on(work),
+        }
     })
 }
 
@@ -495,9 +511,22 @@ impl SelfRestartController {
         }
     }
 
-    fn handle(&self) -> RestoreRestartHandle {
+    fn handle(&self, restore: Arc<scryer_application::RestoreCoordinator>) -> RestoreRestartHandle {
         let controller = self.clone();
-        RestoreRestartHandle::new(move || controller.schedule_restart())
+        RestoreRestartHandle::new(move || {
+            let restore = restore.clone();
+            controller.schedule_restart_with_failure(move || {
+                if let Some(status) = restore.snapshot().filter(|status| {
+                    status.phase == scryer_application::RestoreJobPhase::Restarting
+                }) && let Err(error) = restore.transition(
+                    &status.id,
+                    scryer_application::RestoreJobPhase::Failed,
+                    Some(scryer_application::restore_refusal::RESTORE_RESTART_FAILED),
+                ) {
+                    tracing::error!(%error, "could not persist failed restore restart");
+                }
+            });
+        })
     }
 
     fn application_upgrade_handle(
@@ -517,6 +546,10 @@ impl SelfRestartController {
     }
 
     fn schedule_restart(&self) {
+        self.schedule_restart_with_failure(|| {});
+    }
+
+    fn schedule_restart_with_failure(&self, on_failure: impl FnOnce() + Send + 'static) {
         if self.inner.scheduled.swap(true, Ordering::SeqCst) {
             tracing::info!("restore restart already scheduled");
             return;
@@ -528,6 +561,7 @@ impl SelfRestartController {
             if let Err(error) = (inner.launcher)() {
                 tracing::error!(error = %error, "failed to restart after restore");
                 inner.scheduled.store(false, Ordering::SeqCst);
+                on_failure();
             }
         });
     }
@@ -900,14 +934,12 @@ async fn run_application() {
             }
         };
 
-    let finalized_pending_restore =
-        match finalize_pending_restore_if_present(&data_dir, &pre_restore_datastore_config).await {
-            Ok(finalized) => finalized,
-            Err(error) => {
-                tracing::error!(error = %error, "failed to finalize pending restore");
-                std::process::exit(1);
-            }
-        };
+    let restore_coordinator = Arc::new(
+        scryer_application::RestoreCoordinator::recover(&data_dir).unwrap_or_else(|error| {
+            tracing::error!(%error, "failed to recover restore ownership");
+            std::process::exit(1);
+        }),
+    );
 
     let secrets_path = data_dir.join("instance-secrets.env");
     if secrets_path.exists() && dotenvy::from_path_override(&secrets_path).is_err() {
@@ -976,6 +1008,7 @@ async fn run_application() {
     let splash_state = SplashState {
         status_rx,
         migration_progress,
+        restore: restore_coordinator.clone(),
     };
     let cors = CorsConfig::from_env();
     let splash_app = build_splash_router(splash_state, cors.clone(), base_path.clone());
@@ -1010,14 +1043,105 @@ async fn run_application() {
     let bootstrap_bind = bind.clone();
     let bootstrap_development_mode = development_mode;
     let runtime_handle = tokio::runtime::Handle::current();
+    let shutdown_restore = restore_coordinator.clone();
     std::thread::Builder::new()
         .name("scryer-bootstrap".to_string())
         .spawn(move || {
             runtime_handle.block_on(async move {
-                match bootstrap_application(
+                let startup_restore = restore_coordinator.snapshot();
+                // A ready stage left by a failed restart handoff is promoted
+                // by this boot, just as a Restarting one is.
+                let may_finalize = startup_restore
+                    .as_ref()
+                    .is_none_or(scryer_application::RestoreJobStatus::awaits_promotion);
+                let finalize = async {
+                    if may_finalize {
+                        finalize_pending_restore_if_present(
+                            &data_dir,
+                            &pre_restore_datastore_config,
+                        )
+                        .await
+                    } else {
+                        Ok(false)
+                    }
+                };
+                // The restore budget covers promotion only. Once promotion
+                // commits, the rest of startup runs without it.
+                let restart_deadline = startup_restore
+                    .as_ref()
+                    .filter(|status| status.awaits_promotion())
+                    .map(|status| scryer_application::RestoreDeadline::resume(status.expires_at));
+                let finalized = if let Some(deadline) = &restart_deadline {
+                    restore_coordinator.track_deadline(deadline);
+                    deadline.scope(finalize).await
+                } else {
+                    finalize.await
+                };
+                let finalized_pending_restore = match finalized {
+                    Ok(value) => {
+                        // The restored files are committed. A later startup
+                        // failure is an ordinary one and must never lock the
+                        // instance behind restore recovery.
+                        if let Err(error) = restore_coordinator.commit_promoted_restore(value) {
+                            tracing::error!(%error, "could not persist committed restore status");
+                        }
+                        value
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "restore startup failed");
+                        let reason = error
+                            .get_ref()
+                            .and_then(|source| {
+                                source.downcast_ref::<scryer_application::AppError>()
+                            })
+                            .and_then(scryer_application::AppError::validation_reason);
+                        if reason
+                            == Some(scryer_application::restore_refusal::RESTORE_RECOVERY_REQUIRED)
+                            || startup_restore.is_none()
+                        {
+                            restore_coordinator.fail_startup();
+                            let _ = status_tx.send(BootstrapStatus::Failed(error.to_string()));
+                            return;
+                        }
+                        if let Some(status) = &startup_restore {
+                            let _ = restore_coordinator.transition(
+                                &status.id,
+                                scryer_application::RestoreJobPhase::Failed,
+                                Some(reason.unwrap_or(
+                                    scryer_application::restore_refusal::RESTORE_INTERRUPTED,
+                                )),
+                            );
+                        }
+                        // Rollback finished and the live files are intact, so
+                        // the failed attempt releases the application and this
+                        // start continues as an ordinary one.
+                        false
+                    }
+                };
+                let plugin_recovery_pending = restore_coordinator.plugin_recovery_pending();
+                if finalized_pending_restore {
+                    let secrets_path = data_dir.join("instance-secrets.env");
+                    if dotenvy::from_path_override(&secrets_path).is_err() {
+                        restore_coordinator.fail_startup();
+                        let _ = status_tx.send(BootstrapStatus::Failed(
+                            "Cannot load restored instance secrets".into(),
+                        ));
+                        return;
+                    }
+                }
+                let datastore_config =
+                    match resolve_datastore_config_from_env(data_dir.clone(), migration_mode) {
+                        Ok(config) => config,
+                        Err(error) => {
+                            restore_coordinator.fail_startup();
+                            let _ = status_tx.send(BootstrapStatus::Failed(error.to_string()));
+                            return;
+                        }
+                    };
+                let bootstrapped = bootstrap_application(
                     datastore_config,
                     migration_mode,
-                    finalized_pending_restore,
+                    plugin_recovery_pending,
                     jwt_issuer,
                     bootstrap_bind,
                     bootstrap_development_mode,
@@ -1030,13 +1154,16 @@ async fn run_application() {
                     data_dir,
                     bootstrap_base_path,
                     application_upgrade_assessment,
+                    restore_coordinator.clone(),
                 )
-                .await
-                {
+                .await;
+                match bootstrapped {
                     Ok(router) => {
                         let _ = status_tx.send(BootstrapStatus::Ready(router));
                     }
                     Err(error) => {
+                        // Promotion already committed or never started here,
+                        // so this is an ordinary startup failure.
                         tracing::error!(error = %error, "application bootstrap failed");
                         let _ = status_tx.send(BootstrapStatus::Failed(error.to_string()));
                     }
@@ -1061,7 +1188,7 @@ async fn run_application() {
             let shutdown_handle = handle.clone();
             let shutdown_token_tls = shutdown_token.clone();
             tokio::spawn(async move {
-                shutdown_signal(shutdown_token_tls).await;
+                shutdown_signal(shutdown_token_tls, shutdown_restore).await;
                 shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
             });
             tracing::info!("scryer service listening on {addr} with TLS");
@@ -1095,7 +1222,7 @@ async fn run_application() {
                 listener,
                 splash_app.into_make_service_with_connect_info::<SocketAddr>(),
             )
-            .with_graceful_shutdown(shutdown_signal(shutdown_token.clone()))
+            .with_graceful_shutdown(shutdown_signal(shutdown_token.clone(), shutdown_restore))
             .await
             {
                 tracing::error!(error = %error, "server failed");
@@ -1153,13 +1280,42 @@ async fn drain_indexer_accounting_on_shutdown(accounting: &IndexerAccountingShut
     }
 }
 
+async fn run_image_cache_maintenance(
+    app: &AppUseCase,
+    runtime: Arc<ImageProxyRuntime>,
+    shutdown: &CancellationToken,
+) {
+    let Some(admission) = app.acquire_image_maintenance(shutdown).await else {
+        return;
+    };
+    // Keep admission until blocking I/O settles, even if the supervisor drops
+    // the invocation during shutdown.
+    if let Err(error) = tokio::spawn(async move {
+        let _admission = admission;
+        let started = std::time::Instant::now();
+        let result = runtime.prune().await;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            success = result.is_ok(),
+            "image cache maintenance finished"
+        );
+        if let Err(error) = result {
+            tracing::warn!(%error, "image cache maintenance failed");
+        }
+    })
+    .await
+    {
+        tracing::warn!(%error, "image cache maintenance task failed");
+    }
+}
+
 /// Runs the full application bootstrap: DB init, migrations, service construction, and router
 /// building. Returns the fully-constructed Axum router or an error.
 #[expect(clippy::too_many_arguments)]
 async fn bootstrap_application(
     datastore_config: DatastoreConfig,
     _migration_mode: MigrationMode,
-    finalized_pending_restore: bool,
+    plugin_recovery_pending: bool,
     jwt_issuer: String,
     bind: String,
     development_mode: bool,
@@ -1172,6 +1328,7 @@ async fn bootstrap_application(
     data_dir: PathBuf,
     base_path: BasePath,
     application_upgrade_assessment: scryer_application::application_upgrade::InstallationAssessment,
+    restore_coordinator: Arc<scryer_application::RestoreCoordinator>,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
     scryer_application::initialize_archive_workspace_ownership(&data_dir)?;
@@ -1385,7 +1542,7 @@ async fn bootstrap_application(
             .map_err(|e| format!("failed to initialize staged nzb store: {e}"))?,
     );
     let staged_nzb_pipeline_limit = Arc::new(tokio::sync::Semaphore::new(4));
-    bootstrap_plugin_installations(&customization_store, finalized_pending_restore)
+    bootstrap_plugin_installations(&customization_store, plugin_recovery_pending)
         .await
         .map_err(|e| format!("failed to bootstrap plugin installations: {e}"))?;
     let (runtime_plugins, disabled_builtin_plugins) =
@@ -1529,6 +1686,13 @@ async fn bootstrap_application(
             .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
         ));
 
+    let indexer_caps_cache = Arc::new(scryer_application::CapsRequestCache::default());
+    let indexer_caps_refresher = Arc::new(
+        DirectNabCapsSnapshotRefresher::new()
+            .with_indexer_stats_tracker(indexer_stats.clone())
+            .with_upstream_scheduler(upstream_scheduler.clone())
+            .with_managed_indexers(indexer_configs.clone(), indexer_errors.clone()),
+    );
     let indexer_client = MultiIndexerSearchClient::new(
         indexer_configs.clone(),
         indexer_stats.clone(),
@@ -1537,7 +1701,8 @@ async fn bootstrap_application(
     .with_proxy_config_repository(datastore.proxy_configs())
     .with_search_learning_repository(indexer_learning)
     .with_indexer_error_repository(indexer_errors.clone())
-    .with_upstream_scheduler(upstream_scheduler.clone());
+    .with_upstream_scheduler(upstream_scheduler.clone())
+    .with_caps_resolution(indexer_caps_cache.clone(), indexer_caps_refresher.clone());
 
     let indexer_client = Arc::new(indexer_client);
     let title_images_for_route: Arc<dyn TitleImageRepository> = datastore.title_images();
@@ -1586,7 +1751,8 @@ async fn bootstrap_application(
     // Warm up SMG enrollment so the mTLS client is ready before the first real
     // metadata query, and check for version incompatibility.
     let metadata_gateway_for_warmup = metadata_gateway.clone();
-    tokio::spawn(async move {
+    let metadata_shutdown = restore_coordinator.shutdown_workers.clone();
+    restore_coordinator.spawn_worker(async move {
         if let Some(incompat) = metadata_gateway_for_warmup.warm_enrollment().await {
             log_smg_version_incompatibility(&incompat);
         }
@@ -1605,7 +1771,10 @@ async fn bootstrap_application(
                         error = %error,
                         "failed to derive SMG version compatibility poll phase"
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+                    tokio::select! {
+                        _ = metadata_shutdown.cancelled() => return,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(15 * 60)) => {},
+                    }
                 }
             }
         };
@@ -1615,7 +1784,10 @@ async fn bootstrap_application(
             let delay =
                 MetadataGatewayClient::next_version_compatibility_poll_delay(phase, minimum_delay);
             minimum_delay = std::time::Duration::from_secs(0);
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+                _ = metadata_shutdown.cancelled() => return,
+                _ = tokio::time::sleep(delay) => {},
+            }
 
             match metadata_gateway_for_warmup
                 .refresh_version_compatibility(true)
@@ -1680,11 +1852,13 @@ async fn bootstrap_application(
         .with_indexer_stats(indexer_stats.clone())
         .with_indexer_artifact_resolver(Some(indexer_artifact_resolver))
         .with_upstream_scheduler(upstream_scheduler.clone())
-        .with_indexer_caps_refresher(Arc::new(
-            DirectNabCapsSnapshotRefresher::new()
-                .with_indexer_stats_tracker(indexer_stats)
-                .with_upstream_scheduler(upstream_scheduler.clone()),
+        .with_indexer_caps_cache(indexer_caps_cache)
+        .with_indexer_client_repository(Arc::new(
+            scryer_infrastructure_acquisition::indexers::client_store::IndexerClientStore::new(
+                datastore.datastore(),
+            ),
         ))
+        .with_indexer_caps_refresher(indexer_caps_refresher)
         .with_plugin_http_trust_runtime(plugin_http_runtime)
         .with_plugin_provider(plugin_provider)
         .with_builtin_download_client_connection_tester(Arc::new(
@@ -1724,7 +1898,7 @@ async fn bootstrap_application(
     let (webauthn, passkey_rp_source, passkey_rp) =
         build_webauthn_runtime(public_url_policy.url().as_ref());
     let webauthn_configured = webauthn.is_some();
-    let app_use_case = AppUseCase::new_with_webauthn(
+    let mut app_use_case = AppUseCase::new_with_webauthn(
         services,
         scryer_application::JwtAuthConfig {
             issuer: jwt_issuer,
@@ -1733,6 +1907,16 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    app_use_case.install_restore_coordinator(restore_coordinator);
+    let restore_workers = app_use_case.restore_coordinator().clone();
+    let worker_shutdown = restore_workers.shutdown_workers.clone();
+    let process_shutdown = shutdown_token.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = process_shutdown.cancelled() => worker_shutdown.cancel(),
+            _ = worker_shutdown.cancelled() => {},
+        }
+    });
     let _ = script_shutdown.set(app_use_case.clone());
     {
         use scryer_application::public_url::{ConfigValueSource, InstanceAddressing};
@@ -1778,13 +1962,16 @@ async fn bootstrap_application(
     if let Err(error) = app_use_case.sync_image_cache_runtime_limit().await {
         tracing::warn!(error = %error, "failed to apply configured image cache limit");
     }
-    if let Err(error) = image_proxy_runtime.prune().await {
-        tracing::warn!(error = %error, "failed to run startup image cache maintenance");
-    }
+    run_image_cache_maintenance(
+        &app_use_case,
+        image_proxy_runtime.clone(),
+        &restore_workers.shutdown_workers,
+    )
+    .await;
     {
         let source_repository = app_use_case.image_proxy_repository();
-        let source_flush_shutdown = shutdown_token.child_token();
-        tokio::spawn(async move {
+        let source_flush_shutdown = restore_workers.shutdown_workers.child_token();
+        restore_workers.spawn_worker(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;
@@ -1807,8 +1994,9 @@ async fn bootstrap_application(
     }
     {
         let runtime = image_proxy_runtime.clone();
-        let maintenance_shutdown = shutdown_token.child_token();
-        tokio::spawn(async move {
+        let maintenance_app = app_use_case.clone();
+        let maintenance_shutdown = restore_workers.shutdown_workers.child_token();
+        restore_workers.spawn_worker(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;
@@ -1816,16 +2004,16 @@ async fn bootstrap_application(
                 tokio::select! {
                     _ = maintenance_shutdown.cancelled() => break,
                     _ = interval.tick() => {
-                        if let Err(error) = runtime.prune().await {
-                            tracing::warn!(error = %error, "periodic image cache maintenance failed");
-                        }
+                        run_image_cache_maintenance(
+                            &maintenance_app, runtime.clone(), &maintenance_shutdown,
+                        ).await;
                     }
                 }
             }
         });
     }
-    tokio::spawn(flush_upstream_scheduler_after_shutdown(
-        shutdown_token.child_token(),
+    restore_workers.spawn_worker(flush_upstream_scheduler_after_shutdown(
+        restore_workers.shutdown_workers.child_token(),
         {
             let app_use_case = app_use_case.clone();
             move || async move { app_use_case.flush_upstream_scheduler().await }
@@ -1839,14 +2027,26 @@ async fn bootstrap_application(
         "initialized runtime build identity"
     );
     app_use_case.warm_runtime_performance();
-    if finalized_pending_restore {
+    if plugin_recovery_pending {
+        // The restore is already committed. A catalog that cannot be reached
+        // must not hold the instance down: the pending flag stays on the
+        // restore record and the next start tries again.
         tracing::info!("recovering restored plugins from remote catalogs");
-        if let Err(error) = app_use_case
+        match app_use_case
             .recover_restored_plugins_after_backup_restore()
             .await
         {
-            tracing::error!(error = %error, "failed to recover restored plugins");
-            std::process::exit(1);
+            Ok(()) => {
+                if let Err(error) = app_use_case.restore_coordinator().finish_plugin_recovery() {
+                    tracing::error!(%error, "could not record restored plugin recovery");
+                }
+            }
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "failed to recover restored plugins; retrying on the next start"
+                );
+            }
         }
     }
     let previous_version = match &version_lifecycle {
@@ -1885,6 +2085,14 @@ async fn bootstrap_application(
     app_use_case.set_application_upgrade_restart_handle(
         restore_restart_controller.application_upgrade_handle(),
     );
+    {
+        // A failed Apply already stopped the background workers; a restart
+        // is what brings them back once the live data is known intact.
+        let controller = restore_restart_controller.clone();
+        app_use_case
+            .restore_coordinator()
+            .install_failure_restart(move || controller.schedule_restart());
+    }
 
     let mut location_reservations_readable = true;
     let mut upgrade_reconcile_exclusions = match app_use_case
@@ -2081,7 +2289,7 @@ async fn bootstrap_application(
             data_dir: data_dir.clone(),
             datastore_config: restore_datastore_config(&backup_datastore_config),
             datastore: restore_datastore_handle(),
-            restart: restore_restart_controller.handle(),
+            restart: restore_restart_controller.handle(app_use_case.restore_coordinator().clone()),
         }),
         application_upgrade_assessment,
     );
@@ -2112,7 +2320,16 @@ async fn bootstrap_application(
             "SCRYER_DEV_AUTO_LOGIN is deprecated; use SCRYER_AUTH_ENABLED=false instead"
         );
     }
-    if auth_runtime.snapshot().effective_form_login_enabled {
+    let initial_auth_state = app_use_case.initial_authentication_state().await?;
+    if let Some(state) = &initial_auth_state {
+        state.validate_runtime_mode(auth_runtime.snapshot().effective_form_login_enabled)?;
+    }
+    let initial_auth_pending = initial_auth_state
+        .as_ref()
+        .is_some_and(|state| state.is_pending());
+    if initial_auth_pending {
+        tracing::info!("initial authentication setup must be completed before application access");
+    } else if auth_runtime.snapshot().effective_form_login_enabled {
         if auth_mode.recovery_active() {
             tracing::warn!(
                 env = RECOVERY_ADMIN_PASSWORD_ENV,
@@ -2179,74 +2396,74 @@ async fn bootstrap_application(
 
     // Run the generic download queue poller for polling-based clients. Weaver
     // is excluded while its self-contained subscription bridge is active.
-    tokio::spawn(start_download_queue_poller_with_options(
+    restore_workers.spawn_worker(start_download_queue_poller_with_options(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
         tracked_download_rx,
         tracked_download_snapshot_rx,
         poller_options,
     ));
-    tokio::spawn(start_weaver_bridge_supervisor(
-        shutdown_token.child_token(),
+    restore_workers.spawn_worker(start_weaver_bridge_supervisor(
+        restore_workers.shutdown_workers.child_token(),
         app_use_case.clone(),
         tracked_download_snapshot_ingest,
         bridged_client_types,
     ));
-    tokio::spawn(start_background_acquisition_poller(
+    restore_workers.spawn_worker(start_background_acquisition_poller(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(scryer_application::start_full_hash_backfill_worker(
+    restore_workers.spawn_worker(scryer_application::start_full_hash_backfill_worker(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_library_refresh_loop(
+    restore_workers.spawn_worker(start_background_library_refresh_loop(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_media_server_playback_reconciliation_loop(
+    restore_workers.spawn_worker(start_background_media_server_playback_reconciliation_loop(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_title_hydration_loop(
+    restore_workers.spawn_worker(start_background_title_hydration_loop(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_title_image_loop(
+    restore_workers.spawn_worker(start_background_title_image_loop(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_navigation_badge_facts_refresh(
+    restore_workers.spawn_worker(start_navigation_badge_facts_refresh(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(runtime_health::start_runtime_health_monitor(
+    restore_workers.spawn_worker(runtime_health::start_runtime_health_monitor(
         datastore.datastore(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_notification_dispatcher(
+    restore_workers.spawn_worker(start_notification_dispatcher(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_subtitle_poller(
+    restore_workers.spawn_worker(start_background_subtitle_poller(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_auto_backup_scheduler(
+    restore_workers.spawn_worker(start_background_auto_backup_scheduler(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_custom_job_scheduler(
+    restore_workers.spawn_worker(start_background_custom_job_scheduler(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_manual_import_poller(
+    restore_workers.spawn_worker(start_background_manual_import_poller(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
-    tokio::spawn(start_background_download_delete_poller(
+    restore_workers.spawn_worker(start_background_download_delete_poller(
         app_use_case.clone(),
-        shutdown_token.child_token(),
+        restore_workers.shutdown_workers.child_token(),
     ));
     app_use_case.wake_title_image_loops();
 
@@ -2260,6 +2477,26 @@ async fn bootstrap_application(
         std::process::exit(1);
     }
     let rate_limiter = ScryerRateLimiter::from_env(app_use_case.trusted_proxy_runtime());
+    if matches!(
+        initial_auth_state,
+        Some(scryer_application::initial_auth::SetupState::Choice)
+    ) {
+        // The choice itself is always required. Operators who expose a fresh
+        // instance before making it can also require console proof.
+        if initial_auth::setup_code_required(
+            std::env::var(initial_auth::REQUIRE_SETUP_CODE_ENV)
+                .ok()
+                .as_deref(),
+        ) {
+            let code = auth_runtime.initial_authentication.initialize()?;
+            // Operator-only output: deliberately bypass tracing and its web log ring.
+            initial_auth::print_setup_code(&code)?;
+        } else {
+            auth_runtime
+                .initial_authentication
+                .initialize_without_code();
+        }
+    }
     let authless_access_policy = AuthlessAccessPolicy {
         allow_unauthenticated_public_access: auth_mode.allow_unauthenticated_public_access,
     };
@@ -2297,6 +2534,22 @@ async fn bootstrap_application(
         base_path: base_path.clone(),
         auth_runtime: auth_runtime.clone(),
     };
+    let nab_key = bootstrap_settings_store
+        .current_encryption_key_base64()
+        .await?
+        .ok_or("indexer reference encryption key is unavailable after bootstrap")?;
+    let nab_route_state = nab_api::NabState {
+        app: app_use_case.clone(),
+        cipher: Arc::new(
+            scryer_infrastructure_crypto::artifact_reference::ArtifactReferenceCipher::new(
+                &EncryptionKey::from_base64(&nab_key)?,
+            ),
+        ),
+        base_path: base_path.prefix().to_owned(),
+        tls: ["SCRYER_TLS_CERT", "SCRYER_TLS_KEY"]
+            .iter()
+            .all(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty())),
+    };
     let ws_auth_state = auth_state.clone();
 
     // WebSocket route must be outside CompressionLayer — compression wraps the
@@ -2320,6 +2573,7 @@ async fn bootstrap_application(
         )
         .merge(oauth_router(oauth_route_state))
         .merge(arr_compat::router(auth_state.clone()))
+        .merge(nab_api::router(nab_route_state))
         .route("/oauth/authorize", get(ui_fallback))
         .route(
             "/graphql",
@@ -2371,6 +2625,10 @@ async fn bootstrap_application(
         .layer(axum::middleware::from_fn_with_state(
             authless_access_guard_state,
             enforce_authless_access_guard,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state.clone(),
+            initial_auth::admit_http,
         ))
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
@@ -2583,7 +2841,10 @@ where
     }
 }
 
-async fn shutdown_signal(token: CancellationToken) {
+async fn shutdown_signal(
+    token: CancellationToken,
+    restore: Arc<scryer_application::RestoreCoordinator>,
+) {
     #[cfg(windows)]
     if std::env::var("SCRYER_TRAY_SUPERVISED").as_deref() == Ok("1") {
         let tray_token = token.clone();
@@ -2627,6 +2888,10 @@ async fn shutdown_signal(token: CancellationToken) {
         _ = token.cancelled() => {}
     }
     token.cancel();
+
+    // Restore cancellation may need longer than ordinary shutdown to finish
+    // blocking I/O or rollback. Its worker, not a transport timer, owns that wait.
+    restore.drain_for_shutdown().await;
 
     // Hard exit if graceful shutdown takes too long.
     tokio::spawn(async {
@@ -3395,7 +3660,7 @@ async fn spawn_post_upgrade_auto_backup_if_pending(
         return;
     }
 
-    tokio::spawn(async move {
+    app.restore_coordinator().clone().spawn_worker(async move {
         match app
             .run_scheduled_auto_backup_job_now(JobTriggerSource::SystemInternal)
             .await
@@ -4002,32 +4267,89 @@ mod tests {
             }),
         );
 
-        // The launcher runs on its own thread; poll for its observable effects.
-        let wait_until = |what: &str, condition: &dyn Fn() -> bool| {
-            let deadline = std::time::Instant::now() + Duration::from_secs(30);
-            while !condition() {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "timed out waiting for {what}"
-                );
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        };
-
-        controller.schedule_restart();
-        wait_until("the failed launch to clear the schedule", &|| {
-            attempts.load(Ordering::SeqCst) == 1
-                && !controller.inner.scheduled.load(Ordering::SeqCst)
-        });
-        controller.schedule_restart();
-        wait_until("the retry to launch", &|| {
-            attempts.load(Ordering::SeqCst) == 2
-        });
-        wait_until("the retry to clear the schedule", &|| {
-            !controller.inner.scheduled.load(Ordering::SeqCst)
-        });
+        for expected in 1..=2 {
+            let (finished, completion) = std::sync::mpsc::channel();
+            controller.schedule_restart_with_failure(move || finished.send(()).unwrap());
+            completion.recv_timeout(Duration::from_secs(60)).unwrap();
+            assert_eq!(attempts.load(Ordering::SeqCst), expected);
+            assert!(!controller.inner.scheduled.load(Ordering::SeqCst));
+        }
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn background_restore_restart_failure_is_observable_and_retryable() {
+        use scryer_application::{
+            RestoreCoordinator, RestoreJobKind, RestoreJobPhase, restore_refusal,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let restore = Arc::new(RestoreCoordinator::default());
+        let (attempt, _) = restore
+            .start(directory.path(), "fixture", RestoreJobKind::Apply)
+            .unwrap();
+        restore
+            .transition(&attempt.id, RestoreJobPhase::Restarting, None)
+            .unwrap();
+        let controller = SelfRestartController::with_launcher(
+            Duration::ZERO,
+            Arc::new(|| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "synthetic launch failure",
+                ))
+            }),
+        );
+        let changed = restore.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        controller.handle(restore.clone()).schedule_restart();
+        tokio::time::timeout(Duration::from_secs(60), changed)
+            .await
+            .unwrap();
+        let status = restore.snapshot().unwrap();
+        assert_eq!(status.phase, RestoreJobPhase::Failed);
+        assert_eq!(
+            status.reason.as_deref(),
+            Some(restore_refusal::RESTORE_RESTART_FAILED)
+        );
+        // Nothing was promoted, so the failed handoff releases the instance
+        // now and on the next boot, while the record stays retryable.
+        assert!(!restore.blocks_application());
+        assert!(restore.can_retry());
+        let recovered = RestoreCoordinator::recover(directory.path()).unwrap();
+        assert!(!recovered.blocks_application());
+        assert!(recovered.can_retry());
+        // The ready stage stays promotable by the next boot.
+        assert!(recovered.snapshot().unwrap().awaits_promotion());
+        // Another upload does not resume this handoff and changes nothing.
+        assert!(restore.resume_failed_restart("other").unwrap().is_none());
+        assert_eq!(restore.snapshot().unwrap().phase, RestoreJobPhase::Failed);
+        // The same upload resumes the handoff without staging again.
+        let resumed = restore.resume_failed_restart("fixture").unwrap().unwrap();
+        assert_eq!(resumed.id, attempt.id);
+        assert_eq!(resumed.phase, RestoreJobPhase::Restarting);
+        assert_eq!(resumed.reason, None);
+        assert_eq!(resumed.pid, Some(std::process::id()));
+        assert!(restore.blocks_application());
+        let persisted = RestoreCoordinator::recover(directory.path()).unwrap();
+        assert_eq!(
+            persisted.snapshot().unwrap().phase,
+            RestoreJobPhase::Restarting
+        );
+        // A fresh start still works once the handoff fails again.
+        restore
+            .transition(
+                &attempt.id,
+                RestoreJobPhase::Failed,
+                Some(restore_refusal::RESTORE_RESTART_FAILED),
+            )
+            .unwrap();
+        let (retry, fresh) = restore
+            .start(directory.path(), "fixture", RestoreJobKind::Apply)
+            .unwrap();
+        assert!(fresh);
+        assert_ne!(retry.id, attempt.id);
     }
 
     #[test]
@@ -5126,3 +5448,5 @@ mod tests {
         }
     }
 }
+
+mod error_reasons;

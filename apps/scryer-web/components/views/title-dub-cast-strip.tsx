@@ -33,9 +33,9 @@ type Props = {
 export function TitleDubCastStrip({ credits, variant = "panel" }: Props) {
   const t = useTranslate();
   const languages = titleCastDubLanguages(credits);
-  const [requestedLanguage, setRequestedLanguage] = React.useState<string | null>(
-    null,
-  );
+  const [requestedLanguage, setRequestedLanguage] = React.useState<
+    string | null
+  >(null);
   // Resolved rather than stored, so a title whose dub languages change (or a
   // different title reusing this rail) never renders an empty selected option.
   const selectedLanguage = titleCastPreferredDubLanguage(

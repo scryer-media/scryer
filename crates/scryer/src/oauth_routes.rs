@@ -109,7 +109,7 @@ async fn oauth_authorize_decision(
 ) -> Response {
     match oauth_authorize_decision_inner(state, headers, input).await {
         Ok(response) => Json(response).into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -117,7 +117,7 @@ async fn oauth_authorize_decision_inner(
     state: OAuthRouteState,
     headers: HeaderMap,
     input: OAuthAuthorizeDecisionRequest,
-) -> Result<OAuthAuthorizeDecisionResponse, Response> {
+) -> Result<OAuthAuthorizeDecisionResponse, Box<Response>> {
     let form_login_enabled = state.auth_runtime.snapshot().effective_form_login_enabled;
     let authless_authorization = !form_login_enabled;
     state
@@ -132,8 +132,7 @@ async fn oauth_authorize_decision_inner(
                 "unsupported_response_type",
                 "only response_type=code is supported",
                 input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
+            )?,
         });
     }
     let scope = match state
@@ -154,8 +153,7 @@ async fn oauth_authorize_decision_inner(
                     "invalid_scope",
                     &oauth_error_description(&err),
                     input.state.as_deref(),
-                )
-                .map_err(|response| *response)?,
+                )?,
             });
         }
     };
@@ -166,8 +164,7 @@ async fn oauth_authorize_decision_inner(
                 "access_denied",
                 "authorization was denied",
                 input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
+            )?,
         });
     }
     let (user, authorization_source, auth_session_version, security_action_verified_until) =
@@ -211,11 +208,11 @@ async fn oauth_authorize_decision_inner(
                 || claims.is_oauth_access_token()
                 || AppUseCase::is_reserved_recovery_username(&user.username)
             {
-                return Err(oauth_error(
+                return Err(Box::new(oauth_error(
                     StatusCode::FORBIDDEN,
                     "access_denied",
                     "this session cannot authorize OAuth clients",
-                ));
+                )));
             }
             (
                 user,
@@ -228,11 +225,11 @@ async fn oauth_authorize_decision_inner(
         && security_action_verified_until
             .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())
     {
-        return Err(oauth_error(
+        return Err(Box::new(oauth_error(
             StatusCode::UNAUTHORIZED,
             "reauthentication_required",
             "sign in again before authorizing this OAuth client",
-        ));
+        )));
     }
     let code = state
         .app
@@ -435,7 +432,7 @@ fn oauth_redirect_error(
 
 fn oauth_validation_error(err: AppError) -> Response {
     match err {
-        AppError::Unauthorized(error) => {
+        AppError::Unauthorized(error) | AppError::UnauthorizedReason { message: error, .. } => {
             tracing::debug!(error = %error, "OAuth validation rejected an authorization grant");
             oauth_error(
                 StatusCode::BAD_REQUEST,
@@ -443,10 +440,12 @@ fn oauth_validation_error(err: AppError) -> Response {
                 "OAuth grant is invalid",
             )
         }
-        AppError::Validation(message) if message == "invalid OAuth scope" => {
-            oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message)
-        }
-        AppError::Validation(message) => {
+        AppError::ValidationRefused {
+            message,
+            reason: scryer_application::error_reasons::oauth::INVALID_SCOPE,
+            ..
+        } => oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message),
+        AppError::Validation(message) | AppError::ValidationRefused { message, .. } => {
             oauth_error(StatusCode::BAD_REQUEST, "invalid_request", message)
         }
         other => {
@@ -462,7 +461,7 @@ fn oauth_validation_error(err: AppError) -> Response {
 
 fn oauth_app_error(err: AppError) -> Response {
     match err {
-        AppError::Unauthorized(error) => {
+        AppError::Unauthorized(error) | AppError::UnauthorizedReason { message: error, .. } => {
             tracing::debug!(error = %error, "OAuth grant was rejected");
             oauth_error(
                 StatusCode::BAD_REQUEST,
@@ -470,10 +469,12 @@ fn oauth_app_error(err: AppError) -> Response {
                 "OAuth grant is invalid",
             )
         }
-        AppError::Validation(message) if message == "invalid OAuth scope" => {
-            oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message)
-        }
-        AppError::Validation(error) => {
+        AppError::ValidationRefused {
+            message,
+            reason: scryer_application::error_reasons::oauth::INVALID_SCOPE,
+            ..
+        } => oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message),
+        AppError::Validation(error) | AppError::ValidationRefused { message: error, .. } => {
             tracing::debug!(error = %error, "OAuth request validation failed");
             oauth_error(
                 StatusCode::BAD_REQUEST,
@@ -505,7 +506,11 @@ fn oauth_token_response(body: OAuthTokenResponse) -> Response {
 
 fn oauth_error_description(err: &AppError) -> String {
     match err {
-        AppError::Validation(message) | AppError::Unauthorized(message) => message.clone(),
+        AppError::Validation(message)
+        | AppError::Unauthorized(message)
+        | AppError::ValidationRefused { message, .. }
+        | AppError::ValidationRefusedWithCount { message, .. }
+        | AppError::UnauthorizedReason { message, .. } => message.clone(),
         other => other.to_string(),
     }
 }

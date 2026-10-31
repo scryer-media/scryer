@@ -903,10 +903,16 @@ pub(super) async fn maybe_resolve_title_from_completed_download(
             {
                 td.status = TrackedDownloadStatus::Warning;
                 td.status_messages.retain(|message| {
-                    !message.contains("matched by ID only")
-                        && !message.contains(ID_ONLY_CONFLICT_MESSAGE)
+                    !matches!(
+                        message.kind,
+                        crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConfirmation
+                            | crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict
+                    )
                 });
-                td.warn(ID_ONLY_CONFLICT_MESSAGE);
+                td.warn_kind(
+                    crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict,
+                    ID_ONLY_CONFLICT_MESSAGE,
+                );
                 return;
             }
 
@@ -922,8 +928,9 @@ pub(super) async fn maybe_resolve_title_from_completed_download(
 }
 
 fn clear_id_only_conflict(td: &mut TrackedDownload) {
-    td.status_messages
-        .retain(|message| message != ID_ONLY_CONFLICT_MESSAGE);
+    td.status_messages.retain(|message| {
+        message.kind != crate::tracked_downloads::TrackedStatusMessageKind::IdOnlyConflict
+    });
     if td.status_messages.is_empty() && td.status == TrackedDownloadStatus::Warning {
         td.status = TrackedDownloadStatus::Ok;
     }

@@ -48,7 +48,9 @@ function orderedTypes(input: Parameters<typeof order>[0]) {
 
 function itemKeys(sections: readonly OrderableDiscoverySection[]) {
   return sections.flatMap((entry) =>
-    entry.items.map((entryItem) => `${entryItem.targetKind}:${entryItem.targetKey}`),
+    entry.items.map(
+      (entryItem) => `${entryItem.targetKind}:${entryItem.targetKey}`,
+    ),
   );
 }
 
@@ -202,12 +204,16 @@ test("every Because You Like rail of a kind is kept, in payload order", () => {
 });
 
 test("FOR_YOU renders only when there is no library context", () => {
-  assert.deepEqual(orderedTypes({ personalizedSections: [section("FOR_YOU")] }), [
-    "FOR_YOU",
-  ]);
+  assert.deepEqual(
+    orderedTypes({ personalizedSections: [section("FOR_YOU")] }),
+    ["FOR_YOU"],
+  );
   assert.deepEqual(
     orderedTypes({
-      personalizedSections: [section("FOR_YOU"), section("BECAUSE_YOU_LIKE_TAG")],
+      personalizedSections: [
+        section("FOR_YOU"),
+        section("BECAUSE_YOU_LIKE_TAG"),
+      ],
     }),
     ["BECAUSE_YOU_LIKE_TAG"],
   );
@@ -250,7 +256,9 @@ test("legacy section types are recognised regardless of case and whitespace", ()
   );
   // ...and so are live types.
   assert.deepEqual(
-    orderedTypes({ publicSections: [section(" curated "), section("popular_right_now")] }),
+    orderedTypes({
+      publicSections: [section(" curated "), section("popular_right_now")],
+    }),
     ["popular_right_now", " curated "],
   );
 });
@@ -300,11 +308,7 @@ test("merge: TRENDING_NOW folds into POPULAR_RIGHT_NOW, target items first", () 
     ordered.map((entry) => entry.sectionType),
     ["POPULAR_RIGHT_NOW"],
   );
-  assert.deepEqual(itemKeys(ordered), [
-    "MOVIE:r1",
-    "MOVIE:t1",
-    "MOVIE:t2",
-  ]);
+  assert.deepEqual(itemKeys(ordered), ["MOVIE:r1", "MOVIE:t1", "MOVIE:t2"]);
   assert.equal(ordered[0]?.totalCount, 3);
 });
 
@@ -322,7 +326,11 @@ test("merge: POPULAR_WITH_ANIME_FANS folds into ANIME_THIS_WEEK", () => {
     ordered.map((entry) => entry.sectionType),
     ["ANIME_THIS_WEEK", "ANIME_SEASON_STANDOUTS"],
   );
-  assert.deepEqual(itemKeys([ordered[0]!]), ["ANIME:w1", "ANIME:f1", "ANIME:f2"]);
+  assert.deepEqual(itemKeys([ordered[0]!]), [
+    "ANIME:w1",
+    "ANIME:f1",
+    "ANIME:f2",
+  ]);
 });
 
 test("merge: a source whose target is absent renders itself in the target's slot", () => {
@@ -395,7 +403,10 @@ test("presentation invariant: every unique title renders exactly once", () => {
     completeCollection,
   ]);
   for (const key of expected) {
-    assert.ok(counts.has(key), `unique item ${key} vanished from the dashboard`);
+    assert.ok(
+      counts.has(key),
+      `unique item ${key} vanished from the dashboard`,
+    );
   }
 });
 
@@ -417,7 +428,12 @@ test("cross-rail dedupe: first reading-order occurrence wins across shelves", ()
   const shared = item("cross-shelf-title");
   const ordered = order({
     publicSections: [
-      section("POPULAR_RIGHT_NOW", [shared, item("p1"), item("p2"), item("p3")]),
+      section("POPULAR_RIGHT_NOW", [
+        shared,
+        item("p1"),
+        item("p2"),
+        item("p3"),
+      ]),
     ],
     personalizedSections: [
       section("BECAUSE_YOU_LIKE_TAG", [shared, item("tag-b")]),
@@ -428,7 +444,11 @@ test("cross-rail dedupe: first reading-order occurrence wins across shelves", ()
     "MOVIE:cross-shelf-title",
     "MOVIE:tag-b",
   ]);
-  assert.deepEqual(itemKeys([ordered[1]!]), ["MOVIE:p1", "MOVIE:p2", "MOVIE:p3"]);
+  assert.deepEqual(itemKeys([ordered[1]!]), [
+    "MOVIE:p1",
+    "MOVIE:p2",
+    "MOVIE:p3",
+  ]);
 });
 
 test("a hero sourced from TRENDING_NOW stays visible in the rendered rails", () => {

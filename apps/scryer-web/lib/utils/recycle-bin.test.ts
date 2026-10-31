@@ -52,33 +52,66 @@ test("recycle-bin grouping keeps a matched title's files together and newest fir
 
   assert.equal(groups.length, 1);
   assert.equal(groups[0]?.titleName, "Arrival");
-  assert.deepEqual(groups[0]?.items.map((item) => item.id), ["one-new", "one-old"]);
+  assert.deepEqual(
+    groups[0]?.items.map((item) => item.id),
+    ["one-new", "one-old"],
+  );
 });
 
 test("recycle-bin file filtering narrows only matching files and supports unassociated files", () => {
-  const matchingFile = groupRecycleBinItems(items, "2160p", "Unassociated files");
+  const matchingFile = groupRecycleBinItems(
+    items,
+    "2160p",
+    "Unassociated files",
+  );
   assert.equal(matchingFile.length, 1);
-  assert.deepEqual(matchingFile[0]?.items.map((item) => item.id), ["one-new"]);
+  assert.deepEqual(
+    matchingFile[0]?.items.map((item) => item.id),
+    ["one-new"],
+  );
 
-  const unassociated = groupRecycleBinItems(items, "manual-extra", "Unassociated files");
+  const unassociated = groupRecycleBinItems(
+    items,
+    "manual-extra",
+    "Unassociated files",
+  );
   assert.equal(unassociated.length, 1);
   assert.equal(unassociated[0]?.titleName, "Unassociated files");
-  assert.deepEqual(unassociated[0]?.items.map((item) => item.id), ["unassociated"]);
+  assert.deepEqual(
+    unassociated[0]?.items.map((item) => item.id),
+    ["unassociated"],
+  );
 });
 
 test("recycle bin settings input carries only the changed fields", () => {
-  assert.deepEqual(buildRecycleBinSettingsInput({ enabled: false }), { enabled: false });
-  assert.equal("path" in buildRecycleBinSettingsInput({ enabled: true }), false);
-  assert.equal("retentionDays" in buildRecycleBinSettingsInput({ enabled: true }), false);
-  assert.deepEqual(buildRecycleBinSettingsInput({ path: "  /srv/bin  ", retentionDays: 14 }), {
-    path: "/srv/bin",
-    retentionDays: 14,
+  assert.deepEqual(buildRecycleBinSettingsInput({ enabled: false }), {
+    enabled: false,
   });
-  assert.deepEqual(buildRecycleBinSettingsInput({ path: "   ", retentionDays: 7 }), {
+  assert.equal(
+    "path" in buildRecycleBinSettingsInput({ enabled: true }),
+    false,
+  );
+  assert.equal(
+    "retentionDays" in buildRecycleBinSettingsInput({ enabled: true }),
+    false,
+  );
+  assert.deepEqual(
+    buildRecycleBinSettingsInput({ path: "  /srv/bin  ", retentionDays: 14 }),
+    {
+      path: "/srv/bin",
+      retentionDays: 14,
+    },
+  );
+  assert.deepEqual(
+    buildRecycleBinSettingsInput({ path: "   ", retentionDays: 7 }),
+    {
+      path: null,
+      retentionDays: 7,
+    },
+  );
+  assert.deepEqual(buildRecycleBinSettingsInput({ path: null }), {
     path: null,
-    retentionDays: 7,
   });
-  assert.deepEqual(buildRecycleBinSettingsInput({ path: null }), { path: null });
   assert.deepEqual(buildRecycleBinSettingsInput({}), {});
 });
 
@@ -93,16 +126,34 @@ test("recycle bin retention accepts only whole days in the server range", () => 
 
 test("recycle bin location save sends the path only when it changed", () => {
   const stored = { path: "/srv/bin", retentionDays: 7 };
-  assert.deepEqual(recycleBinLocationChanges(stored, { path: " /srv/bin ", retentionDays: 30 }), {
-    retentionDays: 30,
-  });
-  assert.deepEqual(recycleBinLocationChanges(stored, { path: "/srv/other", retentionDays: 7 }), {
-    path: "/srv/other",
-  });
-  assert.deepEqual(recycleBinLocationChanges(stored, { path: "  ", retentionDays: 7 }), { path: null });
   assert.deepEqual(
-    recycleBinLocationChanges({ path: null, retentionDays: 7 }, { path: "", retentionDays: 14 }),
+    recycleBinLocationChanges(stored, {
+      path: " /srv/bin ",
+      retentionDays: 30,
+    }),
+    {
+      retentionDays: 30,
+    },
+  );
+  assert.deepEqual(
+    recycleBinLocationChanges(stored, { path: "/srv/other", retentionDays: 7 }),
+    {
+      path: "/srv/other",
+    },
+  );
+  assert.deepEqual(
+    recycleBinLocationChanges(stored, { path: "  ", retentionDays: 7 }),
+    { path: null },
+  );
+  assert.deepEqual(
+    recycleBinLocationChanges(
+      { path: null, retentionDays: 7 },
+      { path: "", retentionDays: 14 },
+    ),
     { retentionDays: 14 },
   );
-  assert.deepEqual(recycleBinLocationChanges(stored, { path: "/srv/bin", retentionDays: 7 }), {});
+  assert.deepEqual(
+    recycleBinLocationChanges(stored, { path: "/srv/bin", retentionDays: 7 }),
+    {},
+  );
 });

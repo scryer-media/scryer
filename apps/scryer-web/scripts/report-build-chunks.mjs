@@ -3,7 +3,10 @@ import path from "node:path";
 import { brotliDecompressSync, gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
-const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const webRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const distRoot = path.join(webRoot, "dist");
 const manifestPath = path.join(distRoot, ".vite", "manifest.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -68,7 +71,9 @@ function formatSizes(relativePath) {
 
 const entries = records.filter((record) => record.isEntry);
 for (const entry of entries) {
-  const startupFiles = staticClosure(entry).filter((file) => file.endsWith(".js"));
+  const startupFiles = staticClosure(entry).filter((file) =>
+    file.endsWith(".js"),
+  );
   const totals = startupFiles.reduce(
     (sum, file) => {
       const sizes = assetSizes(file);
@@ -88,7 +93,10 @@ for (const entry of entries) {
 
 const dynamicEntries = records
   .filter((record) => record.isDynamicEntry && record.file.endsWith(".js"))
-  .sort((left, right) => assetSizes(right.file).brotli - assetSizes(left.file).brotli);
+  .sort(
+    (left, right) =>
+      assetSizes(right.file).brotli - assetSizes(left.file).brotli,
+  );
 for (const record of dynamicEntries) {
   console.log(
     `[bundle] lazy ${record.src ?? record.file}: ${formatSizes(record.file)}`,

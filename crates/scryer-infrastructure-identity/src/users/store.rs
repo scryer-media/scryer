@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate,
-    UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiDeviceClass, UiPalette, UiSettings,
-    UiSettingsFacet, UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode,
-    UiTheme, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
-    UserUiSettingsRepository,
+    UiDashboardBreakpoint, UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat,
+    UiDefaultLandingView, UiDensity, UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet,
+    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
+    UserExternalAccountRepository, UserLoginSnapshot, UserRepository, UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -27,6 +27,72 @@ impl UserStore {
 
 #[async_trait]
 impl UserRepository for UserStore {
+    async fn initial_authentication_state(
+        &self,
+    ) -> AppResult<Option<scryer_application::initial_auth::SetupState>> {
+        let row = SqlRuntime::fetch_optional(self.datastore.read_exec(),
+            "SELECT CAST(value_json AS TEXT) AS state FROM settings_values WHERE id = 'initial-authentication-setup'", &[]).await?;
+        row.map(|row| {
+            serde_json::from_str(&row.text("state")?)
+                .map_err(|_| AppError::Repository("invalid initial authentication state".into()))
+        })
+        .transpose()
+    }
+
+    async fn complete_initial_authentication(&self, user: User) -> AppResult<User> {
+        SqlRuntime::run_in_transaction(&self.datastore, "complete_initial_authentication", move |tx| {
+            let user = user.clone();
+            Box::pin(async move {
+                use scryer_application::initial_auth::{SetupState, refusal};
+                if !transition_initial_auth_tx(tx, &SetupState::Choice, &SetupState::Complete).await? {
+                    return Err(AppError::validation_refused(refusal::ALREADY_COMPLETED, "authentication setup is no longer awaiting a choice"));
+                }
+                let rows = tx.execute(
+                    "UPDATE users SET password_hash = {}, password_change_required = {}, auth_session_version = {} WHERE id = {} AND username = 'admin' AND password_hash IS NULL",
+                    &[SqlArg::OptText(user.password_hash.clone()), SqlArg::Bool(false), SqlArg::Text(scryer_domain::Id::new().0), SqlArg::Text(user.id.clone())],
+                ).await?;
+                if rows != 1 { return Err(AppError::validation_refused(refusal::ALREADY_COMPLETED, "the initial administrator has changed")); }
+                upsert_app_permission_mask_tx(tx, &user.id, user.authorization.app).await?;
+                let libraries = SqlRuntime::fetch_all(SqlExec::Tx(tx), "SELECT id FROM libraries", &[]).await?;
+                let grants = libraries.iter().map(|row| Ok(LibraryGrant {
+                    user_id: user.id.clone(), library_id: row.text("id")?, permissions: user.authorization.default_library,
+                })).collect::<AppResult<Vec<_>>>()?;
+                replace_library_grants_tx(tx, &user.id, &grants).await?;
+                save_initial_auth_setting_tx(tx, "auth.form_login_enabled", user.password_hash.is_some()).await?;
+                save_initial_auth_setting_tx(tx, "auth.skip_login_for_local_ips", false).await?;
+                Ok(user)
+            })
+        }).await
+    }
+
+    async fn prepare_initial_authentication_recovery(&self, id: &str) -> AppResult<Option<User>> {
+        let id = id.to_owned();
+        SqlRuntime::run_in_transaction(&self.datastore, "prepare_initial_authentication_recovery", move |tx| {
+            let id = id.clone();
+            Box::pin(async move {
+                use scryer_application::initial_auth::{SetupState, refusal};
+                let Some(row) = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT CAST(value_json AS TEXT) AS state FROM settings_values WHERE id = 'initial-authentication-setup'", &[]).await? else {
+                    return Ok(None);
+                };
+                let previous: SetupState = serde_json::from_str(&row.text("state")?)
+                    .map_err(|_| AppError::Repository("invalid initial authentication state".into()))?;
+                if !previous.is_pending() { return Ok(None); }
+                if !transition_initial_auth_tx(tx, &previous, &SetupState::PasswordReplacement { user_id: id.clone() }).await? {
+                    return Err(AppError::validation_refused(refusal::ALREADY_COMPLETED, "authentication setup changed during recovery"));
+                }
+                let rows = tx.execute(
+                    "UPDATE users SET password_change_required = {}, auth_session_version = {} WHERE id = {} AND password_hash IS NOT NULL",
+                    &[SqlArg::Bool(true), SqlArg::Text(scryer_domain::Id::new().0), SqlArg::Text(id.clone())],
+                ).await?;
+                if rows != 1 { return Err(AppError::Repository("initial recovery administrator is missing credentials".into())); }
+                save_initial_auth_setting_tx(tx, "auth.form_login_enabled", true).await?;
+                save_initial_auth_setting_tx(tx, "auth.skip_login_for_local_ips", false).await?;
+                load_user_by_id_tx(tx, &id).await
+            })
+        }).await
+    }
+
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>> {
         load_user_by_username(self.datastore.read_exec(), username).await
     }
@@ -72,12 +138,13 @@ impl UserRepository for UserStore {
                         "UPDATE users SET password_hash = {}, password_change_required = {} WHERE id = {} AND id = '00000000000000000000000000000001' AND username = 'admin' AND password_hash IS NULL AND auth_session_version IS NULL AND account_kind = 'local' AND status = 'active' AND NOT EXISTS (SELECT 1 FROM user_app_permission_masks WHERE user_id = users.id) AND NOT EXISTS (SELECT 1 FROM user_library_permission_masks WHERE user_id = users.id)",
                         &[SqlArg::OptText(user.password_hash.clone()), SqlArg::Bool(true), SqlArg::Text(user.id.clone())],
                     ).await?;
-                    if rows != 1 { return Err(AppError::Validation("default administrator seed changed during bootstrap".into())); }
+                    if rows != 1 { return Err(AppError::validation_refused(crate::error_reasons::IDENTITY_ADMINISTRATOR_BOOTSTRAP_SEED_STALE, "default administrator seed changed during bootstrap")); }
                 } else {
                     insert_user_tx(tx, &user).await?;
                 }
                 upsert_app_permission_mask_tx(tx, &user.id, user.authorization.app).await?;
                 replace_library_grants_tx(tx, &user.id, &grants).await?;
+                begin_initial_password_replacement_tx(tx, &user.id).await?;
                 Ok(user)
             })
         })
@@ -130,11 +197,17 @@ impl UserRepository for UserStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("user {user_id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                        format!("user {user_id}"),
+                    ));
                 }
-                load_user_by_id_tx(tx, &user_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))
+                load_user_by_id_tx(tx, &user_id).await?.ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                        format!("user {user_id}"),
+                    )
+                })
             })
         })
         .await
@@ -164,7 +237,10 @@ impl UserRepository for UserStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("user {user_id}")));
+                        return Err(AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                            format!("user {user_id}"),
+                        ));
                     }
                     for table in [
                         "totp_credentials",
@@ -219,7 +295,7 @@ impl UserRepository for UserStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::NotFound(format!("user {id}")));
+                        return Err(AppError::not_found_reason(crate::error_reasons::IDENTITY_USER_NOT_FOUND, format!("user {id}")));
                     }
                     for table in [
                         "totp_enrollment_challenges",
@@ -234,7 +310,7 @@ impl UserRepository for UserStore {
                     }
                     load_user_by_id_tx(tx, &id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_USER_NOT_FOUND, format!("user {id}")))
                 })
             },
         )
@@ -294,6 +370,11 @@ impl UserRepository for UserStore {
                             "account credentials changed; authenticate again".into(),
                         ));
                     }
+                    if password_change_required {
+                        // Bootstrap may select an already initialized passwordless
+                        // administrator when resuming an unfinished first boot.
+                        begin_initial_password_replacement_tx(tx, &id).await?;
+                    }
                     for table in [
                         "totp_enrollment_challenges",
                         "webauthn_challenges",
@@ -307,7 +388,7 @@ impl UserRepository for UserStore {
                     }
                     load_user_by_id_tx(tx, &id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_USER_NOT_FOUND, format!("user {id}")))
                 })
             },
         )
@@ -351,13 +432,15 @@ impl UserRepository for UserStore {
                         )
                         .await?;
                     if rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "password change is no longer required".into(),
-                        ));
+                        return Err(AppError::unauthorized_reason(crate::error_reasons::IDENTITY_PASSWORD_CHANGE_NOT_REQUIRED, "password change is no longer required"));
                     }
+                    transition_initial_auth_tx(tx,
+                        &scryer_application::initial_auth::SetupState::PasswordReplacement { user_id: id.clone() },
+                        &scryer_application::initial_auth::SetupState::Complete,
+                    ).await?;
                     load_user_by_id_tx(tx, &id)
                         .await?
-                        .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                        .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_USER_NOT_FOUND, format!("user {id}")))
                 })
             },
         )
@@ -389,11 +472,17 @@ impl UserRepository for UserStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("user {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                        format!("user {id}"),
+                    ));
                 }
-                load_user_by_id_tx(tx, &id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                load_user_by_id_tx(tx, &id).await?.ok_or_else(|| {
+                    AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                        format!("user {id}"),
+                    )
+                })
             })
         })
         .await
@@ -411,7 +500,10 @@ impl UserRepository for UserStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("user {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_USER_NOT_FOUND,
+                        format!("user {id}"),
+                    ));
                 }
                 Ok(())
             })
@@ -439,9 +531,7 @@ impl UserUiSettingsRepository for UserStore {
                 if let Some(columns) = &settings.table_columns {
                     replace_ui_table_columns_tx(tx, &user_id, None, columns).await?;
                 }
-                load_ui_settings_by_user_id_tx(tx, &user_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("UI settings for user {user_id}")))
+                load_ui_settings_by_user_id_tx(tx, &user_id).await
             })
         })
         .await
@@ -458,19 +548,6 @@ impl UserUiSettingsRepository for UserStore {
             let update = update.clone();
             Box::pin(async move {
                 let now = Utc::now();
-                // Settings are read through their row, so a first catalog save
-                // creates it with every other preference at its default.
-                tx.execute(
-                    "INSERT INTO user_ui_settings (user_id, created_at, updated_at)
-                     VALUES ({}, {}, {})
-                     ON CONFLICT(user_id) DO NOTHING",
-                    &[
-                        SqlArg::Text(user_id.clone()),
-                        SqlArg::Timestamp(now),
-                        SqlArg::Timestamp(now),
-                    ],
-                )
-                .await?;
                 if let Some(view_mode) = update.view_mode {
                     tx.execute(
                         "INSERT INTO user_ui_catalog_views (
@@ -500,11 +577,111 @@ impl UserUiSettingsRepository for UserStore {
                     )
                     .await?;
                 }
-                load_ui_settings_by_user_id_tx(tx, &user_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("UI settings for user {user_id}")))
+                load_ui_settings_by_user_id_tx(tx, &user_id).await
             })
         })
+        .await
+    }
+
+    async fn set_dashboard_layout(
+        &self,
+        user_id: &str,
+        layout: UiDashboardLayout,
+    ) -> AppResult<UiSettings> {
+        let user_id = user_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "set_user_ui_dashboard_layout", move |tx| {
+            let user_id = user_id.clone();
+            let layout = layout.clone();
+            Box::pin(async move {
+                let now = Utc::now();
+                let breakpoint = layout.breakpoint.as_str().to_string();
+                tx.execute(
+                    "INSERT INTO user_ui_dashboard_layouts (
+                         user_id, breakpoint, column_count, created_at, updated_at
+                     )
+                     VALUES ({}, {}, {}, {}, {})
+                     ON CONFLICT(user_id, breakpoint) DO UPDATE SET
+                         column_count = excluded.column_count,
+                         updated_at = excluded.updated_at",
+                    &[
+                        SqlArg::Text(user_id.clone()),
+                        SqlArg::Text(breakpoint.clone()),
+                        SqlArg::I64(i64::from(layout.columns)),
+                        SqlArg::Timestamp(now),
+                        SqlArg::Timestamp(now),
+                    ],
+                )
+                .await?;
+                tx.execute(
+                    "DELETE FROM user_ui_dashboard_layout_items
+                      WHERE user_id = {} AND breakpoint = {}",
+                    &[
+                        SqlArg::Text(user_id.clone()),
+                        SqlArg::Text(breakpoint.clone()),
+                    ],
+                )
+                .await?;
+                for item in &layout.items {
+                    tx.execute(
+                        "INSERT INTO user_ui_dashboard_layout_items (
+                             user_id, breakpoint, panel_id, x, y, w, h
+                         )
+                         VALUES ({}, {}, {}, {}, {}, {}, {})",
+                        &[
+                            SqlArg::Text(user_id.clone()),
+                            SqlArg::Text(breakpoint.clone()),
+                            SqlArg::Text(item.panel_id.clone()),
+                            SqlArg::I64(i64::from(item.x)),
+                            SqlArg::I64(i64::from(item.y)),
+                            SqlArg::I64(i64::from(item.w)),
+                            SqlArg::I64(i64::from(item.h)),
+                        ],
+                    )
+                    .await?;
+                }
+                load_ui_settings_by_user_id_tx(tx, &user_id).await
+            })
+        })
+        .await
+    }
+
+    async fn reset_dashboard_layouts(
+        &self,
+        user_id: &str,
+        breakpoint: Option<UiDashboardBreakpoint>,
+    ) -> AppResult<Option<UiSettings>> {
+        let user_id = user_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "reset_user_ui_dashboard_layouts",
+            move |tx| {
+                let user_id = user_id.clone();
+                Box::pin(async move {
+                    // Item rows follow their layout row through ON DELETE CASCADE.
+                    match breakpoint {
+                        None => {
+                            tx.execute(
+                                "DELETE FROM user_ui_dashboard_layouts WHERE user_id = {}",
+                                &[SqlArg::Text(user_id.clone())],
+                            )
+                            .await?;
+                        }
+                        Some(breakpoint) => {
+                            tx.execute(
+                                "DELETE FROM user_ui_dashboard_layouts
+                                  WHERE user_id = {} AND breakpoint = {}",
+                                &[
+                                    SqlArg::Text(user_id.clone()),
+                                    SqlArg::Text(breakpoint.as_str().to_string()),
+                                ],
+                            )
+                            .await?;
+                        }
+                    }
+                    load_ui_settings_by_user_id_tx(tx, &user_id).await.map(Some)
+                })
+            },
+        )
         .await
     }
 }
@@ -518,7 +695,12 @@ impl UserExternalAccountRepository for UserStore {
                 insert_external_account_tx(tx, &account).await?;
                 load_external_account_by_id_tx(tx, &account.id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("external account {}", account.id)))
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                            format!("external account {}", account.id),
+                        )
+                    })
             })
         })
         .await
@@ -533,8 +715,9 @@ impl UserExternalAccountRepository for UserStore {
             .as_deref()
             .is_none_or(|external_user_id| external_user_id.trim().is_empty())
         {
-            return Err(AppError::Validation(
-                "external account identity must be present when claiming".into(),
+            return Err(AppError::validation_refused(
+                crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED,
+                "external account identity must be present when claiming",
             ));
         }
         SqlRuntime::run_in_transaction(
@@ -547,7 +730,10 @@ impl UserExternalAccountRepository for UserStore {
                         return load_external_account_by_id_tx(tx, &account.id)
                             .await?
                             .ok_or_else(|| {
-                                AppError::NotFound(format!("external account {}", account.id))
+                                AppError::not_found_reason(
+                                    crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                                    format!("external account {}", account.id),
+                                )
                             });
                     }
 
@@ -556,8 +742,9 @@ impl UserExternalAccountRepository for UserStore {
                         &account.provider,
                         &account.connection_id,
                         account.external_user_id.as_deref().ok_or_else(|| {
-                            AppError::Validation(
-                                "external account identity must be present when claiming".into(),
+                            AppError::validation_refused(
+                                crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED,
+                                "external account identity must be present when claiming",
                             )
                         })?,
                     )
@@ -574,9 +761,9 @@ impl UserExternalAccountRepository for UserStore {
                     .await?
                     .is_some()
                     {
-                        return Err(AppError::Validation(
-                            "external account is already linked to a different provider identity"
-                                .into(),
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::EXTERNAL_ACCOUNT_IDENTITY_MISMATCH,
+                            "external account is already linked to a different provider identity",
                         ));
                     }
                     Err(AppError::Repository(
@@ -722,14 +909,19 @@ impl UserExternalAccountRepository for UserStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!(
-                        "external account {}",
-                        account.id
-                    )));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                        format!("external account {}", account.id),
+                    ));
                 }
                 load_external_account_by_id_tx(tx, &account.id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("external account {}", account.id)))
+                    .ok_or_else(|| {
+                        AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                            format!("external account {}", account.id),
+                        )
+                    })
             })
         })
         .await
@@ -757,7 +949,10 @@ impl UserExternalAccountRepository for UserStore {
                     let account = load_external_account_by_id_tx(tx, &account.id)
                         .await?
                         .ok_or_else(|| {
-                            AppError::NotFound(format!("external account {}", account.id))
+                            AppError::not_found_reason(
+                                crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                                format!("external account {}", account.id),
+                            )
                         })?;
                     Ok((user, account))
                 })
@@ -778,7 +973,10 @@ impl UserExternalAccountRepository for UserStore {
                 )
                 .await?
                 else {
-                    return Err(AppError::NotFound(format!("external account {id}")));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_NOT_FOUND,
+                        format!("external account {id}"),
+                    ));
                 };
                 let user_id = account.text("user_id")?;
                 tx.execute(
@@ -808,8 +1006,9 @@ impl UserExternalAccountRepository for UserStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::Validation(
-                        "cannot remove the last available sign-in method".into(),
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED,
+                        "cannot remove the last available sign-in method",
                     ));
                 }
                 Ok(())
@@ -861,6 +1060,59 @@ async fn load_user_by_id(exec: SqlExec<'_, '_>, id: &str) -> AppResult<Option<Us
 
 async fn load_user_by_id_tx(tx: &mut SqlTx<'_>, id: &str) -> AppResult<Option<User>> {
     load_user_by_id(SqlExec::Tx(tx), id).await
+}
+
+async fn begin_initial_password_replacement_tx(tx: &mut SqlTx<'_>, user_id: &str) -> AppResult<()> {
+    use scryer_application::initial_auth::SetupState;
+    if transition_initial_auth_tx(
+        tx,
+        &SetupState::Choice,
+        &SetupState::PasswordReplacement {
+            user_id: user_id.to_owned(),
+        },
+    )
+    .await?
+    {
+        save_initial_auth_setting_tx(tx, "auth.form_login_enabled", true).await?;
+        save_initial_auth_setting_tx(tx, "auth.skip_login_for_local_ips", false).await?;
+    }
+    Ok(())
+}
+
+async fn transition_initial_auth_tx(
+    tx: &mut SqlTx<'_>,
+    expected: &scryer_application::initial_auth::SetupState,
+    next: &scryer_application::initial_auth::SetupState,
+) -> AppResult<bool> {
+    Ok(tx.execute(
+        "UPDATE settings_values SET value_json = {}, updated_at = {} WHERE id = 'initial-authentication-setup' AND value_json = {}",
+        &[SqlArg::Json(serde_json::to_value(next).map_err(|e| AppError::Repository(e.to_string()))?),
+          SqlArg::Timestamp(Utc::now()),
+          SqlArg::Json(serde_json::to_value(expected).map_err(|e| AppError::Repository(e.to_string()))?)],
+    ).await? == 1)
+}
+
+async fn save_initial_auth_setting_tx(tx: &mut SqlTx<'_>, key: &str, value: bool) -> AppResult<()> {
+    let definition = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id FROM settings_definitions WHERE scope = 'system' AND key_name = {}",
+        &[SqlArg::Text(key.to_string())],
+    )
+    .await?
+    .ok_or_else(|| AppError::Repository("authentication setting definition is missing".into()))?;
+    let definition_id = definition.text("id")?;
+    let now = Utc::now();
+    let rows = tx.execute(
+        "UPDATE settings_values SET value_json = {}, updated_at = {}, source = 'initial-authentication' WHERE setting_definition_id = {} AND scope = 'system' AND scope_id IS NULL",
+        &[SqlArg::Json(serde_json::json!(value)), SqlArg::Timestamp(now), SqlArg::Text(definition_id.clone())],
+    ).await?;
+    if rows == 0 {
+        tx.execute(
+            "INSERT INTO settings_values (id, setting_definition_id, scope, value_json, source, created_at, updated_at) VALUES ({}, {}, 'system', {}, 'initial-authentication', {}, {})",
+            &[SqlArg::Text(scryer_domain::Id::new().0), SqlArg::Text(definition_id), SqlArg::Json(serde_json::json!(value)), SqlArg::Timestamp(now), SqlArg::Timestamp(now)],
+        ).await?;
+    }
+    Ok(())
 }
 
 async fn insert_user_tx(tx: &mut SqlTx<'_>, user: &User) -> AppResult<()> {
@@ -957,48 +1209,69 @@ fn row_to_user(row: &SqlRow) -> AppResult<User> {
 // preferences live in user_ui_settings.
 const UI_SETTINGS_SELECT: &str =
     "SELECT user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode,
-            reduce_motion, hide_sponsor_button, no_glow, density, sidebar_mode, default_landing_view,
+            reduce_motion, hide_sponsor_button, density, sidebar_mode, default_landing_view,
             (SELECT locale FROM users WHERE users.id = user_ui_settings.user_id) AS language,
             created_at, updated_at
        FROM user_ui_settings
       WHERE user_id = {}";
 
+const UI_LANGUAGE_SELECT: &str = "SELECT locale FROM users WHERE id = {}";
+
+// The general preferences and each per-surface table (columns, catalog views,
+// dashboard layouts) are independent. A user without a user_ui_settings row
+// has the general preferences at their application defaults, whatever the
+// other tables hold, so a save on one surface never writes another's values.
+// Settings read as `None` only for a user that does not exist.
 async fn load_ui_settings_by_user_id(
     datastore: &StoreDatastore,
     user_id: &str,
 ) -> AppResult<Option<UiSettings>> {
-    let row = SqlRuntime::fetch_optional(
-        datastore.read_exec(),
-        UI_SETTINGS_SELECT,
-        &[SqlArg::Text(user_id.to_string())],
-    )
-    .await?;
-    let Some(row) = row else {
-        return Ok(None);
+    let args = [SqlArg::Text(user_id.to_string())];
+    let row = SqlRuntime::fetch_optional(datastore.read_exec(), UI_SETTINGS_SELECT, &args).await?;
+    let mut settings = match row {
+        Some(row) => row_to_ui_settings(&row)?,
+        None => {
+            let Some(user) =
+                SqlRuntime::fetch_optional(datastore.read_exec(), UI_LANGUAGE_SELECT, &args)
+                    .await?
+            else {
+                return Ok(None);
+            };
+            default_ui_settings(user_id, Some(&user))?
+        }
     };
-    let mut settings = row_to_ui_settings(&row)?;
     settings.table_columns = load_ui_table_columns(datastore.read_exec(), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(datastore.read_exec(), user_id).await?;
+    settings.dashboard_layouts = load_ui_dashboard_layouts(datastore.read_exec(), user_id).await?;
     Ok(Some(settings))
 }
 
 async fn load_ui_settings_by_user_id_tx(
     tx: &mut SqlTx<'_>,
     user_id: &str,
-) -> AppResult<Option<UiSettings>> {
-    let row = SqlRuntime::fetch_optional(
-        SqlExec::Tx(tx),
-        UI_SETTINGS_SELECT,
-        &[SqlArg::Text(user_id.to_string())],
-    )
-    .await?;
-    let Some(row) = row else {
-        return Ok(None);
+) -> AppResult<UiSettings> {
+    let args = [SqlArg::Text(user_id.to_string())];
+    let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx), UI_SETTINGS_SELECT, &args).await?;
+    let mut settings = match row {
+        Some(row) => row_to_ui_settings(&row)?,
+        None => {
+            let language =
+                SqlRuntime::fetch_optional(SqlExec::Tx(tx), UI_LANGUAGE_SELECT, &args).await?;
+            default_ui_settings(user_id, language.as_ref())?
+        }
     };
-    let mut settings = row_to_ui_settings(&row)?;
     settings.table_columns = load_ui_table_columns(SqlExec::Tx(tx), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(SqlExec::Tx(tx), user_id).await?;
-    Ok(Some(settings))
+    settings.dashboard_layouts = load_ui_dashboard_layouts(SqlExec::Tx(tx), user_id).await?;
+    Ok(settings)
+}
+
+fn default_ui_settings(user_id: &str, language: Option<&SqlRow>) -> AppResult<UiSettings> {
+    let mut settings = UiSettings::defaults_for_user(user_id);
+    if let Some(row) = language {
+        settings.language = row.opt_text("locale")?;
+    }
+    Ok(settings)
 }
 
 async fn upsert_ui_settings_tx(
@@ -1010,9 +1283,9 @@ async fn upsert_ui_settings_tx(
     tx.execute(
         "INSERT INTO user_ui_settings (
              user_id, theme, palette, date_time_format, highlight_color, secondary_color, high_contrast_mode, reduce_motion,
-             hide_sponsor_button, no_glow, density, sidebar_mode, default_landing_view, created_at, updated_at
+             hide_sponsor_button, density, sidebar_mode, default_landing_view, created_at, updated_at
          )
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
          ON CONFLICT(user_id) DO UPDATE SET
              theme = excluded.theme,
              palette = excluded.palette,
@@ -1022,7 +1295,6 @@ async fn upsert_ui_settings_tx(
              high_contrast_mode = excluded.high_contrast_mode,
              reduce_motion = excluded.reduce_motion,
              hide_sponsor_button = excluded.hide_sponsor_button,
-             no_glow = excluded.no_glow,
              density = excluded.density,
              sidebar_mode = excluded.sidebar_mode,
              default_landing_view = excluded.default_landing_view,
@@ -1037,7 +1309,6 @@ async fn upsert_ui_settings_tx(
             SqlArg::Bool(settings.high_contrast_mode),
             SqlArg::Bool(settings.reduce_motion),
             SqlArg::Bool(settings.hide_sponsor_button),
-            SqlArg::Bool(settings.no_glow),
             SqlArg::Text(settings.density.as_str().to_string()),
             SqlArg::Text(settings.sidebar_mode.as_str().to_string()),
             SqlArg::Text(settings.default_landing_view.as_str().to_string()),
@@ -1133,13 +1404,13 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         high_contrast_mode: row.bool("high_contrast_mode")?,
         reduce_motion: row.bool("reduce_motion")?,
         hide_sponsor_button: row.bool("hide_sponsor_button")?,
-        no_glow: row.bool("no_glow")?,
         density: parse_ui_density(row.text("density")?)?,
         sidebar_mode: parse_ui_sidebar_mode(row.text("sidebar_mode")?)?,
         default_landing_view: parse_ui_default_landing_view(row.text("default_landing_view")?)?,
         language: row.opt_text("language")?,
         table_columns: Vec::new(),
         catalog_views: Vec::new(),
+        dashboard_layouts: Vec::new(),
         created_at: Some(row.timestamp("created_at")?),
         updated_at: Some(row.timestamp("updated_at")?),
     })
@@ -1194,6 +1465,60 @@ async fn load_ui_catalog_views(
             })
         })
         .collect()
+}
+
+/// Loads every saved dashboard layout of the user, including layouts whose
+/// panels were all removed.
+async fn load_ui_dashboard_layouts(
+    exec: SqlExec<'_, '_>,
+    user_id: &str,
+) -> AppResult<Vec<UiDashboardLayout>> {
+    let rows = SqlRuntime::fetch_all(
+        exec,
+        "SELECT layouts.breakpoint, layouts.column_count,
+                items.panel_id, items.x, items.y, items.w, items.h
+           FROM user_ui_dashboard_layouts layouts
+           LEFT JOIN user_ui_dashboard_layout_items items
+             ON items.user_id = layouts.user_id
+            AND items.breakpoint = layouts.breakpoint
+          WHERE layouts.user_id = {}
+          ORDER BY layouts.breakpoint, items.y, items.x, items.panel_id",
+        &[SqlArg::Text(user_id.to_string())],
+    )
+    .await?;
+    let mut layouts: Vec<UiDashboardLayout> = Vec::new();
+    for row in &rows {
+        let breakpoint = parse_ui_dashboard_breakpoint(row.text("breakpoint")?)?;
+        if layouts
+            .last()
+            .is_none_or(|layout| layout.breakpoint != breakpoint)
+        {
+            layouts.push(UiDashboardLayout {
+                breakpoint,
+                columns: row.i32("column_count")?,
+                items: Vec::new(),
+            });
+        }
+        // A layout without items still yields one joined row with no panel.
+        let Some(panel_id) = row.opt_text("panel_id")? else {
+            continue;
+        };
+        if let Some(layout) = layouts.last_mut() {
+            layout.items.push(UiDashboardLayoutItem {
+                panel_id,
+                x: row.i32("x")?,
+                y: row.i32("y")?,
+                w: row.i32("w")?,
+                h: row.i32("h")?,
+            });
+        }
+    }
+    Ok(layouts)
+}
+
+fn parse_ui_dashboard_breakpoint(value: String) -> AppResult<UiDashboardBreakpoint> {
+    UiDashboardBreakpoint::parse(&value)
+        .ok_or_else(|| AppError::Repository(format!("invalid UI dashboard breakpoint {value:?}")))
 }
 
 fn parse_ui_device_class(value: String) -> AppResult<UiDeviceClass> {
@@ -1541,7 +1866,6 @@ mod tests {
                 high_contrast_mode INTEGER NOT NULL DEFAULT 0,
                 reduce_motion INTEGER NOT NULL DEFAULT 0,
                 hide_sponsor_button INTEGER NOT NULL DEFAULT 0,
-                no_glow INTEGER NOT NULL DEFAULT 0,
                 density TEXT NOT NULL DEFAULT 'comfortable',
                 sidebar_mode TEXT NOT NULL DEFAULT 'expanded',
                 default_landing_view TEXT NOT NULL DEFAULT 'movies',
@@ -1583,6 +1907,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create user_ui_catalog_views table");
+        sqlx::raw_sql(include_str!(
+            "../../../scryer/src/db/migrations/0316_user_dashboard_layouts.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("create dashboard layout tables");
         sqlx::query(
             "CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity
                ON user_external_accounts(provider, connection_id, external_user_id)",
@@ -1805,8 +2135,8 @@ mod tests {
                 result.expect("cancel pending invite or unlink with a fallback");
             } else {
                 assert!(
-                    matches!(result, Err(AppError::Validation(ref message))
-                        if message == "cannot remove the last available sign-in method"),
+                    matches!(result, Err(AppError::ValidationRefused { reason, .. })
+                        if reason == crate::error_reasons::IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED),
                     "{id}: {result:?}"
                 );
             }
@@ -1914,8 +2244,9 @@ mod tests {
 
         let missing = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
             .await
-            .expect("load missing UI settings");
-        assert!(missing.is_none());
+            .expect("load missing UI settings")
+            .expect("unsaved settings read as defaults");
+        assert_eq!(missing, UiSettings::defaults_for_user(user.id.clone()));
 
         let stored = UserUiSettingsRepository::upsert(
             &store,
@@ -1929,7 +2260,6 @@ mod tests {
                 high_contrast_mode: true,
                 reduce_motion: true,
                 hide_sponsor_button: true,
-                no_glow: false,
                 density: UiDensity::Compact,
                 sidebar_mode: UiSidebarMode::Collapsed,
                 default_landing_view: UiDefaultLandingView::Calendar,
@@ -1998,7 +2328,6 @@ mod tests {
                 high_contrast_mode: false,
                 reduce_motion: false,
                 hide_sponsor_button: false,
-                no_glow: true,
                 density: UiDensity::Comfortable,
                 sidebar_mode: UiSidebarMode::Expanded,
                 default_landing_view: UiDefaultLandingView::Movies,
@@ -2061,6 +2390,12 @@ mod tests {
             "user_ui_catalog_views" => {
                 "SELECT COUNT(*) FROM user_ui_catalog_views WHERE user_id = ?"
             }
+            "user_ui_dashboard_layouts" => {
+                "SELECT COUNT(*) FROM user_ui_dashboard_layouts WHERE user_id = ?"
+            }
+            "user_ui_dashboard_layout_items" => {
+                "SELECT COUNT(*) FROM user_ui_dashboard_layout_items WHERE user_id = ?"
+            }
             other => panic!("unexpected table {other}"),
         };
         sqlx::query_scalar(sql)
@@ -2068,6 +2403,203 @@ mod tests {
             .fetch_one(pool)
             .await
             .expect("count user rows")
+    }
+
+    fn dashboard_item(panel_id: &str, x: i32, y: i32) -> UiDashboardLayoutItem {
+        UiDashboardLayoutItem {
+            panel_id: panel_id.to_string(),
+            x,
+            y,
+            w: 2,
+            h: 3,
+        }
+    }
+
+    async fn has_ui_settings_row(store: &UserStore, user_id: &str) -> bool {
+        SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT user_id FROM user_ui_settings WHERE user_id = {}",
+            &[SqlArg::Text(user_id.to_string())],
+        )
+        .await
+        .expect("query settings row")
+        .is_some()
+    }
+
+    #[tokio::test]
+    async fn layout_and_catalog_saves_never_write_general_preferences() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("isolation_user"))
+            .await
+            .expect("create user");
+        let defaults = UiSettings::defaults_for_user(user.id.clone());
+
+        let layout = UiDashboardLayout {
+            breakpoint: UiDashboardBreakpoint::Lg,
+            columns: 12,
+            items: vec![dashboard_item("panel-one", 0, 0)],
+        };
+        let saved =
+            UserUiSettingsRepository::set_dashboard_layout(&store, &user.id, layout.clone())
+                .await
+                .expect("save layout");
+        assert_eq!(saved.hide_sponsor_button, defaults.hide_sponsor_button);
+        assert_eq!(saved.theme, defaults.theme);
+        assert_eq!(saved.dashboard_layouts, vec![layout.clone()]);
+
+        let viewed = UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Movies,
+                view_mode: Some(UiCatalogViewMode::PosterTable),
+                columns: None,
+            },
+        )
+        .await
+        .expect("save catalog view");
+        assert_eq!(viewed.hide_sponsor_button, defaults.hide_sponsor_button);
+
+        let reset = UserUiSettingsRepository::reset_dashboard_layouts(&store, &user.id, None)
+            .await
+            .expect("reset layouts")
+            .expect("settings after reset");
+        assert_eq!(reset.hide_sponsor_button, defaults.hide_sponsor_button);
+        assert!(!has_ui_settings_row(&store, &user.id).await);
+
+        let loaded = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load settings")
+            .expect("settings without a row");
+        assert_eq!(loaded.hide_sponsor_button, defaults.hide_sponsor_button);
+        assert_eq!(loaded.catalog_views.len(), 1);
+
+        // A stored choice survives saves on the other surfaces untouched.
+        let update = UiSettingsUpdate {
+            theme: loaded.theme,
+            palette: loaded.palette,
+            date_time_format: loaded.date_time_format,
+            highlight_color: None,
+            secondary_color: None,
+            high_contrast_mode: false,
+            reduce_motion: false,
+            hide_sponsor_button: true,
+            density: loaded.density,
+            sidebar_mode: loaded.sidebar_mode,
+            default_landing_view: loaded.default_landing_view,
+            language: None,
+            table_columns: None,
+        };
+        UserUiSettingsRepository::upsert(&store, &user.id, update)
+            .await
+            .expect("hide the sponsor button");
+        let saved = UserUiSettingsRepository::set_dashboard_layout(&store, &user.id, layout)
+            .await
+            .expect("save layout again");
+        assert!(saved.hide_sponsor_button);
+    }
+
+    #[tokio::test]
+    async fn dashboard_layouts_replace_reset_and_cascade_with_the_user() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("dashboard_user"))
+            .await
+            .expect("create user");
+
+        let saved = UserUiSettingsRepository::set_dashboard_layout(
+            &store,
+            &user.id,
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Lg,
+                columns: 12,
+                items: vec![
+                    dashboard_item("panel-two", 4, 0),
+                    dashboard_item("panel-one", 0, 0),
+                ],
+            },
+        )
+        .await
+        .expect("save lg layout");
+        // A layout save leaves the general preferences at their defaults.
+        assert_eq!(saved.theme, UiTheme::default());
+        assert_eq!(
+            saved.dashboard_layouts,
+            vec![UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Lg,
+                columns: 12,
+                items: vec![
+                    dashboard_item("panel-one", 0, 0),
+                    dashboard_item("panel-two", 4, 0),
+                ],
+            }]
+        );
+
+        // An empty layout is kept as a row of its own.
+        let emptied = UserUiSettingsRepository::set_dashboard_layout(
+            &store,
+            &user.id,
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Xs,
+                columns: 2,
+                items: Vec::new(),
+            },
+        )
+        .await
+        .expect("save empty xs layout");
+        assert_eq!(emptied.dashboard_layouts.len(), 2);
+        assert_eq!(
+            emptied.dashboard_layouts[1],
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Xs,
+                columns: 2,
+                items: Vec::new(),
+            }
+        );
+
+        let reset = UserUiSettingsRepository::reset_dashboard_layouts(
+            &store,
+            &user.id,
+            Some(UiDashboardBreakpoint::Lg),
+        )
+        .await
+        .expect("reset lg")
+        .expect("settings exist");
+        assert_eq!(
+            reset
+                .dashboard_layouts
+                .iter()
+                .map(|layout| layout.breakpoint)
+                .collect::<Vec<_>>(),
+            vec![UiDashboardBreakpoint::Xs]
+        );
+        assert_eq!(
+            count_user_rows(&store, "user_ui_dashboard_layout_items", &user.id).await,
+            0
+        );
+
+        UserUiSettingsRepository::set_dashboard_layout(
+            &store,
+            &user.id,
+            UiDashboardLayout {
+                breakpoint: UiDashboardBreakpoint::Md,
+                columns: 8,
+                items: vec![dashboard_item("panel-one", 0, 0)],
+            },
+        )
+        .await
+        .expect("save md layout");
+
+        // Deleting the user removes its layouts and their panels.
+        UserRepository::delete(&store, &user.id)
+            .await
+            .expect("delete user");
+        for table in [
+            "user_ui_dashboard_layouts",
+            "user_ui_dashboard_layout_items",
+        ] {
+            assert_eq!(count_user_rows(&store, table, &user.id).await, 0, "{table}");
+        }
     }
 
     #[tokio::test]
@@ -2080,7 +2612,7 @@ mod tests {
             .await
             .expect("create second user");
 
-        // A first catalog save creates the settings row with defaults.
+        // A catalog save leaves the general preferences at their defaults.
         let desktop = UserUiSettingsRepository::set_catalog_view(
             &store,
             &user_a.id,
@@ -2205,7 +2737,6 @@ mod tests {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
-            no_glow: current.no_glow,
             density: current.density,
             sidebar_mode: current.sidebar_mode,
             default_landing_view: current.default_landing_view,
@@ -2238,8 +2769,9 @@ mod tests {
         // Nothing leaks to the other user.
         let other = UserUiSettingsRepository::get_by_user_id(&store, &user_b.id)
             .await
-            .expect("load other user's settings");
-        assert!(other.is_none());
+            .expect("load other user's settings")
+            .expect("the other user exists");
+        assert_eq!(other, UiSettings::defaults_for_user(user_b.id.clone()));
 
         // Deleting the user removes every preference row it owned.
         UserRepository::delete(&store, &user_a.id)
@@ -2370,8 +2902,8 @@ mod tests {
 
         assert!(matches!(
             conflict,
-            Err(AppError::Validation(message))
-                if message == "external account is already linked to a different provider identity"
+            Err(AppError::ValidationRefused { reason, .. })
+                if reason == crate::error_reasons::EXTERNAL_ACCOUNT_IDENTITY_MISMATCH
         ));
     }
 
@@ -2397,8 +2929,8 @@ mod tests {
 
             assert!(matches!(
                 result,
-                Err(AppError::Validation(message))
-                    if message == "external account identity must be present when claiming"
+                Err(AppError::ValidationRefused { reason, .. })
+                    if reason == crate::error_reasons::IDENTITY_EXTERNAL_ACCOUNT_IDENTITY_REQUIRED
             ));
         }
     }

@@ -14,8 +14,9 @@ impl AccessMode {
         match value {
             "api-key" => Ok(Self::ApiKey),
             "oauth" => Ok(Self::OAuth),
-            _ => Err(AppError::Validation(
-                "Invalid API explorer access mode".into(),
+            _ => Err(AppError::validation_refused(
+                crate::error_reasons::HTTP_API_EXPLORER_MODE_INVALID,
+                "Invalid API explorer access mode",
             )),
         }
     }
@@ -38,18 +39,20 @@ impl AccessMode {
 
 pub(super) fn http_mode(headers: &HeaderMap) -> AppResult<Option<AccessMode>> {
     if headers.get_all(HEADER).iter().count() > 1 {
-        return Err(AppError::Validation(
-            "Duplicate API explorer access mode".into(),
+        return Err(AppError::validation_refused(
+            crate::error_reasons::HTTP_API_EXPLORER_MODE_DUPLICATE,
+            "Duplicate API explorer access mode",
         ));
     }
     headers
         .get(HEADER)
         .map(|value| {
-            AccessMode::parse(
-                value
-                    .to_str()
-                    .map_err(|_| AppError::Validation("Invalid API explorer access mode".into()))?,
-            )
+            AccessMode::parse(value.to_str().map_err(|_| {
+                AppError::validation_refused(
+                    crate::error_reasons::HTTP_API_EXPLORER_MODE_INVALID,
+                    "Invalid API explorer access mode",
+                )
+            })?)
         })
         .transpose()
 }
@@ -62,8 +65,9 @@ pub(super) async fn masquerade(
     if !(actor.is_interactive_session() || actor.is_authless_default_session())
         || actor.token_claims.session_scope != JwtSessionScope::Full
     {
-        return Err(AppError::Unauthorized(
-            "API explorer requires a web session".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_API_EXPLORER_WEB_SESSION_REQUIRED,
+            "API explorer requires a web session",
         ));
     }
     require_access(app, &actor.user).await?;
@@ -77,7 +81,10 @@ async fn require_access(app: &AppUseCase, user: &scryer_domain::User) -> AppResu
     app.require_app_permission(user, scryer_domain::AppPermission::ManageSystemSettings)
         .await?;
     if !app.api_explorer_enabled().await? {
-        return Err(AppError::Unauthorized("API explorer is disabled".into()));
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_API_EXPLORER_DISABLED,
+            "API explorer is disabled",
+        ));
     }
     Ok(())
 }
@@ -114,8 +121,9 @@ pub(super) async fn validate_session(
             && app.current_actor_auth_session_version(&current).await?
                 != original.token_claims.auth_session_version)
     {
-        return Err(AppError::Unauthorized(
-            "API explorer session changed".into(),
+        return Err(AppError::unauthorized_reason(
+            crate::error_reasons::HTTP_API_EXPLORER_SESSION_CHANGED,
+            "API explorer session changed",
         ));
     }
     Ok(())

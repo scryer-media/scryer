@@ -117,7 +117,7 @@ impl WebauthnRepository for WebauthnStore {
                 .await?;
                 load_credential_by_id_tx(tx, &credential.id, &credential.user_id)
                     .await?
-                    .ok_or_else(|| AppError::NotFound(format!("webauthn credential {}", credential.id)))
+                    .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND, format!("webauthn credential {}", credential.id)))
             })
         })
         .await
@@ -148,9 +148,7 @@ impl WebauthnRepository for WebauthnStore {
                     )
                     .await?;
                     if session_rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "passkey enrollment session is no longer current".into(),
-                        ));
+                        return Err(AppError::unauthorized_reason(crate::error_reasons::IDENTITY_PASSKEY_ENROLLMENT_SESSION_STALE, "passkey enrollment session is no longer current"));
                     }
                     tx.execute(
                         "INSERT INTO webauthn_credentials
@@ -170,7 +168,7 @@ impl WebauthnRepository for WebauthnStore {
                     load_credential_by_id_tx(tx, &credential.id, &credential.user_id)
                         .await?
                         .ok_or_else(|| {
-                            AppError::NotFound(format!("webauthn credential {}", credential.id))
+                            AppError::not_found_reason(crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND, format!("webauthn credential {}", credential.id))
                         })
                 })
             },
@@ -200,15 +198,18 @@ impl WebauthnRepository for WebauthnStore {
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!(
-                        "webauthn credential {}",
-                        credential.id
-                    )));
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND,
+                        format!("webauthn credential {}", credential.id),
+                    ));
                 }
                 load_credential_by_id_tx(tx, &credential.id, &credential.user_id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("webauthn credential {}", credential.id))
+                        AppError::not_found_reason(
+                            crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND,
+                            format!("webauthn credential {}", credential.id),
+                        )
                     })
             })
         })
@@ -269,9 +270,10 @@ impl WebauthnRepository for WebauthnStore {
         )
         .await?;
         if rows == 0 {
-            return Err(AppError::NotFound(format!(
-                "webauthn credential {credential_record_id}"
-            )));
+            return Err(AppError::not_found_reason(
+                crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND,
+                format!("webauthn credential {credential_record_id}"),
+            ));
         }
         Ok(())
     }
@@ -306,8 +308,9 @@ impl WebauthnRepository for WebauthnStore {
                         )
                         .await?;
                     if users == 0 {
-                        return Err(AppError::Unauthorized(
-                            "passkey deletion session is no longer current".into(),
+                        return Err(AppError::unauthorized_reason(
+                            crate::error_reasons::IDENTITY_PASSKEY_DELETION_SESSION_STALE,
+                            "passkey deletion session is no longer current",
                         ));
                     }
 
@@ -338,12 +341,14 @@ impl WebauthnRepository for WebauthnStore {
                             .await?
                             .is_none()
                         {
-                            return Err(AppError::NotFound(format!(
-                                "webauthn credential {credential_record_id}"
-                            )));
+                            return Err(AppError::not_found_reason(
+                                crate::error_reasons::IDENTITY_WEBAUTHN_CREDENTIAL_NOT_FOUND,
+                                format!("webauthn credential {credential_record_id}"),
+                            ));
                         }
-                        return Err(AppError::Validation(
-                            "cannot remove the last available sign-in method".into(),
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::IDENTITY_LAST_SIGN_IN_METHOD_REQUIRED,
+                            "cannot remove the last available sign-in method",
                         ));
                     }
                     Ok(())
@@ -380,7 +385,7 @@ impl WebauthnRepository for WebauthnStore {
                 load_challenge_by_id_tx(tx, &challenge.id)
                     .await?
                     .ok_or_else(|| {
-                        AppError::NotFound(format!("webauthn challenge {}", challenge.id))
+                        AppError::not_found_reason(crate::error_reasons::IDENTITY_WEBAUTHN_CHALLENGE_NOT_FOUND, format!("webauthn challenge {}", challenge.id))
                     })
             })
         })
@@ -478,14 +483,12 @@ impl WebauthnRepository for WebauthnStore {
                     )
                     .await?;
                     if rows == 0 {
-                        return Err(AppError::Unauthorized(
-                            "authentication session was invalidated".into(),
-                        ));
+                        return Err(AppError::unauthorized_reason(crate::error_reasons::IDENTITY_AUTHENTICATION_SESSION_INVALIDATED, "authentication session was invalidated"));
                     }
                     load_login_verification_challenge_by_id_tx(tx, &challenge.id)
                         .await?
                         .ok_or_else(|| {
-                            AppError::NotFound(format!(
+                            AppError::not_found_reason(crate::error_reasons::IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND, format!(
                                 "login verification challenge {}",
                                 challenge.id
                             ))

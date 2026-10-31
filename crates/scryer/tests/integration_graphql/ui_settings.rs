@@ -42,7 +42,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
             highContrastMode
             reduceMotion
             hideSponsorButton
-            noGlow
             density
             sidebarMode
             defaultLandingView
@@ -66,7 +65,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
                 "highContrastMode": true,
                 "reduceMotion": true,
                 "hideSponsorButton": true,
-                "noGlow": false,
                 "density": "COMPACT",
                 "sidebarMode": "COLLAPSED",
                 "defaultLandingView": "CALENDAR",
@@ -105,7 +103,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
             highContrastMode
             reduceMotion
             hideSponsorButton
-            noGlow
             density
             sidebarMode
             defaultLandingView
@@ -134,7 +131,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
     assert_eq!(settings["highContrastMode"], json!(true));
     assert_eq!(settings["reduceMotion"], json!(true));
     assert_eq!(settings["hideSponsorButton"], json!(true));
-    assert_eq!(settings["noGlow"], json!(false));
     assert_eq!(settings["density"], json!("COMPACT"));
     assert_eq!(settings["sidebarMode"], json!("COLLAPSED"));
     assert_eq!(settings["defaultLandingView"], json!("CALENDAR"));
@@ -166,7 +162,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
             theme
             palette
             dateTimeFormat
-            noGlow
           }
         }
         "#,
@@ -194,11 +189,6 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
     assert_eq!(
         old_client_update["data"]["setMyUiSettings"]["dateTimeFormat"],
         json!("ISO24H")
-    );
-    // Clients that predate the glow preference keep the saved choice.
-    assert_eq!(
-        old_client_update["data"]["setMyUiSettings"]["noGlow"],
-        json!(false)
     );
 }
 
@@ -254,7 +244,6 @@ async fn graphql_ui_settings_are_isolated_per_logged_in_user() {
             theme
             palette
             dateTimeFormat
-            noGlow
             density
             sidebarMode
             defaultLandingView
@@ -293,7 +282,6 @@ async fn graphql_ui_settings_are_isolated_per_logged_in_user() {
             theme
             palette
             dateTimeFormat
-            noGlow
             density
             sidebarMode
             defaultLandingView
@@ -324,9 +312,6 @@ async fn graphql_ui_settings_are_isolated_per_logged_in_user() {
         json!("MOVIES")
     );
     assert_eq!(read_b["data"]["myUiSettings"]["tableColumns"], json!([]));
-    // Users without saved settings start without the glow.
-    assert_eq!(read_b["data"]["myUiSettings"]["noGlow"], json!(true));
-    assert_eq!(read_a["data"]["myUiSettings"]["noGlow"], json!(true));
 }
 
 #[tokio::test]
@@ -646,4 +631,377 @@ async fn graphql_ui_settings_reject_oversized_language_and_unknown_catalog_colum
     assert_no_errors(&read);
     assert_eq!(read["data"]["myUiSettings"]["language"], json!(null));
     assert_eq!(read["data"]["myUiSettings"]["tableColumns"], json!([]));
+}
+
+const DASHBOARD_LAYOUT_SELECTION: &str = r#"
+    dashboardLayouts { breakpoint columns items { panelId x y w h } }
+"#;
+
+async fn dashboard_exec(ctx: &TestContext, query: &str, variables: Value, user: &User) -> Value {
+    let request = async_graphql::Request::new(query)
+        .variables(async_graphql::Variables::from_json(variables))
+        .data(user.clone());
+    let response = ctx.schema.execute(request).await;
+    serde_json::to_value(&response).expect("serialize gql response")
+}
+
+async fn set_dashboard_layout(ctx: &TestContext, user: &User, input: Value) -> Value {
+    dashboard_exec(
+        ctx,
+        &format!(
+            "mutation($input: SetMyDashboardLayoutInput!) {{
+               setMyDashboardLayout(input: $input) {{ {DASHBOARD_LAYOUT_SELECTION} }}
+             }}"
+        ),
+        json!({ "input": input }),
+        user,
+    )
+    .await
+}
+
+async fn reset_dashboard_layout(ctx: &TestContext, user: &User, breakpoint: Value) -> Value {
+    dashboard_exec(
+        ctx,
+        &format!(
+            "mutation($breakpoint: UiDashboardBreakpoint) {{
+               resetMyDashboardLayout(breakpoint: $breakpoint) {{ {DASHBOARD_LAYOUT_SELECTION} }}
+             }}"
+        ),
+        json!({ "breakpoint": breakpoint }),
+        user,
+    )
+    .await
+}
+
+async fn read_dashboard_layouts(ctx: &TestContext, user: &User) -> Value {
+    let body = dashboard_exec(
+        ctx,
+        &format!("query {{ myUiSettings {{ {DASHBOARD_LAYOUT_SELECTION} }} }}"),
+        json!({}),
+        user,
+    )
+    .await;
+    assert_no_errors(&body);
+    body["data"]["myUiSettings"]["dashboardLayouts"].clone()
+}
+
+fn dashboard_panel(panel_id: &str, x: i32, y: i32, w: i32, h: i32) -> Value {
+    json!({ "panelId": panel_id, "x": x, "y": y, "w": w, "h": h })
+}
+
+#[tokio::test]
+async fn graphql_dashboard_layouts_save_replace_and_keep_empty_layouts() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "dashboard_layout_user").await;
+
+    assert_eq!(read_dashboard_layouts(&ctx, &user).await, json!([]));
+
+    let lg = set_dashboard_layout(
+        &ctx,
+        &user,
+        json!({
+            "breakpoint": "LG",
+            "columns": 12,
+            "items": [
+                dashboard_panel("panel-beta", 6, 0, 6, 4),
+                dashboard_panel("panel-alpha", 0, 0, 6, 4),
+            ]
+        }),
+    )
+    .await;
+    assert_no_errors(&lg);
+    let xs = set_dashboard_layout(
+        &ctx,
+        &user,
+        json!({
+            "breakpoint": "XS",
+            "columns": 2,
+            "items": [dashboard_panel("panel-alpha", 0, 0, 2, 3)]
+        }),
+    )
+    .await;
+    assert_no_errors(&xs);
+    // The mutation returns the full settings, both breakpoints included.
+    assert_eq!(
+        xs["data"]["setMyDashboardLayout"]["dashboardLayouts"],
+        read_dashboard_layouts(&ctx, &user).await
+    );
+    assert_eq!(
+        read_dashboard_layouts(&ctx, &user).await,
+        json!([
+            {
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [
+                    dashboard_panel("panel-alpha", 0, 0, 6, 4),
+                    dashboard_panel("panel-beta", 6, 0, 6, 4),
+                ]
+            },
+            {
+                "breakpoint": "XS",
+                "columns": 2,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 2, 3)]
+            }
+        ])
+    );
+
+    // Saving a breakpoint again replaces its layout and leaves the other alone.
+    let replaced = set_dashboard_layout(
+        &ctx,
+        &user,
+        json!({
+            "breakpoint": "LG",
+            "columns": 10,
+            "items": [dashboard_panel("panel-gamma", 2, 1, 8, 2)]
+        }),
+    )
+    .await;
+    assert_no_errors(&replaced);
+    // An empty list is a saved layout, not a missing one.
+    let emptied = set_dashboard_layout(
+        &ctx,
+        &user,
+        json!({ "breakpoint": "SM", "columns": 6, "items": [] }),
+    )
+    .await;
+    assert_no_errors(&emptied);
+    assert_eq!(
+        read_dashboard_layouts(&ctx, &user).await,
+        json!([
+            {
+                "breakpoint": "LG",
+                "columns": 10,
+                "items": [dashboard_panel("panel-gamma", 2, 1, 8, 2)]
+            },
+            { "breakpoint": "SM", "columns": 6, "items": [] },
+            {
+                "breakpoint": "XS",
+                "columns": 2,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 2, 3)]
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn graphql_dashboard_layouts_reset_one_breakpoint_or_all() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "dashboard_reset_user").await;
+
+    // Resetting before anything was saved returns the defaults.
+    let untouched = reset_dashboard_layout(&ctx, &user, Value::Null).await;
+    assert_no_errors(&untouched);
+    assert_eq!(
+        untouched["data"]["resetMyDashboardLayout"]["dashboardLayouts"],
+        json!([])
+    );
+
+    for (breakpoint, columns) in [("LG", 12), ("MD", 10), ("XS", 2)] {
+        let saved = set_dashboard_layout(
+            &ctx,
+            &user,
+            json!({
+                "breakpoint": breakpoint,
+                "columns": columns,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 2, 2)]
+            }),
+        )
+        .await;
+        assert_no_errors(&saved);
+    }
+
+    let reset_md = reset_dashboard_layout(&ctx, &user, json!("MD")).await;
+    assert_no_errors(&reset_md);
+    let remaining: Vec<Value> = read_dashboard_layouts(&ctx, &user)
+        .await
+        .as_array()
+        .expect("layouts")
+        .iter()
+        .map(|layout| layout["breakpoint"].clone())
+        .collect();
+    assert_eq!(remaining, vec![json!("LG"), json!("XS")]);
+    assert_eq!(
+        reset_md["data"]["resetMyDashboardLayout"]["dashboardLayouts"],
+        read_dashboard_layouts(&ctx, &user).await
+    );
+
+    let reset_all = reset_dashboard_layout(&ctx, &user, Value::Null).await;
+    assert_no_errors(&reset_all);
+    assert_eq!(
+        reset_all["data"]["resetMyDashboardLayout"]["dashboardLayouts"],
+        json!([])
+    );
+    assert_eq!(read_dashboard_layouts(&ctx, &user).await, json!([]));
+}
+
+#[tokio::test]
+async fn graphql_dashboard_layouts_are_private_to_each_user() {
+    let ctx = TestContext::new().await;
+    let user_a = create_ui_settings_test_user(&ctx, "dashboard_owner_a").await;
+    let user_b = create_ui_settings_test_user(&ctx, "dashboard_owner_b").await;
+
+    let saved = set_dashboard_layout(
+        &ctx,
+        &user_a,
+        json!({
+            "breakpoint": "MD",
+            "columns": 8,
+            "items": [dashboard_panel("panel-alpha", 0, 0, 4, 2)]
+        }),
+    )
+    .await;
+    assert_no_errors(&saved);
+
+    assert_eq!(read_dashboard_layouts(&ctx, &user_b).await, json!([]));
+
+    // Another user's saves and resets never reach the first user's layouts.
+    let other = set_dashboard_layout(
+        &ctx,
+        &user_b,
+        json!({ "breakpoint": "MD", "columns": 4, "items": [] }),
+    )
+    .await;
+    assert_no_errors(&other);
+    let reset = reset_dashboard_layout(&ctx, &user_b, Value::Null).await;
+    assert_no_errors(&reset);
+
+    assert_eq!(
+        read_dashboard_layouts(&ctx, &user_a).await,
+        json!([
+            {
+                "breakpoint": "MD",
+                "columns": 8,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 4, 2)]
+            }
+        ])
+    );
+    assert_eq!(read_dashboard_layouts(&ctx, &user_b).await, json!([]));
+}
+
+#[tokio::test]
+async fn graphql_dashboard_layouts_refuse_invalid_layouts_with_reasons() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "dashboard_refusal_user").await;
+
+    let too_many: Vec<Value> = (0..65)
+        .map(|index| dashboard_panel(&format!("panel-{index}"), 0, index, 1, 1))
+        .collect();
+    let cases = [
+        (
+            json!({ "breakpoint": "LG", "columns": 0, "items": [] }),
+            "SETTINGS_DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE",
+        ),
+        (
+            json!({ "breakpoint": "LG", "columns": 25, "items": [] }),
+            "SETTINGS_DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE",
+        ),
+        (
+            json!({ "breakpoint": "LG", "columns": 12, "items": too_many }),
+            "SETTINGS_DASHBOARD_LAYOUT_TOO_MANY_ITEMS",
+        ),
+        (
+            json!({ "breakpoint": "LG", "columns": 12, "items": [dashboard_panel("", 0, 0, 1, 1)] }),
+            "SETTINGS_DASHBOARD_PANEL_ID_INVALID",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel(&"p".repeat(65), 0, 0, 1, 1)]
+            }),
+            "SETTINGS_DASHBOARD_PANEL_ID_INVALID",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("Panel_Alpha", 0, 0, 1, 1)]
+            }),
+            "SETTINGS_DASHBOARD_PANEL_ID_INVALID",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [
+                    dashboard_panel("panel-alpha", 0, 0, 1, 1),
+                    dashboard_panel("panel-alpha", 2, 0, 1, 1),
+                ]
+            }),
+            "SETTINGS_DASHBOARD_PANEL_ID_DUPLICATED",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", -1, 0, 1, 1)]
+            }),
+            "SETTINGS_DASHBOARD_ITEM_POSITION_OUT_OF_RANGE",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", 0, -1, 1, 1)]
+            }),
+            "SETTINGS_DASHBOARD_ITEM_POSITION_OUT_OF_RANGE",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 0, 1)]
+            }),
+            "SETTINGS_DASHBOARD_ITEM_SIZE_OUT_OF_RANGE",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", 0, 0, 1, 0)]
+            }),
+            "SETTINGS_DASHBOARD_ITEM_SIZE_OUT_OF_RANGE",
+        ),
+        (
+            json!({
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", 8, 0, 5, 1)]
+            }),
+            "SETTINGS_DASHBOARD_ITEM_EXCEEDS_COLUMNS",
+        ),
+    ];
+
+    for (input, reason) in cases {
+        let body = set_dashboard_layout(&ctx, &user, input.clone()).await;
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"],
+            json!(reason),
+            "{input}: {body}"
+        );
+    }
+
+    // A panel that exactly fills the last column is accepted.
+    let edge = set_dashboard_layout(
+        &ctx,
+        &user,
+        json!({
+            "breakpoint": "LG",
+            "columns": 12,
+            "items": [dashboard_panel("panel-alpha", 7, 0, 5, 1)]
+        }),
+    )
+    .await;
+    assert_no_errors(&edge);
+    // No refused save left a layout behind.
+    assert_eq!(
+        read_dashboard_layouts(&ctx, &user).await,
+        json!([
+            {
+                "breakpoint": "LG",
+                "columns": 12,
+                "items": [dashboard_panel("panel-alpha", 7, 0, 5, 1)]
+            }
+        ])
+    );
 }

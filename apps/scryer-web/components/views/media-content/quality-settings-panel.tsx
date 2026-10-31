@@ -49,7 +49,9 @@ function QualitySettingsSection({
     <section className="rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
-        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">{title}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">
+          {title}
+        </h2>
       </div>
       {description ? (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--scry-muted3)]">
@@ -85,42 +87,56 @@ export function QualitySettingsPanel({
   qualityProfileParseError: string;
   categoryQualityProfileOverrides: Record<ViewCategoryId, string>;
   categoryRequiredAudioLanguages: Record<ViewCategoryId, string[]>;
-  saveCategoryRequiredAudioLanguages: (languages: string[]) => Promise<void> | void;
+  saveCategoryRequiredAudioLanguages: (
+    languages: string[],
+  ) => Promise<void> | void;
   activeQualityScopeId: ViewCategoryId;
   globalScoringPersona: ScoringPersonaId;
-  categoryPersonaSelections: Record<ViewCategoryId, FacetScoringPersonaSelectionRecord>;
+  categoryPersonaSelections: Record<
+    ViewCategoryId,
+    FacetScoringPersonaSelectionRecord
+  >;
   qualityProfileInheritValue: string;
-  toProfileOptions: (profiles: ParsedQualityProfile[]) => QualityProfileOption[];
+  toProfileOptions: (
+    profiles: ParsedQualityProfile[],
+  ) => QualityProfileOption[];
   saveCategoryQualityProfileOverride: (value: string) => Promise<void> | void;
-  onFacetPersonaSave: (persona: ScoringPersonaId | null) => Promise<void> | void;
+  onFacetPersonaSave: (
+    persona: ScoringPersonaId | null,
+  ) => Promise<void> | void;
 }) {
   const t = useTranslate();
-  const personaSelection =
-    categoryPersonaSelections[activeQualityScopeId] ?? {
-      scope: activeQualityScopeId,
-      overridePersona: null,
-      effectivePersona: globalScoringPersona,
-      inheritsGlobal: true,
-    };
-  const basePersonaSelection = personaSelection.overridePersona ?? "__default__";
-  const [selectedPersona, setSelectedPersona] = React.useState<string>(
-    basePersonaSelection,
-  );
+  const personaSelection = categoryPersonaSelections[activeQualityScopeId] ?? {
+    scope: activeQualityScopeId,
+    overridePersona: null,
+    effectivePersona: globalScoringPersona,
+    inheritsGlobal: true,
+  };
+  const basePersonaSelection =
+    personaSelection.overridePersona ?? "__default__";
+  const [selectedPersona, setSelectedPersona] =
+    React.useState<string>(basePersonaSelection);
 
   React.useEffect(() => {
     setSelectedPersona(basePersonaSelection);
   }, [activeQualityScopeId, basePersonaSelection]);
 
   const resolvedPersona: ScoringPersonaId = React.useMemo(() => {
-    if (selectedPersona !== "__default__") return selectedPersona as ScoringPersonaId;
+    if (selectedPersona !== "__default__")
+      return selectedPersona as ScoringPersonaId;
     return personaSelection.effectivePersona ?? globalScoringPersona;
-  }, [globalScoringPersona, personaSelection.effectivePersona, selectedPersona]);
+  }, [
+    globalScoringPersona,
+    personaSelection.effectivePersona,
+    selectedPersona,
+  ]);
 
   const [personaSaving, setPersonaSaving] = React.useState(false);
   const traits = PERSONA_SCORING_TRAITS[resolvedPersona];
   const globalScoringPersonaLabelKey =
-    SCORING_PERSONA_CHOICES.find((choice) => choice.value === globalScoringPersona)
-      ?.labelKey ?? "qualityProfile.personaBalanced";
+    SCORING_PERSONA_CHOICES.find(
+      (choice) => choice.value === globalScoringPersona,
+    )?.labelKey ?? "qualityProfile.personaBalanced";
 
   return (
     <div className="space-y-[18px]">
@@ -140,7 +156,9 @@ export function QualitySettingsPanel({
             onValueChange={(value) => {
               void saveCategoryQualityProfileOverride(value);
             }}
-            disabled={mediaSettingsLoading || mediaSettingsSaving || personaSaving}
+            disabled={
+              mediaSettingsLoading || mediaSettingsSaving || personaSaving
+            }
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -171,9 +189,7 @@ export function QualitySettingsPanel({
       >
         <div className="space-y-5">
           <div className="max-w-xl space-y-2">
-            <Label>
-              {t("facetSettings.scoringPersonaOverrideLabel")}
-            </Label>
+            <Label>{t("facetSettings.scoringPersonaOverrideLabel")}</Label>
             <Select
               value={selectedPersona}
               onValueChange={async (value) => {
@@ -185,7 +201,9 @@ export function QualitySettingsPanel({
                 setPersonaSaving(true);
                 try {
                   const personaValue =
-                    value === "__default__" ? null : (value as ScoringPersonaId);
+                    value === "__default__"
+                      ? null
+                      : (value as ScoringPersonaId);
                   await onFacetPersonaSave(personaValue);
                 } catch {
                   setSelectedPersona(previousValue);
@@ -193,7 +211,9 @@ export function QualitySettingsPanel({
                   setPersonaSaving(false);
                 }
               }}
-              disabled={mediaSettingsLoading || mediaSettingsSaving || personaSaving}
+              disabled={
+                mediaSettingsLoading || mediaSettingsSaving || personaSaving
+              }
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -245,7 +265,9 @@ export function QualitySettingsPanel({
             onChange={(languages) => {
               void saveCategoryRequiredAudioLanguages(languages);
             }}
-            disabled={mediaSettingsLoading || mediaSettingsSaving || personaSaving}
+            disabled={
+              mediaSettingsLoading || mediaSettingsSaving || personaSaving
+            }
           />
         </div>
       </QualitySettingsSection>

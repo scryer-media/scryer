@@ -1,3 +1,4 @@
+import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useBeforeUnload, useBlocker } from "react-router";
@@ -63,7 +64,10 @@ import type {
   RootFolderOption,
   ScoringPersonaId,
 } from "@/lib/types";
-import { MOVIE_AVAILABILITY_VALUES, type ImportMode } from "@/lib/types/settings";
+import {
+  MOVIE_AVAILABILITY_VALUES,
+  type ImportMode,
+} from "@/lib/types/settings";
 import type {
   DownloadClientRoutingSettings,
   DownloadClientRoutingSettingsByClient,
@@ -144,13 +148,22 @@ type MediaLibrarySettingsPanelProps = {
   downloadClientsLoading: boolean;
   canCreateLibrary: boolean;
   canManageDownloadClientRouting: boolean;
-  loadLibrarySettings: (libraryId: string) => Promise<LibrarySettingsRecord | null>;
+  loadLibrarySettings: (
+    libraryId: string,
+  ) => Promise<LibrarySettingsRecord | null>;
   loadFacetDownloadClientRouting: (
     scopeId: LibraryRecord["facet"],
   ) => Promise<DownloadClientRoutingEntry[]>;
-  onCreateLibrary: (input: LibraryMutationInput) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
-  onUpdateLibrary: (libraryId: string, input: LibraryMutationInput) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
-  onDeleteLibrary: (libraryId: string) => Promise<boolean | void> | boolean | void;
+  onCreateLibrary: (
+    input: LibraryMutationInput,
+  ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
+  onUpdateLibrary: (
+    libraryId: string,
+    input: LibraryMutationInput,
+  ) => Promise<LibraryRecord | null | void> | LibraryRecord | null | void;
+  onDeleteLibrary: (
+    libraryId: string,
+  ) => Promise<boolean | void> | boolean | void;
   onScan: (libraryId: string) => Promise<void> | void;
   /** Reports the active library name for the page breadcrumb (null when creating). */
   onActiveLibraryNameChange?: (name: string | null) => void;
@@ -177,7 +190,9 @@ function LibrarySettingsSection({
     <section className="rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
-        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">{title}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">
+          {title}
+        </h2>
       </div>
       {description ? (
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--scry-muted3)]">
@@ -225,7 +240,9 @@ function rootsEqual(
   }
   return normalizedLeft.every((root, index) => {
     const other = normalizedRight[index];
-    return other && root.path === other.path && root.isDefault === other.isDefault;
+    return (
+      other && root.path === other.path && root.isDefault === other.isDefault
+    );
   });
 }
 
@@ -273,412 +290,480 @@ function importModeLabelKey(value: ImportMode | null | undefined): string {
     : "settings.importModeHardlinkCopy";
 }
 
-export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySettingsPanel({
-  facet,
-  settingsTitle,
-  libraries,
-  librariesLoading,
-  rootValidationLibraries,
-  rootValidationLibrariesLoading,
-  rootValidationUnavailable,
-  invalidRootPathsByLibraryId,
-  preferredLibraryId,
-  allLibrariesValue,
-  loading,
-  saving,
-  scanLoading,
-  scanNotice,
-  scanSummary,
-  localPathStyle,
-  qualityProfiles,
-  downloadClients,
-  downloadClientsLoading,
-  canCreateLibrary,
-  canManageDownloadClientRouting,
-  loadLibrarySettings,
-  loadFacetDownloadClientRouting,
-  onCreateLibrary,
-  onUpdateLibrary,
-  onDeleteLibrary,
-  onScan,
-  onActiveLibraryNameChange,
-}: MediaLibrarySettingsPanelProps) {
-  const t = useTranslate();
-  // Root changes are still being finished, so the row action and its dialog
-  // only exist when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
-  const [mode, setMode] = React.useState<"existing" | "new">("existing");
-  // `saving` covers the container's mutation and refreshes only; this also
-  // covers the panel adopting the saved library afterwards.
-  const [saveInProgress, setSaveInProgress] = React.useState(false);
-  const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
-  const [pendingLibrarySelection, setPendingLibrarySelection] = React.useState<
-    string | null
-  >(null);
-  const [activeLibraryId, setActiveLibraryId] = React.useState<string | null>(null);
-  const [draftName, setDraftName] = React.useState("");
-  const [draftRoots, setDraftRoots] = React.useState<RootFolderOption[]>([]);
-  const [settingsLoading, setSettingsLoading] = React.useState(false);
-  const [settingsError, setSettingsError] = React.useState<string | null>(null);
-  const [draftRequiredAudioLanguages, setDraftRequiredAudioLanguages] = React.useState<string[]>([]);
-  const [draftSearchLanguages, setDraftSearchLanguages] = React.useState<string[]>([]);
-  const [draftMetadataLanguage, setDraftMetadataLanguage] = React.useState(INHERIT_VALUE);
-  const [draftUseSeasonFolders, setDraftUseSeasonFolders] = React.useState(INHERIT_VALUE);
-  const [draftQualityProfileId, setDraftQualityProfileId] = React.useState(INHERIT_VALUE);
-  const [draftRequestQualityProfileIds, setDraftRequestQualityProfileIds] = React.useState<string[]>([]);
-  const [draftScoringPersona, setDraftScoringPersona] = React.useState(INHERIT_VALUE);
-  const [draftFillerPolicy, setDraftFillerPolicy] = React.useState(INHERIT_VALUE);
-  const [draftRecapPolicy, setDraftRecapPolicy] = React.useState(INHERIT_VALUE);
-  const [draftMonitorSpecials, setDraftMonitorSpecials] = React.useState(INHERIT_VALUE);
-  const [draftInterSeasonMovies, setDraftInterSeasonMovies] = React.useState(INHERIT_VALUE);
-  const [draftMonitorFillerMovies, setDraftMonitorFillerMovies] = React.useState(INHERIT_VALUE);
-  const [draftNfoWriteOnImport, setDraftNfoWriteOnImport] = React.useState(INHERIT_VALUE);
-  const [draftPlexmatchWriteOnImport, setDraftPlexmatchWriteOnImport] = React.useState(INHERIT_VALUE);
-  const [draftImportMode, setDraftImportMode] = React.useState(INHERIT_VALUE);
-  const [draftSetPermissionsLinux, setDraftSetPermissionsLinux] = React.useState(INHERIT_VALUE);
-  const [draftMovieAvailability, setDraftMovieAvailability] = React.useState(INHERIT_VALUE);
-  const [draftMovieReleaseMarket, setDraftMovieReleaseMarket] = React.useState("");
-  const [draftMovieAvailabilityDelayDays, setDraftMovieAvailabilityDelayDays] =
-    React.useState("");
-  const [draftFileChmod, setDraftFileChmod] = React.useState("");
-  const [draftFolderChmod, setDraftFolderChmod] = React.useState("");
-  const [draftChownGroup, setDraftChownGroup] = React.useState("");
-  const [draftDownloadClientRoutingMode, setDraftDownloadClientRoutingMode] =
-    React.useState<"inherit" | "custom">("inherit");
-  const [draftDownloadClientRouting, setDraftDownloadClientRouting] =
-    React.useState<DownloadClientRoutingSettingsByClient>({});
-  const [draftDownloadClientRoutingOrder, setDraftDownloadClientRoutingOrder] =
-    React.useState<string[]>([]);
-  const [draftDownloadClientRoutingLoading, setDraftDownloadClientRoutingLoading] =
-    React.useState(false);
-  const [savedSettings, setSavedSettings] = React.useState<LibrarySettingsRecord | null>(null);
-  const [browserOpen, setBrowserOpen] = React.useState(false);
-  const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
-  // FR-020's single action, opened from one root row. Held by root id rather
-  // than by draft index: the dialog talks to the server about a configured
-  // root, and a draft row that was never saved is not one.
-  const [changeRootId, setChangeRootId] = React.useState<string | null>(null);
-  const lastHydratedRoutingKeyRef = React.useRef<string | null>(null);
-  const [secondaryNavTarget, setSecondaryNavTarget] =
-    React.useState<HTMLElement | null>(null);
-  const [headerActionsTarget, setHeaderActionsTarget] =
-    React.useState<HTMLElement | null>(null);
-  const [footerTarget, setFooterTarget] = React.useState<HTMLElement | null>(
-    null,
-  );
-  React.useEffect(() => {
-    setSecondaryNavTarget(document.getElementById(LIBRARY_SECONDARY_NAV_SLOT_ID));
-    setHeaderActionsTarget(
-      document.getElementById(LIBRARY_HEADER_ACTIONS_SLOT_ID),
+export const MediaLibrarySettingsPanel = React.memo(
+  function MediaLibrarySettingsPanel({
+    facet,
+    settingsTitle,
+    libraries,
+    librariesLoading,
+    rootValidationLibraries,
+    rootValidationLibrariesLoading,
+    rootValidationUnavailable,
+    invalidRootPathsByLibraryId,
+    preferredLibraryId,
+    allLibrariesValue,
+    loading,
+    saving,
+    scanLoading,
+    scanNotice,
+    scanSummary,
+    localPathStyle,
+    qualityProfiles,
+    downloadClients,
+    downloadClientsLoading,
+    canCreateLibrary,
+    canManageDownloadClientRouting,
+    loadLibrarySettings,
+    loadFacetDownloadClientRouting,
+    onCreateLibrary,
+    onUpdateLibrary,
+    onDeleteLibrary,
+    onScan,
+    onActiveLibraryNameChange,
+  }: MediaLibrarySettingsPanelProps) {
+    const t = useTranslate();
+    // Root changes are still being finished, so the row action and its dialog
+    // only exist when the instance has opted in.
+    const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+    const [mode, setMode] = React.useState<"existing" | "new">("existing");
+    // `saving` covers the container's mutation and refreshes only; this also
+    // covers the panel adopting the saved library afterwards.
+    const [saveInProgress, setSaveInProgress] = React.useState(false);
+    const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
+    const [pendingLibrarySelection, setPendingLibrarySelection] =
+      React.useState<string | null>(null);
+    const [activeLibraryId, setActiveLibraryId] = React.useState<string | null>(
+      null,
     );
-    setFooterTarget(document.getElementById(LIBRARY_FOOTER_SLOT_ID));
-  }, []);
+    const [draftName, setDraftName] = React.useState("");
+    const [draftRoots, setDraftRoots] = React.useState<RootFolderOption[]>([]);
+    const [settingsLoading, setSettingsLoading] = React.useState(false);
+    const [settingsError, setSettingsError] = React.useState<string | null>(
+      null,
+    );
+    const [draftRequiredAudioLanguages, setDraftRequiredAudioLanguages] =
+      React.useState<string[]>([]);
+    const [draftSearchLanguages, setDraftSearchLanguages] = React.useState<
+      string[]
+    >([]);
+    const [draftMetadataLanguage, setDraftMetadataLanguage] =
+      React.useState(INHERIT_VALUE);
+    const [draftUseSeasonFolders, setDraftUseSeasonFolders] =
+      React.useState(INHERIT_VALUE);
+    const [draftQualityProfileId, setDraftQualityProfileId] =
+      React.useState(INHERIT_VALUE);
+    const [draftRequestQualityProfileIds, setDraftRequestQualityProfileIds] =
+      React.useState<string[]>([]);
+    const [draftScoringPersona, setDraftScoringPersona] =
+      React.useState(INHERIT_VALUE);
+    const [draftFillerPolicy, setDraftFillerPolicy] =
+      React.useState(INHERIT_VALUE);
+    const [draftRecapPolicy, setDraftRecapPolicy] =
+      React.useState(INHERIT_VALUE);
+    const [draftMonitorSpecials, setDraftMonitorSpecials] =
+      React.useState(INHERIT_VALUE);
+    const [draftInterSeasonMovies, setDraftInterSeasonMovies] =
+      React.useState(INHERIT_VALUE);
+    const [draftMonitorFillerMovies, setDraftMonitorFillerMovies] =
+      React.useState(INHERIT_VALUE);
+    const [draftNfoWriteOnImport, setDraftNfoWriteOnImport] =
+      React.useState(INHERIT_VALUE);
+    const [draftPlexmatchWriteOnImport, setDraftPlexmatchWriteOnImport] =
+      React.useState(INHERIT_VALUE);
+    const [draftImportMode, setDraftImportMode] = React.useState(INHERIT_VALUE);
+    const [draftSetPermissionsLinux, setDraftSetPermissionsLinux] =
+      React.useState(INHERIT_VALUE);
+    const [draftMovieAvailability, setDraftMovieAvailability] =
+      React.useState(INHERIT_VALUE);
+    const [draftMovieReleaseMarket, setDraftMovieReleaseMarket] =
+      React.useState("");
+    const [
+      draftMovieAvailabilityDelayDays,
+      setDraftMovieAvailabilityDelayDays,
+    ] = React.useState("");
+    const [draftFileChmod, setDraftFileChmod] = React.useState("");
+    const [draftFolderChmod, setDraftFolderChmod] = React.useState("");
+    const [draftChownGroup, setDraftChownGroup] = React.useState("");
+    const [draftDownloadClientRoutingMode, setDraftDownloadClientRoutingMode] =
+      React.useState<"inherit" | "custom">("inherit");
+    const [draftDownloadClientRouting, setDraftDownloadClientRouting] =
+      React.useState<DownloadClientRoutingSettingsByClient>({});
+    const [
+      draftDownloadClientRoutingOrder,
+      setDraftDownloadClientRoutingOrder,
+    ] = React.useState<string[]>([]);
+    const [
+      draftDownloadClientRoutingLoading,
+      setDraftDownloadClientRoutingLoading,
+    ] = React.useState(false);
+    const [savedSettings, setSavedSettings] =
+      React.useState<LibrarySettingsRecord | null>(null);
+    const [browserOpen, setBrowserOpen] = React.useState(false);
+    const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
+    // FR-020's single action, opened from one root row. Held by root id rather
+    // than by draft index: the dialog talks to the server about a configured
+    // root, and a draft row that was never saved is not one.
+    const [changeRootId, setChangeRootId] = React.useState<string | null>(null);
+    const lastHydratedRoutingKeyRef = React.useRef<string | null>(null);
+    const [secondaryNavTarget, setSecondaryNavTarget] =
+      React.useState<HTMLElement | null>(null);
+    const [headerActionsTarget, setHeaderActionsTarget] =
+      React.useState<HTMLElement | null>(null);
+    const [footerTarget, setFooterTarget] = React.useState<HTMLElement | null>(
+      null,
+    );
+    React.useEffect(() => {
+      setSecondaryNavTarget(
+        document.getElementById(LIBRARY_SECONDARY_NAV_SLOT_ID),
+      );
+      setHeaderActionsTarget(
+        document.getElementById(LIBRARY_HEADER_ACTIONS_SLOT_ID),
+      );
+      setFooterTarget(document.getElementById(LIBRARY_FOOTER_SLOT_ID));
+    }, []);
 
-  const activeLibrary = React.useMemo(
-    () => libraries.find((library) => library.id === activeLibraryId) ?? null,
-    [activeLibraryId, libraries],
-  );
-  React.useEffect(() => {
-    onActiveLibraryNameChange?.(activeLibrary?.name ?? null);
-  }, [activeLibrary, onActiveLibraryNameChange]);
-  React.useEffect(() => {
-    if (canCreateLibrary || mode !== "new") {
-      return;
-    }
-    setMode("existing");
-    setActiveLibraryId(libraries[0]?.id ?? null);
-  }, [canCreateLibrary, libraries, mode]);
-  const currentFacet = activeLibrary?.facet ?? facet;
-  const isAnimeFacet = currentFacet === "ANIME";
-  const isMovieFacet = currentFacet === "MOVIE";
-  const isEpisodicFacet = currentFacet === "SERIES" || currentFacet === "ANIME";
-  const showPlexmatch = currentFacet === "SERIES" || currentFacet === "ANIME";
-  const savedDownloadClientRoutingEntries =
-    savedSettings?.downloadClientRoutingOverride ?? null;
-  const savedDownloadClientRoutingState = React.useMemo(
-    () =>
-      buildDownloadClientRoutingState(
-        downloadClients,
-        savedDownloadClientRoutingEntries ?? [],
-        disabledDownloadClientRoutingSettings(),
-      ),
-    [downloadClients, savedDownloadClientRoutingEntries],
-  );
-
-  const hydrateSavedSettings = React.useCallback(
-    (settings: LibrarySettingsRecord | null) => {
-      setSavedSettings(settings);
-      setDraftRequiredAudioLanguages(settings?.requiredAudioLanguagesOverride ?? []);
-      setDraftSearchLanguages(settings?.searchLanguages ?? []);
-      setDraftMetadataLanguage(settings?.metadataLanguageOverride ?? INHERIT_VALUE);
-      setDraftUseSeasonFolders(
-        booleanOverrideSelectValue(settings?.useSeasonFoldersOverride),
-      );
-      setDraftQualityProfileId(settings?.qualityProfileIdOverride ?? INHERIT_VALUE);
-      setDraftRequestQualityProfileIds(settings?.requestQualityProfileIdsOverride ?? []);
-      setDraftScoringPersona(settings?.scoringPersonaOverride ?? INHERIT_VALUE);
-      setDraftFillerPolicy(settings?.fillerPolicyOverride ?? INHERIT_VALUE);
-      setDraftRecapPolicy(settings?.recapPolicyOverride ?? INHERIT_VALUE);
-      setDraftMonitorSpecials(booleanOverrideSelectValue(settings?.monitorSpecialsOverride));
-      setDraftInterSeasonMovies(
-        booleanOverrideSelectValue(settings?.interSeasonMoviesOverride),
-      );
-      setDraftMonitorFillerMovies(
-        booleanOverrideSelectValue(settings?.monitorFillerMoviesOverride),
-      );
-      setDraftNfoWriteOnImport(
-        booleanOverrideSelectValue(settings?.nfoWriteOnImportOverride),
-      );
-      setDraftPlexmatchWriteOnImport(
-        booleanOverrideSelectValue(settings?.plexmatchWriteOnImportOverride),
-      );
-      setDraftImportMode(settings?.importModeOverride ?? INHERIT_VALUE);
-      setDraftSetPermissionsLinux(
-        booleanOverrideSelectValue(settings?.setPermissionsLinuxOverride),
-      );
-      setDraftFileChmod(settings?.fileChmodOverride ?? "");
-      setDraftFolderChmod(settings?.folderChmodOverride ?? "");
-      setDraftChownGroup(settings?.chownGroupOverride ?? "");
-      setDraftMovieAvailability(settings?.defaultMovieAvailabilityOverride ?? INHERIT_VALUE);
-      setDraftMovieReleaseMarket(settings?.movieReleaseMarketOverride ?? "");
-      setDraftMovieAvailabilityDelayDays(
-        settings?.movieAvailabilityDelayDaysOverride == null
-          ? ""
-          : String(settings.movieAvailabilityDelayDaysOverride),
-      );
-    },
-    [],
-  );
-
-  React.useEffect(() => {
-    if (mode === "new") {
-      return;
-    }
-    if (libraries.length === 0) {
-      setActiveLibraryId(null);
-      return;
-    }
-    const preferred =
-      preferredLibraryId !== allLibrariesValue
-        ? libraries.find((library) => library.id === preferredLibraryId) ?? null
-        : null;
-    setActiveLibraryId((current) => {
-      if (preferred) {
-        return preferred.id;
+    const activeLibrary = React.useMemo(
+      () => libraries.find((library) => library.id === activeLibraryId) ?? null,
+      [activeLibraryId, libraries],
+    );
+    React.useEffect(() => {
+      onActiveLibraryNameChange?.(activeLibrary?.name ?? null);
+    }, [activeLibrary, onActiveLibraryNameChange]);
+    React.useEffect(() => {
+      if (canCreateLibrary || mode !== "new") {
+        return;
       }
-      if (current && libraries.some((library) => library.id === current)) {
-        return current;
+      setMode("existing");
+      setActiveLibraryId(libraries[0]?.id ?? null);
+    }, [canCreateLibrary, libraries, mode]);
+    const currentFacet = activeLibrary?.facet ?? facet;
+    const isAnimeFacet = currentFacet === "ANIME";
+    const isMovieFacet = currentFacet === "MOVIE";
+    const isEpisodicFacet =
+      currentFacet === "SERIES" || currentFacet === "ANIME";
+    const showPlexmatch = currentFacet === "SERIES" || currentFacet === "ANIME";
+    const savedDownloadClientRoutingEntries =
+      savedSettings?.downloadClientRoutingOverride ?? null;
+    const savedDownloadClientRoutingState = React.useMemo(
+      () =>
+        buildDownloadClientRoutingState(
+          downloadClients,
+          savedDownloadClientRoutingEntries ?? [],
+          disabledDownloadClientRoutingSettings(),
+        ),
+      [downloadClients, savedDownloadClientRoutingEntries],
+    );
+
+    const hydrateSavedSettings = React.useCallback(
+      (settings: LibrarySettingsRecord | null) => {
+        setSavedSettings(settings);
+        setDraftRequiredAudioLanguages(
+          settings?.requiredAudioLanguagesOverride ?? [],
+        );
+        setDraftSearchLanguages(settings?.searchLanguages ?? []);
+        setDraftMetadataLanguage(
+          settings?.metadataLanguageOverride ?? INHERIT_VALUE,
+        );
+        setDraftUseSeasonFolders(
+          booleanOverrideSelectValue(settings?.useSeasonFoldersOverride),
+        );
+        setDraftQualityProfileId(
+          settings?.qualityProfileIdOverride ?? INHERIT_VALUE,
+        );
+        setDraftRequestQualityProfileIds(
+          settings?.requestQualityProfileIdsOverride ?? [],
+        );
+        setDraftScoringPersona(
+          settings?.scoringPersonaOverride ?? INHERIT_VALUE,
+        );
+        setDraftFillerPolicy(settings?.fillerPolicyOverride ?? INHERIT_VALUE);
+        setDraftRecapPolicy(settings?.recapPolicyOverride ?? INHERIT_VALUE);
+        setDraftMonitorSpecials(
+          booleanOverrideSelectValue(settings?.monitorSpecialsOverride),
+        );
+        setDraftInterSeasonMovies(
+          booleanOverrideSelectValue(settings?.interSeasonMoviesOverride),
+        );
+        setDraftMonitorFillerMovies(
+          booleanOverrideSelectValue(settings?.monitorFillerMoviesOverride),
+        );
+        setDraftNfoWriteOnImport(
+          booleanOverrideSelectValue(settings?.nfoWriteOnImportOverride),
+        );
+        setDraftPlexmatchWriteOnImport(
+          booleanOverrideSelectValue(settings?.plexmatchWriteOnImportOverride),
+        );
+        setDraftImportMode(settings?.importModeOverride ?? INHERIT_VALUE);
+        setDraftSetPermissionsLinux(
+          booleanOverrideSelectValue(settings?.setPermissionsLinuxOverride),
+        );
+        setDraftFileChmod(settings?.fileChmodOverride ?? "");
+        setDraftFolderChmod(settings?.folderChmodOverride ?? "");
+        setDraftChownGroup(settings?.chownGroupOverride ?? "");
+        setDraftMovieAvailability(
+          settings?.defaultMovieAvailabilityOverride ?? INHERIT_VALUE,
+        );
+        setDraftMovieReleaseMarket(settings?.movieReleaseMarketOverride ?? "");
+        setDraftMovieAvailabilityDelayDays(
+          settings?.movieAvailabilityDelayDaysOverride == null
+            ? ""
+            : String(settings.movieAvailabilityDelayDaysOverride),
+        );
+      },
+      [],
+    );
+
+    React.useEffect(() => {
+      if (mode === "new") {
+        return;
       }
-      return libraries[0]?.id ?? null;
-    });
-  }, [allLibrariesValue, libraries, mode, preferredLibraryId]);
+      if (libraries.length === 0) {
+        setActiveLibraryId(null);
+        return;
+      }
+      const preferred =
+        preferredLibraryId !== allLibrariesValue
+          ? (libraries.find((library) => library.id === preferredLibraryId) ??
+            null)
+          : null;
+      setActiveLibraryId((current) => {
+        if (preferred) {
+          return preferred.id;
+        }
+        if (current && libraries.some((library) => library.id === current)) {
+          return current;
+        }
+        return libraries[0]?.id ?? null;
+      });
+    }, [allLibrariesValue, libraries, mode, preferredLibraryId]);
 
-  React.useEffect(() => {
-    if (mode === "new") {
-      setSavedSettings(null);
-      setDraftRequiredAudioLanguages([]);
-      setDraftMetadataLanguage(INHERIT_VALUE);
-      setDraftUseSeasonFolders(INHERIT_VALUE);
-      setDraftQualityProfileId(INHERIT_VALUE);
-      setDraftRequestQualityProfileIds([]);
-      setDraftScoringPersona(INHERIT_VALUE);
-      setDraftFillerPolicy(INHERIT_VALUE);
-      setDraftRecapPolicy(INHERIT_VALUE);
-      setDraftMonitorSpecials(INHERIT_VALUE);
-      setDraftInterSeasonMovies(INHERIT_VALUE);
-      setDraftMonitorFillerMovies(INHERIT_VALUE);
-      setDraftNfoWriteOnImport(INHERIT_VALUE);
-      setDraftPlexmatchWriteOnImport(INHERIT_VALUE);
-      setDraftImportMode(INHERIT_VALUE);
-      setDraftSetPermissionsLinux(INHERIT_VALUE);
-      setDraftFileChmod("");
-      setDraftFolderChmod("");
-      setDraftChownGroup("");
-      setDraftMovieAvailability(INHERIT_VALUE);
-      setDraftMovieReleaseMarket("");
-      setDraftMovieAvailabilityDelayDays("");
-      setDraftDownloadClientRoutingMode("inherit");
-      setDraftDownloadClientRouting({});
-      setDraftDownloadClientRoutingOrder([]);
-      setDraftDownloadClientRoutingLoading(false);
-      return;
-    }
-    setDraftName(activeLibrary?.name ?? "");
-    setDraftRoots(rootsFromLibrary(activeLibrary));
-  }, [activeLibrary, mode]);
+    React.useEffect(() => {
+      if (mode === "new") {
+        setSavedSettings(null);
+        setDraftRequiredAudioLanguages([]);
+        setDraftMetadataLanguage(INHERIT_VALUE);
+        setDraftUseSeasonFolders(INHERIT_VALUE);
+        setDraftQualityProfileId(INHERIT_VALUE);
+        setDraftRequestQualityProfileIds([]);
+        setDraftScoringPersona(INHERIT_VALUE);
+        setDraftFillerPolicy(INHERIT_VALUE);
+        setDraftRecapPolicy(INHERIT_VALUE);
+        setDraftMonitorSpecials(INHERIT_VALUE);
+        setDraftInterSeasonMovies(INHERIT_VALUE);
+        setDraftMonitorFillerMovies(INHERIT_VALUE);
+        setDraftNfoWriteOnImport(INHERIT_VALUE);
+        setDraftPlexmatchWriteOnImport(INHERIT_VALUE);
+        setDraftImportMode(INHERIT_VALUE);
+        setDraftSetPermissionsLinux(INHERIT_VALUE);
+        setDraftFileChmod("");
+        setDraftFolderChmod("");
+        setDraftChownGroup("");
+        setDraftMovieAvailability(INHERIT_VALUE);
+        setDraftMovieReleaseMarket("");
+        setDraftMovieAvailabilityDelayDays("");
+        setDraftDownloadClientRoutingMode("inherit");
+        setDraftDownloadClientRouting({});
+        setDraftDownloadClientRoutingOrder([]);
+        setDraftDownloadClientRoutingLoading(false);
+        return;
+      }
+      setDraftName(activeLibrary?.name ?? "");
+      setDraftRoots(rootsFromLibrary(activeLibrary));
+    }, [activeLibrary, mode]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!activeLibrary || mode === "new") {
-      // A load this effect started before is canceled by its cleanup, which
-      // also stops its `finally` from clearing the flag. Nothing is loading
-      // now, so clear it here, or a switch to "New library" mid-load leaves
-      // every save control disabled as busy.
-      setSettingsLoading(false);
+    React.useEffect(() => {
+      let cancelled = false;
+      if (!activeLibrary || mode === "new") {
+        // A load this effect started before is canceled by its cleanup, which
+        // also stops its `finally` from clearing the flag. Nothing is loading
+        // now, so clear it here, or a switch to "New library" mid-load leaves
+        // every save control disabled as busy.
+        setSettingsLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      setSettingsLoading(true);
+      setSettingsError(null);
+      void loadLibrarySettings(activeLibrary.id)
+        .then((settings) => {
+          if (cancelled) {
+            return;
+          }
+          hydrateSavedSettings(settings);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setSettingsError(
+              userFacingGraphQlErrorMessage(
+                error,
+                t("settings.librarySettingsLoadFailed"),
+                t,
+              ),
+            );
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setSettingsLoading(false);
+          }
+        });
+
       return () => {
         cancelled = true;
       };
-    }
+    }, [activeLibrary, hydrateSavedSettings, loadLibrarySettings, mode, t]);
 
-    setSettingsLoading(true);
-    setSettingsError(null);
-    void loadLibrarySettings(activeLibrary.id)
-      .then((settings) => {
-        if (cancelled) {
-          return;
-        }
-        hydrateSavedSettings(settings);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setSettingsError(error instanceof Error ? error.message : t("settings.librarySettingsLoadFailed"));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setSettingsLoading(false);
-        }
-      });
+    React.useEffect(() => {
+      const routingHydrationKey =
+        mode === "new"
+          ? `new:${currentFacet}:${downloadClients.map((client) => client.id).join(",")}`
+          : `library:${activeLibrary?.id ?? "none"}:${savedDownloadClientRoutingEntries ? "custom" : "inherit"}:${(savedDownloadClientRoutingEntries ?? []).map((entry) => entry.clientId).join(",")}:${downloadClients.map((client) => client.id).join(",")}`;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLibrary, hydrateSavedSettings, loadLibrarySettings, mode, t]);
+      if (lastHydratedRoutingKeyRef.current === routingHydrationKey) {
+        return;
+      }
+      lastHydratedRoutingKeyRef.current = routingHydrationKey;
 
-  React.useEffect(() => {
-    const routingHydrationKey =
-      mode === "new"
-        ? `new:${currentFacet}:${downloadClients.map((client) => client.id).join(",")}`
-        : `library:${activeLibrary?.id ?? "none"}:${savedDownloadClientRoutingEntries ? "custom" : "inherit"}:${(savedDownloadClientRoutingEntries ?? []).map((entry) => entry.clientId).join(",")}:${downloadClients.map((client) => client.id).join(",")}`;
+      if (mode === "new") {
+        setDraftDownloadClientRoutingMode("inherit");
+        setDraftDownloadClientRouting({});
+        setDraftDownloadClientRoutingOrder([]);
+        return;
+      }
 
-    if (lastHydratedRoutingKeyRef.current === routingHydrationKey) {
-      return;
-    }
-    lastHydratedRoutingKeyRef.current = routingHydrationKey;
+      setDraftDownloadClientRoutingMode(
+        savedDownloadClientRoutingEntries ? "custom" : "inherit",
+      );
+      setDraftDownloadClientRouting(savedDownloadClientRoutingState.routing);
+      setDraftDownloadClientRoutingOrder(savedDownloadClientRoutingState.order);
+    }, [
+      activeLibrary?.id,
+      currentFacet,
+      downloadClients,
+      mode,
+      savedDownloadClientRoutingEntries,
+      savedDownloadClientRoutingState,
+    ]);
 
-    if (mode === "new") {
-      setDraftDownloadClientRoutingMode("inherit");
-      setDraftDownloadClientRouting({});
-      setDraftDownloadClientRoutingOrder([]);
-      return;
-    }
-
-    setDraftDownloadClientRoutingMode(
-      savedDownloadClientRoutingEntries ? "custom" : "inherit",
+    const normalizedDraftRoots = React.useMemo(
+      () => normalizeRoots(draftRoots, localPathStyle),
+      [draftRoots, localPathStyle],
     );
-    setDraftDownloadClientRouting(savedDownloadClientRoutingState.routing);
-    setDraftDownloadClientRoutingOrder(savedDownloadClientRoutingState.order);
-  }, [
-    activeLibrary?.id,
-    currentFacet,
-    downloadClients,
-    mode,
-    savedDownloadClientRoutingEntries,
-    savedDownloadClientRoutingState,
-  ]);
-
-  const normalizedDraftRoots = React.useMemo(
-    () => normalizeRoots(draftRoots, localPathStyle),
-    [draftRoots, localPathStyle],
-  );
-  const conflictingLibraryNamesByRootPath = React.useMemo(() => {
-    const currentLibraryId = mode === "existing" ? activeLibrary?.id ?? null : null;
-    return findConflictingLibraryNamesByRootPath(
+    const conflictingLibraryNamesByRootPath = React.useMemo(() => {
+      const currentLibraryId =
+        mode === "existing" ? (activeLibrary?.id ?? null) : null;
+      return findConflictingLibraryNamesByRootPath(
+        normalizedDraftRoots,
+        rootValidationLibraries,
+        currentLibraryId,
+        localPathStyle,
+      );
+    }, [
+      activeLibrary?.id,
+      localPathStyle,
+      mode,
       normalizedDraftRoots,
       rootValidationLibraries,
-      currentLibraryId,
-      localPathStyle,
+    ]);
+    const sortedFolders = React.useMemo(
+      () =>
+        normalizedDraftRoots
+          .map((rf, i) => ({ rf, originalIndex: i }))
+          .sort((a, b) =>
+            a.rf.isDefault === b.rf.isDefault ? 0 : a.rf.isDefault ? -1 : 1,
+          ),
+      [normalizedDraftRoots],
     );
-  }, [
-    activeLibrary?.id,
-    localPathStyle,
-    mode,
-    normalizedDraftRoots,
-    rootValidationLibraries,
-  ]);
-  const sortedFolders = React.useMemo(
-    () =>
-      normalizedDraftRoots
-        .map((rf, i) => ({ rf, originalIndex: i }))
-        .sort((a, b) => (a.rf.isDefault === b.rf.isDefault ? 0 : a.rf.isDefault ? -1 : 1)),
-    [normalizedDraftRoots],
-  );
-  const hasRootFolderConflicts = conflictingLibraryNamesByRootPath.size > 0;
-  const invalidRootFolderPaths = React.useMemo(() => {
-    const invalidPaths = new Set<string>();
-    normalizedDraftRoots.forEach((root) => {
-      if (!isLocalPathFormatValidForStyle(root.path, localPathStyle)) {
-        invalidPaths.add(root.path);
+    const hasRootFolderConflicts = conflictingLibraryNamesByRootPath.size > 0;
+    const invalidRootFolderPaths = React.useMemo(() => {
+      const invalidPaths = new Set<string>();
+      normalizedDraftRoots.forEach((root) => {
+        if (!isLocalPathFormatValidForStyle(root.path, localPathStyle)) {
+          invalidPaths.add(root.path);
+        }
+      });
+      return invalidPaths;
+    }, [localPathStyle, normalizedDraftRoots]);
+    const validatedInvalidRootPathKeys = React.useMemo(() => {
+      if (!activeLibrary?.id) {
+        return new Set<string>();
       }
-    });
-    return invalidPaths;
-  }, [localPathStyle, normalizedDraftRoots]);
-  const validatedInvalidRootPathKeys = React.useMemo(() => {
-    if (!activeLibrary?.id) {
-      return new Set<string>();
-    }
-    return new Set(
-      (invalidRootPathsByLibraryId[activeLibrary.id] ?? []).map(
-        (path) => normalizeComparableLibraryRootPath(path, localPathStyle),
-      ),
+      return new Set(
+        (invalidRootPathsByLibraryId[activeLibrary.id] ?? []).map((path) =>
+          normalizeComparableLibraryRootPath(path, localPathStyle),
+        ),
+      );
+    }, [activeLibrary?.id, invalidRootPathsByLibraryId, localPathStyle]);
+    const hasInvalidRootFolderPaths = invalidRootFolderPaths.size > 0;
+    const saveInFlight = saving || saveInProgress;
+    const actionBusy =
+      loading ||
+      librariesLoading ||
+      rootValidationLibrariesLoading ||
+      saveInFlight;
+    const settingsBusy = actionBusy || settingsLoading;
+    const showUnixPermissions = localPathStyle !== "windows";
+    const effectiveDraftSetPermissionsLinux =
+      draftSetPermissionsLinux === INHERIT_VALUE
+        ? (savedSettings?.setPermissionsLinux ?? false)
+        : draftSetPermissionsLinux === BOOLEAN_TRUE_VALUE;
+    const permissionFieldsDisabled =
+      settingsBusy || !effectiveDraftSetPermissionsLinux;
+    const draftFileChmodSelectValue = draftFileChmod.trim() || INHERIT_VALUE;
+    const draftFolderChmodSelectValue =
+      draftFolderChmod.trim() || INHERIT_VALUE;
+    const customFileChmod =
+      draftFileChmodSelectValue !== INHERIT_VALUE &&
+      !isChmodPresetValue(FILE_CHMOD_PRESETS, draftFileChmodSelectValue)
+        ? draftFileChmodSelectValue
+        : null;
+    const customFolderChmod =
+      draftFolderChmodSelectValue !== INHERIT_VALUE &&
+      !isChmodPresetValue(FOLDER_CHMOD_PRESETS, draftFolderChmodSelectValue)
+        ? draftFolderChmodSelectValue
+        : null;
+    const downloadClientRoutingBusy =
+      downloadClientsLoading || draftDownloadClientRoutingLoading;
+    const savedRoots = React.useMemo(
+      () => rootsFromLibrary(activeLibrary),
+      [activeLibrary],
     );
-  }, [activeLibrary?.id, invalidRootPathsByLibraryId, localPathStyle]);
-  const hasInvalidRootFolderPaths = invalidRootFolderPaths.size > 0;
-  const saveInFlight = saving || saveInProgress;
-  const actionBusy =
-    loading || librariesLoading || rootValidationLibrariesLoading || saveInFlight;
-  const settingsBusy = actionBusy || settingsLoading;
-  const showUnixPermissions = localPathStyle !== "windows";
-  const effectiveDraftSetPermissionsLinux =
-    draftSetPermissionsLinux === INHERIT_VALUE
-      ? (savedSettings?.setPermissionsLinux ?? false)
-      : draftSetPermissionsLinux === BOOLEAN_TRUE_VALUE;
-  const permissionFieldsDisabled =
-    settingsBusy || !effectiveDraftSetPermissionsLinux;
-  const draftFileChmodSelectValue = draftFileChmod.trim() || INHERIT_VALUE;
-  const draftFolderChmodSelectValue = draftFolderChmod.trim() || INHERIT_VALUE;
-  const customFileChmod =
-    draftFileChmodSelectValue !== INHERIT_VALUE &&
-    !isChmodPresetValue(FILE_CHMOD_PRESETS, draftFileChmodSelectValue)
-      ? draftFileChmodSelectValue
-      : null;
-  const customFolderChmod =
-    draftFolderChmodSelectValue !== INHERIT_VALUE &&
-    !isChmodPresetValue(FOLDER_CHMOD_PRESETS, draftFolderChmodSelectValue)
-      ? draftFolderChmodSelectValue
-      : null;
-  const downloadClientRoutingBusy =
-    downloadClientsLoading || draftDownloadClientRoutingLoading;
-  const savedRoots = React.useMemo(() => rootsFromLibrary(activeLibrary), [activeLibrary]);
-  const draftDownloadClientRoutingEntries = React.useMemo(
-    () =>
-      draftDownloadClientRoutingMode === "custom"
-        ? serializeDownloadClientRoutingEntries(
-            downloadClients,
-            draftDownloadClientRouting,
-            draftDownloadClientRoutingOrder,
-          )
-        : null,
-    [
-      downloadClients,
-      draftDownloadClientRouting,
-      draftDownloadClientRoutingMode,
-      draftDownloadClientRoutingOrder,
-    ],
-  );
-  const settingsDraft = React.useMemo<LibrarySettingsDraft>(
-    () => {
+    const draftDownloadClientRoutingEntries = React.useMemo(
+      () =>
+        draftDownloadClientRoutingMode === "custom"
+          ? serializeDownloadClientRoutingEntries(
+              downloadClients,
+              draftDownloadClientRouting,
+              draftDownloadClientRoutingOrder,
+            )
+          : null,
+      [
+        downloadClients,
+        draftDownloadClientRouting,
+        draftDownloadClientRoutingMode,
+        draftDownloadClientRoutingOrder,
+      ],
+    );
+    const settingsDraft = React.useMemo<LibrarySettingsDraft>(() => {
       const draft: LibrarySettingsDraft = {
         searchLanguages: draftSearchLanguages,
         requiredAudioLanguages:
-          draftRequiredAudioLanguages.length > 0 ? draftRequiredAudioLanguages : null,
+          draftRequiredAudioLanguages.length > 0
+            ? draftRequiredAudioLanguages
+            : null,
         metadataLanguage:
-          draftMetadataLanguage === INHERIT_VALUE ? null : draftMetadataLanguage,
+          draftMetadataLanguage === INHERIT_VALUE
+            ? null
+            : draftMetadataLanguage,
         useSeasonFolders: isEpisodicFacet
           ? booleanOverrideFromSelectValue(draftUseSeasonFolders)
           : null,
         qualityProfileId:
-          draftQualityProfileId === INHERIT_VALUE ? null : draftQualityProfileId,
+          draftQualityProfileId === INHERIT_VALUE
+            ? null
+            : draftQualityProfileId,
         requestQualityProfileIds:
           draftRequestQualityProfileIds.length > 0
             ? draftRequestQualityProfileIds
@@ -688,25 +773,38 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
             ? null
             : (draftScoringPersona as ScoringPersonaId),
         fillerPolicy:
-          isAnimeFacet && draftFillerPolicy !== INHERIT_VALUE ? (draftFillerPolicy as 'DOWNLOAD_ALL' | 'SKIP_FILLER') : null,
+          isAnimeFacet && draftFillerPolicy !== INHERIT_VALUE
+            ? (draftFillerPolicy as "DOWNLOAD_ALL" | "SKIP_FILLER")
+            : null,
         recapPolicy:
-          isAnimeFacet && draftRecapPolicy !== INHERIT_VALUE ? (draftRecapPolicy as 'DOWNLOAD_ALL' | 'SKIP_RECAP') : null,
-        monitorSpecials:
-          isAnimeFacet ? booleanOverrideFromSelectValue(draftMonitorSpecials) : null,
-        interSeasonMovies:
-          isAnimeFacet ? booleanOverrideFromSelectValue(draftInterSeasonMovies) : null,
-        monitorFillerMovies:
-          isAnimeFacet ? booleanOverrideFromSelectValue(draftMonitorFillerMovies) : null,
+          isAnimeFacet && draftRecapPolicy !== INHERIT_VALUE
+            ? (draftRecapPolicy as "DOWNLOAD_ALL" | "SKIP_RECAP")
+            : null,
+        monitorSpecials: isAnimeFacet
+          ? booleanOverrideFromSelectValue(draftMonitorSpecials)
+          : null,
+        interSeasonMovies: isAnimeFacet
+          ? booleanOverrideFromSelectValue(draftInterSeasonMovies)
+          : null,
+        monitorFillerMovies: isAnimeFacet
+          ? booleanOverrideFromSelectValue(draftMonitorFillerMovies)
+          : null,
         nfoWriteOnImport: booleanOverrideFromSelectValue(draftNfoWriteOnImport),
         plexmatchWriteOnImport: showPlexmatch
           ? booleanOverrideFromSelectValue(draftPlexmatchWriteOnImport)
           : null,
         importMode:
-          draftImportMode === INHERIT_VALUE ? null : (draftImportMode as ImportMode),
-        setPermissionsLinux: booleanOverrideFromSelectValue(draftSetPermissionsLinux),
+          draftImportMode === INHERIT_VALUE
+            ? null
+            : (draftImportMode as ImportMode),
+        setPermissionsLinux: booleanOverrideFromSelectValue(
+          draftSetPermissionsLinux,
+        ),
         fileChmod: draftFileChmod.trim() === "" ? null : draftFileChmod.trim(),
-        folderChmod: draftFolderChmod.trim() === "" ? null : draftFolderChmod.trim(),
-        chownGroup: draftChownGroup.trim() === "" ? null : draftChownGroup.trim(),
+        folderChmod:
+          draftFolderChmod.trim() === "" ? null : draftFolderChmod.trim(),
+        chownGroup:
+          draftChownGroup.trim() === "" ? null : draftChownGroup.trim(),
         indexerRouting: savedSettings?.indexerRoutingOverride ?? null,
         defaultMovieAvailability:
           isMovieFacet && draftMovieAvailability !== INHERIT_VALUE
@@ -724,8 +822,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
         draft.downloadClientRouting = draftDownloadClientRoutingEntries;
       }
       return draft;
-    },
-    [
+    }, [
       canManageDownloadClientRouting,
       draftDownloadClientRoutingEntries,
       draftFillerPolicy,
@@ -755,520 +852,559 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       isMovieFacet,
       savedSettings,
       showPlexmatch,
-    ],
-  );
-  const hasSettingsChanges =
-    mode === "new" ||
-    (savedSettings !== null &&
-      (draftRequiredAudioLanguages.join("\n") !==
-        (savedSettings.requiredAudioLanguagesOverride ?? []).join("\n") ||
-        draftSearchLanguages.join("\n") !== (savedSettings.searchLanguages ?? []).join("\n") ||
-        settingsDraft.metadataLanguage !== savedSettings.metadataLanguageOverride ||
-        settingsDraft.useSeasonFolders !== savedSettings.useSeasonFoldersOverride ||
-        settingsDraft.qualityProfileId !== savedSettings.qualityProfileIdOverride ||
-        (settingsDraft.requestQualityProfileIds ?? []).join("\n") !==
-          (savedSettings.requestQualityProfileIdsOverride ?? []).join("\n") ||
-        settingsDraft.scoringPersona !== savedSettings.scoringPersonaOverride ||
-        settingsDraft.fillerPolicy !== savedSettings.fillerPolicyOverride ||
-        settingsDraft.recapPolicy !== savedSettings.recapPolicyOverride ||
-        settingsDraft.monitorSpecials !== savedSettings.monitorSpecialsOverride ||
-      settingsDraft.interSeasonMovies !== savedSettings.interSeasonMoviesOverride ||
-        settingsDraft.monitorFillerMovies !==
-          savedSettings.monitorFillerMoviesOverride ||
-        settingsDraft.nfoWriteOnImport !== savedSettings.nfoWriteOnImportOverride ||
-        settingsDraft.plexmatchWriteOnImport !==
-          savedSettings.plexmatchWriteOnImportOverride ||
-        settingsDraft.importMode !== savedSettings.importModeOverride ||
-        settingsDraft.setPermissionsLinux !== savedSettings.setPermissionsLinuxOverride ||
-        settingsDraft.fileChmod !== savedSettings.fileChmodOverride ||
-        settingsDraft.folderChmod !== savedSettings.folderChmodOverride ||
-        settingsDraft.chownGroup !== savedSettings.chownGroupOverride ||
-        settingsDraft.defaultMovieAvailability !==
-          (savedSettings.defaultMovieAvailabilityOverride ?? null) ||
-        settingsDraft.movieReleaseMarket !== (savedSettings.movieReleaseMarketOverride ?? null) ||
-        settingsDraft.movieAvailabilityDelayDays !==
-          (savedSettings.movieAvailabilityDelayDaysOverride ?? null) ||
-        (canManageDownloadClientRouting &&
-          ((draftDownloadClientRoutingMode === "custom") !==
-            Boolean(savedDownloadClientRoutingEntries) ||
-            (draftDownloadClientRoutingMode === "custom" &&
-              (!areNzbgetRoutingMapsEqual(
-                draftDownloadClientRouting,
-                savedDownloadClientRoutingState.routing,
-              ) ||
-                !areRoutingOrdersEqual(
-                  draftDownloadClientRoutingOrder,
-                  savedDownloadClientRoutingState.order,
-                )))))));
-  const hasDraftChanges =
-    mode === "new" ||
-    draftName.trim() !== (activeLibrary?.name ?? "") ||
-    !rootsEqual(draftRoots, savedRoots, localPathStyle) ||
-    hasSettingsChanges;
-  const shouldBlockNavigation = shouldBlockLibraryNavigation({
-    hasDraftChanges,
-    saveInFlight,
-  });
-  // A root change is planned against the *stored* configuration, so it is
-  // offered only while the panel has nothing unsaved to contradict it.
-  const canChangeRoot =
-    experimentalFeaturesEnabled &&
-    mode !== "new" &&
-    !!activeLibrary &&
-    !hasDraftChanges &&
-    !actionBusy;
-  const changeRootTarget = React.useMemo(
-    () => savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
-    [changeRootId, savedRoots],
-  );
-  const changeRootOtherRoots = React.useMemo(
-    () =>
-      savedRoots.filter(
-        (candidate) => !!candidate.id && candidate.id !== changeRootId,
-      ),
-    [changeRootId, savedRoots],
-  );
-  const libraryNavigationBlocker = useBlocker(shouldBlockNavigation);
+    ]);
+    const hasSettingsChanges =
+      mode === "new" ||
+      (savedSettings !== null &&
+        (draftRequiredAudioLanguages.join("\n") !==
+          (savedSettings.requiredAudioLanguagesOverride ?? []).join("\n") ||
+          draftSearchLanguages.join("\n") !==
+            (savedSettings.searchLanguages ?? []).join("\n") ||
+          settingsDraft.metadataLanguage !==
+            savedSettings.metadataLanguageOverride ||
+          settingsDraft.useSeasonFolders !==
+            savedSettings.useSeasonFoldersOverride ||
+          settingsDraft.qualityProfileId !==
+            savedSettings.qualityProfileIdOverride ||
+          (settingsDraft.requestQualityProfileIds ?? []).join("\n") !==
+            (savedSettings.requestQualityProfileIdsOverride ?? []).join("\n") ||
+          settingsDraft.scoringPersona !==
+            savedSettings.scoringPersonaOverride ||
+          settingsDraft.fillerPolicy !== savedSettings.fillerPolicyOverride ||
+          settingsDraft.recapPolicy !== savedSettings.recapPolicyOverride ||
+          settingsDraft.monitorSpecials !==
+            savedSettings.monitorSpecialsOverride ||
+          settingsDraft.interSeasonMovies !==
+            savedSettings.interSeasonMoviesOverride ||
+          settingsDraft.monitorFillerMovies !==
+            savedSettings.monitorFillerMoviesOverride ||
+          settingsDraft.nfoWriteOnImport !==
+            savedSettings.nfoWriteOnImportOverride ||
+          settingsDraft.plexmatchWriteOnImport !==
+            savedSettings.plexmatchWriteOnImportOverride ||
+          settingsDraft.importMode !== savedSettings.importModeOverride ||
+          settingsDraft.setPermissionsLinux !==
+            savedSettings.setPermissionsLinuxOverride ||
+          settingsDraft.fileChmod !== savedSettings.fileChmodOverride ||
+          settingsDraft.folderChmod !== savedSettings.folderChmodOverride ||
+          settingsDraft.chownGroup !== savedSettings.chownGroupOverride ||
+          settingsDraft.defaultMovieAvailability !==
+            (savedSettings.defaultMovieAvailabilityOverride ?? null) ||
+          settingsDraft.movieReleaseMarket !==
+            (savedSettings.movieReleaseMarketOverride ?? null) ||
+          settingsDraft.movieAvailabilityDelayDays !==
+            (savedSettings.movieAvailabilityDelayDaysOverride ?? null) ||
+          (canManageDownloadClientRouting &&
+            ((draftDownloadClientRoutingMode === "custom") !==
+              Boolean(savedDownloadClientRoutingEntries) ||
+              (draftDownloadClientRoutingMode === "custom" &&
+                (!areNzbgetRoutingMapsEqual(
+                  draftDownloadClientRouting,
+                  savedDownloadClientRoutingState.routing,
+                ) ||
+                  !areRoutingOrdersEqual(
+                    draftDownloadClientRoutingOrder,
+                    savedDownloadClientRoutingState.order,
+                  )))))));
+    const hasDraftChanges =
+      mode === "new" ||
+      draftName.trim() !== (activeLibrary?.name ?? "") ||
+      !rootsEqual(draftRoots, savedRoots, localPathStyle) ||
+      hasSettingsChanges;
+    const shouldBlockNavigation = shouldBlockLibraryNavigation({
+      hasDraftChanges,
+      saveInFlight,
+    });
+    // A root change is planned against the *stored* configuration, so it is
+    // offered only while the panel has nothing unsaved to contradict it.
+    const canChangeRoot =
+      experimentalFeaturesEnabled &&
+      mode !== "new" &&
+      !!activeLibrary &&
+      !hasDraftChanges &&
+      !actionBusy;
+    const changeRootTarget = React.useMemo(
+      () =>
+        savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
+      [changeRootId, savedRoots],
+    );
+    const changeRootOtherRoots = React.useMemo(
+      () =>
+        savedRoots.filter(
+          (candidate) => !!candidate.id && candidate.id !== changeRootId,
+        ),
+      [changeRootId, savedRoots],
+    );
+    const libraryNavigationBlocker = useBlocker(shouldBlockNavigation);
 
-  useBeforeUnload(
-    React.useCallback(
-      (event: BeforeUnloadEvent) => {
-        if (!shouldBlockNavigation) {
+    useBeforeUnload(
+      React.useCallback(
+        (event: BeforeUnloadEvent) => {
+          if (!shouldBlockNavigation) {
+            return;
+          }
+          event.preventDefault();
+          event.returnValue = "";
+        },
+        [shouldBlockNavigation],
+      ),
+    );
+    const selectedValue =
+      mode === "new" ? NEW_LIBRARY_VALUE : (activeLibraryId ?? "");
+
+    const applyLibrarySelection = React.useCallback(
+      (value: string) => {
+        if (value === NEW_LIBRARY_VALUE) {
+          if (!canCreateLibrary) {
+            return;
+          }
+          setMode("new");
+          setActiveLibraryId(null);
+          setDraftName("");
+          setDraftRoots([]);
+          setSavedSettings(null);
+          setDraftRequiredAudioLanguages([]);
+          setDraftQualityProfileId(INHERIT_VALUE);
+          setDraftRequestQualityProfileIds([]);
+          setDraftScoringPersona(INHERIT_VALUE);
+          setDraftFillerPolicy(INHERIT_VALUE);
+          setDraftRecapPolicy(INHERIT_VALUE);
+          setDraftMonitorSpecials(INHERIT_VALUE);
+          setDraftInterSeasonMovies(INHERIT_VALUE);
+          setDraftMonitorFillerMovies(INHERIT_VALUE);
+          setDraftNfoWriteOnImport(INHERIT_VALUE);
+          setDraftPlexmatchWriteOnImport(INHERIT_VALUE);
+          setDraftImportMode(INHERIT_VALUE);
+          setDraftSetPermissionsLinux(INHERIT_VALUE);
+          setDraftFileChmod("");
+          setDraftFolderChmod("");
+          setDraftChownGroup("");
+          setDraftMovieAvailability(INHERIT_VALUE);
+          setDraftMovieReleaseMarket("");
+          setDraftMovieAvailabilityDelayDays("");
+          setDraftDownloadClientRoutingMode("inherit");
+          setDraftDownloadClientRouting({});
+          setDraftDownloadClientRoutingOrder([]);
+          setDraftDownloadClientRoutingLoading(false);
           return;
         }
-        event.preventDefault();
-        event.returnValue = "";
+        setMode("existing");
+        setActiveLibraryId(value);
       },
-      [shouldBlockNavigation],
-    ),
-  );
-  const selectedValue = mode === "new" ? NEW_LIBRARY_VALUE : activeLibraryId ?? "";
-
-  const applyLibrarySelection = React.useCallback((value: string) => {
-    if (value === NEW_LIBRARY_VALUE) {
-      if (!canCreateLibrary) {
-        return;
-      }
-      setMode("new");
-      setActiveLibraryId(null);
-      setDraftName("");
-      setDraftRoots([]);
-      setSavedSettings(null);
-      setDraftRequiredAudioLanguages([]);
-      setDraftQualityProfileId(INHERIT_VALUE);
-      setDraftRequestQualityProfileIds([]);
-      setDraftScoringPersona(INHERIT_VALUE);
-      setDraftFillerPolicy(INHERIT_VALUE);
-      setDraftRecapPolicy(INHERIT_VALUE);
-      setDraftMonitorSpecials(INHERIT_VALUE);
-      setDraftInterSeasonMovies(INHERIT_VALUE);
-      setDraftMonitorFillerMovies(INHERIT_VALUE);
-      setDraftNfoWriteOnImport(INHERIT_VALUE);
-      setDraftPlexmatchWriteOnImport(INHERIT_VALUE);
-      setDraftImportMode(INHERIT_VALUE);
-      setDraftSetPermissionsLinux(INHERIT_VALUE);
-      setDraftFileChmod("");
-      setDraftFolderChmod("");
-      setDraftChownGroup("");
-      setDraftMovieAvailability(INHERIT_VALUE);
-      setDraftMovieReleaseMarket("");
-      setDraftMovieAvailabilityDelayDays("");
-      setDraftDownloadClientRoutingMode("inherit");
-      setDraftDownloadClientRouting({});
-      setDraftDownloadClientRoutingOrder([]);
-      setDraftDownloadClientRoutingLoading(false);
-      return;
-    }
-    setMode("existing");
-    setActiveLibraryId(value);
-  }, [canCreateLibrary]);
-
-  const handleSelectLibrary = (value: string) => {
-    if (value === selectedValue) {
-      return;
-    }
-    if (shouldBlockNavigation) {
-      setPendingLibrarySelection(value);
-      return;
-    }
-    applyLibrarySelection(value);
-  };
-
-  const handleAddPath = (path: string) => {
-    const trimmed = path.trim();
-    if (!trimmed) return;
-    setDraftRoots((current) => {
-      if (current.some((rf) => rf.path === trimmed)) {
-        return current;
-      }
-      return normalizeRoots(
-        [...current, { path: trimmed, isDefault: current.length === 0 }],
-        localPathStyle,
-      );
-    });
-  };
-
-  const handleEditPath = (index: number, path: string) => {
-    const trimmed = path.trim();
-    if (!trimmed) return;
-    setDraftRoots((current) => {
-      if (current.some((rf, i) => rf.path === trimmed && i !== index)) {
-        return current;
-      }
-      return normalizeRoots(
-        current.map((rf, i) => (i === index ? { ...rf, path: trimmed } : rf)),
-        localPathStyle,
-      );
-    });
-  };
-
-  const handleRemovePath = (index: number) => {
-    setDraftRoots((current) =>
-      normalizeRoots(current.filter((_, i) => i !== index), localPathStyle),
+      [canCreateLibrary],
     );
-  };
 
-  const handleSetDefault = (index: number) => {
-    setDraftRoots((current) =>
-      normalizeRoots(
-        current.map((rf, i) => ({ ...rf, isDefault: i === index })),
-        localPathStyle,
-      ),
-    );
-  };
-
-  const openAdd = () => {
-    setEditingIndex(null);
-    setBrowserOpen(true);
-  };
-
-  const openEdit = (index: number) => {
-    setEditingIndex(index);
-    setBrowserOpen(true);
-  };
-
-  const handleBrowserSelect = (path: string) => {
-    if (editingIndex !== null) {
-      handleEditPath(editingIndex, path);
-    } else {
-      handleAddPath(path);
-    }
-  };
-
-  const handleNewLibrary = () => {
-    handleSelectLibrary(NEW_LIBRARY_VALUE);
-  };
-
-  const handleDownloadClientRoutingModeChange = React.useCallback(
-    async (nextMode: "inherit" | "custom") => {
-      if (nextMode === "inherit") {
-        setDraftDownloadClientRoutingMode("inherit");
+    const handleSelectLibrary = (value: string) => {
+      if (value === selectedValue) {
         return;
       }
-
-      if (draftDownloadClientRoutingMode === "custom") {
-        setDraftDownloadClientRoutingMode("custom");
+      if (shouldBlockNavigation) {
+        setPendingLibrarySelection(value);
         return;
       }
+      applyLibrarySelection(value);
+    };
 
-      if (savedDownloadClientRoutingEntries) {
-        setDraftDownloadClientRoutingMode("custom");
-        return;
-      }
-
-      setSettingsError(null);
-      setDraftDownloadClientRoutingLoading(true);
-      try {
-        const entries = await loadFacetDownloadClientRouting(currentFacet);
-        const nextState = buildDownloadClientRoutingState(downloadClients, entries);
-        setDraftDownloadClientRoutingMode("custom");
-        setDraftDownloadClientRouting(nextState.routing);
-        setDraftDownloadClientRoutingOrder(nextState.order);
-      } catch (error) {
-        setSettingsError(
-          error instanceof Error ? error.message : t("status.failedToLoad"),
+    const handleAddPath = (path: string) => {
+      const trimmed = path.trim();
+      if (!trimmed) return;
+      setDraftRoots((current) => {
+        if (current.some((rf) => rf.path === trimmed)) {
+          return current;
+        }
+        return normalizeRoots(
+          [...current, { path: trimmed, isDefault: current.length === 0 }],
+          localPathStyle,
         );
-      } finally {
-        setDraftDownloadClientRoutingLoading(false);
-      }
-    },
-    [
-      currentFacet,
-      downloadClients,
-      draftDownloadClientRoutingMode,
-      loadFacetDownloadClientRouting,
-      savedDownloadClientRoutingEntries,
-      t,
-    ],
-  );
-
-  const updateDownloadClientRoutingDraft = React.useCallback(
-    (
-      clientId: string,
-      nextValue: Partial<DownloadClientRoutingSettings>,
-    ) => {
-      setDraftDownloadClientRouting((current) => ({
-        ...current,
-        [clientId]: {
-          ...(current[clientId] ?? disabledDownloadClientRoutingSettings()),
-          ...nextValue,
-        },
-      }));
-      setDraftDownloadClientRoutingOrder((current) =>
-        current.includes(clientId) ? current : [...current, clientId],
-      );
-    },
-    [],
-  );
-
-  const moveDownloadClientRoutingDraft = React.useCallback(
-    (clientId: string, direction: "up" | "down") => {
-      setDraftDownloadClientRoutingOrder((current) => {
-        const index = current.indexOf(clientId);
-        if (index < 0) {
-          return current;
-        }
-
-        const nextIndex = direction === "up" ? index - 1 : index + 1;
-        if (nextIndex < 0 || nextIndex >= current.length) {
-          return current;
-        }
-
-        const next = [...current];
-        [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-        return next;
       });
-    },
-    [],
-  );
+    };
 
-  const handleSaveLibrary = async () => {
-    if (downloadClientRoutingBusy) {
-      return null;
-    }
-    const name = draftName.trim();
-    if (!name) {
-      return null;
-    }
-    const roots = normalizeRoots(draftRoots, localPathStyle);
-    setDraftRoots(roots);
-    // The container releases `saving` before the panel has reloaded the saved
-    // settings or left "new" mode, and until then the draft still reads as
-    // unsaved. Count the save as in flight until the saved library is adopted,
-    // so a navigation in between is not blocked and Save stays disabled.
-    setSaveInProgress(true);
-    try {
-      if (mode === "new") {
-        if (!canCreateLibrary) {
-          return null;
+    const handleEditPath = (index: number, path: string) => {
+      const trimmed = path.trim();
+      if (!trimmed) return;
+      setDraftRoots((current) => {
+        if (current.some((rf, i) => rf.path === trimmed && i !== index)) {
+          return current;
         }
-        const created = await onCreateLibrary({ name, roots, settings: settingsDraft });
-        if (created?.id) {
+        return normalizeRoots(
+          current.map((rf, i) => (i === index ? { ...rf, path: trimmed } : rf)),
+          localPathStyle,
+        );
+      });
+    };
+
+    const handleRemovePath = (index: number) => {
+      setDraftRoots((current) =>
+        normalizeRoots(
+          current.filter((_, i) => i !== index),
+          localPathStyle,
+        ),
+      );
+    };
+
+    const handleSetDefault = (index: number) => {
+      setDraftRoots((current) =>
+        normalizeRoots(
+          current.map((rf, i) => ({ ...rf, isDefault: i === index })),
+          localPathStyle,
+        ),
+      );
+    };
+
+    const openAdd = () => {
+      setEditingIndex(null);
+      setBrowserOpen(true);
+    };
+
+    const openEdit = (index: number) => {
+      setEditingIndex(index);
+      setBrowserOpen(true);
+    };
+
+    const handleBrowserSelect = (path: string) => {
+      if (editingIndex !== null) {
+        handleEditPath(editingIndex, path);
+      } else {
+        handleAddPath(path);
+      }
+    };
+
+    const handleNewLibrary = () => {
+      handleSelectLibrary(NEW_LIBRARY_VALUE);
+    };
+
+    const handleDownloadClientRoutingModeChange = React.useCallback(
+      async (nextMode: "inherit" | "custom") => {
+        if (nextMode === "inherit") {
+          setDraftDownloadClientRoutingMode("inherit");
+          return;
+        }
+
+        if (draftDownloadClientRoutingMode === "custom") {
+          setDraftDownloadClientRoutingMode("custom");
+          return;
+        }
+
+        if (savedDownloadClientRoutingEntries) {
+          setDraftDownloadClientRoutingMode("custom");
+          return;
+        }
+
+        setSettingsError(null);
+        setDraftDownloadClientRoutingLoading(true);
+        try {
+          const entries = await loadFacetDownloadClientRouting(currentFacet);
+          const nextState = buildDownloadClientRoutingState(
+            downloadClients,
+            entries,
+          );
+          setDraftDownloadClientRoutingMode("custom");
+          setDraftDownloadClientRouting(nextState.routing);
+          setDraftDownloadClientRoutingOrder(nextState.order);
+        } catch (error) {
+          setSettingsError(
+            userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          );
+        } finally {
+          setDraftDownloadClientRoutingLoading(false);
+        }
+      },
+      [
+        currentFacet,
+        downloadClients,
+        draftDownloadClientRoutingMode,
+        loadFacetDownloadClientRouting,
+        savedDownloadClientRoutingEntries,
+        t,
+      ],
+    );
+
+    const updateDownloadClientRoutingDraft = React.useCallback(
+      (clientId: string, nextValue: Partial<DownloadClientRoutingSettings>) => {
+        setDraftDownloadClientRouting((current) => ({
+          ...current,
+          [clientId]: {
+            ...(current[clientId] ?? disabledDownloadClientRoutingSettings()),
+            ...nextValue,
+          },
+        }));
+        setDraftDownloadClientRoutingOrder((current) =>
+          current.includes(clientId) ? current : [...current, clientId],
+        );
+      },
+      [],
+    );
+
+    const moveDownloadClientRoutingDraft = React.useCallback(
+      (clientId: string, direction: "up" | "down") => {
+        setDraftDownloadClientRoutingOrder((current) => {
+          const index = current.indexOf(clientId);
+          if (index < 0) {
+            return current;
+          }
+
+          const nextIndex = direction === "up" ? index - 1 : index + 1;
+          if (nextIndex < 0 || nextIndex >= current.length) {
+            return current;
+          }
+
+          const next = [...current];
+          [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+          return next;
+        });
+      },
+      [],
+    );
+
+    const handleSaveLibrary = async () => {
+      if (downloadClientRoutingBusy) {
+        return null;
+      }
+      const name = draftName.trim();
+      if (!name) {
+        return null;
+      }
+      const roots = normalizeRoots(draftRoots, localPathStyle);
+      setDraftRoots(roots);
+      // The container releases `saving` before the panel has reloaded the saved
+      // settings or left "new" mode, and until then the draft still reads as
+      // unsaved. Count the save as in flight until the saved library is adopted,
+      // so a navigation in between is not blocked and Save stays disabled.
+      setSaveInProgress(true);
+      try {
+        if (mode === "new") {
+          if (!canCreateLibrary) {
+            return null;
+          }
+          const created = await onCreateLibrary({
+            name,
+            roots,
+            settings: settingsDraft,
+          });
+          if (created?.id) {
+            try {
+              const refreshedSettings = await loadLibrarySettings(created.id);
+              hydrateSavedSettings(refreshedSettings);
+              setSettingsError(null);
+            } catch (error) {
+              setSettingsError(
+                userFacingGraphQlErrorMessage(
+                  error,
+                  t("settings.librarySettingsLoadFailed"),
+                  t,
+                ),
+              );
+            }
+            setMode("existing");
+            setActiveLibraryId(created.id);
+          }
+          return created ?? null;
+        }
+        if (activeLibrary) {
+          const updatedLibrary =
+            (await onUpdateLibrary(activeLibrary.id, {
+              name,
+              roots,
+              settings: settingsDraft,
+            })) ?? activeLibrary;
           try {
-            const refreshedSettings = await loadLibrarySettings(created.id);
+            const refreshedSettings = await loadLibrarySettings(
+              updatedLibrary.id,
+            );
             hydrateSavedSettings(refreshedSettings);
             setSettingsError(null);
           } catch (error) {
             setSettingsError(
-              error instanceof Error ? error.message : t("settings.librarySettingsLoadFailed"),
+              userFacingGraphQlErrorMessage(
+                error,
+                t("settings.librarySettingsLoadFailed"),
+                t,
+              ),
             );
           }
-          setMode("existing");
-          setActiveLibraryId(created.id);
+          return updatedLibrary;
         }
-        return created ?? null;
+        return null;
+      } finally {
+        setSaveInProgress(false);
       }
-      if (activeLibrary) {
-        const updatedLibrary =
-          (await onUpdateLibrary(activeLibrary.id, {
-            name,
-            roots,
-            settings: settingsDraft,
-          })) ?? activeLibrary;
-        try {
-          const refreshedSettings = await loadLibrarySettings(updatedLibrary.id);
-          hydrateSavedSettings(refreshedSettings);
-          setSettingsError(null);
-        } catch (error) {
-          setSettingsError(
-            error instanceof Error ? error.message : t("settings.librarySettingsLoadFailed"),
-          );
-        }
-        return updatedLibrary;
+    };
+
+    const handleSaveAndScanLibrary = async () => {
+      const savedLibrary = await handleSaveLibrary();
+      const libraryId =
+        savedLibrary?.id ?? (mode === "existing" ? activeLibrary?.id : null);
+      if (!libraryId) {
+        return;
       }
-      return null;
-    } finally {
-      setSaveInProgress(false);
-    }
-  };
+      void onScan(libraryId);
+    };
 
-  const handleSaveAndScanLibrary = async () => {
-    const savedLibrary = await handleSaveLibrary();
-    const libraryId = savedLibrary?.id ?? (mode === "existing" ? activeLibrary?.id : null);
-    if (!libraryId) {
-      return;
-    }
-    void onScan(libraryId);
-  };
+    const handleDeleteLibrary = () => {
+      if (!activeLibrary || activeLibrary.isDefault) {
+        return;
+      }
+      setDeleteLibraryOpen(true);
+    };
 
-  const handleDeleteLibrary = () => {
-    if (!activeLibrary || activeLibrary.isDefault) {
-      return;
-    }
-    setDeleteLibraryOpen(true);
-  };
+    const handleConfirmDeleteLibrary = async () => {
+      setDeleteLibraryOpen(false);
+      if (!activeLibrary || activeLibrary.isDefault) {
+        return;
+      }
+      await onDeleteLibrary(activeLibrary.id);
+    };
 
-  const handleConfirmDeleteLibrary = async () => {
-    setDeleteLibraryOpen(false);
-    if (!activeLibrary || activeLibrary.isDefault) {
-      return;
-    }
-    await onDeleteLibrary(activeLibrary.id);
-  };
+    const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
+      if (libraryNavigationBlocker.state === "blocked") {
+        libraryNavigationBlocker.proceed();
+        return;
+      }
+      if (pendingLibrarySelection !== null) {
+        const nextSelection = pendingLibrarySelection;
+        setPendingLibrarySelection(null);
+        applyLibrarySelection(nextSelection);
+      }
+    }, [
+      applyLibrarySelection,
+      libraryNavigationBlocker,
+      pendingLibrarySelection,
+    ]);
 
-  const handleConfirmDiscardLibraryChanges = React.useCallback(() => {
-    if (libraryNavigationBlocker.state === "blocked") {
-      libraryNavigationBlocker.proceed();
-      return;
-    }
-    if (pendingLibrarySelection !== null) {
-      const nextSelection = pendingLibrarySelection;
+    const libraryDiscardPrompt = resolveLibraryDiscardPrompt({
+      hasDraftChanges,
+      blockerState: libraryNavigationBlocker.state,
+      pendingLibrarySelection,
+    });
+    // A navigation or library switch held while the draft was unsaved stays held
+    // after the draft becomes clean (a save landed in between). The user asked to
+    // move and nothing is left to discard, so finish the move.
+    React.useEffect(() => {
+      if (libraryDiscardPrompt === "settled") {
+        handleConfirmDiscardLibraryChanges();
+      }
+    }, [handleConfirmDiscardLibraryChanges, libraryDiscardPrompt]);
+
+    const handleCancelDiscardLibraryChanges = React.useCallback(() => {
+      if (libraryNavigationBlocker.state === "blocked") {
+        libraryNavigationBlocker.reset();
+      }
       setPendingLibrarySelection(null);
-      applyLibrarySelection(nextSelection);
-    }
-  }, [applyLibrarySelection, libraryNavigationBlocker, pendingLibrarySelection]);
+    }, [libraryNavigationBlocker]);
 
-  const libraryDiscardPrompt = resolveLibraryDiscardPrompt({
-    hasDraftChanges,
-    blockerState: libraryNavigationBlocker.state,
-    pendingLibrarySelection,
-  });
-  // A navigation or library switch held while the draft was unsaved stays held
-  // after the draft becomes clean (a save landed in between). The user asked to
-  // move and nothing is left to discard, so finish the move.
-  React.useEffect(() => {
-    if (libraryDiscardPrompt === "settled") {
-      handleConfirmDiscardLibraryChanges();
-    }
-  }, [handleConfirmDiscardLibraryChanges, libraryDiscardPrompt]);
+    const handleScan = () => {
+      if (!activeLibrary || mode === "new") {
+        return;
+      }
+      void onScan(activeLibrary.id);
+    };
 
-  const handleCancelDiscardLibraryChanges = React.useCallback(() => {
-    if (libraryNavigationBlocker.state === "blocked") {
-      libraryNavigationBlocker.reset();
-    }
-    setPendingLibrarySelection(null);
-  }, [libraryNavigationBlocker]);
+    const browserInitialPath =
+      editingIndex !== null
+        ? (normalizedDraftRoots[editingIndex]?.path ?? "/")
+        : "/";
 
-  const handleScan = () => {
-    if (!activeLibrary || mode === "new") {
-      return;
-    }
-    void onScan(activeLibrary.id);
-  };
+    const browserTitle =
+      editingIndex !== null
+        ? t("settings.rootFolderEdit")
+        : t("settings.rootFolderAdd");
+    const libraryScanDisabled =
+      scanLoading || actionBusy || mode === "new" || !activeLibrary;
+    const libraryScanSummaryText = scanSummary
+      ? t("settings.libraryScanSummary", {
+          imported: scanSummary.imported,
+          skipped: scanSummary.skipped,
+          unmatched: scanSummary.unmatched,
+        })
+      : null;
 
-  const browserInitialPath = editingIndex !== null
-    ? normalizedDraftRoots[editingIndex]?.path ?? "/"
-    : "/";
-
-  const browserTitle = editingIndex !== null
-    ? t("settings.rootFolderEdit")
-    : t("settings.rootFolderAdd");
-  const libraryScanDisabled =
-    scanLoading || actionBusy || mode === "new" || !activeLibrary;
-  const libraryScanSummaryText = scanSummary
-    ? t("settings.libraryScanSummary", {
-        imported: scanSummary.imported,
-        skipped: scanSummary.skipped,
-        unmatched: scanSummary.unmatched,
-      })
-    : null;
-
-  return (
-    <>
-      {secondaryNavTarget
-        ? createPortal(
-            <div>
-              <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)]">
-                {t("settings.librariesLabel")}
-              </div>
-              <ul className="space-y-1">
-                {libraries.map((library) => {
-                  const active = mode !== "new" && selectedValue === library.id;
-                  return (
-                    <li key={library.id}>
-                      <button
-                        id={selectorId("media-library-list-item", library.id)}
-                        type="button"
-                        onClick={() => handleSelectLibrary(library.id)}
-                        disabled={actionBusy}
-                        aria-current={active ? "true" : undefined}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-[10px] border border-transparent px-3 py-2 text-left text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] disabled:opacity-60",
-                          active &&
-                            "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] text-[var(--scry-ink2)]",
-                        )}
-                      >
-                        <Folder
+    return (
+      <>
+        {secondaryNavTarget
+          ? createPortal(
+              <div>
+                <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)]">
+                  {t("settings.librariesLabel")}
+                </div>
+                <ul className="space-y-1">
+                  {libraries.map((library) => {
+                    const active =
+                      mode !== "new" && selectedValue === library.id;
+                    return (
+                      <li key={library.id}>
+                        <button
+                          id={selectorId("media-library-list-item", library.id)}
+                          type="button"
+                          onClick={() => handleSelectLibrary(library.id)}
+                          disabled={actionBusy}
+                          aria-current={active ? "true" : undefined}
                           className={cn(
-                            "h-4 w-4 shrink-0 text-[var(--scry-faint)]",
-                            active && "text-[var(--scry-accent-text)]",
+                            "flex w-full items-center gap-2 rounded-[10px] border border-transparent px-3 py-2 text-left text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] disabled:opacity-60",
+                            active &&
+                              "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] text-[var(--scry-ink2)]",
                           )}
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          {library.name}
-                        </span>
-                        {library.isDefault ? (
-                          <span className="shrink-0 rounded-[6px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-[var(--scry-accent-text)]">
-                            {t("label.default")}
+                        >
+                          <Folder
+                            className={cn(
+                              "h-4 w-4 shrink-0 text-[var(--scry-faint)]",
+                              active && "text-[var(--scry-accent-text)]",
+                            )}
+                          />
+                          <span className="min-w-0 flex-1 truncate">
+                            {library.name}
                           </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-              {canCreateLibrary ? (
-                <AddNewButton
-                  id="media-library-new"
-                  icon={Plus}
-                  label={t("settings.libraryNewButton")}
-                  onClick={handleNewLibrary}
-                  disabled={actionBusy}
-                  aria-current={mode === "new" ? "true" : undefined}
-                  className={cn(
-                    "mt-2 w-full justify-start",
-                    mode === "new" &&
-                      "bg-[rgba(var(--scry-accent-rgb),0.16)]",
-                  )}
-                />
-              ) : null}
-            </div>,
-            secondaryNavTarget,
-          )
-        : null}
-      {headerActionsTarget && activeLibrary && mode !== "new"
-        ? createPortal(
-            <Button
-              id="media-library-scan"
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleScan}
-              disabled={libraryScanDisabled}
-            >
-              {scanLoading ? (
-                <LoadingMark className="mr-1.5 h-4 w-4" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-              )}
-              {scanLoading
-                ? t("settings.libraryScanRunning")
-                : t("settings.libraryScanButton")}
-            </Button>,
-            headerActionsTarget,
-          )
-        : null}
-      <div id="media-library-settings-panel" className="space-y-[18px]">
+                          {library.isDefault ? (
+                            <span className="shrink-0 rounded-[6px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-[var(--scry-accent-text)]">
+                              {t("label.default")}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {canCreateLibrary ? (
+                  <AddNewButton
+                    id="media-library-new"
+                    icon={Plus}
+                    label={t("settings.libraryNewButton")}
+                    onClick={handleNewLibrary}
+                    disabled={actionBusy}
+                    aria-current={mode === "new" ? "true" : undefined}
+                    className={cn(
+                      "mt-2 w-full justify-start",
+                      mode === "new" &&
+                        "bg-[rgba(var(--scry-accent-rgb),0.16)]",
+                    )}
+                  />
+                ) : null}
+              </div>,
+              secondaryNavTarget,
+            )
+          : null}
+        {headerActionsTarget && activeLibrary && mode !== "new"
+          ? createPortal(
+              <Button
+                id="media-library-scan"
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleScan}
+                disabled={libraryScanDisabled}
+              >
+                {scanLoading ? (
+                  <LoadingMark className="mr-1.5 h-4 w-4" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                )}
+                {scanLoading
+                  ? t("settings.libraryScanRunning")
+                  : t("settings.libraryScanButton")}
+              </Button>,
+              headerActionsTarget,
+            )
+          : null}
+        <div id="media-library-settings-panel" className="space-y-[18px]">
           {scanSummary ? (
             <p
               id="media-library-scan-summary"
@@ -1282,7 +1418,10 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
           ) : null}
 
           {libraries.length === 0 && !librariesLoading && mode !== "new" ? (
-            <p id="media-library-empty" className="text-sm text-muted-foreground">
+            <p
+              id="media-library-empty"
+              className="text-sm text-muted-foreground"
+            >
               {t("settings.libraryEmpty")}
             </p>
           ) : null}
@@ -1293,150 +1432,174 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 icon={HardDrive}
                 title={t("settings.identityStorageTitle")}
               >
-              <div className="space-y-2">
-                <Label htmlFor="media-library-name">{t("settings.libraryNameLabel")}</Label>
-                <Input
-                  id="media-library-name"
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
-                  placeholder={t("settings.libraryNamePlaceholder")}
-                  disabled={actionBusy}
-                />
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="media-library-name">
+                    {t("settings.libraryNameLabel")}
+                  </Label>
+                  <Input
+                    id="media-library-name"
+                    value={draftName}
+                    onChange={(event) => setDraftName(event.target.value)}
+                    placeholder={t("settings.libraryNamePlaceholder")}
+                    disabled={actionBusy}
+                  />
+                </div>
 
-              <div className="space-y-3">
-                <Label className="block">{t("settings.rootFoldersLabel")}</Label>
-                {rootValidationUnavailable ? (
-                  <p className="text-xs text-[var(--scry-warning-text)]">
-                    {t("settings.rootFolderValidationUnavailable")}
-                  </p>
-                ) : null}
-                {normalizedDraftRoots.length === 0 && !loading ? (
-                  <p className="text-xs text-muted-foreground">{t("settings.rootFoldersEmpty")}</p>
-                ) : null}
-                <ul className="space-y-2">
-                  {sortedFolders.map(({ rf, originalIndex: index }) => {
-                    const conflictingLibraryNames =
-                      conflictingLibraryNamesByRootPath.get(rf.path) ?? null;
-                    const pathFormatIsInvalid = invalidRootFolderPaths.has(rf.path);
-                    const pathValidationIsInvalid =
-                      validatedInvalidRootPathKeys.has(
-                        normalizeComparableLibraryRootPath(
-                          rf.path,
-                          localPathStyle,
-                        ),
+                <div className="space-y-3">
+                  <Label className="block">
+                    {t("settings.rootFoldersLabel")}
+                  </Label>
+                  {rootValidationUnavailable ? (
+                    <p className="text-xs text-[var(--scry-warning-text)]">
+                      {t("settings.rootFolderValidationUnavailable")}
+                    </p>
+                  ) : null}
+                  {normalizedDraftRoots.length === 0 && !loading ? (
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.rootFoldersEmpty")}
+                    </p>
+                  ) : null}
+                  <ul className="space-y-2">
+                    {sortedFolders.map(({ rf, originalIndex: index }) => {
+                      const conflictingLibraryNames =
+                        conflictingLibraryNamesByRootPath.get(rf.path) ?? null;
+                      const pathFormatIsInvalid = invalidRootFolderPaths.has(
+                        rf.path,
                       );
-                    const pathIsInvalid =
-                      pathFormatIsInvalid || pathValidationIsInvalid;
-                    const invalidRootTooltip = pathFormatIsInvalid
-                      ? t("settings.downloadClientRemotePathMappingsLocalRequired")
-                      : t("settings.rootFolderInvalidTooltip");
+                      const pathValidationIsInvalid =
+                        validatedInvalidRootPathKeys.has(
+                          normalizeComparableLibraryRootPath(
+                            rf.path,
+                            localPathStyle,
+                          ),
+                        );
+                      const pathIsInvalid =
+                        pathFormatIsInvalid || pathValidationIsInvalid;
+                      const invalidRootTooltip = pathFormatIsInvalid
+                        ? t(
+                            "settings.downloadClientRemotePathMappingsLocalRequired",
+                          )
+                        : t("settings.rootFolderInvalidTooltip");
 
-                    return (
-                      <li
-                        key={`${rf.path}-${index}`}
-                        id={selectorId("media-library-root-row", rf.path)}
-                        className="space-y-1"
-                      >
-                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 sm:flex-nowrap sm:py-1.5">
-                          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                            <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
-                            <span
-                              className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] sm:truncate"
-                              title={rf.path}
-                            >
-                              {rf.path}
-                            </span>
-                          </div>
-                          <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:shrink-0 sm:flex-nowrap">
-                            {pathIsInvalid ? (
+                      return (
+                        <li
+                          key={`${rf.path}-${index}`}
+                          id={selectorId("media-library-root-row", rf.path)}
+                          className="space-y-1"
+                        >
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 sm:flex-nowrap sm:py-1.5">
+                            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                              <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
                               <span
-                                className="shrink-0 rounded-[7px] border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-destructive"
-                                title={invalidRootTooltip}
+                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] sm:truncate"
+                                title={rf.path}
                               >
-                                {t("settings.rootFolderInvalid")}
+                                {rf.path}
                               </span>
-                            ) : null}
-                            {rf.isDefault ? (
-                              <span className="shrink-0 rounded-[7px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-accent-text)]">
-                                {t("label.default")}
-                              </span>
-                            ) : (
-                              <Button
-                                id={selectorId("media-library-root-set-default", rf.path)}
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
-                                onClick={() => handleSetDefault(index)}
+                            </div>
+                            <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:shrink-0 sm:flex-nowrap">
+                              {pathIsInvalid ? (
+                                <span
+                                  className="shrink-0 rounded-[7px] border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-destructive"
+                                  title={invalidRootTooltip}
+                                >
+                                  {t("settings.rootFolderInvalid")}
+                                </span>
+                              ) : null}
+                              {rf.isDefault ? (
+                                <span className="shrink-0 rounded-[7px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.12)] px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--scry-accent-text)]">
+                                  {t("label.default")}
+                                </span>
+                              ) : (
+                                <Button
+                                  id={selectorId(
+                                    "media-library-root-set-default",
+                                    rf.path,
+                                  )}
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  onClick={() => handleSetDefault(index)}
+                                  disabled={actionBusy}
+                                >
+                                  {t("settings.rootFolderSetDefault")}
+                                </Button>
+                              )}
+                              {rf.id && experimentalFeaturesEnabled ? (
+                                <Button
+                                  id={selectorId(
+                                    "media-library-root-change",
+                                    rf.path,
+                                  )}
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  onClick={() => setChangeRootId(rf.id ?? null)}
+                                  disabled={!canChangeRoot}
+                                  title={
+                                    canChangeRoot
+                                      ? undefined
+                                      : t("rootChange.unavailableWhileUnsaved")
+                                  }
+                                >
+                                  <HardDrive className="mr-1 h-3.5 w-3.5" />
+                                  {t("rootChange.rowAction")}
+                                </Button>
+                              ) : null}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <IconButton
+                                id={selectorId(
+                                  "media-library-root-edit",
+                                  rf.path,
+                                )}
+                                label={t("label.edit")}
+                                tone="edit"
+                                onClick={() => openEdit(index)}
                                 disabled={actionBusy}
                               >
-                                {t("settings.rootFolderSetDefault")}
-                              </Button>
-                            )}
-                            {rf.id && experimentalFeaturesEnabled ? (
-                              <Button
-                                id={selectorId("media-library-root-change", rf.path)}
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
-                                onClick={() => setChangeRootId(rf.id ?? null)}
-                                disabled={!canChangeRoot}
-                                title={
-                                  canChangeRoot
-                                    ? undefined
-                                    : t("rootChange.unavailableWhileUnsaved")
-                                }
+                                <Pencil className="h-4 w-4" />
+                              </IconButton>
+                              <IconButton
+                                id={selectorId(
+                                  "media-library-root-delete",
+                                  rf.path,
+                                )}
+                                label={t("label.delete")}
+                                tone="delete"
+                                onClick={() => handleRemovePath(index)}
+                                disabled={actionBusy}
                               >
-                                <HardDrive className="mr-1 h-3.5 w-3.5" />
-                                {t("rootChange.rowAction")}
-                              </Button>
-                            ) : null}
+                                <Trash2 className="h-4 w-4" />
+                              </IconButton>
+                            </div>
                           </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <IconButton
-                              id={selectorId("media-library-root-edit", rf.path)}
-                              label={t("label.edit")}
-                              tone="edit"
-                              onClick={() => openEdit(index)}
-                              disabled={actionBusy}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </IconButton>
-                            <IconButton
-                              id={selectorId("media-library-root-delete", rf.path)}
-                              label={t("label.delete")}
-                              tone="delete"
-                              onClick={() => handleRemovePath(index)}
-                              disabled={actionBusy}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </IconButton>
-                          </div>
-                        </div>
-                        {conflictingLibraryNames ? (
-                          <p className="text-xs text-destructive">
-                            {t("settings.rootFolderConflict", {
-                              libraries: conflictingLibraryNames.join(", "),
-                            })}
-                          </p>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-                <AddNewButton
-                  id="media-library-add-root"
-                  icon={FolderPlus}
-                  label={t("settings.rootFolderAdd")}
-                  onClick={openAdd}
-                  disabled={actionBusy}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {loading ? t("label.loading") : t("settings.rootFoldersHelp")}
-                </p>
-              </div>
+                          {conflictingLibraryNames ? (
+                            <p className="text-xs text-destructive">
+                              {t("settings.rootFolderConflict", {
+                                libraries: conflictingLibraryNames.join(", "),
+                              })}
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <AddNewButton
+                    id="media-library-add-root"
+                    icon={FolderPlus}
+                    label={t("settings.rootFolderAdd")}
+                    onClick={openAdd}
+                    disabled={actionBusy}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {loading
+                      ? t("label.loading")
+                      : t("settings.rootFoldersHelp")}
+                  </p>
+                </div>
               </LibrarySettingsSection>
 
               <LibrarySettingsSection
@@ -1444,70 +1607,105 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 title={t("settings.mediaProfilesTitle")}
                 description={t("settings.mediaProfilesHelp")}
               >
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
-                  <AudioLanguagePicker
-                    value={draftRequiredAudioLanguages}
-                    onChange={setDraftRequiredAudioLanguages}
-                    disabled={settingsBusy}
-                  />
-                  {savedSettings ? (
-                    <EffectiveChip>
-                      {t("settings.libraryEffectiveAudio", {
-                        value:
-                          formatAudioLanguageLabels(
-                            savedSettings.requiredAudioLanguages,
-                            t("title.originalAudioLanguagePerTitle"),
-                          ) || t("label.none"),
-                      })}
-                    </EffectiveChip>
-                  ) : null}
-                </div>
-                <div className="space-y-2">
-                  <Label>{t("settings.searchLanguages")}</Label>
-                  <SearchLanguagePicker
-                    value={draftSearchLanguages}
-                    onChange={setDraftSearchLanguages}
-                    disabled={settingsBusy}
-                  />
-                  <p className="text-xs text-muted-foreground">{t("settings.searchLanguagesHelp")}</p>
-                </div>
-                <div className="space-y-2">
-                  <Label>{t("settings.libraryMetadataLanguageLabel")}</Label>
-                  <Select
-                    value={draftMetadataLanguage}
-                    onValueChange={setDraftMetadataLanguage}
-                    disabled={settingsBusy}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={INHERIT_VALUE}>
-                        {t("settings.libraryInheritGlobal")}
-                      </SelectItem>
-                      {METADATA_LANGUAGES.map((language) => (
-                        <SelectItem key={language.code} value={language.code}>
-                          {language.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {savedSettings ? (
-                    <EffectiveChip>
-                      {t("settings.libraryEffectiveMetadataLanguage", {
-                        value: savedSettings.metadataLanguage,
-                      })}
-                    </EffectiveChip>
-                  ) : null}
-                </div>
-                {isEpisodicFacet ? (
+                <div className="grid gap-3 md:grid-cols-3">
                   <div className="space-y-2">
-                    <Label>{t("settings.librarySeasonFoldersLabel")}</Label>
+                    <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
+                    <AudioLanguagePicker
+                      value={draftRequiredAudioLanguages}
+                      onChange={setDraftRequiredAudioLanguages}
+                      disabled={settingsBusy}
+                    />
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveAudio", {
+                          value:
+                            formatAudioLanguageLabels(
+                              savedSettings.requiredAudioLanguages,
+                              t("title.originalAudioLanguagePerTitle"),
+                            ) || t("label.none"),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.searchLanguages")}</Label>
+                    <SearchLanguagePicker
+                      value={draftSearchLanguages}
+                      onChange={setDraftSearchLanguages}
+                      disabled={settingsBusy}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.searchLanguagesHelp")}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.libraryMetadataLanguageLabel")}</Label>
                     <Select
-                      value={draftUseSeasonFolders}
-                      onValueChange={setDraftUseSeasonFolders}
+                      value={draftMetadataLanguage}
+                      onValueChange={setDraftMetadataLanguage}
+                      disabled={settingsBusy}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={INHERIT_VALUE}>
+                          {t("settings.libraryInheritGlobal")}
+                        </SelectItem>
+                        {METADATA_LANGUAGES.map((language) => (
+                          <SelectItem key={language.code} value={language.code}>
+                            {language.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveMetadataLanguage", {
+                          value: savedSettings.metadataLanguage,
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
+                  {isEpisodicFacet ? (
+                    <div className="space-y-2">
+                      <Label>{t("settings.librarySeasonFoldersLabel")}</Label>
+                      <Select
+                        value={draftUseSeasonFolders}
+                        onValueChange={setDraftUseSeasonFolders}
+                        disabled={settingsBusy}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={INHERIT_VALUE}>
+                            {t("settings.libraryInheritFacet")}
+                          </SelectItem>
+                          <SelectItem value={BOOLEAN_TRUE_VALUE}>
+                            {t("label.enabled")}
+                          </SelectItem>
+                          <SelectItem value={BOOLEAN_FALSE_VALUE}>
+                            {t("label.disabled")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {savedSettings ? (
+                        <EffectiveChip>
+                          {t("settings.libraryEffectiveSeasonFolders", {
+                            value: savedSettings.useSeasonFolders
+                              ? t("label.enabled")
+                              : t("label.disabled"),
+                          })}
+                        </EffectiveChip>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="space-y-2">
+                    <Label>{t("settings.libraryQualityProfileLabel")}</Label>
+                    <Select
+                      value={draftQualityProfileId}
+                      onValueChange={setDraftQualityProfileId}
                       disabled={settingsBusy}
                     >
                       <SelectTrigger>
@@ -1517,135 +1715,114 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                         <SelectItem value={INHERIT_VALUE}>
                           {t("settings.libraryInheritFacet")}
                         </SelectItem>
-                        <SelectItem value={BOOLEAN_TRUE_VALUE}>{t("label.enabled")}</SelectItem>
-                        <SelectItem value={BOOLEAN_FALSE_VALUE}>{t("label.disabled")}</SelectItem>
+                        {qualityProfiles.map((profile) => (
+                          <SelectItem key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     {savedSettings ? (
                       <EffectiveChip>
-                        {t("settings.libraryEffectiveSeasonFolders", {
-                          value: savedSettings.useSeasonFolders
-                            ? t("label.enabled")
-                            : t("label.disabled"),
+                        {t("settings.libraryEffectiveProfile", {
+                          value:
+                            qualityProfiles.find(
+                              (profile) =>
+                                profile.id === savedSettings.qualityProfileId,
+                            )?.name ?? savedSettings.qualityProfileId,
                         })}
                       </EffectiveChip>
                     ) : null}
                   </div>
-                ) : null}
-                <div className="space-y-2">
-                  <Label>{t("settings.libraryQualityProfileLabel")}</Label>
-                  <Select
-                    value={draftQualityProfileId}
-                    onValueChange={setDraftQualityProfileId}
-                    disabled={settingsBusy}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={INHERIT_VALUE}>
-                        {t("settings.libraryInheritFacet")}
-                      </SelectItem>
-                      {qualityProfiles.map((profile) => (
-                        <SelectItem key={profile.id} value={profile.id}>
-                          {profile.name}
+                  <div className="space-y-2">
+                    <Label>{t("settings.libraryScoringPersonaLabel")}</Label>
+                    <Select
+                      value={draftScoringPersona}
+                      onValueChange={setDraftScoringPersona}
+                      disabled={settingsBusy}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={INHERIT_VALUE}>
+                          {t("settings.libraryInheritFacet")}
                         </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {savedSettings ? (
-                    <EffectiveChip>
-                      {t("settings.libraryEffectiveProfile", {
-                        value:
-                          qualityProfiles.find(
-                            (profile) => profile.id === savedSettings.qualityProfileId,
-                          )?.name ?? savedSettings.qualityProfileId,
-                      })}
-                    </EffectiveChip>
-                  ) : null}
+                        {SCORING_PERSONA_CHOICES.map((choice) => (
+                          <SelectItem key={choice.value} value={choice.value}>
+                            {t(choice.labelKey)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectivePersona", {
+                          value: t(
+                            SCORING_PERSONA_CHOICES.find(
+                              (choice) =>
+                                choice.value === savedSettings.scoringPersona,
+                            )?.labelKey ?? "qualityProfile.personaBalanced",
+                          ),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>{t("settings.libraryScoringPersonaLabel")}</Label>
-                  <Select
-                    value={draftScoringPersona}
-                    onValueChange={setDraftScoringPersona}
-                    disabled={settingsBusy}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={INHERIT_VALUE}>
-                        {t("settings.libraryInheritFacet")}
-                      </SelectItem>
-                      {SCORING_PERSONA_CHOICES.map((choice) => (
-                        <SelectItem key={choice.value} value={choice.value}>
-                          {t(choice.labelKey)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {savedSettings ? (
-                    <EffectiveChip>
-                      {t("settings.libraryEffectivePersona", {
-                        value: t(
-                          SCORING_PERSONA_CHOICES.find(
-                            (choice) => choice.value === savedSettings.scoringPersona,
-                          )?.labelKey ?? "qualityProfile.personaBalanced",
-                        ),
-                      })}
-                    </EffectiveChip>
-                  ) : null}
-                </div>
-              </div>
 
-              <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
-                <div className="mb-3 flex items-center gap-2">
-                  <Send className="h-[15px] w-[15px] text-[var(--scry-accent-text)]" />
-                  <span className="text-[13.5px] font-semibold text-[var(--scry-body)]">
-                    {t("settings.libraryRequestQualityProfilesLabel")}
-                  </span>
+                <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Send className="h-[15px] w-[15px] text-[var(--scry-accent-text)]" />
+                    <span className="text-[13.5px] font-semibold text-[var(--scry-body)]">
+                      {t("settings.libraryRequestQualityProfilesLabel")}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2.5">
+                    {qualityProfiles.map((profile) => {
+                      const checked = draftRequestQualityProfileIds.includes(
+                        profile.id,
+                      );
+                      return (
+                        <label
+                          key={profile.id}
+                          className={cn(
+                            "flex h-[42px] cursor-pointer items-center gap-2.5 rounded-[10px] border px-3.5 text-[13px] font-semibold transition",
+                            checked
+                              ? "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-ink2)]"
+                              : "border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-text2)]",
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            disabled={settingsBusy}
+                            onCheckedChange={(value) => {
+                              setDraftRequestQualityProfileIds((current) =>
+                                value
+                                  ? [...current, profile.id]
+                                  : current.filter(
+                                      (profileId) => profileId !== profile.id,
+                                    ),
+                              );
+                            }}
+                          />
+                          <span>{profile.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-3 text-xs text-[var(--scry-muted3)]">
+                    {t("settings.libraryRequestQualityProfilesHelp")}
+                  </p>
                 </div>
-                <div className="flex flex-wrap gap-2.5">
-                  {qualityProfiles.map((profile) => {
-                    const checked = draftRequestQualityProfileIds.includes(profile.id);
-                    return (
-                      <label
-                        key={profile.id}
-                        className={cn(
-                          "flex h-[42px] cursor-pointer items-center gap-2.5 rounded-[10px] border px-3.5 text-[13px] font-semibold transition",
-                          checked
-                            ? "border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-ink2)]"
-                            : "border-[var(--scry-border2)] bg-[var(--scry-bg)] text-[var(--scry-text2)]",
-                        )}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          disabled={settingsBusy}
-                          onCheckedChange={(value) => {
-                            setDraftRequestQualityProfileIds((current) =>
-                              value
-                                ? [...current, profile.id]
-                                : current.filter((profileId) => profileId !== profile.id),
-                            );
-                          }}
-                        />
-                        <span>{profile.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <p className="mt-3 text-xs text-[var(--scry-muted3)]">
-                  {t("settings.libraryRequestQualityProfilesHelp")}
-                </p>
-              </div>
               </LibrarySettingsSection>
 
               {isMovieFacet ? (
                 <LibrarySettingsSection
                   icon={CalendarClock}
                   title={t("settings.movieAvailability")}
-                  description={t("settings.libraryMovieAvailabilityDescription")}
+                  description={t(
+                    "settings.libraryMovieAvailabilityDescription",
+                  )}
                 >
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <div className="space-y-2">
@@ -1692,7 +1869,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                         placeholder={t("settings.libraryInheritFacet")}
                         disabled={settingsBusy}
                         onChange={(event) =>
-                          setDraftMovieReleaseMarket(event.target.value.toUpperCase())
+                          setDraftMovieReleaseMarket(
+                            event.target.value.toUpperCase(),
+                          )
                         }
                       />
                       {savedSettings?.movieReleaseMarket ? (
@@ -1720,7 +1899,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       {savedSettings?.movieAvailabilityDelayDays != null ? (
                         <EffectiveChip>
                           {t("settings.libraryEffectiveValue", {
-                            value: String(savedSettings.movieAvailabilityDelayDays),
+                            value: String(
+                              savedSettings.movieAvailabilityDelayDays,
+                            ),
                           })}
                         </EffectiveChip>
                       ) : null}
@@ -1733,292 +1914,280 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 icon={ImportIcon}
                 title={t("settings.importBehaviorTitle")}
               >
-              <div
-                className={cn(
-                  "grid gap-5",
-                  canManageDownloadClientRouting && "md:grid-cols-2",
-                )}
-              >
-                <div className="space-y-2">
-                  <Label>{t("settings.importModeLabel")}</Label>
-                  <Select
-                    value={draftImportMode}
-                    onValueChange={setDraftImportMode}
-                    disabled={settingsBusy}
-                  >
-                    <SelectTrigger id="media-library-import-mode-trigger">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {IMPORT_MODE_OPTIONS.map((option) => (
-                        <SelectItem
-                          id={selectorId("media-library-import-mode-option", option.value)}
-                          key={option.value}
-                          value={option.value}
-                        >
-                          {t(option.labelKey)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {savedSettings ? (
-                    <EffectiveChip>
-                      {t("settings.libraryEffectiveProfile", {
-                        value: t(importModeLabelKey(savedSettings.importMode)),
-                      })}
-                    </EffectiveChip>
-                  ) : null}
-                  {showUnixPermissions ? (
-                    <div className="grid gap-3 pt-2 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>{t("settings.setPermissionsLinuxLabel")}</Label>
-                        <Select
-                          value={draftSetPermissionsLinux}
-                          onValueChange={setDraftSetPermissionsLinux}
-                          disabled={settingsBusy}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {BOOLEAN_OVERRIDE_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {t(option.labelKey)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {savedSettings ? (
-                          <EffectiveChip>
-                            {t("settings.libraryEffectiveProfile", {
-                              value: savedSettings.setPermissionsLinux
-                                ? t("label.enabled")
-                                : t("label.disabled"),
-                            })}
-                          </EffectiveChip>
-                        ) : null}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t("settings.fileChmodLabel")}</Label>
-                        <Select
-                          value={draftFileChmodSelectValue}
-                          onValueChange={(value) =>
-                            setDraftFileChmod(
-                              value === INHERIT_VALUE ? "" : value,
-                            )
-                          }
-                          disabled={permissionFieldsDisabled}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={INHERIT_VALUE}>
-                              {t("settings.libraryInheritFacet")}
-                            </SelectItem>
-                            {FILE_CHMOD_PRESETS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                <span className="flex w-full items-center justify-between gap-4">
-                                  <span>
-                                    {option.value} - {t(option.labelKey)}
-                                  </span>
-                                  <span className="font-[var(--font-code)] text-xs text-muted-foreground">
-                                    {formatChmodMode(option.value, "file")}
-                                  </span>
-                                </span>
-                              </SelectItem>
-                            ))}
-                            {customFileChmod ? (
-                              <SelectItem value={customFileChmod}>
-                                <span className="flex w-full items-center justify-between gap-4">
-                                  <span>
-                                    {customFileChmod} -{" "}
-                                    {t("settings.chmodPresetCustom")}
-                                  </span>
-                                  <span className="font-[var(--font-code)] text-xs text-muted-foreground">
-                                    {formatChmodMode(customFileChmod, "file")}
-                                  </span>
-                                </span>
-                              </SelectItem>
-                            ) : null}
-                          </SelectContent>
-                        </Select>
-                        {savedSettings ? (
-                          <EffectiveChip>
-                            {t("settings.libraryEffectiveProfile", {
-                              value: savedSettings.fileChmod ?? t("label.none"),
-                            })}
-                          </EffectiveChip>
-                        ) : null}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t("settings.folderChmodLabel")}</Label>
-                        <Select
-                          value={draftFolderChmodSelectValue}
-                          onValueChange={(value) =>
-                            setDraftFolderChmod(
-                              value === INHERIT_VALUE ? "" : value,
-                            )
-                          }
-                          disabled={permissionFieldsDisabled}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={INHERIT_VALUE}>
-                              {t("settings.libraryInheritFacet")}
-                            </SelectItem>
-                            {FOLDER_CHMOD_PRESETS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                <span className="flex w-full items-center justify-between gap-4">
-                                  <span>
-                                    {option.value} - {t(option.labelKey)}
-                                  </span>
-                                  <span className="font-[var(--font-code)] text-xs text-muted-foreground">
-                                    {formatChmodMode(option.value, "folder")}
-                                  </span>
-                                </span>
-                              </SelectItem>
-                            ))}
-                            {customFolderChmod ? (
-                              <SelectItem value={customFolderChmod}>
-                                <span className="flex w-full items-center justify-between gap-4">
-                                  <span>
-                                    {customFolderChmod} -{" "}
-                                    {t("settings.chmodPresetCustom")}
-                                  </span>
-                                  <span className="font-[var(--font-code)] text-xs text-muted-foreground">
-                                    {formatChmodMode(customFolderChmod, "folder")}
-                                  </span>
-                                </span>
-                              </SelectItem>
-                            ) : null}
-                          </SelectContent>
-                        </Select>
-                        {savedSettings ? (
-                          <EffectiveChip>
-                            {t("settings.libraryEffectiveProfile", {
-                              value: savedSettings.folderChmod ?? t("label.none"),
-                            })}
-                          </EffectiveChip>
-                        ) : null}
-                      </div>
-                      <div className="space-y-2">
-                        <Label>{t("settings.chownGroupLabel")}</Label>
-                        <Input
-                          value={draftChownGroup}
-                          onChange={(event) =>
-                            setDraftChownGroup(event.target.value)
-                          }
-                          disabled={permissionFieldsDisabled}
-                          placeholder={
-                            savedSettings?.chownGroup ??
-                            t("settings.libraryInheritFacet")
-                          }
-                        />
-                        {savedSettings ? (
-                          <EffectiveChip>
-                            {t("settings.libraryEffectiveProfile", {
-                              value: savedSettings.chownGroup ?? t("label.none"),
-                            })}
-                          </EffectiveChip>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-                {canManageDownloadClientRouting ? (
+                <div
+                  className={cn(
+                    "grid gap-5",
+                    canManageDownloadClientRouting && "md:grid-cols-2",
+                  )}
+                >
                   <div className="space-y-2">
-                    <Label>{t("settings.downloadClientRouting")}</Label>
+                    <Label>{t("settings.importModeLabel")}</Label>
                     <Select
-                      value={draftDownloadClientRoutingMode}
-                      onValueChange={(value) => {
-                        void handleDownloadClientRoutingModeChange(
-                          value as "inherit" | "custom",
-                        );
-                      }}
-                      disabled={settingsBusy || downloadClientRoutingBusy}
+                      value={draftImportMode}
+                      onValueChange={setDraftImportMode}
+                      disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="media-library-import-mode-trigger">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="inherit">
-                          {t("settings.libraryInheritFacet")}
-                        </SelectItem>
-                        <SelectItem value="custom">
-                          {t("settings.libraryCustomRouting")}
-                        </SelectItem>
+                        {IMPORT_MODE_OPTIONS.map((option) => (
+                          <SelectItem
+                            id={selectorId(
+                              "media-library-import-mode-option",
+                              option.value,
+                            )}
+                            key={option.value}
+                            value={option.value}
+                          >
+                            {t(option.labelKey)}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
+                    {savedSettings ? (
+                      <EffectiveChip>
+                        {t("settings.libraryEffectiveProfile", {
+                          value: t(
+                            importModeLabelKey(savedSettings.importMode),
+                          ),
+                        })}
+                      </EffectiveChip>
+                    ) : null}
+                    {showUnixPermissions ? (
+                      <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>
+                            {t("settings.setPermissionsLinuxLabel")}
+                          </Label>
+                          <Select
+                            value={draftSetPermissionsLinux}
+                            onValueChange={setDraftSetPermissionsLinux}
+                            disabled={settingsBusy}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {BOOLEAN_OVERRIDE_OPTIONS.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {t(option.labelKey)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {savedSettings ? (
+                            <EffectiveChip>
+                              {t("settings.libraryEffectiveProfile", {
+                                value: savedSettings.setPermissionsLinux
+                                  ? t("label.enabled")
+                                  : t("label.disabled"),
+                              })}
+                            </EffectiveChip>
+                          ) : null}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>{t("settings.fileChmodLabel")}</Label>
+                          <Select
+                            value={draftFileChmodSelectValue}
+                            onValueChange={(value) =>
+                              setDraftFileChmod(
+                                value === INHERIT_VALUE ? "" : value,
+                              )
+                            }
+                            disabled={permissionFieldsDisabled}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={INHERIT_VALUE}>
+                                {t("settings.libraryInheritFacet")}
+                              </SelectItem>
+                              {FILE_CHMOD_PRESETS.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  <span className="flex w-full items-center justify-between gap-4">
+                                    <span>
+                                      {option.value} - {t(option.labelKey)}
+                                    </span>
+                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                      {formatChmodMode(option.value, "file")}
+                                    </span>
+                                  </span>
+                                </SelectItem>
+                              ))}
+                              {customFileChmod ? (
+                                <SelectItem value={customFileChmod}>
+                                  <span className="flex w-full items-center justify-between gap-4">
+                                    <span>
+                                      {customFileChmod} -{" "}
+                                      {t("settings.chmodPresetCustom")}
+                                    </span>
+                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                      {formatChmodMode(customFileChmod, "file")}
+                                    </span>
+                                  </span>
+                                </SelectItem>
+                              ) : null}
+                            </SelectContent>
+                          </Select>
+                          {savedSettings ? (
+                            <EffectiveChip>
+                              {t("settings.libraryEffectiveProfile", {
+                                value:
+                                  savedSettings.fileChmod ?? t("label.none"),
+                              })}
+                            </EffectiveChip>
+                          ) : null}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>{t("settings.folderChmodLabel")}</Label>
+                          <Select
+                            value={draftFolderChmodSelectValue}
+                            onValueChange={(value) =>
+                              setDraftFolderChmod(
+                                value === INHERIT_VALUE ? "" : value,
+                              )
+                            }
+                            disabled={permissionFieldsDisabled}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={INHERIT_VALUE}>
+                                {t("settings.libraryInheritFacet")}
+                              </SelectItem>
+                              {FOLDER_CHMOD_PRESETS.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  <span className="flex w-full items-center justify-between gap-4">
+                                    <span>
+                                      {option.value} - {t(option.labelKey)}
+                                    </span>
+                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                      {formatChmodMode(option.value, "folder")}
+                                    </span>
+                                  </span>
+                                </SelectItem>
+                              ))}
+                              {customFolderChmod ? (
+                                <SelectItem value={customFolderChmod}>
+                                  <span className="flex w-full items-center justify-between gap-4">
+                                    <span>
+                                      {customFolderChmod} -{" "}
+                                      {t("settings.chmodPresetCustom")}
+                                    </span>
+                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                      {formatChmodMode(
+                                        customFolderChmod,
+                                        "folder",
+                                      )}
+                                    </span>
+                                  </span>
+                                </SelectItem>
+                              ) : null}
+                            </SelectContent>
+                          </Select>
+                          {savedSettings ? (
+                            <EffectiveChip>
+                              {t("settings.libraryEffectiveProfile", {
+                                value:
+                                  savedSettings.folderChmod ?? t("label.none"),
+                              })}
+                            </EffectiveChip>
+                          ) : null}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>{t("settings.chownGroupLabel")}</Label>
+                          <Input
+                            value={draftChownGroup}
+                            onChange={(event) =>
+                              setDraftChownGroup(event.target.value)
+                            }
+                            disabled={permissionFieldsDisabled}
+                            placeholder={
+                              savedSettings?.chownGroup ??
+                              t("settings.libraryInheritFacet")
+                            }
+                          />
+                          {savedSettings ? (
+                            <EffectiveChip>
+                              {t("settings.libraryEffectiveProfile", {
+                                value:
+                                  savedSettings.chownGroup ?? t("label.none"),
+                              })}
+                            </EffectiveChip>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+                  {canManageDownloadClientRouting ? (
+                    <div className="space-y-2">
+                      <Label>{t("settings.downloadClientRouting")}</Label>
+                      <Select
+                        value={draftDownloadClientRoutingMode}
+                        onValueChange={(value) => {
+                          void handleDownloadClientRoutingModeChange(
+                            value as "inherit" | "custom",
+                          );
+                        }}
+                        disabled={settingsBusy || downloadClientRoutingBusy}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherit">
+                            {t("settings.libraryInheritFacet")}
+                          </SelectItem>
+                          <SelectItem value="custom">
+                            {t("settings.libraryCustomRouting")}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+                </div>
+                {canManageDownloadClientRouting &&
+                draftDownloadClientRoutingMode === "custom" ? (
+                  <DownloadClientRoutingPanel
+                    scopeLabel={activeLibrary?.name ?? settingsTitle}
+                    downloadClients={downloadClients}
+                    activeScopeRouting={draftDownloadClientRouting}
+                    activeScopeRoutingOrder={draftDownloadClientRoutingOrder}
+                    downloadClientRoutingLoading={downloadClientRoutingBusy}
+                    downloadClientRoutingSaving={saving}
+                    updateDownloadClientRoutingForScope={
+                      updateDownloadClientRoutingDraft
+                    }
+                    moveDownloadClientInScope={moveDownloadClientRoutingDraft}
+                  />
                 ) : null}
-              </div>
-              {canManageDownloadClientRouting &&
-              draftDownloadClientRoutingMode === "custom" ? (
-                <DownloadClientRoutingPanel
-                  scopeLabel={activeLibrary?.name ?? settingsTitle}
-                  downloadClients={downloadClients}
-                  activeScopeRouting={draftDownloadClientRouting}
-                  activeScopeRoutingOrder={draftDownloadClientRoutingOrder}
-                  downloadClientRoutingLoading={downloadClientRoutingBusy}
-                  downloadClientRoutingSaving={saving}
-                  updateDownloadClientRoutingForScope={
-                    updateDownloadClientRoutingDraft
-                  }
-                  moveDownloadClientInScope={moveDownloadClientRoutingDraft}
-                />
-              ) : null}
               </LibrarySettingsSection>
 
               <LibrarySettingsSection
                 icon={FileText}
                 title={t("settings.sidecarFilesTitle")}
               >
-              <div>
-                <div
-                  className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
-                >
-                  <div className="space-y-2">
-                    <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
-                    <Select
-                      value={draftNfoWriteOnImport}
-                      onValueChange={setDraftNfoWriteOnImport}
-                      disabled={settingsBusy}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {BOOLEAN_OVERRIDE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {t(option.labelKey)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.nfoWriteOnImportDescription")}
-                    </p>
-                    {savedSettings ? (
-                      <EffectiveChip>
-                        {t("settings.libraryEffectiveProfile", {
-                          value: t(
-                            savedSettings.nfoWriteOnImport
-                              ? "label.enabled"
-                              : "label.disabled",
-                          ),
-                        })}
-                      </EffectiveChip>
-                    ) : null}
-                  </div>
-                  {showPlexmatch ? (
+                <div>
+                  <div
+                    className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+                  >
                     <div className="space-y-2">
-                      <Label>{t("settings.plexmatchWriteOnImportLabel")}</Label>
+                      <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
                       <Select
-                        value={draftPlexmatchWriteOnImport}
-                        onValueChange={setDraftPlexmatchWriteOnImport}
+                        value={draftNfoWriteOnImport}
+                        onValueChange={setDraftNfoWriteOnImport}
                         disabled={settingsBusy}
                       >
                         <SelectTrigger>
@@ -2033,13 +2202,13 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">
-                        {t("settings.plexmatchWriteOnImportDescription")}
+                        {t("settings.nfoWriteOnImportDescription")}
                       </p>
-                      {savedSettings?.plexmatchWriteOnImport != null ? (
+                      {savedSettings ? (
                         <EffectiveChip>
                           {t("settings.libraryEffectiveProfile", {
                             value: t(
-                              savedSettings.plexmatchWriteOnImport
+                              savedSettings.nfoWriteOnImport
                                 ? "label.enabled"
                                 : "label.disabled",
                             ),
@@ -2047,9 +2216,48 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                         </EffectiveChip>
                       ) : null}
                     </div>
-                  ) : null}
+                    {showPlexmatch ? (
+                      <div className="space-y-2">
+                        <Label>
+                          {t("settings.plexmatchWriteOnImportLabel")}
+                        </Label>
+                        <Select
+                          value={draftPlexmatchWriteOnImport}
+                          onValueChange={setDraftPlexmatchWriteOnImport}
+                          disabled={settingsBusy}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {BOOLEAN_OVERRIDE_OPTIONS.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {t(option.labelKey)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          {t("settings.plexmatchWriteOnImportDescription")}
+                        </p>
+                        {savedSettings?.plexmatchWriteOnImport != null ? (
+                          <EffectiveChip>
+                            {t("settings.libraryEffectiveProfile", {
+                              value: t(
+                                savedSettings.plexmatchWriteOnImport
+                                  ? "label.enabled"
+                                  : "label.disabled",
+                              ),
+                            })}
+                          </EffectiveChip>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
               </LibrarySettingsSection>
 
               {isAnimeFacet ? (
@@ -2082,7 +2290,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       {savedSettings?.fillerPolicy ? (
                         <p className="text-xs text-muted-foreground">
                           {t("settings.libraryEffectiveProfile", {
-                            value: t(fillerPolicyLabelKey(savedSettings.fillerPolicy)),
+                            value: t(
+                              fillerPolicyLabelKey(savedSettings.fillerPolicy),
+                            ),
                           })}
                         </p>
                       ) : null}
@@ -2111,7 +2321,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       {savedSettings?.recapPolicy ? (
                         <p className="text-xs text-muted-foreground">
                           {t("settings.libraryEffectiveProfile", {
-                            value: t(recapPolicyLabelKey(savedSettings.recapPolicy)),
+                            value: t(
+                              recapPolicyLabelKey(savedSettings.recapPolicy),
+                            ),
                           })}
                         </p>
                       ) : null}
@@ -2212,15 +2424,12 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               {settingsError ? (
                 <p className="text-xs text-destructive">{settingsError}</p>
               ) : null}
-
             </div>
           ) : null}
           {footerTarget && (mode === "new" || activeLibrary)
             ? createPortal(
                 <div className="border-t border-[var(--scry-border2)] bg-[var(--scry-surf)]">
-                  <div
-                    className="mx-auto flex w-full max-w-[920px] flex-wrap items-center gap-2 px-4 pb-[max(1.5rem,calc(0.875rem+env(safe-area-inset-bottom)))] pt-3.5 sm:px-6 sm:pb-3.5 md:px-[30px]"
-                  >
+                  <div className="mx-auto flex w-full max-w-[920px] flex-wrap items-center gap-2 px-4 pb-[max(1.5rem,calc(0.875rem+env(safe-area-inset-bottom)))] pt-3.5 sm:px-6 sm:pb-3.5 md:px-[30px]">
                     {mode !== "new" &&
                     activeLibrary &&
                     !activeLibrary.isDefault ? (
@@ -2278,58 +2487,61 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 footerTarget,
               )
             : null}
-      </div>
-      <FolderBrowserDialog
-        open={browserOpen}
-        onOpenChange={setBrowserOpen}
-        onSelect={handleBrowserSelect}
-        selectionTypes={["folder"]}
-        initialPath={browserInitialPath}
-        title={browserTitle}
-      />
-      {experimentalFeaturesEnabled && activeLibrary && changeRootTarget?.id ? (
-        <ChangeRootDialog
-          open
-          onOpenChange={(next) => {
-            if (!next) {
-              setChangeRootId(null);
-            }
-          }}
-          libraryId={activeLibrary.id}
-          root={{
-            id: changeRootTarget.id,
-            path: changeRootTarget.path,
-            isDefault: changeRootTarget.isDefault,
-          }}
-          otherRoots={changeRootOtherRoots.map((candidate) => ({
-            id: candidate.id ?? "",
-            path: candidate.path,
-            isDefault: candidate.isDefault,
-          }))}
+        </div>
+        <FolderBrowserDialog
+          open={browserOpen}
+          onOpenChange={setBrowserOpen}
+          onSelect={handleBrowserSelect}
+          selectionTypes={["folder"]}
+          initialPath={browserInitialPath}
+          title={browserTitle}
         />
-      ) : null}
-      <ConfirmDialog
-        open={deleteLibraryOpen}
-        title={t("settings.libraryDeleteButton")}
-        description={
-          activeLibrary
-            ? t("settings.libraryDeleteConfirm", { name: activeLibrary.name })
-            : ""
-        }
-        confirmLabel={t("label.delete")}
-        cancelLabel={t("label.cancel")}
-        onConfirm={handleConfirmDeleteLibrary}
-        onCancel={() => setDeleteLibraryOpen(false)}
-      />
-      <ConfirmDialog
-        open={libraryDiscardPrompt === "open"}
-        title={t("settings.unsavedLibraryChangesTitle")}
-        description={t("settings.unsavedLibraryChangesConfirm")}
-        confirmLabel={t("label.discard")}
-        cancelLabel={t("label.cancel")}
-        onConfirm={handleConfirmDiscardLibraryChanges}
-        onCancel={handleCancelDiscardLibraryChanges}
-      />
-    </>
-  );
-});
+        {experimentalFeaturesEnabled &&
+        activeLibrary &&
+        changeRootTarget?.id ? (
+          <ChangeRootDialog
+            open
+            onOpenChange={(next) => {
+              if (!next) {
+                setChangeRootId(null);
+              }
+            }}
+            libraryId={activeLibrary.id}
+            root={{
+              id: changeRootTarget.id,
+              path: changeRootTarget.path,
+              isDefault: changeRootTarget.isDefault,
+            }}
+            otherRoots={changeRootOtherRoots.map((candidate) => ({
+              id: candidate.id ?? "",
+              path: candidate.path,
+              isDefault: candidate.isDefault,
+            }))}
+          />
+        ) : null}
+        <ConfirmDialog
+          open={deleteLibraryOpen}
+          title={t("settings.libraryDeleteButton")}
+          description={
+            activeLibrary
+              ? t("settings.libraryDeleteConfirm", { name: activeLibrary.name })
+              : ""
+          }
+          confirmLabel={t("label.delete")}
+          cancelLabel={t("label.cancel")}
+          onConfirm={handleConfirmDeleteLibrary}
+          onCancel={() => setDeleteLibraryOpen(false)}
+        />
+        <ConfirmDialog
+          open={libraryDiscardPrompt === "open"}
+          title={t("settings.unsavedLibraryChangesTitle")}
+          description={t("settings.unsavedLibraryChangesConfirm")}
+          confirmLabel={t("label.discard")}
+          cancelLabel={t("label.cancel")}
+          onConfirm={handleConfirmDiscardLibraryChanges}
+          onCancel={handleCancelDiscardLibraryChanges}
+        />
+      </>
+    );
+  },
+);

@@ -98,16 +98,27 @@ export function pluginFailureDetail(error: unknown): string | null {
  * naming the code when it gave none. Any other error shows the server's own
  * sentence, and `fallback` when it carries no usable sentence.
  */
-export function pluginErrorMessage(error: unknown, t: Translate, fallback: string): string {
+export function pluginErrorMessage(
+  error: unknown,
+  t: Translate,
+  fallback: string,
+): string {
   const key = pluginFailureKey(error);
   const detail = pluginFailureDetail(error);
   if (key) {
     const reason = t(key);
-    return detail ? t("plugins.failure.withDetail", { reason, detail }) : reason;
+    return detail
+      ? t("plugins.failure.withDetail", { reason, detail })
+      : reason;
   }
   const unknownReason = unknownPluginFailureReason(error);
   if (unknownReason) {
-    return detail ?? t("plugins.failure.unknown", { code: humanisePluginReason(unknownReason) });
+    return (
+      detail ??
+      t("plugins.failure.unknown", {
+        code: humanisePluginReason(unknownReason),
+      })
+    );
   }
-  return userFacingGraphQlErrorMessage(error, fallback);
+  return userFacingGraphQlErrorMessage(error, fallback, t);
 }

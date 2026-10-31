@@ -62,7 +62,27 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Probe a download client. When the test names a stored client and the
+    /// client answers, its failure run ends the way an answering refresh ends
+    /// it, so a corrected client is routed again without waiting out its
+    /// backoff. A failed test leaves the failure run as it was.
     pub async fn test_download_client_connection(
+        &self,
+        actor: &User,
+        client_id: Option<&str>,
+        client_type: &str,
+        config_json: &str,
+        proxy_config_id: Option<&str>,
+    ) -> AppResult<()> {
+        self.probe_download_client_connection(actor, client_type, config_json, proxy_config_id)
+            .await?;
+        if let Some(client_id) = client_id.map(str::trim).filter(|id| !id.is_empty()) {
+            self.end_download_client_failure_run(client_id).await;
+        }
+        Ok(())
+    }
+
+    async fn probe_download_client_connection(
         &self,
         actor: &User,
         client_type: &str,
@@ -118,11 +138,9 @@ impl AppUseCase {
             .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+            .ok_or_else(|| AppError::validation_refused(crate::error_reasons::plugins::PROXY_CONFIGURATION_NOT_FOUND, "Proxy configuration was not found."))?;
         if !config.is_enabled {
-            return Err(AppError::Validation(
-                "Proxy is disabled for this download client.".into(),
-            ));
+            return Err(AppError::validation_refused(crate::error_reasons::plugins::PROXY_DISABLED_DOWNLOAD_CLIENT, "Proxy is disabled for this download client."));
         }
         Ok(Some(config))
     }
@@ -144,7 +162,7 @@ impl AppUseCase {
             .download_client_plugin_provider
             .available()
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::plugins::TEST_CONNECTION_UNSUPPORTED, format!(
                     "test connection is not supported for client type '{}'",
                     client_type.trim()
                 ))
@@ -157,10 +175,10 @@ impl AppUseCase {
         } else {
             serde_json::to_string(
                 &serde_json::from_str::<serde_json::Value>(config_json).map_err(|error| {
-                    AppError::Validation(format!("invalid client config_json: {error}"))
+                    AppError::validation_refused(crate::error_reasons::plugins::CLIENT_CONFIG_JSON_INVALID, format!("invalid client config_json: {error}"))
                 })?,
             )
-            .map_err(|error| AppError::Validation(format!("invalid client config_json: {error}")))?
+            .map_err(|error| AppError::validation_refused(crate::error_reasons::plugins::CLIENT_CONFIG_JSON_INVALID, format!("invalid client config_json: {error}")))?
         };
 
         let now = chrono::Utc::now();
@@ -181,7 +199,7 @@ impl AppUseCase {
         let client = provider
             .client_for_config_with_proxy(&config, proxy_config)
             .ok_or_else(|| {
-                AppError::Validation(format!(
+                AppError::validation_refused(crate::error_reasons::plugins::TEST_CONNECTION_UNSUPPORTED, format!(
                     "test connection is not supported for client type '{client_type}'"
                 ))
             })?;

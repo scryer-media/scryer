@@ -58,12 +58,21 @@ test("empty selections never reach the API", () => {
     }),
     true,
   );
-  assert.equal(monitorSelectionInput({ seasonNumbers: [], seriesMovies: [] }), undefined);
-  assert.deepEqual(monitorSelectionInput({ seasonNumbers: [2, 1], seriesMovies: [] }), {
-    seasonNumbers: [1, 2],
-    seriesMovies: [],
-  });
-  assert.equal(monitorSelectionFromRecord({ seasonNumbers: [], seriesMovies: [] }), null);
+  assert.equal(
+    monitorSelectionInput({ seasonNumbers: [], seriesMovies: [] }),
+    undefined,
+  );
+  assert.deepEqual(
+    monitorSelectionInput({ seasonNumbers: [2, 1], seriesMovies: [] }),
+    {
+      seasonNumbers: [1, 2],
+      seriesMovies: [],
+    },
+  );
+  assert.equal(
+    monitorSelectionFromRecord({ seasonNumbers: [], seriesMovies: [] }),
+    null,
+  );
 });
 
 test("the API input carries only input fields, never urql cache keys", () => {
@@ -73,14 +82,21 @@ test("the API input carries only input fields, never urql cache keys", () => {
       {
         __typename: "MetadataSeriesMovie",
         name: "Synthetic Movie",
-        externalIds: [{ __typename: "ExternalId", source: "tmdb", value: "42" }],
+        externalIds: [
+          { __typename: "ExternalId", source: "tmdb", value: "42" },
+        ],
       },
     ],
   } as unknown as MonitorSelectionDraft;
   const input = monitorSelectionInput(cached);
   assert.deepEqual(input, {
     seasonNumbers: [1],
-    seriesMovies: [{ name: "Synthetic Movie", externalIds: [{ source: "tmdb", value: "42" }] }],
+    seriesMovies: [
+      {
+        name: "Synthetic Movie",
+        externalIds: [{ source: "tmdb", value: "42" }],
+      },
+    ],
   });
   assert.equal(JSON.stringify(input).includes("__typename"), false);
 });
@@ -90,7 +106,10 @@ test("the card summary renders specials and movie names", () => {
     {
       seasonNumbers: [1, 0],
       seriesMovies: [
-        { name: "Iron Rail", externalIds: [{ source: "tvdb", value: "131963" }] },
+        {
+          name: "Iron Rail",
+          externalIds: [{ source: "tvdb", value: "131963" }],
+        },
       ],
     },
     {
