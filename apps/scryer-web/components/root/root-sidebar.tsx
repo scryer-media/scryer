@@ -1982,7 +1982,7 @@ export const RootSidebar = React.memo(function RootSidebar(
 ) {
   return (
     <SidebarProvider
-      className="h-full"
+      className="min-[1280px]:h-full"
       style={
         {
           "--sidebar-width": "224px",
