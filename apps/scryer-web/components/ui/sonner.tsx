@@ -9,6 +9,14 @@ import { Toaster as Sonner, toast, type ToasterProps } from "sonner";
 import { isDarkTheme } from "@/lib/theme";
 import { LoadingMark } from "@/components/common/loading-mark";
 
+// Sonner's phone offset ignores the notch and home indicator.
+const MOBILE_TOAST_OFFSET = {
+  top: "calc(env(safe-area-inset-top) + 16px)",
+  right: "16px",
+  bottom: "calc(env(safe-area-inset-bottom) + 16px)",
+  left: "16px",
+};
+
 const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
   const { resolvedTheme } = useTheme();
   const isDark = isDarkTheme(resolvedTheme);
@@ -62,6 +70,7 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
       theme={isDark ? "dark" : "light"}
       richColors
       className="toaster group"
+      mobileOffset={MOBILE_TOAST_OFFSET}
       toastOptions={{
         className: "shadow-[0_18px_48px_rgba(0,0,0,0.34)]",
         classNames: {

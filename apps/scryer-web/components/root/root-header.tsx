@@ -1348,7 +1348,7 @@ export const RootHeader = React.memo(function RootHeader({
         className={cn(
           "relative z-50 border-b border-[var(--scry-border3)] bg-transparent pt-safe-comfort px-safe backdrop-blur transition-transform duration-200 ease-out",
           isMobile
-            ? "fixed inset-x-0 top-[var(--root-shell-top-offset,0px)]"
+            ? "fixed inset-x-0 top-0"
             : "sticky top-0",
           isMobile
             ? !isMobileHeaderVisible
@@ -1881,6 +1881,7 @@ export const RootHeader = React.memo(function RootHeader({
       {isMobile ? (
         <div
           aria-hidden="true"
+          data-slot="root-header-spacer"
           className="shrink-0"
           style={{ height: mobileHeaderHeight }}
         />

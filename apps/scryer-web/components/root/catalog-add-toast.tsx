@@ -28,9 +28,10 @@ export type CatalogAddToastContent = {
 const CATALOG_ADD_TOAST_DURATION_MS = 10_000;
 
 // The default toaster paints its own card chrome; this toast owns the frame so
-// the poster can sit flush against the left edge.
+// the poster can sit flush against the left edge. Sonner's own phone width
+// allows for the viewport offset, so full width only applies above that range.
 const CATALOG_ADD_TOAST_CLASS_NAME =
-  "!w-full !border-0 !bg-transparent !p-0 !shadow-none";
+  "min-[601px]:!w-full !border-0 !bg-transparent !p-0 !shadow-none";
 
 function CatalogAddToastCard({
   titleName,
