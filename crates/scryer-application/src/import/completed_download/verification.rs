@@ -309,6 +309,22 @@ async fn verify_import_outcome_with_mode(
     if manual_source_coverage == Some(false) {
         return Ok(NotProven);
     }
+    // A manual mapping is the operator's statement of what this download
+    // holds for the title. Once every mapped file landed and nothing recorded
+    // for the download is left rejected or undisposed, episode videos the
+    // operator chose not to map (a seeding pack keeps them in its folder) do
+    // not make the import incomplete. This deliberately accepts less than the
+    // whole advertised pack; it stays a fallback unless every expected
+    // episode did land. A released hold verifies with no pass of its own, so
+    // the pass count is checked only when the reconcile reports one.
+    let manual_scope_satisfied = manual_source_coverage == Some(true)
+        && artifact_members == ArtifactMemberCompletion::Terminal
+        && match mode {
+            ImportVerificationMode::Manual {
+                expected_mapping_count: Some(expected),
+            } => files_imported_this_pass == 0 || files_imported_this_pass >= expected,
+            _ => false,
+        };
 
     match expected_episode_units_with_release_evidence(app, td, release_evidence).await {
         ExpectedEpisodeResolution::Resolved(expected_episode_units) => {
@@ -337,6 +353,14 @@ async fn verify_import_outcome_with_mode(
             let every_expected_unit_imported = expected_episode_units
                 .iter()
                 .all(|unit| successful_units.contains(unit));
+
+            if manual_scope_satisfied {
+                return Ok(if every_expected_unit_imported {
+                    Proven
+                } else {
+                    Fallback
+                });
+            }
 
             // A retry may have moved only part of the source before interruption.
             // Its surviving files/artifacts cannot narrow the advertised episode set.

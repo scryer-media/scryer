@@ -494,6 +494,225 @@ async fn verify_manual_import_keeps_movie_largest_video_rule() {
     assert!(!verify_manual_import(&app, &td, 1, Some(1)).await);
 }
 
+const SEEDING_PACK_RELEASE: &str = "Fixture.Show.S01.1080p.WEB-DL";
+
+/// A season pack still seeding: every episode video stays in the folder after
+/// the operator imports the ones they mapped.
+fn seeding_pack_manual_app(
+    dest_dir: &std::path::Path,
+    artifacts: Vec<ImportArtifact>,
+) -> (AppUseCase, CompletedDownload) {
+    write_fixture_videos(
+        dest_dir,
+        &[
+            "Fixture.Show.S01E01.mkv",
+            "Fixture.Show.S01E02.mkv",
+            "Fixture.Show.S01E03.mkv",
+            "Fixture.Show.S01E04.mkv",
+        ],
+    );
+    let title = build_title("title-1", "Fixture Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = (1..=4)
+        .map(|number| {
+            build_episode(
+                &format!("ep-{number}"),
+                "title-1",
+                "season-1",
+                "1",
+                &number.to_string(),
+                None,
+            )
+        })
+        .collect();
+    let completed = build_completed_download(
+        SEEDING_PACK_RELEASE,
+        dest_dir.to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let download_client = test_download_client_with_completed(completed.clone());
+    let app = build_app_with_download_client(
+        vec![title],
+        vec![collection],
+        episodes,
+        artifacts,
+        download_client,
+    );
+    (app, completed)
+}
+
+fn mapped_subset_artifacts() -> Vec<ImportArtifact> {
+    vec![
+        build_artifact("dl-1", "ep-1", "Fixture.Show.S01E01.mkv"),
+        build_artifact("dl-1", "ep-2", "Fixture.Show.S01E02.mkv"),
+    ]
+}
+
+async fn reconcile_manual_import(
+    app: &AppUseCase,
+    td: TrackedDownload,
+    files_imported_this_pass: usize,
+    expected_mapping_count: Option<usize>,
+) -> (bool, TrackedDownload) {
+    let actor = scryer_domain::User::new_admin("synthetic-operator");
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    let id = td.id.clone();
+    let download_id = tracker.insert_for_tests(td);
+    let (reply, response) = tokio::sync::oneshot::channel();
+    crate::integration::workflow::run_tracked_download_command_for_tests(
+        app,
+        &actor,
+        &mut tracker,
+        crate::tracked_downloads::TrackedDownloadCommand::ReconcileManualImport {
+            id,
+            canonical_download_id: Some(download_id),
+            files_imported_this_pass,
+            expected_mapping_count,
+            reply,
+        },
+    )
+    .await;
+    let terminalized = response
+        .await
+        .expect("reconcile reply")
+        .expect("reconcile manual import");
+    let td = tracker
+        .get_by_download_id(download_id)
+        .expect("tracked download stays cached")
+        .clone();
+    (terminalized, td)
+}
+
+fn blocked_seeding_pack_download() -> TrackedDownload {
+    let mut td = build_tracked_download("title-1", "series", SEEDING_PACK_RELEASE);
+    td.state = TrackedDownloadState::ImportBlocked;
+    td.status = TrackedDownloadStatus::Warning;
+    td
+}
+
+/// The operator mapped two episodes of a pack that is still seeding. Both
+/// landed, so the mapping is complete even though the other episode videos
+/// stay in the folder unmapped. It is not proof of the whole pack.
+#[tokio::test]
+async fn verify_manual_import_accepts_a_fully_landed_subset_of_a_seeding_pack() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let (app, completed) = seeding_pack_manual_app(temp_dir.path(), mapped_subset_artifacts());
+    let td = blocked_seeding_pack_download();
+
+    assert!(verify_manual_import(&app, &td, 2, Some(2)).await);
+    assert_eq!(
+        verify_released_hold_outcome(&app, &td, &completed, None, Some(2))
+            .await
+            .expect("released hold verification"),
+        VerificationOutcome::Fallback
+    );
+
+    let (terminalized, td) = reconcile_manual_import(&app, td, 2, Some(2)).await;
+    assert!(terminalized);
+    assert_eq!(td.state, TrackedDownloadState::Imported);
+    assert_eq!(td.status, TrackedDownloadStatus::Ok);
+}
+
+/// Earlier imports cannot stand in for a mapping of this pass that did not
+/// land: the pass must report every mapped file imported.
+#[tokio::test]
+async fn verify_manual_import_subset_needs_every_mapping_of_the_pass_imported() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let (app, _) = seeding_pack_manual_app(temp_dir.path(), mapped_subset_artifacts());
+    let td = blocked_seeding_pack_download();
+
+    assert!(!verify_manual_import(&app, &td, 1, Some(2)).await);
+}
+
+#[tokio::test]
+async fn verify_manual_import_subset_with_a_rejected_mapping_stays_blocked() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut artifacts = mapped_subset_artifacts();
+    artifacts.push(build_artifact_with_result(
+        "dl-1",
+        Some("ep-3"),
+        "Fixture.Show.S01E03.mkv",
+        "rejected",
+    ));
+    let (app, _) = seeding_pack_manual_app(temp_dir.path(), artifacts);
+    let td = blocked_seeding_pack_download();
+
+    assert!(!verify_manual_import(&app, &td, 2, Some(3)).await);
+    let (terminalized, td) = reconcile_manual_import(&app, td, 2, Some(3)).await;
+    assert!(!terminalized);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+}
+
+/// A rejection recorded for a source that is no longer in the folder still
+/// holds the block, even when the mapping count is otherwise met.
+#[tokio::test]
+async fn verify_manual_import_subset_keeps_a_rejection_for_a_departed_source_blocked() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let mut artifacts = mapped_subset_artifacts();
+    artifacts.push(build_artifact_with_result(
+        "dl-1",
+        Some("ep-3"),
+        "Fixture.Show.S01E03.Repack.mkv",
+        "rejected",
+    ));
+    let (app, _) = seeding_pack_manual_app(temp_dir.path(), artifacts);
+    let td = blocked_seeding_pack_download();
+
+    assert!(!verify_manual_import(&app, &td, 2, Some(2)).await);
+}
+
+/// The operator's scope applies only to manual mappings: automatic
+/// verification of the same folder still needs every visible episode.
+#[tokio::test]
+async fn verify_import_of_a_seeding_pack_subset_stays_unproven_outside_manual_mode() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let (app, completed) = seeding_pack_manual_app(temp_dir.path(), mapped_subset_artifacts());
+    let td = blocked_seeding_pack_download();
+
+    assert!(!verify_import_inner(&app, &td, 2, Some(&completed)).await);
+    assert_eq!(
+        verify_released_hold_outcome(&app, &td, &completed, None, None)
+            .await
+            .expect("released hold verification"),
+        VerificationOutcome::NotProven
+    );
+}
+
+/// With no mapping count there is no statement of scope, so the unmapped
+/// episode videos keep the manual import blocked as before.
+#[tokio::test]
+async fn verify_manual_import_subset_without_a_mapping_count_stays_blocked() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let (app, _) = seeding_pack_manual_app(temp_dir.path(), mapped_subset_artifacts());
+    let td = blocked_seeding_pack_download();
+
+    assert!(!verify_manual_import(&app, &td, 2, None).await);
+}
+
+/// Mapping every episode of the pack is still proof of the whole.
+#[tokio::test]
+async fn verify_manual_import_of_a_whole_seeding_pack_is_proven() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let artifacts = (1..=4)
+        .map(|number| {
+            build_artifact(
+                "dl-1",
+                &format!("ep-{number}"),
+                &format!("Fixture.Show.S01E0{number}.mkv"),
+            )
+        })
+        .collect();
+    let (app, completed) = seeding_pack_manual_app(temp_dir.path(), artifacts);
+    let td = blocked_seeding_pack_download();
+
+    assert_eq!(
+        verify_released_hold_outcome(&app, &td, &completed, None, Some(4))
+            .await
+            .expect("released hold verification"),
+        VerificationOutcome::Proven
+    );
+}
+
 #[tokio::test]
 async fn verify_import_excludes_only_currently_unmonitored_ignored_episodes_from_wanted_coverage() {
     let title = build_title("title-1", "Show", MediaFacet::Series);
