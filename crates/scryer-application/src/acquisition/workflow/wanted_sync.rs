@@ -51,13 +51,13 @@ impl AppUseCase {
                 .map(|title| title.library_id)
                 .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::catalog::TITLE_NOT_FOUND, format!("title {}", item.title_id)))?,
         };
-        self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
+        self.require_privileged_library_access(actor, &library_id)
             .await?;
         Ok(Some(item))
     }
 
     /// Batch variant of [`Self::get_wanted_item`]: loads wanted items by id and
-    /// silently drops those the actor cannot `View`.
+    /// silently drops those outside the actor's privileged libraries.
     pub async fn get_wanted_items_by_ids(
         &self,
         actor: &User,
@@ -69,12 +69,8 @@ impl AppUseCase {
             .acquisition_scope_states
             .list_acquisition_scope_states_by_ids(ids)
             .await?;
-        self.filter_wanted_items_for_permission(
-            actor,
-            items,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await
+        self.filter_wanted_items_for_privileged_access(actor, items)
+            .await
     }
 }
 impl AppUseCase {
@@ -84,9 +80,7 @@ impl AppUseCase {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<(Vec<AcquisitionScopeState>, i64)> {
         let requested_library_ids = query.library_ids.clone();
-        let mut library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let mut library_ids = self.require_privileged_library_ids(actor, None).await?;
         if !requested_library_ids.is_empty() {
             let authorized = library_ids.into_iter().collect::<HashSet<_>>();
             library_ids = requested_library_ids

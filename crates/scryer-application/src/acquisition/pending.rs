@@ -720,13 +720,10 @@ impl AppUseCase {
     /// List all pending releases that are waiting to be grabbed.
     pub async fn list_pending_releases(&self, actor: &User) -> AppResult<Vec<PendingRelease>> {
         let authorized_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+            .require_privileged_library_ids(actor, None)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
-        if authorized_library_ids.is_empty() {
-            return Ok(Vec::new());
-        }
 
         let releases = self
             .services
@@ -765,12 +762,7 @@ impl AppUseCase {
         limit: i64,
         offset: i64,
     ) -> AppResult<(Vec<PendingRelease>, i64)> {
-        let authorized_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
-        if authorized_library_ids.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
+        let authorized_library_ids = self.require_privileged_library_ids(actor, None).await?;
         let sort = if wanted_item_id.is_some()
             && !statuses.is_empty()
             && statuses
@@ -824,17 +816,13 @@ impl AppUseCase {
                         format!("title {}", release.title_id),
                     )
                 })?;
-            self.require_library_permission(
-                actor,
-                &title.library_id,
-                scryer_domain::LibraryPermission::View,
-            )
-            .await?;
+            self.require_privileged_library_access(actor, &title.library_id)
+                .await?;
         }
         Ok(release)
     }
 
-    /// Require `View` on the library owning `wanted_item_id`, resolving the
+    /// Require privileged access to the library owning `wanted_item_id`, resolving the
     /// library from the wanted item (falling back to its title). Shared by the
     /// per-wanted-item pending-release reads.
     async fn require_wanted_item_view(&self, actor: &User, wanted_item_id: &str) -> AppResult<()> {
@@ -866,7 +854,7 @@ impl AppUseCase {
                     )
                 })?
         };
-        self.require_library_permission(actor, &library_id, scryer_domain::LibraryPermission::View)
+        self.require_privileged_library_access(actor, &library_id)
             .await
     }
 

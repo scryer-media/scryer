@@ -1010,6 +1010,25 @@ async fn listing_external_subtitles_stays_on_view() {
         .await
         .expect("a viewer can still list external subtitles");
     assert_eq!(listings.len(), 1);
+    // Where the sidecar lives on disk is privileged: a viewer gets its name only.
+    assert_eq!(listings[0].download.file_path, "Lumen Drift.eng.srt");
+
+    let manager_listings = fixture
+        .app
+        .list_external_subtitles_for_title(
+            &title_manager_for(&fixture.movie_library_id),
+            &listings[0].download.title_id,
+        )
+        .await
+        .expect("a title manager can list external subtitles");
+    assert!(
+        manager_listings[0]
+            .download
+            .file_path
+            .ends_with("/Lumen Drift/Lumen Drift.eng.srt"),
+        "a title manager keeps the full sidecar path: {}",
+        manager_listings[0].download.file_path
+    );
 
     fixture
         .app

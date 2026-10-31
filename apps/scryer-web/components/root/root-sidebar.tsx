@@ -94,6 +94,7 @@ import {
   LIBRARY_PERMISSIONS,
   hasAnyAppPermission,
   hasAnyLibraryPermission,
+  hasAnyPrivilegedLibraryAccess,
 } from "@/lib/utils/permissions";
 import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
@@ -763,6 +764,9 @@ function RootSidebarContent({
     LIBRARY_PERMISSIONS.resolveImports,
   );
   const canAccessFacetImport = canResolveImports;
+  // Download activity, history and wanted state are privileged; a caller who
+  // can only view libraries or resolve imports does not get those pages.
+  const canViewLibraryInternals = hasAnyPrivilegedLibraryAccess(user);
   const visibleMediaSettingsSubPages = React.useMemo(
     () =>
       canManageConfig
@@ -825,7 +829,7 @@ function RootSidebarContent({
                 canManageTitle,
               canManageLists || canManageSystemSettings,
             )) &&
-          (item.id !== "wanted" || canViewCatalog) &&
+          (item.id !== "wanted" || canViewLibraryInternals) &&
           (item.id !== "dashboard" ||
             canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -833,6 +837,7 @@ function RootSidebarContent({
       ),
     [
       canAccessMediaTopNav,
+      canViewLibraryInternals,
       canManageLists,
       canManageSystemSettings,
       canManageTitle,
@@ -992,7 +997,13 @@ function RootSidebarContent({
   const activityImportBadgeText = !manualImportCountKnown
     ? "…"
     : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
-  const visibleActivitySubPages = ACTIVITY_SUB_PAGES;
+  const visibleActivitySubPages = React.useMemo(
+    () =>
+      canViewLibraryInternals
+        ? ACTIVITY_SUB_PAGES
+        : ACTIVITY_SUB_PAGES.filter((entry) => entry.id === "import"),
+    [canViewLibraryInternals],
+  );
   const hasVisibleActivitySubnav = React.useMemo(
     () => visibleActivitySubPages.some((entry) => entry.id !== "activity"),
     [visibleActivitySubPages],

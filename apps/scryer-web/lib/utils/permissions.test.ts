@@ -6,8 +6,11 @@ import {
   LIBRARY_PERMISSIONS,
   canManageLibrarySubtitles,
   hasAnyLibraryPermission,
+  hasAnyPrivilegedLibraryAccess,
   hasAppPermission,
   hasLibraryPermission,
+  hasPrivilegedLibraryAccess,
+  hasPrivilegedTitleAccess,
   libraryPermissionShadowSource,
   libraryPermissionsWithRequestShadowing,
   normalizeJwtPermissionClaims,
@@ -453,4 +456,56 @@ test("the catalog-settings override reaches subtitles in every library", () => {
     ),
     false,
   );
+});
+
+test("privileged library access mirrors the server predicate", () => {
+  const grant = (...permissions: string[]) =>
+    normalizeJwtPermissionClaims(
+      [],
+      [{ libraryId: "library-movies", permissions }],
+    );
+  const viewer = grant(LIBRARY_PERMISSIONS.view);
+  const subtitleManager = grant(
+    LIBRARY_PERMISSIONS.view,
+    LIBRARY_PERMISSIONS.manageSubtitles,
+  );
+  const resolver = grant(
+    LIBRARY_PERMISSIONS.view,
+    LIBRARY_PERMISSIONS.resolveImports,
+  );
+  const titleManager = grant(
+    LIBRARY_PERMISSIONS.view,
+    LIBRARY_PERMISSIONS.manageTitles,
+  );
+  const libraryManager = grant(
+    LIBRARY_PERMISSIONS.view,
+    LIBRARY_PERMISSIONS.manageLibrary,
+  );
+  const catalogAdmin = normalizeJwtPermissionClaims(
+    [APP_PERMISSIONS.manageCatalogSettings],
+    [{ libraryId: "library-movies", permissions: [LIBRARY_PERMISSIONS.view] }],
+  );
+  const systemAdmin = normalizeJwtPermissionClaims(
+    [APP_PERMISSIONS.manageSystemSettings],
+    [],
+  );
+
+  for (const user of [viewer, subtitleManager, resolver]) {
+    assert.equal(hasPrivilegedLibraryAccess(user, "library-movies"), false);
+    assert.equal(hasAnyPrivilegedLibraryAccess(user), false);
+    assert.equal(hasPrivilegedTitleAccess(user, null), false);
+  }
+  for (const user of [titleManager, libraryManager]) {
+    assert.equal(hasPrivilegedLibraryAccess(user, "library-movies"), true);
+    assert.equal(hasPrivilegedLibraryAccess(user, "library-series"), false);
+    assert.equal(hasAnyPrivilegedLibraryAccess(user), true);
+    assert.equal(hasPrivilegedTitleAccess(user, null), true);
+    assert.equal(hasPrivilegedTitleAccess(user, "library-series"), false);
+  }
+  for (const user of [catalogAdmin, systemAdmin]) {
+    assert.equal(hasPrivilegedLibraryAccess(user, "library-movies"), true);
+    assert.equal(hasPrivilegedLibraryAccess(user, "library-series"), true);
+    assert.equal(hasAnyPrivilegedLibraryAccess(user), true);
+  }
+  assert.equal(hasPrivilegedLibraryAccess(null, "library-movies"), false);
 });

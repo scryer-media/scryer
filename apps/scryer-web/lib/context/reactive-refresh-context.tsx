@@ -36,6 +36,8 @@ export type QueueTitleSidePanelOverviewRefreshOptions<
   titleId: string;
   blocklistLimit: number;
   projection: TitleSidePanelOverviewProjection;
+  /** Whether to ask for privileged title data; omitted means yes. */
+  includePrivileged?: boolean;
   apply: (
     snapshot: TitleSidePanelOverviewSnapshot<
       TTitle,

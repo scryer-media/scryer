@@ -188,7 +188,10 @@ import {
 } from "@/components/common/title-rename-controls";
 import { InteractiveSearchDialog } from "@/components/common/interactive-search-dialog";
 import { TitleSearchDownloadClientNotice } from "@/components/common/title-search-download-client-notice";
-import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access";
+import {
+  useCanManageOverviewTitle,
+  useCanViewTitleInternals,
+} from "@/lib/hooks/use-title-overview-access";
 import {
   useDownloadClientsConfigured,
   useTitleDownloadFeedback,
@@ -1110,6 +1113,7 @@ function TitleContextPanel({
   const hasDownloadClients = useDownloadClientsConfigured(titleId);
   const downloadFeedback = useTitleDownloadFeedback({
     titleId,
+    libraryId: title?.libraryId ?? null,
     hasDownloadClients,
   });
   const refreshDownloadFeedback = downloadFeedback.refresh;
@@ -2288,9 +2292,15 @@ export function MediaContentView({
     () => titleTableSupportedRatingColumnsForView(view),
     [view],
   );
+  // Root folders say where media lives on disk; the server returns them only
+  // to callers with privileged library access, so the column is not offered
+  // to anyone else.
+  const canSeeRootColumn = useCanViewTitleInternals(null);
   const isTitleTableColumnSupported = React.useCallback(
-    (key: TitleTableColumnKey) => isTitleTableColumnSupportedForView(key, view),
-    [view],
+    (key: TitleTableColumnKey) =>
+      (key !== "root" || canSeeRootColumn) &&
+      isTitleTableColumnSupportedForView(key, view),
+    [canSeeRootColumn, view],
   );
   const titleTableColumnGroups = React.useMemo(
     () =>
@@ -2637,7 +2647,13 @@ export function MediaContentView({
   // columns and scrolls horizontally when the overview pane squeezes it. The
   // narrow "compact drawer" (title/mon/size) is a separate width-gated layout,
   // not column shedding, so we keep the full column set in every table state.
-  const effectiveVisibleTitleTableColumns = visibleTitleTableColumns;
+  const effectiveVisibleTitleTableColumns = React.useMemo(
+    () =>
+      canSeeRootColumn || !visibleTitleTableColumns.root
+        ? visibleTitleTableColumns
+        : { ...visibleTitleTableColumns, root: false },
+    [canSeeRootColumn, visibleTitleTableColumns],
+  );
   const showTitleTableColumnControls =
     effectiveViewMode !== "poster" && !selectedTitleCompactDrawerActive;
   const multiSelectActive = selectedTitleIds.size > 0;

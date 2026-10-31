@@ -257,7 +257,7 @@ export type TitleRecord = {
   movieAvailability?: MovieAvailabilityRecord | null;
   qualityProfileId?: string | null;
   rootFolderId?: string;
-  rootFolderPath?: string;
+  rootFolderPath?: string | null;
   /** Whether renaming is turned on for this title's media type. */
   renameEnabled?: boolean;
   monitorType?: string | null;

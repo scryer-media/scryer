@@ -24,10 +24,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<broadcast::Receiver<Vec<DownloadQueueItem>>> {
-        if !self
-            .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?
-        {
+        if self.privileged_library_ids(actor, None).await?.is_empty() {
             return Err(AppError::unauthorized_reason(crate::error_reasons::integration::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
 
@@ -63,10 +60,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<tokio::sync::watch::Receiver<DownloadQueueSync>> {
-        if !self
-            .has_any_library_permission(actor, scryer_domain::LibraryPermission::View)
-            .await?
-        {
+        if self.privileged_library_ids(actor, None).await?.is_empty() {
             return Err(AppError::unauthorized_reason(crate::error_reasons::integration::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
         }
         Ok(self.runtime.acquisition.download_queue_snapshot.subscribe())

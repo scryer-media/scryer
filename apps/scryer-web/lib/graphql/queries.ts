@@ -1030,10 +1030,10 @@ export const movieAvailabilityQuery = `query MovieAvailability($id: ID!) {
   }
 }`;
 
-export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID!, $blocklistLimit: Int) {
+export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID!, $blocklistLimit: Int, $includePrivileged: Boolean! = true) {
   title(id: $id) {${MOVIE_SIDE_PANEL_TITLE_FIELDS}
   }
-  titleAcquisitionDiagnostics(titleId: $id) {
+  titleAcquisitionDiagnostics(titleId: $id) @include(if: $includePrivileged) {
     recentDecisions {
       id
       wantedItemId
@@ -1064,11 +1064,11 @@ export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID
     latestDecisionAt
     latestWantedSearchAt
   }
-  titleHistory: titleHistory(filter: { titleIds: [$id], limit: 50, offset: 0 }) {
+  titleHistory: titleHistory(filter: { titleIds: [$id], limit: 50, offset: 0 }) @include(if: $includePrivileged) {
     items {${TITLE_EVENT_FIELDS}
     }
   }
-  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
+  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) @include(if: $includePrivileged) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
   }
   externalSubtitles(titleId: $id) {${EXTERNAL_SUBTITLE_FIELDS}
   }
@@ -1077,10 +1077,10 @@ export const movieSidePanelOverviewQuery = `query MovieSidePanelOverview($id: ID
   }
 }`;
 
-export const seriesSidePanelOverviewQuery = `query SeriesSidePanelOverview($id: ID!, $blocklistLimit: Int) {
+export const seriesSidePanelOverviewQuery = `query SeriesSidePanelOverview($id: ID!, $blocklistLimit: Int, $includePrivileged: Boolean! = true) {
   title(id: $id) {${SERIES_SIDE_PANEL_TITLE_FIELDS}
   }
-  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
+  titleReleaseBlocklist(titleId: $id, limit: $blocklistLimit) @include(if: $includePrivileged) {${TITLE_RELEASE_BLOCKLIST_FIELDS}
   }
   externalSubtitles(titleId: $id) {${EXTERNAL_SUBTITLE_FIELDS}
   }
@@ -1917,6 +1917,12 @@ export type ReactiveRefreshQueryActionInput =
       titleId: string;
       blocklistLimit: number;
       projection: TitleSidePanelOverviewProjection;
+      /**
+       * Whether to ask for the title's history and release blocklist, which
+       * the server refuses to callers without privileged library access.
+       * Omitted means yes.
+       */
+      includePrivileged?: boolean;
     }
   | {
       key: string;
@@ -1945,7 +1951,7 @@ export type ReactiveRefreshQueryActionPlan =
       kind: "titleSidePanelOverview";
       titleAlias: string;
       titleHistoryAlias?: string;
-      titleReleaseBlocklistAlias: string;
+      titleReleaseBlocklistAlias?: string;
       externalSubtitlesAlias: string;
       setupStatusAlias: string;
     }
@@ -1998,16 +2004,21 @@ export function buildReactiveRefreshQuery(
         const titleIdVariableName = `titleSidePanelOverviewId${index}`;
         const blocklistLimitVariableName = `titleSidePanelOverviewBlocklistLimit${index}`;
         const titleAlias = `titleSidePanelOverviewTitleAction${index}`;
+        const includePrivileged = action.includePrivileged !== false;
         const titleHistoryAlias =
-          action.projection === "MOVIE"
+          includePrivileged && action.projection === "MOVIE"
             ? `titleSidePanelOverviewHistoryAction${index}`
             : undefined;
-        const titleReleaseBlocklistAlias = `titleSidePanelOverviewBlocklistAction${index}`;
+        const titleReleaseBlocklistAlias = includePrivileged
+          ? `titleSidePanelOverviewBlocklistAction${index}`
+          : undefined;
         const externalSubtitlesAlias = `titleSidePanelOverviewExternalSubtitlesAction${index}`;
         const setupStatusAlias = `titleSidePanelOverviewSetupStatusAction${index}`;
 
         variableDefinitions.push(`$${titleIdVariableName}: ID!`);
-        variableDefinitions.push(`$${blocklistLimitVariableName}: Int`);
+        if (titleReleaseBlocklistAlias) {
+          variableDefinitions.push(`$${blocklistLimitVariableName}: Int`);
+        }
         const titleFields =
           action.projection === "SERIES"
             ? SERIES_SIDE_PANEL_TITLE_FIELDS
@@ -2020,9 +2031,11 @@ export function buildReactiveRefreshQuery(
             `  ${titleHistoryAlias}: titleHistory(filter: { titleIds: [$${titleIdVariableName}], limit: 50, offset: 0 }) {\n    items {\n${TITLE_EVENT_FIELDS}\n    }\n  }`,
           );
         }
-        fields.push(
-          `  ${titleReleaseBlocklistAlias}: titleReleaseBlocklist(titleId: $${titleIdVariableName}, limit: $${blocklistLimitVariableName}) {\n${TITLE_RELEASE_BLOCKLIST_FIELDS}\n  }`,
-        );
+        if (titleReleaseBlocklistAlias) {
+          fields.push(
+            `  ${titleReleaseBlocklistAlias}: titleReleaseBlocklist(titleId: $${titleIdVariableName}, limit: $${blocklistLimitVariableName}) {\n${TITLE_RELEASE_BLOCKLIST_FIELDS}\n  }`,
+          );
+        }
         fields.push(
           `  ${externalSubtitlesAlias}: externalSubtitles(titleId: $${titleIdVariableName}) {\n${EXTERNAL_SUBTITLE_FIELDS}\n  }`,
         );
@@ -2030,7 +2043,9 @@ export function buildReactiveRefreshQuery(
           `  ${setupStatusAlias}: setupStatus {\n    hasDownloadClients\n  }`,
         );
         variables[titleIdVariableName] = action.titleId;
-        variables[blocklistLimitVariableName] = action.blocklistLimit;
+        if (titleReleaseBlocklistAlias) {
+          variables[blocklistLimitVariableName] = action.blocklistLimit;
+        }
         actionPlans.push({
           key: action.key,
           kind: action.kind,

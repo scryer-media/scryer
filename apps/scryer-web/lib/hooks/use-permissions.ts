@@ -3,6 +3,7 @@ import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
   hasAnyLibraryPermission,
+  hasAnyPrivilegedLibraryAccess,
   hasAppPermission,
 } from "@/lib/utils/permissions";
 import { canAccessListsPage } from "@/lib/utils/routes";
@@ -25,6 +26,10 @@ export function usePermissions(authenticatedUser: AuthUser) {
     LIBRARY_PERMISSIONS.resolveImports,
   );
   const canAccessActivity = canResolveImports || canManageTitle;
+  // Download activity, acquisition history and on-disk locations: only for
+  // actors with privileged access to at least one library.
+  const canViewLibraryInternals =
+    hasAnyPrivilegedLibraryAccess(authenticatedUser);
   const canManageUserAccounts = hasAppPermission(
     authenticatedUser,
     APP_PERMISSIONS.manageUsers,
@@ -63,6 +68,7 @@ export function usePermissions(authenticatedUser: AuthUser) {
     canRequestMedia,
     canResolveImports,
     canAccessActivity,
+    canViewLibraryInternals,
     canManageUserAccounts,
     canManagePermissions,
     canManageSystemSettings,

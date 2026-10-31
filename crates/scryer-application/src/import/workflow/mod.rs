@@ -306,9 +306,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<Vec<crate::ActiveImportStream>> {
-        let allowed_library_ids = self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?;
+        let allowed_library_ids = self.require_privileged_library_ids(actor, None).await?;
         Ok(self
             .runtime
             .imports
@@ -324,11 +322,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<tokio::sync::watch::Receiver<crate::ActiveImportStreamSync>> {
-        if self
-            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
-            .await?
-            .is_empty()
-        {
+        if self.privileged_library_ids(actor, None).await?.is_empty() {
             return Err(AppError::unauthorized_reason(
                 crate::error_reasons::import::DO_NOT_ACCESS_ANY_LIBRARIES,
                 "You do not have access to any libraries".to_string(),

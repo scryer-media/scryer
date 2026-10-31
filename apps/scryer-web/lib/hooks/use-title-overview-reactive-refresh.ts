@@ -22,6 +22,8 @@ type UseTitleOverviewReactiveRefreshOptions<
   titleId?: string | null;
   blocklistLimit: number;
   projection: TitleSidePanelOverviewProjection;
+  /** Whether the caller may read the title's history and blocklist. */
+  includePrivileged?: boolean;
   applyOverviewSnapshot: (
     snapshot: TitleSidePanelOverviewSnapshot<
       TTitle,
@@ -48,6 +50,7 @@ export function useTitleOverviewReactiveRefresh<
   titleId,
   blocklistLimit,
   projection,
+  includePrivileged = true,
   applyOverviewSnapshot,
   importKinds,
   pause = false,
@@ -94,6 +97,7 @@ export function useTitleOverviewReactiveRefresh<
       titleId: requestedTitleId,
       blocklistLimit,
       projection,
+      includePrivileged,
       apply(snapshot) {
         if (titleIdRef.current !== requestedTitleId) {
           return;

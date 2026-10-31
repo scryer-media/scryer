@@ -180,7 +180,11 @@ import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 import { useAuth } from "@/lib/hooks/use-auth";
-import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
+import {
+  APP_PERMISSIONS,
+  hasAppPermission,
+  hasPrivilegedTitleAccess,
+} from "@/lib/utils/permissions";
 import {
   exclusionInputFromTitle,
   type AddListExclusionInput,
@@ -3101,6 +3105,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedOverviewTitleRecord?.metadataFetchedAt ?? "";
   const selectedPanelHydrationCreatedAt =
     selectedOverviewTitleRecord?.createdAt ?? "";
+  // The release blocklist is privileged: a viewer of this title's library is
+  // refused it, so it is not asked for.
+  const selectedPanelCanViewInternals = hasPrivilegedTitleAccess(
+    auth.user,
+    selectedOverviewTitleRecord?.libraryId,
+  );
   const selectedPanelNeedsPanelDetails =
     selectedOverviewTitleRecord !== null
       ? !hasSelectedTitlePanelDetails(selectedOverviewTitleRecord)
@@ -3274,12 +3284,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     void Promise.allSettled([
       titleDetailsRequest,
       loadSelectedOverviewExternalSubtitles(titleId),
-      client
-        .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
-          titleReleaseBlocklistQuery,
-          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
-        )
-        .toPromise(),
+      selectedPanelCanViewInternals
+        ? client
+            .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
+              titleReleaseBlocklistQuery,
+              { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
+            )
+            .toPromise()
+        : Promise.resolve(null),
     ] as const).then(
       ([titleDetailsResult, externalSubtitlesResult, blocklistResult]) => {
         if (selectedPanelHydrationKeyRef.current !== requestKey) {
@@ -3320,7 +3332,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         });
 
         const blocklistEntries =
-          blocklistResult.status === "fulfilled" && !blocklistResult.value.error
+          blocklistResult.status === "fulfilled" &&
+          blocklistResult.value &&
+          !blocklistResult.value.error
             ? (blocklistResult.value.data?.titleReleaseBlocklist ?? [])
             : [];
         if (blocklistResult.status === "rejected") {
@@ -3328,7 +3342,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
             "[selected-title-blocklist-refresh] refresh failed:",
             blocklistResult.reason,
           );
-        } else if (blocklistResult.value.error) {
+        } else if (blocklistResult.value?.error) {
           console.error(
             "[selected-title-blocklist-refresh] refresh failed:",
             blocklistResult.value.error,
@@ -3345,6 +3359,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     applyTitleMoreLikeThis,
     client,
     loadSelectedOverviewExternalSubtitles,
+    selectedPanelCanViewInternals,
     selectedPanelHydrationCreatedAt,
     selectedPanelHydrationMetadataFetchedAt,
     selectedPanelHydrationTitleId,
