@@ -3762,6 +3762,22 @@ mod localized_query_tests {
         );
     }
 
+    /// The romanization tags SMG serves for the catalog's Chinese, Korean and
+    /// Thai romanized titles resolve to the language they romanize.
+    #[test]
+    fn localized_search_names_search_latn_romanizations_under_their_language() {
+        let title = title_with(vec![
+            alias("Xingkong Bi'an", "zh-Latn"),
+            alias("Hangu Deungbul", "ko-Latn"),
+            alias("Khom Fai Tha Ruea", "th-Latn"),
+        ]);
+        assert_eq!(
+            localized_search_names(&title, &languages(&["zho", "kor", "tha"])),
+            vec!["Xingkong Bi'an", "Hangu Deungbul", "Khom Fai Tha Ruea"]
+        );
+        assert!(localized_search_names(&title, &languages(&["jpn", "eng"])).is_empty());
+    }
+
     #[test]
     fn localized_search_names_leave_an_untagged_latin_alias_out() {
         let title = title_with(vec![
