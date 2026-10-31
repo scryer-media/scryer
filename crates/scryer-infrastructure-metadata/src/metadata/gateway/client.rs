@@ -3262,10 +3262,14 @@ mod tests {
 
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("metadataBulk"));
         assert!(graphql_docs::METADATA_BULK_QUERY.contains("external_ratings"));
-        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases"));
-        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country }"));
-        assert!(graphql_docs::METADATA_BULK_QUERY.contains("tagged_aliases"));
-        assert!(graphql_docs::METADATA_BULK_QUERY.contains("    country\n  }"));
+        // SMG's TvdbAlias has no country field yet; selecting it would fail validation.
+        assert!(graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language }"));
+        assert!(
+            graphql_docs::METADATA_BULK_QUERY
+                .contains("  tagged_aliases {\n    name\n    language\n  }\n")
+        );
+        assert!(!graphql_docs::TITLES_QUERY.contains("tagged_aliases { name language country"));
+        assert!(!graphql_docs::METADATA_BULK_QUERY.contains("    language\n    country\n"));
         assert!(
             queries
                 .iter()

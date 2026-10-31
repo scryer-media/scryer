@@ -4490,6 +4490,7 @@ pub(crate) struct RenameMediaEvidence {
     source_type: Option<String>,
     video_hdr_format: Option<String>,
     dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
     video_codec_parsed: Option<crate::release_parser::VideoCodec>,
     audio_codec_parsed: Option<String>,
     audio_channels_parsed: Option<String>,
@@ -4514,6 +4515,7 @@ impl RenameMediaEvidence {
             source_type: non_empty_owned(media_file.source_type.clone()),
             video_hdr_format: non_empty_owned(media_file.video_hdr_format.clone()),
             dovi_profile: media_file.dovi_profile,
+            dovi_bl_compat_id: media_file.dovi_bl_compat_id,
             video_codec_parsed: media_file.video_codec_parsed,
             audio_codec_parsed: non_empty_owned(media_file.audio_codec_parsed.clone()),
             audio_channels_parsed: non_empty_owned(media_file.audio_channels_parsed.clone()),
@@ -4538,6 +4540,7 @@ impl RenameMediaEvidence {
             ),
             video_hdr_format: non_empty_owned(analysis.video_hdr_format.clone()),
             dovi_profile: analysis.dovi_profile,
+            dovi_bl_compat_id: analysis.dovi_bl_compat_id,
             ..Self::default()
         }
     }
@@ -4576,6 +4579,7 @@ fn resolve_rename_common_metadata_from_evidence(
         source_type,
         video_hdr_format,
         dovi_profile,
+        dovi_bl_compat_id,
         video_codec_parsed,
         audio_codec_parsed,
         audio_channels_parsed,
@@ -4591,8 +4595,12 @@ fn resolve_rename_common_metadata_from_evidence(
     let source = source_type
         .or_else(|| parsed_current.source.as_ref().map(ToString::to_string))
         .unwrap_or_default();
-    let dynamic_range =
-        dynamic_range_label(video_hdr_format.as_deref(), dovi_profile, parsed_current);
+    let dynamic_range = dynamic_range_label(
+        video_hdr_format.as_deref(),
+        dovi_profile,
+        dovi_bl_compat_id,
+        parsed_current,
+    );
     let revision = if parsed_current.revision <= 0 {
         String::new()
     } else if parsed_current.is_repack {
@@ -4653,6 +4661,7 @@ fn resolve_rename_common_metadata_from_evidence(
 fn dynamic_range_label(
     video_hdr_format: Option<&str>,
     dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
     parsed: &ParsedReleaseMetadata,
 ) -> String {
     if let Some(format) = video_hdr_format {
@@ -4665,7 +4674,7 @@ fn dynamic_range_label(
             return String::new();
         }
         if compact == "DV" || compact.contains("DOLBYVISION") || compact.contains("DOVI") {
-            return "DV".to_string();
+            return dolby_vision_label(dovi_profile, dovi_bl_compat_id, parsed);
         }
         if compact.contains("HDR10+") || compact.contains("HDR10PLUS") || compact.contains("HDR10P")
         {
@@ -4683,7 +4692,7 @@ fn dynamic_range_label(
         return format.trim().to_string();
     }
     if dovi_profile.is_some() {
-        return "DV".to_string();
+        return dolby_vision_label(dovi_profile, dovi_bl_compat_id, parsed);
     }
 
     let mut labels = Vec::new();
@@ -4702,6 +4711,51 @@ fn dynamic_range_label(
         labels.push("HDR");
     }
     labels.join(" ")
+}
+
+/// "DV" plus the base layer a non-Dolby-Vision player falls back to, the way
+/// the release-name path spells it ("DV HDR10", "DV HDR10+", "DV HLG").
+///
+/// The probe's BL-compatibility id decides when it is present: 1 and 6 are an
+/// HDR10 base layer, 4 is HLG, and 0 or 2 (none, SDR) leave plain "DV". Without
+/// it, profiles 7 and 8 carry an HDR10-compatible base layer. The release name
+/// fills in what the probe cannot tell, including HDR10+ dynamic metadata on
+/// an HDR10 base layer.
+fn dolby_vision_label(
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+    parsed: &ParsedReleaseMetadata,
+) -> String {
+    let parsed_base = if parsed.is_hdr10plus {
+        Some("HDR10+")
+    } else if parsed.has_hdr_fallback {
+        Some("HDR10")
+    } else if parsed.is_hlg {
+        Some("HLG")
+    } else {
+        None
+    };
+    let base = match dovi_bl_compat_id {
+        Some(1 | 6) => Some(if parsed.is_hdr10plus {
+            "HDR10+"
+        } else {
+            "HDR10"
+        }),
+        Some(4) => Some("HLG"),
+        Some(0 | 2) => None,
+        _ => match dovi_profile {
+            Some(7 | 8) => Some(if parsed.is_hdr10plus {
+                "HDR10+"
+            } else {
+                "HDR10"
+            }),
+            _ => parsed_base,
+        },
+    };
+    match base {
+        Some(base) => format!("DV {base}"),
+        None => "DV".to_string(),
+    }
 }
 
 /// The tokens every rename template can use for `title`'s file: title, year,
