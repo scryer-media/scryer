@@ -64,12 +64,7 @@ export function TitleWorkspaceHero({
           </ActionTooltip>
         </div>
       </div>
-      <div
-        className={cn(
-          "relative flex flex-col gap-4 p-[18px] sm:flex-row",
-          leadingAction ? "sm:pr-36" : "sm:pr-16",
-        )}
-      >
+      <div className="relative flex flex-col gap-4 p-[18px] sm:flex-row">
         {children}
       </div>
     </section>

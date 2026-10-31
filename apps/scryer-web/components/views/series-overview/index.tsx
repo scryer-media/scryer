@@ -1324,6 +1324,16 @@ function SeriesOverviewViewImpl({
                 {heroLeadingAction}
               </div>
             ) : null}
+            {onBackToList ? (
+              <IconButton
+                label={t("label.close")}
+                tone="neutral"
+                className="absolute right-2.5 top-2.5 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] sm:right-4 sm:top-4"
+                onClick={() => onBackToList()}
+              >
+                <X className="h-5 w-5" />
+              </IconButton>
+            ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
               <div className="mx-auto shrink-0 sm:mx-0">
                 <TitlePosterSlot
@@ -1337,23 +1347,13 @@ function SeriesOverviewViewImpl({
                 />
               </div>
 
-              <div
-                className={cn(
-                  "relative min-w-0 flex-1 flex flex-col pr-12",
-                  heroLeadingAction && "sm:pr-36",
-                )}
-              >
-                {onBackToList ? (
-                  <IconButton
-                    label={t("label.close")}
-                    tone="neutral"
-                    className="absolute right-0 top-0 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                    onClick={() => onBackToList()}
-                  >
-                    <X className="h-5 w-5" />
-                  </IconButton>
-                ) : null}
-                <h1 className="text-xl font-bold text-foreground sm:text-2xl">
+              <div className="relative min-w-0 flex-1 flex flex-col">
+                <h1
+                  className={cn(
+                    "text-xl font-bold text-foreground sm:min-h-10 sm:pr-12 sm:text-2xl",
+                    heroLeadingAction && "sm:pr-36",
+                  )}
+                >
                   {title.name}
                   {title.year ? (
                     <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">

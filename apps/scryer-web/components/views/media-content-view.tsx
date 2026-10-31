@@ -274,6 +274,11 @@ const SELECTED_POSTER_INLINE_MIN_WIDTH =
   TITLE_OVERVIEW_PANE_MIN_WIDTH +
   TITLE_WORKSPACE_PANE_GAP +
   TITLE_POSTER_GRID_MIN_COLUMN_WIDTH;
+const TITLE_LIST_PANE_MIN_WIDTH = 340;
+const SELECTED_TITLE_LIST_INLINE_MIN_WIDTH =
+  TITLE_OVERVIEW_PANE_MIN_WIDTH +
+  TITLE_WORKSPACE_PANE_GAP +
+  TITLE_LIST_PANE_MIN_WIDTH;
 
 type QualityProfileOption = {
   value: string;
@@ -1163,7 +1168,7 @@ function TitleContextPanel({
     onImportQueued: reloadTitleAndDownloads,
   });
   const panelClassName = cn(
-    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[981px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
+    "min-h-0 w-full min-w-0 flex-col overflow-visible min-[1280px]:overflow-hidden rounded-[16px] border border-[var(--scry-border2)] bg-[var(--scry-surfD)]",
     className,
   );
   const moreLikeThisItems = React.useMemo(
@@ -1359,7 +1364,7 @@ function TitleContextPanel({
     >
       <div
         data-slot="title-context-scroll"
-        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[981px]:overflow-y-auto sm:p-5 sm:pb-5"
+        className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[1280px]:overflow-y-auto sm:p-5 sm:pb-5"
       >
         <div className="-mx-4 -mt-4 sm:-mx-5 sm:-mt-5">
           <TitleWorkspaceHero
@@ -1391,7 +1396,12 @@ function TitleContextPanel({
               />
             </TitleWorkspacePosterFrame>
             <div className="flex w-full min-w-0 flex-1 flex-col sm:w-auto">
-              <h2 className="text-[21px] font-bold leading-[1.1] tracking-normal text-white">
+              <h2
+                className={cn(
+                  "text-[21px] font-bold leading-[1.1] tracking-normal text-white sm:pr-12",
+                  titleListDisclosure && "sm:pr-36",
+                )}
+              >
                 {title.name}
                 {yearLabel ? (
                   <span className="font-medium text-[var(--scry-muted3)]">
@@ -2531,7 +2541,7 @@ export function MediaContentView({
     selectedTitleCompactLayoutActive &&
     (titleLayoutWidth == null
       ? selectedTitleListInlineViewportMatches
-      : titleLayoutWidth >= contextPanelMinimumWidth);
+      : titleLayoutWidth >= SELECTED_TITLE_LIST_INLINE_MIN_WIDTH);
   const [selectedTitleListDrawerOpen, setSelectedTitleListDrawerOpen] =
     React.useState(false);
   const selectedTitleListDrawerRef = React.useRef<HTMLDivElement | null>(null);
@@ -3289,7 +3299,7 @@ export function MediaContentView({
     selectedTitleCompactLayoutActive && !selectedTitleListInlineActive;
   const catalogHeader = (
     <div className="relative min-h-[3.25rem] shrink-0 px-4 pb-0 pt-2 sm:min-h-[4.5rem] sm:px-5 lg:px-6">
-      <div className="flex min-w-0 items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-[22px] font-bold leading-tight tracking-normal text-[var(--scry-ink2)]">
             {mediaTitle}
@@ -3298,16 +3308,7 @@ export function MediaContentView({
             {mediaSummary}
           </p>
         </div>
-        <div
-          className={cn(
-            "shrink-0 sm:absolute sm:right-4 sm:z-10 lg:right-5",
-            showTitleBulkSelectionBar
-              ? "sm:top-3"
-              : "sm:top-1/2 sm:-translate-y-1/2",
-          )}
-        >
-          {titleTableViewControls}
-        </div>
+        <div className="ml-auto shrink-0">{titleTableViewControls}</div>
       </div>
       {showTitleBulkSelectionBar ? (
         <div className="mt-4">
@@ -4153,7 +4154,7 @@ export function MediaContentView({
                             selectedTitleListInlineActive ||
                               selectedTitlePosterInlineActive
                               ? "grid h-full items-stretch"
-                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[981px]:overflow-hidden",
+                              : "flex min-h-0 flex-1 flex-col overflow-visible min-[1280px]:overflow-hidden",
                           )
                         : "grid min-h-0 gap-4",
                       !selectedTitleLayoutActive &&
