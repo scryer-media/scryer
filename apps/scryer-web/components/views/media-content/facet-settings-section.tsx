@@ -137,7 +137,7 @@ export function FacetSettingsSection({
           </>
         ) : null}
       </div>
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-4">
           <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[13px] border border-[var(--scry-baccent)] bg-[linear-gradient(135deg,rgba(var(--scry-accent-rgb),0.35),rgba(123,91,255,0.22))] text-[var(--scry-accent-text)]">
             <Icon className="h-[23px] w-[23px]" />
@@ -149,7 +149,7 @@ export function FacetSettingsSection({
           </div>
         </div>
         {headerStatus || showSecondaryNav ? (
-          <div className="flex shrink-0 items-center gap-2.5">
+          <div className="ml-auto flex shrink-0 items-center gap-2.5">
             {headerStatus}
             {showSecondaryNav ? (
               <div
