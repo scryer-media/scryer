@@ -1287,11 +1287,12 @@ function SeriesOverviewViewImpl({
               ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
               : "relative overflow-hidden p-0"
           }
-          style={
-            overviewBackdropUrl
+          style={{
+            ...(overviewBackdropUrl
               ? { backdropFilter: "none", WebkitBackdropFilter: "none" }
-              : undefined
-          }
+              : null),
+            ...(fullBleedHero ? { boxShadow: "none" } : null),
+          }}
         >
           {overviewBackdropUrl ? (
             <div
