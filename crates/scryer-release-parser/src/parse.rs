@@ -3618,10 +3618,11 @@ fn release_group_suffix_range(
             break;
         };
         let hyphen_joined = previous.separator_before == SeparatorKind::Hyphen;
-        // A dot starts a compound group, unlike a hyphen-delimited tag before
-        // a terminal group (`.Files-x` versus `-Goki-TAoE`).
+        // A single-letter suffix can continue a dot-delimited group (`.Files-x`).
+        // Otherwise preserve the terminal-group convention (`.Tag-GROUP`).
         let dot_delimited_compound = previous.separator_before == SeparatorKind::Dot
-            && tokens[start_token].separator_before == SeparatorKind::Hyphen;
+            && tokens[start_token].separator_before == SeparatorKind::Hyphen
+            && tokens[start_token].raw.len() == 1;
         let current_depth = tokens
             .get(start_token)
             .map(|token| token.bracket_depth)

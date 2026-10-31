@@ -2955,6 +2955,35 @@ fn release_group_preserves_dotted_and_hyphenated_suffixes() {
 }
 
 #[test]
+fn release_group_keeps_dot_separated_tags_out_of_terminal_group() {
+    for facet in [
+        ContextFacetHint::Movie,
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+    ] {
+        for tag in ["TextTag", "iNTERNAL", "RERiP", "NFO", "Goki"] {
+            let raw = format!("Quiet.Meridian.2026.WEB-DL.1080p.{tag}-TAoE");
+            let analysis = analyze_release_for_target(&raw, &context(facet, "Quiet Meridian"));
+            let candidate = analysis.best_candidate().expect("best candidate");
+            assert_eq!(
+                candidate.projected.release_group.as_deref(),
+                Some("TAoE"),
+                "{raw}"
+            );
+            let span = candidate.zones.release_group_span.expect("group span");
+            assert_eq!(
+                analysis.tokens[span.start_token..span.end_token]
+                    .iter()
+                    .map(|token| token.raw.as_str())
+                    .collect::<Vec<_>>(),
+                ["TAoE"],
+                "{raw}"
+            );
+        }
+    }
+}
+
+#[test]
 fn release_group_preserves_dot_delimited_compound_and_its_token_span() {
     for facet in [
         ContextFacetHint::Movie,
