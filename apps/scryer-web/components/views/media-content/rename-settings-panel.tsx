@@ -1592,7 +1592,7 @@ export function RenameSettingsPanel({
                     onChange={handleUseSeasonFoldersChange}
                   />
                 </div>
-                <div className="grid gap-5 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-5 @xl/facet-page:grid-cols-2">
                   <div className="space-y-3">
                     <div className="space-y-2.5">
                       <Label className="text-sm text-card-foreground">
@@ -1736,7 +1736,7 @@ export function RenameSettingsPanel({
               </div>
 
               <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 @xl/facet-page:grid-cols-2">
                   <label className="space-y-2">
                     <Label className="text-sm text-card-foreground">
                       {t("settings.renameCollisionPolicyLabel")}

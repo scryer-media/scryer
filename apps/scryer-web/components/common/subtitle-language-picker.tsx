@@ -250,7 +250,7 @@ export const SubtitleLanguagePicker = React.memo(
               ) : (
                 <span className="flex min-w-0 flex-1 flex-wrap gap-1">
                   {value.length === 0 ? (
-                    <span className="text-muted-foreground">
+                    <span className="min-w-0 truncate text-muted-foreground">
                       {t("settings.sub.languagePickerSelect")}
                     </span>
                   ) : (

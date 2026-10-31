@@ -1322,11 +1322,11 @@ export const MediaLibrarySettingsPanel = React.memo(
       <>
         {secondaryNavTarget
           ? createPortal(
-              <div>
-                <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)]">
+              <div className="flex flex-wrap items-center gap-2 @6xl/facet-shell:block">
+                <div className="w-full px-1 text-[11px] font-bold uppercase tracking-[0.05em] text-[var(--scry-faint2)] @6xl/facet-shell:mb-2">
                   {t("settings.librariesLabel")}
                 </div>
-                <ul className="space-y-1">
+                <ul className="flex flex-wrap gap-2 @6xl/facet-shell:block @6xl/facet-shell:space-y-1">
                   {libraries.map((library) => {
                     const active =
                       mode !== "new" && selectedValue === library.id;
@@ -1372,7 +1372,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                     disabled={actionBusy}
                     aria-current={mode === "new" ? "true" : undefined}
                     className={cn(
-                      "mt-2 w-full justify-start",
+                      "justify-start @6xl/facet-shell:mt-2 @6xl/facet-shell:w-full",
                       mode === "new" &&
                         "bg-[rgba(var(--scry-accent-rgb),0.16)]",
                     )}
@@ -1487,17 +1487,17 @@ export const MediaLibrarySettingsPanel = React.memo(
                           id={selectorId("media-library-root-row", rf.path)}
                           className="space-y-1"
                         >
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 sm:flex-nowrap sm:py-1.5">
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-bg)] py-2 pl-3.5 pr-2 @xl/facet-page:flex-nowrap @xl/facet-page:py-1.5">
                             <div className="flex min-w-0 flex-1 items-center gap-2.5">
                               <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
                               <span
-                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] sm:truncate"
+                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
                                 title={rf.path}
                               >
                                 {rf.path}
                               </span>
                             </div>
-                            <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:shrink-0 sm:flex-nowrap">
+                            <div className="order-last flex w-full flex-wrap items-center gap-2 @xl/facet-page:order-none @xl/facet-page:w-auto @xl/facet-page:shrink-0 @xl/facet-page:flex-nowrap">
                               {pathIsInvalid ? (
                                 <span
                                   className="shrink-0 rounded-[7px] border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-destructive"
@@ -1607,7 +1607,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                 title={t("settings.mediaProfilesTitle")}
                 description={t("settings.mediaProfilesHelp")}
               >
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                   <div className="space-y-2">
                     <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
                     <AudioLanguagePicker
@@ -1645,7 +1645,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftMetadataLanguage}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1675,7 +1675,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftUseSeasonFolders}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1708,7 +1708,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftQualityProfileId}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1741,7 +1741,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftScoringPersona}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1824,7 +1824,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                     "settings.libraryMovieAvailabilityDescription",
                   )}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                     <div className="space-y-2">
                       <Label htmlFor="library-movie-default-availability">
                         {t("settings.movieDefaultAvailability")}
@@ -1834,7 +1834,10 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMovieAvailability}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger id="library-movie-default-availability">
+                        <SelectTrigger
+                          id="library-movie-default-availability"
+                          className="w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1916,8 +1919,8 @@ export const MediaLibrarySettingsPanel = React.memo(
               >
                 <div
                   className={cn(
-                    "grid gap-5",
-                    canManageDownloadClientRouting && "md:grid-cols-2",
+                    "grid grid-cols-1 gap-5",
+                    canManageDownloadClientRouting && "@xl/facet-page:grid-cols-2",
                   )}
                 >
                   <div className="space-y-2">
@@ -1927,7 +1930,10 @@ export const MediaLibrarySettingsPanel = React.memo(
                       onValueChange={setDraftImportMode}
                       disabled={settingsBusy}
                     >
-                      <SelectTrigger id="media-library-import-mode-trigger">
+                      <SelectTrigger
+                        id="media-library-import-mode-trigger"
+                        className="w-full"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1955,7 +1961,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       </EffectiveChip>
                     ) : null}
                     {showUnixPermissions ? (
-                      <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-3 pt-2 @md/facet-page:grid-cols-2">
                         <div className="space-y-2">
                           <Label>
                             {t("settings.setPermissionsLinuxLabel")}
@@ -1965,7 +1971,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                             onValueChange={setDraftSetPermissionsLinux}
                             disabled={settingsBusy}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger className="w-full">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -2143,7 +2149,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         }}
                         disabled={settingsBusy || downloadClientRoutingBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2181,7 +2187,7 @@ export const MediaLibrarySettingsPanel = React.memo(
               >
                 <div>
                   <div
-                    className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+                    className={`grid grid-cols-1 gap-3 ${showPlexmatch ? "@xl/facet-page:grid-cols-2" : ""}`}
                   >
                     <div className="space-y-2">
                       <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
@@ -2190,7 +2196,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftNfoWriteOnImport}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2226,7 +2232,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                           onValueChange={setDraftPlexmatchWriteOnImport}
                           disabled={settingsBusy}
                         >
-                          <SelectTrigger>
+                          <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -2265,7 +2271,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                   icon={SlidersVertical}
                   title={t("settings.animeSettings")}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
                     <div className="space-y-2">
                       <Label>{t("settings.fillerPolicyLabel")}</Label>
                       <Select
@@ -2273,7 +2279,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftFillerPolicy}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2304,7 +2310,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftRecapPolicy}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2335,7 +2341,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMonitorSpecials}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2365,7 +2371,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftInterSeasonMovies}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2395,7 +2401,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                         onValueChange={setDraftMonitorFillerMovies}
                         disabled={settingsBusy}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>

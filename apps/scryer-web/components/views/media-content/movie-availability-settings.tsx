@@ -115,7 +115,7 @@ export function MovieAvailabilitySettingsFields() {
 
   return (
     <div id="settings-movie-availability" className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 @xl/facet-page:grid-cols-2 @3xl/facet-page:grid-cols-3">
         <div className="space-y-2">
           <Label htmlFor="settings-movie-default-availability">
             {t("settings.movieDefaultAvailability")}
