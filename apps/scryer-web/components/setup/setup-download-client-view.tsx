@@ -151,7 +151,7 @@ export function SetupDownloadClientView({
             id="setup-download-client-name"
             value={draft.name}
             onChange={(e) => onDraftChange({ name: e.target.value })}
-            placeholder="My Download Client"
+            placeholder={t("uiAttr.My_Download_Client")}
           />
         </div>
         <div className="space-y-2">
@@ -238,7 +238,7 @@ export function SetupDownloadClientView({
             />
             {normalizedClientType === "weaver" ? (
               <p className="text-xs text-muted-foreground">
-                Create an integration API key in Weaver:{" "}
+                {t("uiText.createAnIntegrationAPIKeyInWeaver")}{" "}
                 {weaverApiKeyUrl ? (
                   <a
                     href={weaverApiKeyUrl}
@@ -246,10 +246,12 @@ export function SetupDownloadClientView({
                     rel="noreferrer"
                     className="underline underline-offset-4 hover:text-foreground"
                   >
-                    open Weaver security settings
+                    {t("uiText.openWeaverSecuritySettings")}
                   </a>
                 ) : (
-                  <span>finish the Weaver URL above to generate the link.</span>
+                  <span>
+                    {t("uiText.finishTheWeaverURLAboveToGenerateTheLink")}
+                  </span>
                 )}
               </p>
             ) : normalizedClientType === "sabnzbd" ? (

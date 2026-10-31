@@ -50,17 +50,21 @@ function errorMessage(
   return userFacingGraphQlErrorMessage(error, fallback, translate);
 }
 
-function apiKeyStatus(key: ApiKeySummary, canCreate: boolean) {
+function apiKeyStatus(
+  key: ApiKeySummary,
+  canCreate: boolean,
+  t: (key: string) => string,
+) {
   if (key.revokedAt) {
-    return { label: "Revoked", tone: "negative" as const };
+    return { label: t("apiKeys.ui.Revoked"), tone: "negative" as const };
   }
   if (key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) {
-    return { label: "Expired", tone: "warning" as const };
+    return { label: t("apiKeys.ui.Expired"), tone: "warning" as const };
   }
   if (!canCreate) {
-    return { label: "Policy disabled", tone: "warning" as const };
+    return { label: t("apiKeys.ui.Policy_disabled"), tone: "warning" as const };
   }
-  return { label: "Active", tone: "positive" as const };
+  return { label: t("apiKeys.ui.Active"), tone: "positive" as const };
 }
 
 function formatTimestamp(value: string, dateTimeFormat: UiDateTimeFormat) {
@@ -198,7 +202,7 @@ export function ApiKeysPanel({
     if (busy) return;
     const trimmedLabel = label.trim();
     if (!trimmedLabel) {
-      setStatus("Enter a name for this API key.");
+      setStatus(t("apiKeys.ui.Enter_a_name_for_this_API_key"));
       return;
     }
     setBusy(true);
@@ -254,7 +258,7 @@ export function ApiKeysPanel({
     }
     try {
       if (!navigator.clipboard) {
-        throw new Error("Clipboard access is unavailable.");
+        throw new Error(t("apiKeys.ui.Clipboard_access_is_unavailable"));
       }
       await navigator.clipboard.writeText(revealed);
       setRevealedCopied(true);
@@ -341,7 +345,7 @@ export function ApiKeysPanel({
               aria-hidden="true"
             />
             <h3 className="text-base font-semibold text-[var(--scry-ink2)]">
-              API keys
+              {t("uiText.aPIKeys")}
             </h3>
           </div>
         </div>
@@ -364,10 +368,10 @@ export function ApiKeysPanel({
               />
               <div>
                 <p className="font-medium text-[var(--scry-warning-text)]">
-                  Copy this key now
+                  {t("uiText.copyThisKeyNow")}
                 </p>
                 <p className="text-xs leading-5 text-[var(--scry-muted3)]">
-                  For your security, Scryer will not display it again.
+                  {t("uiText.forYourSecurityScryerWillNotDisplayItAgain")}
                 </p>
               </div>
             </div>
@@ -377,7 +381,7 @@ export function ApiKeysPanel({
                 value={revealed}
                 size={revealed.length + 2}
                 id="settings-profile-api-key-revealed"
-                aria-label="New API key"
+                aria-label={t("uiAttr.New_API_key")}
                 className="h-10 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
               <Button
@@ -385,7 +389,11 @@ export function ApiKeysPanel({
                 variant="outline"
                 size="icon-sm"
                 className={`-ml-px h-10 shrink-0 rounded-l-none ${revealedCopied ? "text-emerald-600 dark:text-emerald-300" : ""}`}
-                aria-label={revealedCopied ? "API key copied" : "Copy API key"}
+                aria-label={
+                  revealedCopied
+                    ? t("apiKeys.ui.API_key_copied")
+                    : t("apiKeys.ui.Copy_API_key")
+                }
                 onClick={() => void copyRevealedKey()}
               >
                 {revealedCopied ? (
@@ -398,7 +406,7 @@ export function ApiKeysPanel({
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={() => void copyRevealedKey()}>
                 <Clipboard aria-hidden="true" />
-                Copy key
+                {t("uiText.copyKey")}
               </Button>
               <Button
                 type="button"
@@ -406,7 +414,7 @@ export function ApiKeysPanel({
                 id="settings-profile-api-key-dismiss"
                 onClick={() => setRevealed(null)}
               >
-                Dismiss
+                {t("label.dismiss")}
               </Button>
             </div>
           </div>
@@ -425,30 +433,30 @@ export function ApiKeysPanel({
                 htmlFor="settings-profile-api-key-name"
                 className="min-h-5"
               >
-                Name
+                {t("label.name")}
               </Label>
               <Input
                 id="settings-profile-api-key-name"
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
                 maxLength={120}
-                placeholder="e.g. Home automation"
+                placeholder={t("uiAttr.e_g_Home_automation")}
                 disabled={busy}
                 className="h-10"
               />
             </div>
             <SingleSelectField
               id="settings-profile-api-key-expiry"
-              label="Expires"
+              label={t("uiAttr.Expires")}
               value={expiry}
               onValueChange={setExpiry}
               disabled={busy}
               labelClassName="flex min-h-5 items-center leading-none"
               options={[
-                { value: "DAYS_30", label: "30 days" },
-                { value: "DAYS_90", label: "90 days" },
-                { value: "DAYS_365", label: "1 year" },
-                { value: "NEVER", label: "Never" },
+                { value: "DAYS_30", label: t("apiKeys.ui.30_days") },
+                { value: "DAYS_90", label: t("apiKeys.ui.90_days") },
+                { value: "DAYS_365", label: t("apiKeys.ui.1_year") },
+                { value: "NEVER", label: t("apiKeys.ui.Never") },
               ]}
             />
             <div className="space-y-0 sm:space-y-1.5">
@@ -456,7 +464,7 @@ export function ApiKeysPanel({
                 aria-hidden="true"
                 className="invisible hidden min-h-5 items-center text-sm font-medium leading-none sm:flex"
               >
-                Action
+                {t("settings.maintenanceRuleAction")}
               </span>
               <Button
                 id="settings-profile-api-key-create"
@@ -465,7 +473,9 @@ export function ApiKeysPanel({
                 className="h-10 w-full sm:w-auto"
               >
                 {busy ? <LoadingMark /> : <KeyRound aria-hidden="true" />}
-                {busy ? "Creating…" : "Create API key"}
+                {busy
+                  ? t("apiKeys.ui.Creating")
+                  : t("apiKeys.ui.Create_API_key")}
               </Button>
             </div>
           </form>
@@ -475,23 +485,23 @@ export function ApiKeysPanel({
               className="mt-0.5 h-4 w-4 shrink-0"
               aria-hidden="true"
             />
-            API key creation is disabled by the current security policy.
+            {t("uiText.aPIKeyCreationIsDisabledByTheCurrentSecurityPolicy")}
           </div>
         ) : null}
 
         {!loaded ? (
           <div className="flex items-center gap-2 py-2 text-sm text-[var(--scry-muted3)]">
             <LoadingMark className="h-4 w-4" />
-            Loading API keys…
+            {t("uiText.loadingAPIKeys")}
           </div>
         ) : keys.length === 0 ? (
           <div className="rounded-[12px] border border-dashed border-[var(--scry-border2)] px-4 py-6 text-center text-sm text-[var(--scry-muted3)]">
-            No API keys yet.
+            {t("uiText.noAPIKeysYet")}
           </div>
         ) : (
           <div className="space-y-3">
             {keys.map((key) => {
-              const keyStatus = apiKeyStatus(key, canCreate);
+              const keyStatus = apiKeyStatus(key, canCreate, t);
               return (
                 <div
                   key={key.id}
@@ -504,36 +514,46 @@ export function ApiKeysPanel({
                       </span>
                       <Badge tone={keyStatus.tone}>{keyStatus.label}</Badge>
                       {key.provisioningSource === "environment" ? (
-                        <Badge tone="info">Managed</Badge>
+                        <Badge tone="info">
+                          {t("settings.managedIndexerBadge")}
+                        </Badge>
                       ) : null}
                     </div>
                     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
                       <div className="min-w-0">
-                        <dt className="text-[var(--scry-muted3)]">Actor</dt>
+                        <dt className="text-[var(--scry-muted3)]">
+                          {t("history.actor")}
+                        </dt>
                         <dd className="truncate font-[var(--font-code)] text-[var(--scry-ink2)]">
                           {key.actor}
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-[var(--scry-muted3)]">Created</dt>
+                        <dt className="text-[var(--scry-muted3)]">
+                          {t("settings.externalAccountInviteCreatedAt")}
+                        </dt>
                         <dd className="text-[var(--scry-ink2)]">
                           {formatTimestamp(key.createdAt, dateTimeFormat)}
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-[var(--scry-muted3)]">Expires</dt>
+                        <dt className="text-[var(--scry-muted3)]">
+                          {t("uiText.expires")}
+                        </dt>
                         <dd className="text-[var(--scry-ink2)]">
                           {key.expiresAt
                             ? formatTimestamp(key.expiresAt, dateTimeFormat)
-                            : "Never"}
+                            : t("apiKeys.ui.Never")}
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-[var(--scry-muted3)]">Last used</dt>
+                        <dt className="text-[var(--scry-muted3)]">
+                          {t("indexerClients.lastUsed")}
+                        </dt>
                         <dd className="text-[var(--scry-ink2)]">
                           {key.lastUsedAt
                             ? formatTimestamp(key.lastUsedAt, dateTimeFormat)
-                            : "Never"}
+                            : t("apiKeys.ui.Never")}
                         </dd>
                       </div>
                     </dl>
@@ -541,7 +561,7 @@ export function ApiKeysPanel({
                   {key.provisioningSource === "environment" ? (
                     <div className="flex items-center gap-1.5 text-xs text-[var(--scry-muted3)]">
                       <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                      Managed by Scryer
+                      {t("uiText.managedByScryer")}
                     </div>
                   ) : !key.revokedAt ? (
                     <Button
@@ -556,7 +576,9 @@ export function ApiKeysPanel({
                       ) : (
                         <Trash2 aria-hidden="true" />
                       )}
-                      {revokingId === key.id ? "Revoking…" : "Revoke"}
+                      {revokingId === key.id
+                        ? t("apiKeys.ui.Revoking")
+                        : t("apiKeys.ui.Revoke")}
                     </Button>
                   ) : null}
                 </div>
@@ -568,14 +590,14 @@ export function ApiKeysPanel({
 
       <ConfirmDialog
         open={pendingRevoke !== null}
-        title="Revoke API key?"
+        title={t("uiAttr.Revoke_API_key")}
         description={
           pendingRevoke
             ? `“${pendingRevoke.label}” will stop working immediately. This cannot be undone.`
             : ""
         }
-        confirmLabel="Revoke key"
-        cancelLabel="Cancel"
+        confirmLabel={t("uiAttr.Revoke_key")}
+        cancelLabel={t("uiAttr.Cancel")}
         isBusy={pendingRevoke ? revokingId === pendingRevoke.id : false}
         onCancel={() => setPendingRevoke(null)}
         onConfirm={() => {

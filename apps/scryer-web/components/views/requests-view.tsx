@@ -391,7 +391,7 @@ function requestStatusLabel(
     case "APPROVED":
       return t("requests.status.approved");
     case "REJECTED":
-      return "Dismissed";
+      return t("requests.status.dismissed");
     case "CANCELED":
       return t("requests.status.canceled");
     default:
@@ -435,24 +435,27 @@ function requestStatusTone(
   }
 }
 
-function statusFilterOptions(mode: RequestsMode): Array<{
+function statusFilterOptions(
+  mode: RequestsMode,
+  t: ReturnType<typeof useTranslate>,
+): Array<{
   value: RequestStatusFilter;
   label: string;
 }> {
   if (mode === "admin") {
     return [
-      { value: "PENDING", label: "Pending" },
-      { value: "APPROVED", label: "Approved" },
-      { value: "REJECTED", label: "Dismissed" },
+      { value: "PENDING", label: t("requests.status.pending") },
+      { value: "APPROVED", label: t("requests.status.approved") },
+      { value: "REJECTED", label: t("requests.status.dismissed") },
     ];
   }
 
   return [
-    { value: "all", label: "All" },
-    { value: "PENDING", label: "Pending" },
-    { value: "APPROVED", label: "Approved" },
-    { value: "REJECTED", label: "Dismissed" },
-    { value: "CANCELED", label: "Canceled" },
+    { value: "all", label: t("label.all") },
+    { value: "PENDING", label: t("requests.status.pending") },
+    { value: "APPROVED", label: t("requests.status.approved") },
+    { value: "REJECTED", label: t("requests.status.dismissed") },
+    { value: "CANCELED", label: t("requests.status.canceled") },
   ];
 }
 
@@ -764,12 +767,14 @@ export function RequestsView({
   const dateTimeFormat = useUiDateTimeFormat();
   const showModeSwitch = canShowAdminMode && canShowRequesterMode;
   const HeadingIcon = mode === "admin" ? Inbox : Clock;
-  const headingTitle = mode === "admin" ? "Request Queue" : "My Requests";
+  const headingTitle = t(
+    mode === "admin" ? "requests.queueTitle" : "requests.myTitle",
+  );
   const headingCopy =
     mode === "admin"
       ? null
       : "Track the titles you've asked Scryer to grab. You'll be notified when they're available.";
-  const filters = statusFilterOptions(mode);
+  const filters = statusFilterOptions(mode, t);
   const [adminFacetFilters, setAdminFacetFilters] = React.useState<
     Record<RequestFacetFilter, boolean>
   >({ MOVIE: true, SERIES: true, ANIME: true });
@@ -1357,7 +1362,7 @@ export function RequestsView({
               <div className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2">
                 <div className="mb-1 flex items-center gap-1.5 text-[var(--scry-faint)]">
                   <BookOpen className="h-3.5 w-3.5" />
-                  Library
+                  {t("nav.library")}
                 </div>
                 <div className="text-[var(--scry-ink2)]">{libraryLabel}</div>
               </div>
@@ -1479,7 +1484,7 @@ export function RequestsView({
               className="h-10 w-10 rounded-[11px] p-0"
               onClick={onRefresh}
               disabled={loading}
-              aria-label="Refresh requests"
+              aria-label={t("uiAttr.Refresh_requests")}
             >
               {loading ? (
                 <LoadingMark className="h-4 w-4" />
@@ -1493,7 +1498,7 @@ export function RequestsView({
         <div className="border-b border-[var(--scry-border3)]">
           <div
             role="group"
-            aria-label="Request filters"
+            aria-label={t("uiAttr.Request_filters")}
             className="relative top-px flex min-h-10 min-w-0 max-w-full flex-wrap items-center justify-start gap-x-5 gap-y-1 border-0 bg-transparent p-0 shadow-none"
           >
             {showModeSwitch ? (
@@ -1515,7 +1520,7 @@ export function RequestsView({
             {mode === "admin"
               ? (
                   [
-                    ["MOVIE", "Movie"],
+                    ["MOVIE", t("label.movie")],
                     ["SERIES", t("search.facetSeries")],
                     ["ANIME", t("search.facetAnime")],
                   ] as Array<[RequestFacetFilter, string]>

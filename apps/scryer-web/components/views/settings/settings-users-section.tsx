@@ -304,7 +304,7 @@ export function SettingsUsersSection({
                                 user.username,
                                 "section",
                               )}
-                              title="Permissions"
+                              title={t("uiAttr.Permissions")}
                             >
                               <PermissionDropdowns
                                 libraries={libraries}

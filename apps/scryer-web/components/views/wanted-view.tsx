@@ -935,7 +935,7 @@ function WantedItemsCard({
                     {t("wanted.colTitle")}
                   </TableHead>
                   <TableHead className="min-w-[112px] text-center">
-                    Library
+                    {t("nav.library")}
                   </TableHead>
                   <TableHead className="min-w-[80px] text-center">
                     {t("wanted.colType")}
@@ -1513,7 +1513,9 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         <div className="mt-3 grid gap-2 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-bg)] p-3 text-xs">
                           <div>
                             <span className="block text-muted-foreground">
-                              Title ID
+                              {t(
+                                "settings.notificationScopeIdPlaceholderTitle",
+                              )}
                             </span>
                             <span className="break-all text-foreground">
                               {item.titleId}
@@ -1521,7 +1523,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                           </div>
                           <div>
                             <span className="block text-muted-foreground">
-                              Wanted Item
+                              {t("uiText.wantedItem")}
                             </span>
                             <span className="break-all text-foreground">
                               {item.wantedItemId}
@@ -1719,7 +1721,9 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                               <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
                                 <div>
                                   <span className="block text-muted-foreground">
-                                    Title ID
+                                    {t(
+                                      "settings.notificationScopeIdPlaceholderTitle",
+                                    )}
                                   </span>
                                   <span className="break-all text-foreground">
                                     {item.titleId}
@@ -1727,7 +1731,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                                 </div>
                                 <div>
                                   <span className="block text-muted-foreground">
-                                    Wanted Item
+                                    {t("uiText.wantedItem")}
                                   </span>
                                   <span className="break-all text-foreground">
                                     {item.wantedItemId}

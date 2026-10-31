@@ -191,7 +191,7 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
                 {t("system.auditTitle")}
               </h2>
               <p className={`text-sm ${AUDIT_MUTED_TEXT_CLASS}`}>
-                {events.length} events loaded
+                {events.length} {t("uiText.eventsLoaded")}
               </p>
             </div>
             <Button

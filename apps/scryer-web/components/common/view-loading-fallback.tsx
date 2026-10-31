@@ -1,6 +1,8 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 export function ViewLoadingFallback() {
+  const t = useTranslate();
   return (
     <div
       className="flex min-h-[18rem] items-center justify-center px-6 py-12 text-[var(--scry-body)]"
@@ -12,7 +14,7 @@ export function ViewLoadingFallback() {
           <LoadingMark className="h-4 w-4" />
         </span>
         <span className="text-sm font-medium text-[var(--scry-muted)]">
-          Loading view…
+          {t("uiText.loadingView")}
         </span>
       </div>
     </div>

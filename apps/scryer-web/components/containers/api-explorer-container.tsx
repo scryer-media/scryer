@@ -85,7 +85,7 @@ export default function ApiExplorerContainer() {
   return (
     <section
       className="scryer-api-explorer flex h-[calc(100dvh-5rem)] min-h-[32rem] flex-col gap-4 p-4 sm:p-6"
-      aria-label="API explorer"
+      aria-label={t("uiAttr.API_explorer")}
     >
       <div className="flex flex-wrap items-center gap-x-6 gap-y-4 rounded-xl border border-border bg-card px-5 py-4">
         <div className="flex items-center gap-3">
