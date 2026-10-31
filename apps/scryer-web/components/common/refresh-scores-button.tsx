@@ -118,7 +118,7 @@ export function RefreshScoresButton({
           variant={appearance === "menu" ? "ghost" : "outline"}
           id={id}
           className={cn(
-            appearance === "menu" && "flex-1 justify-start",
+            appearance === "menu" && "flex-1 justify-end",
             className,
           )}
           disabled={blocked}

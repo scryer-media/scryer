@@ -106,7 +106,7 @@ function SeasonActionsMenuItem(
       type="button"
       size="sm"
       variant="ghost"
-      className="w-full justify-start"
+      className="w-full justify-end"
       {...props}
     />
   );
@@ -760,7 +760,12 @@ function SeasonSectionImpl({
               </Popover>
             ) : null}
           </div>
-          <div className="flex items-center gap-2 empty:hidden">
+          <div
+            className={cn(
+              "flex items-center gap-2 empty:hidden",
+              actionsInMenu && "ml-auto",
+            )}
+          >
             {collectionSizeLabel ? (
               <span className="text-xs tabular-nums text-muted-foreground">
                 {collectionSizeLabel}
