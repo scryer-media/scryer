@@ -14,6 +14,7 @@ import {
 import { formatRuntimeFromMinutes } from "./helpers";
 import { TitleRatingsStrip } from "../title-ratings-strip";
 import { TitleCastStrip } from "../title-cast-strip";
+import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "../title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { SeriesMovieTagsEditor } from "@/components/common/title-tags-picker";
@@ -130,8 +131,10 @@ export function SeriesMoviePanel({
         </div>
       ) : null}
       {filesOnDisk}
-      <TitleCastStrip credits={titleCastOriginalCredits(movie.credits)} />
-      <TitleDubCastStrip credits={movie.credits} />
+      <HorizontalRailScrollGroup>
+        <TitleCastStrip credits={titleCastOriginalCredits(movie.credits)} />
+        <TitleDubCastStrip credits={movie.credits} />
+      </HorizontalRailScrollGroup>
     </div>
   );
 }

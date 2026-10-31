@@ -72,6 +72,7 @@ import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { TitleCastStrip } from "@/components/views/title-cast-strip";
+import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
@@ -1656,12 +1657,14 @@ function TitleContextPanel({
             onAction={onDiscoveryAction}
           />
 
-          <TitleCastStrip
-            credits={titleCastOriginalCredits(title.credits)}
-            variant="workspace"
-          />
+          <HorizontalRailScrollGroup>
+            <TitleCastStrip
+              credits={titleCastOriginalCredits(title.credits)}
+              variant="workspace"
+            />
 
-          <TitleDubCastStrip credits={title.credits} variant="workspace" />
+            <TitleDubCastStrip credits={title.credits} variant="workspace" />
+          </HorizontalRailScrollGroup>
 
           <TitleBlockedReleasesSection
             key={title.id}

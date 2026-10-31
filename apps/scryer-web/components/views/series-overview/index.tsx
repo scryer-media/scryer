@@ -80,6 +80,7 @@ import {
   type TitleMoreLikeThisStripActions,
 } from "../title-more-like-this-strip";
 import { TitleCastStrip } from "../title-cast-strip";
+import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "../title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "../title-ratings-strip";
@@ -1831,9 +1832,11 @@ function SeriesOverviewViewImpl({
           {...moreLikeThisActions}
         />
 
-        <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
+        <HorizontalRailScrollGroup>
+          <TitleCastStrip credits={titleCastOriginalCredits(title.credits)} />
 
-        <TitleDubCastStrip credits={title.credits} />
+          <TitleDubCastStrip credits={title.credits} />
+        </HorizontalRailScrollGroup>
 
         <TitleBlockedReleasesSection
           key={title.id}

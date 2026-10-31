@@ -2,10 +2,32 @@ import * as React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import {
+  createRailScrollGroup,
+  type RailScrollGroup,
+} from "@/lib/utils/rail-scroll-group";
 
 /** The round arrow that pages a scroll container toward its hidden content. */
 export const SCROLL_FADE_CONTROL_CLASS =
   "absolute z-20 inline-flex size-14 items-center justify-center rounded-full border-[3px] border-[var(--scry-ink2)] bg-[var(--scry-bg)] text-[var(--scry-ink2)] shadow-[0_8px_28px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors hover:bg-[var(--scry-card2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]";
+
+const HorizontalRailScrollContext = React.createContext<RailScrollGroup | null>(
+  null,
+);
+
+/** Every HorizontalRail inside scrolls as one, so their columns stay aligned. */
+export function HorizontalRailScrollGroup({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [group] = React.useState(createRailScrollGroup);
+  return (
+    <HorizontalRailScrollContext.Provider value={group}>
+      {children}
+    </HorizontalRailScrollContext.Provider>
+  );
+}
 
 type HorizontalRailProps = {
   children: React.ReactNode;
@@ -24,6 +46,7 @@ export function HorizontalRail({
   scrollControlLabel = "Scroll right",
   scrollBackControlLabel = "Scroll left",
 }: HorizontalRailProps) {
+  const scrollGroup = React.useContext(HorizontalRailScrollContext);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const overflowRef = React.useRef({
     maxScrollLeft: 0,
@@ -66,8 +89,9 @@ export function HorizontalRail({
   const handleScroll = React.useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
       updateControls(event.currentTarget.scrollLeft);
+      scrollGroup?.scrolled(event.currentTarget);
     },
-    [updateControls],
+    [scrollGroup, updateControls],
   );
 
   const scrollByPage = React.useCallback((direction: 1 | -1) => {
@@ -81,6 +105,15 @@ export function HorizontalRail({
       behavior: "smooth",
     });
   }, []);
+
+  React.useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || !scrollGroup) {
+      return;
+    }
+
+    return scrollGroup.add(element);
+  }, [scrollGroup]);
 
   React.useEffect(() => {
     const element = scrollRef.current;
