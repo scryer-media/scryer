@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   episodeAvailabilityPill,
-  episodeCardAvailabilityPill,
+  episodeRowAvailabilityPill,
   type EpisodeMediaAvailability,
 } from "./episode-media-availability.ts";
 
@@ -53,13 +53,21 @@ test("episode availability maps every compact state to its collapsed-row pill", 
   );
 });
 
-test("episode cards report an unmonitored episode with no file as missing", () => {
+test("episode rows report files and missing episodes as muted", () => {
   assert.deepEqual(
-    episodeCardAvailabilityPill(availability("UNMONITORED"), translate),
-    { tone: "warning", label: "Missing" },
+    episodeRowAvailabilityPill(availability("UNMONITORED"), translate),
+    { tone: "warning", label: "Missing", muted: true },
   );
   assert.deepEqual(
-    episodeCardAvailabilityPill(availability("AVAILABLE", "720p"), translate),
-    { tone: "positive", label: "720p" },
+    episodeRowAvailabilityPill(availability("MISSING"), translate),
+    { tone: "warning", label: "Missing", muted: true },
+  );
+  assert.deepEqual(
+    episodeRowAvailabilityPill(availability("AVAILABLE", "720p"), translate),
+    { tone: "positive", label: "720p", muted: true },
+  );
+  assert.deepEqual(
+    episodeRowAvailabilityPill(availability("PENDING_SCAN"), translate),
+    { tone: "warning", label: "Pending scan", muted: false },
   );
 });
