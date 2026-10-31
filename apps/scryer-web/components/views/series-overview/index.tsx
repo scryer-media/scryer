@@ -1334,7 +1334,13 @@ function SeriesOverviewViewImpl({
               </IconButton>
             ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
-              <div className="mx-auto shrink-0 sm:mx-0">
+              <div
+                className={
+                  heroLeadingAction
+                    ? "mx-auto shrink-0 sm:mx-0 sm:mt-2"
+                    : "mx-auto shrink-0 sm:mx-0"
+                }
+              >
                 <TitlePosterSlot
                   src={title.posterUrl}
                   metadataFetchedAt={title.metadataFetchedAt}

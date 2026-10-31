@@ -72,12 +72,20 @@ export function TitleWorkspaceHero({
 }
 
 export function TitleWorkspacePosterFrame({
+  belowLeadingAction = false,
   children,
 }: {
+  /** Drops the poster clear of the hero's leading action once they share a column. */
+  belowLeadingAction?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative mx-auto h-[300px] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] shadow-[0_4px_14px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_22px_rgba(0,0,0,0.5)] sm:mx-0">
+    <div
+      className={cn(
+        "relative mx-auto h-[300px] w-[200px] shrink-0 overflow-hidden rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] shadow-[0_4px_14px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_22px_rgba(0,0,0,0.5)] sm:mx-0",
+        belowLeadingAction && "sm:mt-7",
+      )}
+    >
       {children}
     </div>
   );

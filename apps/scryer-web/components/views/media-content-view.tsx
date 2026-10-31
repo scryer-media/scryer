@@ -1382,7 +1382,9 @@ function TitleContextPanel({
               ) : null
             }
           >
-            <TitleWorkspacePosterFrame>
+            <TitleWorkspacePosterFrame
+              belowLeadingAction={Boolean(titleListDisclosure)}
+            >
               <TitlePosterSlot
                 src={posterUrl}
                 metadataFetchedAt={title.metadataFetchedAt}
