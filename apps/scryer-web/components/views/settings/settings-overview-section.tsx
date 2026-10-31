@@ -494,9 +494,9 @@ export function SettingsOverviewSection({
               id="settings-general-plugin-http-trust-toggle"
               type="button"
               variant="outline"
-              className="flex w-full items-center justify-between gap-3"
+              className="flex h-auto min-h-9 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1.5 whitespace-normal py-2"
             >
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 flex-wrap items-center gap-2">
                 <ShieldPlus className="h-4 w-4" />
                 <span className="text-left">
                   {t("settings.pluginHttpTrustTitle")}
@@ -508,7 +508,7 @@ export function SettingsOverviewSection({
                   {t("settings.pluginHttpTrustAdvancedLabel")}
                 </Badge>
               </span>
-              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
                 <span>
                   {generalSettings.pluginHttpTrustedCertificates.length > 0
                     ? t("settings.pluginHttpTrustStoredCount", {
