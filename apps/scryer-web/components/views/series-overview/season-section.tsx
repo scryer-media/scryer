@@ -106,7 +106,7 @@ function SeasonActionsMenuItem(
       type="button"
       size="sm"
       variant="ghost"
-      className="w-full justify-end"
+      className="w-full flex-row-reverse justify-start"
       {...props}
     />
   );
@@ -686,7 +686,7 @@ function SeasonSectionImpl({
                 </PopoverTrigger>
                 <PopoverContent
                   align="end"
-                  className="flex w-56 flex-col gap-0.5 p-1"
+                  className="flex w-max flex-col gap-0.5 p-1"
                   onKeyDown={(event) => event.stopPropagation()}
                   onClick={(event) => event.stopPropagation()}
                 >
@@ -733,7 +733,7 @@ function SeasonSectionImpl({
                       ) : (
                         <Zap className="h-4 w-4" />
                       )}
-                      {t("series.searchSeason")}
+                      {t("label.search")}
                     </SeasonActionsMenuItem>
                   ) : null}
                   {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
@@ -753,7 +753,7 @@ function SeasonSectionImpl({
                       ) : (
                         <Search className="h-4 w-4" />
                       )}
-                      {t("series.interactiveSearchSeason")}
+                      {t("label.interactiveSearch")}
                     </SeasonActionsMenuItem>
                   ) : null}
                 </PopoverContent>
