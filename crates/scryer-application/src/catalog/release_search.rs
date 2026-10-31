@@ -130,10 +130,7 @@ fn localized_search_names(title: &Title, languages: &[String]) -> Vec<String> {
         let mut localized = title
             .tagged_aliases
             .iter()
-            .filter(|alias| {
-                crate::normalize_detected_subtitle_language_code(&alias.language).as_ref()
-                    == Some(&language)
-            })
+            .filter(|alias| alias_search_language(alias).as_ref() == Some(&language))
             .map(|alias| alias.name.trim().to_string())
             .collect::<Vec<_>>();
         localized.sort();
@@ -149,6 +146,31 @@ fn localized_search_names(title: &Title, languages: &[String]) -> Vec<String> {
             !key.is_empty() && seen.insert(key)
         })
         .collect()
+}
+
+/// The search language an alias is searched under, normalized the way
+/// configured search languages are.
+///
+/// A tagged alias keeps its tag. The Japanese romanization tags the matcher
+/// already treats as Japanese (`x-jat`, through the romanization rule set) are
+/// Japanese here too, so romaji names are searched; `ja-Latn`, `ko-Latn` and
+/// `zh-Latn` already resolve through their primary subtag. An alias with no
+/// tag (or `und`) is attributed by its script, with its country only as
+/// corroboration: see [`scryer_domain::title_spelling::untagged_name_language`].
+fn alias_search_language(alias: &TaggedAlias) -> Option<String> {
+    let tag = alias.language.trim();
+    if !tag.is_empty() && !tag.eq_ignore_ascii_case("und") {
+        return crate::normalize_detected_subtitle_language_code(tag).or_else(|| {
+            scryer_domain::title_normalization::rules_for(Some(tag))
+                .filter(|rules| {
+                    rules.equivalence_tag()
+                        == scryer_domain::title_normalization::JAPANESE_ROMANIZATION_TAG
+                })
+                .and_then(|_| crate::normalize_detected_subtitle_language_code("jpn"))
+        });
+    }
+    scryer_domain::title_spelling::untagged_name_language(&alias.name, alias.country.as_deref())
+        .and_then(crate::normalize_detected_subtitle_language_code)
 }
 
 fn localized_search_queries(primary: &str, alias: &str, queries: &[String]) -> Vec<String> {
@@ -3627,5 +3649,188 @@ mod localized_query_tests {
             localized_search_queries("Over the Atlantic", "Över Atlanten", &queries),
             vec!["Över Atlanten S11E02", "Över Atlanten 2019"]
         );
+    }
+
+    fn alias(name: &str, language: &str) -> TaggedAlias {
+        TaggedAlias {
+            name: name.to_string(),
+            language: language.to_string(),
+            country: None,
+        }
+    }
+
+    fn languages(codes: &[&str]) -> Vec<String> {
+        codes
+            .iter()
+            .filter_map(|code| crate::normalize_search_language_code(code))
+            .collect()
+    }
+
+    fn title_with(aliases: Vec<TaggedAlias>) -> Title {
+        Title {
+            id: "title-1".to_string(),
+            name: "Harbor Lantern".to_string(),
+            facet: MediaFacet::Anime,
+            library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Anime),
+            root_folder_id: scryer_domain::root_folder_id_for_path("/data/test"),
+            monitored: true,
+            tags: vec![],
+            canonical_tags: vec![],
+            external_ids: vec![],
+            created_by: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+            year: Some(2022),
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: aliases,
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            movie_release_dates: None,
+            folder_path: None,
+        }
+    }
+
+    #[test]
+    fn localized_search_names_attribute_an_untagged_kana_alias_to_japanese() {
+        let title = title_with(vec![
+            alias("ハーバーランタン", ""),
+            alias("ほしぞらのかなた", "und"),
+        ]);
+        assert_eq!(
+            localized_search_names(&title, &languages(&["jpn"])),
+            vec!["ほしぞらのかなた", "ハーバーランタン"]
+        );
+        assert!(localized_search_names(&title, &languages(&["kor", "zho"])).is_empty());
+    }
+
+    #[test]
+    fn localized_search_names_attribute_an_untagged_hangul_alias_to_korean() {
+        let title = title_with(vec![alias("항구의 등불", "")]);
+        assert_eq!(
+            localized_search_names(&title, &languages(&["kor"])),
+            vec!["항구의 등불"]
+        );
+        assert!(localized_search_names(&title, &languages(&["jpn"])).is_empty());
+    }
+
+    #[test]
+    fn localized_search_names_do_not_make_an_untagged_han_alias_japanese() {
+        let title = title_with(vec![alias("星空彼方", "")]);
+        assert!(localized_search_names(&title, &languages(&["jpn", "zho"])).is_empty());
+
+        // A country, when the catalog supplies one, settles it.
+        let mut title = title;
+        title.tagged_aliases[0].country = Some("JP".to_string());
+        assert_eq!(
+            localized_search_names(&title, &languages(&["jpn"])),
+            vec!["星空彼方"]
+        );
+    }
+
+    #[test]
+    fn localized_search_names_search_romaji_aliases_under_japanese() {
+        let title = title_with(vec![
+            alias("Hoshizora no Kanata", "x-jat"),
+            alias("Minato no Akari", "ja-Latn"),
+            alias("Hangu Deungbul", "ko-Latn"),
+        ]);
+        assert_eq!(
+            localized_search_names(&title, &languages(&["jpn"])),
+            vec!["Hoshizora no Kanata", "Minato no Akari"]
+        );
+        assert_eq!(
+            localized_search_names(&title, &languages(&["kor"])),
+            vec!["Hangu Deungbul"]
+        );
+    }
+
+    /// The romanization tags SMG serves for the catalog's Chinese, Korean and
+    /// Thai romanized titles resolve to the language they romanize.
+    #[test]
+    fn localized_search_names_search_latn_romanizations_under_their_language() {
+        let title = title_with(vec![
+            alias("Xingkong Bi'an", "zh-Latn"),
+            alias("Hangu Deungbul", "ko-Latn"),
+            alias("Khom Fai Tha Ruea", "th-Latn"),
+        ]);
+        assert_eq!(
+            localized_search_names(&title, &languages(&["zho", "kor", "tha"])),
+            vec!["Xingkong Bi'an", "Hangu Deungbul", "Khom Fai Tha Ruea"]
+        );
+        assert!(localized_search_names(&title, &languages(&["jpn", "eng"])).is_empty());
+    }
+
+    #[test]
+    fn localized_search_names_leave_an_untagged_latin_alias_out() {
+        let title = title_with(vec![
+            alias("Lantern of the Harbor", ""),
+            alias("Kanata", "und"),
+        ]);
+        assert!(
+            localized_search_names(&title, &languages(&["eng", "jpn", "kor", "fra"])).is_empty()
+        );
+    }
+
+    #[test]
+    fn localized_search_names_keep_tagged_alias_order_and_exclusions() {
+        let mut title = title_with(vec![
+            alias("Lanterne du Port", "fr"),
+            alias("Hafenlaterne", "deu"),
+            alias("Harbor  Lantern", "eng"),
+            alias("Ein Hafenlicht", "de-DE"),
+            alias("ハーバーランタン", "ja"),
+        ]);
+        title.tags = vec![format!(
+            "{}Harbor Lamp",
+            scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+        )];
+        assert_eq!(
+            localized_search_names(&title, &languages(&["deu", "eng", "fra"])),
+            vec![
+                "Harbor Lamp",
+                "Ein Hafenlicht",
+                "Hafenlaterne",
+                "Lanterne du Port"
+            ]
+        );
+    }
+
+    #[test]
+    fn localized_search_names_attribute_every_script_to_its_picker_language() {
+        for (name, code) in [
+            ("ほしぞら", "jpn"),
+            ("항구", "kor"),
+            ("Φανός", "ell"),
+            ("פנס", "heb"),
+            ("โคมไฟ", "tha"),
+            ("ფარანი", "kat"),
+            ("լապտեր", "hye"),
+            ("فانوس", "ara"),
+        ] {
+            let title = title_with(vec![alias(name, "")]);
+            assert_eq!(
+                localized_search_names(&title, &languages(&[code])),
+                vec![name],
+                "{name} under {code}"
+            );
+        }
     }
 }
