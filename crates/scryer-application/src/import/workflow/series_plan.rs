@@ -73,6 +73,7 @@ impl VerifiedEpisodePack {
     }
 }
 
+#[cfg_attr(test, derive(Debug))]
 enum PlannedMemberDraft {
     Resolved(Vec<scryer_domain::Episode>),
     AmbiguousNumbering {
@@ -737,23 +738,18 @@ fn plan_episode_pack_member(
         }
     };
 
-    if is_leading_numbered_pack_member(source_path) {
-        return pack
-            .and_then(|pack| leading_numbered_pack_episode(title, pack, source_path, catalog))
-            .filter(|episode| folder_season.is_none_or(|season| catalog_episode_season(episode) == Some(season)))
-            .map(|episode| PlannedMemberDraft::Resolved(vec![episode]))
-            .unwrap_or(PlannedMemberDraft::Hold {
-                episodes: Vec::new(),
-                reason_code: "unparseable_pack_member",
-                message: "Automatic import could not prove this numbered pack member's title, season and episode. Open Manual Import and assign the correct episode.".to_string(),
-            });
-    }
-
-    let Some(identity) = parsed_stem
-        .episode
-        .clone()
-        .or_else(|| parsed_release_from_file_stem(source_path).episode)
+    let Some(identity) = pack_member_episode_identity(title, source_path, &parsed_stem, pack)
     else {
+        if let Some(episode) = pack
+            .and_then(|pack| {
+                leading_numbered_pack_episode(title, pack, source_root, source_path, catalog)
+            })
+            .filter(|episode| {
+                folder_season.is_none_or(|season| catalog_episode_season(episode) == Some(season))
+            })
+        {
+            return PlannedMemberDraft::Resolved(vec![episode]);
+        }
         return PlannedMemberDraft::Hold {
             episodes: Vec::new(),
             reason_code: "unparseable_pack_member",
@@ -810,21 +806,56 @@ fn plan_episode_pack_member(
     )
 }
 
-fn is_leading_numbered_pack_member(source_path: &Path) -> bool {
-    source_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(|stem| stem.split_once('.'))
-        .is_some_and(|(number, rest)| {
-            !number.is_empty()
-                && number.bytes().all(|byte| byte.is_ascii_digit())
-                && rest.starts_with(char::is_whitespace)
-        })
+fn pack_member_episode_identity(
+    title: &scryer_domain::Title,
+    source_path: &Path,
+    parsed: &crate::ParsedReleaseMetadata,
+    pack: Option<&VerifiedEpisodePack>,
+) -> Option<crate::ParsedEpisodeMetadata> {
+    let identity = parsed
+        .episode
+        .clone()
+        .or_else(|| parsed_release_from_file_stem(source_path).episode)?;
+    if let Some((number, _)) = leading_numbered_pack_body(source_path)
+        && identity.season.is_none()
+        && identity.season_numbers.is_empty()
+        && identity.episode_numbers.is_empty()
+        && identity.absolute_episode == Some(number)
+        && identity.absolute_episode_numbers == [number]
+        && identity.special_kind.is_none()
+        && identity.special_absolute_episode_numbers.is_empty()
+        && identity.air_date.is_none()
+    {
+        // Catalog hints can promote the prefix over an explicit marker.
+        // Re-read the whole stem without those hints, preserving genuine
+        // absolute identities and ranges before trying the ordinal lane.
+        let normal_identity = source_video_stem(Some(source_path))
+            .and_then(|stem| parse_import_release_for_title(&stem, title).episode);
+        if normal_identity.is_some() || pack.is_some_and(|pack| pack.allows_leading_numbers) {
+            return normal_identity;
+        }
+    }
+    Some(identity)
+}
+
+fn leading_numbered_pack_body(source_path: &Path) -> Option<(u32, &str)> {
+    static PREFIX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)^(?<number>[0-9]{1,3})[.\-_\s]+(?:(?:\[[a-z]\]|v[0-9]+)[.\-_\s]+)?(?<body>\S.*)$",
+        )
+        .expect("valid leading ordinal prefix")
+    });
+    let captures = PREFIX.captures(source_path.file_stem()?.to_str()?)?;
+    Some((
+        captures.name("number")?.as_str().parse().ok()?,
+        captures.name("body")?.as_str(),
+    ))
 }
 
 fn leading_numbered_pack_episode(
     title: &scryer_domain::Title,
     pack: &VerifiedEpisodePack,
+    source_root: &Path,
     source_path: &Path,
     catalog: &[scryer_domain::Episode],
 ) -> Option<scryer_domain::Episode> {
@@ -835,27 +866,49 @@ fn leading_numbered_pack_episode(
     if seasons.len() != 1 {
         return None;
     }
-    let season = *seasons.iter().next()?;
-    // Consume the whole stem: neither a second episode marker nor an
-    // unrecognized numeric suffix may hide in an unparsed tail.
-    static GRAMMAR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(
-            r"(?i)^(?<number>[0-9]{1,3})\.\s+(?<title>.+?)[. ](?<year>(?:19|20)[0-9]{2})[. ](?:WEB-DL|WEBRip|BluRay|HDTV)[. ](?:480p|576p|720p|1080p|2160p)(?:[. ](?:HEVC|AVC|AV1|[HX]26[45]))?(?:[. -][A-Za-z]+(?:-[A-Za-z]+)*)?$"
-        ).expect("valid contextual pack member grammar")
-    });
-    let stem = source_path.file_stem()?.to_str()?;
-    let captures = GRAMMAR.captures(stem)?;
-    if !exact_catalog_title_name_matches(&captures["title"], title) {
+    let relative_path = source_path.strip_prefix(source_root).ok()?;
+    if relative_path.parent()?.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|name| {
+            matches!(
+                name.trim().to_ascii_uppercase().as_str(),
+                "NCED"
+                    | "NCOP"
+                    | "OP"
+                    | "ED"
+                    | "EXTRAS"
+                    | "SPECIALS"
+                    | "BONUS"
+                    | "MENU"
+                    | "PV"
+                    | "CM"
+            )
+        })
+    }) {
         return None;
     }
-    let body = stem.split_once('.')?.1.trim();
-    if parse_import_release_for_title(body, title)
-        .episode
-        .is_some()
+    let season = *seasons.iter().next()?;
+    let (number, body) = leading_numbered_pack_body(source_path)?;
+    let parsed = parse_import_release_for_title(body, title);
+    if parsed.episode.is_some()
+        || !exact_catalog_title_name_matches(&parsed.normalized_title, title)
     {
         return None;
     }
-    let number: u32 = captures["number"].parse().ok()?;
+    // A context match can project the canonical title despite leftover words.
+    // Only the parser may classify the remaining tokens as release metadata.
+    let evidence = crate::acquisition_release_search::canonical_title_evidence(title);
+    let analysis = crate::analyze_release_for_target(body, &evidence.parse_context);
+    let candidate = analysis.best_candidate()?;
+    if analysis.tokens.iter().enumerate().any(|(index, token)| {
+        candidate.unconsumed_tokens.contains(&token.span)
+            && token.raw.chars().any(char::is_alphanumeric)
+            && !candidate
+                .zones
+                .release_group_span
+                .is_some_and(|group| (group.start_token..group.end_token).contains(&index))
+    }) {
+        return None;
+    }
     let mut episodes = catalog_episodes_for_season_numbers(catalog, season, &[number])?;
     let episode = episodes.pop()?;
     (episode.title_id == title.id && pack.vouches_for(&episode)).then_some(episode)
@@ -1683,18 +1736,31 @@ mod series_plan_tests {
     }
 
     #[test]
-    fn issue_394_leading_number_grammar_requires_exact_identity_and_single_catalog_scope() {
+    fn issue_394_leading_numbers_require_exact_identity_and_single_catalog_scope() {
         let mut title = scene_pack_title();
         title.aliases.push("Second Horizon".into());
-        let catalog = vec![catalog_episode("ep-1", 1, 1), catalog_episode("ep-4", 4, 4)];
+        let catalog = vec![
+            catalog_episode("ep-1", 1, 1),
+            catalog_episode("ep-4", 4, 4),
+            catalog_episode("ep-40", 40, 40),
+        ];
         let pack = declared_season_pack(Some(1));
+        let root = Path::new("");
         for (filename, id) in [
             ("01. Quiet Meridian.2026.WEB-DL 1080p.Files-x.mkv", "ep-1"),
             ("04. Quiet.Meridian.2026.WEB-DL.1080p.mkv", "ep-4"),
             ("04. Second Horizon.2026.WEB-DL.1080p.mkv", "ep-4"),
+            ("01 - Quiet Meridian.mkv", "ep-1"),
+            ("01 [A] - Quiet Meridian.mkv", "ep-1"),
+            ("04 v2 - Second Horizon.mkv", "ep-4"),
+            ("04_Quiet Meridian.mkv", "ep-4"),
+            ("04   Quiet Meridian.mkv", "ep-4"),
+            ("01.Quiet Meridian.mkv", "ep-1"),
+            ("01. Quiet Meridian.2026.WEB-DL.1080p.HDR.mkv", "ep-1"),
+            ("01. Quiet Meridian (2026) WEB-DL 1080p.mkv", "ep-1"),
         ] {
             assert_eq!(
-                leading_numbered_pack_episode(&title, &pack, Path::new(filename), &catalog)
+                leading_numbered_pack_episode(&title, &pack, root, Path::new(filename), &catalog)
                     .map(|episode| episode.id),
                 Some(id.into()),
                 "{filename}"
@@ -1710,9 +1776,18 @@ mod series_plan_tests {
             "01. Quiet Meridian.2026.WEB-DL 1080p.02.mkv",
             "01. Quiet Meridian.2026.WEB-DL 1080p.Ep02.mkv",
             "01. Quiet Meridian.S01E02.2026.WEB-DL 1080p.mkv",
+            "01 - Song Title.mkv",
+            "40 [B] - Song Title.mkv",
+            "01. Quiet Meridian \u{043f}\u{0435}\u{0441}\u{043d}\u{044f}.mkv",
+            "01. Quiet Meridian.2026.WEB-DL.1080p \u{043f}\u{0435}\u{0441}\u{043d}\u{044f}.mkv",
+            "01 - Quiet Meridian Returns.mkv",
+            "01 - Quiet Meridian.S01.mkv",
+            "01 - Quiet Meridian.2026.01.02.mkv",
+            "01 - Quiet Meridian.NCOP.mkv",
+            "01 [Episode 2] - Quiet Meridian.mkv",
         ] {
             assert!(
-                leading_numbered_pack_episode(&title, &pack, Path::new(filename), &catalog)
+                leading_numbered_pack_episode(&title, &pack, root, Path::new(filename), &catalog)
                     .is_none(),
                 "{filename}"
             );
@@ -1728,7 +1803,7 @@ mod series_plan_tests {
         ] {
             let filename = format!("01. Quiet Meridian.{markers}.2026.WEB-DL 1080p.mkv");
             assert!(
-                leading_numbered_pack_episode(&title, &pack, Path::new(&filename), &catalog)
+                leading_numbered_pack_episode(&title, &pack, root, Path::new(&filename), &catalog)
                     .is_none(),
                 "{filename}"
             );
@@ -1754,7 +1829,8 @@ mod series_plan_tests {
             },
         ] {
             assert!(
-                leading_numbered_pack_episode(&title, &invalid_pack, filename, &catalog).is_none()
+                leading_numbered_pack_episode(&title, &invalid_pack, root, filename, &catalog)
+                    .is_none()
             );
         }
         let duplicate_catalog = vec![
@@ -1762,7 +1838,21 @@ mod series_plan_tests {
             catalog_episode("duplicate-4", 4, 4),
         ];
         assert!(
-            leading_numbered_pack_episode(&title, &pack, filename, &duplicate_catalog).is_none()
+            leading_numbered_pack_episode(&title, &pack, root, filename, &duplicate_catalog)
+                .is_none()
+        );
+        let mut second_season_episode = catalog[1].clone();
+        second_season_episode.season_number = Some("2".into());
+        assert_eq!(
+            leading_numbered_pack_episode(
+                &title,
+                &declared_season_pack(Some(2)),
+                root,
+                filename,
+                &[second_season_episode],
+            )
+            .and_then(|episode| catalog_episode_season(&episode)),
+            Some(2)
         );
         let mut drafts = vec![
             PlannedMemberDraft::Resolved(vec![catalog[1].clone()]),
@@ -1774,6 +1864,237 @@ mod series_plan_tests {
                 .iter()
                 .all(|draft| matches!(draft, PlannedMemberDraft::Hold { .. }))
         );
+    }
+
+    #[test]
+    fn issue_394_explicit_episode_identity_precedes_leading_ordinal() {
+        let title = scene_pack_title();
+        let catalog = vec![
+            catalog_episode("ep-1", 1, 1),
+            catalog_episode("ep-2", 2, 2),
+            catalog_episode("ep-4", 4, 4),
+        ];
+        let pack = declared_season_pack(Some(1));
+        for pack in [None, Some(&pack)] {
+            for (file, expected) in [
+                ("01. Quiet Meridian.S01E01.1080p.mkv", vec!["ep-1"]),
+                ("01. Quiet Meridian.S01E04.1080p.mkv", vec!["ep-4"]),
+                (
+                    "01. Quiet Meridian.S01E01E02.1080p.mkv",
+                    vec!["ep-1", "ep-2"],
+                ),
+            ] {
+                let draft = plan_episode_pack_member(
+                    &title,
+                    Path::new(""),
+                    Path::new(file),
+                    &catalog,
+                    None,
+                    None,
+                    pack,
+                );
+                let PlannedMemberDraft::Resolved(episodes) = &draft else {
+                    panic!("explicit identity should resolve: {file}: {draft:?}");
+                };
+                assert_eq!(
+                    episodes
+                        .iter()
+                        .map(|episode| episode.id.as_str())
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{file}",
+                );
+            }
+        }
+        let draft = plan_episode_pack_member(
+            &title,
+            Path::new(""),
+            Path::new("01 - Quiet Meridian.mkv"),
+            &catalog,
+            None,
+            None,
+            Some(&pack),
+        );
+        assert!(
+            matches!(&draft, PlannedMemberDraft::Resolved(episodes) if episodes[0].id == "ep-1"),
+            "{draft:?}"
+        );
+        for file in [
+            "01-04. Quiet Meridian.mkv",
+            "Season 1/01-04. Quiet Meridian.mkv",
+            "Season 1/01_04. Quiet Meridian.mkv",
+            "Season 1/01. Quiet Meridian - 04.mkv",
+        ] {
+            let mut draft = plan_episode_pack_member(
+                &title,
+                Path::new(""),
+                Path::new(file),
+                &catalog,
+                None,
+                None,
+                Some(&pack),
+            );
+            resolve_ambiguous_pack_numbering(std::slice::from_mut(&mut draft), &catalog, None);
+            assert!(
+                matches!(draft, PlannedMemberDraft::Hold { .. }),
+                "{file}: {draft:?}"
+            );
+        }
+        let mut complete_catalog = catalog;
+        complete_catalog.push(catalog_episode("ep-3", 3, 3));
+        let draft = plan_episode_pack_member(
+            &title,
+            Path::new(""),
+            Path::new("Season 1/01-04. Quiet Meridian.mkv"),
+            &complete_catalog,
+            None,
+            None,
+            Some(&pack),
+        );
+        let PlannedMemberDraft::Resolved(episodes) = &draft else {
+            panic!("the complete normal range should resolve: {draft:?}");
+        };
+        assert_eq!(
+            episodes
+                .iter()
+                .map(|episode| episode.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ep-1", "ep-2", "ep-3", "ep-4"]
+        );
+    }
+
+    #[test]
+    fn issue_394_genuine_anime_absolute_identity_precedes_leading_ordinal() {
+        let title = anime_pack_title();
+        let catalog = vec![
+            catalog_episode("ep-1", 1, 4),
+            catalog_episode("ep-4", 4, 40),
+        ];
+        let pack = declared_season_pack(Some(1));
+        let draft = plan_episode_pack_member(
+            &title,
+            Path::new(""),
+            Path::new("04. Quiet Meridian - 04 [1080p].mkv"),
+            &catalog,
+            None,
+            None,
+            Some(&pack),
+        );
+        assert!(
+            matches!(&draft, PlannedMemberDraft::Resolved(episodes) if episodes.len() == 1 && episodes[0].id == "ep-1"),
+            "{draft:?}"
+        );
+    }
+
+    #[test]
+    fn issue_394_leading_numbers_refuse_auxiliary_ancestors_within_pack_root() {
+        let title = scene_pack_title();
+        let catalog = vec![catalog_episode("ep-1", 1, 1)];
+        let pack = declared_season_pack(Some(1));
+        let root = Path::new("/downloads/Extras/pack");
+        for folder in [
+            "NCED", "ncop", "OP", "ed", "Extras", "Specials", "Bonus", "Menu", "PV", "CM",
+        ] {
+            for filename in [
+                "01 - Quiet Meridian.mkv",
+                "01 - Song Title.mkv",
+                "40 [B] - Song Title.mkv",
+            ] {
+                let path = root
+                    .join("Season 1")
+                    .join(folder)
+                    .join("nested")
+                    .join(filename);
+                assert!(
+                    matches!(
+                        plan_episode_pack_member(
+                            &title,
+                            root,
+                            &path,
+                            &catalog,
+                            None,
+                            None,
+                            Some(&pack)
+                        ),
+                        PlannedMemberDraft::Hold { .. }
+                    ),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+        let path = root.join("Season 1/01 - Quiet Meridian.mkv");
+        assert!(matches!(
+            plan_episode_pack_member(&title, root, &path, &catalog, None, None, Some(&pack)),
+            PlannedMemberDraft::Resolved(_)
+        ));
+        let conflicting = root.join("Season 2/01 - Quiet Meridian.mkv");
+        assert!(matches!(
+            plan_episode_pack_member(
+                &title,
+                root,
+                &conflicting,
+                &catalog,
+                None,
+                None,
+                Some(&pack)
+            ),
+            PlannedMemberDraft::Hold { .. }
+        ));
+        assert!(
+            leading_numbered_pack_episode(
+                &title,
+                &pack,
+                root,
+                Path::new("/other/01 - Quiet Meridian.mkv"),
+                &catalog
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn issue_393_pack_verification_rejects_another_title_for_every_submission_scope() {
+        let title = scene_pack_title();
+        let episode = catalog_episode("ep-1", 1, 1);
+        for scope in [
+            SubmissionScope::Episode {
+                episode_id: episode.id.clone(),
+            },
+            SubmissionScope::EpisodeSet {
+                episode_ids: vec![episode.id.clone()],
+            },
+            SubmissionScope::Collection {
+                collection_id: episode.collection_id.clone().unwrap(),
+            },
+            SubmissionScope::Title,
+            SubmissionScope::SeriesMovie {
+                series_movie_link_id: "movie-link".into(),
+            },
+            SubmissionScope::Orphan,
+        ] {
+            let mut evidence = episode_scoped_pack_evidence("Quiet.Meridian.S01.1080p.WEB-DL");
+            if let ReleaseEvidence::ScryerSubmission {
+                title_id,
+                scope: saved_scope,
+                ..
+            } = &mut evidence
+            {
+                *title_id = "another-title".into();
+                *saved_scope = scope;
+            }
+            assert!(matches!(
+                verified_episode_pack(
+                    &evidence,
+                    &title,
+                    std::slice::from_ref(&episode),
+                    None,
+                    None,
+                    None
+                ),
+                EpisodePackVerification::Unresolved
+            ));
+        }
     }
 
     fn catalog_episode(id: &str, episode: u32, absolute: u32) -> scryer_domain::Episode {

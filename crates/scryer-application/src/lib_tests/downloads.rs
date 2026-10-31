@@ -8783,6 +8783,336 @@ async fn issue_394_leading_numbers_use_proven_pack_season_not_initiating_episode
 }
 
 #[tokio::test]
+async fn issue_394_review_forms_share_preview_and_import_mapping_and_preserve_held_sources() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let (
+            FailClosedPackFixture {
+                app,
+                user,
+                title,
+                episode,
+                library_dir,
+                import_artifacts,
+                ..
+            },
+            submissions,
+        ) = fail_closed_pack_fixture_with_submissions().await;
+        let second =
+            create_pack_episode_in_season(&app, &user, &title.id, 1, 2, Some(2), "standard").await;
+        let third =
+            create_pack_episode_in_season(&app, &user, &title.id, 1, 3, Some(3), "standard").await;
+        let fourth =
+            create_pack_episode_in_season(&app, &user, &title.id, 1, 4, Some(4), "standard").await;
+        let catalog = [episode.clone(), second.clone(), third, fourth.clone()];
+        let release_name = "Fail.Closed.Pack.S01.720p.WEB-DL";
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "review-numbered-pack",
+            release_name,
+            SubmissionScope::Collection {
+                collection_id: episode.collection_id.clone().unwrap(),
+            },
+        )
+        .await;
+        let source = tempfile::tempdir().unwrap();
+        let imports = [
+            ("01 - Fail Closed Pack.mkv", &episode, 1),
+            ("04. Fail Closed Pack.S01E02.720p.mkv", &second, 2),
+            (
+                "04 [A] - Fail Closed Pack (2026) WEB-DL 720p.HDR.mkv",
+                &fourth,
+                4,
+            ),
+        ];
+        let mut source_files = Vec::new();
+        for (name, _, _) in &imports {
+            source_files.push(write_pack_video(source.path(), name));
+        }
+        let held = [
+            ("NCED/nested", "01 - Fail Closed Pack.mkv"),
+            ("NCOP", "40 [B] - Song Title.mkv"),
+            (
+                "",
+                "03 - Fail Closed Pack \u{043f}\u{0435}\u{0441}\u{043d}\u{044f}.mkv",
+            ),
+        ];
+        for (folder, name) in held {
+            let parent = source.path().join(folder);
+            std::fs::create_dir_all(&parent).unwrap();
+            source_files.push(write_pack_video(&parent, name));
+        }
+        let unrelated = source.path().join("unrelated.txt");
+        std::fs::write(&unrelated, b"preserve me").unwrap();
+        let completed = series_pack_completed_download(
+            "review-numbered-pack",
+            &title.id,
+            release_name,
+            source.path(),
+        );
+        let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .unwrap();
+        let preview = crate::import::workflow::preview_manual_import_episode_details_for_tests(
+            &app,
+            source.path(),
+            &title,
+            &evidence,
+            &catalog,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.len(), 6);
+        for (name, expected, number) in &imports {
+            let matches: Vec<_> = preview.iter().filter(|file| file.0 == *name).collect();
+            assert!(
+                matches.iter().any(|file| {
+                    file.1 == Some(1)
+                        && file.2 == [*number]
+                        && file.3.as_deref() == Some(expected.id.as_str())
+                }),
+                "{name}: {preview:?}"
+            );
+        }
+        assert_eq!(
+            preview.iter().filter(|file| file.3.is_none()).count(),
+            3,
+            "{preview:?}"
+        );
+        for _ in 0..2 {
+            let result = {
+                let _probe = probe_sequence_agrees_with_the_names([(1280, 720); 3]);
+                crate::import::import::import_completed_download(&app, &user, &completed)
+                    .await
+                    .unwrap()
+            };
+            assert_eq!(
+                result.decision,
+                scryer_domain::ImportDecision::Rejected,
+                "{result:?}"
+            );
+            assert_eq!(
+                result.skip_reason,
+                Some(scryer_domain::ImportSkipReason::PolicyMismatch)
+            );
+            assert!(!result.release_burned);
+            let files = app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .unwrap();
+            assert_eq!(files.len(), 3);
+            assert_eq!(
+                media_file_episode_ids(&files),
+                std::collections::BTreeSet::from([
+                    episode.id.clone(),
+                    second.id.clone(),
+                    fourth.id.clone()
+                ])
+            );
+            assert_eq!(library_video_file_names(library_dir.path()).len(), 3);
+            assert!(source_files.iter().all(|path| path.exists()));
+            assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserve me");
+        }
+        let artifacts = import_artifacts
+            .artifacts_for_file("40 [B] - Song Title.mkv")
+            .await;
+        assert!(
+            artifacts
+                .iter()
+                .all(|artifact| artifact.result == "rejected"),
+            "{artifacts:?}"
+        );
+        assert!(!artifacts.is_empty());
+    })
+    .await
+    .expect("numbered pack import and preview must finish");
+}
+
+#[tokio::test]
+async fn issue_394_manual_preview_does_not_replace_normal_identity_or_guess_rejected_ordinals() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let (
+            FailClosedPackFixture {
+                app,
+                title,
+                episode,
+                ..
+            },
+            submissions,
+        ) = fail_closed_pack_fixture_with_submissions().await;
+        let release_name = "Fail.Closed.Pack.S01.720p.WEB-DL";
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "preview-ordinal-guards",
+            release_name,
+            SubmissionScope::Collection {
+                collection_id: episode.collection_id.clone().unwrap(),
+            },
+        )
+        .await;
+        for filename in [
+            "NCED/01 - Fail Closed Pack.mkv",
+            "01 - Song Title.mkv",
+            "40 [B] - Song Title.mkv",
+            "01 - Fail Closed Pack \u{043f}\u{0435}\u{0441}\u{043d}\u{044f}.mkv",
+        ] {
+            let source = tempfile::tempdir().unwrap();
+            let path = source.path().join(filename);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            write_pack_video(
+                path.parent().unwrap(),
+                path.file_name().unwrap().to_str().unwrap(),
+            );
+            let completed = series_pack_completed_download(
+                "preview-ordinal-guards",
+                &title.id,
+                release_name,
+                source.path(),
+            );
+            let evidence =
+                crate::import::workflow::resolve_release_evidence_for_completed_download(
+                    &app, &completed, None,
+                )
+                .await
+                .unwrap();
+            let preview = crate::import::workflow::preview_manual_import_episode_details_for_tests(
+                &app,
+                source.path(),
+                &title,
+                &evidence,
+                std::slice::from_ref(&episode),
+            )
+            .await
+            .unwrap();
+            assert_eq!(preview.len(), 1);
+            assert_eq!(preview[0].3, None, "{filename}: {preview:?}");
+            assert_eq!(preview[0].1, None, "{filename}: {preview:?}");
+            assert!(preview[0].2.is_empty(), "{filename}: {preview:?}");
+        }
+        let source = tempfile::tempdir().unwrap();
+        write_pack_video(source.path(), "01. Fail Closed Pack.S01E01.720p.mkv");
+        let evidence = crate::import::workflow::ReleaseEvidence::ScryerSubmission {
+            title_id: title.id.clone(),
+            facet: "series".into(),
+            source_title: Some("Fail.Closed.Pack.S01E01.720p.WEB-DL".into()),
+            observed_release_name: None,
+            release_size_bytes: None,
+            release_listing_json: None,
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            scope: SubmissionScope::Episode {
+                episode_id: episode.id.clone(),
+            },
+        };
+        let preview = crate::import::workflow::preview_manual_import_episode_details_for_tests(
+            &app,
+            source.path(),
+            &title,
+            &evidence,
+            std::slice::from_ref(&episode),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview[0].1, Some(1));
+        assert_eq!(preview[0].2, [1]);
+        assert_eq!(preview[0].3.as_deref(), Some(episode.id.as_str()));
+    })
+    .await
+    .expect("numbered pack preview must finish");
+}
+
+#[tokio::test]
+async fn issue_393_bridge_read_failure_stops_pack_import_preview_and_verification() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        let (
+            FailClosedPackFixture {
+                app,
+                user,
+                title,
+                episode,
+                library_dir,
+                ..
+            },
+            submissions,
+        ) = fail_closed_pack_fixture_with_submissions().await;
+        let shows = Arc::new(MockShowRepo::default());
+        shows.episodes.lock().await.push(episode.clone());
+        *shows.fail_anime_bridge.lock().await = true;
+        let app = app.with_test_overrides(|services| services.with_shows(shows.clone()));
+        let release_name = "Fail.Closed.Pack.S01.720p.WEB-DL";
+        record_pack_identity_submission(
+            &submissions,
+            &title.id,
+            "bridge-read-failure",
+            release_name,
+            SubmissionScope::Episode {
+                episode_id: episode.id.clone(),
+            },
+        )
+        .await;
+        let source = tempfile::tempdir().unwrap();
+        let payload = write_pack_video(source.path(), "01 - Fail Closed Pack.mkv");
+        let completed = series_pack_completed_download(
+            "bridge-read-failure",
+            &title.id,
+            release_name,
+            source.path(),
+        );
+        let evidence = crate::import::workflow::resolve_release_evidence_for_completed_download(
+            &app, &completed, None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            crate::import::workflow::preview_manual_import_suggested_episode_ids_for_tests(
+                &app,
+                source.path(),
+                &title,
+                &evidence,
+                std::slice::from_ref(&episode),
+            )
+            .await,
+            Err(AppError::Repository(_))
+        ));
+        assert!(matches!(
+            crate::import::workflow::expected_episode_ids_from_verified_pack(
+                &app, &title, &evidence
+            )
+            .await,
+            Err(AppError::Repository(_))
+        ));
+        let bridge_reads = shows
+            .anime_bridge_reads
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let result = crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .unwrap();
+        assert!(
+            shows
+                .anime_bridge_reads
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > bridge_reads
+        );
+        assert_eq!(
+            result.decision,
+            scryer_domain::ImportDecision::Failed,
+            "{result:?}"
+        );
+        assert!(result.error_message.is_some());
+        assert!(!result.release_burned);
+        assert!(payload.exists());
+        assert!(library_video_file_names(library_dir.path()).is_empty());
+    })
+    .await
+    .expect("bridge failure must propagate without hanging");
+}
+
+#[tokio::test]
 async fn automatic_multi_season_pack_imports_explicit_members_from_each_declared_season() {
     let (
         FailClosedPackFixture {

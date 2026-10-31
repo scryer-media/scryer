@@ -1201,7 +1201,8 @@ async fn preview_manual_import(
                 for episode in &episodes {
                     *leading_counts.entry(episode.id.clone()).or_default() += 1;
                 }
-                if is_leading_numbered_pack_member(path)
+                let parsed = parsed_pack_member_for_catalog(title, path, available_episodes);
+                if pack_member_episode_identity(title, path, &parsed, Some(pack)).is_none()
                     && let [episode] = episodes.as_slice()
                 {
                     leading_suggestions.insert(path.clone(), episode.clone());
@@ -1271,6 +1272,7 @@ async fn preview_manual_import(
             })
             .filter(|parsed| parsed.episode.is_some())
             .unwrap_or_else(|| parsed_release_from_file_stem(path));
+        parsed.episode = pack_member_episode_identity(title, path, &parsed, verified_pack.as_ref());
         // Translate community anime numbering into the catalog's own before the
         // suggestion lookups, so a file named in per-cour numbering points at
         // the episode the user actually has. Inert without a bridge.
@@ -1438,12 +1440,15 @@ async fn preview_manual_import(
         let is_grabbed_fallback_path = grabbed_fallback_path
             .as_ref()
             .is_some_and(|fallback| fallback == path);
+        let unresolved_leading_member =
+            parsed.episode.is_none() && leading_numbered_pack_body(path).is_some();
         let scoped_suggestion = (!unresolved_pack && !numbering_ambiguous)
             .then(|| {
                 manual_episode_suggestion_for_grabbed_scope(
                     suggested_episode_id.clone(),
                     &grabbed_episode_ids,
                     !exact_pack_scope
+                        && !unresolved_leading_member
                         && manual_grabbed_episode_fallback_applies(
                             is_grabbed_fallback_path,
                             parsed.episode.as_ref(),
@@ -1460,15 +1465,11 @@ async fn preview_manual_import(
             });
             suggested_episode_id = scoped_suggestion;
         }
-        if is_leading_numbered_pack_member(path) {
-            let episode = leading_suggestions.get(path);
-            suggested_episode_id = episode.map(|episode| episode.id.clone());
-            suggested_episode_label = episode.map(manual_import_episode_label);
-            parsed_season = episode.and_then(catalog_episode_season);
-            parsed_episodes = episode
-                .and_then(catalog_episode_number)
-                .into_iter()
-                .collect();
+        if unresolved_leading_member && let Some(episode) = leading_suggestions.get(path) {
+            suggested_episode_id = Some(episode.id.clone());
+            suggested_episode_label = Some(manual_import_episode_label(episode));
+            parsed_season = catalog_episode_season(episode);
+            parsed_episodes = catalog_episode_number(episode).into_iter().collect();
         }
 
         use crate::library::filename_parser::SeriesMovieFilenameMatch;
@@ -1563,6 +1564,31 @@ async fn preview_manual_import(
     }
 
     Ok(ManualImportPreview { files: previews })
+}
+
+#[cfg(test)]
+pub(crate) async fn preview_manual_import_episode_details_for_tests(
+    app: &AppUseCase,
+    source_dir: &Path,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    available_episodes: &[scryer_domain::Episode],
+) -> AppResult<Vec<(String, Option<u32>, Vec<u32>, Option<String>)>> {
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| {
+                (
+                    file.file_name,
+                    file.parsed_season,
+                    file.parsed_episodes,
+                    file.suggested_episode_id,
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

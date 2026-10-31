@@ -2955,6 +2955,40 @@ fn release_group_preserves_dotted_and_hyphenated_suffixes() {
 }
 
 #[test]
+fn release_group_preserves_dot_delimited_compound_and_its_token_span() {
+    for facet in [
+        ContextFacetHint::Movie,
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+    ] {
+        for marker in ["2026", "S01E01"] {
+            let raw = format!("Quiet.Meridian.{marker}.WEB-DL.1080p.Files-x");
+            let analysis = analyze_release_for_target(&raw, &context(facet, "Quiet Meridian"));
+            let candidate = analysis.best_candidate().expect("best candidate");
+            assert_eq!(
+                candidate.projected.release_group.as_deref(),
+                Some("Files-x"),
+                "{raw}"
+            );
+            let span = candidate
+                .zones
+                .release_group_span
+                .expect("classified group");
+            assert_eq!(
+                analysis.tokens[span.start_token..span.end_token]
+                    .iter()
+                    .map(|token| token.raw.as_str())
+                    .collect::<Vec<_>>(),
+                ["Files", "x"],
+                "{raw}",
+            );
+            assert_eq!(candidate.projected.source, Some(ReleaseSource::WebDl));
+            assert_eq!(candidate.projected.quality.as_deref(), Some("1080p"));
+        }
+    }
+}
+
+#[test]
 fn leading_fansub_group_beats_trailing_batch_group() {
     let analysis = analyze_release_for_target(
         "[HorribleSubs] Harbor Wraith [01-12] [720p] [Batch]",
