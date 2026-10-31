@@ -1788,6 +1788,37 @@ impl AppUseCase {
         }
     }
 
+    /// Finishes a scheduled library job cleanly when its library's only root
+    /// was never created, so an unused facet does not show up as a failure on
+    /// every run. A manual run still fails, since someone asked for that scan.
+    async fn scheduled_library_job_skip(
+        &self,
+        run: &JobRunRecord,
+    ) -> AppResult<Option<JobExecutionOutcome>> {
+        if run.trigger_source == JobTriggerSource::Manual {
+            return Ok(None);
+        }
+        let Some(facet) = job_key_library_facet(run.job_key) else {
+            return Ok(None);
+        };
+        let Some(library_path) = self
+            .sole_missing_library_root(&facet, job_run_library_id(run))
+            .await?
+        else {
+            return Ok(None);
+        };
+        info!(
+            job_key = run.job_key.as_str(),
+            library_path = %library_path,
+            "skipping scheduled library job: the only root folder does not exist"
+        );
+        let mut outcome = JobExecutionOutcome::from_library_scan(&LibraryScanSummary::default());
+        outcome.summary_text = Some(format!(
+            "Skipped: library folder {library_path} does not exist"
+        ));
+        Ok(Some(outcome))
+    }
+
     async fn execute_job_body(
         &self,
         run: &JobRunRecord,
@@ -1799,6 +1830,9 @@ impl AppUseCase {
         match job_key {
             JobKey::CustomJob => self.execute_custom_job(run).await,
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
+                if let Some(outcome) = self.scheduled_library_job_skip(run).await? {
+                    return Ok(outcome);
+                }
                 let summary = if let Some(library_id) = job_run_library_id(run) {
                     self.scan_library_by_id_with_tracking(
                         &actor,
@@ -1827,6 +1861,9 @@ impl AppUseCase {
                         crate::error_reasons::jobs::BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
                         "background library refresh is temporarily disabled",
                     ));
+                }
+                if let Some(outcome) = self.scheduled_library_job_skip(run).await? {
+                    return Ok(outcome);
                 }
                 let summary = if let Some(library_id) = job_run_library_id(run) {
                     self.background_library_refresh_by_id_with_tracking(&actor, library_id, run_id)

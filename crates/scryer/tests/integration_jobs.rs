@@ -661,6 +661,47 @@ async fn scheduled_job_failure_returns_err_and_persists_failed_run() {
     seed_media_path_settings(&ctx).await;
     let workflow_store = WorkflowOperationStore::new(ctx.db.datastore());
 
+    let default_root = tempfile::tempdir().expect("default movie root");
+    set_media_path(
+        &ctx,
+        "movies.path",
+        default_root.path().to_string_lossy().as_ref(),
+    )
+    .await;
+
+    // Two missing roots read as lost storage, not as an unused facet.
+    let parent = tempfile::tempdir().expect("missing root parent");
+    let first_missing = parent.path().join("first").to_string_lossy().to_string();
+    let second_missing = parent.path().join("second").to_string_lossy().to_string();
+    let now = Utc::now();
+    LibraryRepository::create(
+        &ctx.libraries,
+        Library {
+            id: "movie_kids_library".to_string(),
+            facet: MediaFacet::Movie,
+            name: "Kids".to_string(),
+            slug: "kids".to_string(),
+            is_default: false,
+            roots: vec![],
+            created_at: now,
+            updated_at: now,
+        },
+        vec![
+            LibraryRootDraft {
+                id: None,
+                path: first_missing.clone(),
+                is_default: true,
+            },
+            LibraryRootDraft {
+                id: None,
+                path: second_missing,
+                is_default: false,
+            },
+        ],
+    )
+    .await
+    .expect("create library with missing roots");
+
     let result = ctx
         .app
         .run_scheduled_job_now(
@@ -678,13 +719,14 @@ async fn scheduled_job_failure_returns_err_and_persists_failed_run() {
             let runs = <WorkflowOperationStore as JobRunRepository>::list_job_runs(
                 &workflow_store,
                 Some(JobKey::BackgroundLibraryRefreshMovies),
-                1,
+                5,
             )
             .await
             .expect("list job runs");
-            if let Some(run) = runs.first()
-                && run.status == JobRunStatus::Failed
-            {
+            if let Some(run) = runs.iter().find(|run| {
+                run.operation_type == "background_library_refresh_movies:movie_kids_library"
+                    && run.status == JobRunStatus::Failed
+            }) {
                 break run.clone();
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -696,6 +738,64 @@ async fn scheduled_job_failure_returns_err_and_persists_failed_run() {
     assert!(
         run.error_text
             .as_deref()
-            .is_some_and(|value| value.contains("library path is not a directory: /data/movies")),
+            .is_some_and(|value| value.contains("library path is not a directory")),
     );
+}
+
+async fn assert_scheduled_job_skips_root(ctx: &TestContext, job_key: JobKey, root: &str) {
+    ctx.app
+        .run_scheduled_job_now(job_key, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("a library with no real root should not fail its job");
+
+    assert!(
+        ctx.app.active_library_scan_sessions().await.is_empty(),
+        "a skipped job should not leave a scan session behind",
+    );
+
+    let workflow_store = WorkflowOperationStore::new(ctx.db.datastore());
+    let runs = <WorkflowOperationStore as JobRunRepository>::list_job_runs(
+        &workflow_store,
+        Some(job_key),
+        1,
+    )
+    .await
+    .expect("list job runs");
+    let run = runs.first().expect("skipped job should record a run");
+    assert_eq!(run.status, JobRunStatus::Completed);
+    assert_eq!(run.error_text, None);
+    assert!(
+        run.summary_text
+            .as_deref()
+            .is_some_and(|value| value.contains(root)),
+        "the run should name the folder it skipped",
+    );
+}
+
+#[tokio::test]
+async fn scheduled_library_jobs_complete_when_the_only_root_does_not_exist() {
+    let ctx = TestContext::new().await;
+    seed_media_path_settings(&ctx).await;
+
+    let parent = tempfile::tempdir().expect("missing root parent");
+    let missing_root = parent.path().join("anime").to_string_lossy().to_string();
+    set_media_path(&ctx, "anime.path", &missing_root).await;
+
+    assert_scheduled_job_skips_root(&ctx, JobKey::BackgroundLibraryRefreshAnime, &missing_root)
+        .await;
+    assert_scheduled_job_skips_root(&ctx, JobKey::LibraryScanAnime, &missing_root).await;
+}
+
+#[tokio::test]
+async fn scheduled_library_jobs_complete_when_the_only_root_is_a_file() {
+    let ctx = TestContext::new().await;
+    seed_media_path_settings(&ctx).await;
+
+    let parent = tempfile::tempdir().expect("file root parent");
+    let file_root = parent.path().join("anime");
+    std::fs::write(&file_root, b"").expect("write file in place of the root");
+    let file_root = file_root.to_string_lossy().to_string();
+    set_media_path(&ctx, "anime.path", &file_root).await;
+
+    assert_scheduled_job_skips_root(&ctx, JobKey::BackgroundLibraryRefreshAnime, &file_root).await;
 }

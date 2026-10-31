@@ -1349,6 +1349,48 @@ impl AppUseCase {
         Ok(roots)
     }
 
+    /// The path of a library's only root when that root is not a real folder,
+    /// which is how a facet nobody uses looks: its default path was never
+    /// created. Any other unreadable root, or a library with several roots, is
+    /// `None`, so the job runs and reports the problem.
+    pub(crate) async fn sole_missing_library_root(
+        &self,
+        facet: &MediaFacet,
+        library_id: Option<&str>,
+    ) -> AppResult<Option<String>> {
+        let library_paths = match library_id {
+            Some(library_id) => {
+                let Some(library) = self
+                    .services
+                    .catalog
+                    .libraries
+                    .get_by_id(library_id)
+                    .await?
+                else {
+                    return Ok(None);
+                };
+                library
+                    .roots
+                    .iter()
+                    .map(|root| root.path.trim().to_string())
+                    .filter(|path| !path.is_empty())
+                    .collect()
+            }
+            None => self.read_library_paths_for_scan_facet(facet).await?,
+        };
+        let [library_path] = library_paths.as_slice() else {
+            return Ok(None);
+        };
+        let missing = match tokio::fs::metadata(library_path).await {
+            Ok(metadata) => !metadata.is_dir(),
+            Err(error) => matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ),
+        };
+        Ok(missing.then(|| library_path.clone()))
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "library scan sessions carry explicit runtime, permission, and cancellation context"
