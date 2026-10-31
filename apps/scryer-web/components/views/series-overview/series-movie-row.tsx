@@ -312,7 +312,13 @@ export function SeriesMovieTimelineSection(
             onToggle();
           }
         }}
-        className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
+        // The section clips to its rounded border, so the focus ring is drawn
+        // inset and the header takes the section's corner radius, keeping the
+        // ring whole at the corners.
+        className={cn(
+          "flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--scry-focus)]",
+          expanded ? "rounded-t-[inherit]" : "rounded-[inherit]",
+        )}
       >
         <div className="flex min-w-0 items-center gap-2">
           <button

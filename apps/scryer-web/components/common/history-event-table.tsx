@@ -34,6 +34,12 @@ import {
   type HistoryEpisodeDisplay,
 } from "@/lib/utils/history-episodes";
 import { redactHistoryApiKeys } from "@/lib/utils/history-redaction";
+import {
+  historyHoverData,
+  historyHoverDetails,
+  historyHoverString,
+  type HistoryHoverDetails,
+} from "@/lib/utils/history-hover";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
 import type { ViewId } from "@/components/root/types";
@@ -141,50 +147,9 @@ function historyEpisodeHref(
 
 type HistoryEpisode = HistoryEpisodeDisplay;
 
-function historyHoverData(value: unknown): Record<string, unknown> | null {
-  if (typeof value === "string") {
-    try {
-      return historyHoverData(JSON.parse(value));
-    } catch {
-      return null;
-    }
-  }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
-}
-
-function historyHoverString(
-  value: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const candidate = value?.[key];
-  return typeof candidate === "string" && candidate.trim() ? candidate : null;
-}
-
-function historyHoverDetails(event: TitleHistoryEvent): {
-  facet: string | null;
-  posterUrl: string | null;
-} {
-  const payload = historyHoverData(event.dataJson);
-  const title = historyHoverData(payload?.title) ?? payload;
-  const rawFacet = historyHoverString(title, "facet") ?? event.facet;
-  const facet = rawFacet?.trim().toUpperCase() ?? null;
-  return {
-    facet:
-      facet === "MOVIE" || facet === "SERIES" || facet === "ANIME"
-        ? facet
-        : null,
-    posterUrl:
-      historyHoverString(title, "poster_url") ??
-      historyHoverString(title, "posterUrl"),
-  };
-}
-
 function calendarEpisodeForHistoryEvent(
   event: TitleHistoryEvent,
-  details: ReturnType<typeof historyHoverDetails>,
+  details: HistoryHoverDetails,
   episodeLabel?: string | null,
 ): CalendarEpisodeItem {
   const libraryName = event.sourceSystem ?? event.clientName ?? null;
@@ -199,7 +164,7 @@ function calendarEpisodeForHistoryEvent(
     episodeNumber: null,
     episodeTitle: episodeLabel ?? null,
     overview: event.quality,
-    imageUrl: details.posterUrl,
+    imageUrl: null,
     airDate: event.occurredAt,
     monitored: true,
     playbackLinks: [],
@@ -298,6 +263,7 @@ function HistoryTitleHoverLink({
       {!isMobile && previewAnchor ? (
         <CalendarEventHoverCard
           key={event.id}
+          posterFallbackUrl={details.posterUrl}
           preview={{
             episode: calendarEpisodeForHistoryEvent(
               event,

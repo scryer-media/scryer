@@ -4801,6 +4801,7 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
       titleId
       titleName
       facet
+      posterUrl
       episodeId
       episodeIds
       collectionId
