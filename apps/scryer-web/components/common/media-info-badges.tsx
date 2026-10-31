@@ -131,7 +131,7 @@ export function AudioTracksPopover({
                 ) : null}
                 {stream.bitrateKbps ? (
                   <span className="text-muted-foreground/60">
-                    {stream.bitrateKbps} kbps
+                    {stream.bitrateKbps} {t("uiText.kbps")}
                   </span>
                 ) : null}
               </div>
@@ -188,10 +188,14 @@ export function SubtitleTracksPopover({
                 {resolveSubtitleCodec(track.codec)}
               </span>
               {track.forced ? (
-                <span className="text-muted-foreground/60">[Forced]</span>
+                <span className="text-muted-foreground/60">
+                  {t("uiText.forced")}
+                </span>
               ) : null}
               {track.default ? (
-                <span className="text-muted-foreground/60">[Default]</span>
+                <span className="text-muted-foreground/60">
+                  {t("uiText.default")}
+                </span>
               ) : null}
               {track.name ? (
                 <span className="truncate text-muted-foreground/60">

@@ -360,7 +360,7 @@ export default function OAuthAuthorizePage() {
             className="flex items-center justify-center gap-2 py-3 text-sm text-[var(--scry-muted)]"
           >
             <LoadingMark className="h-5 w-5" />
-            Completing authorization…
+            {t("uiText.completingAuthorization")}
           </div>
         </div>
       </main>
@@ -372,7 +372,10 @@ export default function OAuthAuthorizePage() {
       <main className={OAUTH_PAGE_CLASS}>
         <div className={OAUTH_COMPACT_PANEL_CLASS}>
           <div className="flex items-center justify-center py-3">
-            <LoadingMark className="h-5 w-5" label="Preparing authorization" />
+            <LoadingMark
+              className="h-5 w-5"
+              label={t("uiAttr.Preparing_authorization")}
+            />
           </div>
         </div>
       </main>
@@ -391,20 +394,22 @@ export default function OAuthAuthorizePage() {
               id={selectorId("oauth-authorize-heading")}
               className={OAUTH_HEADING_CLASS}
             >
-              Authorize {clientName ?? "integration"}
+              {t("uiText.authorize")} {clientName ?? "integration"}
             </h1>
             <p className={OAUTH_URI_CLASS}>{request.redirectUri}</p>
           </div>
         </div>
         <div className="grid gap-3 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4 text-sm text-[var(--scry-ink2)]">
-          <h2 className="font-medium text-[var(--scry-ink)]">Scopes</h2>
-          <ul className="grid gap-2" aria-label="Granted scopes">
+          <h2 className="font-medium text-[var(--scry-ink)]">
+            {t("uiText.scopes")}
+          </h2>
+          <ul className="grid gap-2" aria-label={t("uiAttr.Granted_scopes")}>
             <li className="flex items-center gap-2">
               <CheckCircle2
                 className="h-4 w-4 text-emerald-500"
                 aria-hidden="true"
               />
-              Library access
+              {t("uiText.libraryAccess")}
             </li>
             {!authlessAuthorization &&
             grantedScopes.includes("jellyfin-link") ? (
@@ -413,7 +418,7 @@ export default function OAuthAuthorizePage() {
                   className="h-4 w-4 text-emerald-500"
                   aria-hidden="true"
                 />
-                Jellyfin account linking
+                {t("uiText.jellyfinAccountLinking")}
               </li>
             ) : null}
           </ul>
@@ -422,7 +427,7 @@ export default function OAuthAuthorizePage() {
               id={selectorId("oauth-authorize-link-scope-dropped")}
               className="text-xs text-[var(--scry-muted)]"
             >
-              Account linking not granted: no eligible Jellyfin connection.
+              {t("uiText.accountLinkingNotGrantedNoEligibleJellyfinConnection")}
             </p>
           ) : null}
         </div>
@@ -450,7 +455,7 @@ export default function OAuthAuthorizePage() {
               onClick={() => setActorValidationRetry((attempt) => attempt + 1)}
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              Retry validation
+              {t("uiText.retryValidation")}
             </Button>
           ) : null}
           <Button
@@ -461,7 +466,7 @@ export default function OAuthAuthorizePage() {
             onClick={() => decide(false)}
           >
             <X className="h-4 w-4" aria-hidden="true" />
-            Deny
+            {t("uiText.deny")}
           </Button>
         </div>
       </div>

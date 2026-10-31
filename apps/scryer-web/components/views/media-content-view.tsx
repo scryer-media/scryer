@@ -887,7 +887,7 @@ function TitleContextReleaseSearchPanel({
                 className="h-[30px] shrink-0 rounded-[8px] border-[var(--scry-border2)] px-2.5 text-[11px] font-semibold"
                 onClick={() => toggleSort("score")}
               >
-                <span>Score</span>
+                <span>{t("nzb.score")}</span>
                 {renderSortIcon("score")}
               </Button>
               <Button
@@ -897,7 +897,7 @@ function TitleContextReleaseSearchPanel({
                 className="h-[30px] shrink-0 rounded-[8px] border-[var(--scry-border2)] px-2.5 text-[11px] font-semibold"
                 onClick={() => toggleSort("size")}
               >
-                <span>Size</span>
+                <span>{t("title.table.size")}</span>
                 {renderSortIcon("size")}
               </Button>
             </>
@@ -3127,14 +3127,19 @@ export function MediaContentView({
     [deleteCatalogTitle],
   );
   const mediaTitle = mediaTitleLabel(view, t);
-  const titleSummaryNoun = (() => {
-    if (view === "movies") {
-      return knownCatalogTitleCount === 1 ? "title" : "titles";
-    }
-    return view === "series" ? "series" : "anime";
-  })();
+  const titleSummaryKey =
+    view === "movies"
+      ? knownCatalogTitleCount === 1
+        ? "catalog.summary.movie"
+        : "catalog.summary.movies"
+      : view === "series"
+        ? "catalog.summary.series"
+        : "catalog.summary.anime";
   const mediaSummary = [
-    `${knownCatalogTitleCount.toLocaleString()} ${titleSummaryNoun}`,
+    t(titleSummaryKey, {
+      count: knownCatalogTitleCount,
+      formattedCount: knownCatalogTitleCount.toLocaleString(),
+    }),
     managedStorageSummary(Math.max(0, catalogManagedBytes)),
   ].join(" · ");
 

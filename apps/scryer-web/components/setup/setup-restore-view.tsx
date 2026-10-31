@@ -583,7 +583,7 @@ export function SetupRestoreView({
                 </div>
                 <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-page2)] p-3">
                   <p className="text-xs uppercase tracking-wide text-[var(--scry-faint)]">
-                    Tables
+                    {t("uiText.tables")}
                   </p>
                   <p className="mt-1 font-[var(--font-space-grotesk)] text-lg font-bold text-[var(--scry-ink2)]">
                     {rowCounts.length.toLocaleString()}
@@ -600,10 +600,10 @@ export function SetupRestoreView({
                     <TableHeader>
                       <TableRow>
                         <TableHead className="text-[var(--scry-muted2)]">
-                          Table
+                          {t("uiText.table")}
                         </TableHead>
                         <TableHead className="text-right text-[var(--scry-muted2)]">
-                          Rows
+                          {t("uiText.rows")}
                         </TableHead>
                       </TableRow>
                     </TableHeader>

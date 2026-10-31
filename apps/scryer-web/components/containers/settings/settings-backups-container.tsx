@@ -1161,12 +1161,12 @@ export function SettingsBackupsContainer() {
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Bundle
+                      {t("uiText.bundle")}
                     </TableHead>
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Created
+                      {t("settings.externalAccountInviteCreatedAt")}
                     </TableHead>
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
@@ -1176,7 +1176,7 @@ export function SettingsBackupsContainer() {
                     <TableHead
                       className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}
                     >
-                      Size
+                      {t("title.table.size")}
                     </TableHead>
                     <TableHead
                       className={`text-right font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}

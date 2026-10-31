@@ -1228,10 +1228,11 @@ function TemplateExample({
   value: string | null;
   outputId?: string;
 }) {
+  const t = useTranslate();
   return (
     <div className="w-full space-y-2">
       <Label className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
-        Example
+        {t("settings.downloadClientRemotePathMappingsExampleLabel")}
       </Label>
       {value ? (
         <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] px-3.5 py-2.5">

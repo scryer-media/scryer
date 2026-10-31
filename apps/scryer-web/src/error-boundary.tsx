@@ -1,5 +1,12 @@
 import { useEffect } from "react";
-import { useRouteError, isRouteErrorResponse, useNavigate } from "react-router";
+import { useLanguage } from "@/lib/hooks/use-language";
+import type { Translate } from "@/components/root/types";
+import {
+  useRouteError,
+  isRouteErrorResponse,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
@@ -7,7 +14,10 @@ import { claimViteImportRecovery } from "@/lib/utils/vite-import-recovery";
 const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
 const VITE_IMPORT_RECOVERY_DELAY_MS = 500;
 
-function errorInfo(error: unknown): {
+function errorInfo(
+  error: unknown,
+  t: Translate,
+): {
   status: number | null;
   title: string;
   detail: string;
@@ -16,36 +26,38 @@ function errorInfo(error: unknown): {
     if (error.status === 404) {
       return {
         status: 404,
-        title: "Page not found",
-        detail: "The page you're looking for doesn't exist or has been moved.",
+        title: t("uiText.pageNotFound"),
+        detail: t("routeError.notFoundDetail"),
       };
     }
     return {
       status: error.status,
-      title: error.statusText || "Request failed",
-      detail: `The server returned an error (${error.status}).`,
+      title: t("routeError.requestFailed"),
+      detail: t("routeError.serverStatus", { status: error.status }),
     };
   }
 
   if (error instanceof Error) {
     return {
       status: null,
-      title: "Something went wrong",
+      title: t("routeError.somethingWrong"),
       detail: error.message,
     };
   }
 
   return {
     status: null,
-    title: "Unexpected error",
-    detail: "An unknown error occurred while loading this page.",
+    title: t("routeError.unexpected"),
+    detail: t("routeError.unknownDetail"),
   };
 }
 
 export function RouteErrorBoundary() {
   const error = useRouteError();
   const navigate = useNavigate();
-  const { status, title, detail } = errorInfo(error);
+  const [searchParams] = useSearchParams();
+  const { t } = useLanguage(searchParams);
+  const { status, title, detail } = errorInfo(error, t);
 
   useEffect(() => {
     if (!import.meta.env.PROD || typeof window === "undefined") {
@@ -91,7 +103,7 @@ export function RouteErrorBoundary() {
         {error instanceof Error && error.stack && (
           <details className="mb-6 w-full text-left">
             <summary className="cursor-pointer text-xs text-[#8b96b9] transition-colors hover:text-[#dbe5ff] focus-visible:outline-2 focus-visible:outline-[#7b8cff]">
-              Technical details
+              {t("mediaFile.discTechnicalDetails")}
             </summary>
             <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-[#1c2746] bg-[#0a1120] p-3 text-[11px] leading-relaxed text-[#8b96b9]">
               {error.stack}
@@ -109,7 +121,7 @@ export function RouteErrorBoundary() {
             className="gap-2 border-[#1c2746] bg-[#0b1322] text-[#dbe5ff] hover:bg-[#151f35] hover:text-[#dbe5ff] focus-visible:ring-[#7b8cff]"
           >
             <Home className="h-3.5 w-3.5" />
-            Home
+            {t("uiText.home")}
           </Button>
           <Button
             type="button"
@@ -119,7 +131,7 @@ export function RouteErrorBoundary() {
             className="gap-2 bg-[#5b64ff] text-white hover:bg-[#4a52e6] focus-visible:ring-[#7b8cff]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Retry
+            {t("initialAuth.retry")}
           </Button>
         </div>
       </div>

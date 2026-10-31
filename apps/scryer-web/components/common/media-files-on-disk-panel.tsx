@@ -405,7 +405,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                           />
                         ) : (
                           <span className="inline-flex items-center rounded-[6px] bg-[var(--scry-chip)] px-[9px] py-[3px] text-[10.5px] font-semibold text-[var(--scry-muted2)]">
-                            No subs
+                            {t("uiText.noSubs")}
                           </span>
                         )}
                         <MediaInfoButton

@@ -533,10 +533,10 @@ export function SettingsProfileSection({
         <div className={PROFILE_ROW_CARD_CLASS}>
           <div className="space-y-1">
             <div className="font-medium text-[var(--scry-ink2)]">
-              Sponsor button
+              {t("uiText.sponsorButton")}
             </div>
             <p className={`${PROFILE_MUTED_TEXT_CLASS} max-w-xs`}>
-              Show the Sponsor link in the navigation footer.
+              {t("uiText.showTheSponsorLinkInTheNavigationFooter")}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -548,7 +548,7 @@ export function SettingsProfileSection({
               checked={showSponsorButton}
               disabled={savingSponsorPreference}
               onChange={(visible) => onHideSponsorButtonChange(!visible)}
-              ariaLabel="Show Sponsor button"
+              ariaLabel={t("uiAttr.Show_Sponsor_button")}
             />
           </div>
         </div>
@@ -908,9 +908,11 @@ export function SettingsProfileSection({
 
       <div className={PROFILE_CARD_CLASS}>
         <div className="space-y-1">
-          <h3 className={PROFILE_CARD_TITLE_CLASS}>Connected apps</h3>
+          <h3 className={PROFILE_CARD_TITLE_CLASS}>
+            {t("uiText.connectedApps")}
+          </h3>
           <p className={PROFILE_MUTED_TEXT_CLASS}>
-            OAuth integrations authorized to access Scryer as you.
+            {t("uiText.oAuthIntegrationsAuthorizedToAccessScryerAsYou")}
           </p>
         </div>
 
@@ -924,7 +926,7 @@ export function SettingsProfileSection({
             id="settings-profile-oauth-apps-empty"
             className={PROFILE_MUTED_TEXT_CLASS}
           >
-            No connected apps.
+            {t("uiText.noConnectedApps")}
           </p>
         ) : (
           <div className="space-y-3">
@@ -945,7 +947,7 @@ export function SettingsProfileSection({
                     )}
                     className={PROFILE_MUTED_TEXT_CLASS}
                   >
-                    Authorized:{" "}
+                    {t("uiText.authorized")}{" "}
                     {formatTimestamp(app.authorizedAt, dateTimeFormat)}
                   </div>
                   <div
@@ -955,7 +957,8 @@ export function SettingsProfileSection({
                     )}
                     className={PROFILE_MUTED_TEXT_CLASS}
                   >
-                    Last used: {formatTimestamp(app.lastUsedAt, dateTimeFormat)}
+                    {t("uiText.lastUsed")}{" "}
+                    {formatTimestamp(app.lastUsedAt, dateTimeFormat)}
                   </div>
                 </div>
                 <Button
@@ -971,7 +974,7 @@ export function SettingsProfileSection({
                   {revokingOauthGrantId === app.grantId ? (
                     <LoadingMark className="mr-2 h-4 w-4" />
                   ) : null}
-                  Revoke
+                  {t("uiText.revoke")}
                 </Button>
               </div>
             ))}
@@ -1014,7 +1017,7 @@ export function SettingsProfileSection({
                 onClick={() => onStartLinkAccount("EMBY")}
                 disabled={linkAccountBusy}
               >
-                Link Emby account
+                {t("uiText.linkEmbyAccount")}
               </Button>
             ) : null}
             {isVisibleExternalAccountProvider("PLEX") &&
@@ -1194,7 +1197,7 @@ export function SettingsProfileSection({
                   }
                   onClick={() => onLinkAccountEmbyModeChange("LOCAL")}
                 >
-                  Local
+                  {t("uiText.local")}
                 </Button>
                 <Button
                   id="profile-link-emby-mode-connect"
@@ -1204,7 +1207,7 @@ export function SettingsProfileSection({
                   }
                   onClick={() => onLinkAccountEmbyModeChange("CONNECT")}
                 >
-                  Connect
+                  {t("auth.embyConnectMode")}
                 </Button>
               </div>
             ) : null}

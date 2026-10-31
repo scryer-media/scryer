@@ -1,3 +1,4 @@
+import { useTranslate } from "@/lib/context/translate-context";
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "react-router";
@@ -1226,6 +1227,7 @@ type TitleCollectionEmptyStateProps = {
 };
 
 export function TitleCollectionLoadingState() {
+  const t = useTranslate();
   return (
     <div
       className="mx-auto flex max-w-sm items-center justify-center gap-3 rounded-xl border border-border/70 bg-card/60 px-5 py-5 text-center shadow-sm"
@@ -1235,10 +1237,10 @@ export function TitleCollectionLoadingState() {
       <LoadingMark className="h-5 w-5 text-primary" />
       <div className="text-left">
         <p className="text-sm font-medium text-foreground">
-          Loading library...
+          {t("uiText.loadingLibrary")}
         </p>
         <p className="text-sm text-muted-foreground">
-          Checking your titles and library setup.
+          {t("uiText.checkingYourTitlesAndLibrarySetup")}
         </p>
       </div>
     </div>
