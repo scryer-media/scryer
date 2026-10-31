@@ -1,6 +1,7 @@
 import * as React from "react";
 import { RefreshScoresButton } from "@/components/common/refresh-scores-button";
 import { FolderOpen, Trash2, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -146,6 +147,8 @@ function compareEpisodeQueueItems(
 type Props = {
   canManageTitle: boolean;
   fullBleedHero?: boolean;
+  /** Top left of the hero on phones, beside the close button otherwise. */
+  heroLeadingAction?: React.ReactNode;
   loading: boolean;
   hydrating: boolean;
   title: TitleDetail | null;
@@ -244,6 +247,7 @@ type Props = {
 function SeriesOverviewViewImpl({
   canManageTitle,
   fullBleedHero = false,
+  heroLeadingAction,
   loading,
   hydrating,
   title,
@@ -1315,6 +1319,11 @@ function SeriesOverviewViewImpl({
             </div>
           ) : null}
           <CardContent className="relative p-4">
+            {heroLeadingAction ? (
+              <div className="absolute left-2.5 top-2.5 z-20 sm:left-auto sm:right-[4.25rem] sm:top-5">
+                {heroLeadingAction}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
               <div className="mx-auto shrink-0 sm:mx-0">
                 <TitlePosterSlot
@@ -1328,7 +1337,12 @@ function SeriesOverviewViewImpl({
                 />
               </div>
 
-              <div className="relative min-w-0 flex-1 flex flex-col pr-12">
+              <div
+                className={cn(
+                  "relative min-w-0 flex-1 flex flex-col pr-12",
+                  heroLeadingAction && "sm:pr-36",
+                )}
+              >
                 {onBackToList ? (
                   <IconButton
                     label={t("label.close")}

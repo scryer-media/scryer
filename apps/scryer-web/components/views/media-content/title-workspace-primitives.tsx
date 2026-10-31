@@ -11,12 +11,15 @@ export function TitleWorkspaceHero({
   backgroundUrl,
   closeLabel,
   onClose,
+  leadingAction,
   headerActions,
   children,
 }: {
   backgroundUrl?: string | null;
   closeLabel: string;
   onClose: () => void;
+  /** Sits opposite the close button on phones, and beside it otherwise. */
+  leadingAction?: React.ReactNode;
   headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -43,20 +46,30 @@ export function TitleWorkspaceHero({
       ) : null}
       <div className="absolute inset-0 bg-[linear-gradient(105deg,color-mix(in_srgb,var(--scry-bg)_96%,transparent)_30%,color-mix(in_srgb,var(--scry-bg)_55%,transparent)_70%,color-mix(in_srgb,var(--scry-bg)_20%,transparent))]" />
       <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
-      <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">
-        {headerActions}
-        <ActionTooltip content={closeLabel}>
-          <button
-            type="button"
-            aria-label={closeLabel}
-            className="flex size-8 items-center justify-center rounded-[9px] border border-[var(--scry-border2)] bg-background/90 text-foreground backdrop-blur-md transition hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </ActionTooltip>
+      <div className="pointer-events-none absolute inset-x-2.5 top-2.5 z-10 flex items-center justify-between gap-1.5 sm:justify-end">
+        {leadingAction ? (
+          <div className="pointer-events-auto">{leadingAction}</div>
+        ) : null}
+        <div className="pointer-events-auto ml-auto flex items-center gap-1.5 sm:ml-0">
+          {headerActions}
+          <ActionTooltip content={closeLabel}>
+            <button
+              type="button"
+              aria-label={closeLabel}
+              className="flex size-8 items-center justify-center rounded-[9px] border border-[var(--scry-border2)] bg-background/90 text-foreground backdrop-blur-md transition hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </ActionTooltip>
+        </div>
       </div>
-      <div className="relative flex flex-col gap-4 p-[18px] sm:flex-row sm:pr-16">
+      <div
+        className={cn(
+          "relative flex flex-col gap-4 p-[18px] sm:flex-row",
+          leadingAction ? "sm:pr-36" : "sm:pr-16",
+        )}
+      >
         {children}
       </div>
     </section>

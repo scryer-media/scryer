@@ -367,6 +367,7 @@ type SeriesOverviewSnapshotTitle = TitleDetail & {
 type SeriesOverviewContainerProps = {
   titleId: string;
   fullBleedHero?: boolean;
+  heroLeadingAction?: React.ReactNode;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
   onTitleResolved?: (title: OverviewTitleTarget) => void;
@@ -420,6 +421,7 @@ export const SeriesOverviewContainer = React.memo(
   function SeriesOverviewContainer({
     titleId,
     fullBleedHero,
+    heroLeadingAction,
     onTitleNotFound,
     onBackToList,
     onTitleResolved,
@@ -2328,6 +2330,7 @@ export const SeriesOverviewContainer = React.memo(
         <SeriesOverviewView
           canManageTitle={canManageTitle}
           fullBleedHero={fullBleedHero}
+          heroLeadingAction={heroLeadingAction}
           loading={loading}
           hydrating={hydrating}
           title={title}

@@ -1361,14 +1361,12 @@ function TitleContextPanel({
         data-slot="title-context-scroll"
         className="relative min-h-0 flex-1 overflow-visible p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] min-[981px]:overflow-y-auto sm:p-5 sm:pb-5"
       >
-        {titleListDisclosure ? (
-          <div className="mb-3 flex items-center">{titleListDisclosure}</div>
-        ) : null}
         <div className="-mx-4 -mt-4 sm:-mx-5 sm:-mt-5">
           <TitleWorkspaceHero
             backgroundUrl={backgroundUrl}
             closeLabel={t("label.clear")}
             onClose={onClearSelection}
+            leadingAction={titleListDisclosure}
             headerActions={
               (title.playbackLinks?.length ?? 0) > 0 ? (
                 <WatchInMediaServerMenu
@@ -3920,7 +3918,7 @@ export function MediaContentView({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 text-[12px] shadow-none"
+                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 text-[12px] shadow-none max-sm:w-8 max-sm:bg-background/90 max-sm:px-0 max-sm:backdrop-blur-md"
                       aria-expanded={selectedTitleListDrawerOpen}
                       aria-controls={selectedTitleListDrawerId}
                       aria-label={
@@ -3938,7 +3936,9 @@ export function MediaContentView({
                       }
                     >
                       <PanelLeftOpen className="h-4 w-4" />
-                      <span>{t("title.contextListDisclosure")}</span>
+                      <span className="max-sm:sr-only">
+                        {t("title.contextListDisclosure")}
+                      </span>
                     </Button>
                   ) : undefined;
                 const titleOverviewPaneClassName = selectedTitleLayoutActive
@@ -4054,14 +4054,10 @@ export function MediaContentView({
                       data-slot="title-context-scroll"
                       className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-[max(5rem,calc(1rem+env(safe-area-inset-bottom)))] sm:p-5 sm:pb-5"
                     >
-                      {titleListDisclosure ? (
-                        <div className="mb-3 flex items-center">
-                          {titleListDisclosure}
-                        </div>
-                      ) : null}
                       <SeriesOverviewContainer
                         titleId={seriesSidePanelTitleId}
                         fullBleedHero
+                        heroLeadingAction={titleListDisclosure}
                         initialEpisodeId={routeOverviewEpisodeId}
                         onTitleNotFound={handleSelectedOverviewBackToList}
                         onBackToList={handleSelectedOverviewBackToList}
