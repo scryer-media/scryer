@@ -99,6 +99,7 @@ import {
   TvdbSeriesExternalLink,
 } from "@/components/common/external-media-links";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
+import { resolveQueuedSeasonSelections } from "@/lib/utils/season-selection";
 import {
   collectActiveDownloadEpisodeIds,
   coveredEpisodeIdsForQueueItem,
@@ -412,9 +413,15 @@ function SeriesOverviewViewImpl({
       seriesMovieSearchAbortByLinkRef.current = {};
     };
   }, []);
+  // Seasons ticked while collapsed, before their episodes loaded. Each is
+  // selected once its episodes arrive.
+  const [queuedSeasonSelections, setQueuedSeasonSelections] = React.useState<
+    Set<string>
+  >(() => new Set());
   const titleId = title?.id ?? null;
   React.useEffect(() => {
     setSelectedEpisodeIds(new Set());
+    setQueuedSeasonSelections(new Set());
   }, [titleId]);
 
   React.useEffect(() => {
@@ -422,7 +429,48 @@ function SeriesOverviewViewImpl({
       return;
     }
     setSelectedEpisodeIds(new Set());
+    setQueuedSeasonSelections(new Set());
   }, [episodeSelectionResetToken]);
+
+  React.useEffect(() => {
+    if (queuedSeasonSelections.size === 0) {
+      return;
+    }
+    const resolved = resolveQueuedSeasonSelections(
+      queuedSeasonSelections,
+      episodesByCollection,
+      pendingEpisodeIds,
+    );
+    if (!resolved) {
+      return;
+    }
+    setQueuedSeasonSelections(resolved.remaining);
+    if (resolved.episodeIds.length > 0) {
+      setSelectedEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of resolved.episodeIds) {
+          next.add(episodeId);
+        }
+        return next;
+      });
+    }
+  }, [episodesByCollection, pendingEpisodeIds, queuedSeasonSelections]);
+
+  const handleToggleUnloadedSeasonSelected = React.useCallback(
+    (collectionId: string) => {
+      setQueuedSeasonSelections((current) => {
+        const next = new Set(current);
+        if (next.has(collectionId)) {
+          next.delete(collectionId);
+        } else {
+          next.add(collectionId);
+        }
+        return next;
+      });
+      void onLoadCollectionEpisodes?.(collectionId);
+    },
+    [onLoadCollectionEpisodes],
+  );
 
   const handleToggleEpisodeSelected = React.useCallback((episodeId: string) => {
     setSelectedEpisodeIds((current) => {
@@ -1746,6 +1794,14 @@ function SeriesOverviewViewImpl({
                             ? handleSetSeasonSelected
                             : undefined
                         }
+                        onToggleUnloadedSeasonSelected={
+                          episodeSelectionEnabled && onLoadCollectionEpisodes
+                            ? handleToggleUnloadedSeasonSelected
+                            : undefined
+                        }
+                        seasonSelectionQueued={queuedSeasonSelections.has(
+                          collection.id,
+                        )}
                       />
                     );
                   })}

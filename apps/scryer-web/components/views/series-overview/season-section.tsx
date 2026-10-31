@@ -62,6 +62,7 @@ import type {
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
+import { seasonHasSelectableEpisodes } from "@/lib/utils/season-selection";
 import {
   formatFileSize,
   isEpisodeCountableForProgress,
@@ -156,6 +157,13 @@ type SeasonSectionProps = {
   pendingEpisodeIds?: ReadonlySet<string>;
   onToggleEpisodeSelected?: (episodeId: string) => void;
   onSetSeasonSelected?: (episodeIds: string[], selected: boolean) => void;
+  /**
+   * Ticks or unticks the header checkbox of a season whose episodes have not
+   * loaded yet. The owner loads them and selects the season once they arrive.
+   */
+  onToggleUnloadedSeasonSelected?: (collectionId: string) => void;
+  /** The season was ticked before its episodes loaded and is waiting on them. */
+  seasonSelectionQueued?: boolean;
 };
 
 const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
@@ -276,6 +284,8 @@ function SeasonSectionImpl({
   pendingEpisodeIds,
   onToggleEpisodeSelected,
   onSetSeasonSelected,
+  onToggleUnloadedSeasonSelected,
+  seasonSelectionQueued = false,
 }: SeasonSectionProps) {
   const t = useTranslate();
   const seasonSearchPresentation = React.useMemo(
@@ -329,12 +339,33 @@ function SeasonSectionImpl({
       : "indeterminate";
   }, [selectableEpisodeIds, selectedEpisodeIds]);
 
+  const seasonSelectable = seasonHasSelectableEpisodes({
+    episodesReady,
+    selectableEpisodeCount: selectableEpisodeIds.length,
+    episodeRecordsTotal: collection.episodeRecordsTotal,
+  });
+  const seasonCheckboxState =
+    !episodesReady && seasonSelectionQueued ? true : seasonSelectionState;
+
   const handleToggleSeasonSelection = React.useCallback(() => {
+    if (!episodesReady) {
+      // A collapsed season has not loaded its episodes; the owner loads them
+      // and applies the selection once they arrive.
+      onToggleUnloadedSeasonSelected?.(collection.id);
+      return;
+    }
     if (!onSetSeasonSelected) {
       return;
     }
     onSetSeasonSelected(selectableEpisodeIds, seasonSelectionState !== true);
-  }, [onSetSeasonSelected, seasonSelectionState, selectableEpisodeIds]);
+  }, [
+    collection.id,
+    episodesReady,
+    onSetSeasonSelected,
+    onToggleUnloadedSeasonSelected,
+    seasonSelectionState,
+    selectableEpisodeIds,
+  ]);
 
   const seasonCheckedState: boolean | "indeterminate" = React.useMemo(() => {
     if (episodes.length === 0) {
@@ -519,7 +550,13 @@ function SeasonSectionImpl({
               onToggle();
             }
           }}
-          className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80"
+          // The section clips to its rounded border, so the focus ring is drawn
+          // inset and the header takes the section's corner radius, keeping the
+          // ring whole at the corners.
+          className={cn(
+            "flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 bg-card/60 px-4 py-2 text-left transition hover:bg-accent/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--scry-focus)]",
+            expanded ? "rounded-t-[inherit]" : "rounded-[inherit]",
+          )}
         >
           <div className="flex items-center gap-2">
             {selectionEnabled ? (
@@ -536,8 +573,11 @@ function SeasonSectionImpl({
                   id={seriesOverviewSeasonSelectId(collection.id)}
                   size="table"
                   className="shrink-0"
-                  checked={seasonSelectionState}
-                  disabled={!episodesReady || selectableEpisodeIds.length === 0}
+                  checked={seasonCheckboxState}
+                  disabled={
+                    !seasonSelectable ||
+                    (!episodesReady && !onToggleUnloadedSeasonSelected)
+                  }
                   aria-label={t("seriesOverview.selectSeasonForDelete", {
                     name: seasonHeading(collection, t),
                   })}
