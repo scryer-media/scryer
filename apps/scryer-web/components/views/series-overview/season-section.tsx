@@ -4,6 +4,7 @@ import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access
 import {
   ChevronDown,
   ChevronRight,
+  EllipsisVertical,
   Eye,
   EyeOff,
   History,
@@ -11,6 +12,7 @@ import {
   Search,
   Zap,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableActionsHead,
@@ -27,6 +29,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
 import {
   ReleaseSearchLoader,
@@ -40,6 +47,10 @@ import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { InteractiveSearchDialog } from "@/components/common/interactive-search-dialog";
 import { useIsNarrowElement } from "@/lib/hooks/use-mobile";
+import {
+  boxedActionButtonBaseClass,
+  boxedActionButtonToneClass,
+} from "@/lib/utils/action-button-styles";
 import {
   selectorId,
   seriesOverviewSeasonInteractiveSearchId,
@@ -84,6 +95,22 @@ const EMPTY_INDEXER_PROGRESS: InteractiveSearchIndexerProgress[] = [];
 const EPISODE_TABLE_MIN_WIDTH = 720;
 
 export { SeriesMovieTimelineSection } from "./series-movie-row";
+
+const SEASON_ACTIONS_MENU_MAX_WIDTH = 520;
+
+function SeasonActionsMenuItem(
+  props: Omit<React.ComponentProps<typeof Button>, "size" | "variant">,
+) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="w-full justify-start"
+      {...props}
+    />
+  );
+}
 
 type SeasonSectionProps = {
   collection: TitleCollection;
@@ -311,6 +338,11 @@ function SeasonSectionImpl({
   const [seasonToggling, setSeasonToggling] = React.useState(false);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [seasonSearchOpen, setSeasonSearchOpen] = React.useState(false);
+  const actionsInMenu = useIsNarrowElement(
+    sectionRef,
+    SEASON_ACTIONS_MENU_MAX_WIDTH,
+  );
+  const [actionsMenuOpen, setActionsMenuOpen] = React.useState(false);
   const stableSubtitleDownloads = subtitleDownloads ?? EMPTY_SUBTITLE_DOWNLOADS;
   const selectionEnabled = Boolean(onToggleEpisodeSelected);
 
@@ -558,7 +590,9 @@ function SeasonSectionImpl({
             expanded ? "rounded-t-[inherit]" : "rounded-[inherit]",
           )}
         >
-          <div className="flex items-center gap-2">
+          <div
+            className={cn("flex items-center gap-2", actionsInMenu && "w-full")}
+          >
             {selectionEnabled ? (
               // On desktop this mirrors the table's 40px selection column
               // (pulled back through the header's px-4) so the season and
@@ -630,8 +664,103 @@ function SeasonSectionImpl({
                 </p>
               ) : null}
             </div>
+            {actionsInMenu ? (
+              <Popover open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id={`season-actions-${collection.id}`}
+                    type="button"
+                    size="icon-sm"
+                    variant="secondary"
+                    aria-label={`${seasonHeading(collection, t)} — ${t("label.actions")}`}
+                    className={cn(
+                      boxedActionButtonBaseClass,
+                      boxedActionButtonToneClass.neutral,
+                      "ml-auto shrink-0",
+                    )}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <EllipsisVertical className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  className="flex w-56 flex-col gap-0.5 p-1"
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {canRefreshScores ? (
+                    <RefreshScoresButton
+                      appearance="menu"
+                      id={`season-refresh-scores-${collection.id}`}
+                      selection={{ seasonIds: [collection.id] }}
+                    />
+                  ) : null}
+                  <SeasonActionsMenuItem
+                    id={`season-details-${collection.id}`}
+                    onClick={() => {
+                      setActionsMenuOpen(false);
+                      setDetailsOpen(true);
+                    }}
+                  >
+                    <Info className="h-4 w-4" />
+                    {t("episode.details")}
+                  </SeasonActionsMenuItem>
+                  {onOpenSeasonHistory ? (
+                    <SeasonActionsMenuItem
+                      id={`season-history-${collection.id}`}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        onOpenSeasonHistory(collection);
+                      }}
+                    >
+                      <History className="h-4 w-4" />
+                      {t("history.title")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                  {onRunSeasonSearch ? (
+                    <SeasonActionsMenuItem
+                      id={seriesOverviewSeasonSearchId(collection.id)}
+                      disabled={seasonSearchLoading === true}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        onRunSeasonSearch();
+                      }}
+                    >
+                      {seasonSearchLoading === true ? (
+                        <LoadingMark className="h-4 w-4" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
+                      {t("series.searchSeason")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                  {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
+                    <SeasonActionsMenuItem
+                      id={seriesOverviewSeasonInteractiveSearchId(
+                        collection.id,
+                      )}
+                      disabled={seasonInteractiveSearchLoading}
+                      onClick={() => {
+                        setActionsMenuOpen(false);
+                        setSeasonSearchOpen(true);
+                        onRunSeasonInteractiveSearch();
+                      }}
+                    >
+                      {seasonInteractiveSearchLoading ? (
+                        <LoadingMark className="h-4 w-4" />
+                      ) : (
+                        <Search className="h-4 w-4" />
+                      )}
+                      {t("series.interactiveSearchSeason")}
+                    </SeasonActionsMenuItem>
+                  ) : null}
+                </PopoverContent>
+              </Popover>
+            ) : null}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 empty:hidden">
             {collectionSizeLabel ? (
               <span className="text-xs tabular-nums text-muted-foreground">
                 {collectionSizeLabel}
@@ -644,25 +773,27 @@ function SeasonSectionImpl({
                 className="w-[6.75rem]"
               />
             ) : null}
-            {canRefreshScores ? (
+            {canRefreshScores && !actionsInMenu ? (
               <RefreshScoresButton
                 appearance="icon"
                 id={`season-refresh-scores-${collection.id}`}
                 selection={{ seasonIds: [collection.id] }}
               />
             ) : null}
-            <IconButton
-              id={`season-details-${collection.id}`}
-              label={`${seasonHeading(collection, t)} — ${t("episode.details")}`}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                setDetailsOpen(true);
-              }}
-            >
-              <Info className="h-4 w-4" />
-            </IconButton>
-            {onOpenSeasonHistory ? (
+            {actionsInMenu ? null : (
+              <IconButton
+                id={`season-details-${collection.id}`}
+                label={`${seasonHeading(collection, t)} — ${t("episode.details")}`}
+                onKeyDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setDetailsOpen(true);
+                }}
+              >
+                <Info className="h-4 w-4" />
+              </IconButton>
+            )}
+            {onOpenSeasonHistory && !actionsInMenu ? (
               <IconButton
                 id={`season-history-${collection.id}`}
                 label={`${seasonHeading(collection, t)} — ${t("history.title")}`}
@@ -675,7 +806,7 @@ function SeasonSectionImpl({
                 <History className="h-4 w-4" />
               </IconButton>
             ) : null}
-            {onRunSeasonSearch ? (
+            {onRunSeasonSearch && !actionsInMenu ? (
               <EpisodeTableActionButton
                 id={seriesOverviewSeasonSearchId(collection.id)}
                 tone="auto"
@@ -698,7 +829,9 @@ function SeasonSectionImpl({
                 )}
               </EpisodeTableActionButton>
             ) : null}
-            {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
+            {onRunSeasonInteractiveSearch &&
+            onQueueFromSeasonSearch &&
+            !actionsInMenu ? (
               <EpisodeTableActionButton
                 id={seriesOverviewSeasonInteractiveSearchId(collection.id)}
                 tone="search"
