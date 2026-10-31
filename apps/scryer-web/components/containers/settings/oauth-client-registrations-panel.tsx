@@ -253,18 +253,21 @@ export function OAuthClientRegistrationsPanel() {
     }
   }, [client, draft, editingClientId, reload, resetDraft, t]);
 
-  const copyClientId = React.useCallback(async (clientId: string) => {
-    if (!navigator.clipboard) {
-      toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(clientId);
-      toast.success(t("oauth.ui.OAuth_client_ID_copied"));
-    } catch {
-      toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
-    }
-  }, [t]);
+  const copyClientId = React.useCallback(
+    async (clientId: string) => {
+      if (!navigator.clipboard) {
+        toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(clientId);
+        toast.success(t("oauth.ui.OAuth_client_ID_copied"));
+      } catch {
+        toast.error(t("oauth.ui.Unable_to_copy_the_OAuth_client_ID"));
+      }
+    },
+    [t],
+  );
 
   const copyJellyfinCallback = React.useCallback(
     async (callbackUrl: string) => {
