@@ -1310,11 +1310,15 @@ function SeriesOverviewViewImpl({
               <div
                 className="absolute inset-0"
                 style={{
-                  background: `linear-gradient(to top, ${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent), color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
+                  background: `linear-gradient(to top, ${
+                    fullBleedHero
+                      ? `color-mix(in srgb, ${overviewBackdropGround} 70%, transparent)`
+                      : `${overviewBackdropGround} 0%, ${overviewBackdropGround} 5%, color-mix(in srgb, ${overviewBackdropGround} 82%, transparent)`
+                  }, color-mix(in srgb, ${overviewBackdropGround} 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)`,
                 }}
               />
               {fullBleedHero ? (
-                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
+                <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
               ) : null}
             </div>
           ) : null}
