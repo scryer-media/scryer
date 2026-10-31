@@ -1517,9 +1517,9 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     rf.path,
                                   )}
                                   type="button"
-                                  variant="ghost"
+                                  variant="outline"
                                   size="sm"
-                                  className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                  className="h-8 shrink-0 px-2.5 text-xs"
                                   onClick={() => handleSetDefault(index)}
                                   disabled={actionBusy}
                                 >
