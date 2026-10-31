@@ -1324,20 +1324,22 @@ function SeriesOverviewViewImpl({
               </div>
             ) : null}
             {onBackToList ? (
-              <IconButton
-                label={t("label.close")}
-                tone="neutral"
-                className="absolute right-2.5 top-2.5 z-20 size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] sm:right-4 sm:top-4"
-                onClick={() => onBackToList()}
-              >
-                <X className="h-5 w-5" />
-              </IconButton>
+              <div className="absolute right-2.5 top-2.5 z-20 sm:right-4 sm:top-4">
+                <IconButton
+                  label={t("label.close")}
+                  tone="neutral"
+                  className="size-10 rounded-[11px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] text-[var(--scry-ink2)] shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                  onClick={() => onBackToList()}
+                >
+                  <X className="h-5 w-5" />
+                </IconButton>
+              </div>
             ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:gap-5">
               <div
                 className={
                   heroLeadingAction
-                    ? "mx-auto shrink-0 sm:mx-0 sm:mt-2"
+                    ? "mx-auto shrink-0 sm:mx-0 sm:mt-8"
                     : "mx-auto shrink-0 sm:mx-0"
                 }
               >
