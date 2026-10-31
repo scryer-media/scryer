@@ -126,6 +126,181 @@ pub fn title_script(value: &str) -> TitleScript {
     script.unwrap_or(TitleScript::Other)
 }
 
+/// The writing system of a name, finer than [`TitleScript`]: it tells kana
+/// from Hangul from Han, and names the alphabets [`TitleScript::Other`]
+/// lumps together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NameScript {
+    Latin,
+    Kana,
+    Hangul,
+    Han,
+    Cyrillic,
+    Greek,
+    Hebrew,
+    /// Arabic letters. `extended` is set when the name uses a letter outside
+    /// the Arabic language's own alphabet (Persian `پ`, Urdu `ے`, ...).
+    Arabic {
+        extended: bool,
+    },
+    Thai,
+    Georgian,
+    Armenian,
+}
+
+fn letter_script(ch: char) -> Option<NameScript> {
+    Some(match ch as u32 {
+        0x41..=0x7a | 0xc0..=0x24f | 0x1e00..=0x1eff | 0xff21..=0xff5a => NameScript::Latin,
+        0x3040..=0x30ff | 0x31f0..=0x31ff | 0xff66..=0xff9f => NameScript::Kana,
+        0x1100..=0x11ff | 0x3130..=0x318f | 0xa960..=0xa97f | 0xac00..=0xd7ff | 0xffa0..=0xffdc => {
+            NameScript::Hangul
+        }
+        0x2e80..=0x2fdf
+        | 0x3005..=0x3007
+        | 0x3400..=0x4dbf
+        | 0x4e00..=0x9fff
+        | 0xf900..=0xfaff
+        | 0x20000..=0x323af => NameScript::Han,
+        0x400..=0x52f => NameScript::Cyrillic,
+        0x370..=0x3ff | 0x1f00..=0x1fff => NameScript::Greek,
+        0x590..=0x5ff | 0xfb1d..=0xfb4f => NameScript::Hebrew,
+        // The Arabic alphabet proper and its vowel marks.
+        0x621..=0x65f | 0x670 => NameScript::Arabic { extended: false },
+        0x600..=0x6ff | 0x750..=0x77f | 0x8a0..=0x8ff | 0xfb50..=0xfdff | 0xfe70..=0xfeff => {
+            NameScript::Arabic { extended: true }
+        }
+        0xe00..=0xe7f => NameScript::Thai,
+        0x10a0..=0x10ff | 0x1c90..=0x1cbf | 0x2d00..=0x2d2f => NameScript::Georgian,
+        0x530..=0x58f | 0xfb13..=0xfb17 => NameScript::Armenian,
+        _ => return None,
+    })
+}
+
+/// The one non-Latin script of a name, `Latin` for a name in Latin letters
+/// only, or `None` when it mixes scripts no single language writes or uses a
+/// letter outside the scripts above. Latin letters beside another script
+/// (`ハーバー Lantern 2`) are carried along: release-style names mix them.
+fn name_script(value: &str) -> Option<NameScript> {
+    let mut latin = false;
+    let mut kana = false;
+    let mut hangul = false;
+    let mut han = false;
+    let mut other: Option<NameScript> = None;
+    for ch in value.chars().filter(|ch| ch.is_alphabetic()) {
+        match letter_script(ch)? {
+            NameScript::Latin => latin = true,
+            NameScript::Kana => kana = true,
+            NameScript::Hangul => hangul = true,
+            NameScript::Han => han = true,
+            script => {
+                other = Some(match (other, script) {
+                    (None, script) => script,
+                    (
+                        Some(NameScript::Arabic { extended: left }),
+                        NameScript::Arabic { extended: right },
+                    ) => NameScript::Arabic {
+                        extended: left || right,
+                    },
+                    (Some(previous), script) if previous == script => script,
+                    _ => return None,
+                });
+            }
+        }
+    }
+    match (other, kana, hangul, han) {
+        (Some(script), false, false, false) => Some(script),
+        (Some(_), ..) => None,
+        // Japanese writes kana beside kanji; Korean writes Hangul beside
+        // hanja. No language writes kana and Hangul together.
+        (None, true, true, _) => None,
+        (None, true, false, _) => Some(NameScript::Kana),
+        (None, false, true, _) => Some(NameScript::Hangul),
+        (None, false, false, true) => Some(NameScript::Han),
+        (None, false, false, false) => latin.then_some(NameScript::Latin),
+    }
+}
+
+/// The language a country's catalog names are corroborated as, used only to
+/// settle a script several languages write.
+fn country_language(country: &str) -> Option<&'static str> {
+    Some(match country.trim().to_ascii_uppercase().as_str() {
+        "JP" => "jpn",
+        "KR" => "kor",
+        "CN" | "TW" | "HK" | "MO" | "SG" => "zho",
+        "RU" => "rus",
+        "UA" => "ukr",
+        "BG" => "bul",
+        "RS" => "srp",
+        "MK" => "mkd",
+        "IR" => "fas",
+        "PK" => "urd",
+        _ => return None,
+    })
+}
+
+/// Whether `language` writes names in `script`. For Latin this is only the
+/// romanizations release groups name titles by, so a country cannot turn an
+/// English-looking name into a German or French one.
+fn language_writes(language: &str, script: NameScript) -> bool {
+    match script {
+        NameScript::Latin => matches!(language, "jpn" | "kor"),
+        NameScript::Kana => language == "jpn",
+        NameScript::Hangul => language == "kor",
+        NameScript::Han => matches!(language, "jpn" | "zho"),
+        NameScript::Cyrillic => matches!(language, "rus" | "ukr" | "bul" | "srp" | "mkd"),
+        NameScript::Arabic { .. } => matches!(language, "ara" | "fas" | "urd"),
+        NameScript::Greek | NameScript::Hebrew | NameScript::Thai => false,
+        NameScript::Georgian | NameScript::Armenian => false,
+    }
+}
+
+/// The language (ISO 639-2/T) an alias that carries no language tag is
+/// attributed to, from the script it is written in, or `None` when the script
+/// does not settle it.
+///
+/// Catalogs serve some aliases untagged (alternative titles that carry only a
+/// country), so this is what lets a search language reach them. The rule:
+///
+/// * A script only one search language writes settles it: kana is Japanese,
+///   Hangul Korean, and Greek, Hebrew, Thai, Georgian and Armenian their own
+///   language. Arabic letters default to Arabic; a letter of the Persian or
+///   Urdu alphabets leaves the name open.
+/// * Han characters without kana are not Japanese by default: a kanji-only
+///   Japanese name and a Chinese name are written alike, and untagged Han
+///   aliases are as often a Chinese market's title. Cyrillic is shared by
+///   Russian, Ukrainian, Bulgarian, Serbian and Macedonian. Latin letters
+///   name no language at all. All three stay unattributed.
+/// * `country`, when the catalog supplies one, only corroborates: it settles
+///   a shared script for the language that country names titles in (Han with
+///   `JP` is Japanese, with `CN` or `TW` Chinese; Cyrillic with `UA` is
+///   Ukrainian; Arabic letters with `IR` are Persian), and a Latin name with
+///   `JP` or `KR` is read as a romanization. A country whose language does not
+///   write the name's script is ignored (kana with `CN` is still Japanese),
+///   and a country is never required.
+pub fn untagged_name_language(value: &str, country: Option<&str>) -> Option<&'static str> {
+    let script = name_script(value)?;
+    if let Some(language) = country
+        .and_then(country_language)
+        .filter(|language| language_writes(language, script))
+    {
+        return Some(language);
+    }
+    match script {
+        NameScript::Kana => Some("jpn"),
+        NameScript::Hangul => Some("kor"),
+        NameScript::Greek => Some("ell"),
+        NameScript::Hebrew => Some("heb"),
+        NameScript::Thai => Some("tha"),
+        NameScript::Georgian => Some("kat"),
+        NameScript::Armenian => Some("hye"),
+        NameScript::Arabic { extended: false } => Some("ara"),
+        NameScript::Arabic { extended: true }
+        | NameScript::Han
+        | NameScript::Cyrillic
+        | NameScript::Latin => None,
+    }
+}
+
 /// Preserve diacritics and native letters; normalize only representation and
 /// word separators. Remaining combining marks belong to the preceding letter.
 pub fn normalize_title_spelling(value: &str) -> String {
@@ -1387,5 +1562,74 @@ mod tests {
                 "{axis} under {language}: {left} / {right}"
             );
         }
+    }
+
+    #[test]
+    fn untagged_name_language_reads_scripts_one_language_writes() {
+        for (name, language) in [
+            ("ほしぞらのかなた", "jpn"),
+            ("ハーバーランタン", "jpn"),
+            ("星空のカナタ", "jpn"),
+            ("ハーバー Lantern 2", "jpn"),
+            ("항구의 등불", "kor"),
+            ("Φανός του Λιμανιού", "ell"),
+            ("פנס הנמל", "heb"),
+            ("โคมไฟท่าเรือ", "tha"),
+            ("ნავსადგურის ფარანი", "kat"),
+            ("Նավահանգստի լապտեր", "hye"),
+            ("فانوس الميناء", "ara"),
+        ] {
+            assert_eq!(untagged_name_language(name, None), Some(language), "{name}");
+        }
+    }
+
+    #[test]
+    fn untagged_name_language_leaves_shared_scripts_open() {
+        for name in [
+            // Han without kana: a kanji-only Japanese name or a Chinese one.
+            "星空彼方",
+            // Cyrillic: Russian, Ukrainian, Bulgarian, Serbian, Macedonian.
+            "Фонарь гавани",
+            // Latin names no language.
+            "Harbor Lantern",
+            "Hoshizora no Kanata",
+            // A Persian-alphabet letter leaves Arabic letters open.
+            "چراغ بندر",
+            // Kana and Hangul together, and a script outside the table.
+            "ほし 항구",
+            "बंदरगाह",
+            "",
+            "2024",
+        ] {
+            assert_eq!(untagged_name_language(name, None), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn untagged_name_language_takes_a_country_only_as_corroboration() {
+        assert_eq!(untagged_name_language("星空彼方", Some("JP")), Some("jpn"));
+        assert_eq!(untagged_name_language("星空彼方", Some("tw")), Some("zho"));
+        assert_eq!(untagged_name_language("星空彼方", Some("KR")), None);
+        assert_eq!(
+            untagged_name_language("Фонарь гавани", Some("UA")),
+            Some("ukr")
+        );
+        assert_eq!(untagged_name_language("چراغ بندر", Some("IR")), Some("fas"));
+        assert_eq!(
+            untagged_name_language("Hoshizora no Kanata", Some("JP")),
+            Some("jpn")
+        );
+        // A country never makes a Latin name a non-romanized language, and
+        // never overrides a script its language does not write.
+        assert_eq!(untagged_name_language("Harbor Lantern", Some("DE")), None);
+        assert_eq!(untagged_name_language("Harbor Lantern", Some("RU")), None);
+        assert_eq!(
+            untagged_name_language("ほしぞらのかなた", Some("CN")),
+            Some("jpn")
+        );
+        assert_eq!(
+            untagged_name_language("항구의 등불", Some("JP")),
+            Some("kor")
+        );
     }
 }
