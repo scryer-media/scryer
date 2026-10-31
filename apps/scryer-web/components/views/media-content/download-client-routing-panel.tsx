@@ -346,7 +346,7 @@ export const DownloadClientRoutingPanel = React.memo(
                         <ChevronDown className="h-4 w-4" />
                       </DownloadClientRoutingActionButton>
                     </div>
-                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <div className="order-first flex w-full min-w-0 items-center gap-2 @lg/facet-page:order-none @lg/facet-page:w-auto @lg/facet-page:flex-1">
                       <DownloadClientTypeLogo typeValue={client.clientType} />
                       <span className="sr-only">{client.clientType}</span>
                       <span className="truncate font-semibold text-[var(--scry-ink2)]">
@@ -363,7 +363,7 @@ export const DownloadClientRoutingPanel = React.memo(
                     </div>
                     <label
                       htmlFor={enabledId}
-                      className="flex cursor-pointer items-center gap-2 text-sm font-medium"
+                      className="ml-auto flex cursor-pointer items-center gap-2 text-sm font-medium"
                     >
                       {t("settings.downloadClientRoutingEnabled")}
                       <Checkbox

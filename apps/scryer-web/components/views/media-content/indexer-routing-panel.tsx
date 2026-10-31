@@ -1,21 +1,8 @@
 import * as React from "react";
-import { RenderBooleanIcon } from "@/components/common/boolean-icon";
+import { Checkbox } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
-import {
-  ChevronDown,
-  ChevronUp,
-  Power,
-  PowerOff,
-  SlidersVertical,
-} from "lucide-react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Label } from "@/components/ui/label";
+import { ChevronDown, ChevronUp, SlidersVertical } from "lucide-react";
 import { IndexerCategoryPicker } from "./indexer-category-picker";
 import type { ViewCategoryId } from "./indexer-category-picker";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
@@ -37,7 +24,7 @@ function IndexerRoutingActionButton({
   ...props
 }: Omit<React.ComponentProps<typeof IconButton>, "tone"> & {
   label: string;
-  tone: Extract<BoxedActionButtonTone, "enabled" | "disabled" | "reorder">;
+  tone: Extract<BoxedActionButtonTone, "reorder">;
 }) {
   return (
     <IconButton label={label} tone={tone} className={className} {...props}>
@@ -103,158 +90,126 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
           })}
         </h2>
       </div>
-      <div className="mt-5">
-        <div className="overflow-x-auto rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)]">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("settings.indexerRoutingPriority")}</TableHead>
-                <TableHead>{t("label.name")}</TableHead>
-                <TableHead>{t("settings.indexerRoutingCategories")}</TableHead>
-                <TableHead className="text-center">
-                  {t("settings.indexerRoutingGloballyEnabled")}
-                </TableHead>
-                <TableHead className="text-center">
-                  {t("settings.indexerRoutingEnabled")}
-                </TableHead>
-                <TableHead className="text-right">
-                  {t("label.actions")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orderedIndexerIds.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground">
-                    {t("settings.indexerRoutingNoIndexers")}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                orderedIndexerIds.map((indexerId, index) => {
-                  const indexer = indexerById[indexerId];
-                  if (!indexer) {
-                    return null;
-                  }
-                  const routing =
-                    activeScopeIndexerRouting[indexer.id] ??
-                    getDefaultIndexerRouting(activeQualityScopeId);
-                  return (
-                    <TableRow
-                      key={indexer.id}
-                      id={selectorId("indexer-routing-row", indexer.name)}
-                      data-ui="settings-table-row"
+      <div className="mt-5 space-y-3">
+        {orderedIndexerIds.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {t("settings.indexerRoutingNoIndexers")}
+          </p>
+        ) : (
+          orderedIndexerIds.map((indexerId, index) => {
+            const indexer = indexerById[indexerId];
+            if (!indexer) {
+              return null;
+            }
+            const routing =
+              activeScopeIndexerRouting[indexer.id] ??
+              getDefaultIndexerRouting(activeQualityScopeId);
+            const controlsDisabled =
+              indexerRoutingLoading || indexerRoutingSaving;
+            const enabledId = selectorId(
+              routing.enabled
+                ? "indexer-routing-disable"
+                : "indexer-routing-enable",
+              indexer.name,
+            );
+            const categoriesId = selectorId(
+              "indexer-routing-categories",
+              indexer.name,
+            );
+            return (
+              <div
+                key={indexer.id}
+                id={selectorId("indexer-routing-row", indexer.name)}
+                data-ui="settings-table-row"
+                className="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)] p-3 sm:p-4"
+              >
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <div className="flex items-center gap-1">
+                    <span className="w-5 text-center text-sm tabular-nums text-muted-foreground">
+                      {index + 1}
+                    </span>
+                    <IndexerRoutingActionButton
+                      id={selectorId("indexer-routing-move-up", indexer.name)}
+                      tone="reorder"
+                      label={`${t("label.moveUp")} ${indexer.name}`}
+                      onClick={() => onMoveUp(indexer.id)}
+                      disabled={controlsDisabled || index === 0}
                     >
-                      <TableCell>{index + 1}</TableCell>
-                      <TableCell>{indexer.name}</TableCell>
-                      <TableCell className="w-[30rem] min-w-[30rem] max-w-[30rem]">
-                        <IndexerCategoryPicker
-                          triggerId={selectorId(
-                            "indexer-routing-categories",
-                            indexer.name,
-                          )}
-                          panelId={selectorId(
-                            "indexer-routing-categories-panel",
-                            indexer.name,
-                          )}
-                          categoryIdPrefix={selectorId(
-                            "indexer-routing-category",
-                            indexer.name,
-                          )}
-                          value={routing.categories}
-                          scope={activeQualityScopeId}
-                          capsCategories={indexer.capsCategories}
-                          disabled={
-                            indexerRoutingLoading || indexerRoutingSaving
-                          }
-                          categoriesLabel={`${t("settings.indexerRoutingCategories")} (${indexer.name})`}
-                          onChange={(categories) =>
-                            onCategoriesChange(indexer.id, categories)
-                          }
-                        />
-                      </TableCell>
-                      <TableCell className="text-center align-middle">
-                        <RenderBooleanIcon
-                          value={indexer.isEnabled}
-                          label={`${t("settings.indexerRoutingGloballyEnabled")}: ${indexer.name}`}
-                        />
-                      </TableCell>
-                      <TableCell className="text-center align-middle">
-                        <RenderBooleanIcon
-                          value={indexer.isEnabled && routing.enabled}
-                          label={`${t("settings.indexerRoutingEnabled")}: ${indexer.name}`}
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <IndexerRoutingActionButton
-                            id={selectorId(
-                              routing.enabled
-                                ? "indexer-routing-disable"
-                                : "indexer-routing-enable",
-                              indexer.name,
-                            )}
-                            tone={routing.enabled ? "disabled" : "enabled"}
-                            label={
-                              routing.enabled
-                                ? t("label.disable")
-                                : t("label.enable")
-                            }
-                            onClick={() =>
-                              onEnabledChange(indexer.id, !routing.enabled)
-                            }
-                            disabled={
-                              indexerRoutingLoading ||
-                              indexerRoutingSaving ||
-                              !indexer.isEnabled
-                            }
-                          >
-                            {routing.enabled ? (
-                              <PowerOff className="h-3.5 w-3.5" />
-                            ) : (
-                              <Power className="h-3.5 w-3.5" />
-                            )}
-                          </IndexerRoutingActionButton>
-                          <IndexerRoutingActionButton
-                            id={selectorId(
-                              "indexer-routing-move-up",
-                              indexer.name,
-                            )}
-                            tone="reorder"
-                            label={`${t("label.moveUp")} ${indexer.name}`}
-                            onClick={() => onMoveUp(indexer.id)}
-                            disabled={
-                              indexerRoutingLoading ||
-                              indexerRoutingSaving ||
-                              index === 0
-                            }
-                          >
-                            <ChevronUp className="h-4 w-4" />
-                          </IndexerRoutingActionButton>
-                          <IndexerRoutingActionButton
-                            id={selectorId(
-                              "indexer-routing-move-down",
-                              indexer.name,
-                            )}
-                            tone="reorder"
-                            label={`${t("label.moveDown")} ${indexer.name}`}
-                            onClick={() => onMoveDown(indexer.id)}
-                            disabled={
-                              indexerRoutingLoading ||
-                              indexerRoutingSaving ||
-                              index >= orderedIndexerIds.length - 1
-                            }
-                          >
-                            <ChevronDown className="h-4 w-4" />
-                          </IndexerRoutingActionButton>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                      <ChevronUp className="h-4 w-4" />
+                    </IndexerRoutingActionButton>
+                    <IndexerRoutingActionButton
+                      id={selectorId("indexer-routing-move-down", indexer.name)}
+                      tone="reorder"
+                      label={`${t("label.moveDown")} ${indexer.name}`}
+                      onClick={() => onMoveDown(indexer.id)}
+                      disabled={
+                        controlsDisabled ||
+                        index >= orderedIndexerIds.length - 1
+                      }
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </IndexerRoutingActionButton>
+                  </div>
+                  <div className="order-first flex w-full min-w-0 items-center gap-2 @lg/facet-page:order-none @lg/facet-page:w-auto @lg/facet-page:flex-1">
+                    <span className="truncate font-semibold text-[var(--scry-ink2)]">
+                      {indexer.name}
+                    </span>
+                    {!indexer.isEnabled ? (
+                      <span
+                        className="shrink-0 rounded-full border border-[var(--scry-border2)] px-2 py-0.5 text-xs text-muted-foreground"
+                        title={`${t("settings.indexerRoutingGloballyEnabled")}: ${t("label.no")}`}
+                      >
+                        {t("label.disabled")}
+                      </span>
+                    ) : null}
+                  </div>
+                  <label
+                    htmlFor={enabledId}
+                    className="ml-auto flex cursor-pointer items-center gap-2 text-sm font-medium"
+                  >
+                    {t("settings.indexerRoutingEnabled")}
+                    <Checkbox
+                      id={enabledId}
+                      size="large"
+                      checked={indexer.isEnabled && routing.enabled}
+                      disabled={controlsDisabled || !indexer.isEnabled}
+                      onCheckedChange={(checked) =>
+                        onEnabledChange(indexer.id, checked === true)
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 min-w-0 space-y-1.5">
+                  <Label
+                    htmlFor={categoriesId}
+                    className="text-xs text-muted-foreground"
+                  >
+                    {t("settings.indexerRoutingCategories")}
+                  </Label>
+                  <IndexerCategoryPicker
+                    triggerId={categoriesId}
+                    panelId={selectorId(
+                      "indexer-routing-categories-panel",
+                      indexer.name,
+                    )}
+                    categoryIdPrefix={selectorId(
+                      "indexer-routing-category",
+                      indexer.name,
+                    )}
+                    value={routing.categories}
+                    scope={activeQualityScopeId}
+                    capsCategories={indexer.capsCategories}
+                    disabled={controlsDisabled}
+                    categoriesLabel={`${t("settings.indexerRoutingCategories")} (${indexer.name})`}
+                    onChange={(categories) =>
+                      onCategoriesChange(indexer.id, categories)
+                    }
+                  />
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
     </section>
   );
