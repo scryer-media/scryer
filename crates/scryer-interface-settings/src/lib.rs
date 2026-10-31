@@ -1503,9 +1503,10 @@ impl SettingsQueries {
         facet: MediaFacetValue,
     ) -> GqlResult<Vec<RootFolderPayload>> {
         let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
         let media_facet = facet.into_domain();
         let entries = app
-            .root_folders_for_facet(&media_facet)
+            .visible_root_folders_for_facet(&actor, &media_facet)
             .await
             .map_err(to_gql_error)?;
         Ok(entries

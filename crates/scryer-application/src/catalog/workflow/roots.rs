@@ -113,6 +113,25 @@ pub(crate) fn submission_scopes_overlap(
         })
 }
 impl AppUseCase {
+    /// Public root listing uses the same visibility boundary as library listings.
+    pub async fn visible_root_folders_for_facet(
+        &self,
+        actor: &User,
+        facet: &scryer_domain::MediaFacet,
+    ) -> AppResult<Vec<scryer_domain::RootFolderEntry>> {
+        let libraries = self
+            .list_libraries_for_permission(
+                actor,
+                Some(facet.clone()),
+                scryer_domain::LibraryPermission::View,
+            )
+            .await?;
+        Ok(libraries
+            .iter()
+            .flat_map(|library| root_folder_entries_from_library_roots(&library.roots))
+            .collect())
+    }
+
     /// Return the configured root folders for a facet.
     ///
     /// Reads canonical roots from the facet's default library. Legacy
