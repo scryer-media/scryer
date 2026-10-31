@@ -1396,12 +1396,7 @@ function TitleContextPanel({
               />
             </TitleWorkspacePosterFrame>
             <div className="flex w-full min-w-0 flex-1 flex-col sm:w-auto">
-              <h2
-                className={cn(
-                  "text-[21px] font-bold leading-[1.1] tracking-normal text-white sm:pr-12",
-                  titleListDisclosure && "sm:pr-36",
-                )}
-              >
+              <h2 className="text-[21px] font-bold leading-[1.1] tracking-normal text-white sm:pr-12">
                 {title.name}
                 {yearLabel ? (
                   <span className="font-medium text-[var(--scry-muted3)]">
@@ -3919,7 +3914,7 @@ export function MediaContentView({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 text-[12px] shadow-none max-sm:w-8 max-sm:bg-background/90 max-sm:px-0 max-sm:backdrop-blur-md"
+                      className="h-8 gap-2 rounded-[8px] border-[var(--scry-border2)] bg-background/90 px-3 text-[12px] shadow-none backdrop-blur-md max-sm:w-8 max-sm:px-0"
                       aria-expanded={selectedTitleListDrawerOpen}
                       aria-controls={selectedTitleListDrawerId}
                       aria-label={

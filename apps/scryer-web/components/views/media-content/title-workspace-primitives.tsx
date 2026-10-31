@@ -18,7 +18,7 @@ export function TitleWorkspaceHero({
   backgroundUrl?: string | null;
   closeLabel: string;
   onClose: () => void;
-  /** Sits opposite the close button on phones, and beside it otherwise. */
+  /** Sits in the top left corner, opposite the close button. */
   leadingAction?: React.ReactNode;
   headerActions?: React.ReactNode;
   children: React.ReactNode;
@@ -46,11 +46,11 @@ export function TitleWorkspaceHero({
       ) : null}
       <div className="absolute inset-0 bg-[linear-gradient(105deg,color-mix(in_srgb,var(--scry-bg)_96%,transparent)_30%,color-mix(in_srgb,var(--scry-bg)_55%,transparent)_70%,color-mix(in_srgb,var(--scry-bg)_20%,transparent))]" />
       <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
-      <div className="pointer-events-none absolute inset-x-2.5 top-2.5 z-10 flex items-center justify-between gap-1.5 sm:justify-end">
+      <div className="pointer-events-none absolute inset-x-2.5 top-2.5 z-10 flex items-center justify-between gap-1.5">
         {leadingAction ? (
           <div className="pointer-events-auto">{leadingAction}</div>
         ) : null}
-        <div className="pointer-events-auto ml-auto flex items-center gap-1.5 sm:ml-0">
+        <div className="pointer-events-auto ml-auto flex items-center gap-1.5">
           {headerActions}
           <ActionTooltip content={closeLabel}>
             <button

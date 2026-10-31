@@ -1,7 +1,6 @@
 import * as React from "react";
 import { RefreshScoresButton } from "@/components/common/refresh-scores-button";
 import { FolderOpen, Trash2, X } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -147,7 +146,7 @@ function compareEpisodeQueueItems(
 type Props = {
   canManageTitle: boolean;
   fullBleedHero?: boolean;
-  /** Top left of the hero on phones, beside the close button otherwise. */
+  /** Sits in the top left corner of the hero. */
   heroLeadingAction?: React.ReactNode;
   loading: boolean;
   hydrating: boolean;
@@ -1320,7 +1319,7 @@ function SeriesOverviewViewImpl({
           ) : null}
           <CardContent className="relative p-4">
             {heroLeadingAction ? (
-              <div className="absolute left-2.5 top-2.5 z-20 sm:left-auto sm:right-[4.25rem] sm:top-5">
+              <div className="absolute left-2.5 top-2.5 z-20">
                 {heroLeadingAction}
               </div>
             ) : null}
@@ -1348,12 +1347,7 @@ function SeriesOverviewViewImpl({
               </div>
 
               <div className="relative min-w-0 flex-1 flex flex-col">
-                <h1
-                  className={cn(
-                    "text-xl font-bold text-foreground sm:min-h-10 sm:pr-12 sm:text-2xl",
-                    heroLeadingAction && "sm:pr-36",
-                  )}
-                >
+                <h1 className="text-xl font-bold text-foreground sm:min-h-10 sm:pr-12 sm:text-2xl">
                   {title.name}
                   {title.year ? (
                     <span className="block text-base font-normal text-muted-foreground sm:ml-2 sm:inline sm:text-lg">
