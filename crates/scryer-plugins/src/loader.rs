@@ -391,11 +391,23 @@ fn apply_builtin_settings(
     settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 ) -> Result<(), String> {
     for (provider, values) in settings {
-        let loaded = plugins
-            .get_mut(provider)
-            .ok_or("builtin settings target is unavailable")?;
+        // Settings for a builtin this provider does not hold apply to
+        // nothing. A bundled installation row can outlive the builtin it was
+        // seeded for, or be shadowed by an external plugin, and neither may
+        // fail the reload that every other plugin depends on.
+        let Some(loaded) = plugins.get_mut(provider) else {
+            warn!(
+                provider_type = provider.as_str(),
+                "ignoring saved settings for a builtin this build does not ship"
+            );
+            continue;
+        };
         if !matches!(loaded.load_source, PluginLoadSource::Builtin) {
-            return Err("builtin settings target was replaced by an external plugin".into());
+            warn!(
+                provider_type = provider.as_str(),
+                "ignoring saved builtin settings for a provider an external plugin replaced"
+            );
+            continue;
         }
         loaded.settings = loaded
             .descriptor
@@ -4789,6 +4801,46 @@ mod tests {
             "synthetic-default"
         );
         assert_eq!(snapshot["passwords"], "synthetic-saved");
+    }
+
+    #[test]
+    fn builtin_settings_for_an_unshipped_or_replaced_target_are_skipped() {
+        let descriptor = parse_builtin_descriptor(NEWZNAB).unwrap();
+        let mut plugins = HashMap::from([
+            (
+                "newznab".to_string(),
+                LoadedPlugin::from_builtin(descriptor, NEWZNAB),
+            ),
+            (
+                "synthetic-external".to_string(),
+                LoadedPlugin::from_owned(
+                    runtime_plugin_load("indexer", "synthetic-external", &[]).descriptor,
+                    b"synthetic-wasm".to_vec(),
+                ),
+            ),
+        ]);
+        let before = plugins["synthetic-external"].settings.clone();
+        apply_builtin_settings(
+            &mut plugins,
+            &std::collections::BTreeMap::from([
+                ("synthetic-removed".to_string(), Default::default()),
+                (
+                    "synthetic-external".to_string(),
+                    std::collections::BTreeMap::from([("ignored".to_string(), "x".to_string())]),
+                ),
+                ("newznab".to_string(), Default::default()),
+            ]),
+        )
+        .expect("an unshipped or replaced target never fails the reload");
+        assert_eq!(plugins.len(), 2, "nothing is added or removed");
+        assert_eq!(
+            plugins["synthetic-external"].settings, before,
+            "the external plugin keeps its own settings"
+        );
+        assert!(matches!(
+            plugins["newznab"].load_source,
+            PluginLoadSource::Builtin
+        ));
     }
 
     #[test]
