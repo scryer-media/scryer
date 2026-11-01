@@ -44,6 +44,7 @@ impl RecoveryPlan {
                 })
                 .collect(),
             outcomes: Default::default(),
+            planned_rename_sources: Default::default(),
         }])
     }
 }

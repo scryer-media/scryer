@@ -150,14 +150,9 @@ impl PlannedFile {
     }
 }
 
-/// What the confirmed plan already decided this title's outcome would be, for
-/// the FR-091 counters Activity shows.
-///
-/// These are plan facts, not run facts: the collision engine decided at preview
-/// time which files are proven duplicates and which have to be renamed, and the
-/// title either carries out those decisions or does not finish at all. Counting
-/// them off the plan is what lets a resumed run report the same totals as the
-/// run it resumed, without a per-file counter table.
+/// The FR-091 outcomes Activity shows once a title completes. The plan supplies
+/// a baseline for older operations without per-file resolutions; current runs
+/// combine confirmed rename identities with completed transfer decisions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TitleOutcomeCounts {
     /// Files or companion assets recycled as proven duplicates (FR-073).
@@ -176,6 +171,9 @@ pub struct PlannedTitle {
     pub classification: Option<TitleLocationClass>,
     pub placement: TitleCheckpointPlacement,
     pub files: Vec<PlannedFile>,
+    /// Sources whose relative destination name the confirmed plan changed.
+    /// The transfer may rename one again; either way it counts once per source.
+    pub planned_rename_sources: BTreeSet<PathBuf>,
     /// Dedup and rename decisions this title carries out, counted only once the
     /// title actually finishes.
     pub outcomes: TitleOutcomeCounts,
@@ -830,7 +828,7 @@ impl<'a> LocationOperationRunner<'a> {
                 .store
                 .file_resolutions(operation_id, &title.title_id)
                 .await?;
-            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+            progress.record_resolved_outcomes(title, &resolutions);
         }
         progress.verification_fallbacks = operation.verification_fallback_count;
 
@@ -1574,13 +1572,13 @@ impl<'a> LocationOperationRunner<'a> {
         ) {
             // The transfer, not the plan, decides which files merged with an
             // identical copy or landed under another name (FR-073/FR-074), so
-            // a title's outcome counts come from its recorded resolutions —
-            // the same rows a resumed run reads for titles settled earlier.
+            // completed resolutions and planned source identities together
+            // provide the same counts a resumed run reads for settled titles.
             let resolutions = self
                 .store
                 .file_resolutions(&operation.id, &title.title_id)
                 .await?;
-            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+            progress.record_resolved_outcomes(title, &resolutions);
         }
         progress.settle(title, state);
         self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
@@ -1913,14 +1911,14 @@ struct RunProgress {
 impl RunProgress {
     fn record_resolved_outcomes(
         &mut self,
-        title_id: &str,
+        title: &PlannedTitle,
         resolutions: &[super::resolution::FileResolution],
     ) {
         if resolutions.is_empty() {
             return;
         }
         self.resolved_outcomes.insert(
-            title_id.into(),
+            title.title_id.clone(),
             TitleOutcomeCounts {
                 dedups: resolutions
                     .iter()
@@ -1935,9 +1933,15 @@ impl RunProgress {
                     .filter(|row| {
                         row.completed
                             && !row.is_disposal()
-                            && row.original_destination != row.destination_path
+                            && row.disposition
+                                != super::resolution::ResolutionDisposition::Identical
+                            && (title.planned_rename_sources.contains(
+                                &crate::stored_paths::stored_path_to_path_buf(&row.source_path),
+                            ) || row.original_destination != row.destination_path)
                     })
-                    .count() as i64,
+                    .map(|row| crate::stored_paths::stored_path_to_path_buf(&row.source_path))
+                    .collect::<BTreeSet<_>>()
+                    .len() as i64,
             },
         );
     }
@@ -2837,6 +2841,7 @@ mod tests {
                 })
                 .collect(),
             outcomes: TitleOutcomeCounts::default(),
+            planned_rename_sources: BTreeSet::new(),
         }
     }
 
@@ -4224,6 +4229,111 @@ mod tests {
         assert_eq!(persisted.dedups, 1);
         assert_eq!(persisted.renames, 2);
         assert_eq!(persisted.no_ops, 3);
+    }
+
+    #[test]
+    fn resolved_outcome_union_counts_each_completed_source_once_and_resumes() {
+        use super::super::resolution::{FileResolution, ResolutionDisposition};
+        let mut title = planned_title("title-1", 1, 7);
+        // A companion can be renamed through its parent directory while its
+        // own basename remains unchanged.
+        title.files[0].source_path = PathBuf::from("/source/movie.trickplay/frame.jpg");
+        title.files[0].destination_path =
+            PathBuf::from("/destination/movie (from source).trickplay/frame.jpg");
+        title.planned_rename_sources = [0, 1, 4, 5, 6]
+            .map(|index| title.files[index].source_path.clone())
+            .into_iter()
+            .collect();
+        title.outcomes.renames = 5;
+        let resolution = |index: usize, runtime_rename: bool, completed: bool, disposition| {
+            let destination = title.files[index].stored_destination();
+            FileResolution {
+                operation_id: "op-1".into(),
+                title_id: title.title_id.clone(),
+                source_path: path_to_stored_string(&title.files[index].source_path),
+                original_destination: destination.clone(),
+                destination_path: if runtime_rename {
+                    format!("{destination}.preserved")
+                } else {
+                    destination
+                },
+                disposition,
+                completed,
+                source_version: None,
+                destination_version: None,
+                identity_hash: None,
+                warning: None,
+                reason_code: None,
+            }
+        };
+        let mut resolutions = vec![
+            resolution(0, false, true, ResolutionDisposition::Placed),
+            resolution(1, true, true, ResolutionDisposition::Preserved),
+            resolution(2, true, true, ResolutionDisposition::Preserved),
+            resolution(3, false, true, ResolutionDisposition::Placed),
+            resolution(4, false, false, ResolutionDisposition::Placed),
+            resolution(
+                5,
+                true,
+                true,
+                ResolutionDisposition::Disposal(super::super::conflicts::DisposalProof {
+                    sequence: 0,
+                    before_link_count: 1,
+                    after_link_count: Some(0),
+                    after_versions: BTreeMap::new(),
+                    recycle: None,
+                }),
+            ),
+            resolution(6, true, true, ResolutionDisposition::Identical),
+        ];
+        resolutions.push(resolutions[1].clone());
+        let plan = OperationWorkPlan::new(vec![title]);
+        let title = &plan.titles[0];
+        let mut progress = RunProgress::default();
+        progress.record_resolved_outcomes(title, &resolutions);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            0,
+            "an unfinished title has no settled outcomes"
+        );
+        progress.settle(title, TitleCheckpointState::Completed);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            3,
+            "planned-only, runtime-only, and both each count once; incomplete, disposal, and dedup rows are excluded"
+        );
+        assert_eq!(progress.counters(&plan).dedups, 1);
+        progress.record_resolved_outcomes(title, &resolutions);
+        progress.settle(title, TitleCheckpointState::Completed);
+        assert_eq!(
+            progress.counters(&plan).renames,
+            3,
+            "retry does not add another count"
+        );
+
+        let now = Utc::now();
+        let checkpoint = TitleCheckpoint {
+            operation_id: "op-1".into(),
+            title_id: title.title_id.clone(),
+            sequence: 1,
+            state: TitleCheckpointState::Completed,
+            classification: title.classification,
+            placement: title.placement.clone(),
+            files_total: 7,
+            files_verified: 7,
+            bytes_total: 700,
+            bytes_verified: 700,
+            detail: None,
+            reason_code: None,
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        };
+        let mut resumed =
+            RunProgress::resume(&plan, &[(title.title_id.clone(), checkpoint)].into());
+        resumed.record_resolved_outcomes(title, &resolutions);
+        assert_eq!(resumed.counters(&plan).renames, 3);
+        assert_eq!(resumed.counters(&plan).dedups, 1);
     }
 
     #[tokio::test]

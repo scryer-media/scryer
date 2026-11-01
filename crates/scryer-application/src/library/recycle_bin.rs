@@ -228,6 +228,104 @@ fn manifest_path(entry_dir: &Path) -> PathBuf {
     entry_dir.join("manifest.json")
 }
 
+fn payload_relative_path(original: &Path) -> PathBuf {
+    let name = original
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
+    if name.to_str().is_some_and(|name| {
+        name.trim_end_matches(['.', ' '])
+            .eq_ignore_ascii_case("manifest.json")
+    }) {
+        Path::new(".scryer-payload").join(name)
+    } else {
+        PathBuf::from(name)
+    }
+}
+
+fn prepared_payload_location(entry: &Path, original: &Path, payload: &Path) -> bool {
+    entry.join(payload_relative_path(original)) == payload
+        || original.file_name().is_some_and(|name| {
+            entry.join(name) == payload || entry.join(".scryer-payload").join(name) == payload
+        })
+}
+
+async fn payload_is_manifest(entry: &Path, payload: &Path) -> AppResult<bool> {
+    let metadata = manifest_path(entry);
+    if payload == metadata {
+        return Ok(true);
+    }
+    match tokio::fs::canonicalize(payload).await {
+        Ok(payload) => Ok(payload
+            == tokio::fs::canonicalize(metadata)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::Repository(error.to_string())),
+    }
+}
+
+async fn inspect_payload_location(entry: &Path, payload: &Path) -> AppResult<()> {
+    let invalid = || {
+        AppError::validation_refused(
+            crate::error_reasons::library::REGULAR_FILE_REQUIRED,
+            "The recycle payload path changed; its files were preserved",
+        )
+    };
+    let metadata = tokio::fs::symlink_metadata(entry)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(invalid());
+    }
+    let relative = payload.strip_prefix(entry).map_err(|_| invalid())?;
+    let canonical_entry = tokio::fs::canonicalize(entry)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    crate::location::title_folder_recovery::inspect_path(&canonical_entry.join(relative), true)
+        .await
+}
+
+/// Locate a new safe payload or a legacy direct-layout payload. Entry metadata
+/// is never a payload, even when the original name aliases it on this filesystem.
+pub(crate) async fn recycled_payload_path(
+    entry: &Path,
+    manifest: &RecycleManifest,
+) -> AppResult<PathBuf> {
+    let original = manifest.original_path_buf();
+    let mapped = entry.join(payload_relative_path(&original));
+    inspect_payload_location(entry, &mapped).await?;
+    match tokio::fs::symlink_metadata(&mapped).await {
+        Ok(_) if !payload_is_manifest(entry, &mapped).await? => return Ok(mapped),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::Repository(error.to_string())),
+    }
+    let legacy = entry.join(
+        original
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
+    );
+    inspect_payload_location(entry, &legacy).await?;
+    if !payload_is_manifest(entry, &legacy).await? {
+        return Ok(legacy);
+    }
+    let separated = entry.join(".scryer-payload").join(
+        original
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
+    );
+    inspect_payload_location(entry, &separated).await?;
+    if tokio::fs::symlink_metadata(&separated).await.is_ok()
+        && !payload_is_manifest(entry, &separated).await?
+    {
+        return Ok(separated);
+    }
+    Err(AppError::validation_refused(
+        crate::error_reasons::library::REGULAR_FILE_REQUIRED,
+        "The recycled payload is unavailable; entry metadata was preserved",
+    ))
+}
+
 fn sentinel_path(config: &RecycleBinConfig) -> PathBuf {
     config.base_path.join(RECYCLE_ROOT_SENTINEL)
 }
@@ -486,13 +584,15 @@ pub(crate) async fn finish_conflict_recycle(
             Path::new(&prepared.entry_id).components().next(),
             Some(std::path::Component::Normal(_))
         )
-        || original
-            .file_name()
-            .is_none_or(|name| entry.join(name) != payload)
+        || !prepared_payload_location(&entry, &original, &payload)
     {
         return Err(invalid());
     }
     ensure_recycle_root(config).await?;
+    inspect_payload_location(&entry, &payload).await?;
+    if payload_is_manifest(&entry, &payload).await? {
+        return Err(invalid());
+    }
     crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
     let mut manifest = read_manifest(&entry).await?.ok_or_else(invalid)?;
     if manifest.entry_id.as_deref() != Some(&prepared.entry_id)
@@ -573,15 +673,14 @@ async fn pending_conflict_recycle(
             Some(std::path::Component::Normal(_))
         )
         || crate::stored_paths::stored_path_to_path_buf(&prepared.original_path) != source
-        || source
-            .file_name()
-            .is_none_or(|name| entry.join(name) != payload)
+        || !prepared_payload_location(&entry, source, &payload)
     {
         return Err(invalid());
     }
     ensure_source_within_roots(config, source)?;
     ensure_recycle_root(config).await?;
     crate::location::title_folder_recovery::inspect_path(&entry, false).await?;
+    inspect_payload_location(&entry, &payload).await?;
     let manifest = read_manifest(&entry).await?.ok_or_else(invalid)?;
     if manifest.entry_id.as_deref() != Some(&prepared.entry_id)
         || manifest.original_path != prepared.original_path
@@ -599,6 +698,10 @@ pub(crate) async fn renew_conflict_recycle(
     prepared: &PreparedRecycleFile,
 ) -> AppResult<PreparedRecycleFile> {
     let (_, payload, mut manifest) = pending_conflict_recycle(config, source, prepared).await?;
+    if payload_is_manifest(&config.base_path.join(&prepared.entry_id), &payload).await? {
+        manifest.recycled_at = Utc::now().to_rfc3339();
+        return prepare_conflict_recycle(config, source, manifest).await;
+    }
     let partial = crate::location::verify::partial_destination_path(&payload);
     match tokio::fs::symlink_metadata(&partial).await {
         Ok(_) => {
@@ -627,6 +730,9 @@ pub(crate) async fn execute_conflict_recycle(
             "The reserved recycle entry changed; the source was preserved",
         )
     };
+    if payload_is_manifest(&config.base_path.join(&prepared.entry_id), &payload).await? {
+        return Err(invalid());
+    }
     let partial = crate::location::verify::partial_destination_path(&payload);
     match tokio::fs::symlink_metadata(&partial).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -956,10 +1062,19 @@ async fn recycle_file_inner(
     // Move the file into the recycle directory. Raw manifest strings are metadata
     // and may use stored-path encoding; payload names come from a trusted path
     // chosen by the caller.
-    let file_name = payload_name_path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
-    let recycled_path = recycle_dir.join(file_name);
+    let mut recycled_path = recycle_dir.join(payload_relative_path(payload_name_path));
+    if payload_is_manifest(&recycle_dir, &recycled_path).await? {
+        recycled_path = recycle_dir.join(".scryer-payload").join(
+            payload_name_path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
+        );
+    }
+    if recycled_path.parent() != Some(recycle_dir.as_path()) {
+        tokio::fs::create_dir(recycled_path.parent().expect("nested payload parent"))
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+    }
 
     if prepare_only {
         return Ok(Some(RecycleResult {
@@ -1671,6 +1786,10 @@ async fn trusted_committed_entry_from_dir(
         return Ok(None);
     }
 
+    if let Err(error) = recycled_payload_path(&entry_dir, &manifest).await {
+        warn!(path = %entry_dir.display(), error = %error, "recycle metadata cannot be used as its payload; entry preserved");
+        return Ok(None);
+    }
     Ok(Some(CommittedRecycleEntry {
         entry_dir,
         manifest,
@@ -1837,6 +1956,12 @@ pub(crate) async fn purge_committed_entry(
         return Ok(false);
     }
 
+    if recycled_payload_path(&entry.entry_dir, &entry.manifest)
+        .await
+        .is_err()
+    {
+        return Ok(false);
+    }
     crate::fs_safety::remove_dir_all_safely(&entry.entry_dir).await?;
     Ok(true)
 }
@@ -2928,6 +3053,252 @@ mod tests {
         assert_eq!(row.acquisition_score, Some(12));
         assert_eq!(row.release_hash.as_deref(), Some("abc123"));
         assert_eq!(row.release_listing_json, None);
+    }
+
+    #[test]
+    fn recycle_payload_mapping_reserves_metadata_aliases() {
+        for name in [
+            "manifest.json",
+            "Manifest.JSON",
+            "MANIFEST.JSON.",
+            "manifest.json ",
+            "manifest.json. ",
+        ] {
+            assert_eq!(
+                payload_relative_path(Path::new(name)),
+                Path::new(".scryer-payload").join(name)
+            );
+        }
+        assert_eq!(
+            payload_relative_path(Path::new("ordinary.mkv")),
+            PathBuf::from("ordinary.mkv")
+        );
+    }
+
+    #[tokio::test]
+    async fn recycle_metadata_named_payloads_roundtrip_without_overwriting_manifest() {
+        let mut names = vec![
+            "manifest.json",
+            "Manifest.JSON",
+            "MANIFEST.JSON",
+            "ordinary.mkv",
+            "MANIFE~1.JSO",
+        ];
+        #[cfg(unix)]
+        names.extend(["manifest.json.", "manifest.json "]);
+        for name in names {
+            for prepared in [false, true] {
+                let temp = TempDir::new().unwrap();
+                let root = std::fs::canonicalize(temp.path()).unwrap();
+                let source = root.join(name);
+                let bytes = b"original operator file; never entry metadata";
+                std::fs::write(&source, bytes).unwrap();
+                let config = test_config(&root.join("bin"));
+                let mut manifest = test_manifest();
+                manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+                manifest.source_operation_id = Some("synthetic-operation".into());
+                manifest.size_bytes = bytes.len() as u64;
+                let (entry, payload) = if prepared {
+                    let receipt = prepare_conflict_recycle(&config, &source, manifest)
+                        .await
+                        .unwrap();
+                    let version = crate::location::resolution::file_version(&source)
+                        .await
+                        .unwrap();
+                    let hash = hash_existing_file(&source).await.unwrap().full_blake3;
+                    execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
+                        .await
+                        .unwrap();
+                    (
+                        config.base_path.join(&receipt.entry_id),
+                        crate::stored_paths::stored_path_to_path_buf(&receipt.recycled_path),
+                    )
+                } else {
+                    let result = recycle_file(&config, &source, manifest)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    (result.entry_dir, result.recycled_path)
+                };
+                assert!(!source.exists(), "{name}, prepared={prepared}");
+                assert_eq!(std::fs::read(&payload).unwrap(), bytes);
+                let manifest = read_manifest(&entry).await.unwrap().unwrap();
+                assert_eq!(manifest.status.as_deref(), Some(RECYCLE_STATUS_COMMITTED));
+                assert_eq!(manifest.size_bytes, bytes.len() as u64);
+                assert_ne!(payload, manifest_path(&entry));
+                assert_eq!(
+                    recycled_payload_path(&entry, &manifest).await.unwrap(),
+                    payload
+                );
+                let listed = list_committed_entries(&config).await.unwrap();
+                assert_eq!(listed.len(), 1);
+                let restored = restore_from_recycle_with_roots(&payload, &source, false, &[root])
+                    .await
+                    .unwrap();
+                assert_eq!(restored, source);
+                assert_eq!(std::fs::read(restored).unwrap(), bytes);
+                assert_eq!(
+                    read_manifest(&entry).await.unwrap().unwrap().original_path,
+                    manifest.original_path
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn recycle_legacy_pending_receipts_preserve_metadata_and_restore_original_name() {
+        for name in ["manifest.json", "Manifest.JSON", "ordinary.mkv"] {
+            let temp = TempDir::new().unwrap();
+            let root = std::fs::canonicalize(temp.path()).unwrap();
+            let source = root.join(name);
+            let bytes = b"legacy pathname payload";
+            std::fs::write(&source, bytes).unwrap();
+            let config = test_config(&root.join("bin"));
+            let mut manifest = test_manifest();
+            manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+            manifest.source_operation_id = Some("synthetic-operation".into());
+            let mut legacy = prepare_conflict_recycle(&config, &source, manifest)
+                .await
+                .unwrap();
+            let old_entry = config.base_path.join(&legacy.entry_id);
+            legacy.recycled_path = crate::stored_paths::path_to_stored_string(old_entry.join(name));
+            let metadata_bytes = std::fs::read(manifest_path(&old_entry)).unwrap();
+            let aliases_metadata = payload_is_manifest(
+                &old_entry,
+                &crate::stored_paths::stored_path_to_path_buf(&legacy.recycled_path),
+            )
+            .await
+            .unwrap();
+            let version = crate::location::resolution::file_version(&source)
+                .await
+                .unwrap();
+            let hash = hash_existing_file(&source).await.unwrap().full_blake3;
+            if aliases_metadata {
+                assert!(
+                    execute_conflict_recycle(&config, &source, &legacy, &version, &hash)
+                        .await
+                        .is_err()
+                );
+                assert_eq!(std::fs::read(&source).unwrap(), bytes);
+            }
+            let receipt = renew_conflict_recycle(&config, &source, &legacy)
+                .await
+                .unwrap();
+            assert_eq!(receipt.entry_id != legacy.entry_id, aliases_metadata);
+            assert_eq!(
+                std::fs::read(manifest_path(&old_entry)).unwrap(),
+                metadata_bytes
+            );
+            execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
+                .await
+                .unwrap();
+            let entry = config.base_path.join(&receipt.entry_id);
+            let manifest = read_manifest(&entry).await.unwrap().unwrap();
+            let payload = recycled_payload_path(&entry, &manifest).await.unwrap();
+            assert_eq!(std::fs::read(&payload).unwrap(), bytes);
+            restore_from_recycle_with_roots(&payload, &source, false, &[root])
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recycle_payload_lookup_preserves_symlinked_parent_and_external_contents() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("manifest.json");
+        std::fs::write(&source, b"selected original").unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        let result = recycle_file(&config, &source, manifest)
+            .await
+            .unwrap()
+            .unwrap();
+        let manifest = read_manifest(&result.entry_dir).await.unwrap().unwrap();
+        let owned = result.entry_dir.join("preserved-original");
+        std::fs::rename(result.recycled_path.parent().unwrap(), &owned).unwrap();
+        let external = root.join("external");
+        std::fs::create_dir(&external).unwrap();
+        std::fs::write(external.join("manifest.json"), b"unrelated external").unwrap();
+        std::os::unix::fs::symlink(&external, result.entry_dir.join(".scryer-payload")).unwrap();
+        assert!(
+            recycled_payload_path(&result.entry_dir, &manifest)
+                .await
+                .is_err()
+        );
+        assert!(list_committed_entries(&config).await.unwrap().is_empty());
+        assert!(
+            !purge_committed_entry(
+                &config,
+                &CommittedRecycleEntry {
+                    entry_dir: result.entry_dir,
+                    manifest
+                }
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            std::fs::read(external.join("manifest.json")).unwrap(),
+            b"unrelated external"
+        );
+        assert_eq!(
+            std::fs::read(owned.join("manifest.json")).unwrap(),
+            b"selected original"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepared_recycle_preserves_source_when_payload_parent_becomes_symlink() {
+        let temp = TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source = root.join("manifest.json");
+        std::fs::write(&source, b"selected original").unwrap();
+        let config = test_config(&root.join("bin"));
+        let mut manifest = test_manifest();
+        manifest.original_path = crate::stored_paths::path_to_stored_string(&source);
+        manifest.source_operation_id = Some("synthetic-operation".into());
+        let receipt = prepare_conflict_recycle(&config, &source, manifest)
+            .await
+            .unwrap();
+        let entry = config.base_path.join(&receipt.entry_id);
+        std::fs::rename(
+            entry.join(".scryer-payload"),
+            entry.join("preserved-empty-directory"),
+        )
+        .unwrap();
+        let external = root.join("external");
+        std::fs::create_dir(&external).unwrap();
+        std::os::unix::fs::symlink(&external, entry.join(".scryer-payload")).unwrap();
+        let version = crate::location::resolution::file_version(&source)
+            .await
+            .unwrap();
+        let hash = hash_existing_file(&source).await.unwrap().full_blake3;
+        assert!(
+            renew_conflict_recycle(&config, &source, &receipt)
+                .await
+                .is_err()
+        );
+        assert!(
+            execute_conflict_recycle(&config, &source, &receipt, &version, &hash)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"selected original");
+        assert!(!external.join("manifest.json").exists());
+        assert_eq!(
+            read_manifest(&entry)
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some(RECYCLE_STATUS_CONFLICT_PENDING)
+        );
     }
 
     #[tokio::test]

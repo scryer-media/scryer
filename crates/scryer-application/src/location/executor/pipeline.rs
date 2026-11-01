@@ -746,7 +746,7 @@ impl LocationOperationRunner<'_> {
             .store
             .file_resolutions(&operation.id, &title.title_id)
             .await?;
-        progress.record_resolved_outcomes(&title.title_id, &resolutions);
+        progress.record_resolved_outcomes(title, &resolutions);
         for resolution in resolutions {
             if resolution.completed && paths.contains(&resolution.destination_path) {
                 paths.insert(resolution.original_destination);

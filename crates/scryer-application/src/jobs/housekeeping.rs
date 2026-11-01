@@ -1515,10 +1515,8 @@ impl AppUseCase {
                     &original_path,
                 )
                 .await?;
-                let file_name = original_path
-                    .file_name()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
-                let recycled_file = entry_dir.join(file_name);
+                let recycled_file =
+                    crate::recycle_bin::recycled_payload_path(&entry_dir, &manifest).await?;
                 crate::recycle_bin::ensure_recycled_restore_source_is_regular(&recycled_file)
                     .await?;
 
@@ -1560,10 +1558,9 @@ impl AppUseCase {
             &original_path,
         )
         .await?;
-        let file_name = original_path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("unknown"));
-        let recycled_file = context.entry_dir.join(file_name);
+        let recycled_file =
+            crate::recycle_bin::recycled_payload_path(&context.entry_dir, &context.manifest)
+                .await?;
 
         let restored_to = match conflict_policy {
             crate::RecycleRestoreConflictPolicy::KeepBoth => {
