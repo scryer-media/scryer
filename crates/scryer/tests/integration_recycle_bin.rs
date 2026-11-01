@@ -340,6 +340,95 @@ async fn seed_recycled_file_in_bin(
 }
 
 #[tokio::test]
+async fn recycled_items_deletion_horizon_filters_before_counting_and_pagination() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Upcoming deletions", root.path()).await;
+    seed_title(&ctx, "upcoming-title", &library).await;
+    let now = Utc::now();
+    let mut ids = Vec::new();
+    for (name, hours) in [
+        ("overdue", -2),
+        ("soon", 24),
+        ("later", 48),
+        ("outside", 96),
+    ] {
+        let id = seed_recycled_file(root.path(), "upcoming-title", name).await;
+        let path = root
+            .path()
+            .join(".scryer-recycle")
+            .join(&id)
+            .join("manifest.json");
+        let mut manifest: RecycleManifest =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest.recycled_at =
+            (now + chrono::Duration::hours(hours) - chrono::Duration::days(7)).to_rfc3339();
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        ids.push(id);
+    }
+
+    let body = gql(
+        &ctx,
+        r#"{
+        recycledItems(limit: 1, offset: 1, deletionWithinHours: 72) {
+            totalCount items { id }
+        }
+    }"#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 3);
+    assert_eq!(
+        body["data"]["recycledItems"]["items"],
+        json!([{ "id": ids[1] }])
+    );
+    let body = gql(&ctx, "{ recycledItems { totalCount } }", json!({})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 4);
+
+    assert!(
+        ctx.app
+            .list_recycled_items_deleting_within(&no_permission_actor(), None, 72)
+            .await
+            .is_err()
+    );
+    let other_root = tempfile::tempdir().unwrap();
+    let other_library = seed_library(&ctx, "Other library", other_root.path()).await;
+    let other_manager = manage_titles_actor("other-manager", &[other_library.id]);
+    assert!(
+        ctx.app
+            .list_recycled_items_deleting_within(&other_manager, None, 72)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    ctx.app
+        .update_recycle_bin_settings(&config_actor(), disabled_settings())
+        .await
+        .unwrap();
+    let body = gql(
+        &ctx,
+        "{ recycledItems(deletionWithinHours: 72) { totalCount } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItems"]["totalCount"], 0);
+    for id in ids {
+        assert!(
+            root.path()
+                .join(".scryer-recycle")
+                .join(id)
+                .join("manifest.json")
+                .exists()
+        );
+    }
+}
+
+#[tokio::test]
 async fn recycle_bin_settings_permissions_are_split_between_read_and_update() {
     let ctx = TestContext::new().await;
     seed_recycle_bin_setting_definition(&ctx).await;

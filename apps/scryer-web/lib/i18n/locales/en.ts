@@ -4517,6 +4517,14 @@ const en: LocaleDictionary = {
   "dashboard.panel.storageDescription": "Space used on each root folder.",
   "dashboard.panel.activeQueueDescription":
     "What is downloading now and how long is left.",
+  "dashboard.recycleBin": "Pending deletion",
+  "dashboard.panel.recycleBinDescription":
+    "Recycle-bin files due for permanent deletion in the next 72 hours, including overdue items.",
+  "dashboard.recycleBinEmpty":
+    "No recycle-bin items are due for deletion in the next 72 hours.",
+  "dashboard.recycleBinWindow": "Next 72 hours",
+  "dashboard.recycleBinDueNow": "Due now",
+  "dashboard.recycleBinDueIn": "In {{hours}}h",
   "dashboard.layout.edit": "Edit dashboard",
   "dashboard.layout.editing": "Editing dashboard",
   "dashboard.layout.editHint":

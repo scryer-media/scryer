@@ -1047,6 +1047,41 @@ impl AppUseCase {
         Ok(items)
     }
 
+    /// List files due by the requested horizon (including overdue files), soonest first.
+    /// Disabled or invalid recycle bins cannot schedule automatic deletion.
+    pub async fn list_recycled_items_deleting_within(
+        &self,
+        actor: &scryer_domain::User,
+        library_ids: Option<Vec<String>>,
+        hours: i32,
+    ) -> AppResult<Vec<RecycledItem>> {
+        let items = self.list_recycled_items(actor, library_ids).await?;
+        let active_roots: HashSet<String> = self
+            .resolve_all_recycle_configs()
+            .await
+            .into_iter()
+            .filter(|(_, config)| config.enabled && config.cleanup_enabled)
+            .map(|(root, _)| root)
+            .collect();
+        let deadline =
+            self.runtime.environment.now() + chrono::Duration::hours(i64::from(hours.clamp(1, 72)));
+        let mut due = items
+            .into_iter()
+            .filter(|item| active_roots.contains(&item.media_root))
+            .filter_map(|item| {
+                let scheduled =
+                    chrono::DateTime::parse_from_rfc3339(&item.scheduled_deletion_at).ok()?;
+                (scheduled <= deadline).then_some((scheduled, item))
+            })
+            .collect::<Vec<_>>();
+        due.sort_by(|(left_time, left), (right_time, right)| {
+            left_time
+                .cmp(right_time)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(due.into_iter().map(|(_, item)| item).collect())
+    }
+
     async fn recycle_entry_titles_by_id(
         &self,
         mut title_ids: Vec<String>,

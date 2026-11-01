@@ -3403,14 +3403,22 @@ impl SystemQueries {
             desc = "Library IDs to include; omitted or empty includes all permitted libraries."
         )]
         library_ids: Option<Vec<ID>>,
+        #[graphql(
+            desc = "Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first."
+        )]
+        deletion_within_hours: Option<i32>,
     ) -> GqlResult<RecycledItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let library_ids = library_ids.map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
-        let all = app
-            .list_recycled_items(&actor, library_ids)
-            .await
-            .map_err(to_gql_error)?;
+        let all = match deletion_within_hours {
+            Some(hours) => {
+                app.list_recycled_items_deleting_within(&actor, library_ids, hours)
+                    .await
+            }
+            None => app.list_recycled_items(&actor, library_ids).await,
+        }
+        .map_err(to_gql_error)?;
         let total_count = all.len() as i32;
         let limit = limit.clamp(1, 500) as usize;
         let offset = offset.max(0) as usize;

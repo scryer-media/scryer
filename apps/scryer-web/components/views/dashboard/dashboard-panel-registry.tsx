@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { RecycleBinPanel } from "./recycle-bin-panel";
 
 import {
   ActiveQueuePanel,
@@ -34,6 +35,7 @@ type DashboardPanelRenderArgs = {
 export const DASHBOARD_PANEL_RENDERERS: Readonly<
   Record<DashboardPanelId, (args: DashboardPanelRenderArgs) => React.ReactNode>
 > = {
+  "recycle-bin": ({ tier }) => <RecycleBinPanel tier={tier} />,
   stats: ({ data, tier, breakpoint }) => (
     <DashboardPanelLoad state={data.panels.overview}>
       <StatsPanel

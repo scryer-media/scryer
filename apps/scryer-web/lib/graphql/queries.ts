@@ -3800,6 +3800,20 @@ export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   }
 }`;
 
+export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
+  recycledItems(limit: 15, deletionWithinHours: 72) {
+    items {
+      id
+      fileName
+      sizeBytes
+      titleName
+      libraryName
+      scheduledDeletionAt
+    }
+    totalCount
+  }
+}`;
+
 export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
   recycledItems(libraryIds: $libraryIds) {
     items {

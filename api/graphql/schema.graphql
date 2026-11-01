@@ -25182,6 +25182,10 @@ type QueryRoot {
 		Library IDs to include; omitted or empty includes all permitted libraries.
 		"""
 		libraryIds: [ID!]
+		"""
+		Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first.
+		"""
+		deletionWithinHours: Int
 	): RecycledItemsPayload!
 	"""
 	Preview restoring recycled items by ID without changing their files.
