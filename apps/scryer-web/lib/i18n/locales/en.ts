@@ -6048,6 +6048,12 @@ const en: LocaleDictionary = {
     "{{count}} torrent release(s) hidden, no enabled torrent download client: {{names}}",
   "title.contextReleaseSearchUnroutable.noHttpClient":
     "{{count}} direct download release(s) hidden, no enabled HTTP download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.usenetClientPluginUnavailable":
+    "{{count}} Usenet release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
+  "title.contextReleaseSearchUnroutable.torrentClientPluginUnavailable":
+    "{{count}} torrent release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
+  "title.contextReleaseSearchUnroutable.httpClientPluginUnavailable":
+    "{{count}} direct download release(s) hidden, an enabled download client's plugin is not loaded: {{names}}",
   "title.contextReleaseSearchUnroutable.unknown":
     "{{count}} release(s) hidden, no enabled download client accepts them: {{names}}",
   "title.noReleasesFound": "No releases found for {{name}}.",

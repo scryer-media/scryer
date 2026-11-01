@@ -6185,6 +6185,177 @@ async fn scoring_without_a_torrent_client_tallies_dropped_torrents_per_indexer()
 }
 
 #[tokio::test]
+async fn scoring_reports_an_unavailable_client_plugin_instead_of_a_missing_client() {
+    use crate::error_reasons::release_search as reasons;
+
+    // NZBGet is the fixture's only usable client. An enabled client whose
+    // plugin is not loaded must not read as "no torrent client configured".
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    app.services
+        .integrations
+        .download_client_configs
+        .create(DownloadClientConfig {
+            id: "synthetic-unloaded-client".to_string(),
+            name: "Synthetic Unloaded Client".to_string(),
+            client_type: "synthetic-unloaded-plugin".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 5,
+            is_enabled: true,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            proxy_config_id: None,
+        })
+        .await
+        .unwrap();
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let nzb = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let torrent = IndexerSearchResult {
+        title: "Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-ALPHA".into(),
+        indexer_id: Some("indexer-a".to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        ..nzb.clone()
+    };
+
+    let batch = within_deadline(
+        "unavailable client plugin scoring",
+        app.score_release_results_with_prepared(
+            vec![nzb, torrent],
+            &profile,
+            &title.id,
+            None,
+            Some(24),
+            &subject.title_evidence.parse_context,
+            Some(7),
+            Some(23),
+            None,
+            &mut None,
+            None,
+            true,
+            None,
+            Utc::now(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        batch.unroutable_by_indexer,
+        HashMap::from([(
+            "indexer-a".to_string(),
+            std::collections::BTreeMap::from([(reasons::TORRENT_CLIENT_PLUGIN_UNAVAILABLE, 1)]),
+        )]),
+        "the torrent is counted under the plugin-unavailable code"
+    );
+}
+
+#[tokio::test]
+async fn auto_scoring_counts_releases_set_aside_at_the_grab_limit_per_indexer() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let base = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let release = |indexer_id: &str, suffix: &str, current: u64, maximum: u64| {
+        let mut result = IndexerSearchResult {
+            title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-{suffix}"),
+            indexer_id: Some(indexer_id.to_string()),
+            link: Some(format!("https://indexer.example.test/{suffix}.nzb")),
+            download_url: Some(format!("https://indexer.example.test/{suffix}.nzb")),
+            guid: Some(format!("guid-{suffix}")),
+            ..base.clone()
+        };
+        result
+            .extra
+            .insert("grab_current".into(), serde_json::json!(current));
+        result
+            .extra
+            .insert("grab_max".into(), serde_json::json!(maximum));
+        result
+    };
+    let raw_results = vec![
+        release("indexer-full", "ALPHA", 5, 5),
+        release("indexer-full", "BRAVO", 6, 5),
+        release("indexer-open", "CHARLIE", 1, 5),
+    ];
+
+    macro_rules! score {
+        ($auto:expr) => {
+            within_deadline(
+                "grab limit scoring",
+                app.score_release_results_with_prepared(
+                    raw_results.clone(),
+                    &profile,
+                    &title.id,
+                    None,
+                    Some(24),
+                    &subject.title_evidence.parse_context,
+                    Some(7),
+                    Some(23),
+                    None,
+                    &mut None,
+                    None,
+                    $auto,
+                    None,
+                    Utc::now(),
+                ),
+            )
+            .await
+            .unwrap()
+        };
+    }
+
+    let auto = score!(true);
+    assert_eq!(
+        auto.quota_exhausted_by_indexer,
+        HashMap::from([("indexer-full".to_string(), 2)]),
+        "both releases from the indexer at its limit are counted"
+    );
+    assert!(
+        auto.results
+            .iter()
+            .all(|result| result.indexer_id.as_deref() == Some("indexer-open")),
+        "the set-aside releases still do not reach the automatic candidates"
+    );
+
+    let interactive = score!(false);
+    assert!(
+        interactive.quota_exhausted_by_indexer.is_empty(),
+        "an interactive search lists those releases and counts nothing"
+    );
+}
+
+#[tokio::test]
 async fn title_walk_compact_reads_cover_pack_ownership_and_scope_cutoffs() {
     let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let pending = Arc::new(TrackingPendingReleaseRepo::default());

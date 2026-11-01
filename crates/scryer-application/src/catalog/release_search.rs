@@ -40,6 +40,7 @@ pub(crate) struct PreparedReleaseScoringInputs {
     has_usenet_client: bool,
     has_torrent_client: bool,
     has_http_client: bool,
+    has_unavailable_client_plugin: bool,
     preferred_source_kind: String,
     enabled_protocols: Option<(bool, bool)>,
     title: Title,
@@ -70,31 +71,54 @@ pub(crate) struct ScoredReleaseBatch {
     pub results: Vec<IndexerSearchResult>,
     /// Keyed by indexer id; empty when every release had an accepting client.
     pub unroutable_by_indexer: HashMap<String, UnroutableReleaseCounts>,
+    /// Releases an automatic search set aside because their indexer has used
+    /// its whole grab allowance, keyed by indexer id.
+    pub quota_exhausted_by_indexer: HashMap<String, usize>,
 }
 
 /// Removes releases no enabled download client can take and counts them per
 /// indexer and missing client family. A release with no source kind is kept.
+/// When an enabled client's plugin is unavailable, the missing family is
+/// reported under the plugin-unavailable code, so the operator is pointed at
+/// the plugin rather than at client configuration.
 fn retain_routable_releases(
     results: &mut Vec<IndexerSearchResult>,
     has_usenet_client: bool,
     has_torrent_client: bool,
     has_http_client: bool,
+    has_unavailable_client_plugin: bool,
 ) -> HashMap<String, UnroutableReleaseCounts> {
     use crate::error_reasons::release_search as reasons;
     let mut unroutable: HashMap<String, UnroutableReleaseCounts> = HashMap::new();
+    let pick = |no_client: &'static str, plugin_unavailable: &'static str| {
+        if has_unavailable_client_plugin {
+            plugin_unavailable
+        } else {
+            no_client
+        }
+    };
     results.retain(|result| {
         let missing = match result.source_kind {
             Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
                 if !has_usenet_client =>
             {
-                reasons::NO_USENET_CLIENT
+                pick(
+                    reasons::NO_USENET_CLIENT,
+                    reasons::USENET_CLIENT_PLUGIN_UNAVAILABLE,
+                )
             }
             Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri)
                 if !has_torrent_client =>
             {
-                reasons::NO_TORRENT_CLIENT
+                pick(
+                    reasons::NO_TORRENT_CLIENT,
+                    reasons::TORRENT_CLIENT_PLUGIN_UNAVAILABLE,
+                )
             }
-            Some(DownloadSourceKind::HttpResource) if !has_http_client => reasons::NO_HTTP_CLIENT,
+            Some(DownloadSourceKind::HttpResource) if !has_http_client => pick(
+                reasons::NO_HTTP_CLIENT,
+                reasons::HTTP_CLIENT_PLUGIN_UNAVAILABLE,
+            ),
             _ => return true,
         };
         *unroutable
@@ -124,7 +148,7 @@ fn log_unroutable_releases(
                     indexer_id = indexer_id.as_str(),
                     removed = *count,
                     reason = *missing_client,
-                    "removed search results no enabled download client accepts"
+                    "removed search results no available download client accepts"
                 );
             } else {
                 debug!(
@@ -132,10 +156,29 @@ fn log_unroutable_releases(
                     indexer_id = indexer_id.as_str(),
                     removed = *count,
                     reason = *missing_client,
-                    "removed search results no enabled download client accepts"
+                    "removed search results no available download client accepts"
                 );
             }
         }
+    }
+}
+
+/// Reports releases an automatic search set aside because their indexer is
+/// at its grab limit: one line per indexer, with the count. They are dropped
+/// before the search picks a candidate, so without this the search would
+/// look as though the indexer had returned nothing usable.
+fn log_quota_exhausted_releases(
+    caller_label: &str,
+    quota_exhausted_by_indexer: &HashMap<String, usize>,
+) {
+    for (indexer_id, count) in quota_exhausted_by_indexer {
+        info!(
+            caller = caller_label,
+            indexer_id = indexer_id.as_str(),
+            set_aside = *count,
+            reason = crate::error_reasons::release_search::INDEXER_GRAB_QUOTA_EXHAUSTED,
+            "set aside search results from an indexer at its grab limit"
+        );
     }
 }
 
@@ -144,6 +187,10 @@ pub(crate) struct ScoredSearchOutcome {
     /// Releases removed before scoring because no enabled download client
     /// accepts their source kind, keyed by indexer id.
     pub unroutable_by_indexer: HashMap<String, UnroutableReleaseCounts>,
+    /// Releases an automatic search set aside because their indexer is at its
+    /// grab limit, keyed by indexer id. Always empty for an interactive search,
+    /// which lists those releases.
+    pub quota_exhausted_by_indexer: HashMap<String, usize>,
     pub complete_indexer_ids: Vec<String>,
     /// Indexers that could not answer any of the search's queries: no id they
     /// can search the facet by and no usable text query. Nothing was sent.
@@ -689,12 +736,16 @@ pub(crate) enum IncompleteIndexerKind {
 pub(crate) struct IncompleteIndexerReason {
     pub kind: IncompleteIndexerKind,
     pub message: String,
+    /// Stable code for a condition the operator must act on, when the
+    /// outcome names one.
+    pub code: Option<&'static str>,
 }
 impl IncompleteIndexerReason {
     pub fn failed(message: String) -> Self {
         Self {
             kind: IncompleteIndexerKind::Failed,
             message,
+            code: None,
         }
     }
 }
@@ -782,7 +833,14 @@ pub(crate) fn incomplete_indexer_reason(
         }
         // Never asked: an indexer that cannot serve the facet is not a failure.
         IndexerSearchOutcome::Unsupported | IndexerSearchOutcome::BackedOff { .. } => return None,
+        IndexerSearchOutcome::ClientUnavailable { .. } => {
+            ("indexer client could not be set up", None)
+        }
         IndexerSearchOutcome::Errored => ("indexer search failed", None),
+    };
+    let code = match outcome {
+        IndexerSearchOutcome::ClientUnavailable { reason } => Some(reason),
+        _ => None,
     };
     Some(IncompleteIndexerReason {
         kind,
@@ -790,6 +848,7 @@ pub(crate) fn incomplete_indexer_reason(
             Some(delay) => format!("{reason}; retry after {}s", delay.as_secs()),
             None => reason.to_string(),
         },
+        code,
     })
 }
 
@@ -1104,6 +1163,9 @@ pub(crate) struct DownloadSourceCapabilities {
     pub(crate) has_usenet: bool,
     pub(crate) has_torrent: bool,
     pub(crate) has_http: bool,
+    /// An enabled client's type is known to no native client and no loaded
+    /// plugin: its plugin is blocked or uninstalled.
+    pub(crate) has_unavailable_client_plugin: bool,
     pub(crate) preferred: String,
 }
 
@@ -1137,6 +1199,19 @@ impl AppUseCase {
         let has_http = enabled
             .iter()
             .any(|c| client_accepts(c, DownloadSourceKind::HttpResource));
+        let unavailable_client_names = enabled
+            .iter()
+            .filter(|c| {
+                !crate::helpers::download_client_type_is_known(&c.client_type, plugin_provider)
+            })
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>();
+        if !unavailable_client_names.is_empty() {
+            debug!(
+                clients = ?unavailable_client_names,
+                "enabled download clients have no loaded plugin"
+            );
+        }
         let preferred = enabled
             .iter()
             .min_by_key(|c| c.client_priority)
@@ -1154,6 +1229,7 @@ impl AppUseCase {
             has_usenet,
             has_torrent,
             has_http,
+            has_unavailable_client_plugin: !unavailable_client_names.is_empty(),
             preferred,
         }
     }
@@ -1295,6 +1371,7 @@ impl AppUseCase {
                 has_usenet: has_usenet_client,
                 has_torrent: has_torrent_client,
                 has_http: has_http_client,
+                has_unavailable_client_plugin,
                 preferred: client_preferred_source_kind,
             } = self.download_source_capabilities().await;
             let scored_title = self.services.catalog.titles.get_by_id(title_id).await?;
@@ -1354,6 +1431,7 @@ impl AppUseCase {
                 has_usenet_client,
                 has_torrent_client,
                 has_http_client,
+                has_unavailable_client_plugin,
                 preferred_source_kind,
                 enabled_protocols,
                 title: scored_title,
@@ -1376,6 +1454,7 @@ impl AppUseCase {
             prepared.has_usenet_client,
             prepared.has_torrent_client,
             prepared.has_http_client,
+            prepared.has_unavailable_client_plugin,
         );
         let requested_episode = resolve_requested_episode(
             &prepared.catalog_episodes,
@@ -1656,7 +1735,15 @@ impl AppUseCase {
             scored.push(scored_result);
         }
 
+        let mut quota_exhausted_by_indexer: HashMap<String, usize> = HashMap::new();
         let mut scored = if preserve_duplicate_sources {
+            for candidate in &scored {
+                if grab_quota_preference(candidate).0 == 3 {
+                    *quota_exhausted_by_indexer
+                        .entry(candidate.indexer_id.clone().unwrap_or_default())
+                        .or_default() += 1;
+                }
+            }
             scored.retain(|candidate| grab_quota_preference(candidate).0 != 3);
             scored
         } else {
@@ -1683,6 +1770,7 @@ impl AppUseCase {
         Ok(ScoredReleaseBatch {
             results: scored,
             unroutable_by_indexer,
+            quota_exhausted_by_indexer,
         })
     }
 
@@ -1773,6 +1861,7 @@ impl AppUseCase {
             return Ok(ScoredSearchOutcome {
                 results: Vec::new(),
                 unroutable_by_indexer: HashMap::new(),
+                quota_exhausted_by_indexer: HashMap::new(),
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
@@ -1892,6 +1981,7 @@ impl AppUseCase {
             return Ok(ScoredSearchOutcome {
                 results: Vec::new(),
                 unroutable_by_indexer: HashMap::new(),
+                quota_exhausted_by_indexer: HashMap::new(),
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
@@ -2022,6 +2112,7 @@ impl AppUseCase {
         }
 
         let mut unroutable_by_indexer = HashMap::new();
+        let mut quota_exhausted_by_indexer = HashMap::new();
         if !scored_results.is_empty() {
             let batch = self
                 .score_release_results_with_prepared(
@@ -2044,6 +2135,8 @@ impl AppUseCase {
             scored_results = batch.results;
             unroutable_by_indexer = batch.unroutable_by_indexer;
             log_unroutable_releases(caller_label, mode, &unroutable_by_indexer);
+            quota_exhausted_by_indexer = batch.quota_exhausted_by_indexer;
+            log_quota_exhausted_releases(caller_label, &quota_exhausted_by_indexer);
         }
         if scored_results.is_empty() && successful_searches == 0 && query_failures > 0 {
             let details =
@@ -2055,6 +2148,7 @@ impl AppUseCase {
         Ok(ScoredSearchOutcome {
             results: scored_results,
             unroutable_by_indexer,
+            quota_exhausted_by_indexer,
             complete_indexer_ids: completely_covered_indexers(
                 coverage_by_indexer,
                 required_query_count,
@@ -2419,6 +2513,18 @@ impl AppUseCase {
             outcome
                 .incomplete_indexer_reasons
                 .extend(next.incomplete_indexer_reasons);
+            for (indexer_id, counts) in next.unroutable_by_indexer {
+                let merged = outcome.unroutable_by_indexer.entry(indexer_id).or_default();
+                for (reason, count) in counts {
+                    *merged.entry(reason).or_default() += count;
+                }
+            }
+            for (indexer_id, count) in next.quota_exhausted_by_indexer {
+                *outcome
+                    .quota_exhausted_by_indexer
+                    .entry(indexer_id)
+                    .or_default() += count;
+            }
         }
         outcome.results.sort_by(compare_release_search_results);
         Ok(outcome)
@@ -3522,6 +3628,9 @@ mod structured_dispatch_query_tests {
             IndexerSearchOutcome::Skipped { retry_after: None },
             IndexerSearchOutcome::Unsupported,
             IndexerSearchOutcome::BackedOff { until: None },
+            IndexerSearchOutcome::ClientUnavailable {
+                reason: "SYNTHETIC_CLIENT_UNAVAILABLE",
+            },
             IndexerSearchOutcome::Errored,
         ];
 
@@ -3538,6 +3647,37 @@ mod structured_dispatch_query_tests {
 
             assert!(completely_covered_indexers(aggregate, 2).is_empty());
         }
+    }
+
+    #[test]
+    fn an_indexer_whose_client_could_not_be_built_fails_with_its_setup_code() {
+        let reason = super::incomplete_indexer_reason(IndexerSearchOutcome::ClientUnavailable {
+            reason: "SYNTHETIC_CLIENT_UNAVAILABLE",
+        })
+        .expect("a client that could not be built is an incomplete answer");
+        assert_eq!(reason.code, Some("SYNTHETIC_CLIENT_UNAVAILABLE"));
+        assert!(!reason.message.is_empty());
+        assert!(
+            super::incomplete_indexer_reason(IndexerSearchOutcome::Errored)
+                .is_some_and(|reason| reason.code.is_none()),
+            "an ordinary failure carries no code"
+        );
+
+        let mut aggregate = HashMap::new();
+        record_query_coverage_outcomes(
+            &mut aggregate,
+            &[outcome(
+                "unloaded",
+                IndexerSearchOutcome::ClientUnavailable {
+                    reason: "SYNTHETIC_CLIENT_UNAVAILABLE",
+                },
+            )],
+        );
+        assert!(
+            unsupported_indexers(&aggregate, 1).is_empty(),
+            "an unloaded plugin is not reported as lacking text search"
+        );
+        assert!(completely_covered_indexers(aggregate, 1).is_empty());
     }
 
     #[test]

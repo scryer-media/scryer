@@ -1267,12 +1267,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
+    // Unroutable search results add InteractiveReleaseSearchUnroutableResultsPayload:
+    // public types 991->992, OBJECT 535->536.
+    assert!(public_type_names.contains(&"InteractiveReleaseSearchUnroutableResultsPayload"));
     assert_eq!(
         public_types.len(),
-        991,
+        992,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 535);
+    assert_eq!(kind_count("OBJECT"), 536);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
     assert_eq!(kind_count("ENUM"), 201);
     assert_eq!(kind_count("SCALAR"), 10);

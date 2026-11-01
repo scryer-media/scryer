@@ -2907,6 +2907,13 @@ pub enum IndexerSearchOutcome {
     BackedOff {
         until: Option<chrono::DateTime<chrono::Utc>>,
     },
+    /// The indexer's client could not be built, so nothing was sent: its
+    /// plugin is not loaded, or its proxy is missing or disabled. `reason` is
+    /// the stable code of the setup failure. The indexer stays enabled, so
+    /// every search reports it until the operator acts.
+    ClientUnavailable {
+        reason: &'static str,
+    },
     Errored,
 }
 

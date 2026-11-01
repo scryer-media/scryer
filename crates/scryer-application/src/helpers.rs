@@ -37,6 +37,24 @@ pub fn accepted_inputs_for_client(
     native_accepted_inputs(client_type)
 }
 
+/// Whether anything running knows a download client type: a native client,
+/// or a loaded plugin. A configured client whose type is unknown has its
+/// plugin blocked or uninstalled, which differs from having no client at all.
+/// The plugin provider matches types without regard to case, and saved
+/// client types are lowercased, so the native match needs no folding.
+pub(crate) fn download_client_type_is_known(
+    client_type: &str,
+    plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
+) -> bool {
+    !native_accepted_inputs(client_type).is_empty()
+        || plugin_provider.is_some_and(|provider| {
+            provider.plugin_name_for_provider(client_type).is_some()
+                || !provider
+                    .accepted_inputs_for_provider(client_type)
+                    .is_empty()
+        })
+}
+
 /// Native client capabilities. Returns the accepted input kinds for
 /// built-in download client types.
 fn native_accepted_inputs(client_type: &str) -> Vec<DownloadSourceKind> {

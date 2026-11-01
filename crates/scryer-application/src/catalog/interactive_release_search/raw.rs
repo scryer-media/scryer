@@ -760,6 +760,7 @@ impl RawSearchGeneration {
                                 | IndexerSearchOutcome::Skipped { .. }
                                 | IndexerSearchOutcome::BackedOff { .. }
                                 | IndexerSearchOutcome::Unsupported
+                                | IndexerSearchOutcome::ClientUnavailable { .. }
                                 | IndexerSearchOutcome::Errored
                         )
                     );

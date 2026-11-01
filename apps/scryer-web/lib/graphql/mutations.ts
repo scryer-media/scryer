@@ -2043,6 +2043,7 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited
@@ -2079,6 +2080,7 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       skipReason
       skippedUntil
       rateLimited

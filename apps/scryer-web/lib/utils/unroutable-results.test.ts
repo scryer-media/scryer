@@ -39,6 +39,21 @@ test("known reason codes map to their own keys", () => {
   );
 });
 
+test("plugin-unavailable codes map to their own keys, not the no-client ones", () => {
+  assert.equal(
+    unroutableResultsKey("RELEASE_SEARCH_USENET_CLIENT_PLUGIN_UNAVAILABLE"),
+    "title.contextReleaseSearchUnroutable.usenetClientPluginUnavailable",
+  );
+  assert.equal(
+    unroutableResultsKey("RELEASE_SEARCH_TORRENT_CLIENT_PLUGIN_UNAVAILABLE"),
+    "title.contextReleaseSearchUnroutable.torrentClientPluginUnavailable",
+  );
+  assert.equal(
+    unroutableResultsKey("RELEASE_SEARCH_HTTP_CLIENT_PLUGIN_UNAVAILABLE"),
+    "title.contextReleaseSearchUnroutable.httpClientPluginUnavailable",
+  );
+});
+
 test("an unknown reason code falls back to the generic key", () => {
   assert.equal(
     unroutableResultsKey("RELEASE_SEARCH_SOMETHING_NEW"),

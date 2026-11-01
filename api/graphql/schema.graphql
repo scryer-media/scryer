@@ -9418,6 +9418,12 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	failureReason: String
 	"""
+	Stable code for a failure the operator must act on, such as
+	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
+	not loaded; null for other failures and when the indexer did not fail.
+	"""
+	failureReasonCode: String
+	"""
 	How the capabilities used for this indexer were obtained, or null
 	before they were resolved.
 	"""

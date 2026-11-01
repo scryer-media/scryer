@@ -27,6 +27,11 @@ export type InteractiveSearchIndexerProgress = {
   elapsedMs: number | null;
   failureReason: string | null;
   /**
+   * Stable code beside `failureReason` for a failure the operator must act
+   * on, such as an indexer whose plugin is not loaded; an open set.
+   */
+  failureReasonCode?: string | null;
+  /**
    * The indexer asked Scryer to slow down rather than failing. It resumes on
    * its own, so the row reads as a cooldown rather than an error.
    */

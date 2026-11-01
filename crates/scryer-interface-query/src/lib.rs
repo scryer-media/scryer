@@ -604,6 +604,7 @@ pub fn from_interactive_release_search_snapshot(
                 .elapsed_ms
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
+            failure_reason_code: indexer.failure_reason_code.map(str::to_owned),
             caps_source: indexer.caps.map(|caps| {
                 use scryer_application::IndexerCapsSource as Source;
                 match caps.source {
