@@ -1336,7 +1336,6 @@ const zh_CN: LocaleDictionary = {
   "settings.rulePriority": "优先级",
   "settings.ruleAppliedFacets": "适用类型",
   "settings.ruleAppliedFacetsHelp": "留空则适用于所有媒体类型。",
-  "settings.ruleValidate": "验证",
   "settings.ruleValidating": "验证中…",
   "settings.ruleValid": "规则有效。",
   "settings.ruleValidationRequired": "名称和 Rego 源码为必填项。",

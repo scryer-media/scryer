@@ -17,6 +17,7 @@ import {
   type RegoFamily,
 } from "./rego-assistance.ts";
 import {
+  formatRegoValidationError,
   graphQlRuleValidationResult,
   regoDiagnostics,
   regoSourceLine,
@@ -183,6 +184,15 @@ test("every field and catalog item has a localized description", () => {
   }
   for (const item of [...regoCatalog.helpers, ...regoCatalog.snippets])
     assert.ok(english.includes(`"${item.descKey}"`), item.descKey);
+});
+
+test("validation errors show the line as written in the editor", () => {
+  const error =
+    "compilation error: \n--> request/r1.rego:3:1\n  |\n3 | asdf\n  | ^\nerror: rule must have a body or assignment";
+  assert.equal(
+    formatRegoValidationError(error, "asdf"),
+    "compilation error: \n--> request/r1.rego:1:1\n  |\n1 | asdf\n  | ^\nerror: rule must have a body or assignment",
+  );
 });
 
 test("diagnostics account for inserted package and import lines", () => {

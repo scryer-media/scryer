@@ -2323,7 +2323,6 @@ const ru: LocaleDictionary = {
   "settings.ruleAppliedFacetsHelp":
     "Оставьте поле пустым, чтобы применять правило ко всем типам медиаконтента.",
 
-  "settings.ruleValidate": "Проверить",
   "settings.ruleValidating": "Проверка…",
   "settings.ruleValid": "Правило корректно.",
   "settings.ruleValidationRequired":

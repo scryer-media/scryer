@@ -1415,7 +1415,6 @@ const ko: LocaleDictionary = {
   "settings.rulePriority": "우선순위",
   "settings.ruleAppliedFacets": "적용 유형",
   "settings.ruleAppliedFacetsHelp": "비워두면 모든 미디어 유형에 적용됩니다.",
-  "settings.ruleValidate": "검증",
   "settings.ruleValidating": "검증 중…",
   "settings.ruleValid": "규칙이 유효합니다.",
   "settings.ruleValidationRequired": "이름과 Rego 소스는 필수입니다.",

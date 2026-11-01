@@ -1963,7 +1963,6 @@ const nl: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Toegepaste facets",
   "settings.ruleAppliedFacetsHelp":
     "Laat leeg om toe te passen op alle mediatypes.",
-  "settings.ruleValidate": "Valideren",
   "settings.ruleValidating": "Valideren…",
   "settings.ruleValid": "Regel is geldig.",
   "settings.ruleValidationRequired": "Naam en Rego source zijn verplicht.",

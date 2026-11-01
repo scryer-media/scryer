@@ -4248,7 +4248,7 @@ const en: LocaleDictionary = {
   "settings.hideEnteredPasswords": "Hide entered passwords",
   "settings.pluginSettingsSaveFailed": "Could not save plugin settings.",
   "settings.regoValidationUnavailable":
-    "Validation unavailable. Check your connection and try Validate again.",
+    "Validation unavailable. Check your connection and try saving again.",
   "settings.regoValidationFailed": "Rule validation failed. Show errors.",
   "settings.regoFileAvailability":
     "Available only when scoring an imported file with media information. During release searches input.file is null; guard it before reading fields.",
@@ -6599,7 +6599,6 @@ const en: LocaleDictionary = {
   "settings.rulePriority": "Priority",
   "settings.ruleAppliedFacets": "Applied Facets",
   "settings.ruleAppliedFacetsHelp": "Leave empty to apply to all media types.",
-  "settings.ruleValidate": "Validate",
   "settings.ruleValidating": "Validating…",
   "settings.ruleValid": "Rule is valid.",
   "settings.ruleValidationRequired": "Name and Rego source are required.",

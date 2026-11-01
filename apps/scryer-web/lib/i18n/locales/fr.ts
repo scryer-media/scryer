@@ -1532,7 +1532,6 @@ const fr: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Types appliqués",
   "settings.ruleAppliedFacetsHelp":
     "Laissez vide pour appliquer à tous les types de médias.",
-  "settings.ruleValidate": "Valider",
   "settings.ruleValidating": "Validation…",
   "settings.ruleValid": "La règle est valide.",
   "settings.ruleValidationRequired": "Le nom et la source Rego sont requis.",

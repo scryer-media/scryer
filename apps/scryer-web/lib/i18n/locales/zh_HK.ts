@@ -2062,7 +2062,6 @@ const zh_HK: LocaleDictionary = {
   "settings.rulePriority": "優先級",
   "settings.ruleAppliedFacets": "適用類型",
   "settings.ruleAppliedFacetsHelp": "留空則適用於所有媒體類型。",
-  "settings.ruleValidate": "驗證",
   "settings.ruleValidating": "驗證中…",
   "settings.ruleValid": "規則有效。",
   "settings.ruleValidationRequired": "名稱和 Rego 源碼為必填項。",

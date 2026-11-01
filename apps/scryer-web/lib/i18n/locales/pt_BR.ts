@@ -1461,7 +1461,6 @@ const pt_BR: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Tipos aplicados",
   "settings.ruleAppliedFacetsHelp":
     "Deixe vazio para aplicar a todos os tipos de mídia.",
-  "settings.ruleValidate": "Validar",
   "settings.ruleValidating": "Validando…",
   "settings.ruleValid": "A regra é válida.",
   "settings.ruleValidationRequired": "Nome e código Rego são obrigatórios.",

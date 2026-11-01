@@ -824,7 +824,6 @@ export function SettingsRulesContainer({
         editRuleSet={requestEditRuleSet}
         toggleRuleSetEnabled={toggleRuleSetEnabled}
         deleteRuleSet={deleteRuleSet}
-        validateDraft={validateDraft}
         validating={validating}
         validationResult={validationResult}
         applyTemplate={requestApplyTemplate}

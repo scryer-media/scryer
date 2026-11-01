@@ -141,7 +141,7 @@ const cs: LocaleDictionary = {
   "settings.pluginSettingsSaveFailed":
     "Nastavení pluginu se nepodařilo uložit.",
   "settings.regoValidationUnavailable":
-    "Validace není dostupná. Zkontrolujte připojení a zkuste Ověřit znovu.",
+    "Validace není dostupná. Zkontrolujte připojení a zkuste uložit znovu.",
   "settings.regoValidationFailed": "Ověření pravidla selhalo. Zobrazit chyby.",
   "settings.regoFileAvailability":
     "Dostupné pouze při hodnocení importovaného souboru s mediálními informacemi. Při vyhledávání vydání je input.file null; před čtením polí to ošetřete.",
@@ -2381,7 +2381,6 @@ const cs: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Platí pro oblasti",
   "settings.ruleAppliedFacetsHelp":
     "Ponechte prázdné pro použití na všechny typy médií.",
-  "settings.ruleValidate": "Ověřit",
   "settings.ruleValidating": "Ověřování…",
   "settings.ruleValid": "Pravidlo je platné.",
   "settings.ruleValidationRequired": "Název a zdrojový kód Rego jsou povinné.",

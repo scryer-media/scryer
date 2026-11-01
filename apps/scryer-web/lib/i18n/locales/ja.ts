@@ -1440,7 +1440,6 @@ const ja: LocaleDictionary = {
   "settings.ruleAppliedFacets": "適用タイプ",
   "settings.ruleAppliedFacetsHelp":
     "空欄にするとすべてのメディアタイプに適用されます。",
-  "settings.ruleValidate": "検証",
   "settings.ruleValidating": "検証中…",
   "settings.ruleValid": "ルールは有効です。",
   "settings.ruleValidationRequired": "名前とRegoソースは必須です。",

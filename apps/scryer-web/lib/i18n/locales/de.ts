@@ -1466,7 +1466,6 @@ const de: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Angewandte Typen",
   "settings.ruleAppliedFacetsHelp":
     "Leer lassen, um auf alle Medientypen anzuwenden.",
-  "settings.ruleValidate": "Validieren",
   "settings.ruleValidating": "Wird validiert…",
   "settings.ruleValid": "Regel ist gültig.",
   "settings.ruleValidationRequired":

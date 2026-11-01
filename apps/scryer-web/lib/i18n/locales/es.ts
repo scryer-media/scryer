@@ -1475,7 +1475,6 @@ const es: LocaleDictionary = {
   "settings.ruleAppliedFacets": "Tipos aplicados",
   "settings.ruleAppliedFacetsHelp":
     "Dejar vacío para aplicar a todos los tipos de medios.",
-  "settings.ruleValidate": "Validar",
   "settings.ruleValidating": "Validando…",
   "settings.ruleValid": "La regla es válida.",
   "settings.ruleValidationRequired":
