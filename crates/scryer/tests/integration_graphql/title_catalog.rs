@@ -3102,6 +3102,86 @@ async fn graphql_titles_expose_matched_size_bytes_only_for_movies() {
 }
 
 #[tokio::test]
+async fn graphql_titles_managed_bytes_follow_query_and_filter() {
+    let ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+
+    let movies = [
+        ("Harbor Lights", true, 1_000),
+        ("Harbor Storm", false, 200),
+        ("Desert Road", false, 30),
+    ];
+    for (name, monitored, size_bytes) in movies {
+        let title =
+            create_catalog_title(&ctx, name, MediaFacet::Movie, vec![], vec![], monitored).await;
+        let path = media_root.path().join(format!("{name}.mkv"));
+        ctx.shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type: CollectionType::Movie,
+                collection_index: "1".to_string(),
+                label: Some(name.to_string()),
+                ordered_path: Some(path.to_string_lossy().to_string()),
+                narrative_order: None,
+                first_episode_number: None,
+                last_episode_number: None,
+                monitored: true,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .expect("create movie collection");
+        ctx.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes,
+                ..Default::default()
+            })
+            .await
+            .expect("insert movie file");
+    }
+
+    let managed_bytes = async |variables: serde_json::Value| {
+        let body = gql(
+            &ctx,
+            r#"query($facet: MediaFacetValue, $query: String, $filter: TitleCatalogFilterInput) {
+                titles(facet: $facet, query: $query, filter: $filter) { totalCount managedBytes }
+            }"#,
+            variables,
+        )
+        .await;
+        assert_no_errors(&body);
+        (
+            body["data"]["titles"]["totalCount"].clone(),
+            body["data"]["titles"]["managedBytes"].clone(),
+        )
+    };
+
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE" })).await,
+        (json!(3), json!(1_230))
+    );
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE", "filter": { "monitored": false } })).await,
+        (json!(2), json!(230))
+    );
+    assert_eq!(
+        managed_bytes(json!({ "facet": "MOVIE", "query": "Harbor" })).await,
+        (json!(2), json!(1_200))
+    );
+    assert_eq!(
+        managed_bytes(json!({
+            "facet": "MOVIE",
+            "query": "Harbor",
+            "filter": { "monitored": false },
+        }))
+        .await,
+        (json!(1), json!(200))
+    );
+}
+
+#[tokio::test]
 async fn graphql_get_title_by_id() {
     let ctx = TestContext::new().await;
     let expected_name = "Specific Movie";

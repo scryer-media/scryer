@@ -1274,7 +1274,14 @@ impl TitleRepository for TitleStore {
             0
         };
         let managed_bytes = if aggregates.managed_bytes {
-            fetch_title_catalog_managed_bytes(&self.datastore, facet.clone(), library_ids).await?
+            fetch_title_catalog_managed_bytes(
+                &self.datastore,
+                facet.clone(),
+                library_ids,
+                query,
+                &filter,
+            )
+            .await?
         } else {
             0
         };
@@ -4167,14 +4174,18 @@ async fn fetch_title_catalog_managed_bytes(
     datastore: &StoreDatastore,
     facet: Option<MediaFacet>,
     library_ids: &[String],
+    query: Option<&crate::queries::title_search::ResolvedTitleSearch>,
+    filter: &TitleCatalogFilter,
 ) -> AppResult<i64> {
     if library_ids.is_empty() {
         return Ok(0);
     }
 
-    let (scope_sql, args) = build_title_catalog_options_scope_sql(facet, library_ids, &[]);
+    let dialect = title_catalog_dialect_for_datastore(datastore);
+    let (scope_sql, args) =
+        build_title_catalog_where_sql(facet, library_ids, query, filter, dialect);
     let media_size_sql = title_catalog_media_size_subquery_scoped(
-        title_catalog_dialect_for_datastore(datastore),
+        dialect,
         "JOIN scoped_titles ON scoped_titles.id = mf.title_id",
     );
     let sql = format!(

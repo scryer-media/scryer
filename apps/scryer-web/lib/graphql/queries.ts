@@ -1841,9 +1841,12 @@ export const titleCatalogCountsQuery = `query TitleCatalogCounts(
 }`;
 
 export const titleCatalogManagedBytesQuery = `query TitleCatalogManagedBytes(
-  $facet: MediaFacetValue, $libraryIds: [ID!]
+  $facet: MediaFacetValue, $libraryIds: [ID!], $query: String,
+  $filter: TitleCatalogFilterInput
 ) {
-  titles(facet: $facet, libraryIds: $libraryIds) { managedBytes }
+  titles(facet: $facet, libraryIds: $libraryIds, query: $query, filter: $filter) {
+    managedBytes
+  }
 }`;
 
 export const titlesQuery = buildTitlesQuery();

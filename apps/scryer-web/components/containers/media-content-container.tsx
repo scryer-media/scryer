@@ -1880,14 +1880,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
   const summaryScopesRef = React.useRef({
     counts: "",
-    bytes: "",
     countsReady: false,
   });
   React.useEffect(() => {
     if (!shouldLoadCatalogTitles) return;
     summaryLoaders.counts.activate();
     summaryLoaders.bytes.activate();
-    summaryScopesRef.current = { counts: "", bytes: "", countsReady: false };
+    summaryScopesRef.current = { counts: "", countsReady: false };
     return () => {
       summaryLoaders.counts.dispose();
       summaryLoaders.bytes.dispose();
@@ -1915,17 +1914,19 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         limit: 0,
         offset: 0,
       });
-      const scope = { facet, libraryIds: [...(scopedIds ?? [])].sort() };
-      const countVariables = { ...scope, query, filter };
+      const countVariables = {
+        facet,
+        libraryIds: [...(scopedIds ?? [])].sort(),
+        query,
+        filter,
+      };
       const countKey = JSON.stringify(countVariables);
-      const bytesKey = JSON.stringify(scope);
       // A new scope keeps the previous counts on screen until its own counts
       // land; the loader drops a superseded scope's late result.
       if (summaryScopesRef.current.counts !== countKey) {
         summaryScopesRef.current.counts = countKey;
         summaryScopesRef.current.countsReady = false;
       }
-      summaryScopesRef.current.bytes = bytesKey;
       void summaryLoaders.counts.run(
         countKey,
         async () => {
@@ -1952,10 +1953,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         invalidate,
       );
       void summaryLoaders.bytes.run(
-        bytesKey,
+        countKey,
         async () => {
           const { data, error } = await client
-            .query(titleCatalogManagedBytesQuery, scope, {
+            .query(titleCatalogManagedBytesQuery, countVariables, {
               requestPolicy: "network-only",
             })
             .toPromise();
