@@ -115,28 +115,31 @@ export function ScoreLogRows({
         return (
           <div
             key={`${entry.code}-${index}`}
-            className="flex justify-between gap-4 font-[family-name:var(--font-code)] text-xs"
+            className="flex justify-between gap-4 text-xs"
           >
             <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
               <span
-                className="break-all"
+                className="break-all font-[family-name:var(--font-code)]"
                 title={entry.label ? entry.code : undefined}
               >
                 {entry.label ?? entry.code}
               </span>
               {badgeKey ? (
-                <span className="rounded bg-muted px-1 py-0.5 font-sans text-[10px] leading-none text-muted-foreground">
+                <span className="rounded bg-muted px-1 py-0.5 text-[10px] leading-none text-muted-foreground">
                   {t(badgeKey)}
                 </span>
               ) : null}
               {entry.ruleSetName ? (
-                <span className="font-sans text-[10px] text-muted-foreground/60">
+                <span className="text-[10px] text-muted-foreground/60">
                   {entry.ruleSetName}
                 </span>
               ) : null}
             </span>
             <span
-              className={cn("shrink-0", toneClassNames[scoreEntryTone(entry)])}
+              className={cn(
+                "shrink-0 font-[family-name:var(--font-code)]",
+                toneClassNames[scoreEntryTone(entry)],
+              )}
             >
               {scoringEntryText(entry, t)}
             </span>
