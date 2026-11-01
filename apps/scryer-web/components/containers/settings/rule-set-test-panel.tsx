@@ -476,12 +476,8 @@ export function RuleSetTestPanel({
   }, [result]);
 
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={onOpenChange}
-      className="rounded border border-border"
-    >
-      <CollapsibleContent className="px-3 py-3">
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <CollapsibleContent className="mt-3 rounded border border-border px-3 py-3">
         <p className="mb-3 text-xs text-muted-foreground">
           Scoring preview only. This does not save{" "}
           {savedRuleSetMode ? "this rule" : "this draft"}, admit a download, or

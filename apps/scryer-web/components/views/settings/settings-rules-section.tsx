@@ -1288,14 +1288,10 @@ export function SettingsRulesSection({
                         </Button>
                       </div>
                     </form>
-                    {testScoring ? (
-                      <div className="mt-3">
-                        {testScoring({
-                          open: isTestScoringOpen,
-                          onOpenChange: setIsTestScoringOpen,
-                        })}
-                      </div>
-                    ) : null}
+                    {testScoring?.({
+                      open: isTestScoringOpen,
+                      onOpenChange: setIsTestScoringOpen,
+                    })}
                   </CardContent>
                 </Card>
                 {editorMode === "edit" ? (
