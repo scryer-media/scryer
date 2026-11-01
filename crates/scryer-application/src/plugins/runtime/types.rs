@@ -449,6 +449,7 @@ impl AppUseCase {
     /// stale at install time.
     pub async fn reconcile_indexer_configs(&self) -> AppResult<()> {
         self.reconcile_orphaned_managed_indexer_configs().await?;
+        let reserved = self.source_import_reserved_providers().await?;
         let Some(provider) = self.services.integrations.plugin_provider.available() else {
             return Ok(());
         };
@@ -462,6 +463,7 @@ impl AppUseCase {
             else {
                 continue;
             };
+            if reserved.contains(&pt) { continue; }
             let Some(default_url) = provider.default_base_url_for_provider(&pt) else {
                 continue;
             };

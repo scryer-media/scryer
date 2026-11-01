@@ -357,6 +357,11 @@ impl AppUseCase {
 
         Ok(true)
     }
+
+    pub async fn complete_setup_for_source_import(&self, actor: &User, source_import_run_id: Option<&str>) -> AppResult<bool> {
+        if let Some(id) = source_import_run_id { self.require_source_import_resolved(actor, id).await?; }
+        self.complete_setup(actor).await
+    }
 }
 impl AppUseCase {
     pub async fn get_service_settings(&self, actor: &User) -> AppResult<ServiceSettings> {

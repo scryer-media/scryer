@@ -19,6 +19,18 @@ const INTERNAL_ERROR_CODE = "INTERNAL_ERROR";
 /** Public reasons name conditions; their sentences never determine behavior. */
 export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
   ...PUBLIC_ERROR_REASON_KEYS,
+  SOURCE_IMPORT_INVALID_REQUEST: "setup.sourceImportInvalidRequest",
+  SOURCE_IMPORT_SELECTION_CHANGED: "setup.sourceImportSelectionChanged",
+  SOURCE_IMPORT_NOT_OWNED: "setup.sourceImportNotOwned",
+  SOURCE_IMPORT_QUEUE_FULL: "setup.sourceImportQueueFull",
+  SOURCE_IMPORT_ACTIVE: "setup.sourceImportActive",
+  SOURCE_IMPORT_ITEM_NOT_RETRYABLE: "setup.sourceImportNotRetryable",
+  SOURCE_IMPORT_UNRESOLVED: "setup.sourceImportUnresolved",
+  SOURCE_IMPORT_INTERRUPTED: "setup.sourceImportState.interrupted",
+  SOURCE_IMPORT_CREDENTIAL_REQUIRED: "setup.sourceImportCredentialRequired",
+  SOURCE_IMPORT_CONFIG_CONFLICT: "setup.sourceImportConfigConflict",
+  SOURCE_IMPORT_SOURCE_NOT_READY: "setup.sourceImportSourceNotReady",
+  SOURCE_IMPORT_ITEM_FAILED: "setup.sourceImportItemFailed",
   INITIAL_AUTH_REQUIRED: "initialAuth.required",
   INITIAL_AUTH_ALREADY_COMPLETED: "initialAuth.alreadyCompleted",
   INITIAL_AUTH_PASSWORD_REPLACEMENT_REQUIRED: "initialAuth.replaceRequired",

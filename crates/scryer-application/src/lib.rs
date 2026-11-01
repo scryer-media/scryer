@@ -53,6 +53,7 @@ mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
 pub mod grabbed_file_names;
+pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
 mod helpers;
@@ -265,8 +266,9 @@ pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,
     DownloadQueueSync, ImportCancellation, PluginInstallInProgressError,
-    PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
-    RuntimePerformanceClass, RuntimePerformanceSnapshot, describe_download_queue_metrics,
+    PluginInstallOperationKind, PluginInstallOrchestrator, PluginInstallProgressSnapshot,
+    PluginInstallState, RuntimeFeature, RuntimePerformanceClass, RuntimePerformanceSnapshot,
+    describe_download_queue_metrics,
 };
 pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{

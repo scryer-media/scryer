@@ -867,8 +867,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createFolder"));
     // The first-run authentication decision adds one mutation: 284->285.
     assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
+    // Durable source imports add acceptance, status, retry, and explicit skip.
+    for name in [
+        "startExternalImportSources",
+        "externalImportSourceStatus",
+        "retryExternalImportSources",
+        "skipExternalImportSource",
+    ] {
+        assert!(mutation_field_names.contains(&name));
+    }
     assert_eq!(
-        mutation_field_count, 285,
+        mutation_field_count, 289,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1267,12 +1276,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
+    // Durable source imports add a job progress object and per-item receipt object.
+    for name in [
+        "ExternalImportSourceJobPayload",
+        "ExternalImportSourceItemPayload",
+    ] {
+        assert!(public_type_names.contains(&name));
+    }
     assert_eq!(
         public_types.len(),
-        991,
+        993,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 535);
+    assert_eq!(kind_count("OBJECT"), 537);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
     assert_eq!(kind_count("ENUM"), 201);
     assert_eq!(kind_count("SCALAR"), 10);

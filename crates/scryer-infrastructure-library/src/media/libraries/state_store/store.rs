@@ -1429,7 +1429,8 @@ impl HousekeepingRepository for HousekeepingStore {
             &self.datastore,
             "delete_stale_workflow_operations",
             "DELETE FROM workflow_operations
-              WHERE job_key IS NOT NULL
+             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id)
+               AND job_key IS NOT NULL
                 AND (
                     (status = 'completed' AND started_at <= {})
                     OR (status IN ('warning', 'failed') AND started_at <= {})

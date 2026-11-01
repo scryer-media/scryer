@@ -2916,8 +2916,8 @@ export const setTitleRequiredAudioMutation = `mutation SetTitleRequiredAudio($in
 
 // ── Setup Wizard ──────────────────────────────────────────────────────
 
-export const completeSetupMutation = `mutation CompleteSetup {
-  completeSetup {
+export const completeSetupMutation = `mutation CompleteSetup($sourceImportRunId: ID) {
+  completeSetup(sourceImportRunId: $sourceImportRunId) {
     completed
   }
 }`;
@@ -3024,6 +3024,20 @@ export const executeExternalImportMutation = `mutation ExecuteExternalImport($in
     pluginsInstalled
     errors
   }
+}`;
+
+const sourceImportJobFields = `runId active ready updatedAt items { key name configId kind state reason message }`;
+export const startExternalImportSourcesMutation = `mutation StartExternalImportSources($requestKey: String!, $input: ExecuteExternalImportInput!) {
+  startExternalImportSources(requestKey: $requestKey, input: $input) { ${sourceImportJobFields} }
+}`;
+export const externalImportSourceStatusMutation = `mutation ExternalImportSourceStatus($runId: ID!) {
+  externalImportSourceStatus(runId: $runId) { ${sourceImportJobFields} }
+}`;
+export const retryExternalImportSourcesMutation = `mutation RetryExternalImportSources($runId: ID!, $corrections: [IndexerApiKeyOverrideInput!]!) {
+  retryExternalImportSources(runId: $runId, corrections: $corrections) { ${sourceImportJobFields} }
+}`;
+export const skipExternalImportSourceMutation = `mutation SkipExternalImportSource($runId: ID!, $key: String!) {
+  skipExternalImportSource(runId: $runId, key: $key) { ${sourceImportJobFields} }
 }`;
 
 export const finalizeExternalImportMutation = `mutation FinalizeExternalImport($input: FinalizeExternalImportInput!) {
@@ -3154,6 +3168,7 @@ export type ExternalImportSourceLibraryMappingInput = {
 };
 
 export type FinalizeExternalImportInput = {
+  sourceImportRunId?: string | null;
   sourceWarmupSessionIds: string[];
   mappings: ExternalImportSourceLibraryMappingInput[];
 };

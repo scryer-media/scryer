@@ -1356,6 +1356,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "workflow_operations",
         classification: BackupTableClassification::Export,
     },
+    BackupTableCatalogEntry {
+        table: "workflow_private_inputs",
+        classification: BackupTableClassification::Export,
+    },
 ];
 
 /// A `ResetOnRestore` table whose rows only title metadata hydration writes.
