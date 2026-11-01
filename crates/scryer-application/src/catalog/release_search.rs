@@ -59,8 +59,91 @@ pub(crate) struct PreparedReleaseScoringInputs {
     rule_evaluation_batch: crate::canonical_scoring::RuleEvaluationBatch,
 }
 
+/// Releases one indexer returned that scoring removed because no enabled
+/// download client accepts their source kind, counted by the reason code for
+/// the missing client family.
+pub type UnroutableReleaseCounts = std::collections::BTreeMap<&'static str, usize>;
+
+/// What one scoring pass produced, plus the releases it had to set aside
+/// because nothing could download them.
+pub(crate) struct ScoredReleaseBatch {
+    pub results: Vec<IndexerSearchResult>,
+    /// Keyed by indexer id; empty when every release had an accepting client.
+    pub unroutable_by_indexer: HashMap<String, UnroutableReleaseCounts>,
+}
+
+/// Removes releases no enabled download client can take and counts them per
+/// indexer and missing client family. A release with no source kind is kept.
+fn retain_routable_releases(
+    results: &mut Vec<IndexerSearchResult>,
+    has_usenet_client: bool,
+    has_torrent_client: bool,
+    has_http_client: bool,
+) -> HashMap<String, UnroutableReleaseCounts> {
+    use crate::error_reasons::release_search as reasons;
+    let mut unroutable: HashMap<String, UnroutableReleaseCounts> = HashMap::new();
+    results.retain(|result| {
+        let missing = match result.source_kind {
+            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
+                if !has_usenet_client =>
+            {
+                reasons::NO_USENET_CLIENT
+            }
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri)
+                if !has_torrent_client =>
+            {
+                reasons::NO_TORRENT_CLIENT
+            }
+            Some(DownloadSourceKind::HttpResource) if !has_http_client => reasons::NO_HTTP_CLIENT,
+            _ => return true,
+        };
+        *unroutable
+            .entry(result.indexer_id.clone().unwrap_or_default())
+            .or_default()
+            .entry(missing)
+            .or_default() += 1;
+        false
+    });
+    unroutable
+}
+
+/// Reports releases a search set aside because no enabled download client
+/// accepts them. An operator's own search warns: those releases were what
+/// they asked for. Background searches repeat on a schedule, so they log at
+/// debug to keep one missing client from flooding the log.
+fn log_unroutable_releases(
+    caller_label: &str,
+    mode: SearchMode,
+    unroutable_by_indexer: &HashMap<String, UnroutableReleaseCounts>,
+) {
+    for (indexer_id, counts) in unroutable_by_indexer {
+        for (missing_client, count) in counts {
+            if mode == SearchMode::Interactive {
+                warn!(
+                    caller = caller_label,
+                    indexer_id = indexer_id.as_str(),
+                    removed = *count,
+                    reason = *missing_client,
+                    "removed search results no enabled download client accepts"
+                );
+            } else {
+                debug!(
+                    caller = caller_label,
+                    indexer_id = indexer_id.as_str(),
+                    removed = *count,
+                    reason = *missing_client,
+                    "removed search results no enabled download client accepts"
+                );
+            }
+        }
+    }
+}
+
 pub(crate) struct ScoredSearchOutcome {
     pub results: Vec<IndexerSearchResult>,
+    /// Releases removed before scoring because no enabled download client
+    /// accepts their source kind, keyed by indexer id.
+    pub unroutable_by_indexer: HashMap<String, UnroutableReleaseCounts>,
     pub complete_indexer_ids: Vec<String>,
     /// Indexers that could not answer any of the search's queries: no id they
     /// can search the facet by and no usable text query. Nothing was sent.
@@ -1137,6 +1220,7 @@ impl AppUseCase {
             now,
         )
         .await
+        .map(|batch| batch.results)
     }
 
     #[expect(
@@ -1171,7 +1255,7 @@ impl AppUseCase {
         // The lane's clock: listing age is read against it, and the snapshot a
         // grab or park persists is captured at it.
         now: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<Vec<IndexerSearchResult>> {
+    ) -> AppResult<ScoredReleaseBatch> {
         let mut timer = crate::rules::metrics::StageTimer::new(
             "scan_batch",
             crate::rules::metrics::Purpose::Live,
@@ -1287,16 +1371,12 @@ impl AppUseCase {
             .as_mut()
             .expect("release scoring inputs initialized");
 
-        raw_results.retain(|result| match result.source_kind {
-            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl) => {
-                prepared.has_usenet_client
-            }
-            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri) => {
-                prepared.has_torrent_client
-            }
-            Some(DownloadSourceKind::HttpResource) => prepared.has_http_client,
-            None => true,
-        });
+        let unroutable_by_indexer = retain_routable_releases(
+            &mut raw_results,
+            prepared.has_usenet_client,
+            prepared.has_torrent_client,
+            prepared.has_http_client,
+        );
         let requested_episode = resolve_requested_episode(
             &prepared.catalog_episodes,
             season,
@@ -1600,7 +1680,10 @@ impl AppUseCase {
         // discard candidates before that context has been applied.
 
         timer.outcome("ok");
-        Ok(scored)
+        Ok(ScoredReleaseBatch {
+            results: scored,
+            unroutable_by_indexer,
+        })
     }
 
     /// Internal search+score pipeline shared by both user-facing search and background acquisition.
@@ -1689,6 +1772,7 @@ impl AppUseCase {
             );
             return Ok(ScoredSearchOutcome {
                 results: Vec::new(),
+                unroutable_by_indexer: HashMap::new(),
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
@@ -1807,6 +1891,7 @@ impl AppUseCase {
         if context.should_yield() {
             return Ok(ScoredSearchOutcome {
                 results: Vec::new(),
+                unroutable_by_indexer: HashMap::new(),
                 complete_indexer_ids: Vec::new(),
                 unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
@@ -1936,8 +2021,9 @@ impl AppUseCase {
             }
         }
 
+        let mut unroutable_by_indexer = HashMap::new();
         if !scored_results.is_empty() {
-            scored_results = self
+            let batch = self
                 .score_release_results_with_prepared(
                     scored_results,
                     &quality_profile,
@@ -1955,6 +2041,9 @@ impl AppUseCase {
                     scoring_now,
                 )
                 .await?;
+            scored_results = batch.results;
+            unroutable_by_indexer = batch.unroutable_by_indexer;
+            log_unroutable_releases(caller_label, mode, &unroutable_by_indexer);
         }
         if scored_results.is_empty() && successful_searches == 0 && query_failures > 0 {
             let details =
@@ -1965,6 +2054,7 @@ impl AppUseCase {
             unsupported_indexers(&coverage_by_indexer, required_query_count);
         Ok(ScoredSearchOutcome {
             results: scored_results,
+            unroutable_by_indexer,
             complete_indexer_ids: completely_covered_indexers(
                 coverage_by_indexer,
                 required_query_count,

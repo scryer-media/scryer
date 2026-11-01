@@ -6042,6 +6042,14 @@ const en: LocaleDictionary = {
     "{{count}} indexer(s) failed: {{names}}",
   "title.contextReleaseSearchIndexerSkipped":
     "{{count}} indexer(s) skipped: {{names}}",
+  "title.contextReleaseSearchUnroutable.noUsenetClient":
+    "{{count}} Usenet release(s) hidden, no enabled Usenet download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.noTorrentClient":
+    "{{count}} torrent release(s) hidden, no enabled torrent download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.noHttpClient":
+    "{{count}} direct download release(s) hidden, no enabled HTTP download client: {{names}}",
+  "title.contextReleaseSearchUnroutable.unknown":
+    "{{count}} release(s) hidden, no enabled download client accepts them: {{names}}",
   "title.noReleasesFound": "No releases found for {{name}}.",
   "title.searchNeedsDownloadClientTitle": "Search requires a download client",
   "title.searchNeedsDownloadClientDescription":

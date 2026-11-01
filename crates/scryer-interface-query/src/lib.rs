@@ -635,6 +635,16 @@ pub fn from_interactive_release_search_snapshot(
                 }
             }),
             skipped_until: indexer.skipped_until,
+            unroutable_results: indexer
+                .unroutable_results
+                .into_iter()
+                .map(
+                    |(reason, count)| InteractiveReleaseSearchUnroutableResultsPayload {
+                        reason: reason.to_string(),
+                        count: i32::try_from(count).unwrap_or(i32::MAX),
+                    },
+                )
+                .collect(),
         })
         .collect();
     InteractiveReleaseSearchPayload {

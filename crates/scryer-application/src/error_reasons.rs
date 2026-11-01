@@ -4150,6 +4150,35 @@ pub mod indexer_caps {
     }
 }
 
+/// Why a title search removed an indexer's releases before scoring them.
+pub mod release_search {
+    /// No enabled download client accepts Usenet releases (NZB files or links).
+    pub const NO_USENET_CLIENT: &str = "RELEASE_SEARCH_NO_USENET_CLIENT";
+    /// No enabled download client accepts torrent releases (torrent files or magnets).
+    pub const NO_TORRENT_CLIENT: &str = "RELEASE_SEARCH_NO_TORRENT_CLIENT";
+    /// No enabled download client accepts direct HTTP downloads.
+    pub const NO_HTTP_CLIENT: &str = "RELEASE_SEARCH_NO_HTTP_CLIENT";
+    /// Every reason a title search reports for removed releases.
+    pub const ALL: &[&str] = &[NO_USENET_CLIENT, NO_TORRENT_CLIENT, NO_HTTP_CLIENT];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("RELEASE_SEARCH_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 pub mod integration {
     /// Indexer provider is unavailable.
     pub const INDEXER_PROVIDER_UNAVAILABLE: &str = "INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE";

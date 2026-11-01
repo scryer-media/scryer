@@ -1430,6 +1430,10 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
