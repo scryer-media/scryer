@@ -264,7 +264,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {option.value} - {t(option.labelKey)}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(option.value, "file")}
                         </span>
                       </span>
@@ -276,7 +276,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {customFileChmod} - {t("settings.chmodPresetCustom")}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(customFileChmod, "file")}
                         </span>
                       </span>
@@ -302,7 +302,7 @@ export function GeneralSettingsPanel({
                         <span>
                           {option.value} - {t(option.labelKey)}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(option.value, "folder")}
                         </span>
                       </span>
@@ -315,7 +315,7 @@ export function GeneralSettingsPanel({
                           {customFolderChmod} -{" "}
                           {t("settings.chmodPresetCustom")}
                         </span>
-                        <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                        <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                           {formatChmodMode(customFolderChmod, "folder")}
                         </span>
                       </span>

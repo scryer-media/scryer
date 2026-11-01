@@ -239,7 +239,7 @@ export function ScriptEditorForm({
                 variant="outline"
                 aria-haspopup="dialog"
                 onClick={() => setFolderBrowserOpen(true)}
-                className="min-w-0 flex-1 justify-start font-[var(--font-code)]"
+                className="min-w-0 flex-1 justify-start font-[family-name:var(--font-code)]"
                 title={draft.scriptContent || t("script.editor.selectFile")}
                 data-value={draft.scriptContent}
               >

@@ -186,7 +186,7 @@ function CronExpressionField({
           value={expression}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled}
-          className="font-[var(--font-code)]"
+          className="font-[family-name:var(--font-code)]"
           placeholder="0 3 * * *"
           autoComplete="off"
           spellCheck={false}

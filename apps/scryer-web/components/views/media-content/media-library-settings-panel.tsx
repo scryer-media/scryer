@@ -1491,7 +1491,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                             <div className="flex min-w-0 flex-1 items-center gap-2.5">
                               <FolderOpen className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
                               <span
-                                className="min-w-0 flex-1 break-all font-[var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
+                                className="min-w-0 flex-1 break-all font-[family-name:var(--font-code)] text-[13.5px] text-[var(--scry-text2)] @xl/facet-page:truncate"
                                 title={rf.path}
                               >
                                 {rf.path}
@@ -1920,7 +1920,8 @@ export const MediaLibrarySettingsPanel = React.memo(
                 <div
                   className={cn(
                     "grid grid-cols-1 gap-5",
-                    canManageDownloadClientRouting && "@xl/facet-page:grid-cols-2",
+                    canManageDownloadClientRouting &&
+                      "@xl/facet-page:grid-cols-2",
                   )}
                 >
                   <div className="space-y-2">
@@ -2022,7 +2023,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "file")}
                                     </span>
                                   </span>
@@ -2035,7 +2036,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFileChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(customFileChmod, "file")}
                                     </span>
                                   </span>
@@ -2079,7 +2080,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                     <span>
                                       {option.value} - {t(option.labelKey)}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(option.value, "folder")}
                                     </span>
                                   </span>
@@ -2092,7 +2093,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                       {customFolderChmod} -{" "}
                                       {t("settings.chmodPresetCustom")}
                                     </span>
-                                    <span className="font-[var(--font-code)] text-xs text-muted-foreground">
+                                    <span className="font-[family-name:var(--font-code)] text-xs text-muted-foreground">
                                       {formatChmodMode(
                                         customFolderChmod,
                                         "folder",

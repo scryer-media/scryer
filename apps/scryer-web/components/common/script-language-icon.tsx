@@ -37,7 +37,7 @@ export function ScriptLanguageIcon({
   return (
     <span
       aria-hidden="true"
-      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] font-[var(--font-code)] text-[10px] font-bold leading-none text-[var(--scry-accent)]"
+      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] font-[family-name:var(--font-code)] text-[10px] font-bold leading-none text-[var(--scry-accent)]"
     >
       {prompt}
     </span>

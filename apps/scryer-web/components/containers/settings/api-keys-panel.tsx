@@ -378,7 +378,7 @@ export function ApiKeysPanel({
                 size={revealed.length + 2}
                 id="settings-profile-api-key-revealed"
                 aria-label="New API key"
-                className="h-10 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                className="h-10 w-auto max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
               />
               <Button
                 type="button"
@@ -510,7 +510,7 @@ export function ApiKeysPanel({
                     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
                       <div className="min-w-0">
                         <dt className="text-[var(--scry-muted3)]">Actor</dt>
-                        <dd className="truncate font-[var(--font-code)] text-[var(--scry-ink2)]">
+                        <dd className="truncate font-[family-name:var(--font-code)] text-[var(--scry-ink2)]">
                           {key.actor}
                         </dd>
                       </div>

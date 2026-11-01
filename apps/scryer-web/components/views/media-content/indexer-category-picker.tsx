@@ -435,7 +435,7 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
                       />
                       {t(group.labelKey)}
                     </span>
-                    <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                    <span className="text-xs font-[family-name:var(--font-code)] text-muted-foreground">
                       {group.code}
                     </span>
                   </label>
@@ -466,7 +466,7 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
                             </span>
                           ) : null}
                         </span>
-                        <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                        <span className="text-xs font-[family-name:var(--font-code)] text-muted-foreground">
                           {category.code}
                         </span>
                       </label>
@@ -502,7 +502,7 @@ export const IndexerCategoryPicker = React.memo(function IndexerCategoryPicker({
                           {category.label ?? category.code}
                         </span>
                       </span>
-                      <span className="text-xs font-[var(--font-code)] text-muted-foreground">
+                      <span className="text-xs font-[family-name:var(--font-code)] text-muted-foreground">
                         {category.code}
                       </span>
                     </label>

@@ -753,7 +753,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
               </span>
             </ActionTooltip>
           </TableCell>
-          <TableCell className="whitespace-nowrap px-2 py-2 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+          <TableCell className="whitespace-nowrap px-2 py-2 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
             {bytesToReadable(item.sizeBytes)}
           </TableCell>
         </TableRow>
@@ -813,14 +813,14 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
             </div>
           </TableCell>
           {showYearColumn ? (
-            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {item.year ?? "—"}
             </TableCell>
           ) : null}
           {showRatingColumns.map((columnKey) => (
             <TableCell
               key={columnKey}
-              className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]"
+              className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]"
             >
               {titleTableRatingColumnValue(item, columnKey)}
             </TableCell>
@@ -867,7 +867,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
             </TableCell>
           ) : null}
           {showRuntimeColumn ? (
-            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatRuntimeMinutes(item.runtimeMinutes)}
             </TableCell>
           ) : null}
@@ -881,12 +881,12 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
             </TableCell>
           ) : null}
           {showSizeColumn ? (
-            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {bytesToReadable(item.sizeBytes)}
             </TableCell>
           ) : null}
           {showResolutionColumn ? (
-            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatResolutionLabel(item.mediaResolution)}
             </TableCell>
           ) : null}
@@ -901,7 +901,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
             </TableCell>
           ) : null}
           {showPopularityColumn ? (
-            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
+            <TableCell className="whitespace-nowrap py-1.5 text-center align-middle font-[family-name:var(--font-code)] text-[12.5px] tabular-nums text-[var(--scry-text4)]">
               {formatCatalogPopularity(item.popularity)}
             </TableCell>
           ) : null}

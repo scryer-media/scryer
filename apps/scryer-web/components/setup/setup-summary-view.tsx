@@ -222,7 +222,7 @@ export function SetupSummaryView({
                 <p
                   className={
                     item.code
-                      ? "font-[var(--font-code)] text-sm text-muted-foreground"
+                      ? "font-[family-name:var(--font-code)] text-sm text-muted-foreground"
                       : "text-sm text-muted-foreground"
                   }
                 >

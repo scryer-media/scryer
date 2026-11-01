@@ -480,7 +480,7 @@ function DiscoverySectionRail({
       )}
     >
       <div className="mb-3.5 flex items-center justify-between gap-3">
-        <h3 className="m-0 inline-flex items-center gap-2 font-[var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
+        <h3 className="m-0 inline-flex items-center gap-2 font-[family-name:var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
           {HeaderIcon ? (
             <HeaderIcon
               className="h-4 w-4 text-[var(--scry-accent-text)]"
@@ -623,7 +623,7 @@ function DiscoveryHero({
           </div>
           <h2
             id="discovery-hero-title"
-            className="m-0 mb-3 font-[var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow"
+            className="m-0 mb-3 font-[family-name:var(--font-space-grotesk)] text-[clamp(2rem,3vw,46px)] font-bold leading-[0.96] text-white drop-shadow"
           >
             {titleLabel}
           </h2>
@@ -1677,7 +1677,7 @@ export function DiscoveryView({
         ) : !loading && !hasRenderableContent ? (
           <div className="rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] px-5 py-8 text-center">
             <Sparkles className="mx-auto mb-3 h-6 w-6 text-[var(--scry-accent-text)]" />
-            <h2 className="mb-2 font-[var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
+            <h2 className="mb-2 font-[family-name:var(--font-space-grotesk)] text-lg font-semibold text-[var(--scry-ink2)]">
               {t("discovery.emptyTitle")}
             </h2>
             <p className="mx-auto max-w-md text-sm leading-6 text-[var(--scry-muted3)]">

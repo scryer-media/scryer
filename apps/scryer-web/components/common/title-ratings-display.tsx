@@ -117,7 +117,7 @@ function RatingValue({
   return (
     <span
       className={cn(
-        "font-[var(--font-code)]",
+        "font-[family-name:var(--font-code)]",
         variant === "hero" ? "text-white" : "text-card-foreground",
       )}
     >

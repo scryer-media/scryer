@@ -208,7 +208,7 @@ export function ScriptRunsTable({
                           ) : null}
                           <pre
                             id={ids.stdout(run)}
-                            className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-1.5 font-[var(--font-code)] text-[10px] leading-relaxed text-muted-foreground"
+                            className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-1.5 font-[family-name:var(--font-code)] text-[10px] leading-relaxed text-muted-foreground"
                           >
                             {stdout}
                           </pre>
@@ -223,7 +223,7 @@ export function ScriptRunsTable({
                           ) : null}
                           <pre
                             id={ids.stderr(run)}
-                            className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-1.5 font-[var(--font-code)] text-[10px] leading-relaxed text-[var(--scry-danger-text)]"
+                            className="max-h-24 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-1.5 font-[family-name:var(--font-code)] text-[10px] leading-relaxed text-[var(--scry-danger-text)]"
                           >
                             {stderr}
                           </pre>

@@ -762,7 +762,7 @@ export function MoveTitlesDialog({
               >
                 <SelectTrigger
                   id="move-titles-destination-root"
-                  className="h-9 w-full font-[var(--font-code)] text-sm"
+                  className="h-9 w-full font-[family-name:var(--font-code)] text-sm"
                 >
                   <SelectValue
                     placeholder={t("move.destinationRootPlaceholder")}
@@ -1347,13 +1347,13 @@ function SummaryCell({ label, value }: { label: string; value: string }) {
 function PlanItemRow({ item }: { item: LocationPlanItem }) {
   return (
     <li className="min-w-0 text-xs text-muted-foreground">
-      <span className="font-[var(--font-code)] break-all">
+      <span className="font-[family-name:var(--font-code)] break-all">
         {item.sourcePath ?? "—"}
       </span>
       {item.destinationPath ? (
         <>
           {" → "}
-          <span className="font-[var(--font-code)] break-all text-foreground">
+          <span className="font-[family-name:var(--font-code)] break-all text-foreground">
             {item.destinationPath}
           </span>
         </>
@@ -1435,14 +1435,14 @@ function ClassificationGroup({
               <span className="block text-muted-foreground">
                 {currentLibraryName(entry) ?? "—"}
                 {" · "}
-                <span className="font-[var(--font-code)] break-all">
+                <span className="font-[family-name:var(--font-code)] break-all">
                   {where.source ?? "—"}
                 </span>
                 <ArrowRight
                   aria-hidden="true"
                   className="mx-1 inline h-3 w-3 align-[-1px]"
                 />
-                <span className="font-[var(--font-code)] break-all text-foreground">
+                <span className="font-[family-name:var(--font-code)] break-all text-foreground">
                   {where.destination ?? "—"}
                 </span>
               </span>
@@ -1721,19 +1721,19 @@ function BlockedIdentityDetail({
               {candidate.name ? (
                 <>
                   <span>{candidate.name}</span>{" "}
-                  <span className="font-[var(--font-code)] break-all opacity-80">
+                  <span className="font-[family-name:var(--font-code)] break-all opacity-80">
                     {candidate.titleId}
                   </span>
                 </>
               ) : (
-                <span className="font-[var(--font-code)] break-all">
+                <span className="font-[family-name:var(--font-code)] break-all">
                   {candidate.titleId}
                 </span>
               )}
               {candidate.sharedIdentities.length > 0 ? (
                 <span
                   id={`move-titles-ambiguous-shared-${entry.titleId}-${candidate.titleId}`}
-                  className="block font-[var(--font-code)] break-all opacity-80"
+                  className="block font-[family-name:var(--font-code)] break-all opacity-80"
                 >
                   {t("move.ambiguousCandidateShared", {
                     identities: candidate.sharedIdentities.join(", "),

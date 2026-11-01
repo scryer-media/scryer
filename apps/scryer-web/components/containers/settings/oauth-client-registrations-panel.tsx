@@ -801,7 +801,7 @@ export function OAuthClientRegistrationsPanel() {
                   </Button>
                 </div>
               </div>
-              <ul className="space-y-1 break-all font-[var(--font-code)] text-xs text-[var(--scry-muted3)]">
+              <ul className="space-y-1 break-all font-[family-name:var(--font-code)] text-xs text-[var(--scry-muted3)]">
                 {registeredClient.redirectUris.map((uri) => (
                   <li key={uri}>{uri}</li>
                 ))}
@@ -859,7 +859,7 @@ export function OAuthClientRegistrationsPanel() {
             </Label>
             <textarea
               id="oauth-client-redirect-uris"
-              className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 font-[var(--font-code)] text-xs shadow-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-24 w-full rounded-md border border-input bg-transparent px-3 py-2 font-[family-name:var(--font-code)] text-xs shadow-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               value={draft.redirectUris}
               disabled={busy}
               onChange={(event) =>

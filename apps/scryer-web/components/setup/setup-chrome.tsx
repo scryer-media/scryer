@@ -98,7 +98,7 @@ export function SetupStepHeader({
         <Icon className="h-6 w-6" />
       </span>
       <div className="space-y-1">
-        <h2 className="font-[var(--font-space-grotesk)] text-xl font-bold tracking-tight text-[var(--scry-ink2)]">
+        <h2 className="font-[family-name:var(--font-space-grotesk)] text-xl font-bold tracking-tight text-[var(--scry-ink2)]">
           {title}
         </h2>
         {subtitle ? (

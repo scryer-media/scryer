@@ -122,7 +122,7 @@ function EndpointField({
         value={value}
         size={value.length + 2}
         onFocus={(event) => event.currentTarget.select()}
-        className="h-9 w-auto min-w-0 max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+        className="h-9 w-auto min-w-0 max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
       />
       <IconButton
         id={`${id}-copy`}
@@ -784,7 +784,7 @@ export function SettingsIndexerClientsContainer() {
                               size={revealed.apiKey.length + 2}
                               autoComplete="off"
                               onFocus={(event) => event.currentTarget.select()}
-                              className="h-9 w-auto max-w-full rounded-r-none font-[var(--font-code)] text-sm text-[var(--scry-ink2)]"
+                              className="h-9 w-auto max-w-full rounded-r-none font-[family-name:var(--font-code)] text-sm text-[var(--scry-ink2)]"
                             />
                             <IconButton
                               id="indexer-client-revealed-copy"

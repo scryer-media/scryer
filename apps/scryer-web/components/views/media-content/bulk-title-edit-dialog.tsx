@@ -283,7 +283,7 @@ export function BulkTitleEditDialog({
                     ? t("move.destinationRoot")
                     : t("title.rootFolder")
                 }
-                className="h-9 w-full font-[var(--font-code)] text-sm"
+                className="h-9 w-full font-[family-name:var(--font-code)] text-sm"
               >
                 <SelectValue />
               </SelectTrigger>

@@ -94,11 +94,11 @@ export function MediaRenamePlanPanel({
               <p className="text-muted-foreground">
                 {t("rename.namingLanguage", { language: context.language })}
               </p>
-              <p className="font-[var(--font-code)] text-xs">
+              <p className="font-[family-name:var(--font-code)] text-xs">
                 {context.currentRelativePath ?? "—"}
               </p>
               <ArrowDown aria-hidden className="my-1 h-3 w-3" />
-              <p className="font-[var(--font-code)] text-xs">
+              <p className="font-[family-name:var(--font-code)] text-xs">
                 {context.proposedRelativePath}
               </p>
             </div>
@@ -118,7 +118,7 @@ export function MediaRenamePlanPanel({
                 <span className="sr-only">{t("rename.currentPath")}</span>
                 <div
                   data-ui="media-rename-plan-current-path"
-                  className="break-all font-[var(--font-code)] text-xs text-muted-foreground"
+                  className="break-all font-[family-name:var(--font-code)] text-xs text-muted-foreground"
                 >
                   {item.currentPath || "—"}
                 </div>
@@ -129,7 +129,7 @@ export function MediaRenamePlanPanel({
                 <span className="sr-only">{t("rename.proposedPath")}</span>
                 <div
                   data-ui="media-rename-plan-proposed-path"
-                  className="break-all font-[var(--font-code)] text-xs text-card-foreground"
+                  className="break-all font-[family-name:var(--font-code)] text-xs text-card-foreground"
                 >
                   {item.proposedPath ?? "—"}
                 </div>

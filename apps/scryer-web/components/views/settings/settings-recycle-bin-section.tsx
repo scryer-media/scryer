@@ -698,7 +698,7 @@ export function SettingsRecycleBinSection({
                             <div>
                               <div className="font-medium">{item.fileName}</div>
                               <div
-                                className="max-w-[300px] truncate font-[var(--font-code)] text-xs text-muted-foreground"
+                                className="max-w-[300px] truncate font-[family-name:var(--font-code)] text-xs text-muted-foreground"
                                 title={item.originalPath}
                               >
                                 {item.originalPath}
@@ -711,7 +711,7 @@ export function SettingsRecycleBinSection({
                           <TableCell>
                             <ReasonBadge reason={item.reason} />
                           </TableCell>
-                          <TableCell className="whitespace-nowrap font-[var(--font-code)] text-sm text-muted-foreground">
+                          <TableCell className="whitespace-nowrap font-[family-name:var(--font-code)] text-sm text-muted-foreground">
                             {formatSize(item.sizeBytes)}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground whitespace-nowrap">

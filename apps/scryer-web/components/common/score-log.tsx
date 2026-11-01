@@ -35,7 +35,7 @@ export function ScoreValue({
       id={id}
       data-ui="score-value"
       className={cn(
-        "font-[var(--font-code)] font-semibold tabular-nums",
+        "font-[family-name:var(--font-code)] font-semibold tabular-nums",
         scoreToneClassName(score),
         className,
       )}
@@ -87,7 +87,7 @@ export function ScoreLog({
       ) : null}
       <ScoreLogRows entries={entries} />
       {total != null ? (
-        <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-[var(--font-code)] text-xs font-semibold">
+        <div className="mt-1.5 flex justify-between border-t border-border pt-1.5 font-[family-name:var(--font-code)] text-xs font-semibold">
           <span className="text-muted-foreground">{t("nzb.total")}</span>
           <span className={scoreToneClassName(total)}>
             {formatScore(total)}
@@ -115,7 +115,7 @@ export function ScoreLogRows({
         return (
           <div
             key={`${entry.code}-${index}`}
-            className="flex justify-between gap-4 font-[var(--font-code)] text-xs"
+            className="flex justify-between gap-4 font-[family-name:var(--font-code)] text-xs"
           >
             <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
               <span

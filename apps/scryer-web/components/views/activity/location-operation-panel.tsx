@@ -792,7 +792,7 @@ function FilePath({ path }: { path: string }) {
         <span
           tabIndex={0}
           aria-label={path}
-          className="flex min-w-0 font-[var(--font-code)]"
+          className="flex min-w-0 font-[family-name:var(--font-code)]"
         >
           <span
             aria-hidden="true"
@@ -928,7 +928,7 @@ function TitleRow({
                 <span
                   tabIndex={0}
                   aria-label={row.currentFile}
-                  className="flex min-w-0 font-[var(--font-code)]"
+                  className="flex min-w-0 font-[family-name:var(--font-code)]"
                 >
                   <span
                     aria-hidden="true"

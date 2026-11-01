@@ -816,7 +816,7 @@ export function RuleSetTestPanel({
                       <p className="text-xs font-medium uppercase tracking-wide">
                         {label}
                       </p>
-                      <p className="font-[var(--font-code)] text-3xl font-semibold tabular-nums">
+                      <p className="font-[family-name:var(--font-code)] text-3xl font-semibold tabular-nums">
                         {formatSignedScore(score)}
                       </p>
                     </div>

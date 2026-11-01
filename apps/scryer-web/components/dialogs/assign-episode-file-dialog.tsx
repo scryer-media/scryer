@@ -170,7 +170,7 @@ export function AssignEpisodeFileDialog({
         </DialogHeader>
         <div className="space-y-4">
           {fileName ? (
-            <div className="break-all rounded-md border border-border bg-muted/30 px-3 py-2 font-[var(--font-code)] text-xs text-muted-foreground">
+            <div className="break-all rounded-md border border-border bg-muted/30 px-3 py-2 font-[family-name:var(--font-code)] text-xs text-muted-foreground">
               {fileName}
             </div>
           ) : null}
@@ -179,7 +179,7 @@ export function AssignEpisodeFileDialog({
               <div className="text-xs font-medium text-muted-foreground">
                 {t("episodeAssign.originalReleaseName")}
               </div>
-              <div className="break-all rounded-md border border-border bg-muted/30 px-3 py-2 font-[var(--font-code)] text-xs text-foreground">
+              <div className="break-all rounded-md border border-border bg-muted/30 px-3 py-2 font-[family-name:var(--font-code)] text-xs text-foreground">
                 {originalReleaseName.trim()}
               </div>
             </div>
