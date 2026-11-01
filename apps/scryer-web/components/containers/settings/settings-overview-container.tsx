@@ -85,7 +85,7 @@ export function SettingsOverviewContainer({
   const [generalLoading, setGeneralLoading] = React.useState(true);
   const [generalSaving, setGeneralSaving] = React.useState(false);
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
-  // FR-040–FR-047: the import-copy verification depth. Its own query and
+  // The copy verification depth for imports and library moves. Its own query and
   // mutation, so it loads and saves independently of the general settings blob.
   const [verificationDepth, setVerificationDepth] =
     React.useState<VerificationDepth>("QUICK");

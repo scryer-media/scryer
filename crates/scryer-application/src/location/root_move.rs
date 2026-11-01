@@ -309,6 +309,9 @@ impl RootMoveTitleExecution {
 /// so a restart resumes without rebuilding a preview (FR-033).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RootMoveExecutionPlan {
+    /// Confirmed anonymous-folder consolidation, including its disposal allowlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<crate::location::conflicts::ConflictExecution>,
     pub titles: Vec<RootMoveTitleExecution>,
     /// Catalog path updates confirmed by a user who moved files externally.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -395,6 +398,19 @@ impl RootMoveExecutionPlan {
                 ]
             })
             .collect::<Vec<_>>();
+        if let Some(conflict) = &self.conflict {
+            owned_roots.extend(
+                conflict
+                    .roots
+                    .iter()
+                    .filter(|root| {
+                        conflict.folders.iter().any(|folder| {
+                            crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+                        })
+                    })
+                    .map(|root| root.id.clone()),
+            );
+        }
         owned_roots.sort();
         owned_roots.dedup();
 

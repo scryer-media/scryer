@@ -1,0 +1,1372 @@
+use super::*;
+use scryer_application::location::conflicts::{
+    ConflictLeftovers, ConflictPolicy, ConflictRequest, ConflictTask, ResolveConflictRequest,
+    refusal,
+};
+use scryer_application::{LibraryScanUnmatchedItemRepository, UpdateRecycleBinSettings};
+
+struct ConflictFixture {
+    ctx: TestContext,
+    actor: User,
+    _temp: tempfile::TempDir,
+    root: std::path::PathBuf,
+    title: Title,
+    named: std::path::PathBuf,
+    junk: std::path::PathBuf,
+    pending_id: String,
+}
+
+impl ConflictFixture {
+    async fn new() -> Self {
+        let ctx = TestContext::new().await;
+        ctx.settings_store
+            .batch_ensure_setting_definitions(vec![SettingDefinitionSeed {
+                category: "media".into(),
+                scope: scryer_application::SETTINGS_SCOPE_MEDIA.into(),
+                key_name: scryer_application::RECYCLE_BIN_ENABLED_KEY.into(),
+                data_type: "boolean".into(),
+                default_value_json: "true".into(),
+                is_sensitive: false,
+                validation_json: None,
+            }])
+            .await
+            .unwrap();
+        let actor = ctx.app.find_or_create_default_user().await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        configure_default_library_root(&ctx, MediaFacet::Movie, &root).await;
+        let title = create_catalog_title(
+            &ctx,
+            "Emberfall",
+            MediaFacet::Movie,
+            vec![],
+            vec!["scryer:quality-profile:4k".into()],
+            true,
+        )
+        .await;
+        let named = root.join("Emberfall (2024)");
+        let junk = root.join("ADEG78");
+        std::fs::create_dir_all(&named).unwrap();
+        std::fs::create_dir_all(&junk).unwrap();
+        let inferior = named.join("Emberfall.2024.720p.WEB-DL.mkv");
+        std::fs::write(&inferior, b"inferior movie").unwrap();
+        std::fs::write(
+            junk.join("Emberfall.2024.2160p.BluRay.mkv"),
+            b"best movie contents",
+        )
+        .unwrap();
+        std::fs::write(
+            junk.join("Emberfall.2024.2160p.BluRay.en.srt"),
+            b"subtitle contents",
+        )
+        .unwrap();
+        std::fs::write(junk.join("poster.jpg"), b"artwork contents").unwrap();
+        set_title_folder_path(&ctx, &title.id, &named).await;
+        ctx.media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: inferior.to_string_lossy().into_owned(),
+                size_bytes: 14,
+                role: MediaFileRole::Primary,
+                quality_label: Some("720p".into()),
+                resolution: Some("720p".into()),
+                source_type: Some("WEB-DL".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let pending_id = seed_conflict(&ctx, &title, &junk, "duplicate-a").await;
+        ctx.shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type: scryer_domain::CollectionType::Movie,
+                collection_index: "1".into(),
+                label: Some("720p".into()),
+                ordered_path: Some(inferior.to_string_lossy().into_owned()),
+                narrative_order: None,
+                first_episode_number: None,
+                last_episode_number: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        Self {
+            ctx,
+            actor,
+            _temp: temp,
+            root,
+            title,
+            named,
+            junk,
+            pending_id,
+        }
+    }
+
+    fn request(&self, policy: ConflictPolicy, leftovers: ConflictLeftovers) -> ConflictRequest {
+        ConflictRequest {
+            pending_import_ids: vec![self.pending_id.clone()],
+            policy,
+            leftovers,
+        }
+    }
+
+    async fn settle(&self, request: ConflictRequest, confirm: bool) -> ConflictTask {
+        let preview = self
+            .ctx
+            .app
+            .preview_pending_import_conflicts(&self.actor, request.clone())
+            .await
+            .unwrap();
+        assert!(
+            preview.rows.iter().all(|row| row.error_reason.is_none()),
+            "{preview:?}"
+        );
+        let task = self
+            .ctx
+            .app
+            .resolve_pending_import_conflicts(
+                &self.actor,
+                ResolveConflictRequest {
+                    request,
+                    plan_fingerprint: preview.plan_fingerprint,
+                    confirm_permanent_delete: confirm,
+                },
+            )
+            .await
+            .unwrap();
+        self.wait_task(&task.job_run_id).await
+    }
+
+    async fn wait_task(&self, id: &str) -> ConflictTask {
+        use scryer_application::{JobRunRepository, JobRunStatus};
+        use scryer_infrastructure_workflow::workflow::stores::workflow_operation_store::WorkflowOperationStore;
+        let store = WorkflowOperationStore::new(self.ctx.db.datastore());
+        let mut changes = self.ctx.app.subscribe_location_transfers();
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                let persisted = store.get_job_run(id).await.unwrap().unwrap();
+                if persisted.status != JobRunStatus::Running {
+                    let state = self
+                        .ctx
+                        .app
+                        .pending_import_conflict_task(&self.actor, id)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if state.completed {
+                        return state;
+                    }
+                }
+                changes.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("the exact conflict task must settle")
+    }
+}
+
+async fn seed_conflict(
+    ctx: &TestContext,
+    title: &Title,
+    folder: &std::path::Path,
+    id: &str,
+) -> String {
+    let now = Utc::now().to_rfc3339();
+    let item = scryer_application::LibraryScanUnmatchedItem {
+        id: id.into(),
+        library_id: title.library_id.clone(),
+        facet: MediaFacet::Movie,
+        status: scryer_application::PendingImportStatus::Pending,
+        title_id: Some(title.id.clone()),
+        scan_session_id: "conflict-fixture".into(),
+        scan_root: folder.parent().unwrap().to_string_lossy().into_owned(),
+        item_path: folder.to_string_lossy().into_owned(),
+        display_name: "Emberfall".into(),
+        query: "Emberfall".into(),
+        year_hint: Some(2024),
+        reason_code: scryer_application::location::conflicts::PENDING_REASON.into(),
+        error_message: None,
+        search_attempts: vec![],
+        size_bytes: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    ctx.library_scan_unmatched
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .unwrap();
+    id.into()
+}
+
+#[tokio::test]
+async fn conflict_adopt_all_consolidates_three_folders_and_roles_without_losing_leftovers() {
+    let fixture = ConflictFixture::new().await;
+    let third = fixture.root.join("XYZZ98");
+    std::fs::create_dir_all(&third).unwrap();
+    std::fs::write(
+        third.join("Emberfall.2024.1080p.WEB-DL.mkv"),
+        b"additional movie",
+    )
+    .unwrap();
+    std::fs::write(third.join("sample.mkv"), b"sample contents").unwrap();
+    let second_id = seed_conflict(&fixture.ctx, &fixture.title, &third, "duplicate-b").await;
+    let mut request = fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll);
+    request.pending_import_ids.push(second_id);
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(preview.total_count, 2);
+    assert_eq!(
+        preview.rows[0].survivor_path,
+        fixture.named.to_string_lossy()
+    );
+    assert_eq!(
+        preview.rows[0].leftover_count, 2,
+        "artwork and sample remain after media and its subtitle companion"
+    );
+    let task = fixture.settle(request, false).await;
+    assert_eq!((task.settled_count, task.failed_count), (2, 0), "{task:?}");
+    assert_eq!(
+        task.operation_ids.len(),
+        1,
+        "one title, one checkpointed operation"
+    );
+    let files = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 3);
+    assert_eq!(
+        files.iter().filter(|file| file.role.is_primary()).count(),
+        1
+    );
+    assert!(
+        files
+            .iter()
+            .find(|file| file.role.is_primary())
+            .unwrap()
+            .file_path
+            .contains("2160p")
+    );
+    let collections = fixture
+        .ctx
+        .shows
+        .list_collections_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    assert_eq!(collections.len(), 2);
+    let primary_path = &files
+        .iter()
+        .find(|file| file.role.is_primary())
+        .unwrap()
+        .file_path;
+    assert!(
+        collections
+            .iter()
+            .any(|collection| collection.ordered_path.as_ref() == Some(primary_path))
+    );
+    assert!(collections.iter().any(|collection| {
+        collection
+            .ordered_path
+            .as_deref()
+            .is_some_and(|path| path.contains("720p"))
+    }));
+    assert!(
+        files
+            .iter()
+            .all(|file| std::path::Path::new(&file.file_path).starts_with(&fixture.named))
+    );
+    assert_eq!(
+        std::fs::read(fixture.named.join("poster.jpg")).unwrap(),
+        b"artwork contents"
+    );
+    assert_eq!(
+        std::fs::read(fixture.named.join("sample.mkv")).unwrap(),
+        b"sample contents"
+    );
+    assert_eq!(
+        std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.en.srt")).unwrap(),
+        b"subtitle contents"
+    );
+    assert!(!fixture.junk.exists());
+    assert!(!third.exists());
+}
+
+#[tokio::test]
+async fn conflict_keep_one_moves_only_best_movie_and_requires_explicit_permanent_consent() {
+    let fixture = ConflictFixture::new().await;
+    fixture
+        .ctx
+        .app
+        .update_recycle_bin_settings(
+            &fixture.actor,
+            UpdateRecycleBinSettings {
+                enabled: Some(false),
+                path: None,
+                retention_days: None,
+            },
+        )
+        .await
+        .unwrap();
+    let unrelated = fixture.root.join("unrelated.txt");
+    std::fs::write(&unrelated, b"unrelated contents").unwrap();
+    let request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly);
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert!(preview.requires_permanent_delete_confirmation);
+    assert_eq!(
+        preview.rows[0].move_bytes, 36,
+        "only the best media and its subtitle companion move"
+    );
+    assert_eq!(preview.permanent_delete_count, 2);
+    let error = fixture
+        .ctx
+        .app
+        .resolve_pending_import_conflicts(
+            &fixture.actor,
+            ResolveConflictRequest {
+                request: request.clone(),
+                plan_fingerprint: preview.plan_fingerprint,
+                confirm_permanent_delete: false,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.validation_reason(),
+        Some(refusal::PERMANENT_CONFIRMATION_REQUIRED)
+    );
+    assert!(
+        fixture
+            .named
+            .join("Emberfall.2024.720p.WEB-DL.mkv")
+            .exists()
+    );
+    assert!(fixture.junk.join("poster.jpg").exists());
+    let task = fixture.settle(request, true).await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    let files = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(files[0].role.is_primary());
+    assert!(files[0].file_path.contains("2160p"));
+    assert_eq!(
+        std::fs::read(&files[0].file_path).unwrap(),
+        b"best movie contents"
+    );
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated contents");
+    assert!(!fixture.junk.exists());
+    assert!(
+        !fixture
+            .named
+            .join("Emberfall.2024.720p.WEB-DL.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn conflict_confirmation_refuses_changed_files_and_preserves_all_sources() {
+    let fixture = ConflictFixture::new().await;
+    let request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly);
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    std::fs::write(
+        fixture.junk.join("new-unpreviewed.txt"),
+        b"newly arrived contents",
+    )
+    .unwrap();
+    let error = fixture
+        .ctx
+        .app
+        .resolve_pending_import_conflicts(
+            &fixture.actor,
+            ResolveConflictRequest {
+                request,
+                plan_fingerprint: preview.plan_fingerprint,
+                confirm_permanent_delete: true,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.validation_reason(), Some(refusal::PLAN_CHANGED));
+    assert_eq!(
+        std::fs::read(fixture.junk.join("new-unpreviewed.txt")).unwrap(),
+        b"newly arrived contents"
+    );
+    assert!(
+        fixture
+            .named
+            .join("Emberfall.2024.720p.WEB-DL.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn conflict_keep_one_recycles_media_and_restores_its_catalog_provenance() {
+    let fixture = ConflictFixture::new().await;
+    let original = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let snapshot = scryer_application::recycle_bin::RecycledMediaRowSnapshot {
+        acquisition_score: Some(42),
+        scene_name: Some("Emberfall.2024.720p.WEB-DL-GROUP".into()),
+        release_group: Some("GROUP".into()),
+        indexer_source: Some("synthetic-indexer".into()),
+        ..Default::default()
+    };
+    fixture
+        .ctx
+        .media_files
+        .restore_media_file_acquisition_metadata(&original.id, &snapshot)
+        .await
+        .unwrap();
+    let original = fixture
+        .ctx
+        .media_files
+        .get_media_file_by_id(&original.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.acquisition_score, Some(42));
+    assert_eq!(original.scene_name, snapshot.scene_name);
+    fixture
+        .ctx
+        .app
+        .update_recycle_bin_settings(
+            &fixture.actor,
+            UpdateRecycleBinSettings {
+                enabled: Some(true),
+                path: None,
+                retention_days: None,
+            },
+        )
+        .await
+        .unwrap();
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    let entries = fixture
+        .ctx
+        .app
+        .list_recycled_items(&fixture.actor, Some(vec![fixture.title.library_id.clone()]))
+        .await
+        .unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.reason == "folder_conflict_resolution")
+        .expect("inferior movie in recycle bin");
+    assert!(entry.original_path.ends_with("720p.WEB-DL.mkv"));
+    let config = fixture
+        .ctx
+        .app
+        .recycle_bin_config_for_media_root(Some(fixture.root.to_str().unwrap()))
+        .await;
+    let committed = scryer_application::recycle_bin::list_committed_entries(&config)
+        .await
+        .unwrap();
+    let manifest = &committed
+        .iter()
+        .find(|item| item.manifest.original_path == entry.original_path)
+        .unwrap()
+        .manifest;
+    assert_eq!(
+        manifest.media_row.as_ref(),
+        Some(
+            &scryer_application::recycle_bin::RecycledMediaRowSnapshot::from_media_file(&original)
+        )
+    );
+    assert!(
+        fixture
+            .ctx
+            .app
+            .restore_recycled_item(&fixture.actor, &entry.id)
+            .await
+            .unwrap()
+    );
+    let files = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    let restored = files
+        .iter()
+        .find(|file| file.file_path.ends_with("720p.WEB-DL.mkv"))
+        .expect("restored catalog row");
+    assert_eq!(restored.source_type.as_deref(), Some("WEB-DL"));
+    assert_eq!(restored.acquisition_score, original.acquisition_score);
+    assert_eq!(
+        restored.scene_name.as_deref(),
+        Some("Emberfall.2024.720p.WEB-DL")
+    );
+    assert_eq!(restored.release_group, original.release_group);
+    assert_eq!(restored.indexer_source, original.indexer_source);
+    assert_eq!(
+        std::fs::read(&restored.file_path).unwrap(),
+        b"inferior movie"
+    );
+    assert_eq!(
+        std::fs::read(fixture.named.join("poster.jpg")).unwrap(),
+        b"artwork contents"
+    );
+}
+
+#[tokio::test]
+async fn conflict_reconciliation_preserves_each_retained_movie_collection() {
+    for policy in [ConflictPolicy::AdoptAll, ConflictPolicy::KeepOne] {
+        let fixture = ConflictFixture::new().await;
+        let old = fixture
+            .ctx
+            .shows
+            .list_collections_for_title(&fixture.title.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let best_path = fixture
+            .junk
+            .join("Emberfall.2024.2160p.BluRay.mkv")
+            .to_string_lossy()
+            .into_owned();
+        fixture
+            .ctx
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: fixture.title.id.clone(),
+                file_path: best_path.clone(),
+                size_bytes: 19,
+                role: MediaFileRole::Additional,
+                quality_label: Some("2160p".into()),
+                resolution: Some("2160p".into()),
+                source_type: Some("BluRay".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut best_collection = old.clone();
+        best_collection.id = Id::new().0;
+        best_collection.collection_index = "2".into();
+        best_collection.ordered_path = Some(best_path);
+        best_collection.label = Some("2160p".into());
+        fixture
+            .ctx
+            .shows
+            .create_collection(best_collection.clone())
+            .await
+            .unwrap();
+        let task = fixture
+            .settle(
+                fixture.request(policy, ConflictLeftovers::PreserveAll),
+                false,
+            )
+            .await;
+        assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+        let collections = fixture
+            .ctx
+            .shows
+            .list_collections_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        let files = fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        let primary = files.iter().find(|file| file.role.is_primary()).unwrap();
+        let mapped_best = collections
+            .iter()
+            .find(|collection| collection.id == best_collection.id)
+            .unwrap();
+        assert_eq!(mapped_best.ordered_path.as_ref(), Some(&primary.file_path));
+        assert!(
+            primary
+                .file_path
+                .starts_with(fixture.named.to_str().unwrap())
+        );
+        if policy == ConflictPolicy::AdoptAll {
+            assert_eq!(collections.len(), 2);
+            let retained_old = collections
+                .iter()
+                .find(|collection| collection.id == old.id)
+                .unwrap();
+            assert_eq!(retained_old.ordered_path, old.ordered_path);
+            assert_ne!(retained_old.ordered_path, mapped_best.ordered_path);
+        } else {
+            assert_eq!(collections.len(), 1);
+            assert!(!collections.iter().any(|collection| collection.id == old.id));
+        }
+        for collection in collections {
+            let path = collection.ordered_path.unwrap();
+            assert!(files.iter().any(|file| file.file_path == path));
+            assert!(std::path::Path::new(&path).is_file());
+        }
+    }
+}
+
+#[tokio::test]
+async fn conflict_bulk_continues_after_an_invalid_item() {
+    let fixture = ConflictFixture::new().await;
+    let mut request = fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll);
+    request.pending_import_ids.push("missing-conflict".into());
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(preview.total_count, 2);
+    assert!(
+        preview
+            .rows
+            .iter()
+            .any(|row| row.error_reason.as_deref() == Some(refusal::NOT_FOUND))
+    );
+    let task = fixture
+        .ctx
+        .app
+        .resolve_pending_import_conflicts(
+            &fixture.actor,
+            ResolveConflictRequest {
+                request,
+                plan_fingerprint: preview.plan_fingerprint,
+                confirm_permanent_delete: false,
+            },
+        )
+        .await
+        .unwrap();
+    let task = fixture.wait_task(&task.job_run_id).await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 1), "{task:?}");
+    assert_eq!(task.operation_ids.len(), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_disposal_refuses_hardlinked_targets_before_mutating_any_files() {
+    let fixture = ConflictFixture::new().await;
+    let inferior = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
+    let unrelated = fixture.root.join("unrelated-hardlink.mkv");
+    std::fs::hard_link(&inferior, &unrelated).unwrap();
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::FOLDER_UNSAFE)
+    );
+    assert_eq!(std::fs::read(inferior).unwrap(), b"inferior movie");
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"inferior movie");
+    assert_eq!(
+        std::fs::read(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+        b"best movie contents"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_preview_refuses_links_and_non_utf8_names_without_following_or_moving_them() {
+    use std::os::unix::ffi::OsStringExt;
+    let fixture = ConflictFixture::new().await;
+    let unrelated = fixture.root.join("unrelated.txt");
+    std::fs::write(&unrelated, b"unrelated contents").unwrap();
+    let link = fixture.junk.join("linked.txt");
+    std::os::unix::fs::symlink(&unrelated, &link).unwrap();
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+        )
+        .await
+        .unwrap();
+    assert!(preview.rows[0].error_reason.is_some());
+    assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated contents");
+    std::fs::remove_file(link).unwrap();
+    let undecodable = fixture
+        .junk
+        .join(std::ffi::OsString::from_vec(vec![b'x', 0xff]));
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::write(&undecodable, b"unrepresentable filename contents").unwrap();
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(
+                &fixture.actor,
+                fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            preview.rows[0].error_reason.as_deref(),
+            Some(refusal::FOLDER_UNSAFE)
+        );
+        assert_eq!(
+            std::fs::read(&undecodable).unwrap(),
+            b"unrepresentable filename contents"
+        );
+    }
+    let mut item = fixture
+        .ctx
+        .library_scan_unmatched
+        .get_library_scan_unmatched_item(&fixture.pending_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .ctx
+        .library_scan_unmatched
+        .delete_library_scan_unmatched_item(&item.library_id, item.facet.clone(), &item.item_path)
+        .await
+        .unwrap();
+    item.item_path = scryer_application::stored_paths::path_to_stored_string(&undecodable);
+    fixture
+        .ctx
+        .library_scan_unmatched
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .unwrap();
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(
+            &fixture.actor,
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.rows[0].error_reason.as_deref(),
+        Some(refusal::FOLDER_UNSAFE)
+    );
+}
+
+#[tokio::test]
+async fn conflict_keep_one_identical_collision_always_retains_the_resolved_primary() {
+    for enabled in [false, true] {
+        let fixture = ConflictFixture::new().await;
+        fixture
+            .ctx
+            .app
+            .update_recycle_bin_settings(
+                &fixture.actor,
+                UpdateRecycleBinSettings {
+                    enabled: Some(enabled),
+                    path: None,
+                    retention_days: None,
+                },
+            )
+            .await
+            .unwrap();
+        for file in fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap()
+        {
+            fixture
+                .ctx
+                .media_files
+                .delete_media_file(&file.id)
+                .await
+                .unwrap();
+        }
+        std::fs::remove_file(fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv")).unwrap();
+        std::fs::remove_file(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap();
+        let retained = fixture.named.join("movie.mkv");
+        std::fs::write(&retained, b"identical movie contents").unwrap();
+        std::fs::write(fixture.junk.join("movie.mkv"), b"identical movie contents").unwrap();
+        fixture
+            .ctx
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: fixture.title.id.clone(),
+                file_path: retained.to_string_lossy().into_owned(),
+                size_bytes: 24,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let request = fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll);
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(&fixture.actor, request.clone())
+            .await
+            .unwrap();
+        assert!(
+            preview.rows[0]
+                .recycle_paths
+                .contains(&retained.to_string_lossy().into_owned()),
+            "the preview originally designates the destination inferior"
+        );
+        let task = fixture.settle(request, true).await;
+        assert_eq!(
+            (task.settled_count, task.failed_count),
+            (1, 0),
+            "bin enabled={enabled}: {task:?}"
+        );
+        let files = fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].role.is_primary());
+        assert_eq!(files[0].file_path, retained.to_string_lossy());
+        assert_eq!(
+            std::fs::read(&retained).unwrap(),
+            b"identical movie contents"
+        );
+        assert!(!fixture.junk.join("movie.mkv").exists());
+        retry_cleanup(&fixture, &task.operation_ids[0]).await;
+        assert_eq!(
+            std::fs::read(&retained).unwrap(),
+            b"identical movie contents"
+        );
+        assert_eq!(
+            fixture
+                .ctx
+                .media_files
+                .list_media_files_for_title(&fixture.title.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+async fn retry_cleanup(fixture: &ConflictFixture, operation_id: &str) {
+    use scryer_application::LocationOperationRepository;
+    use scryer_application::location::model::{
+        LocationOperationState, LocationReasonCode, TitleCheckpointState,
+    };
+    use scryer_application::location::operations::LocationResumeDecision;
+    use scryer_infrastructure_library::media::libraries::location_operation_store::LocationOperationStore;
+    let store = LocationOperationStore::new(fixture.ctx.db.datastore());
+    let mut checkpoint = store
+        .list_location_title_checkpoints(operation_id)
+        .await
+        .unwrap()
+        .remove(0);
+    // Recreate the exact crash window: cleanup committed, its checkpoint did not.
+    checkpoint.state = TitleCheckpointState::CleaningUp;
+    checkpoint.completed_at = None;
+    store
+        .upsert_location_title_checkpoint(&checkpoint)
+        .await
+        .unwrap();
+    let operation = store
+        .get_location_operation(operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .update_location_operation_progress(&scryer_application::LocationOperationProgress {
+            operation_id: operation_id.into(),
+            state: LocationOperationState::Failed,
+            counters: operation.counters,
+            verification_fallback_count: operation.verification_fallback_count,
+            detail: Some("synthetic interruption after source cleanup".into()),
+            clear_detail: false,
+            reason_code: Some(LocationReasonCode::SourceCleanupFailed),
+            started_at: operation.started_at,
+            completed_at: Some(Utc::now()),
+        })
+        .await
+        .unwrap();
+    let decision = fixture
+        .ctx
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .unwrap();
+    let LocationResumeDecision::Resume(plan) = decision else {
+        panic!("cleanup must remain resumable: {decision:?}");
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        fixture.ctx.app.run_root_move(operation_id, &plan),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        matches!(
+            outcome.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "{outcome:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_adopt_hardlink_dedup_resumes_after_its_own_cleanup_changed_ctime() {
+    let fixture = ConflictFixture::new().await;
+    let primary = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
+    std::fs::remove_file(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap();
+    std::fs::hard_link(
+        &primary,
+        fixture.junk.join("Emberfall.2024.720p.WEB-DL.mkv"),
+    )
+    .unwrap();
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    retry_cleanup(&fixture, &task.operation_ids[0]).await;
+    assert_eq!(std::fs::read(&primary).unwrap(), b"inferior movie");
+    assert_eq!(
+        fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|file| file.role.is_primary())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conflict_survivor_never_uses_a_folder_identifying_a_different_work() {
+    for name in [
+        "Different.Feature.2160p.BluRay",
+        "Different Feature (2024)",
+        "Different Feature {imdb-tt9999999}",
+    ] {
+        let fixture = ConflictFixture::new().await;
+        let owner = fixture.root.join("ZZZ000");
+        std::fs::rename(&fixture.named, &owner).unwrap();
+        set_title_folder_path(&fixture.ctx, &fixture.title.id, &owner).await;
+        for media in fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap()
+        {
+            fixture
+                .ctx
+                .media_files
+                .update_media_file_path(
+                    &media.id,
+                    owner
+                        .join("Emberfall.2024.720p.WEB-DL.mkv")
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+                .await
+                .unwrap();
+        }
+        let different = fixture.root.join(name);
+        std::fs::rename(&fixture.junk, &different).unwrap();
+        let mut item = fixture
+            .ctx
+            .library_scan_unmatched
+            .get_library_scan_unmatched_item(&fixture.pending_id)
+            .await
+            .unwrap()
+            .unwrap();
+        fixture
+            .ctx
+            .library_scan_unmatched
+            .delete_library_scan_unmatched_item(
+                &item.library_id,
+                item.facet.clone(),
+                &item.item_path,
+            )
+            .await
+            .unwrap();
+        item.item_path = different.to_string_lossy().into_owned();
+        fixture
+            .ctx
+            .library_scan_unmatched
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .unwrap();
+        let preview = fixture
+            .ctx
+            .app
+            .preview_pending_import_conflicts(
+                &fixture.actor,
+                fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+            )
+            .await
+            .unwrap();
+        assert!(preview.rows[0].error_reason.is_none(), "{preview:?}");
+        assert_eq!(
+            preview.rows[0].survivor_path,
+            owner.to_string_lossy(),
+            "{name}"
+        );
+        assert!(different.join("Emberfall.2024.2160p.BluRay.mkv").exists());
+    }
+}
+
+#[tokio::test]
+async fn conflict_keep_one_uses_each_of_three_roots_for_its_disposal_manifest() {
+    let mut fixture = ConflictFixture::new().await;
+    let second_temp = tempfile::tempdir().unwrap();
+    let third_temp = tempfile::tempdir().unwrap();
+    let second_root = std::fs::canonicalize(second_temp.path()).unwrap();
+    let third_root = std::fs::canonicalize(third_temp.path()).unwrap();
+    let library = fixture
+        .ctx
+        .libraries
+        .get_by_id(&fixture.title.library_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .ctx
+        .libraries
+        .update(
+            &library.id,
+            library.name,
+            library.slug,
+            vec![
+                LibraryRootDraft {
+                    id: Some(fixture.title.root_folder_id.clone()),
+                    path: fixture.root.to_string_lossy().into_owned(),
+                    is_default: true,
+                },
+                LibraryRootDraft {
+                    id: None,
+                    path: second_root.to_string_lossy().into_owned(),
+                    is_default: false,
+                },
+                LibraryRootDraft {
+                    id: None,
+                    path: third_root.to_string_lossy().into_owned(),
+                    is_default: false,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let moved_junk = second_root.join("ADEG78");
+    std::fs::rename(&fixture.junk, &moved_junk).unwrap();
+    fixture.junk = moved_junk;
+    let mut item = fixture
+        .ctx
+        .library_scan_unmatched
+        .get_library_scan_unmatched_item(&fixture.pending_id)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .ctx
+        .library_scan_unmatched
+        .delete_library_scan_unmatched_item(&item.library_id, item.facet.clone(), &item.item_path)
+        .await
+        .unwrap();
+    item.item_path = fixture.junk.to_string_lossy().into_owned();
+    item.scan_root = second_root.to_string_lossy().into_owned();
+    fixture
+        .ctx
+        .library_scan_unmatched
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .unwrap();
+    let third_folder = third_root.join("XYZZ98");
+    std::fs::create_dir_all(&third_folder).unwrap();
+    std::fs::write(
+        third_folder.join("Emberfall.2024.1080p.WEB-DL.mkv"),
+        b"third root movie",
+    )
+    .unwrap();
+    seed_conflict(
+        &fixture.ctx,
+        &fixture.title,
+        &third_folder,
+        "duplicate-third-root",
+    )
+    .await;
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    let recycled = fixture
+        .ctx
+        .app
+        .list_recycled_items(&fixture.actor, Some(vec![fixture.title.library_id.clone()]))
+        .await
+        .unwrap();
+    assert!(
+        recycled
+            .iter()
+            .any(|entry| entry.media_root == third_root.to_string_lossy())
+    );
+    assert!(
+        recycled
+            .iter()
+            .any(|entry| entry.media_root == fixture.root.to_string_lossy())
+    );
+    assert!(!third_folder.exists());
+    assert!(!fixture.junk.exists());
+    assert_eq!(
+        std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+        b"best movie contents"
+    );
+}
+
+#[test]
+fn conflict_refusal_codes_are_distinct_stable_identifiers() {
+    let unique = refusal::ALL
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), refusal::ALL.len());
+    assert!(unique.iter().all(|reason| {
+        reason.starts_with("LOCATION_CONFLICT_")
+            && reason
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character == '_')
+    }));
+}
+
+#[tokio::test]
+async fn conflict_task_restart_finds_older_unfinished_journal_behind_completed_history() {
+    use scryer_application::{JobRunRepository, JobRunStatus};
+    use scryer_infrastructure_workflow::workflow::stores::workflow_operation_store::WorkflowOperationStore;
+    let fixture = ConflictFixture::new().await;
+    let finished = fixture
+        .settle(
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!(finished.settled_count, 1);
+    let store = WorkflowOperationStore::new(fixture.ctx.db.datastore());
+    let mut original = store
+        .get_job_run(&finished.job_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for sequence in 1..=17 {
+        let mut newer = original.clone();
+        newer.id = Id::new().0;
+        newer.started_at = original.started_at + chrono::Duration::seconds(sequence);
+        newer.created_at = newer.started_at;
+        newer.updated_at = newer.started_at;
+        store.create_job_run(&newer).await.unwrap();
+    }
+    let mut journal: Value =
+        serde_json::from_str(original.progress_json.as_deref().unwrap()).unwrap();
+    journal["task"]["completed"] = json!(false);
+    journal["task"]["settled_count"] = json!(0);
+    journal["task"]["failed_count"] = json!(0);
+    journal["next"] = json!(0);
+    original.progress_json = Some(journal.to_string());
+    original.status = JobRunStatus::Running;
+    original.completed_at = None;
+    store.update_job_run(&original).await.unwrap();
+    let mut abandoned = original.clone();
+    abandoned.id = Id::new().0;
+    abandoned.operation_type = "synthetic_nonresumable".into();
+    abandoned.progress_json = Some("synthetic progress".into());
+    let abandoned = store.create_job_run(&abandoned).await.unwrap();
+    let mut future = original.clone();
+    future.id = Id::new().0;
+    future.progress_json = Some(r#"{"futureFormat":true,"task":{"completed":false}}"#.into());
+    let future = store.create_job_run(&future).await.unwrap();
+    // Use the real boot order: reserve resumable work before generic job cleanup.
+    let reserved = fixture
+        .ctx
+        .app
+        .resumable_location_operation_job_run_ids()
+        .await
+        .unwrap();
+    assert!(reserved.contains(&original.id));
+    assert!(
+        reserved.contains(&future.id),
+        "an unreadable future journal must never be erased by generic reconciliation"
+    );
+    fixture
+        .ctx
+        .app
+        .reconcile_interrupted_job_runs(&reserved)
+        .await
+        .unwrap();
+    let preserved = store.get_job_run(&original.id).await.unwrap().unwrap();
+    assert_eq!(preserved.progress_json, original.progress_json);
+    assert_eq!(preserved.status, JobRunStatus::Running);
+    assert_eq!(
+        store
+            .get_job_run(&abandoned.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        JobRunStatus::Failed
+    );
+    fixture
+        .ctx
+        .app
+        .resume_interrupted_location_operations()
+        .await
+        .unwrap();
+    let recovered = fixture.wait_task(&finished.job_run_id).await;
+    assert_eq!((recovered.settled_count, recovered.failed_count), (1, 0));
+    assert_eq!(
+        recovered.operation_ids, finished.operation_ids,
+        "restart rejoins its existing child operation instead of enrolling another one"
+    );
+    let future_after = store.get_job_run(&future.id).await.unwrap().unwrap();
+    assert_eq!(future_after.progress_json, future.progress_json);
+    assert_eq!(future_after.status, JobRunStatus::Running);
+    assert_eq!(
+        std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+        b"best movie contents"
+    );
+}
+
+#[tokio::test]
+async fn conflict_private_journal_never_enters_generic_job_history_or_live_projection() {
+    use scryer_application::{JobRun, JobRunRepository, JobRunStatus, JobRunTracker};
+    use scryer_infrastructure_workflow::workflow::stores::workflow_operation_store::WorkflowOperationStore;
+    let fixture = ConflictFixture::new().await;
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    let store = WorkflowOperationStore::new(fixture.ctx.db.datastore());
+    let record = store.get_job_run(&task.job_run_id).await.unwrap().unwrap();
+    let private = record
+        .progress_json
+        .clone()
+        .expect("terminal task retains its private recovery journal");
+    assert!(private.contains(fixture.root.to_str().unwrap()));
+    assert!(private.contains(&task.operation_ids[0]));
+    let authorized = fixture
+        .ctx
+        .app
+        .pending_import_conflict_task(&fixture.actor, &task.job_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(authorized.completed);
+    assert_eq!(authorized.operation_ids, task.operation_ids);
+
+    let mut system_only = fixture.actor.clone();
+    system_only.id = Id::new().0;
+    system_only.username = "system-job-observer".into();
+    system_only.authorization.app = scryer_domain::AppPermissionMask::from_permissions([
+        scryer_domain::AppPermission::ManageSystemSettings,
+    ]);
+    system_only.authorization.libraries.clear();
+    system_only.authorization.default_library = scryer_domain::LibraryPermissionMask::NONE;
+    system_only.authorization.loaded = true;
+    let denied = schema_exec(
+        &fixture.ctx,
+        &format!(
+            r#"{{ pendingImportConflictTask(jobRunId: "{}") {{ jobRunId operationIds }} }}"#,
+            task.job_run_id
+        ),
+        Some(system_only.clone()),
+    )
+    .await;
+    assert_graphql_field_denied(&denied, "pendingImportConflictTask");
+    let history = schema_exec(
+        &fixture.ctx,
+        "{ jobRuns(jobKey: LOCATION_OPERATION, limit: 100) { id progressJson } }",
+        Some(system_only),
+    )
+    .await;
+    assert_no_errors(&history);
+    let row = history["data"]["jobRuns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == task.job_run_id)
+        .expect("system job history includes the task summary");
+    assert!(row["progressJson"].is_null());
+    assert!(!history.to_string().contains(&task.operation_ids[0]));
+
+    let tracker = JobRunTracker::new();
+    let mut events = tracker.subscribe();
+    let mut running = record.clone();
+    running.status = JobRunStatus::Running;
+    running.completed_at = None;
+    tracker
+        .upsert_active_run(JobRun::from_record(&running, None))
+        .await;
+    let initial = tracker.list_active().await;
+    assert!(
+        initial
+            .iter()
+            .find(|run| run.id == task.job_run_id)
+            .unwrap()
+            .progress_json
+            .is_none()
+    );
+    let live = tokio::time::timeout(std::time::Duration::from_secs(60), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(live.id, task.job_run_id);
+    assert!(live.progress_json.is_none());
+    tracker
+        .upsert_active_run(JobRun::from_record(&record, None))
+        .await;
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(60), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.id, task.job_run_id);
+    assert!(completed.progress_json.is_none());
+    assert_eq!(
+        record.progress_json.as_deref(),
+        Some(private.as_str()),
+        "projection never destroys the stored journal"
+    );
+}

@@ -13432,6 +13432,14 @@ enum LocationOperationTypeValue {
 	Move titles into a different library, with or without a merge.
 	"""
 	CROSS_LIBRARY_TRANSFER
+	"""
+	Consolidate conflicting folders into the title's selected survivor.
+	"""
+	FOLDER_CONSOLIDATION
+	"""
+	Retain the best media and recycle inferior files in conflicting folders.
+	"""
+	FOLDER_KEEP_ONE
 }
 
 """
@@ -20241,6 +20249,24 @@ type MutationRoot {
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
 	"""
+	Preview survivor selection and every file disposition before settling conflicts.
+	"""
+	previewPendingImportConflicts(
+		"""
+		Selected folder conflicts, media policy and leftover disposition.
+		"""
+		input: PendingImportConflictInput!
+	): PendingImportConflictPreviewPayload!
+	"""
+	Confirm a fresh preview and settle each conflict through its own location operation.
+	"""
+	resolvePendingImportConflicts(
+		"""
+		Previewed selection and fingerprint, with additional permanent-deletion consent when required.
+		"""
+		input: ResolvePendingImportConflictsInput!
+	): PendingImportConflictTaskPayload!
+	"""
 	Confirm a previewed location operation and start it in the background.
 	
 	The plan is rebuilt server side and compared against the fingerprint the
@@ -22180,6 +22206,212 @@ type PendingImportBindingPreviewPayload {
 	Episodes eligible for binding under the selected title.
 	"""
 	availableEpisodes: [EpisodePayload!]!
+}
+
+"""
+A selected set of title-bound folder conflicts and the requested policy.
+"""
+input PendingImportConflictInput {
+	"""
+	Pending-import identities to preview.
+	"""
+	pendingImportIds: [ID!]!
+	"""
+	Media disposition applied independently to each conflict.
+	"""
+	policy: PendingImportConflictPolicy!
+	"""
+	Disposition of the remaining non-media files.
+	"""
+	leftovers: PendingImportConflictLeftovers!
+}
+
+"""
+Disposition of files remaining after the media is safe.
+"""
+enum PendingImportConflictLeftovers {
+	"""
+	Move every remaining file into the survivor folder.
+	"""
+	PRESERVE_ALL
+	"""
+	Recycle the previewed non-media remainder.
+	"""
+	MEDIA_ONLY
+}
+
+"""
+How conflicting movie folders are settled.
+"""
+enum PendingImportConflictPolicy {
+	"""
+	Keep every movie file in the survivor folder.
+	"""
+	ADOPT_ALL
+	"""
+	Keep the best movie file and recycle inferior media.
+	"""
+	KEEP_ONE
+}
+
+"""
+Complete conflict counts and a bounded sample of per-conflict plans.
+"""
+type PendingImportConflictPreviewPayload {
+	"""
+	Fingerprint covering every selected conflict and all file dispositions.
+	"""
+	planFingerprint: String!
+	"""
+	Complete number of selected conflicts.
+	"""
+	totalCount: Int!
+	"""
+	True when the rows are a sample of the complete selection.
+	"""
+	sampled: Boolean!
+	"""
+	Per-conflict survivor and disposition summary.
+	"""
+	rows: [PendingImportConflictRowPayload!]!
+	"""
+	Complete file count requiring permanent-deletion consent.
+	"""
+	permanentDeleteCount: Int!
+	"""
+	Complete bytes requiring permanent-deletion consent.
+	"""
+	permanentDeleteBytes: Long!
+	"""
+	Paths requiring permanent-deletion consent, bounded independently of rows.
+	"""
+	permanentDeletePaths: [String!]!
+	"""
+	True when permanent-deletion paths are a sample.
+	"""
+	permanentDeleteSampled: Boolean!
+	"""
+	True only when the preview requires the additional no-bin confirmation.
+	"""
+	requiresPermanentDeleteConfirmation: Boolean!
+}
+
+"""
+One collision rename, sampled alongside its conflict's complete count.
+"""
+type PendingImportConflictRenamePayload {
+	"""
+	File before consolidation.
+	"""
+	sourcePath: String!
+	"""
+	File's disambiguated destination in the survivor folder.
+	"""
+	destinationPath: String!
+}
+
+"""
+One conflict's survivor, file dispositions and any refusal.
+"""
+type PendingImportConflictRowPayload {
+	"""
+	Pending-import identity represented by this row.
+	"""
+	pendingImportId: ID!
+	"""
+	Title whose folders are being settled.
+	"""
+	titleId: ID!
+	"""
+	Display name of the title.
+	"""
+	titleName: String!
+	"""
+	Folder that survives, independently of which file becomes primary.
+	"""
+	survivorPath: String!
+	"""
+	Best movie file chosen by the quality ladder.
+	"""
+	primaryPath: String!
+	"""
+	Complete bytes that must move into the survivor.
+	"""
+	moveBytes: Long!
+	"""
+	Complete bytes selected for recycling or confirmed permanent deletion.
+	"""
+	recycleBytes: Long!
+	"""
+	Complete count selected for recycling or confirmed permanent deletion.
+	"""
+	recycleCount: Int!
+	"""
+	Count of collision renames needed in the survivor folder.
+	"""
+	collisionRenames: Int!
+	"""
+	Bounded sample of the source and destination of collision renames.
+	"""
+	collisionRenameSamples: [PendingImportConflictRenamePayload!]!
+	"""
+	Complete count of non-media files remaining after media handling.
+	"""
+	leftoverCount: Int!
+	"""
+	Complete bytes in the non-media remainder.
+	"""
+	leftoverBytes: Long!
+	"""
+	Sample of the non-media remainder's paths.
+	"""
+	leftoverPaths: [String!]!
+	"""
+	Sample of paths selected for recycling or permanent deletion.
+	"""
+	recyclePaths: [String!]!
+	"""
+	True when the path lists are samples rather than complete enumerations.
+	"""
+	filesSampled: Boolean!
+	"""
+	Stable refusal reason when this conflict cannot be settled.
+	"""
+	errorReason: String
+	"""
+	Operator-facing explanation of the refusal.
+	"""
+	errorMessage: String
+}
+
+"""
+Progress of the background task that starts one operation per conflict.
+"""
+type PendingImportConflictTaskPayload {
+	"""
+	Background job identity used to read progress.
+	"""
+	jobRunId: ID!
+	"""
+	Number of conflicts in the task.
+	"""
+	totalCount: Int!
+	"""
+	Number of conflicts whose individual operation has settled.
+	"""
+	settledCount: Int!
+	"""
+	Number of conflicts that failed without stopping the remaining walk.
+	"""
+	failedCount: Int!
+	"""
+	Individual location-operation identities, in selection order.
+	"""
+	operationIds: [ID!]!
+	"""
+	True once every selected conflict has settled.
+	"""
+	completed: Boolean!
 }
 
 """
@@ -24336,6 +24568,15 @@ type QueryRoot {
 		"""
 		titleId: ID!
 	): String
+	"""
+	Read progress while a background task settles a selected set of folder conflicts.
+	"""
+	pendingImportConflictTask(
+		"""
+		Background job identity returned when conflicts were accepted.
+		"""
+		jobRunId: ID!
+	): PendingImportConflictTaskPayload
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""
@@ -27202,6 +27443,32 @@ enum RequestVoteValue {
 	The rule ran and had no opinion.
 	"""
 	ABSTAIN
+}
+
+"""
+Confirm a preview, including separate consent when no recycle bin exists.
+"""
+input ResolvePendingImportConflictsInput {
+	"""
+	Pending-import identities confirmed by the preview.
+	"""
+	pendingImportIds: [ID!]!
+	"""
+	Media disposition applied independently to each conflict.
+	"""
+	policy: PendingImportConflictPolicy!
+	"""
+	Disposition of the remaining non-media files.
+	"""
+	leftovers: PendingImportConflictLeftovers!
+	"""
+	Fingerprint of the complete preview being confirmed.
+	"""
+	planFingerprint: String!
+	"""
+	Explicit consent to the previewed permanent deletion when no bin exists.
+	"""
+	confirmPermanentDelete: Boolean! = false
 }
 
 """

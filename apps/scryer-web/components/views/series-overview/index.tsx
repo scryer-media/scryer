@@ -9,7 +9,6 @@ import { useClient } from "urql";
 import type { Release } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
@@ -311,9 +310,6 @@ function SeriesOverviewViewImpl({
   const emptyEpisodes = React.useMemo<CollectionEpisode[]>(() => [], []);
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
-  // Library and root moves are still being finished, so the panel's move entry
-  // point only exists when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const dateTimeFormat = useUiDateTimeFormat();
   const client = useClient();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -1520,7 +1516,6 @@ function SeriesOverviewViewImpl({
                     onUpdateTitleOptions={onUpdateTitleOptions}
                     onTitleChanged={onTitleChanged}
                     onOpenFixMatch={onOpenFixMatch}
-                    experimentalFeaturesEnabled={experimentalFeaturesEnabled}
                     footerActions={
                       rename ? (
                         <TitleRenamePreviewButton

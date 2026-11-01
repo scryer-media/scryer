@@ -558,7 +558,7 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
     Ok(())
 }
 
-fn companion_suffix(companion: &Path, media: &Path) -> Option<String> {
+pub(super) fn companion_suffix(companion: &Path, media: &Path) -> Option<String> {
     let relative = companion.strip_prefix(media.parent()?).ok()?.to_str()?;
     let suffix = relative.strip_prefix(media.file_stem()?.to_str()?)?;
     (suffix.starts_with('.') || suffix.starts_with('-')).then(|| suffix.to_string())

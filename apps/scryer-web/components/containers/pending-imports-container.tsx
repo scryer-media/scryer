@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown, TriangleAlertIcon } from "lucide-react";
 import { useClient } from "urql";
+import { useSearchParams } from "react-router";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -10,6 +11,16 @@ import {
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { EpisodeTargetEpisode } from "@/lib/utils/episode-target";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import {
+  PendingImportConflictDialog,
+  PendingImportConflictProgress,
+} from "@/components/dialogs/pending-import-conflict-dialog";
+import {
+  isResolvableConflict,
+  type ConflictPolicy,
+  type ConflictTask,
+} from "@/lib/pending-import-conflicts";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PendingImportCard } from "@/components/containers/pending-import-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -341,6 +352,7 @@ export const PendingImportsContainer = React.memo(
     onNavigateBackToOverview,
   }: PendingImportsContainerProps) {
     const client = useClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const setGlobalStatus = useGlobalStatus();
     const t = useTranslate();
     const facet = facetForView(view);
@@ -405,6 +417,44 @@ export const PendingImportsContainer = React.memo(
     );
     const [ignoreTargetItem, setIgnoreTargetItem] =
       React.useState<PendingImportItem | null>(null);
+    const [selectedConflictIds, setSelectedConflictIds] = React.useState<
+      string[]
+    >([]);
+    const [conflictDialog, setConflictDialog] = React.useState<{
+      ids: string[];
+      policy: ConflictPolicy;
+    } | null>(null);
+    const [conflictTask, setConflictTask] = React.useState<ConflictTask | null>(
+      () => {
+        const jobRunId = searchParams.get("conflictTask");
+        return jobRunId
+          ? {
+              jobRunId,
+              totalCount: 0,
+              settledCount: 0,
+              failedCount: 0,
+              operationIds: [],
+              completed: false,
+            }
+          : null;
+      },
+    );
+    const toggleConflict = React.useCallback(
+      (item: PendingImportItem, checked: boolean) => {
+        setSelectedConflictIds((current) =>
+          checked
+            ? Array.from(new Set([...current, item.id]))
+            : current.filter((id) => id !== item.id),
+        );
+      },
+      [],
+    );
+    const openConflict = React.useCallback(
+      (item: PendingImportItem, policy: ConflictPolicy) => {
+        setConflictDialog({ ids: [item.id], policy });
+      },
+      [],
+    );
     const [assignItem, setAssignItem] =
       React.useState<PendingImportItem | null>(null);
     const [assignEpisodes, setAssignEpisodes] = React.useState<
@@ -1291,6 +1341,12 @@ export const PendingImportsContainer = React.memo(
                 isActive={isActive}
                 isResolving={isResolving}
                 isBusy={isBusy}
+                conflictBusy={conflictTask !== null && !conflictTask.completed}
+                conflictSelected={selectedConflictIds.includes(item.id)}
+                onConflictSelectedChange={toggleConflict}
+                onResolveConflict={
+                  facetId === "MOVIE" ? openConflict : undefined
+                }
                 libraryLabel={libraryLabel}
                 knownTitleHref={knownTitleHref}
                 knownTitleLabel={knownTitleLabel}
@@ -1327,6 +1383,11 @@ export const PendingImportsContainer = React.memo(
       ),
       [
         activeItemRef,
+        facetId,
+        selectedConflictIds,
+        toggleConflict,
+        openConflict,
+        conflictTask,
         bindingError,
         bindingGroups,
         bindingLoading,
@@ -1354,6 +1415,26 @@ export const PendingImportsContainer = React.memo(
 
     return (
       <>
+        {conflictDialog && (
+          <PendingImportConflictDialog
+            pendingImportIds={conflictDialog.ids}
+            initialPolicy={conflictDialog.policy}
+            onClose={() => setConflictDialog(null)}
+            onStarted={(task) => {
+              setConflictTask(task);
+              setSelectedConflictIds([]);
+              setSearchParams(
+                (current) => {
+                  const next = new URLSearchParams(current);
+                  next.set("conflictTask", task.jobRunId);
+                  return next;
+                },
+                { replace: true },
+              );
+              void refreshAll();
+            }}
+          />
+        )}
         <div className="min-h-0 flex-1 bg-transparent">
           <div className="mx-auto w-full max-w-[1180px] space-y-5 px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-12">
             <div className="flex flex-wrap items-end gap-4">
@@ -1422,6 +1503,84 @@ export const PendingImportsContainer = React.memo(
               </Card>
             ) : null}
 
+            {facetId === "MOVIE" &&
+              (selectedConflictIds.length > 0 ||
+                pendingConnection.items.some(isResolvableConflict)) && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3 text-sm">
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      id="pending-import-conflict-select-page"
+                      checked={pendingConnection.items
+                        .filter(isResolvableConflict)
+                        .every((item) => selectedConflictIds.includes(item.id))}
+                      disabled={
+                        conflictTask !== null && !conflictTask.completed
+                      }
+                      onCheckedChange={(checked) => {
+                        const ids = pendingConnection.items
+                          .filter(isResolvableConflict)
+                          .map((item) => item.id);
+                        setSelectedConflictIds((current) =>
+                          checked === true
+                            ? Array.from(new Set([...current, ...ids]))
+                            : current.filter((id) => !ids.includes(id)),
+                        );
+                      }}
+                    />
+                    {t("pendingImports.conflict.selectPage")}
+                  </label>
+                  <span>
+                    {t("pendingImports.conflict.selected", {
+                      count: selectedConflictIds.length,
+                    })}
+                  </span>
+                  <Button
+                    id="pending-import-conflict-bulk"
+                    size="sm"
+                    disabled={
+                      !selectedConflictIds.length ||
+                      (conflictTask !== null && !conflictTask.completed)
+                    }
+                    onClick={() =>
+                      setConflictDialog({
+                        ids: selectedConflictIds,
+                        policy: "ADOPT_ALL",
+                      })
+                    }
+                  >
+                    {t("pendingImports.conflict.resolveSelected")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!selectedConflictIds.length}
+                    onClick={() => setSelectedConflictIds([])}
+                  >
+                    {t("label.clear")}
+                  </Button>
+                </div>
+              )}
+            {conflictTask && (
+              <PendingImportConflictProgress
+                key={conflictTask.jobRunId}
+                initialTask={conflictTask}
+                onDismiss={() => {
+                  setConflictTask(null);
+                  setSearchParams(
+                    (current) => {
+                      const next = new URLSearchParams(current);
+                      next.delete("conflictTask");
+                      return next;
+                    },
+                    { replace: true },
+                  );
+                }}
+                onChanged={(task) => {
+                  setConflictTask(task);
+                  void refreshAll();
+                }}
+              />
+            )}
             {renderItems(pendingConnection.items)}
 
             {renderPagination(

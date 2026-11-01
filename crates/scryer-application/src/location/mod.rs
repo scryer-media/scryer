@@ -35,6 +35,7 @@ pub mod asset_listing;
 pub mod backfill;
 pub mod classify;
 pub mod collisions;
+pub mod conflicts;
 pub mod execution;
 pub mod executor;
 pub mod folder_match;

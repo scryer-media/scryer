@@ -134,6 +134,36 @@ pub struct TitlePlacementSnapshot {
 /// path can be exercised against temp directories and a fake catalog.
 #[async_trait]
 pub trait RootMoveCatalog: Send + Sync {
+    async fn admit_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict validation is unavailable".into(),
+        ))
+    }
+    /// Apply the confirmed anonymous-folder media associations after verification.
+    async fn reconcile_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict reconciliation is unavailable".into(),
+        ))
+    }
+    /// Dispose only the confirmed conflict allowlist after catalog reconciliation.
+    async fn clean_up_conflict(
+        &self,
+        _operation: &LocationOperation,
+        _plan: &RootMoveExecutionPlan,
+        _recycler: &dyn SourceRecycler,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "Folder conflict cleanup is unavailable".into(),
+        ))
+    }
     async fn has_other_media_at_path(
         &self,
         _title_id: &str,
@@ -816,6 +846,12 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 outcome.notes.push(warning.clone());
             }
         }
+        if self.plan.conflict.is_some() {
+            self.catalog
+                .reconcile_conflict(operation, self.plan)
+                .await?;
+            return Ok(outcome);
+        }
         for file in planned.files.iter().chain(
             self.plan
                 .catalog_paths
@@ -892,7 +928,6 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        let _ = operation;
         // What the preview said would happen — a companion kept under a new
         // name, a hardlinked source, a same-named neighbour — happened. Those
         // are the plan's own statements, confirmed by the user, so they are
@@ -911,6 +946,14 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
         let planned = self.title(&title.title_id)?;
         let mut outcome = TitleStepOutcome::clean();
+
+        if self.plan.conflict.is_some() {
+            // Explicit inferior-file disposal precedes retiring transfer sources,
+            // so a retry still has both sides of any hardlink content proof.
+            self.catalog
+                .clean_up_conflict(operation, self.plan, self.recycler)
+                .await?;
+        }
 
         // The persisted records are the gate, not the absence of an error: only
         // a file recorded `verified` may have its source touched (FR-044).
@@ -1072,13 +1115,24 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                     "Source or destination changed before cleanup; preserved the source.",
                 ));
             }
+            let mut source_title = planned.clone();
+            let mut media_file_id = file.media_file_id.as_deref();
+            if let Some(conflict) = &self.plan.conflict
+                && let Some(source_file) = conflict
+                    .files
+                    .iter()
+                    .find(|source_file| source_file.path == file.source_path)
+            {
+                source_title.source_root_path = Some(source_file.root_path.clone());
+                media_file_id = source_file.media_file_id.as_deref();
+            }
             let disposal = self
                 .recycler
                 .recycle_source(
                     &operation.id,
-                    planned,
+                    &source_title,
                     &source,
-                    file.media_file_id.as_deref(),
+                    media_file_id,
                     file.size_bytes,
                 )
                 .await?;
@@ -1234,6 +1288,12 @@ impl<'a> RootMoveAdmission<'a> {
 impl TitleAdmissionCheck for RootMoveAdmission<'_> {
     async fn admit_title(&self, context: TitleAdmissionContext<'_>) -> AppResult<TitleAdmission> {
         let title_id = context.title.title_id.as_str();
+        if self.plan.conflict.is_some() {
+            self.catalog
+                .admit_conflict(context.operation, self.plan)
+                .await?;
+            return Ok(TitleAdmission::Proceed);
+        }
         let Some(planned) = self.plan.title(title_id) else {
             return Ok(TitleAdmission::Skip(format!(
                 "title {title_id} is not in the confirmed plan"

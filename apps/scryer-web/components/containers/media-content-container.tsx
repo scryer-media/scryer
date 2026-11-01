@@ -164,7 +164,6 @@ import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import { catalogDeletionRefresh } from "@/lib/utils/catalog-deletion-refresh";
@@ -637,9 +636,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
   const auth = useAuth();
-  // Library and root moves are still being finished, so the bulk dialog only
-  // becomes a move entry point when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const canManageLists = hasAppPermission(
     auth.user,
     APP_PERMISSIONS.manageLists,
@@ -5456,14 +5452,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
         destinationLibraryName={editDialogLibraryName}
-        onRequestMove={
-          experimentalFeaturesEnabled
-            ? (rootFolderId) => {
-                setBulkEditDialogOpen(false);
-                setBulkMoveRootId(rootFolderId);
-              }
-            : undefined
-        }
+        onRequestMove={(rootFolderId) => {
+          setBulkEditDialogOpen(false);
+          setBulkMoveRootId(rootFolderId);
+        }}
       />
       <MoveTitlesDialog
         open={bulkMoveRootId !== null}

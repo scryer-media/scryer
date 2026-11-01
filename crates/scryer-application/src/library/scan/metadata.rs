@@ -6,8 +6,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::library::library::library_scan_cancel_requested;
 use crate::library_discovery::{
-    LibraryTitleWalk, MovieTopLevelEntry, matching_movie_nfo_path_async, normalize_folder_name,
-    strip_year_suffix,
+    LibraryTitleWalk, MovieTopLevelEntry, is_sample_video_candidate, matching_movie_nfo_path_async,
+    normalize_folder_name, strip_year_suffix,
 };
 use crate::library_filename_parser::{LibraryFilenameParseInput, parse_library_filename};
 use crate::library_scan_coordinator::LibraryScanCoordinator;
@@ -1449,15 +1449,6 @@ async fn detect_primary_movie_entry_file(
     }
 
     Ok((non_sample_videos.len() == 1).then(|| non_sample_videos[0].clone()))
-}
-
-fn is_sample_video_candidate(path: &Path) -> bool {
-    let stem = path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    stem.contains("sample")
 }
 
 async fn build_prepared_movie_library_scan_candidate(

@@ -464,3 +464,33 @@ test("behavior helpers require the expected broad code and reason together", () 
     "This sentence was reworded",
   );
 });
+
+test("folder conflict refusals use stable reasons when server sentences change", () => {
+  for (const reason of [
+    "LOCATION_CONFLICT_PLAN_CHANGED",
+    "LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED",
+    "LOCATION_CONFLICT_FILE_CHANGED",
+  ]) {
+    const translate = (key: string) => `translated:${key}`;
+    assert.equal(
+      userFacingGraphQlErrorMessage(
+        coded(reason, "VALIDATION_ERROR", "changed sentence"),
+        "fallback",
+        translate,
+      ),
+      `translated:error.reason.${reason}`,
+    );
+    assert.equal(
+      hasGraphQlErrorReason(coded(reason), reason, "VALIDATION_ERROR"),
+      true,
+    );
+    assert.equal(
+      hasGraphQlErrorReason(
+        coded(reason, "INTERNAL_ERROR"),
+        reason,
+        "VALIDATION_ERROR",
+      ),
+      false,
+    );
+  }
+});

@@ -908,6 +908,8 @@ impl AppUseCase {
                 .await?
             }
         }
+        self.preflight_additional_movie_folder_moves(&preview)
+            .await?;
         // Applying is the point at which a title whose root id disagreed with
         // its folder is corrected: the plan was built against the root the
         // files are really under, so the record catches up with it (#224).
@@ -2340,14 +2342,16 @@ impl AppUseCase {
             .shows
             .list_collections_for_title(&title.id)
             .await?;
-        let media_files = self
+        let all_media_files = self
             .services
             .library
             .media_files
             .list_media_files_for_title(&title.id)
-            .await?
-            .into_iter()
+            .await?;
+        let media_files = all_media_files
+            .iter()
             .filter(|file| title.facet != MediaFacet::Movie || file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         if let Some(error) = rendering_error {
             tracing::warn!(title_id = %title.id, %error, "title skipped by rename template validation");
@@ -2412,7 +2416,7 @@ impl AppUseCase {
                         build_movie_rename_plan_items(
                             &title,
                             collections,
-                            media_files,
+                            all_media_files,
                             &mut options,
                         )
                     }
@@ -2705,6 +2709,54 @@ impl AppUseCase {
         }
     }
 
+    /// Folder relocation cannot strand an Additional while the ordinary
+    /// renamer applies media items independently. Filename-only renames remain
+    /// safe because all movie variants keep their established folder.
+    async fn preflight_additional_movie_folder_moves(&self, plan: &RenamePlan) -> AppResult<()> {
+        if plan.facet != MediaFacet::Movie {
+            return Ok(());
+        }
+        for planned in &plan.title_folders {
+            let files = self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&planned.title_id)
+                .await?;
+            let moves_primary = files
+                .iter()
+                .filter(|file| file.role.is_primary())
+                .any(|file| {
+                    plan.items.iter().any(|item| {
+                        item.current_path == file.file_path
+                            && matches!(
+                                item.write_action,
+                                RenameWriteAction::Move | RenameWriteAction::Replace
+                            )
+                            && item.proposed_path.as_deref().is_some_and(|target| {
+                                stored_path_to_path_buf(target).parent()
+                                    != stored_path_to_path_buf(&item.current_path).parent()
+                            })
+                    })
+                });
+            if moves_primary
+                && files.iter().any(|file| {
+                    !file.role.is_primary()
+                        && !crate::title_folder_rules::path_is_strictly_within(
+                            &file.file_path,
+                            &planned.folder_path,
+                        )
+                })
+            {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
+                    "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     async fn normalize_existing_rename_collisions(
         &self,
         items: Vec<RenamePlanItem>,
@@ -2902,17 +2954,22 @@ fn build_movie_rename_plan_items(
 
     collections
         .into_iter()
-        .map(|collection| {
+        .filter_map(|collection| {
             let matched_media_file = collection
                 .ordered_path
                 .as_deref()
                 .and_then(|path| media_files_by_path.get(path));
+            // A scan may give each movie variant its own collection. Keep the
+            // role lookup even though only Primary contributes rename actions.
+            if matched_media_file.is_some_and(|file| !file.role.is_primary()) {
+                return None;
+            }
             let mut item =
                 build_movie_rename_plan_item(title, &collection, matched_media_file, options);
             if item.media_file_id.is_none() {
                 item.media_file_id = matched_media_file.map(|media_file| media_file.id.clone());
             }
-            item
+            Some(item)
         })
         .collect()
 }

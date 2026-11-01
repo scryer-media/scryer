@@ -32,6 +32,8 @@ mod indexer_configs;
 mod library_scan;
 #[path = "integration_graphql/location_operations.rs"]
 mod location_operations;
+#[path = "integration_graphql/location_conflicts.rs"]
+mod location_conflicts;
 #[path = "integration_graphql/media_rename.rs"]
 mod media_rename;
 #[path = "integration_graphql/metadata_search.rs"]

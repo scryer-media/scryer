@@ -334,6 +334,9 @@ pub mod library {
     pub const RENAME_PATH_OUTSIDE_ROOT: &str = "LIBRARY_RENAME_PATH_OUTSIDE_ROOT";
     /// The selected title folders overlap.
     pub const RENAME_FOLDERS_OVERLAP: &str = "LIBRARY_RENAME_FOLDERS_OVERLAP";
+    /// An Additional movie or its companion cannot safely follow a folder rename.
+    pub const RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED: &str =
+        "LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED";
     /// The template optional group is invalid.
     pub const TEMPLATE_OPTIONAL_GROUP_INVALID: &str = "LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID";
     /// The folder is not a valid title boundary for scanning.
@@ -429,6 +432,7 @@ pub mod library {
         DELETE_TARGET_NOT_FILE,
         RENAME_PATH_OUTSIDE_ROOT,
         RENAME_FOLDERS_OVERLAP,
+        RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
     ];

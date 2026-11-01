@@ -1917,6 +1917,20 @@ impl CatalogQueries {
             })
     }
 
+    /// Read progress while a background task settles a selected set of folder conflicts.
+    async fn pending_import_conflict_task(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Background job identity returned when conflicts were accepted.")]
+        job_run_id: ID,
+    ) -> GqlResult<Option<PendingImportConflictTaskPayload>> {
+        app_from_ctx(ctx)?
+            .pending_import_conflict_task(&actor_from_ctx(ctx)?, job_run_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|task| task.map(mappers::from_pending_import_conflict_task))
+    }
+
     /// Read one location operation with its per-title checkpoints.
     async fn location_operation(
         &self,

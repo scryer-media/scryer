@@ -2217,3 +2217,141 @@ async fn graphql_a_start_naming_two_destination_forms_is_refused() {
     }))
     .await;
 }
+
+#[tokio::test]
+async fn graphql_conflict_resolution_rejects_invalid_selection_with_a_reason() {
+    let ctx = TestContext::new().await;
+    for ids in [json!([]), json!(["same-conflict", "same-conflict"])] {
+        let body = gql(
+            &ctx,
+            r#"mutation PreviewConflicts($input: PendingImportConflictInput!) {
+              previewPendingImportConflicts(input: $input) { planFingerprint }
+            }"#,
+            json!({"input": {"pendingImportIds": ids, "policy": "ADOPT_ALL", "leftovers": "PRESERVE_ALL"}}),
+        ).await;
+        assert_graphql_field_denied(&body, "previewPendingImportConflicts");
+        assert_eq!(
+            body["errors"][0]["extensions"]["reason"],
+            scryer_application::location::conflicts::refusal::SELECTION_INVALID,
+            "selection refusal must remain machine-readable: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn graphql_conflict_resolution_requires_both_import_and_title_permissions() {
+    let ctx = TestContext::new().await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let title = create_catalog_title(
+        &ctx,
+        "Guarded Conflict",
+        MediaFacet::Movie,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let now = Utc::now().to_rfc3339();
+    let pending = scryer_application::LibraryScanUnmatchedItem {
+        id: "guarded-folder-conflict".to_string(),
+        library_id: library_id.clone(),
+        facet: MediaFacet::Movie,
+        status: scryer_application::PendingImportStatus::Pending,
+        title_id: Some(title.id),
+        scan_session_id: "guarded-conflict-session".to_string(),
+        scan_root: "/synthetic-library".to_string(),
+        item_path: "/synthetic-library/duplicate".to_string(),
+        display_name: "Guarded Conflict".to_string(),
+        query: "Guarded Conflict".to_string(),
+        year_hint: None,
+        reason_code: scryer_application::location::conflicts::PENDING_REASON.to_string(),
+        error_message: None,
+        search_attempts: Vec::new(),
+        size_bytes: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    scryer_application::LibraryScanUnmatchedItemRepository::upsert_library_scan_unmatched_item(
+        &ctx.library_scan_unmatched,
+        &pending,
+    )
+    .await
+    .expect("seed guarded folder conflict");
+
+    // Each actor has exactly one required permission. Neither may inspect a
+    // conflict's title/folders or start its operation with the other missing.
+    for permission in [
+        LibraryPermission::ManageTitles,
+        LibraryPermission::ResolveImports,
+    ] {
+        let mut actor = location_outsider();
+        actor.authorization.libraries.insert(
+            library_id.clone(),
+            LibraryPermissionMask::from_permissions([permission]),
+        );
+        for (field, extra, selection) in [
+            ("previewPendingImportConflicts", "", "planFingerprint"),
+            (
+                "resolvePendingImportConflicts",
+                ", planFingerprint: \"unconfirmed\"",
+                "jobRunId",
+            ),
+        ] {
+            let query = format!(
+                r#"mutation {{ {field}(input: {{
+                pendingImportIds: ["guarded-folder-conflict"],
+                policy: KEEP_ONE, leftovers: MEDIA_ONLY{extra}
+            }}) {{ {selection} }} }}"#
+            );
+            let denied = schema_exec(&ctx, &query, Some(actor.clone())).await;
+            assert_graphql_field_denied(&denied, field);
+            assert_eq!(
+                denied["errors"][0]["extensions"]["reason"],
+                scryer_application::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                "authorization must precede folder inspection and confirmation: {denied}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn graphql_conflict_schema_exposes_operation_types_and_explicit_disposal_consent() {
+    let ctx = TestContext::new().await;
+    let body = gql(&ctx, r#"{
+      operation: __type(name: "LocationOperationTypeValue") { enumValues { name } }
+      mode: __type(name: "LocationExecutionModeValue") { enumValues { name } }
+      policy: __type(name: "PendingImportConflictPolicy") { enumValues { name } }
+      leftovers: __type(name: "PendingImportConflictLeftovers") { enumValues { name } }
+      confirm: __type(name: "ResolvePendingImportConflictsInput") { inputFields { name defaultValue } }
+    }"#, json!({})).await;
+    assert_no_errors(&body);
+    let names = |key: &str| {
+        body["data"][key]["enumValues"]
+            .as_array()
+            .expect("enum values")
+            .iter()
+            .map(|value| value["name"].as_str().expect("enum name"))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert!(names("operation").contains(&"FOLDER_CONSOLIDATION"));
+    assert!(names("operation").contains(&"FOLDER_KEEP_ONE"));
+    assert!(names("mode").contains(&"USER_MOVED_FILES"));
+    assert_eq!(
+        names("policy"),
+        std::collections::BTreeSet::from(["ADOPT_ALL", "KEEP_ONE"])
+    );
+    assert_eq!(
+        names("leftovers"),
+        std::collections::BTreeSet::from(["PRESERVE_ALL", "MEDIA_ONLY"])
+    );
+    let consent = body["data"]["confirm"]["inputFields"]
+        .as_array()
+        .expect("input fields")
+        .iter()
+        .find(|field| field["name"] == "confirmPermanentDelete")
+        .expect("permanent consent field");
+    assert_eq!(
+        consent["defaultValue"], "false",
+        "permanent deletion is never implicit"
+    );
+}
