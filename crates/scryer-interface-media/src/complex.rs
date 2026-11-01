@@ -65,6 +65,15 @@ impl MovieEntityPayload {
 
 #[ComplexObject]
 impl LibraryPayload {
+    /// Initial monitoring choice for new titles, readable by authorized requesters.
+    async fn default_monitor_type(&self, ctx: &Context<'_>) -> GqlResult<String> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.default_monitor_type_for_library(&actor, self.id.as_ref())
+            .await
+            .map_err(to_gql_error)
+    }
+
     /// Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
     async fn quality_profile_id(&self, ctx: &Context<'_>) -> GqlResult<ID> {
         let app = app_from_ctx(ctx)?;

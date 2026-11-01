@@ -307,6 +307,7 @@ export type LibraryRecord = {
   isDefault: boolean;
   isBootstrapDefaultRootSet?: boolean;
   roots: LibraryRootRecord[];
+  defaultMonitorType?: string | null;
   qualityProfileId?: string | null;
   requestQualityProfileIds?: string[];
   requestQualityProfileDefaultId?: string | null;
@@ -383,6 +384,8 @@ export type LibrarySettingsRecord = {
   metadataLanguage: string;
   useSeasonFoldersOverride: boolean | null;
   useSeasonFolders: boolean;
+  defaultMonitorType?: string | null;
+  defaultMonitorTypeOverride?: string | null;
   qualityProfileIdOverride: string | null;
   qualityProfileId: string;
   requestQualityProfileIdsOverride: string[] | null;
@@ -425,6 +428,7 @@ export type LibrarySettingsRecord = {
 };
 
 export type LibrarySettingsDraft = {
+  defaultMonitorType?: string | null;
   searchLanguages?: string[] | null;
   requiredAudioLanguages: string[] | null;
   metadataLanguage: string | null;

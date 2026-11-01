@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.defaultMonitorType": "Default monitoring for new titles",
+  "settings.defaultMonitorTypeHelp":
+    "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",

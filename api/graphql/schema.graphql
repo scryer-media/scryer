@@ -10081,6 +10081,10 @@ type LibraryPayload {
 	"""
 	roots: [LibraryRootPayload!]!
 	"""
+	Initial monitoring choice for new titles, readable by authorized requesters.
+	"""
+	defaultMonitorType: String!
+	"""
 	Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
 	"""
 	qualityProfileId: ID!
@@ -10340,6 +10344,10 @@ input LibrarySettingsInput {
 	"""
 	useSeasonFolders: Boolean
 	"""
+	Initial monitoring choice for new Add/Request dialogs; null restores the built-in default.
+	"""
+	defaultMonitorType: String
+	"""
 	Default quality profile identity.
 	"""
 	qualityProfileId: ID
@@ -10456,6 +10464,14 @@ type LibrarySettingsPayload {
 	Effective season-folder setting after inheritance.
 	"""
 	useSeasonFolders: Boolean!
+	"""
+	Initial monitoring choice in new Add/Request dialogs.
+	"""
+	defaultMonitorType: String!
+	"""
+	Saved library choice; null uses the built-in facet default.
+	"""
+	defaultMonitorTypeOverride: String
 	"""
 	Library override quality-profile ID; null means inherit.
 	"""

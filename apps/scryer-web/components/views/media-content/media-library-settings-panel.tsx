@@ -187,7 +187,7 @@ function LibrarySettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
+    <section className="min-w-0 rounded-[16px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <Icon className="h-[17px] w-[17px] text-[var(--scry-accent-text)]" />
         <h2 className="text-[16px] font-bold text-[var(--scry-ink2)]">
@@ -199,7 +199,9 @@ function LibrarySettingsSection({
           {description}
         </p>
       ) : null}
-      <div className="mt-5 space-y-5">{children}</div>
+      <div className="mt-5 min-w-0 space-y-5 [&_[data-slot=select-trigger]]:min-w-0 [&_[data-slot=select-trigger]]:w-full">
+        {children}
+      </div>
     </section>
   );
 }
@@ -352,6 +354,8 @@ export const MediaLibrarySettingsPanel = React.memo(
       React.useState(INHERIT_VALUE);
     const [draftQualityProfileId, setDraftQualityProfileId] =
       React.useState(INHERIT_VALUE);
+    const [draftDefaultMonitorType, setDraftDefaultMonitorType] =
+      React.useState(INHERIT_VALUE);
     const [draftRequestQualityProfileIds, setDraftRequestQualityProfileIds] =
       React.useState<string[]>([]);
     const [draftScoringPersona, setDraftScoringPersona] =
@@ -500,6 +504,9 @@ export const MediaLibrarySettingsPanel = React.memo(
         setDraftFileChmod(settings?.fileChmodOverride ?? "");
         setDraftFolderChmod(settings?.folderChmodOverride ?? "");
         setDraftChownGroup(settings?.chownGroupOverride ?? "");
+        setDraftDefaultMonitorType(
+          settings?.defaultMonitorTypeOverride ?? INHERIT_VALUE,
+        );
         setDraftMovieAvailability(
           settings?.defaultMovieAvailabilityOverride ?? INHERIT_VALUE,
         );
@@ -748,6 +755,10 @@ export const MediaLibrarySettingsPanel = React.memo(
     );
     const settingsDraft = React.useMemo<LibrarySettingsDraft>(() => {
       const draft: LibrarySettingsDraft = {
+        defaultMonitorType:
+          draftDefaultMonitorType === INHERIT_VALUE
+            ? null
+            : draftDefaultMonitorType,
         searchLanguages: draftSearchLanguages,
         requiredAudioLanguages:
           draftRequiredAudioLanguages.length > 0
@@ -841,6 +852,7 @@ export const MediaLibrarySettingsPanel = React.memo(
       draftNfoWriteOnImport,
       draftPlexmatchWriteOnImport,
       draftQualityProfileId,
+      draftDefaultMonitorType,
       draftRequestQualityProfileIds,
       draftRecapPolicy,
       draftRequiredAudioLanguages,
@@ -864,6 +876,8 @@ export const MediaLibrarySettingsPanel = React.memo(
             savedSettings.metadataLanguageOverride ||
           settingsDraft.useSeasonFolders !==
             savedSettings.useSeasonFoldersOverride ||
+          settingsDraft.defaultMonitorType !==
+            (savedSettings.defaultMonitorTypeOverride ?? null) ||
           settingsDraft.qualityProfileId !==
             savedSettings.qualityProfileIdOverride ||
           (settingsDraft.requestQualityProfileIds ?? []).join("\n") !==
@@ -1607,7 +1621,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                 title={t("settings.mediaProfilesTitle")}
                 description={t("settings.mediaProfilesHelp")}
               >
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                   <div className="space-y-2">
                     <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
                     <AudioLanguagePicker
@@ -1770,6 +1784,54 @@ export const MediaLibrarySettingsPanel = React.memo(
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="library-default-monitor-type">
+                    {t("settings.defaultMonitorType")}
+                  </Label>
+                  <Select
+                    value={draftDefaultMonitorType}
+                    onValueChange={setDraftDefaultMonitorType}
+                    disabled={settingsBusy}
+                  >
+                    <SelectTrigger id="library-default-monitor-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={INHERIT_VALUE}>
+                        {t("settings.libraryInheritFacet")}
+                      </SelectItem>
+                      {(isMovieFacet
+                        ? ["MONITORED", "UNMONITORED"]
+                        : [
+                            "FUTURE_EPISODES",
+                            "MISSING_AND_FUTURE_EPISODES",
+                            "ALL_EPISODES",
+                            "NONE",
+                          ]
+                      ).map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {t(
+                            (
+                              {
+                                MONITORED: "search.monitorType.monitored",
+                                UNMONITORED: "search.monitorType.unmonitored",
+                                FUTURE_EPISODES:
+                                  "search.monitorType.futureEpisodes",
+                                MISSING_AND_FUTURE_EPISODES:
+                                  "search.monitorType.missingAndFutureEpisodes",
+                                ALL_EPISODES: "search.monitorType.allEpisodes",
+                                NONE: "search.monitorType.none",
+                              } as Record<string, string>
+                            )[value],
+                          )}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.defaultMonitorTypeHelp")}
+                  </p>
+                </div>
                 <div className="rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-card2)] p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <Send className="h-[15px] w-[15px] text-[var(--scry-accent-text)]" />
@@ -1824,7 +1886,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                     "settings.libraryMovieAvailabilityDescription",
                   )}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="library-movie-default-availability">
                         {t("settings.movieDefaultAvailability")}
@@ -1917,7 +1979,8 @@ export const MediaLibrarySettingsPanel = React.memo(
                 <div
                   className={cn(
                     "grid gap-5",
-                    canManageDownloadClientRouting && "md:grid-cols-2",
+                    canManageDownloadClientRouting &&
+                      "grid-cols-[repeat(auto-fit,minmax(min(100%,22rem),1fr))]",
                   )}
                 >
                   <div className="space-y-2">
@@ -1955,7 +2018,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                       </EffectiveChip>
                     ) : null}
                     {showUnixPermissions ? (
-                      <div className="grid gap-3 pt-2 sm:grid-cols-2">
+                      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,13rem),1fr))] gap-3 pt-2">
                         <div className="space-y-2">
                           <Label>
                             {t("settings.setPermissionsLinuxLabel")}
@@ -2181,7 +2244,7 @@ export const MediaLibrarySettingsPanel = React.memo(
               >
                 <div>
                   <div
-                    className={`grid gap-3 ${showPlexmatch ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+                    className={`grid gap-3 ${showPlexmatch ? "grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))]" : "grid-cols-1"}`}
                   >
                     <div className="space-y-2">
                       <Label>{t("settings.nfoWriteOnImportLabel")}</Label>
@@ -2265,7 +2328,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                   icon={SlidersVertical}
                   title={t("settings.animeSettings")}
                 >
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
                     <div className="space-y-2">
                       <Label>{t("settings.fillerPolicyLabel")}</Label>
                       <Select
