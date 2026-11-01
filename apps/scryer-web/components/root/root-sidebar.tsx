@@ -113,14 +113,15 @@ type NavItem = {
 
 type TopNavGroupDefinition = {
   id: string;
-  labelKey: string;
+  /** Without one the items sit directly in the nav, under no section. */
+  labelKey?: string;
   label?: string;
   items: TopNavGroupItemDefinition[];
 };
 
 type TopNavGroup = {
   id: string;
-  label: string;
+  label: string | null;
   items: TopNavGroupItem[];
 };
 
@@ -193,8 +194,7 @@ type HeaderWithMobileNavigationProps = {
 
 const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
   {
-    id: "overview",
-    labelKey: "nav.group.overview",
+    id: "dashboard",
     items: [{ kind: "view", id: "dashboard" }],
   },
   {
@@ -938,7 +938,8 @@ function RootSidebarContent({
         groupedIds.add(definition.id);
         return [{ kind: "view", ...item }];
       });
-      return { id: group.id, label: group.label ?? t(group.labelKey), items };
+      const label = group.label ?? (group.labelKey ? t(group.labelKey) : null);
+      return { id: group.id, label, items };
     }).filter((group) => group.items.length > 0);
     const ungroupedItems = visibleTopNav
       .filter((item) => !groupedIds.has(item.id))
@@ -1183,23 +1184,25 @@ function RootSidebarContent({
 
             return (
               <SidebarGroup key={group.id} className="px-0 py-1 first:pt-0">
-                <SidebarGroupLabel asChild className="h-auto p-0">
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-controls={groupContentId}
-                    aria-expanded={!isCollapsed}
-                    onClick={() => toggleTopNavGroup(group.id)}
-                  >
-                    {group.label}
-                    <ChevronDown
-                      className={cn(
-                        "h-4 w-4 transition-transform",
-                        isCollapsed && "-rotate-90",
-                      )}
-                    />
-                  </button>
-                </SidebarGroupLabel>
+                {group.label ? (
+                  <SidebarGroupLabel asChild className="h-auto p-0">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-[10.5px] font-bold uppercase tracking-[0.13em] text-[var(--scry-faint3)] hover:text-[var(--scry-ink2)] focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-controls={groupContentId}
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleTopNavGroup(group.id)}
+                    >
+                      {group.label}
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 transition-transform",
+                          isCollapsed && "-rotate-90",
+                        )}
+                      />
+                    </button>
+                  </SidebarGroupLabel>
+                ) : null}
                 {isCollapsed ? null : (
                   <SidebarMenu id={groupContentId} className="space-y-0.5">
                     {group.items.map((item) => {
