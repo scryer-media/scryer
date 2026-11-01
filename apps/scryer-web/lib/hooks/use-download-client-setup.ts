@@ -1,4 +1,5 @@
 import { userFacingGraphQlErrorMessage } from "../graphql/error-message.ts";
+import { pluginErrorMessage } from "../utils/plugin-error-message.ts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Client } from "urql";
 
@@ -275,11 +276,7 @@ export function useDownloadClientSetup({
       // was reading the server's container log.
       setDcTestResult("failed");
       setDcError(
-        userFacingGraphQlErrorMessage(
-          err,
-          t("error.fallback.connectionTestFailed"),
-          t,
-        ),
+        pluginErrorMessage(err, t, t("error.fallback.connectionTestFailed")),
       );
       setDcTesting(false);
     }

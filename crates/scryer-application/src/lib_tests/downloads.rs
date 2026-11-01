@@ -19002,7 +19002,7 @@ impl RecordingDownloadClientStatusRepo {
 
 /// A native-client probe that answers with a fixed outcome.
 struct FixedOutcomeConnectionTester {
-    answers: bool,
+    failure: Option<crate::AppError>,
 }
 
 #[async_trait::async_trait]
@@ -19013,18 +19013,30 @@ impl crate::BuiltinDownloadClientConnectionTester for FixedOutcomeConnectionTest
         _config_json: &str,
         _proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> crate::AppResult<()> {
-        if self.answers {
-            Ok(())
-        } else {
-            Err(crate::AppError::Repository(
-                "synthetic client did not answer".to_string(),
-            ))
+        match &self.failure {
+            None => Ok(()),
+            Some(failure) => Err(failure.clone()),
         }
     }
 }
 
 async fn app_with_blocked_download_client(
     tester_answers: bool,
+) -> (
+    AppUseCase,
+    User,
+    Arc<RecordingDownloadClientStatusRepo>,
+    DownloadClientConfig,
+) {
+    app_with_blocked_download_client_failing(
+        (!tester_answers)
+            .then(|| crate::AppError::Repository("synthetic client did not answer".to_string())),
+    )
+    .await
+}
+
+async fn app_with_blocked_download_client_failing(
+    failure: Option<crate::AppError>,
 ) -> (
     AppUseCase,
     User,
@@ -19041,9 +19053,7 @@ async fn app_with_blocked_download_client(
         services
             .with_download_client_status(status.clone())
             .with_builtin_download_client_connection_tester(Arc::new(
-                FixedOutcomeConnectionTester {
-                    answers: tester_answers,
-                },
+                FixedOutcomeConnectionTester { failure },
             ))
     });
     let config =
@@ -19101,6 +19111,71 @@ async fn a_failed_connection_test_keeps_the_clients_failure_backoff() {
     );
     assert!(status.successes.lock().expect("successes mutex").is_empty());
     assert!(status.failures.lock().expect("failures mutex").is_empty());
+}
+
+/// What a built-in client could not classify reaches the operator as a coded
+/// refusal, never as a `Repository` error the GraphQL boundary would mask.
+#[tokio::test]
+async fn an_unclassified_native_probe_failure_is_a_coded_refusal() {
+    let (app, user, _status, config) = app_with_blocked_download_client(false).await;
+
+    let error = app
+        .test_download_client_connection(
+            &user,
+            Some(&config.id),
+            &config.client_type,
+            &config.config_json,
+            None,
+        )
+        .await
+        .expect_err("connection test fails");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::integration::DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED),
+        "{error:?}"
+    );
+    match error {
+        crate::AppError::ValidationRefused { message, .. } => assert_eq!(
+            message,
+            "download client connection test failed: synthetic client did not answer"
+        ),
+        other => panic!("expected a coded refusal, got {other:?}"),
+    }
+}
+
+/// A failure the built-in client already named keeps its reason, so the web
+/// can say "the API key was rejected" rather than a generic failure.
+#[tokio::test]
+async fn a_native_probe_keeps_the_failure_the_client_named() {
+    let (app, user, _status, config) =
+        app_with_blocked_download_client_failing(Some(crate::AppError::native_client_failed(
+            crate::PluginFailureReason::AuthFailed,
+            "synthetic client rejected the API key",
+        )))
+        .await;
+
+    let error = app
+        .test_download_client_connection(
+            &user,
+            Some(&config.id),
+            &config.client_type,
+            &config.config_json,
+            None,
+        )
+        .await
+        .expect_err("connection test fails");
+
+    match error {
+        crate::AppError::PluginFailed { message, failure } => {
+            assert_eq!(failure.reason, crate::PluginFailureReason::AuthFailed);
+            assert_eq!(
+                message,
+                "download client connection test failed: synthetic client rejected the API key"
+            );
+        }
+        other => panic!("expected the named failure, got {other:?}"),
+    }
 }
 
 /// Saving an enabled client is the operator's correction; the next refresh

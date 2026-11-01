@@ -310,10 +310,14 @@ const en: LocaleDictionary = {
   "error.reason.ACQUISITION_NO_ROUTABLE_DOWNLOAD_CLIENT":
     "No enabled compatible download client is allowed by routing.",
   "error.reason.ACQUISITION_NZBGET_JOB_ID_INVALID": "Invalid nzbget job ID.",
+  "error.reason.ACQUISITION_NZBGET_KEEP_HISTORY_DISABLED":
+    "NZBGet's KeepHistory setting is 0, so finished downloads are removed before Scryer can import them. Set KeepHistory to at least 1 in NZBGet.",
   "error.reason.ACQUISITION_NZBGET_METHOD_UNAVAILABLE":
     "NZBGet does not support this request signature.",
   "error.reason.ACQUISITION_NZBGET_QUEUE_ID_INVALID":
     "Invalid nzbget queue id.",
+  "error.reason.ACQUISITION_NZBGET_VERSION_UNSUPPORTED":
+    "This NZBGet version is too old. Scryer needs NZBGet 12.0 or newer.",
   "error.reason.ACQUISITION_NZB_ARTIFACT_TOO_LARGE":
     "The resolved NZB artifact exceeds the size limit.",
   "error.reason.ACQUISITION_NZB_COMPRESSION_UNSUPPORTED":
@@ -1425,6 +1429,8 @@ const en: LocaleDictionary = {
     "Indexer connection test did not return a valid Newznab caps document.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_TEST_FAILED":
     "Indexer connection test failed.",
+  "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED":
+    "Download client connection test failed.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_UNREACHABLE":
     "The indexer could not be reached.",
   "error.reason.INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED":
@@ -7708,7 +7714,7 @@ const en: LocaleDictionary = {
   "plugins.failure.temporary":
     "The plugin ran into a temporary problem. Try again in a little while.",
   "plugins.failure.permanent":
-    "The plugin could not complete this request. Trying again will not help until something changes.",
+    "The request could not be completed. Trying again will not help until something changes.",
   "plugins.failure.hostFailure":
     "The plugin stopped unexpectedly. The Scryer log has the details.",
   "plugins.failure.timedOut": "The plugin took too long to respond.",
