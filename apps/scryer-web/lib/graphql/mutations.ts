@@ -2049,6 +2049,10 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt
@@ -2081,6 +2085,10 @@ export const continueInteractiveReleaseSearchMutation = `mutation ContinueIntera
       capsSource
       capsReason
       capsRetryAfterSeconds
+      unroutableResults {
+        reason
+        count
+      }
     }
     startedAt
     completedAt

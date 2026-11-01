@@ -556,6 +556,9 @@ struct MockPluginProvider {
     builtin_settings:
         StdMutex<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
     removed_provider_types: StdArc<StdMutex<Vec<String>>>,
+    /// Plugin ids and settings handed to the latest full runtime reload.
+    reloaded_runtime_plugins:
+        StdMutex<Vec<(String, std::collections::BTreeMap<String, String>)>>,
     reload_count: AtomicUsize,
     upsert_count: AtomicUsize,
     remove_count: AtomicUsize,
@@ -579,6 +582,7 @@ impl MockPluginProvider {
             builtin_descriptors: HashMap::new(),
             builtin_settings: StdMutex::new(Default::default()),
             removed_provider_types: StdArc::new(StdMutex::new(vec![])),
+            reloaded_runtime_plugins: StdMutex::new(vec![]),
             reload_count: AtomicUsize::new(0),
             upsert_count: AtomicUsize::new(0),
             remove_count: AtomicUsize::new(0),
@@ -755,9 +759,16 @@ impl IndexerPluginProvider for MockPluginProvider {
 
     fn reload_runtime_plugins(
         &self,
-        _runtime_plugins: &[RuntimePluginLoad],
+        runtime_plugins: &[RuntimePluginLoad],
         disabled_builtins: &[String],
     ) -> Result<(), String> {
+        *self
+            .reloaded_runtime_plugins
+            .lock()
+            .expect("reloaded runtime plugins lock") = runtime_plugins
+            .iter()
+            .map(|plugin| (plugin.descriptor.id.clone(), plugin.settings.clone()))
+            .collect();
         *self
             .disabled_builtin_types
             .lock()
@@ -4645,6 +4656,135 @@ async fn builtin_settings_failure_isolates_only_the_misconfigured_plugin() {
         provider.builtin_settings.lock().unwrap()["synthetic-invalid"]["required_value"],
         "recovered-fixture"
     );
+}
+
+/// Seeds two bundled and two downloaded indexer plugins; one of each declares
+/// a required setting with no default and no saved value.
+async fn seed_settings_parity_fixture() -> TestHarness {
+    let required_setting = |default_value: Option<&str>| {
+        serde_json::from_value::<Vec<scryer_plugin_sdk::ConfigFieldDef>>(serde_json::json!([
+            {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
+        ]))
+        .unwrap()
+    };
+    let mut provider = MockPluginProvider::new()
+        .with_builtin_provider("synthetic-bundled-invalid", "Invalid bundled fixture", None)
+        .with_builtin_provider("synthetic-bundled-valid", "Valid bundled fixture", None);
+    for (id, default_value) in [
+        ("synthetic-bundled-invalid", None),
+        ("synthetic-bundled-valid", Some("bundled-value")),
+    ] {
+        let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
+        descriptor.settings = serde_json::from_value(serde_json::json!([
+            {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
+        ]))
+        .unwrap();
+        provider.builtin_descriptors.insert(id.into(), descriptor);
+    }
+    let h = bootstrap_plugins_with_settings(
+        Some(provider),
+        MockSettingsStore::with_plugin_auto_update(false),
+    );
+    for id in ["synthetic-bundled-invalid", "synthetic-bundled-valid"] {
+        let mut installation = make_installation(id, "0.1.0", true, true);
+        installation.descriptor_json = Some(
+            serde_json::to_string(&h.plugin_provider.as_ref().unwrap().builtin_descriptors[id])
+                .unwrap(),
+        );
+        h.plugin_repo.installations.lock().await.push(installation);
+    }
+    for (id, default_value) in [
+        ("synthetic-external-invalid", None),
+        ("synthetic-external-valid", Some("external-value")),
+    ] {
+        let mut installation = official_catalog_installation(id, "0.1.0");
+        let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
+        descriptor.version = "0.1.0".into();
+        descriptor.settings = required_setting(default_value);
+        installation.descriptor_json = Some(serde_json::to_string(&descriptor).unwrap());
+        seed_auto_update_installation(&h, installation).await;
+    }
+    h
+}
+
+/// The decoded runtime plugins startup hands to the shared apply step.
+async fn startup_runtime_plugin_loads(h: &TestHarness) -> Vec<RuntimePluginLoad> {
+    let mut loads = Vec::new();
+    for (installation, payload) in h.plugin_repo.get_enabled_plugin_wasm_bytes().await.unwrap() {
+        if !crate::runtime_plugin_installation_is_loadable(&installation) {
+            continue;
+        }
+        let Some(payload) = payload else { continue };
+        loads.push(
+            crate::load_runtime_plugin_from_persisted_installation_payload(
+                &installation,
+                &payload,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    loads
+}
+
+type LoadOutcome = (
+    std::collections::HashMap<String, String>,
+    Vec<(String, std::collections::BTreeMap<String, String>)>,
+    Vec<String>,
+);
+
+async fn load_outcome(h: &TestHarness) -> LoadOutcome {
+    let provider = h.plugin_provider.as_ref().unwrap();
+    let mut runtime_plugins = provider.reloaded_runtime_plugins.lock().unwrap().clone();
+    runtime_plugins.sort();
+    let mut builtins = provider.builtin_provider_types();
+    builtins.sort();
+    (
+        h.app.runtime.plugins.compatibility_blockers.read().await.clone(),
+        runtime_plugins,
+        builtins,
+    )
+}
+
+#[tokio::test]
+async fn startup_and_runtime_reload_block_unconfigured_plugins_identically() {
+    let startup = seed_settings_parity_fixture().await;
+    let loads = startup_runtime_plugin_loads(&startup).await;
+    assert_eq!(loads.len(), 2, "both downloaded plugins decode at startup");
+    startup.app.apply_startup_runtime_plugins(loads).await.unwrap();
+    let startup_outcome = load_outcome(&startup).await;
+
+    let runtime = seed_settings_parity_fixture().await;
+    runtime.app.reload_plugin_providers().await.unwrap();
+    let runtime_outcome = load_outcome(&runtime).await;
+
+    assert_eq!(startup_outcome, runtime_outcome);
+    let (blockers, runtime_plugins, builtins) = startup_outcome;
+    assert_eq!(
+        blockers,
+        std::collections::HashMap::from([
+            (
+                "synthetic-bundled-invalid".to_string(),
+                "plugin settings require configuration".to_string(),
+            ),
+            (
+                "synthetic-external-invalid".to_string(),
+                "plugin settings require configuration".to_string(),
+            ),
+        ])
+    );
+    assert_eq!(
+        runtime_plugins,
+        vec![(
+            "synthetic-external-valid".to_string(),
+            std::collections::BTreeMap::from([(
+                "required_value".to_string(),
+                "external-value".to_string(),
+            )]),
+        )],
+        "only the configured downloaded plugin loads, with its resolved settings"
+    );
+    assert_eq!(builtins, ["synthetic-bundled-valid"]);
 }
 
 #[tokio::test]

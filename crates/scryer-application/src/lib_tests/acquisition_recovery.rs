@@ -6053,6 +6053,7 @@ async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist(
             )
             .await
             .unwrap()
+            .results
         };
     }
     let first = score!(&mut prepared, Some(&reads));
@@ -6085,6 +6086,101 @@ async fn title_walk_preparation_refreshes_changed_profile_routing_and_blocklist(
         reads.scoring_preparations.load(Ordering::SeqCst),
         3,
         "mutable exclusions refresh without rebuilding title policy"
+    );
+}
+
+#[tokio::test]
+async fn scoring_without_a_torrent_client_tallies_dropped_torrents_per_indexer() {
+    use crate::error_reasons::release_search as reasons;
+
+    // The fixture's only enabled download client is an NZBGet instance, so
+    // every torrent release is unroutable while NZB releases stay.
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let profile = app
+        .resolve_quality_profile(crate::app_usecase_discovery::QualityProfileLookup {
+            title_tags: &title.tags,
+            library_id: Some(&title.library_id),
+            imdb_id: None,
+            tvdb_id: None,
+            category_hint: Some(title.facet.as_str()),
+        })
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let nzb = FixedReleaseIndexerClient::new("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL")
+        .with_listing_facts()
+        .release();
+    let torrent = |indexer_id: &str, suffix: &str| IndexerSearchResult {
+        title: format!("Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-{suffix}"),
+        indexer_id: Some(indexer_id.to_string()),
+        source_kind: Some(DownloadSourceKind::TorrentFile),
+        ..nzb.clone()
+    };
+    let unclassified = IndexerSearchResult {
+        title: "Recent.Failed.Season.Pack.S07E23.720p.WEB-DL".into(),
+        source_kind: None,
+        ..nzb.clone()
+    };
+    let raw_results = vec![
+        nzb.clone(),
+        torrent("indexer-a", "ALPHA"),
+        torrent("indexer-b", "BRAVO"),
+        torrent("indexer-b", "CHARLIE"),
+        unclassified,
+    ];
+
+    let batch = within_deadline(
+        "unroutable scoring",
+        app.score_release_results_with_prepared(
+            raw_results,
+            &profile,
+            &title.id,
+            None,
+            Some(24),
+            &subject.title_evidence.parse_context,
+            Some(7),
+            Some(23),
+            None,
+            &mut None,
+            None,
+            true,
+            None,
+            Utc::now(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        batch.unroutable_by_indexer,
+        HashMap::from([
+            (
+                "indexer-a".to_string(),
+                std::collections::BTreeMap::from([(reasons::NO_TORRENT_CLIENT, 1)]),
+            ),
+            (
+                "indexer-b".to_string(),
+                std::collections::BTreeMap::from([(reasons::NO_TORRENT_CLIENT, 2)]),
+            ),
+        ]),
+        "only torrents are dropped, counted per indexer under the missing capability"
+    );
+    assert!(
+        batch
+            .results
+            .iter()
+            .all(|result| result.source_kind != Some(DownloadSourceKind::TorrentFile)),
+        "no torrent release reaches the scored list"
+    );
+    assert!(
+        batch
+            .results
+            .iter()
+            .any(|result| result.source_kind == Some(DownloadSourceKind::NzbUrl)),
+        "the NZB release is still scored"
     );
 }
 

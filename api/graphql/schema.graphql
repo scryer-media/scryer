@@ -9445,6 +9445,12 @@ type InteractiveReleaseSearchIndexerPayload {
 	UTC time a skip that lifts on its own ends, when known.
 	"""
 	skippedUntil: DateTime
+	"""
+	Releases this indexer returned that a title search removed because no
+	enabled download client accepts them, one entry per missing client
+	family. They are not counted in `resultCount`.
+	"""
+	unroutableResults: [InteractiveReleaseSearchUnroutableResultsPayload!]!
 }
 
 """
@@ -9560,6 +9566,21 @@ enum InteractiveReleaseSearchStateValue {
 	Search was canceled before completion.
 	"""
 	CANCELLED
+}
+
+"""
+Releases one indexer returned that no enabled download client can take.
+"""
+type InteractiveReleaseSearchUnroutableResultsPayload {
+	"""
+	Stable reason code naming the missing download client family, such as
+	`RELEASE_SEARCH_NO_TORRENT_CLIENT`.
+	"""
+	reason: String!
+	"""
+	How many of the indexer's releases were removed for this reason.
+	"""
+	count: Int!
 }
 
 """

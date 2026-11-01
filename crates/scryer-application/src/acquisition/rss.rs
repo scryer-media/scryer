@@ -3114,7 +3114,7 @@ impl AppUseCase {
                 )
                 .await
             {
-                Ok(scored) => scored,
+                Ok(scored) => scored.results,
                 Err(error) => {
                     // A scoring failure is not an empty result set: continuing
                     // with none would report the link as searched-and-nothing-
@@ -3199,6 +3199,7 @@ impl AppUseCase {
             now,
         )
         .await
+        .map(|batch| batch.results)
     }
 
     /// Try to grab the best candidate from scored RSS releases.

@@ -117,7 +117,8 @@ use scryer_application::{
     PluginHttpTrustConfigRuntime, PluginInstallationRepository, RUNTIME_PLUGIN_LOAD_CONCURRENCY,
     RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
     SystemInfoProvider, TitleImageKind, TitleImageRepository,
-    load_runtime_plugin_from_persisted_installation_payload, start_background_acquisition_poller,
+    load_runtime_plugin_from_persisted_installation_payload,
+    runtime_plugin_installation_is_loadable, start_background_acquisition_poller,
     start_background_auto_backup_scheduler, start_background_custom_job_scheduler,
     start_background_download_delete_poller, start_background_library_refresh_loop,
     start_background_manual_import_poller,
@@ -1907,6 +1908,13 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    // The providers above were built from decoded artifacts only. Finish the
+    // load the way every runtime reload does (saved settings validated and
+    // bound, settings blockers recorded) before anything can use a plugin.
+    app_use_case
+        .apply_startup_runtime_plugins(runtime_plugins)
+        .await
+        .map_err(|error| format!("failed to apply runtime plugin state at startup: {error}"))?;
     app_use_case.install_restore_coordinator(restore_coordinator);
     let restore_workers = app_use_case.restore_coordinator().clone();
     let worker_shutdown = restore_workers.shutdown_workers.clone();
@@ -3748,22 +3756,6 @@ pub(crate) fn normalize_env_option_with_legacy<'a>(
     None
 }
 
-fn runtime_normalized_constraint(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|constraint| !constraint.is_empty())
-        .map(str::to_string)
-}
-
-fn runtime_installation_is_host_blocked(installation: &scryer_domain::PluginInstallation) -> bool {
-    runtime_normalized_constraint(installation.scryer_constraint.as_deref()).is_some_and(
-        |constraint| {
-            scryer_plugins::host_version_matches_constraint(env!("CARGO_PKG_VERSION"), &constraint)
-                .map(|matches| !matches)
-                .unwrap_or(true)
-        },
-    )
-}
-
 #[derive(Debug)]
 struct RuntimePluginSdkContractFailure {
     plugin_id: String,
@@ -3846,11 +3838,13 @@ fn collect_runtime_plugin_load_candidates(
         ) {
             continue;
         }
+        // Collected only to report them together; the load decision below is
+        // the rule the runtime reload uses.
         if let Some(failure) = runtime_installation_sdk_contract_failure(&installation) {
             sdk_contract_failures.push(failure);
             continue;
         }
-        if runtime_installation_is_host_blocked(&installation) {
+        if !runtime_plugin_installation_is_loadable(&installation) {
             continue;
         }
         if let Some(payload) = payload {

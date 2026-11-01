@@ -128,6 +128,10 @@ pub struct InteractiveReleaseSearchIndexerView {
     pub skip_reason: Option<InteractiveIndexerSkipReason>,
     /// When a skip that lifts on its own ends, if known.
     pub skipped_until: Option<DateTime<Utc>>,
+    /// Releases this indexer returned that a title search removed because no
+    /// enabled download client accepts their source kind, by reason code.
+    /// They are not part of `result_count`.
+    pub unroutable_results: super::release_search::UnroutableReleaseCounts,
 }
 
 /// Why an interactive search did not ask an indexer.
@@ -661,6 +665,7 @@ impl AppUseCase {
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
                 skipped_until: skip.and_then(|(_, until)| until),
+                unroutable_results: Default::default(),
             });
         }
 
@@ -1163,6 +1168,10 @@ impl AppUseCase {
                                 let failure_reason = search_outcome
                                     .incomplete_indexer_reasons
                                     .remove(&indexer_id);
+                                let unroutable = search_outcome
+                                    .unroutable_by_indexer
+                                    .remove(&indexer_id)
+                                    .unwrap_or_default();
                                 app.attach_candidate_tokens(
                                     &actor,
                                     title_for_search,
@@ -1171,7 +1180,7 @@ impl AppUseCase {
                                     *preserve_subject_scope,
                                 )
                                 .await;
-                                Ok((search_outcome.results, failure_reason, None))
+                                Ok((search_outcome.results, failure_reason, None, unroutable))
                             }
                             Err(error) => Err(error),
                         }
@@ -1180,8 +1189,8 @@ impl AppUseCase {
                         query,
                         categories,
                         page_size,
-                    } => {
-                        app.search_query_subject_on_indexer(
+                    } => app
+                        .search_query_subject_on_indexer(
                             query,
                             categories,
                             *page_size,
@@ -1189,7 +1198,9 @@ impl AppUseCase {
                             child_token,
                         )
                         .await
-                    }
+                        .map(|(results, failure_reason, skip)| {
+                            (results, failure_reason, skip, Default::default())
+                        }),
                 };
                 let elapsed_ms = i64::try_from(began.elapsed().as_millis()).unwrap_or(i64::MAX);
                 (indexer_id, elapsed_ms, outcome)
@@ -1210,7 +1221,7 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok((_, _, Some((reason, until)))) => {
+                    Ok((_, _, Some((reason, until)), _)) => {
                         self.set_interactive_indexer_skipped(
                             &job_id,
                             &indexer_id,
@@ -1220,12 +1231,13 @@ impl AppUseCase {
                         )
                         .await;
                     }
-                    Ok((batch, failure_reason, None)) => {
+                    Ok((batch, failure_reason, None, unroutable)) => {
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
                             query_listing,
                             batch,
+                            unroutable,
                             &indexer_priority_by_name,
                             &preferred_source_kind,
                             elapsed_ms,
@@ -1386,6 +1398,7 @@ impl AppUseCase {
         indexer_id: &str,
         query_listing: bool,
         batch: Vec<IndexerSearchResult>,
+        unroutable: super::release_search::UnroutableReleaseCounts,
         indexer_priority_by_name: &HashMap<String, i64>,
         preferred_source_kind: &str,
         elapsed_ms: i64,
@@ -1435,6 +1448,7 @@ impl AppUseCase {
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = None;
             indexer.rate_limited = false;
+            indexer.unroutable_results = unroutable;
         }
         if query_listing {
             // A query search counts what each indexer contributed to the

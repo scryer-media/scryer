@@ -1,4 +1,8 @@
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
+import {
+  summarizeUnroutableResults,
+  type UnroutableResultsSummary,
+} from "./unroutable-results.ts";
 
 type InteractiveSearchPresentationInput = {
   hasSnapshot: boolean;
@@ -20,6 +24,8 @@ export type InteractiveSearchPresentation = {
   failedIndexerNames: string[];
   /** Indexers the run never queried (routing/scope/capability), with the reason when known. */
   skippedIndexers: Array<{ name: string; reason: string | null }>;
+  /** Releases set aside because no enabled download client accepts them, per reason. */
+  unroutableResults: UnroutableResultsSummary[];
 };
 
 export function deriveInteractiveSearchPresentation({
@@ -55,5 +61,6 @@ export function deriveInteractiveSearchPresentation({
         name: indexer.name,
         reason: indexer.failureReason,
       })),
+    unroutableResults: summarizeUnroutableResults(indexers),
   };
 }
