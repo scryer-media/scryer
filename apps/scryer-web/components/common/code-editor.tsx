@@ -360,6 +360,9 @@ const diagnosticTheme = EditorView.baseTheme({
     textDecorationThickness: "1.5px",
     textUnderlineOffset: "3px",
   },
+  ".cm-tooltip-lint .cm-diagnostic": {
+    fontFamily: "var(--font-code)",
+  },
 });
 
 const lightTheme = EditorView.theme({
@@ -637,7 +640,9 @@ export default function CodeEditor({
                 return [
                   {
                     from,
-                    to: Math.min(line.to, from + 1),
+                    to:
+                      view.state.wordAt(from)?.to ??
+                      Math.min(line.to, from + 1),
                     severity: "error" as const,
                     message: diagnostic.message ?? "",
                   },

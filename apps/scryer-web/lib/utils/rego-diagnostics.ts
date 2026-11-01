@@ -66,7 +66,9 @@ export function regoDiagnostics(
       const line = regoSourceLine(source, diagnostic.line);
       const column = diagnostic.column;
       if (line > 0 && line <= source.split("\n").length && column > 0)
-        return [{ line, column, message }];
+        return [
+          { line, column, message: formatRegoValidationError(message, source) },
+        ];
       return [];
     }
     if (!path) return [];

@@ -351,3 +351,22 @@ test("a diagnostics-shaped extension on another error family cannot paint rule m
     assert.deepEqual(regoDiagnostics("match :=", result), []);
   }
 });
+
+test("compiler diagnostics show the line the editor shows", () => {
+  const source = "import rego.v1\n\nasdf";
+  const [diagnostic] = regoDiagnostics(source, {
+    valid: false,
+    errors: [],
+    diagnostics: [
+      {
+        code: "RULE_COMPILATION_ERROR",
+        message:
+          "compilation error: \n--> user/r.rego:4:1\n  |\n4 | asdf\n  | ^\nerror: bad",
+        line: 4,
+        column: 1,
+      },
+    ],
+  });
+  assert.equal(diagnostic?.line, 3);
+  assert.match(diagnostic?.message ?? "", /r\.rego:3:1\n {2}\|\n3 \| asdf/);
+});
