@@ -833,7 +833,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             .store
             .file_resolutions(&operation.id, &title.title_id)
             .await?;
-        for resolution in &resolutions {
+        for resolution in resolutions.iter().filter(|row| !row.is_disposal()) {
             if !resolution.proof_is_current().await {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::location::VERIFICATION_MISMATCH,
@@ -946,14 +946,6 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
         let planned = self.title(&title.title_id)?;
         let mut outcome = TitleStepOutcome::clean();
-
-        if self.plan.conflict.is_some() {
-            // Explicit inferior-file disposal precedes retiring transfer sources,
-            // so a retry still has both sides of any hardlink content proof.
-            self.catalog
-                .clean_up_conflict(operation, self.plan, self.recycler)
-                .await?;
-        }
 
         // The persisted records are the gate, not the absence of an error: only
         // a file recorded `verified` may have its source touched (FR-044).
@@ -1155,6 +1147,14 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 }
                 outcome.warnings.push(warning);
             }
+        }
+
+        if self.plan.conflict.is_some() {
+            // Historical hardlink content proofs remain usable after retiring
+            // transfer sources. Inferior-file disposal rechecks the survivors.
+            self.catalog
+                .clean_up_conflict(operation, self.plan, self.recycler)
+                .await?;
         }
 
         // 2. Only *empty* source directories, deepest first (FR-031). A

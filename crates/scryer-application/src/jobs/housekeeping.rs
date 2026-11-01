@@ -1183,7 +1183,7 @@ impl AppUseCase {
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
-                original_path.display(),
+                crate::stored_paths::path_to_stored_string(&original_path),
                 target_state
             ));
             items.push(crate::RecycleRestorePreviewItem {
@@ -1225,11 +1225,13 @@ impl AppUseCase {
             fingerprint_parts.push(format!(
                 "{}:{}:{}",
                 entry_id,
-                original_path.display(),
+                crate::stored_paths::path_to_stored_string(&original_path),
                 target_state
             ));
-            if !destination_keys.insert(format!("recycle-destination:{}", original_path.display()))
-            {
+            if !destination_keys.insert(format!(
+                "recycle-destination:{}",
+                crate::stored_paths::path_to_stored_string(&original_path)
+            )) {
                 return Err(AppError::validation_refused(crate::error_reasons::jobs::SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION, "selected recycle entries cannot share the same restore destination"
                         .to_string()));
             }
@@ -1620,14 +1622,13 @@ impl AppUseCase {
         original_path: &Path,
         restored_to: &Path,
     ) {
-        let restored_path = restored_to.to_string_lossy().to_string();
+        let restored_path = crate::stored_paths::path_to_stored_string(restored_to);
         let restored_library_file = crate::LibraryFile {
             path: restored_path.clone(),
             display_name: original_path
                 .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_string(),
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             nfo_path: None,
             size_bytes: tokio::fs::metadata(restored_to)
                 .await
@@ -1846,7 +1847,7 @@ impl AppUseCase {
             ));
         }
 
-        let original_path_text = original_path.to_string_lossy().to_string();
+        let original_path_text = crate::stored_paths::path_to_stored_string(original_path);
         let incumbent = self
             .services
             .library

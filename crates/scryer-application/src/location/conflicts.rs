@@ -169,6 +169,26 @@ pub struct ConflictExecution {
     /// Explicit confirmation persists with the allowlist, never inferred from bin failure.
     pub permanent_delete_confirmed: bool,
     pub permanent_delete_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hardlink_proofs: Vec<ConflictHardlinkProof>,
+}
+
+/// Preview content proof for an inode whose selected pathnames may be disposed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConflictHardlinkProof {
+    pub version: String,
+    pub full_blake3: String,
+    pub link_count: u64,
+}
+
+/// Durable intent and the resulting exact versions of this operation's aliases.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DisposalProof {
+    pub sequence: usize,
+    pub before_link_count: u64,
+    pub after_link_count: Option<u64>,
+    pub after_versions: BTreeMap<String, String>,
+    pub recycle: Option<crate::recycle_bin::PreparedRecycleFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,12 +289,6 @@ fn folder_name_rank(title: &Title, folder: &str) -> i8 {
 
 async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Vec<String>)> {
     let base = stored_path_to_path_buf(folder);
-    if base.to_str().is_none() {
-        return Err(refused(
-            refusal::FOLDER_UNSAFE,
-            "The folder path cannot be safely represented by the collision planner; its files were preserved",
-        ));
-    }
     super::title_folder_recovery::inspect_path(&base, false).await?;
     let mut pending = vec![base.clone()];
     let mut files = Vec::new();
@@ -296,12 +310,6 @@ async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Ve
                 ));
             }
             let path = entry.path();
-            if path.to_str().is_none() {
-                return Err(refused(
-                    refusal::FOLDER_UNSAFE,
-                    "This folder contains a filename that cannot be safely represented by the collision planner; its files were preserved",
-                ));
-            }
             let metadata = tokio::fs::symlink_metadata(&path)
                 .await
                 .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -422,10 +430,19 @@ impl AppUseCase {
         let mut files = Vec::new();
         let mut directories = Vec::new();
         for folder in &folders {
+            if !crate::stored_paths::stored_path_is_native(folder) {
+                return Err(refused(
+                    refusal::FOLDER_UNSAFE,
+                    "The folder path uses another platform's native encoding; its files were preserved",
+                ));
+            }
             let root = library
                 .roots
                 .iter()
-                .find(|root| crate::title_folder_rules::path_is_strictly_within(folder, &root.path))
+                .find(|root| {
+                    crate::stored_paths::stored_path_is_native(&root.path)
+                        && crate::title_folder_rules::path_is_strictly_within(folder, &root.path)
+                })
                 .ok_or_else(|| {
                     refused(
                         refusal::FOLDER_UNSAFE,
@@ -634,54 +651,68 @@ impl AppUseCase {
                 PathCaseRule::platform_default(),
                 CollisionNaming::from_source_library("duplicate"),
             )
+            .with_stored_path_names()
             .with_destination(destination)
             .with_incoming(incoming),
         );
         let execution_files = moving
             .iter()
-            .map(|file| RootMoveFileExecution {
-                media_file_id: file.media_file_id.clone().or_else(|| {
-                    file.media.then(|| {
-                        format!(
-                            "conflict-media:{}",
-                            blake3::hash(file.path.as_bytes()).to_hex()
-                        )
-                    })
-                }),
-                source_path: file.path.clone(),
-                destination_path: path_to_stored_string(
-                    stored_path_to_path_buf(&survivor).join(
+            .map(|file| {
+                Ok(RootMoveFileExecution {
+                    media_file_id: file.media_file_id.clone().or_else(|| {
+                        file.media.then(|| {
+                            format!(
+                                "conflict-media:{}",
+                                blake3::hash(file.path.as_bytes()).to_hex()
+                            )
+                        })
+                    }),
+                    source_path: file.path.clone(),
+                    destination_path: join_relative_name(
+                        &survivor,
                         &collision
                             .decision(&file.path)
                             .expect("planned incoming file")
                             .final_name,
-                    ),
-                ),
-                size_bytes: file.size_bytes,
-                source_content: tracked
-                    .iter()
-                    .find(|media| media.file_path == file.path)
-                    .and_then(super::model::KnownSourceContent::from_media_file),
+                    )?,
+                    size_bytes: file.size_bytes,
+                    source_content: tracked
+                        .iter()
+                        .find(|media| media.file_path == file.path)
+                        .and_then(super::model::KnownSourceContent::from_media_file),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<AppResult<Vec<_>>>()?;
         let mut permanent_delete_paths = Vec::new();
+        let mut hardlink_proofs: Vec<ConflictHardlinkProof> = Vec::new();
         for path in &dispose {
             let file = files
                 .iter()
                 .find(|file| &file.path == path)
                 .expect("allowlisted file");
-            if super::hardlinks::link_count(&stored_path_to_path_buf(path))?.is_hardlinked() {
-                return Err(refused(
-                    refusal::FOLDER_UNSAFE,
-                    "A file selected for disposal has other hardlinks; preserve all files or resolve those links before disposing of duplicates",
-                ));
-            }
             if !self
                 .recycle_bin_config_for_media_root(Some(&file.root_path))
                 .await
                 .enabled
             {
                 permanent_delete_paths.push(path.clone());
+            }
+        }
+        if !dispose.is_empty() {
+            for file in &files {
+                if let Some(link_count) =
+                    super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
+                    && link_count > 1
+                    && !hardlink_proofs
+                        .iter()
+                        .any(|proof| same_inode_version(&proof.version, &file.version))
+                {
+                    hardlink_proofs.push(ConflictHardlinkProof {
+                        version: file.version.clone(),
+                        full_blake3: conflict_hash(&file.path, &file.version).await?,
+                        link_count,
+                    });
+                }
             }
         }
         let conflict = ConflictExecution {
@@ -695,6 +726,7 @@ impl AppUseCase {
             primary_source: primary.clone(),
             permanent_delete_confirmed: false,
             permanent_delete_paths,
+            hardlink_proofs,
         };
         let operation_type = match request.policy {
             ConflictPolicy::AdoptAll => LocationOperationType::FolderConsolidation,
@@ -734,8 +766,9 @@ impl AppUseCase {
         let renamed_destinations = execution_files
             .iter()
             .filter(|file| {
-                stored_path_to_path_buf(&file.source_path).file_name()
-                    != stored_path_to_path_buf(&file.destination_path).file_name()
+                collision
+                    .decision(&file.source_path)
+                    .is_some_and(|decision| decision.renamed())
             })
             .map(|file| file.destination_path.clone())
             .collect::<Vec<_>>();
@@ -840,11 +873,61 @@ impl AppUseCase {
 }
 
 fn relative_name(folder: &str, path: &str) -> String {
-    stored_path_to_path_buf(path)
-        .strip_prefix(stored_path_to_path_buf(folder))
-        .expect("validated descendant")
-        .to_string_lossy()
-        .into_owned()
+    path_to_stored_string(
+        stored_path_to_path_buf(path)
+            .strip_prefix(stored_path_to_path_buf(folder))
+            .expect("validated descendant"),
+    )
+}
+
+fn join_relative_name(folder: &str, name: &str) -> AppResult<String> {
+    let relative = stored_path_to_path_buf(name);
+    if !crate::stored_paths::stored_path_is_native(name)
+        || relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(refused(
+            refusal::FOLDER_UNSAFE,
+            "A planned filename escapes its conflict folder",
+        ));
+    }
+    Ok(path_to_stored_string(
+        stored_path_to_path_buf(folder).join(relative),
+    ))
+}
+
+#[cfg(test)]
+mod native_name_tests {
+    use super::*;
+
+    #[test]
+    fn encoded_relative_names_cannot_escape_the_survivor() {
+        let folder = std::path::Path::new("/library/survivor");
+        for unsafe_name in [
+            "../outside.mkv",
+            "/outside.mkv",
+            "nested/../../outside.mkv",
+            "",
+        ] {
+            let platform = if cfg!(windows) { "w" } else { "u" };
+            let encoded = format!("scryer-path-v1:{platform}:{unsafe_name}");
+            assert_eq!(
+                join_relative_name(&path_to_stored_string(folder), &encoded)
+                    .unwrap_err()
+                    .validation_reason(),
+                Some(refusal::FOLDER_UNSAFE)
+            );
+        }
+        let literal = "scryer-path-v1:u:movie.mkv";
+        let joined = join_relative_name(
+            &path_to_stored_string(folder),
+            &path_to_stored_string(literal),
+        )
+        .unwrap();
+        assert_eq!(stored_path_to_path_buf(&joined), folder.join(literal));
+    }
 }
 
 fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
@@ -869,13 +952,214 @@ fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
     }
 }
 
+fn same_inode_version(left: &str, right: &str) -> bool {
+    cfg!(unix) && left.split(':').take(2).eq(right.split(':').take(2))
+}
+
+fn same_content_version(left: &str, right: &str) -> bool {
+    cfg!(unix) && left.split(':').take(5).eq(right.split(':').take(5))
+}
+
+async fn conflict_hash(path: &str, version: &str) -> AppResult<String> {
+    let native = stored_path_to_path_buf(path);
+    if super::resolution::file_version(&native).await? != version {
+        return Err(refused(
+            refusal::FILE_CHANGED,
+            "A file changed before its content could be verified",
+        ));
+    }
+    let hashes = super::verify::hash_existing_file_with_progress(
+        &native,
+        super::verify::CopyProgress::none(),
+    )
+    .await
+    .map_err(|error| AppError::Repository(error.to_string()))?;
+    if super::resolution::file_version(&native).await? != version {
+        return Err(refused(
+            refusal::FILE_CHANGED,
+            "A file changed while its content was verified",
+        ));
+    }
+    Ok(hashes.full_blake3)
+}
+
+fn disposal_proof(row: &super::resolution::FileResolution) -> Option<&DisposalProof> {
+    match &row.disposition {
+        super::resolution::ResolutionDisposition::Disposal(proof) => Some(proof),
+        _ => None,
+    }
+}
+
+/// Only the newest recorded pathname effect for this inode can explain ctime.
+async fn disposal_version_current(
+    path: &str,
+    expected: &str,
+    resolutions: &[super::resolution::FileResolution],
+) -> AppResult<bool> {
+    let Some((row, proof)) = resolutions
+        .iter()
+        .filter_map(|row| {
+            let proof = disposal_proof(row)?;
+            row.source_version
+                .as_deref()
+                .filter(|version| same_inode_version(version, expected))?;
+            Some((row, proof))
+        })
+        .max_by_key(|(_, proof)| proof.sequence)
+    else {
+        return Ok(false);
+    };
+    let native = stored_path_to_path_buf(path);
+    let actual = super::resolution::file_version(&native).await?;
+    if !same_content_version(&actual, expected) {
+        return Ok(false);
+    }
+    let source_absent = tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
+        .await
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    if !source_absent {
+        return Ok(!row.completed
+            && proof.after_versions.get(path) == Some(&actual)
+            && super::hardlinks::link_count(&native)?.count() == Some(proof.before_link_count));
+    }
+    if row.completed {
+        if let Some(recycle) = &proof.recycle {
+            let payload = stored_path_to_path_buf(&recycle.recycled_path);
+            if super::resolution::file_version(&payload).await.ok() != row.destination_version {
+                return Ok(false);
+            }
+        }
+        return Ok(proof.after_versions.get(path) == Some(&actual)
+            && super::hardlinks::link_count(&native)?.count() == proof.after_link_count);
+    }
+    let mut expected_count = proof.before_link_count.saturating_sub(1);
+    if let Some(recycle) = &proof.recycle {
+        let payload = stored_path_to_path_buf(&recycle.recycled_path);
+        super::title_folder_recovery::inspect_path(&payload, false).await?;
+        let version = super::resolution::file_version(&payload).await?;
+        if conflict_hash(&recycle.recycled_path, &version)
+            .await?
+            .as_str()
+            != row.identity_hash.as_deref().unwrap_or("")
+        {
+            return Ok(false);
+        }
+        if same_inode_version(&version, expected) {
+            expected_count = proof.before_link_count;
+        }
+    }
+    Ok(
+        super::hardlinks::link_count(&native)?.count() == Some(expected_count)
+            && conflict_hash(path, &actual).await?.as_str()
+                == row.identity_hash.as_deref().unwrap_or(""),
+    )
+}
+
+async fn conflict_resolution_current(
+    row: &super::resolution::FileResolution,
+    resolutions: &[super::resolution::FileResolution],
+) -> AppResult<bool> {
+    if row.proof_is_current().await {
+        return Ok(true);
+    }
+    let Some(expected) = &row.destination_version else {
+        return Ok(false);
+    };
+    if row.is_disposal()
+        || !row.completed
+        || !disposal_version_current(&row.destination_path, expected, resolutions).await?
+    {
+        return Ok(false);
+    }
+    if let Some(source_expected) = &row.source_version {
+        match tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path)).await {
+            Ok(_) => {
+                let actual =
+                    super::resolution::file_version(&stored_path_to_path_buf(&row.source_path))
+                        .await?;
+                if &actual != source_expected
+                    && !disposal_version_current(&row.source_path, source_expected, resolutions)
+                        .await?
+                {
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(AppError::Repository(error.to_string())),
+        }
+    }
+    Ok(true)
+}
+
 async fn preview_version_current(
     file: &ConflictFile,
     resolutions: &[super::resolution::FileResolution],
+    conflict: &ConflictExecution,
 ) -> AppResult<bool> {
     let actual = super::resolution::file_version(&stored_path_to_path_buf(&file.path)).await?;
     if actual == file.version {
         return Ok(true);
+    }
+    if disposal_version_current(&file.path, &file.version, resolutions).await? {
+        return Ok(true);
+    }
+    if let Some(proof) = conflict
+        .hardlink_proofs
+        .iter()
+        .find(|proof| same_inode_version(&proof.version, &file.version))
+    {
+        if resolutions.iter().any(|row| {
+            row.is_disposal()
+                && row
+                    .source_version
+                    .as_deref()
+                    .is_some_and(|version| same_inode_version(version, &file.version))
+        }) {
+            return Ok(false);
+        }
+        let mut removed = BTreeSet::new();
+        let mut added = BTreeSet::new();
+        for row in resolutions.iter().filter(|row| {
+            row.completed
+                && row.disposition == super::resolution::ResolutionDisposition::Hardlink
+                && row
+                    .source_version
+                    .as_deref()
+                    .is_some_and(|version| same_inode_version(version, &file.version))
+        }) {
+            if !row.proof_is_current().await
+                || !same_inode_version(
+                    &super::resolution::file_version(&stored_path_to_path_buf(
+                        &row.destination_path,
+                    ))
+                    .await?,
+                    &file.version,
+                )
+            {
+                return Ok(false);
+            }
+            if !conflict
+                .files
+                .iter()
+                .any(|file| file.path == row.destination_path)
+            {
+                added.insert(&row.destination_path);
+            }
+            if tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
+                .await
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
+                removed.insert(&row.source_path);
+            }
+        }
+        return Ok((!added.is_empty() || !removed.is_empty())
+            && same_content_version(&actual, &file.version)
+            && super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
+                == proof
+                    .link_count
+                    .checked_add(added.len() as u64)
+                    .and_then(|count| count.checked_sub(removed.len() as u64))
+            && conflict_hash(&file.path, &actual).await? == proof.full_blake3);
     }
     #[cfg(unix)]
     if actual
@@ -1525,7 +1809,7 @@ impl AppUseCase {
             .chain(
                 resolutions
                     .iter()
-                    .filter(|row| row.completed)
+                    .filter(|row| row.completed && !row.is_disposal())
                     .map(|row| row.destination_path.as_str()),
             )
             .collect();
@@ -1539,7 +1823,7 @@ impl AppUseCase {
         }
         for file in &conflict.files {
             if let Some(resolution) = resolutions.iter().find(|row| row.source_path == file.path)
-                && resolution.proof_is_current().await
+                && conflict_resolution_current(resolution, &resolutions).await?
             {
                 continue;
             }
@@ -1547,7 +1831,7 @@ impl AppUseCase {
             match tokio::fs::symlink_metadata(&path).await {
                 Ok(_) => {
                     super::title_folder_recovery::inspect_path(&path, false).await?;
-                    if !preview_version_current(file, &resolutions).await? {
+                    if !preview_version_current(file, &resolutions, conflict).await? {
                         return Err(refused(
                             refusal::FILE_CHANGED,
                             "A previewed file changed; all unprocessed files were preserved",
@@ -1580,8 +1864,8 @@ impl AppUseCase {
             .location_operations
             .file_resolutions(&operation.id, &planned.title_id)
             .await?;
-        for row in &resolutions {
-            if !row.proof_is_current().await {
+        for row in resolutions.iter().filter(|row| !row.is_disposal()) {
+            if !conflict_resolution_current(row, &resolutions).await? {
                 return Err(refused(
                     refusal::FILE_CHANGED,
                     "A destination changed before catalog reconciliation",
@@ -1805,6 +2089,229 @@ impl AppUseCase {
         Ok(())
     }
 
+    async fn record_conflict_disposal(
+        &self,
+        operation: &LocationOperation,
+        title_id: &str,
+        conflict: &ConflictExecution,
+        file: &ConflictFile,
+        recycle: Option<crate::recycle_bin::PreparedRecycleFile>,
+        resolutions: &mut Vec<super::resolution::FileResolution>,
+    ) -> AppResult<usize> {
+        if let Some(index) = resolutions
+            .iter()
+            .position(|row| row.is_disposal() && row.source_path == file.path)
+        {
+            if resolutions[index].completed {
+                return Err(refused(
+                    refusal::FILE_CHANGED,
+                    "A disposed pathname became occupied again; it was preserved",
+                ));
+            }
+            return Ok(index);
+        }
+        let native = stored_path_to_path_buf(&file.path);
+        let version = super::resolution::file_version(&native).await?;
+        if !preview_version_current(file, resolutions, conflict).await?
+            || super::resolution::file_version(&native).await? != version
+        {
+            return Err(refused(
+                refusal::FILE_CHANGED,
+                "A hardlink changed before its disposal intent was recorded; it was preserved",
+            ));
+        }
+        let proof = conflict
+            .hardlink_proofs
+            .iter()
+            .find(|proof| same_inode_version(&proof.version, &version))
+            .ok_or_else(|| {
+                refused(
+                    refusal::FILE_CHANGED,
+                    "A hardlink disposal has no confirmed content proof",
+                )
+            })?;
+        let before_link_count =
+            super::hardlinks::link_count(&native)?
+                .count()
+                .ok_or_else(|| {
+                    refused(
+                        refusal::FILE_CHANGED,
+                        "The hardlink count cannot be verified",
+                    )
+                })?;
+        let mut before_versions = BTreeMap::new();
+        let candidates: BTreeSet<_> = conflict
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(
+                resolutions
+                    .iter()
+                    .filter(|row| !row.is_disposal())
+                    .map(|row| row.destination_path.clone()),
+            )
+            .collect();
+        for path in candidates {
+            let native = stored_path_to_path_buf(&path);
+            if tokio::fs::symlink_metadata(&native)
+                .await
+                .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+            {
+                let current = super::resolution::file_version(&native).await?;
+                if same_inode_version(&version, &current) {
+                    before_versions.insert(path, current);
+                }
+            }
+        }
+        let row = super::resolution::FileResolution {
+            operation_id: operation.id.clone(),
+            title_id: title_id.to_owned(),
+            source_path: file.path.clone(),
+            original_destination: file.path.clone(),
+            destination_path: recycle
+                .as_ref()
+                .map(|entry| entry.recycled_path.clone())
+                .unwrap_or_else(|| file.path.clone()),
+            disposition: super::resolution::ResolutionDisposition::Disposal(DisposalProof {
+                sequence: resolutions
+                    .iter()
+                    .filter_map(disposal_proof)
+                    .map(|proof| proof.sequence)
+                    .max()
+                    .unwrap_or(0)
+                    + 1,
+                before_link_count,
+                after_link_count: None,
+                after_versions: before_versions,
+                recycle,
+            }),
+            completed: false,
+            source_version: Some(version),
+            destination_version: None,
+            identity_hash: Some(proof.full_blake3.clone()),
+            warning: None,
+            reason_code: None,
+        };
+        self.services
+            .library
+            .location_operations
+            .save_file_resolution(&row)
+            .await?;
+        resolutions.push(row);
+        Ok(resolutions.len() - 1)
+    }
+
+    async fn finish_conflict_disposal(
+        &self,
+        conflict: &ConflictExecution,
+        resolutions: &mut [super::resolution::FileResolution],
+        index: usize,
+    ) -> AppResult<()> {
+        let mut row = resolutions[index].clone();
+        let mut proof = disposal_proof(&row).expect("disposal record").clone();
+        if row.completed {
+            return Ok(());
+        }
+        let source_version = row.source_version.as_deref().expect("disposal version");
+        if !tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
+            .await
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Err(refused(
+                refusal::FILE_CHANGED,
+                "A disposal pathname is still occupied; its files were preserved",
+            ));
+        }
+        let mut expected_count = proof.before_link_count.saturating_sub(1);
+        if let Some(recycle) = &proof.recycle {
+            let payload = stored_path_to_path_buf(&recycle.recycled_path);
+            super::title_folder_recovery::inspect_path(&payload, false).await?;
+            let version = super::resolution::file_version(&payload).await?;
+            if conflict_hash(&recycle.recycled_path, &version)
+                .await?
+                .as_str()
+                != row.identity_hash.as_deref().unwrap_or("")
+            {
+                return Err(refused(
+                    refusal::FILE_CHANGED,
+                    "The reserved recycled copy changed; remaining files were preserved",
+                ));
+            }
+            if same_inode_version(&version, source_version) {
+                expected_count = proof.before_link_count;
+            }
+            row.destination_version = Some(version);
+        }
+        proof.after_versions.clear();
+        let candidates: BTreeSet<_> = conflict
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(
+                resolutions
+                    .iter()
+                    .filter(|row| !row.is_disposal())
+                    .map(|row| row.destination_path.clone()),
+            )
+            .chain(
+                proof
+                    .recycle
+                    .iter()
+                    .map(|recycle| recycle.recycled_path.clone()),
+            )
+            .collect();
+        let mut verified_content = false;
+        for path in candidates {
+            let native = stored_path_to_path_buf(&path);
+            match tokio::fs::symlink_metadata(&native).await {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AppError::Repository(error.to_string())),
+                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+                    continue;
+                }
+                Ok(_) => {}
+            }
+            let version = super::resolution::file_version(&native).await?;
+            if !same_inode_version(&version, source_version) {
+                continue;
+            }
+            if !same_content_version(&version, source_version)
+                || super::hardlinks::link_count(&native)?.count() != Some(expected_count)
+                || (!verified_content
+                    && conflict_hash(&path, &version).await?.as_str()
+                        != row.identity_hash.as_deref().unwrap_or(""))
+            {
+                return Err(refused(
+                    refusal::FILE_CHANGED,
+                    "A hardlinked file changed during disposal; remaining files were preserved",
+                ));
+            }
+            verified_content = true;
+            proof.after_versions.insert(path, version);
+        }
+        if let Some(recycle) = &proof.recycle {
+            let file = conflict
+                .files
+                .iter()
+                .find(|file| file.path == row.source_path)
+                .expect("confirmed disposal");
+            let config = self
+                .recycle_bin_config_for_media_root(Some(&file.root_path))
+                .await;
+            crate::recycle_bin::finish_conflict_recycle(&config, recycle).await?;
+        }
+        proof.after_link_count = Some(expected_count);
+        row.disposition = super::resolution::ResolutionDisposition::Disposal(proof);
+        row.completed = true;
+        self.services
+            .library
+            .location_operations
+            .save_file_resolution(&row)
+            .await?;
+        resolutions[index] = row;
+        Ok(())
+    }
+
     pub(super) async fn clean_up_folder_conflict(
         &self,
         operation: &LocationOperation,
@@ -1815,7 +2322,7 @@ impl AppUseCase {
         let planned = &plan.titles[0];
         // Validate the survivor afresh even on cleanup-only retries. No disposal can
         // proceed if the best copy or any adopted file ceased to match its receipt.
-        let resolutions = self
+        let mut resolutions = self
             .services
             .library
             .location_operations
@@ -1826,7 +2333,7 @@ impl AppUseCase {
         // always wins over the disposal allowlist.
         let retained: BTreeSet<String> = resolutions
             .iter()
-            .filter(|row| row.completed)
+            .filter(|row| row.completed && !row.is_disposal())
             .map(|row| row.destination_path.clone())
             .chain(
                 conflict
@@ -1856,9 +2363,55 @@ impl AppUseCase {
                 break;
             }
         }
-        for row in &resolutions {
-            if !row.proof_is_current().await
-                || (disposal_remaining && !row.proof_supports_disposal().await?)
+        if disposal_remaining {
+            for proof in &conflict.hardlink_proofs {
+                let candidates: BTreeSet<_> = conflict
+                    .files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .chain(
+                        resolutions
+                            .iter()
+                            .filter(|row| !row.is_disposal())
+                            .map(|row| row.destination_path.clone()),
+                    )
+                    .collect();
+                for path in candidates {
+                    let native = stored_path_to_path_buf(&path);
+                    if !tokio::fs::symlink_metadata(&native)
+                        .await
+                        .is_ok_and(|metadata| {
+                            metadata.is_file() && !metadata.file_type().is_symlink()
+                        })
+                    {
+                        continue;
+                    }
+                    let version = super::resolution::file_version(&native).await?;
+                    if same_inode_version(&version, &proof.version) {
+                        if !same_content_version(&version, &proof.version)
+                            || conflict_hash(&path, &version).await? != proof.full_blake3
+                        {
+                            return Err(refused(
+                                refusal::FILE_CHANGED,
+                                "Hardlinked content changed after confirmation; remaining files were preserved",
+                            ));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        for row in resolutions.iter().filter(|row| !row.is_disposal()) {
+            let linked_proof = row.destination_version.as_deref().and_then(|version| {
+                conflict
+                    .hardlink_proofs
+                    .iter()
+                    .find(|proof| same_inode_version(&proof.version, version))
+            });
+            if !conflict_resolution_current(row, &resolutions).await?
+                || (disposal_remaining
+                    && linked_proof.is_none()
+                    && !row.proof_supports_disposal().await?)
             {
                 return Err(refused(
                     refusal::FILE_CHANGED,
@@ -1878,7 +2431,9 @@ impl AppUseCase {
                 .unwrap_or(&file.path);
             let path = stored_path_to_path_buf(destination);
             super::title_folder_recovery::inspect_path(&path, false).await?;
-            if destination == file.path && !preview_version_current(file, &resolutions).await? {
+            if destination == file.path
+                && !preview_version_current(file, &resolutions, conflict).await?
+            {
                 return Err(refused(
                     refusal::FILE_CHANGED,
                     "Surviving media changed; inferior files were preserved",
@@ -1900,13 +2455,21 @@ impl AppUseCase {
                     )
                 })?;
             let source = stored_path_to_path_buf(path);
+            let linked = conflict
+                .hardlink_proofs
+                .iter()
+                .any(|proof| same_inode_version(&proof.version, &file.version));
+            let mut disposal_index = resolutions
+                .iter()
+                .position(|row| row.is_disposal() && row.source_path == *path);
             match tokio::fs::symlink_metadata(&source).await {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(AppError::Repository(error.to_string())),
                 Ok(metadata) => {
                     super::title_folder_recovery::inspect_path(&source, false).await?;
                     if !metadata.is_file()
-                        || super::resolution::file_version(&source).await? != file.version
+                        || disposal_index.is_some_and(|index| resolutions[index].completed)
+                        || !preview_version_current(file, &resolutions, conflict).await?
                     {
                         return Err(refused(
                             refusal::FILE_CHANGED,
@@ -1951,17 +2514,125 @@ impl AppUseCase {
                             replacement_path: None,
                             media_row,
                         };
-                        crate::recycle_bin::recycle_file(&config, &source, manifest)
+                        if linked {
+                            let prepared = match disposal_index
+                                .and_then(|index| disposal_proof(&resolutions[index]))
+                                .and_then(|proof| proof.recycle.clone())
+                            {
+                                Some(prepared) => prepared,
+                                None if disposal_index.is_some() => {
+                                    return Err(refused(
+                                        refusal::RECYCLE_UNAVAILABLE,
+                                        "The confirmed disposal mode changed; the file was preserved",
+                                    ));
+                                }
+                                None => {
+                                    crate::recycle_bin::prepare_conflict_recycle(
+                                        &config, &source, manifest,
+                                    )
+                                    .await?
+                                }
+                            };
+                            let prepared = crate::recycle_bin::renew_conflict_recycle(
+                                &config, &source, &prepared,
+                            )
+                            .await?;
+                            if let Some(index) = disposal_index {
+                                let row = &mut resolutions[index];
+                                let super::resolution::ResolutionDisposition::Disposal(proof) =
+                                    &mut row.disposition
+                                else {
+                                    unreachable!()
+                                };
+                                if proof.recycle.as_ref() != Some(&prepared) {
+                                    proof.recycle = Some(prepared.clone());
+                                    row.destination_path = prepared.recycled_path.clone();
+                                    self.services
+                                        .library
+                                        .location_operations
+                                        .save_file_resolution(row)
+                                        .await?;
+                                }
+                            }
+                            let index = self
+                                .record_conflict_disposal(
+                                    operation,
+                                    &planned.title_id,
+                                    conflict,
+                                    file,
+                                    Some(prepared.clone()),
+                                    &mut resolutions,
+                                )
+                                .await?;
+                            disposal_index = Some(index);
+                            crate::recycle_bin::execute_conflict_recycle(
+                                &config,
+                                &source,
+                                &prepared,
+                                resolutions[index]
+                                    .source_version
+                                    .as_deref()
+                                    .expect("disposal version"),
+                                resolutions[index]
+                                    .identity_hash
+                                    .as_deref()
+                                    .expect("disposal hash"),
+                            )
                             .await
                             .map_err(|error| {
                                 refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
                             })?;
+                        } else {
+                            crate::recycle_bin::recycle_file(&config, &source, manifest)
+                                .await
+                                .map_err(|error| {
+                                    refused(refusal::RECYCLE_UNAVAILABLE, error.to_string())
+                                })?;
+                        }
                     } else {
+                        if linked {
+                            if disposal_index
+                                .and_then(|index| disposal_proof(&resolutions[index]))
+                                .is_some_and(|proof| proof.recycle.is_some())
+                            {
+                                return Err(refused(
+                                    refusal::RECYCLE_UNAVAILABLE,
+                                    "The confirmed disposal mode changed; the file was preserved",
+                                ));
+                            }
+                            disposal_index = Some(
+                                self.record_conflict_disposal(
+                                    operation,
+                                    &planned.title_id,
+                                    conflict,
+                                    file,
+                                    None,
+                                    &mut resolutions,
+                                )
+                                .await?,
+                            );
+                            let index = disposal_index.expect("recorded disposal");
+                            if super::resolution::file_version(&source).await?.as_str()
+                                != resolutions[index]
+                                    .source_version
+                                    .as_deref()
+                                    .expect("disposal version")
+                            {
+                                return Err(refused(
+                                    refusal::FILE_CHANGED,
+                                    "A disposal target changed after its intent was recorded; it was preserved",
+                                ));
+                            }
+                        }
                         tokio::fs::remove_file(&source)
                             .await
                             .map_err(|error| AppError::Repository(error.to_string()))?;
                     }
                 }
+            }
+            if let Some(index) = disposal_index {
+                self.finish_conflict_disposal(conflict, &mut resolutions, index)
+                    .await?;
             }
             if let Some(id) = &file.media_file_id
                 && self
@@ -2007,5 +2678,98 @@ impl AppUseCase {
         }
         let _ = recycler;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod hardlink_disposal_tests {
+    use super::super::resolution::{FileResolution, ResolutionDisposition};
+    use super::*;
+
+    #[tokio::test]
+    async fn disposal_intent_accepts_only_its_own_unlink_and_historical_content() {
+        for mutate_content in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("selected.mkv");
+            let retained = temp.path().join("retained.mkv");
+            let external = temp.path().join("external.mkv");
+            std::fs::write(&source, b"historical movie").unwrap();
+            std::fs::hard_link(&source, &retained).unwrap();
+            std::fs::hard_link(&source, &external).unwrap();
+            let source_path = path_to_stored_string(&source);
+            let retained_path = path_to_stored_string(&retained);
+            let version = super::super::resolution::file_version(&source)
+                .await
+                .unwrap();
+            let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+            let mut row = FileResolution {
+                operation_id: "synthetic-operation".into(),
+                title_id: "synthetic-title".into(),
+                source_path: source_path.clone(),
+                original_destination: source_path.clone(),
+                destination_path: source_path,
+                disposition: ResolutionDisposition::Disposal(DisposalProof {
+                    sequence: 1,
+                    before_link_count: 3,
+                    after_link_count: None,
+                    after_versions: BTreeMap::from([(retained_path.clone(), version.clone())]),
+                    recycle: None,
+                }),
+                completed: false,
+                source_version: Some(version.clone()),
+                destination_version: None,
+                identity_hash: Some(conflict_hash(&retained_path, &version).await.unwrap()),
+                warning: None,
+                reason_code: None,
+            };
+            std::fs::remove_file(&source).unwrap();
+            assert!(
+                disposal_version_current(&retained_path, &version, &[row.clone()])
+                    .await
+                    .unwrap()
+            );
+            if mutate_content {
+                // Same inode, length and restored mtime are insufficient: the
+                // durable content hash must still match after the own unlink.
+                std::fs::write(&external, b"modified content").unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(&external)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .unwrap();
+                assert!(
+                    !disposal_version_current(&retained_path, &version, &[row.clone()])
+                        .await
+                        .unwrap()
+                );
+            } else {
+                let current = super::super::resolution::file_version(&retained)
+                    .await
+                    .unwrap();
+                let ResolutionDisposition::Disposal(proof) = &mut row.disposition else {
+                    unreachable!()
+                };
+                proof.after_versions = BTreeMap::from([(retained_path.clone(), current)]);
+                proof.after_link_count = Some(2);
+                row.completed = true;
+                assert!(
+                    disposal_version_current(&retained_path, &version, &[row.clone()])
+                        .await
+                        .unwrap()
+                );
+                // Reoccupation of the selected pathname is never another
+                // disposal opportunity, even when the old inode is retained.
+                std::fs::write(&source, b"replacement file").unwrap();
+                assert!(
+                    !disposal_version_current(&retained_path, &version, &[row])
+                        .await
+                        .unwrap()
+                );
+                assert_eq!(std::fs::read(&source).unwrap(), b"replacement file");
+            }
+            assert!(retained.exists());
+            assert!(external.exists());
+        }
     }
 }

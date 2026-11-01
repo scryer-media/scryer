@@ -210,7 +210,7 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
 
 /// Reject links in every existing component, including Windows junctions.
 /// Missing final components are allowed only for a destination about to be created.
-pub(super) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<()> {
+pub(crate) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<()> {
     if !path.is_absolute() {
         return Err(fail(
             crate::error_reasons::location::RECOVERY_NATIVE_ABSOLUTE_PATH_REQUIRED,

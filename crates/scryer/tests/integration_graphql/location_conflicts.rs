@@ -181,8 +181,10 @@ async fn seed_conflict(
         status: scryer_application::PendingImportStatus::Pending,
         title_id: Some(title.id.clone()),
         scan_session_id: "conflict-fixture".into(),
-        scan_root: folder.parent().unwrap().to_string_lossy().into_owned(),
-        item_path: folder.to_string_lossy().into_owned(),
+        scan_root: scryer_application::stored_paths::path_to_stored_string(
+            folder.parent().unwrap(),
+        ),
+        item_path: scryer_application::stored_paths::path_to_stored_string(folder),
         display_name: "Emberfall".into(),
         query: "Emberfall".into(),
         year_hint: Some(2024),
@@ -668,36 +670,189 @@ async fn conflict_bulk_continues_after_an_invalid_item() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn conflict_disposal_refuses_hardlinked_targets_before_mutating_any_files() {
-    let fixture = ConflictFixture::new().await;
-    let inferior = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
-    let unrelated = fixture.root.join("unrelated-hardlink.mkv");
-    std::fs::hard_link(&inferior, &unrelated).unwrap();
-    let preview = fixture
-        .ctx
-        .app
-        .preview_pending_import_conflicts(
-            &fixture.actor,
-            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::MediaOnly),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        preview.rows[0].error_reason.as_deref(),
-        Some(refusal::FOLDER_UNSAFE)
-    );
-    assert_eq!(std::fs::read(inferior).unwrap(), b"inferior movie");
-    assert_eq!(std::fs::read(unrelated).unwrap(), b"inferior movie");
-    assert_eq!(
-        std::fs::read(fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
-        b"best movie contents"
-    );
+async fn conflict_disposal_hardlinks_preserve_external_aliases_and_recover_owned_ctime() {
+    use scryer_application::LocationOperationRepository;
+    use scryer_application::location::resolution::ResolutionDisposition;
+    use scryer_infrastructure_library::media::libraries::location_operation_store::LocationOperationStore;
+    use std::os::unix::fs::MetadataExt;
+    for enabled in [false, true] {
+        for shared_survivor in [false, true] {
+            let fixture = ConflictFixture::new().await;
+            fixture
+                .ctx
+                .app
+                .update_recycle_bin_settings(
+                    &fixture.actor,
+                    UpdateRecycleBinSettings {
+                        enabled: Some(enabled),
+                        path: None,
+                        retention_days: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let inferior = fixture.named.join("Emberfall.2024.720p.WEB-DL.mkv");
+            let alias = fixture.junk.join("Emberfall.2024.480p.WEB-DL.mkv");
+            let external = fixture.root.join("unrelated-hardlink.mkv");
+            std::fs::hard_link(&inferior, &alias).unwrap();
+            std::fs::hard_link(&inferior, &external).unwrap();
+            if shared_survivor {
+                let best = fixture.junk.join("Emberfall.2024.2160p.BluRay.mkv");
+                std::fs::remove_file(&best).unwrap();
+                std::fs::hard_link(&inferior, best).unwrap();
+            }
+            let before = std::fs::metadata(&external).unwrap();
+            let task = fixture
+                .settle(
+                    fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+                    true,
+                )
+                .await;
+            let diagnostics = if task.failed_count > 0 {
+                let store = LocationOperationStore::new(fixture.ctx.db.datastore());
+                let mut diagnostics = Vec::new();
+                for id in &task.operation_ids {
+                    diagnostics.push(format!(
+                        "operation={:?}; checkpoints={:?}; resolutions={:?}",
+                        store.get_location_operation(id).await.unwrap(),
+                        store.list_location_title_checkpoints(id).await.unwrap(),
+                        store.file_resolutions(id, &fixture.title.id).await.unwrap()
+                    ));
+                }
+                diagnostics
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                (task.settled_count, task.failed_count),
+                (1, 0),
+                "enabled={enabled}, shared={shared_survivor}: {task:?}; {diagnostics:?}"
+            );
+            assert!(!inferior.exists());
+            assert!(!alias.exists());
+            assert_eq!(std::fs::read(&external).unwrap(), b"inferior movie");
+            assert_eq!(
+                std::fs::metadata(&external).unwrap().modified().unwrap(),
+                before.modified().unwrap()
+            );
+            let expected_links = if enabled {
+                if shared_survivor { 4 } else { 3 }
+            } else if shared_survivor {
+                2
+            } else {
+                1
+            };
+            assert_eq!(
+                std::fs::metadata(&external).unwrap().nlink(),
+                expected_links
+            );
+            let catalog = fixture
+                .ctx
+                .media_files
+                .list_media_files_for_title(&fixture.title.id)
+                .await
+                .unwrap();
+            let primary = catalog.iter().find(|file| file.role.is_primary()).unwrap();
+            assert_eq!(
+                std::fs::read(&primary.file_path).unwrap(),
+                if shared_survivor {
+                    b"inferior movie".as_slice()
+                } else {
+                    b"best movie contents".as_slice()
+                }
+            );
+            let store = LocationOperationStore::new(fixture.ctx.db.datastore());
+            let mut rows = store
+                .file_resolutions(&task.operation_ids[0], &fixture.title.id)
+                .await
+                .unwrap();
+            assert_eq!(rows.iter().filter(|row| row.is_disposal()).count(), 2);
+            let latest = rows
+                .iter_mut()
+                .filter(|row| row.is_disposal())
+                .max_by_key(|row| {
+                    let ResolutionDisposition::Disposal(proof) = &row.disposition else {
+                        unreachable!()
+                    };
+                    proof.sequence
+                })
+                .unwrap();
+            let ResolutionDisposition::Disposal(proof) = &mut latest.disposition else {
+                unreachable!()
+            };
+            // Recreate the durable intent immediately after its pathname effect,
+            // before either the bin manifest or resolution completion was saved.
+            proof.after_versions.clear();
+            proof.after_link_count = None;
+            latest.completed = false;
+            if let Some(recycle) = &proof.recycle {
+                let config = fixture
+                    .ctx
+                    .app
+                    .recycle_bin_config_for_media_root(Some(fixture.root.to_str().unwrap()))
+                    .await;
+                let path = config
+                    .base_path
+                    .join(&recycle.entry_id)
+                    .join("manifest.json");
+                let mut manifest: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                manifest["status"] =
+                    json!(scryer_application::recycle_bin::RECYCLE_STATUS_CONFLICT_PENDING);
+                std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            }
+            store.save_file_resolution(latest).await.unwrap();
+            retry_cleanup(&fixture, &task.operation_ids[0]).await;
+            retry_cleanup(&fixture, &task.operation_ids[0]).await;
+            assert_eq!(
+                store
+                    .get_location_operation(&task.operation_ids[0])
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .counters
+                    .renames,
+                0,
+                "recycled entries never count as collision renames"
+            );
+            assert_eq!(std::fs::read(&external).unwrap(), b"inferior movie");
+            if enabled {
+                let entries = fixture
+                    .ctx
+                    .app
+                    .list_recycled_items(
+                        &fixture.actor,
+                        Some(vec![fixture.title.library_id.clone()]),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.reason == "folder_conflict_resolution")
+                        .count(),
+                    2
+                );
+                let entry = entries
+                    .iter()
+                    .find(|entry| entry.original_path == inferior.to_string_lossy())
+                    .unwrap();
+                fixture
+                    .ctx
+                    .app
+                    .restore_recycled_item(&fixture.actor, &entry.id)
+                    .await
+                    .unwrap();
+                assert_eq!(std::fs::read(&inferior).unwrap(), b"inferior movie");
+                assert_eq!(std::fs::read(&external).unwrap(), b"inferior movie");
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn conflict_preview_refuses_links_and_non_utf8_names_without_following_or_moving_them() {
-    use std::os::unix::ffi::OsStringExt;
+async fn conflict_preview_refuses_links_without_following_or_moving_them() {
     let fixture = ConflictFixture::new().await;
     let unrelated = fixture.root.join("unrelated.txt");
     std::fs::write(&unrelated, b"unrelated contents").unwrap();
@@ -713,64 +868,256 @@ async fn conflict_preview_refuses_links_and_non_utf8_names_without_following_or_
         .await
         .unwrap();
     assert!(preview.rows[0].error_reason.is_some());
-    assert_eq!(std::fs::read(unrelated).unwrap(), b"unrelated contents");
-    std::fs::remove_file(link).unwrap();
-    let undecodable = fixture
-        .junk
-        .join(std::ffi::OsString::from_vec(vec![b'x', 0xff]));
-    #[cfg(target_os = "linux")]
-    {
-        std::fs::write(&undecodable, b"unrepresentable filename contents").unwrap();
-        let preview = fixture
-            .ctx
-            .app
-            .preview_pending_import_conflicts(
-                &fixture.actor,
-                fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            preview.rows[0].error_reason.as_deref(),
-            Some(refusal::FOLDER_UNSAFE)
-        );
-        assert_eq!(
-            std::fs::read(&undecodable).unwrap(),
-            b"unrepresentable filename contents"
-        );
-    }
-    let mut item = fixture
-        .ctx
-        .library_scan_unmatched
-        .get_library_scan_unmatched_item(&fixture.pending_id)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated contents");
+    assert!(
+        std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn conflict_native_paths_preserve_distinct_names_collisions_companions_and_resume() {
+    use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+    let mut fixture = ConflictFixture::new().await;
+    let folder = fixture
+        .root
+        .join(OsString::from_vec(b"ADEG78\xff".to_vec()));
+    std::fs::rename(&fixture.junk, &folder).unwrap();
     fixture
         .ctx
         .library_scan_unmatched
-        .delete_library_scan_unmatched_item(&item.library_id, item.facet.clone(), &item.item_path)
-        .await
-        .unwrap();
-    item.item_path = scryer_application::stored_paths::path_to_stored_string(&undecodable);
-    fixture
-        .ctx
-        .library_scan_unmatched
-        .upsert_library_scan_unmatched_item(&item)
-        .await
-        .unwrap();
-    let preview = fixture
-        .ctx
-        .app
-        .preview_pending_import_conflicts(
-            &fixture.actor,
-            fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll),
+        .delete_library_scan_unmatched_item(
+            &fixture.title.library_id,
+            MediaFacet::Movie,
+            &path_to_stored_string(&fixture.junk),
         )
         .await
         .unwrap();
+    fixture.junk = folder;
+    seed_conflict(
+        &fixture.ctx,
+        &fixture.title,
+        &fixture.junk,
+        &fixture.pending_id,
+    )
+    .await;
+    let first = PathBuf::from(OsString::from_vec(b"movie\xff.mkv".to_vec()));
+    let second = PathBuf::from(OsString::from_vec(b"movie\xfe.mkv".to_vec()));
+    assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+    let occupied = PathBuf::from(OsString::from_vec(
+        b"movie\xff (from duplicate).mkv".to_vec(),
+    ));
+    let renamed = PathBuf::from(OsString::from_vec(
+        b"movie\xff (from duplicate) (2).mkv".to_vec(),
+    ));
+    let subtitle = PathBuf::from(OsString::from_vec(b"movie\xff.en\xfd.srt".to_vec()));
+    let renamed_subtitle = PathBuf::from(OsString::from_vec(
+        b"movie\xff (from duplicate) (2).en\xfd.srt".to_vec(),
+    ));
+    let frame = PathBuf::from(OsString::from_vec(
+        b"movie\xff.trickplay/frame\xfc.jpg".to_vec(),
+    ));
+    let renamed_frame = PathBuf::from(OsString::from_vec(
+        b"movie\xff (from duplicate) (2).trickplay/frame\xfc.jpg".to_vec(),
+    ));
+    let literal = "scryer-path-v1:u:poster.jpg";
+    std::fs::write(fixture.named.join(&first), b"destination movie").unwrap();
+    std::fs::write(fixture.named.join(&occupied), b"occupied suffix").unwrap();
+    for (relative, contents) in [
+        (
+            first.as_path(),
+            b"incoming movie with different bytes".as_slice(),
+        ),
+        (second.as_path(), b"distinct native name".as_slice()),
+        (
+            std::path::Path::new("movie\u{fffd}.mkv"),
+            b"literal replacement character".as_slice(),
+        ),
+        (subtitle.as_path(), b"native subtitle".as_slice()),
+        (frame.as_path(), b"native frame".as_slice()),
+        (
+            std::path::Path::new(literal),
+            b"literal codec prefix".as_slice(),
+        ),
+    ] {
+        let path = fixture.junk.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let request = fixture.request(ConflictPolicy::AdoptAll, ConflictLeftovers::PreserveAll);
+    let preview = fixture
+        .ctx
+        .app
+        .preview_pending_import_conflicts(&fixture.actor, request.clone())
+        .await
+        .unwrap();
+    assert!(preview.rows[0].error_reason.is_none(), "{preview:?}");
+    assert_eq!(preview.rows[0].collision_renames, 3, "{preview:?}");
+    assert!(
+        preview.rows[0]
+            .collision_rename_samples
+            .iter()
+            .any(|rename| {
+                stored_path_to_path_buf(&rename.source_path) == fixture.junk.join(&frame)
+                    && stored_path_to_path_buf(&rename.destination_path)
+                        == fixture.named.join(&renamed_frame)
+            }),
+        "the frame must follow its renamed trickplay directory: {preview:?}"
+    );
+    let task = fixture.settle(request, false).await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    for (relative, contents) in [
+        (first.as_path(), b"destination movie".as_slice()),
+        (occupied.as_path(), b"occupied suffix".as_slice()),
+        (
+            renamed.as_path(),
+            b"incoming movie with different bytes".as_slice(),
+        ),
+        (second.as_path(), b"distinct native name".as_slice()),
+        (
+            std::path::Path::new("movie\u{fffd}.mkv"),
+            b"literal replacement character".as_slice(),
+        ),
+        (renamed_subtitle.as_path(), b"native subtitle".as_slice()),
+        (renamed_frame.as_path(), b"native frame".as_slice()),
+        (
+            std::path::Path::new(literal),
+            b"literal codec prefix".as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            std::fs::read(fixture.named.join(relative)).unwrap(),
+            contents
+        );
+    }
+    let catalog = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    for relative in [&first, &occupied, &renamed, &second] {
+        let expected = fixture.named.join(relative);
+        assert!(
+            catalog
+                .iter()
+                .any(|row| stored_path_to_path_buf(&row.file_path) == expected),
+            "missing {}",
+            expected.display()
+        );
+    }
     assert_eq!(
-        preview.rows[0].error_reason.as_deref(),
-        Some(refusal::FOLDER_UNSAFE)
+        catalog.iter().filter(|row| row.role.is_primary()).count(),
+        1
+    );
+    retry_cleanup(&fixture, &task.operation_ids[0]).await;
+    assert_eq!(
+        std::fs::read(fixture.named.join(&renamed)).unwrap(),
+        b"incoming movie with different bytes"
+    );
+    assert_eq!(
+        fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap()
+            .len(),
+        catalog.len()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn conflict_native_paths_recycle_and_restore_exact_catalog_paths_after_resume() {
+    use scryer_application::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let fixture = ConflictFixture::new().await;
+    let original = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let native = fixture.named.join(OsString::from_vec(
+        b"Emberfall.2024.720p.WEB-DL\xff.mkv".to_vec(),
+    ));
+    std::fs::rename(stored_path_to_path_buf(&original.file_path), &native).unwrap();
+    fixture
+        .ctx
+        .media_files
+        .update_media_file_path(&original.id, &path_to_stored_string(&native))
+        .await
+        .unwrap();
+    fixture
+        .ctx
+        .app
+        .update_recycle_bin_settings(
+            &fixture.actor,
+            UpdateRecycleBinSettings {
+                enabled: Some(true),
+                path: None,
+                retention_days: None,
+            },
+        )
+        .await
+        .unwrap();
+    let task = fixture
+        .settle(
+            fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+            false,
+        )
+        .await;
+    assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+    assert!(!native.exists());
+    retry_cleanup(&fixture, &task.operation_ids[0]).await;
+    let config = fixture
+        .ctx
+        .app
+        .recycle_bin_config_for_media_root(Some(&path_to_stored_string(&fixture.root)))
+        .await;
+    let entries = scryer_application::recycle_bin::list_committed_entries(&config)
+        .await
+        .unwrap();
+    let recycled = entries
+        .iter()
+        .find(|entry| stored_path_to_path_buf(&entry.manifest.original_path) == native)
+        .expect("native path persisted in recycle manifest");
+    assert_eq!(
+        recycled.manifest.original_file_id.as_deref(),
+        Some(original.id.as_str())
+    );
+    assert!(
+        fixture
+            .ctx
+            .app
+            .restore_recycled_item(
+                &fixture.actor,
+                recycled.manifest.entry_id.as_deref().unwrap()
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(std::fs::read(&native).unwrap(), b"inferior movie");
+    let catalog = fixture
+        .ctx
+        .media_files
+        .list_media_files_for_title(&fixture.title.id)
+        .await
+        .unwrap();
+    assert!(
+        catalog
+            .iter()
+            .any(|row| stored_path_to_path_buf(&row.file_path) == native)
+    );
+    assert_eq!(
+        std::fs::read(fixture.named.join("Emberfall.2024.2160p.BluRay.mkv")).unwrap(),
+        b"best movie contents"
     );
 }
 
@@ -874,6 +1221,21 @@ async fn conflict_keep_one_identical_collision_always_retains_the_resolved_prima
 }
 
 async fn retry_cleanup(fixture: &ConflictFixture, operation_id: &str) {
+    use scryer_application::location::model::LocationOperationState;
+    let state = retry_cleanup_state(fixture, operation_id).await;
+    assert!(
+        matches!(
+            state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "{state:?}"
+    );
+}
+
+async fn retry_cleanup_state(
+    fixture: &ConflictFixture,
+    operation_id: &str,
+) -> scryer_application::location::model::LocationOperationState {
     use scryer_application::LocationOperationRepository;
     use scryer_application::location::model::{
         LocationOperationState, LocationReasonCode, TitleCheckpointState,
@@ -928,13 +1290,7 @@ async fn retry_cleanup(fixture: &ConflictFixture, operation_id: &str) {
     .await
     .unwrap()
     .unwrap();
-    assert!(
-        matches!(
-            outcome.state,
-            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
-        ),
-        "{outcome:?}"
-    );
+    outcome.state
 }
 
 #[cfg(unix)]

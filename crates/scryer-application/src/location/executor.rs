@@ -1932,7 +1932,11 @@ impl RunProgress {
                     .count() as i64,
                 renames: resolutions
                     .iter()
-                    .filter(|row| row.completed && row.original_destination != row.destination_path)
+                    .filter(|row| {
+                        row.completed
+                            && !row.is_disposal()
+                            && row.original_destination != row.destination_path
+                    })
                     .count() as i64,
             },
         );

@@ -383,7 +383,10 @@ impl AppUseCase {
                 .location_operations
                 .file_resolutions(operation_id, &title.title_id)
                 .await?;
-            for resolution in resolutions.into_iter().filter(|row| row.completed) {
+            for resolution in resolutions
+                .into_iter()
+                .filter(|row| row.completed && !row.is_disposal())
+            {
                 // An identical merge is a dedup whichever name the transfer
                 // found the matching copy under, so it is classified before the
                 // rename check; the file's destination becomes the survivor.
