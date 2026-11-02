@@ -25188,6 +25188,15 @@ type QueryRoot {
 		deletionWithinHours: Int
 	): RecycledItemsPayload!
 	"""
+	Read the file-correlated grab, import, upgrade and deletion history for a recycle entry.
+	"""
+	recycledItemHistory(
+		"""
+		Recycle-bin entry whose history is requested; requires title-management access to its library.
+		"""
+		id: ID!
+	): RecycledItemHistoryPayload!
+	"""
 	Preview restoring recycled items by ID without changing their files.
 	"""
 	previewRestoreRecycledItems(
@@ -26369,6 +26378,20 @@ type RecycleRestorePreviewPayload {
 	Preview entries for the selected recycle-bin records.
 	"""
 	items: [RecycleRestorePreviewItemPayload!]!
+}
+
+"""
+Bounded history correlated to a recycle entry's retained file and acquisition identities.
+"""
+type RecycledItemHistoryPayload {
+	"""
+	Related events in chronological order, up to the latest 50 matches.
+	"""
+	items: [TitleHistoryEventPayload!]!
+	"""
+	The summary reached its 5000-candidate or 50-match bound.
+	"""
+	truncated: Boolean!
 }
 
 """

@@ -8744,6 +8744,14 @@ const en: LocaleDictionary = {
   "settings.recycleBinSelectTitle": "Select {{title}}",
   "settings.recycleBinSelectFile": "Select {{name}}",
   "settings.recycleBinUnassociatedFiles": "Unassociated files",
+  "settings.recycleBinHistory": "Related title history",
+  "settings.recycleBinHistoryFor": "Show related history for {{name}}",
+  "settings.recycleBinHistoryHelp":
+    "Grabs, imports, upgrades and deletions linked to this recycled file, in chronological order.",
+  "settings.recycleBinHistoryEmpty":
+    "No linked history is available in this instance. The title or events may be absent, or the entry may predate retained file and acquisition links.",
+  "settings.recycleBinHistoryTruncated":
+    "This summary shows up to 50 related events from the latest 5,000 acquisition and file events for the title. Older related history may not be included.",
   "settings.recycleBinFileCountOne": "{{count}} file",
   "settings.recycleBinFileCountOther": "{{count}} files",
   "settings.recycleBinBatchLimit":

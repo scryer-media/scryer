@@ -1,4 +1,4 @@
-use super::{JobRunPayload, Long};
+use super::{JobRunPayload, Long, TitleHistoryEventPayload};
 use async_graphql::{Enum, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
@@ -40,6 +40,15 @@ pub struct RecycledItemsPayload {
     pub items: Vec<RecycledItemPayload>,
     /// Total matching entries across all pages.
     pub total_count: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Bounded history correlated to a recycle entry's retained file and acquisition identities.
+pub struct RecycledItemHistoryPayload {
+    /// Related events in chronological order, up to the latest 50 matches.
+    pub items: Vec<TitleHistoryEventPayload>,
+    /// The summary reached its 5000-candidate or 50-match bound.
+    pub truncated: bool,
 }
 
 #[derive(SimpleObject, Clone)]

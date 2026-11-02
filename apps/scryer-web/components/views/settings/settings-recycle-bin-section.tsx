@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { Trash2, Undo2 } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
+import { History, Trash2, Undo2 } from "lucide-react";
+import { RecycleBinHistory } from "./recycle-bin-history";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { PathPickerButton } from "@/components/common/path-picker-button";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
@@ -367,6 +368,7 @@ export function SettingsRecycleBinSection({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const [filter, setFilter] = useState("");
+  const [historyItemId, setHistoryItemId] = useState<string | null>(null);
   const isBusy = settingsSaving || mutatingId !== null;
   const unassociatedTitleName = t("settings.recycleBinUnassociatedFiles");
   const groups = useMemo(
@@ -655,86 +657,128 @@ export function SettingsRecycleBinSection({
                         pendingItemIds.has(item.id) ||
                         mutatingId === "__empty__";
                       return (
-                        <TableRow
-                          key={item.id}
-                          id={selectorId("settings-recycle-bin-row", item.id)}
-                          data-ui="settings-table-row"
-                        >
-                          <TableCheckboxCell>
-                            <Checkbox
+                        <Fragment key={item.id}>
+                          <TableRow
+                            id={selectorId("settings-recycle-bin-row", item.id)}
+                            data-ui="settings-table-row"
+                          >
+                            <TableCheckboxCell>
+                              <Checkbox
+                                id={selectorId(
+                                  "settings-recycle-bin-select",
+                                  item.id,
+                                )}
+                                size="table"
+                                checked={selectedItemIds.has(item.id)}
+                                disabled={rowBusy || isBusy}
+                                aria-label={t("settings.recycleBinSelectFile", {
+                                  name: item.fileName,
+                                })}
+                                onCheckedChange={(checked) =>
+                                  toggleItem(item, checked === true)
+                                }
+                              />
+                            </TableCheckboxCell>
+                            <TableCell className="w-full min-w-64 max-w-0">
+                              <div>
+                                <div
+                                  className="truncate font-medium"
+                                  title={item.fileName}
+                                >
+                                  {item.fileName}
+                                </div>
+                                <div
+                                  className="truncate font-[family-name:var(--font-code)] text-xs text-muted-foreground"
+                                  title={item.originalPath}
+                                >
+                                  {item.originalPath}
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {item.libraryName}
+                            </TableCell>
+                            <TableCell>
+                              <ReasonBadge reason={item.reason} />
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap font-[family-name:var(--font-code)] text-sm text-muted-foreground">
+                              {formatSize(item.sizeBytes)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                              {formatDate(item.recycledAt, dateTimeFormat)}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                              {formatDate(
+                                item.scheduledDeletionAt,
+                                dateTimeFormat,
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-history",
+                                    item.id,
+                                  )}
+                                  label={t("settings.recycleBinHistoryFor", {
+                                    name: item.fileName,
+                                  })}
+                                  aria-expanded={historyItemId === item.id}
+                                  aria-controls={selectorId(
+                                    "settings-recycle-bin-history-detail",
+                                    item.id,
+                                  )}
+                                  onClick={() =>
+                                    setHistoryItemId((current) =>
+                                      current === item.id ? null : item.id,
+                                    )
+                                  }
+                                >
+                                  <History className="h-4 w-4" />
+                                </IconButton>
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-restore",
+                                    item.id,
+                                  )}
+                                  label={t("settings.recycleBinRestore")}
+                                  tone="enabled"
+                                  disabled={rowBusy || isBusy}
+                                  onClick={() => onRestoreItems([item])}
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </IconButton>
+                                <IconButton
+                                  id={selectorId(
+                                    "settings-recycle-bin-delete",
+                                    item.id,
+                                  )}
+                                  label={t("settings.recycleBinDelete")}
+                                  tone="delete"
+                                  disabled={rowBusy || isBusy}
+                                  onClick={() => onDeleteItems([item])}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </IconButton>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                          {historyItemId === item.id ? (
+                            <TableRow
                               id={selectorId(
-                                "settings-recycle-bin-select",
+                                "settings-recycle-bin-history-detail",
                                 item.id,
                               )}
-                              size="table"
-                              checked={selectedItemIds.has(item.id)}
-                              disabled={rowBusy || isBusy}
-                              aria-label={t("settings.recycleBinSelectFile", {
-                                name: item.fileName,
-                              })}
-                              onCheckedChange={(checked) =>
-                                toggleItem(item, checked === true)
-                              }
-                            />
-                          </TableCheckboxCell>
-                          <TableCell>
-                            <div>
-                              <div className="font-medium">{item.fileName}</div>
-                              <div
-                                className="max-w-[300px] truncate font-[family-name:var(--font-code)] text-xs text-muted-foreground"
-                                title={item.originalPath}
+                            >
+                              <TableCell
+                                colSpan={8}
+                                className="max-w-0 bg-muted/20"
                               >
-                                {item.originalPath}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {item.libraryName}
-                          </TableCell>
-                          <TableCell>
-                            <ReasonBadge reason={item.reason} />
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap font-[family-name:var(--font-code)] text-sm text-muted-foreground">
-                            {formatSize(item.sizeBytes)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                            {formatDate(item.recycledAt, dateTimeFormat)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                            {formatDate(
-                              item.scheduledDeletionAt,
-                              dateTimeFormat,
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <IconButton
-                                id={selectorId(
-                                  "settings-recycle-bin-restore",
-                                  item.id,
-                                )}
-                                label={t("settings.recycleBinRestore")}
-                                tone="enabled"
-                                disabled={rowBusy || isBusy}
-                                onClick={() => onRestoreItems([item])}
-                              >
-                                <Undo2 className="h-4 w-4" />
-                              </IconButton>
-                              <IconButton
-                                id={selectorId(
-                                  "settings-recycle-bin-delete",
-                                  item.id,
-                                )}
-                                label={t("settings.recycleBinDelete")}
-                                tone="delete"
-                                disabled={rowBusy || isBusy}
-                                onClick={() => onDeleteItems([item])}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </IconButton>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                                <RecycleBinHistory key={item.id} id={item.id} />
+                              </TableCell>
+                            </TableRow>
+                          ) : null}
+                        </Fragment>
                       );
                     }),
                   ];

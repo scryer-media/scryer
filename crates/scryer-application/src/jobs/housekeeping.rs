@@ -1082,6 +1082,59 @@ impl AppUseCase {
         Ok(due.into_iter().map(|(_, item)| item).collect())
     }
 
+    /// Read the acquisition/import history tied to one authorized recycle entry.
+    pub async fn recycled_item_history(
+        &self,
+        actor: &scryer_domain::User,
+        entry_id: &str,
+    ) -> AppResult<crate::RecycledItemHistory> {
+        self.require_recycle_bin_page_access(actor).await?;
+        crate::recycle_bin::validate_recycle_entry_id(entry_id)?;
+        let roots = self.recycle_root_libraries().await?;
+        for (media_root, config) in self.resolve_all_recycle_configs().await {
+            let Some((_, manifest)) = crate::recycle_bin::find_entry(&config, entry_id).await?
+            else {
+                continue;
+            };
+            let entry = crate::recycle_bin::RecycleEntry {
+                entry_id: entry_id.to_string(),
+                manifest,
+                media_root,
+            };
+            let library = self
+                .resolve_recycle_entry_library(&entry, &roots)
+                .await?
+                .ok_or_else(|| {
+                    AppError::unauthorized_reason(
+                        crate::error_reasons::jobs::LIBRARY_ACCESS_DENIED,
+                        "You do not have access to this library",
+                    )
+                })?;
+            self.require_library_permission(
+                actor,
+                &library.id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            // A mounted bin may belong to another catalog. Never substitute a
+            // similarly named title or read events from a title that moved libraries.
+            if let Some(title_id) = entry.manifest.title_id.as_deref()
+                && let Some(title) = self.services.catalog.titles.get_by_id(title_id).await?
+                && title.library_id == library.id
+            {
+                return super::recycle_history::load_summary(self, &entry.manifest, title_id).await;
+            }
+            return Ok(crate::RecycledItemHistory {
+                records: Vec::new(),
+                truncated: false,
+            });
+        }
+        Err(AppError::not_found_reason(
+            crate::error_reasons::jobs::RECYCLE_ENTRY_NOT_FOUND,
+            format!("recycle entry {entry_id}"),
+        ))
+    }
+
     async fn recycle_entry_titles_by_id(
         &self,
         mut title_ids: Vec<String>,

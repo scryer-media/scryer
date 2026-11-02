@@ -278,6 +278,13 @@ pub enum RecycleRestoreConflictPolicy {
     ReplaceExisting,
 }
 
+/// A bounded, item-correlated projection of durable title history.
+pub struct RecycledItemHistory {
+    pub records: Vec<scryer_domain::TitleHistoryRecord>,
+    /// More candidate history or matching rows exist beyond the summary bounds.
+    pub truncated: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecycleRestorePreviewItem {
     pub id: String,

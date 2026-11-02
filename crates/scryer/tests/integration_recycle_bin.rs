@@ -340,6 +340,211 @@ async fn seed_recycled_file_in_bin(
 }
 
 #[tokio::test]
+async fn recycled_item_history_correlates_upgrade_chain_and_enforces_library_access() {
+    use scryer_domain::{
+        DomainEventActorKind, DomainEventStream, DomainExternalIds, ImportCompletedEventData,
+        MediaFileDeletedEventData, MediaFileDeletedReason, MediaFileUpgradedEventData,
+        NewDomainEvent, ReleaseGrabbedEventData, TitleContextSnapshot,
+    };
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().unwrap();
+    let library = seed_library(&ctx, "History library", root.path()).await;
+    let title_id = "recycle-history-title";
+    seed_title(&ctx, title_id, &library).await;
+    let entry_id = seed_recycled_file(root.path(), title_id, "original").await;
+    let manifest_path = root
+        .path()
+        .join(".scryer-recycle")
+        .join(&entry_id)
+        .join("manifest.json");
+    let mut manifest: RecycleManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.original_file_id = Some("old-file".into());
+    manifest.replacement_file_id = Some("new-file".into());
+    manifest.reason = "upgrade_replaced".into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let snapshot = TitleContextSnapshot {
+        title_name: "History title".into(),
+        facet: MediaFacet::Movie,
+        external_ids: DomainExternalIds::default(),
+        poster_url: None,
+        year: None,
+    };
+    let grabbed = |download: &str| {
+        DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+            title: snapshot.clone(),
+            source_title: Some("Identical release label".into()),
+            source_hint: None,
+            source_provider: Some("Fixture indexer".into()),
+            download_id: Some(download.into()),
+            episode_ids: Vec::new(),
+            release_facts: Some(scryer_domain::GrabbedReleaseFacts {
+                scoring: Some(scryer_domain::GrabScoringSnapshot {
+                    candidate_score: 20,
+                    previous_score: Some(10),
+                    delta: Some(10),
+                    decision_code: "upgrade".into(),
+                    entries: Vec::new(),
+                    comparisons: vec![scryer_domain::GrabScoreComparison {
+                        file_id: "old-file".into(),
+                        episode_ids: Vec::new(),
+                        previous_score: 10,
+                        delta: 10,
+                    }],
+                }),
+                ..Default::default()
+            }),
+        })
+    };
+    let imported = |import: &str, download: &str| {
+        DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+            title: snapshot.clone(),
+            media_updates: Vec::new(),
+            imported_count: 1,
+            import_id: Some(import.into()),
+            source_system: Some("fixture-client".into()),
+            source_ref: Some(download.into()),
+            source_title: Some("Identical release label".into()),
+            source_path: None,
+            dest_path: Some(manifest.original_path.clone()),
+            quality: Some("1080p".into()),
+            episode_ids: Vec::new(),
+            size_bytes: Some(128),
+            upgrade: true,
+        })
+    };
+    let upgraded = |old: &str, new: &str, import: &str| {
+        DomainEventPayload::MediaFileUpgraded(MediaFileUpgradedEventData {
+            title: snapshot.clone(),
+            media_updates: Vec::new(),
+            episode_ids: Vec::new(),
+            previous_file_id: Some(old.into()),
+            current_file_id: Some(new.into()),
+            old_score: Some(10),
+            new_score: Some(20),
+            size_bytes: Some(128),
+            import_id: Some(import.into()),
+            source_ref: None,
+        })
+    };
+    let events = [
+        ("related-grab", grabbed("download-1")),
+        ("unrelated-grab", grabbed("different-download")),
+        (
+            "unrelated-import",
+            imported("different-import", "different-download"),
+        ),
+        ("related-import", imported("import-1", "download-1")),
+        (
+            "wrong-replacement",
+            upgraded("old-file", "different-file", "different-import"),
+        ),
+        (
+            "related-upgrade",
+            upgraded("old-file", "new-file", "import-1"),
+        ),
+        (
+            "related-recycle",
+            DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                title: snapshot.clone(),
+                media_updates: Vec::new(),
+                file_id: Some("old-file".into()),
+                reason: MediaFileDeletedReason::UpgradeCleanup,
+                episode_ids: Vec::new(),
+            }),
+        ),
+    ];
+    for (index, (id, payload)) in events.into_iter().enumerate() {
+        ctx.app
+            .append_domain_event(NewDomainEvent {
+                event_id: id.into(),
+                occurred_at: chrono::DateTime::from_timestamp(1_700_000_000 + index as i64, 0)
+                    .unwrap(),
+                actor_kind: DomainEventActorKind::System,
+                actor_user_id: None,
+                actor_display_name: "Fixture system".into(),
+                title_id: Some(title_id.into()),
+                facet: Some(MediaFacet::Movie),
+                correlation_id: None,
+                causation_id: None,
+                schema_version: 1,
+                stream: DomainEventStream::Title {
+                    title_id: title_id.into(),
+                },
+                payload,
+            })
+            .await
+            .unwrap();
+    }
+    let query = "query($id: ID!) { recycledItemHistory(id: $id) { items { id eventType sourceTitle } truncated } }";
+    let body = gql(&ctx, query, json!({"id": entry_id})).await;
+    assert_no_errors(&body);
+    let summary = &body["data"]["recycledItemHistory"];
+    assert_eq!(
+        summary["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "related-grab",
+            "related-import",
+            "related-upgrade",
+            "related-recycle"
+        ]
+    );
+    assert_eq!(summary["truncated"], false);
+
+    assert!(
+        ctx.app
+            .recycled_item_history(&no_permission_actor(), &entry_id)
+            .await
+            .is_err()
+    );
+    let other_root = tempfile::tempdir().unwrap();
+    let other_library = seed_library(&ctx, "Other history library", other_root.path()).await;
+    let other_manager = manage_titles_actor("other-manager", &[other_library.id]);
+    assert!(
+        ctx.app
+            .recycled_item_history(&other_manager, &entry_id)
+            .await
+            .is_err()
+    );
+    let manager = manage_titles_actor("history-manager", &[library.id]);
+    assert_eq!(
+        ctx.app
+            .recycled_item_history(&manager, &entry_id)
+            .await
+            .unwrap()
+            .records
+            .len(),
+        4
+    );
+
+    // Identical labels and paths must not substitute for missing file identities.
+    manifest.original_file_id = None;
+    manifest.replacement_file_id = None;
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    assert!(
+        ctx.app
+            .recycled_item_history(&manager, &entry_id)
+            .await
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    // A bin mounted from another catalog cannot borrow history from a local title.
+    manifest.title_id = Some("absent-title".into());
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let body = gql(&ctx, query, json!({"id": entry_id})).await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["recycledItemHistory"]["items"], json!([]));
+    assert!(manifest_path.exists());
+}
+
+#[tokio::test]
 async fn recycled_items_deletion_horizon_filters_before_counting_and_pagination() {
     let ctx = TestContext::new().await;
     seed_recycle_bin_setting_definition(&ctx).await;

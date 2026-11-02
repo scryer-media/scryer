@@ -3814,6 +3814,21 @@ export const dashboardRecycleBinQuery = `query DashboardRecycleBin {
   }
 }`;
 
+export const recycledItemHistoryQuery = `query RecycledItemHistory($id: ID!) {
+  recycledItemHistory(id: $id) {
+    items {
+      ${HISTORY_SCORING_FIELDS}
+      id titleId titleName facet posterUrl episodeId episodeIds collectionId
+      eventType actorKind actorUserId actorDisplayName
+      sourceTitle displayTitle sourceSystem sourceRef sourceProvider sourceHint
+      quality downloadId clientId clientName importId skipReason
+      retryRequiresPassword failureReasonCode failureReason blocklistReason
+      sourcePath destPath dataJson occurredAt createdAt
+    }
+    truncated
+  }
+}`;
+
 export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
   recycledItems(libraryIds: $libraryIds) {
     items {

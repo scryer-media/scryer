@@ -3454,6 +3454,36 @@ impl SystemQueries {
         Ok(RecycledItemsPayload { items, total_count })
     }
 
+    /// Read the file-correlated grab, import, upgrade and deletion history for a recycle entry.
+    async fn recycled_item_history(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Recycle-bin entry whose history is requested; requires title-management access to its library."
+        )]
+        id: ID,
+    ) -> GqlResult<RecycledItemHistoryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let summary = app
+            .recycled_item_history(&actor, id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        let total_count = summary.records.len() as i64;
+        let page = from_title_history_page(
+            scryer_application::TitleHistoryPage {
+                records: summary.records,
+                total_count,
+            },
+            0,
+        )
+        .map_err(to_gql_error)?;
+        Ok(RecycledItemHistoryPayload {
+            items: page.items,
+            truncated: summary.truncated,
+        })
+    }
+
     /// Preview restoring recycled items by ID without changing their files.
     async fn preview_restore_recycled_items(
         &self,
