@@ -3242,4 +3242,40 @@ mod move_import_source_cleanup_gate_tests {
         ))
         .expect_err("a rename never builds a guard, so this result is inconsistent");
     }
+
+    #[test]
+    fn ogm_payload_cleanup_removes_verified_media_and_preserves_unknown_or_changed_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        for name in [
+            "Movie.mkv",
+            "Movie.ogm",
+            "Episode.OGM_",
+            "changed.ogm",
+            "notes.unknown",
+        ] {
+            std::fs::write(directory.path().join(name), b"synthetic payload").expect("fixture");
+        }
+        let inventory =
+            super::inventory_payload_directory_blocking(directory.path()).expect("inventory");
+        assert_eq!(inventory.entries.len(), 4);
+        assert_eq!(inventory.retained, ["notes.unknown"]);
+        // A different length makes the proof mismatch independent of timestamp resolution.
+        std::fs::write(directory.path().join("changed.ogm"), b"replacement")
+            .expect("change fixture");
+        let removed = super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[])
+            .expect("remove verified payload");
+        assert_eq!(removed.removed, 3);
+        assert!(!removed.directory_removed);
+        for name in ["Movie.mkv", "Movie.ogm", "Episode.OGM_"] {
+            assert!(!directory.path().join(name).exists());
+        }
+        assert_eq!(
+            std::fs::read(directory.path().join("changed.ogm")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("notes.unknown")).unwrap(),
+            b"synthetic payload"
+        );
+    }
 }

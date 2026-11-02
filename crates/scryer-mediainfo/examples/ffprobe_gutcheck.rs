@@ -399,13 +399,8 @@ fn ffprobe_bin() -> Option<PathBuf> {
 }
 
 fn is_video_file(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(OsStr::to_str)
-            .map(|ext| ext.to_ascii_lowercase())
-            .as_deref(),
-        Some("mkv" | "mp4" | "m4v" | "mov" | "avi" | "ts" | "m2ts" | "wmv" | "ogv" | "flv")
-    )
+    scryer_media_types::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
 }
 
 fn is_ignored_dir_name(name: &str) -> bool {

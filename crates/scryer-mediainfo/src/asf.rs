@@ -896,7 +896,7 @@ fn resolve_audio_format(
     Some((subformat, bits_per_sample))
 }
 
-fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> {
+pub(crate) fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> {
     match tag {
         0x0001 => match bits_per_sample {
             8 => Some("pcm_u8"),

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { currentReleaseNames, releaseIdentityName } from "./current-release.ts";
+import { VIDEO_EXTENSIONS } from "./media-formats.generated.ts";
 
 test("current release uses the grab identity after library rename, not quality similarity", () => {
   const names = currentReleaseNames([
@@ -135,24 +136,7 @@ test("episode, season and series-movie scopes exclude unrelated owned releases",
 });
 
 test("fallback identities strip every supported video extension", () => {
-  for (const extension of [
-    "mkv",
-    "mp4",
-    "avi",
-    "wmv",
-    "mov",
-    "m4v",
-    "ts",
-    "m2ts",
-    "webm",
-    "flv",
-    "ogv",
-    "strm",
-    "mpg",
-    "mpeg",
-    "vob",
-    "iso",
-  ]) {
+  for (const extension of VIDEO_EXTENSIONS) {
     for (const suffix of [extension, extension.toUpperCase()]) {
       assert.deepEqual(
         [

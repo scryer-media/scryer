@@ -303,16 +303,17 @@ fn resolve_container_format(
 }
 
 fn container_format_from_extension(ext: &str) -> Option<ContainerFormat> {
-    match ext {
-        "mkv" | "webm" => Some(ContainerFormat::Matroska),
-        "mp4" | "m4v" | "mov" => Some(ContainerFormat::Mp4),
-        "avi" => Some(ContainerFormat::Avi),
-        "ts" | "m2ts" => Some(ContainerFormat::Ts),
-        "mpg" | "mpeg" | "vob" => Some(ContainerFormat::Ps),
-        "wmv" => Some(ContainerFormat::Asf),
-        "ogv" => Some(ContainerFormat::Ogg),
-        "flv" => Some(ContainerFormat::Flv),
-        _ => None,
+    use scryer_media_types::formats::{MediaFormat, media_format_for_extension};
+    match media_format_for_extension(ext)?.format {
+        MediaFormat::Matroska | MediaFormat::WebM => Some(ContainerFormat::Matroska),
+        MediaFormat::Mp4 | MediaFormat::QuickTime => Some(ContainerFormat::Mp4),
+        MediaFormat::Avi => Some(ContainerFormat::Avi),
+        MediaFormat::MpegTs => Some(ContainerFormat::Ts),
+        MediaFormat::MpegProgram => Some(ContainerFormat::Ps),
+        MediaFormat::Asf => Some(ContainerFormat::Asf),
+        MediaFormat::Ogg | MediaFormat::Ogm => Some(ContainerFormat::Ogg),
+        MediaFormat::Flv => Some(ContainerFormat::Flv),
+        MediaFormat::StreamLink | MediaFormat::DiscImage => None,
     }
 }
 
@@ -326,6 +327,19 @@ enum ContainerFormat {
     Ogg,
     Flv,
     Ps,
+}
+
+#[test]
+fn every_registered_native_format_has_a_parser_dispatch() {
+    use scryer_media_types::formats::{MEDIA_FORMATS, MediaHandling};
+    for entry in MEDIA_FORMATS {
+        assert_eq!(
+            container_format_from_extension(entry.extension).is_some(),
+            entry.handling == MediaHandling::Native,
+            "{}",
+            entry.extension
+        );
+    }
 }
 
 fn sniff_container_format_from_bytes(data: &[u8]) -> Option<ContainerFormat> {

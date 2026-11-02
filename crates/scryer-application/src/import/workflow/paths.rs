@@ -903,20 +903,10 @@ pub(crate) struct ContentQualifiedVideo {
 
 impl ContentQualifiedVideo {
     pub(crate) fn from_video_facts(facts: &ManualImportVideoFacts) -> Self {
-        // Container names the probe reports, onto `VIDEO_EXTENSIONS`.
-        let container_extension = match facts.container_format.as_deref() {
-            Some("matroska") => Some("mkv"),
-            Some("webm") => Some("webm"),
-            Some("mp4") => Some("mp4"),
-            Some("mov") => Some("mov"),
-            Some("avi") => Some("avi"),
-            Some("mpegts") => Some("ts"),
-            Some("mpeg") => Some("mpg"),
-            Some("asf") => Some("wmv"),
-            Some("ogg") => Some("ogv"),
-            Some("flv") => Some("flv"),
-            _ => None,
-        };
+        let container_extension = facts
+            .container_format
+            .as_deref()
+            .and_then(scryer_media_types::formats::preferred_video_extension_for_container);
         Self {
             container_extension,
         }

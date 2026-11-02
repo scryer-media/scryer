@@ -11,7 +11,7 @@ pub(crate) use crate::library_filename_parser::{
     LibraryTitleWalk, normalize_folder_name, strip_year_suffix,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
-use scryer_domain::VIDEO_EXTENSIONS;
+use scryer_domain::is_video_file;
 use unicode_normalization::UnicodeNormalization;
 
 const LIBRARY_SCAN_DISCOVERY_WORK_QUEUE_CAPACITY: usize = 16;
@@ -1461,10 +1461,7 @@ fn should_skip_media_library_subpath(root: &Path, path: &Path, is_dir: bool) -> 
 }
 
 fn is_allowed_video_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .is_some_and(|extension| VIDEO_EXTENSIONS.contains(&extension.as_str()))
+    is_video_file(path)
 }
 
 pub(crate) fn matching_movie_nfo_path(path: &Path) -> Option<String> {

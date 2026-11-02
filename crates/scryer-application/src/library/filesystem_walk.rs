@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{AppError, AppResult};
-use scryer_domain::VIDEO_EXTENSIONS;
+use scryer_domain::is_video_file;
 
 /// How many times a directory that reads back with zero entries is re-read
 /// before the empty listing is accepted as the truth.
@@ -385,10 +385,7 @@ impl FilesystemWalker {
 }
 
 fn is_supported_video_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .is_some_and(|ext| VIDEO_EXTENSIONS.contains(&ext.as_str()))
+    is_video_file(path)
 }
 
 fn path_has_extension(path: &Path, expected: &str) -> bool {

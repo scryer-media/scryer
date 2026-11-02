@@ -15,25 +15,8 @@ fn media_dir() -> PathBuf {
 }
 
 fn is_media_fixture(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|ext| ext.to_str()),
-        Some(
-            "avi"
-                | "mkv"
-                | "webm"
-                | "mp4"
-                | "m4v"
-                | "mov"
-                | "ts"
-                | "m2ts"
-                | "wmv"
-                | "ogv"
-                | "flv"
-                | "mpg"
-                | "mpeg"
-                | "vob"
-        )
-    )
+    scryer_media_types::formats::media_format_for_path(path)
+        .is_some_and(|entry| entry.handling == scryer_media_types::formats::MediaHandling::Native)
 }
 
 fn ffprobe_bin() -> Option<PathBuf> {
@@ -260,10 +243,7 @@ fn ffprobe_languages(json: &Value, codec_type: &str) -> Vec<String> {
         .filter(|stream| belongs_to_selected_program(json, stream))
         .filter(|stream| codec_type != "audio" || stream["disposition"]["comment"] != 1)
         .filter_map(|stream| {
-            stream
-                .get("tags")
-                .and_then(|tags| tags.get("language"))
-                .and_then(Value::as_str)
+            analysis_parity::reference_language(stream)
                 .filter(|lang| !lang.is_empty() && *lang != "und")
                 .map(str::to_owned)
         })
@@ -450,14 +430,9 @@ fn compare_fixture_corpus_against_ffprobe() {
         let audio = ffprobe_primary_stream(&ffprobe, "audio");
         let container_format = analysis.container_format.as_deref();
 
-        let native_duration = analysis.duration_seconds.unwrap_or_default();
-        let ffprobe_duration = ffprobe
-            .get("format")
-            .and_then(|format| format.get("duration"))
-            .and_then(Value::as_str)
-            .and_then(|duration| duration.parse::<f64>().ok())
-            .map(|duration| duration.round() as i32)
-            .unwrap_or_default();
+        let native_duration = analysis.duration_seconds;
+        let ffprobe_duration =
+            ffprobe_duration_seconds(&ffprobe).map(|duration| duration.round() as i32);
         let native_num_chapters = analysis.num_chapters.unwrap_or_default();
         let ffprobe_num_chapters = ffprobe
             .get("chapters")
@@ -592,11 +567,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             &path,
             "duration_seconds",
             analysis.details.duration_seconds,
-            ffprobe
-                .get("format")
-                .and_then(|format| format.get("duration"))
-                .and_then(Value::as_str)
-                .and_then(|value| value.parse::<f64>().ok()),
+            ffprobe_duration_seconds(&ffprobe),
         );
         if let (Some(native), Some(probe)) = (
             analysis
@@ -614,14 +585,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             ));
         }
 
-        if (native_duration - ffprobe_duration).abs() > 1 {
-            mismatches.push(format!(
-                "{} duration mismatch: native={} ffprobe={}",
-                path.file_name().unwrap().to_string_lossy(),
-                native_duration,
-                ffprobe_duration
-            ));
-        }
+        compare_known_durations(&mut mismatches, &path, native_duration, ffprobe_duration);
 
         if native_num_chapters != ffprobe_num_chapters {
             mismatches.push(format!(
@@ -692,10 +656,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             let probe_language = ffprobe_language_for_compare(
                 container_format,
                 native.language.as_deref(),
-                probe
-                    .get("tags")
-                    .and_then(|tags| tags.get("language"))
-                    .and_then(Value::as_str),
+                analysis_parity::reference_language(probe),
             );
             let probe_channels = ffprobe_optional_i32(Some(probe), "channels");
             let probe_bitrate = ffprobe_bitrate_kbps(Some(probe));
@@ -769,10 +730,7 @@ fn compare_fixture_corpus_against_ffprobe() {
             let probe_language = ffprobe_language_for_compare(
                 container_format,
                 native.language.as_deref(),
-                probe
-                    .get("tags")
-                    .and_then(|tags| tags.get("language"))
-                    .and_then(Value::as_str),
+                analysis_parity::reference_language(probe),
             );
             let disposition = probe.get("disposition");
             let probe_forced = disposition
@@ -988,6 +946,72 @@ fn compare_explicit_sparse_mkv_variants_against_ffprobe() {
             );
         }
     }
+}
+
+fn ffprobe_duration_seconds(reference: &Value) -> Option<f64> {
+    reference
+        .get("format")?
+        .get("duration")?
+        .as_str()?
+        .parse::<f64>()
+        .ok()
+        .filter(|duration| duration.is_finite() && *duration >= 0.0)
+}
+
+fn compare_known_durations(
+    mismatches: &mut Vec<String>,
+    path: &Path,
+    native: Option<i32>,
+    reference: Option<i32>,
+) {
+    if let (Some(native), Some(reference)) = (native, reference)
+        && native.abs_diff(reference) > 1
+    {
+        mismatches.push(format!(
+            "{} duration mismatch: native={native} ffprobe={reference}",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+    }
+}
+
+#[test]
+fn reference_duration_absence_is_unknown_and_known_disagreement_still_fails() {
+    let absent = serde_json::json!({"format":{}});
+    let zero = serde_json::json!({"format":{"duration":"0.0"}});
+    assert_eq!(ffprobe_duration_seconds(&absent), None);
+    assert_eq!(ffprobe_duration_seconds(&zero), Some(0.0));
+    let mut differences = Vec::new();
+    let path = Path::new("fixture.ogm");
+    compare_known_durations(
+        &mut differences,
+        path,
+        Some(3),
+        ffprobe_duration_seconds(&absent).map(|duration| duration.round() as i32),
+    );
+    assert!(differences.is_empty());
+    compare_known_durations(&mut differences, path, Some(3), Some(3));
+    assert!(differences.is_empty());
+    compare_known_durations(&mut differences, path, Some(3), Some(0));
+    compare_known_durations(&mut differences, path, Some(3), Some(6));
+    assert_eq!(differences.len(), 2);
+    missing_native(&mut differences, path, "duration_seconds", None, Some(3.0));
+    assert_eq!(
+        differences.len(),
+        3,
+        "known reference duration still requires native duration"
+    );
+}
+
+#[test]
+fn mixed_case_reference_language_keys_preserve_stream_language_counts() {
+    let reference = serde_json::json!({"streams":[
+        {"codec_type":"audio", "tags":{"LANGUAGE":"eng"}},
+        {"codec_type":"audio", "tags":{"Language":"jpn"}},
+        {"codec_type":"subtitle", "tags":{"lAnGuAgE":"fra"}},
+        {"codec_type":"subtitle", "tags":{"language":"und"}}
+    ]});
+    assert_eq!(ffprobe_languages(&reference, "audio"), ["eng", "jpn"]);
+    assert_eq!(ffprobe_languages(&reference, "subtitle"), ["fra"]);
 }
 
 fn missing_native<T: std::fmt::Debug>(

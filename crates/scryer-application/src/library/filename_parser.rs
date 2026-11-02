@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use chrono::NaiveDate;
 use regex::Regex;
-use scryer_domain::{MediaFacet, MovieEntity, SeriesMovieLink, VIDEO_EXTENSIONS};
+use scryer_domain::{MediaFacet, MovieEntity, SeriesMovieLink, is_video_file};
 use unicode_normalization::UnicodeNormalization;
 
 use super::*;
@@ -1278,13 +1278,7 @@ fn immediate_parent_has_single_video_file(source_path: &Path) -> bool {
             continue;
         }
 
-        let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if VIDEO_EXTENSIONS
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(extension))
-        {
+        if is_video_file(&path) {
             video_count += 1;
             if video_count > 1 {
                 return false;

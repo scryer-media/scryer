@@ -1805,6 +1805,52 @@ fn preserved_import_filename_sanitizes_trailing_bad_chars() {
     );
 }
 
+#[test]
+fn ogm_import_discovery_accepts_direct_and_directory_sources_and_preserves_suffix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut expected = Vec::new();
+    for name in ["Movie.ogm", "Show.OGM", "Episode.OgM_", "Feature.ogm\""] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"video").expect("write video");
+        assert_eq!(
+            find_video_files(&path, false).expect("direct"),
+            vec![path.clone()]
+        );
+        assert_eq!(import_video_destination_extension(&path, None), "ogm");
+        expected.push(path);
+    }
+    for name in ["Movie.ogm.exe", "Movie.ogmx"] {
+        std::fs::write(dir.path().join(name), b"unrelated").expect("write unrelated");
+    }
+    let mut discovered = find_video_files(dir.path(), false).expect("directory");
+    discovered.sort();
+    expected.sort();
+    assert_eq!(discovered, expected);
+}
+
+#[test]
+fn import_container_aliases_choose_ogm_without_changing_ogg() {
+    for (container, extension) in [("ogm", "ogm"), ("OGM", "ogm"), ("ogg", "ogv")] {
+        let facts = ManualImportVideoFacts {
+            container_format: Some(container.into()),
+            video_codec: None,
+            audio_codec: None,
+            video_width: None,
+            video_height: None,
+            duration_seconds: None,
+            disc: None,
+            report: Default::default(),
+        };
+        assert_eq!(
+            import_video_destination_extension(
+                std::path::Path::new("payload"),
+                Some(ContentQualifiedVideo::from_video_facts(&facts)),
+            ),
+            extension,
+        );
+    }
+}
+
 #[tokio::test]
 async fn find_video_files_filters_samples_when_flag_set() {
     use std::io::{Seek, SeekFrom, Write};

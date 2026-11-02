@@ -12,6 +12,7 @@
     "typecheck": "node ./node_modules/@typescript/native/bin/tsc --noEmit",
     "lint": "npm run typecheck && npm run check:i18n && npm run test:i18n-keys && eslint 'src/**/*.{ts,tsx}' 'components/**/*.{ts,tsx}' 'lib/**/*.{ts,tsx}'",
     "check:react-compiler": "node scripts/check-react-compiler.mjs",
+    "generate:media-formats": "node scripts/generate-media-formats.mjs",
     "check:i18n": "node scripts/check-i18n-keys.mjs",
     "test": "node --test \"lib/**/*.test.ts\"",
     "test:i18n-keys": "node --test scripts/check-i18n-keys.test.mjs",

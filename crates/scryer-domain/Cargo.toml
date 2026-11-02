@@ -4,6 +4,7 @@ version = "0.21.23"
 edition.workspace = true
 
 [dependencies]
+scryer-media-types = { path = "../scryer-media-types" }
 serde = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
