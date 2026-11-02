@@ -1,4 +1,7 @@
-import { VIDEO_EXTENSIONS } from "./media-formats.generated.ts";
+import {
+  STANDALONE_VIDEO_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+} from "./media-formats.generated.ts";
 
 function normalizedFileName(path: string): string {
   return (path.split(/[\\/]/).pop() ?? "")
@@ -16,10 +19,13 @@ export function canonicalVideoExtension(path: string): string | undefined {
   return VIDEO_EXTENSIONS.find((known) => known === extension);
 }
 
+/** Only a standalone library suffix is a file extension worth stripping. */
 export function videoFileStem(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? "";
   const normalized = normalizedFileName(path);
-  return canonicalVideoExtension(path)
+  const extension = canonicalVideoExtension(path);
+  return extension &&
+    (STANDALONE_VIDEO_EXTENSIONS as readonly string[]).includes(extension)
     ? normalized.slice(0, normalized.lastIndexOf("."))
     : name;
 }

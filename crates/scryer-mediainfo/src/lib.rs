@@ -214,7 +214,15 @@ pub fn analyze_file_with_options(
     }) {
         return disc::analyze(file_path, Default::default(), options.profile);
     }
-    let mut source = source::FileSource::open(file_path)?;
+    let mut source = match source::FileSource::open(file_path) {
+        Ok(source) => source,
+        // An unregistered suffix is unsupported whether or not the file is
+        // readable; only a registered suffix reports the I/O failure.
+        Err(_) if scryer_media_types::formats::media_format_for_extension(&ext).is_none() => {
+            return Err(MediaInfoError::UnsupportedFormat(ext));
+        }
+        Err(error) => return Err(error.into()),
+    };
     let analysis = analyze_source(&mut source, &ext, options)?;
     if !source.unchanged(file_path)? {
         return Err(MediaInfoError::Io(

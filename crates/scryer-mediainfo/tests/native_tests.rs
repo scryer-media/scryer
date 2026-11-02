@@ -921,7 +921,10 @@ fn mp4_hevc_hdr10plus_ffprobe_parity_profile() {
 #[test]
 fn unsupported_extension_returns_error() {
     let err = analyze_file(&PathBuf::from("/tmp/fake.unsupported")).unwrap_err();
-    assert!(err.to_string().contains("unsupported format"));
+    assert!(
+        matches!(err, scryer_mediainfo::MediaInfoError::UnsupportedFormat(ref ext) if ext == "unsupported"),
+        "{err:?}"
+    );
 }
 
 #[test]

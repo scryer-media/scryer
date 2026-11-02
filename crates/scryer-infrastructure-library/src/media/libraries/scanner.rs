@@ -9,7 +9,6 @@ use scryer_application::{
     AppError, AppResult, LibraryDirectoryScanResult, LibraryFile, LibraryFileBatchReceiver,
     LibraryScanner, stored_paths::path_to_stored_string,
 };
-use scryer_domain::VIDEO_EXTENSIONS;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::mpsc;
@@ -33,7 +32,11 @@ impl Default for FileSystemLibraryScanner {
 
 impl FileSystemLibraryScanner {
     pub fn new() -> Self {
-        let allowed_extensions = VIDEO_EXTENSIONS.iter().map(|ext| ext.to_string()).collect();
+        // The same standalone list the filesystem walker applies, so every scan
+        // path catalogs the same files.
+        let allowed_extensions = scryer_media_types::formats::standalone_video_extensions()
+            .map(str::to_owned)
+            .collect();
 
         Self { allowed_extensions }
     }
@@ -490,12 +493,14 @@ mod tests {
     async fn scanners_share_normalized_registry_acceptance() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut expected = Vec::new();
-        for extension in VIDEO_EXTENSIONS {
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
             let path = dir
                 .path()
-                .join(format!("Release.{}_", extension.to_uppercase()));
+                .join(format!("Release.{}_", entry.extension.to_uppercase()));
             std::fs::write(&path, b"video").expect("write video");
-            expected.push(path_to_stored_string(&path));
+            if entry.is_standalone_video() {
+                expected.push(path_to_stored_string(&path));
+            }
         }
         for name in ["Release.ogm.exe", "Release.ogmx", "notes.txt"] {
             std::fs::write(dir.path().join(name), b"unrelated").expect("write unrelated");

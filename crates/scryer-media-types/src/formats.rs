@@ -45,6 +45,17 @@ pub enum MediaProbeCapability {
     NotApplicable,
 }
 
+/// Whether a recognized suffix may represent its own library item.
+///
+/// The library list follows Sonarr's `MediaFileExtensions` video list. Suffixes
+/// outside it stay registered for probing and classification only, and disc
+/// companions are never library items on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaLibraryRole {
+    Standalone,
+    ProbeOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaFormatRegistration {
     pub extension: &'static str,
@@ -52,10 +63,18 @@ pub struct MediaFormatRegistration {
     pub container_aliases: &'static [&'static str],
     pub handling: MediaHandling,
     pub probe: MediaProbeCapability,
+    pub library: MediaLibraryRole,
+}
+
+impl MediaFormatRegistration {
+    /// A recognized video that can represent its own library item.
+    pub fn is_standalone_video(&self) -> bool {
+        self.library == MediaLibraryRole::Standalone && self.handling != MediaHandling::Companion
+    }
 }
 
 macro_rules! media_formats {
-    ($(($extension:literal, $format:ident, $handling:ident, $probe:ident, [$($alias:literal),*])),* $(,)?) => {
+    ($(($extension:literal, $format:ident, $handling:ident, $probe:ident, $library:ident, [$($alias:literal),*])),* $(,)?) => {
         pub const MEDIA_FORMATS: &[MediaFormatRegistration] = &[$(
             MediaFormatRegistration {
                 extension: $extension,
@@ -63,6 +82,7 @@ macro_rules! media_formats {
                 container_aliases: &[$($alias),*],
                 handling: MediaHandling::$handling,
                 probe: MediaProbeCapability::$probe,
+                library: MediaLibraryRole::$library,
             },
         )*];
         pub const VIDEO_EXTENSIONS: &[&str] = &[$($extension),*];
@@ -72,56 +92,56 @@ macro_rules! media_formats {
 // Container aliases belong to the preferred suffix; filename aliases retain
 // their own suffix when an existing file is imported.
 media_formats! {
-    ("mkv", Matroska, Native, Native, ["matroska", "mkv"]),
-    ("mp4", Mp4, Native, Native, ["mp4"]),
-    ("avi", Avi, Native, Native, ["avi"]),
-    ("wmv", Asf, Native, Native, ["asf", "wmv"]),
-    ("mov", QuickTime, Native, Native, ["mov"]),
-    ("m4v", Mp4, Native, Native, ["m4v"]),
-    ("ts", MpegTs, Native, Native, ["mpegts", "ts"]),
-    ("m2ts", MpegTs, Native, Native, ["m2ts"]),
-    ("webm", WebM, Native, Native, ["webm"]),
-    ("flv", Flv, Native, Native, ["flv"]),
-    ("ogv", Ogg, Native, Native, ["ogg", "ogv"]),
-    ("ogm", Ogm, Native, Native, ["ogm"]),
-    ("strm", StreamLink, StreamLink, NotApplicable, []),
-    ("mpg", MpegProgram, Native, Native, ["mpeg", "mpg"]),
-    ("mpeg", MpegProgram, Native, Native, []),
-    ("vob", MpegProgram, Native, Native, ["vob"]),
-    ("iso", DiscImage, DiscImage, NotApplicable, []),
-    ("3gp", Mp4, Native, Native, []),
-    ("asf", Asf, Native, Native, []),
-    ("asx", Playlist, Playlist, NotApplicable, []),
-    ("avc", H264, Native, Native, ["h264", "avc"]),
-    ("bin", DiscImage, DiscImage, NotApplicable, []),
-    ("bivx", Avi, Native, ContentOnly, []),
-    ("dat", MpegProgram, Native, ContentOnly, []),
-    ("divx", Avi, Native, ContentOnly, []),
-    ("dvr-ms", Asf, Native, Native, []),
-    ("dv", Dv, Native, Native, ["dv"]),
-    ("fli", Unsupported, Unsupported, Unsupported, []),
-    ("ifo", Companion, Companion, NotApplicable, []),
-    ("img", DiscImage, DiscImage, NotApplicable, []),
-    ("m2t", MpegTs, Native, Native, []),
-    ("m2v", MpegVideo, Native, Native, ["mpegvideo", "m2v"]),
-    ("m3u", Playlist, Playlist, NotApplicable, []),
-    ("mts", MpegTs, Native, Native, []),
-    ("nrg", DiscImage, DiscImage, NotApplicable, []),
-    ("nsv", Unsupported, Unsupported, Unsupported, []),
-    ("nuv", Unsupported, Unsupported, Unsupported, []),
-    ("ogg", Ogg, Native, Native, []),
-    ("ogx", Ogg, Native, Native, []),
-    ("pva", Unsupported, Unsupported, Unsupported, []),
-    ("qt", QuickTime, Native, Native, []),
-    ("rm", RealMedia, Native, Native, ["realmedia", "rm"]),
-    ("rmvb", RealMedia, Native, Native, []),
-    ("svq3", Svq3, Native, ContentOnly, []),
-    ("ty", Unsupported, Unsupported, Unsupported, []),
-    ("viv", Unsupported, Unsupported, Unsupported, []),
-    ("vp3", Unsupported, Unsupported, Unsupported, []),
-    ("wpl", Playlist, Playlist, NotApplicable, []),
-    ("wtv", Unsupported, Unsupported, Unsupported, []),
-    ("xvid", Avi, Native, ContentOnly, []),
+    ("mkv", Matroska, Native, Native, Standalone, ["matroska", "mkv"]),
+    ("mp4", Mp4, Native, Native, Standalone, ["mp4"]),
+    ("avi", Avi, Native, Native, Standalone, ["avi"]),
+    ("wmv", Asf, Native, Native, Standalone, ["asf", "wmv"]),
+    ("mov", QuickTime, Native, Native, Standalone, ["mov"]),
+    ("m4v", Mp4, Native, Native, Standalone, ["m4v"]),
+    ("ts", MpegTs, Native, Native, Standalone, ["mpegts", "ts"]),
+    ("m2ts", MpegTs, Native, Native, Standalone, ["m2ts"]),
+    ("webm", WebM, Native, Native, Standalone, ["webm"]),
+    ("flv", Flv, Native, Native, Standalone, ["flv"]),
+    ("ogv", Ogg, Native, Native, Standalone, ["ogg", "ogv"]),
+    ("ogm", Ogm, Native, Native, Standalone, ["ogm"]),
+    ("strm", StreamLink, StreamLink, NotApplicable, Standalone, []),
+    ("mpg", MpegProgram, Native, Native, Standalone, ["mpeg", "mpg"]),
+    ("mpeg", MpegProgram, Native, Native, Standalone, []),
+    ("vob", MpegProgram, Native, Native, Standalone, ["vob"]),
+    ("iso", DiscImage, DiscImage, NotApplicable, Standalone, []),
+    ("3gp", Mp4, Native, Native, Standalone, []),
+    ("asf", Asf, Native, Native, Standalone, []),
+    ("asx", Playlist, Playlist, NotApplicable, Standalone, []),
+    ("avc", H264, Native, Native, Standalone, ["h264", "avc"]),
+    ("bin", DiscImage, DiscImage, NotApplicable, Standalone, []),
+    ("bivx", Avi, Native, ContentOnly, Standalone, []),
+    ("dat", MpegProgram, Native, ContentOnly, Standalone, []),
+    ("divx", Avi, Native, ContentOnly, Standalone, []),
+    ("dvr-ms", Asf, Native, Native, Standalone, []),
+    ("dv", Dv, Native, Native, Standalone, ["dv"]),
+    ("fli", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("ifo", Companion, Companion, NotApplicable, ProbeOnly, []),
+    ("img", DiscImage, DiscImage, NotApplicable, Standalone, []),
+    ("m2t", MpegTs, Native, Native, ProbeOnly, []),
+    ("m2v", MpegVideo, Native, Native, Standalone, ["mpegvideo", "m2v"]),
+    ("m3u", Playlist, Playlist, NotApplicable, Standalone, []),
+    ("mts", MpegTs, Native, Native, ProbeOnly, []),
+    ("nrg", DiscImage, DiscImage, NotApplicable, Standalone, []),
+    ("nsv", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("nuv", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("ogg", Ogg, Native, Native, ProbeOnly, []),
+    ("ogx", Ogg, Native, Native, ProbeOnly, []),
+    ("pva", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("qt", QuickTime, Native, Native, Standalone, []),
+    ("rm", RealMedia, Native, Native, Standalone, ["realmedia", "rm"]),
+    ("rmvb", RealMedia, Native, Native, Standalone, []),
+    ("svq3", Svq3, Native, ContentOnly, Standalone, []),
+    ("ty", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("viv", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("vp3", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("wpl", Playlist, Playlist, NotApplicable, Standalone, []),
+    ("wtv", Unsupported, Unsupported, Unsupported, Standalone, []),
+    ("xvid", Avi, Native, ContentOnly, Standalone, []),
 }
 
 pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaFormatRegistration> {
@@ -148,6 +168,20 @@ pub fn canonical_video_extension(path: &Path) -> Option<&'static str> {
 
 pub fn media_format_for_path(path: &Path) -> Option<&'static MediaFormatRegistration> {
     media_format_for_extension(canonical_video_extension(path)?)
+}
+
+/// Suffixes that can be standalone library items, in registry order.
+pub fn standalone_video_extensions() -> impl Iterator<Item = &'static str> {
+    MEDIA_FORMATS
+        .iter()
+        .filter(|entry| entry.is_standalone_video())
+        .map(|entry| entry.extension)
+}
+
+/// A recognized video that can represent its own library item, rather than a
+/// companion or a suffix registered for probing only.
+pub fn is_standalone_video_path(path: &Path) -> bool {
+    media_format_for_path(path).is_some_and(MediaFormatRegistration::is_standalone_video)
 }
 
 pub fn preferred_video_extension_for_container(container: &str) -> Option<&'static str> {
@@ -187,6 +221,29 @@ mod tests {
             media_format_for_extension("ifo").unwrap().handling,
             MediaHandling::Companion
         );
+    }
+
+    #[test]
+    fn standalone_library_suffixes_follow_sonarr_without_disc_companions() {
+        // Sonarr src/NzbDrone.Core/MediaFiles/MediaFileExtensions.cs:9-66, minus
+        // ".ifo": a DVD companion is never a library item on its own.
+        let sonarr: HashSet<&str> = [
+            "webm", "m4v", "3gp", "nsv", "ty", "strm", "rm", "rmvb", "m3u", "mov", "qt", "divx",
+            "xvid", "bivx", "nrg", "pva", "wmv", "asf", "asx", "ogm", "ogv", "m2v", "avi", "bin",
+            "dat", "dvr-ms", "mpg", "mpeg", "mp4", "avc", "vp3", "svq3", "nuv", "viv", "dv", "fli",
+            "flv", "wpl", "img", "iso", "vob", "mkv", "ts", "wtv", "m2ts",
+        ]
+        .into_iter()
+        .collect();
+        let standalone: HashSet<&str> = standalone_video_extensions().collect();
+        assert_eq!(standalone, sonarr);
+        for probe_only in ["ifo", "ogg", "ogx", "m2t", "mts"] {
+            assert!(media_format_for_extension(probe_only).is_some());
+            assert!(!is_standalone_video_path(Path::new(&format!(
+                "Release.{probe_only}"
+            ))));
+        }
+        assert!(is_standalone_video_path(Path::new("Release.MKV_")));
     }
 
     #[test]

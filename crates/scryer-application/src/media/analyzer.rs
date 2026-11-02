@@ -528,6 +528,8 @@ mod tests {
         }
     }
 
+    // Exercises the native probe, which only the runtime build compiles in.
+    #[cfg(feature = "runtime-media-analysis")]
     #[tokio::test]
     async fn unsupported_self_contained_and_remote_playlist_scans_are_inconclusive() {
         for (extension, contents) in [

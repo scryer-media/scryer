@@ -3120,9 +3120,7 @@ pub fn is_video_file(path: &std::path::Path) -> bool {
 
 /// A recognized video that can represent its own library item, rather than a companion.
 pub fn is_standalone_video_file(path: &std::path::Path) -> bool {
-    scryer_media_types::formats::media_format_for_path(path).is_some_and(|entry| {
-        entry.handling != scryer_media_types::formats::MediaHandling::Companion
-    })
+    scryer_media_types::formats::is_standalone_video_path(path)
 }
 
 pub fn is_disc_image(path: &std::path::Path) -> bool {
