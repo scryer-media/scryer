@@ -1160,30 +1160,47 @@ impl AppUseCase {
             return Err(AppError::validation_refused(crate::error_reasons::catalog::EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE, "the existing download is no longer safe to replace"));
         }
 
-        if let Some(client_id) = conflict.download_client_id.as_deref() {
-            self.services
-                .integrations
-                .download_client
-                .delete_queue_item_for_client_id(
-                    client_id,
-                    &conflict.download_client_item_id,
-                    false,
-                    false,
-                )
-                .await?;
-        } else {
-            self.services
-                .integrations
-                .download_client
-                .delete_queue_item_for_client(
-                    &conflict.download_client_type,
-                    &conflict.download_client_item_id,
-                    false,
-                    false,
-                )
-                .await?;
-        }
+        self.cancel_conflict_in_client(conflict).await?;
+        self.settle_cancelled_conflict(conflict).await
+    }
 
+    /// Ask the conflict's client to cancel its live queue item. Downloaded data
+    /// is never deleted on this path.
+    pub(crate) async fn cancel_conflict_in_client(
+        &self,
+        conflict: &SubmissionScopeConflict,
+    ) -> AppResult<()> {
+        let client = &self.services.integrations.download_client;
+        match conflict.download_client_id.as_deref() {
+            Some(client_id) => {
+                client
+                    .delete_queue_item_for_client_id(
+                        client_id,
+                        &conflict.download_client_item_id,
+                        false,
+                        false,
+                    )
+                    .await
+            }
+            None => {
+                client
+                    .delete_queue_item_for_client(
+                        &conflict.download_client_type,
+                        &conflict.download_client_item_id,
+                        false,
+                        false,
+                    )
+                    .await
+            }
+        }
+    }
+
+    /// Drop the local submission of a conflict the client no longer runs and
+    /// reopen the wanted rows it held.
+    pub(crate) async fn settle_cancelled_conflict(
+        &self,
+        conflict: &SubmissionScopeConflict,
+    ) -> AppResult<()> {
         self.services
             .workflow
             .download_submissions
@@ -1197,10 +1214,14 @@ impl AppUseCase {
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
+        // Without this the accepted-download cache keeps reporting the
+        // cancelled job as in flight for its whole window.
+        self.runtime
+            .acquisition
+            .download_submission_guards
+            .forget_settled_download(&conflict.title_id);
         self.reset_wanted_items_for_submission_scope(&conflict.title_id, &conflict.scope)
-            .await?;
-
-        Ok(())
+            .await
     }
 }
 impl AppUseCase {

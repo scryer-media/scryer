@@ -348,6 +348,22 @@ impl AppUseCase {
         &self,
         intent: CanonicalDownloadSubmissionIntent,
     ) -> AppResult<CanonicalDownloadSubmissionOutcome> {
+        let _title_guard = self
+            .runtime
+            .acquisition
+            .download_submission_guards
+            .acquire_title(&intent.request.title.id)
+            .await;
+        self.submit_canonical_download_locked(intent, false).await
+    }
+
+    /// The caller holds the title submission guard. Standby operator grabs
+    /// resolve title-wide conflicts under that same guard before entering here.
+    pub(crate) async fn submit_canonical_download_locked(
+        &self,
+        intent: CanonicalDownloadSubmissionIntent,
+        allow_concurrent: bool,
+    ) -> AppResult<CanonicalDownloadSubmissionOutcome> {
         super::http_grab::require_http_release_for_http_source(
             intent.request.source_kind,
             intent.http_release.as_ref(),
@@ -356,12 +372,6 @@ impl AppUseCase {
             super::http_grab::refuse_unavailable_http_release(listed)?;
         }
         let title_id = intent.request.title.id.clone();
-        let _title_guard = self
-            .runtime
-            .acquisition
-            .download_submission_guards
-            .acquire_title(&title_id)
-            .await;
 
         if intent.automatic
             && let Err(error) = self.require_recent_missing_grab_admission(&intent).await
@@ -535,7 +545,13 @@ impl AppUseCase {
             .and_then(|signature| {
                 state.submissions.iter().find(|submission| {
                     submission.request_signature.as_deref() == Some(signature)
-                        && submission.purpose == intent.request.purpose
+                        && (submission.purpose == intent.request.purpose
+                            || (allow_concurrent
+                                && matches!(
+                                    submission.purpose,
+                                    DownloadSubmissionPurpose::Standard
+                                        | DownloadSubmissionPurpose::OperatorQueued
+                                )))
                         && submission.scope == intent.scope
                 })
             })
@@ -600,6 +616,14 @@ impl AppUseCase {
                 .items
                 .iter()
                 .find(|item| queue_item_matches_submission(item, &existing));
+            // A brief absence can be client visibility lag, but an explicit
+            // failure overrides the recent-acceptance cache and allows retry.
+            if allow_concurrent
+                && item.is_none()
+                && state.accepted_download_ids.contains(&existing.download_id)
+            {
+                return Ok(accepted_existing(existing));
+            }
             if let Some(item) = item
                 && item.state != DownloadQueueState::Failed
             {
@@ -632,7 +656,7 @@ impl AppUseCase {
                 .store_title_state(&title_id, state.clone());
         }
 
-        let conflicts = if intent.request.purpose.is_additional_file() {
+        let conflicts = if allow_concurrent || intent.request.purpose.is_additional_file() {
             Vec::new()
         } else if let Some(snapshot) = snapshot.as_ref() {
             Self::find_blocking_download_submissions_in_state(

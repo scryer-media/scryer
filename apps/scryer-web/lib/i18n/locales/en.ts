@@ -3266,6 +3266,17 @@ const en: LocaleDictionary = {
     "The requested value version is not valid semantic version.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE": "Votes cannot be negative.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "The script schedule is invalid.",
+  "error.reason.STANDBY_NOT_FOUND": "This saved candidate no longer exists.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "This saved candidate is no longer available. Refresh the list and try again.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "The saved release could not be queued. It remains available to retry.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "This release is on the title's blocklist. Remove it from the blocklist to queue it.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "This release is already in the download queue.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Another search or queue action on this title is running. Try again when it finishes.",
   "error.reason.SECURITY_ACCOUNT_NO_PASSWORD_SET":
     "Account has no password set.",
   "error.reason.SECURITY_ACTOR_CAPABILITY_CLAIM_UNKNOWN":
@@ -8381,6 +8392,17 @@ const en: LocaleDictionary = {
     "Counts rows keyed to this scope; season packs are counted on the season's anchor episode.",
   "wanted.loadingStandby": "Loading saved candidates…",
   "wanted.standbyCandidates": "Standby candidates · {{count}}",
+  "wanted.downloadStandby": "Download",
+  "wanted.downloadStandbyLabel": "Download {{name}}",
+  "wanted.standbyConflictTitle": "Downloads already in progress",
+  "wanted.standbyConflictDescription":
+    "Queue {{name}} alongside these downloads, or cancel them and queue it instead.",
+  "wanted.standbyQueue": "Queue",
+  "wanted.standbyQueuedRefreshFailed":
+    "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
+  "wanted.standbyCancelAndQueue": "Cancel and queue",
+  "wanted.standbyQueuedCancelFailed":
+    "The release was queued, but {{count}} conflicting download(s) could not be cancelled and are still running.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",

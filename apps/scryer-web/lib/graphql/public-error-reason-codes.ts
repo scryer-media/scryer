@@ -26,6 +26,17 @@ const GROUPS: readonly {
   },
   { codes: ["VALIDATION_ERROR"], reasons: Object.keys(MEDIA_REFUSAL_KEYS) },
   { codes: ["VALIDATION_ERROR"], reasons: ["METADATA_GATEWAY_CLOCK_SKEW"] },
+  { codes: ["NOT_FOUND"], reasons: ["STANDBY_NOT_FOUND"] },
+  {
+    codes: ["VALIDATION_ERROR"],
+    reasons: [
+      "STANDBY_NOT_AVAILABLE",
+      "STANDBY_NOT_QUEUEABLE",
+      "STANDBY_RELEASE_BLOCKLISTED",
+      "STANDBY_ALREADY_ACTIVE",
+      "STANDBY_TITLE_BUSY",
+    ],
+  },
   {
     codes: ["VALIDATION_ERROR"],
     reasons: [

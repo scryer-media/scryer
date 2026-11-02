@@ -867,6 +867,27 @@ pub struct QueuedReleaseSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandbyQueueChoice {
+    Check,
+    Queue,
+    CancelAndQueue,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StandbyQueueOutcome {
+    pub grabbed: bool,
+    /// Live downloads that still need the operator's choice.
+    pub conflicts: Vec<SubmissionScopeConflict>,
+    /// Conflicts whose client accepted the cancel request; their local rows
+    /// are gone. Cancellation is best effort: a client may still finish a job
+    /// it was already post-processing.
+    pub cancelled: Vec<SubmissionScopeConflict>,
+    /// Conflicts whose cancel request the client refused or could not take.
+    /// They keep running and stay tracked; the release was queued anyway.
+    pub cancel_failed: Vec<SubmissionScopeConflict>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubmissionConflictPolicy {
     Abort,
     Skip,

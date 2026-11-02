@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "standby_queue_tests.rs"]
+mod standby_queue_tests;
+
 #[tokio::test]
 async fn notification_broadcast_ignores_operational_domain_events() {
     let (app, _) = bootstrap();
@@ -5502,6 +5505,26 @@ async fn seed_recent_failed_season_pack_fixture_with_indexer_and_scope_states(
     Arc<StubDownloadClient>,
 ) {
     let download_client = Arc::new(StubDownloadClient::default());
+    seed_recent_failed_season_pack_fixture_with_client(
+        indexer_client,
+        wanted_items,
+        pending_releases,
+        download_client,
+    )
+    .await
+}
+
+async fn seed_recent_failed_season_pack_fixture_with_client(
+    indexer_client: Arc<TrackingIndexerClient>,
+    wanted_items: Arc<TrackingAcquisitionScopeStateRepo>,
+    pending_releases: Arc<TrackingPendingReleaseRepo>,
+    download_client: Arc<StubDownloadClient>,
+) -> (
+    AppUseCase,
+    Title,
+    Arc<TrackingIndexerClient>,
+    Arc<StubDownloadClient>,
+) {
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
         download_client.clone(),

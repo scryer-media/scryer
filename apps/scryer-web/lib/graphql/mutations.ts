@@ -2175,6 +2175,36 @@ export const forceGrabPendingReleaseMutation = `mutation ForceGrabPendingRelease
   }
 }`;
 
+export const queueStandbyReleaseMutation = `mutation QueueStandbyRelease($id: ID!, $choice: StandbyQueueChoiceValue!, $confirmed: [StandbyConflictIdentityInput!]!) {
+  queueStandbyRelease(id: $id, choice: $choice, confirmed: $confirmed) {
+    grabbed
+    conflicts {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
+    cancelled {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
+    cancelFailed {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
+  }
+}`;
+
 export const dismissPendingReleaseMutation = `mutation DismissPendingRelease($id: ID!) {
   dismissPendingRelease(id: $id) {
     id
