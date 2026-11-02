@@ -823,11 +823,8 @@ const zh_CN: LocaleDictionary = {
     "{{total}} 项，{{renamable}} 可重命名，{{noop}} 无变化，{{conflicts}} 冲突，{{errors}} 错误",
   "settings.sectionTitle": "设置 • {{section}}",
   "settings.generalText": "通用应用程序设置。",
-  "settings.verificationDepthTitle": "导入副本校验",
   "settings.verificationDepthHelp":
     "Scryer 在动源文件之前，对复制出的文件核对得有多严格。",
-  "settings.verificationDepthScope":
-    "仅适用于下载客户端的导入副本。无论此处如何选择，媒体库和根目录的移动始终执行完整校验。",
   "settings.verificationDepthLabel": "校验深度",
   "settings.verificationDepthFull": "完整回读",
   "settings.verificationDepthFullHelp":

@@ -1,6 +1,7 @@
 import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
+import { ERROR_REASON_KEYS } from "@/lib/graphql/error-message";
 
 export type MediaRenamePlanItem = {
   collectionId?: string | null;
@@ -134,6 +135,18 @@ export function MediaRenamePlanPanel({
                   {item.proposedPath ?? "—"}
                 </div>
               </div>
+              {/* A blocked item names why, from its reason code; unknown
+                  codes stay silent rather than showing server text. */}
+              {item.writeAction === "error" &&
+              item.reasonCode &&
+              ERROR_REASON_KEYS[item.reasonCode] ? (
+                <p
+                  data-ui="media-rename-plan-blocked-reason"
+                  className="mt-1 text-xs text-[var(--scry-warning-text)]"
+                >
+                  {t(ERROR_REASON_KEYS[item.reasonCode])}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>

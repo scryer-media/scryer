@@ -2174,6 +2174,26 @@ impl AppUseCase {
                     &mut planning,
                 )
                 .await?;
+            // A movie whose folder move would strand an Additional is blocked
+            // here, per title, so the preview names it and applying leaves it
+            // alone while the rest of the plan goes ahead.
+            if facet == MediaFacet::Movie
+                && let Some(planned) = title_folder.as_ref()
+                && self
+                    .additional_movie_folder_move_blocked(planned, &title_items)
+                    .await?
+            {
+                for item in title_items.iter_mut().filter(|item| {
+                    matches!(
+                        item.write_action,
+                        RenameWriteAction::Move | RenameWriteAction::Replace
+                    )
+                }) {
+                    item.write_action = RenameWriteAction::Error;
+                    item.reason_code =
+                        crate::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED.into();
+                }
+            }
             if let Some(planned) = title_folder.as_ref()
                 && !title_items.is_empty()
                 && title_items
@@ -2712,41 +2732,17 @@ impl AppUseCase {
     /// Folder relocation cannot strand an Additional while the ordinary
     /// renamer applies media items independently. Filename-only renames remain
     /// safe because all movie variants keep their established folder.
+    ///
+    /// Preview already marks such a title's moving items blocked, so this only
+    /// refuses a plan that predates an Additional appearing outside the folder.
     async fn preflight_additional_movie_folder_moves(&self, plan: &RenamePlan) -> AppResult<()> {
         if plan.facet != MediaFacet::Movie {
             return Ok(());
         }
         for planned in &plan.title_folders {
-            let files = self
-                .services
-                .library
-                .media_files
-                .list_media_files_for_title(&planned.title_id)
-                .await?;
-            let moves_primary = files
-                .iter()
-                .filter(|file| file.role.is_primary())
-                .any(|file| {
-                    plan.items.iter().any(|item| {
-                        item.current_path == file.file_path
-                            && matches!(
-                                item.write_action,
-                                RenameWriteAction::Move | RenameWriteAction::Replace
-                            )
-                            && item.proposed_path.as_deref().is_some_and(|target| {
-                                stored_path_to_path_buf(target).parent()
-                                    != stored_path_to_path_buf(&item.current_path).parent()
-                            })
-                    })
-                });
-            if moves_primary
-                && files.iter().any(|file| {
-                    !file.role.is_primary()
-                        && !crate::title_folder_rules::path_is_strictly_within(
-                            &file.file_path,
-                            &planned.folder_path,
-                        )
-                })
+            if self
+                .additional_movie_folder_move_blocked(planned, &plan.items)
+                .await?
             {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::library::RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
@@ -2755,6 +2751,45 @@ impl AppUseCase {
             }
         }
         Ok(())
+    }
+
+    /// Whether applying `items` would move a movie's Primary to another folder
+    /// while one of its Additionals stays outside the planned title folder.
+    async fn additional_movie_folder_move_blocked(
+        &self,
+        planned: &RenamePlanTitleFolder,
+        items: &[RenamePlanItem],
+    ) -> AppResult<bool> {
+        let files = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&planned.title_id)
+            .await?;
+        let moves_primary = files
+            .iter()
+            .filter(|file| file.role.is_primary())
+            .any(|file| {
+                items.iter().any(|item| {
+                    item.current_path == file.file_path
+                        && matches!(
+                            item.write_action,
+                            RenameWriteAction::Move | RenameWriteAction::Replace
+                        )
+                        && item.proposed_path.as_deref().is_some_and(|target| {
+                            stored_path_to_path_buf(target).parent()
+                                != stored_path_to_path_buf(&item.current_path).parent()
+                        })
+                })
+            });
+        Ok(moves_primary
+            && files.iter().any(|file| {
+                !file.role.is_primary()
+                    && !crate::title_folder_rules::path_is_strictly_within(
+                        &file.file_path,
+                        &planned.folder_path,
+                    )
+            }))
     }
 
     async fn normalize_existing_rename_collisions(

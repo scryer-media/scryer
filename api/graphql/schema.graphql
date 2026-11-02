@@ -19418,7 +19418,7 @@ type MutationRoot {
 		input: UpdateRecycleBinSettingsInput!
 	): RecycleBinSettingsPayload!
 	"""
-	Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+	Saves the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations), after checking the system-settings permission.
 	"""
 	updateVerificationSettings(
 		"""
@@ -25120,7 +25120,7 @@ type QueryRoot {
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
 	"""
-	Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
+	Returns the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations).
 	"""
 	verificationSettings: VerificationSettingsPayload!
 	"""
@@ -34435,10 +34435,8 @@ input UpdateTitleTagsInput {
 }
 
 """
-Verification depth applied to download-client completed-download copies.
-Location operations (library moves, root changes, consolidations) always
-verify in full and ignore this preference: they move the only copy of the
-content, so the stronger guarantee is a floor rather than a choice.
+Verification depth applied to download-client completed-download copies
+and to location operations (library moves, root changes, consolidations).
 """
 input UpdateVerificationSettingsInput {
 	"""
@@ -34614,10 +34612,8 @@ enum VerificationDepthValue {
 }
 
 """
-Verification depth applied to download-client completed-download copies.
-Location operations (library moves, root changes, consolidations) always
-verify in full and ignore this preference: they move the only copy of the
-content, so the stronger guarantee is a floor rather than a choice.
+Verification depth applied to download-client completed-download copies
+and to location operations (library moves, root changes, consolidations).
 """
 type VerificationSettingsPayload {
 	"""

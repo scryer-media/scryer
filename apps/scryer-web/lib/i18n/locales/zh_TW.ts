@@ -1273,11 +1273,8 @@ const zh_TW: LocaleDictionary = {
   "settings.historyRetentionDaysSuffix": "天",
   "settings.securitySessionDurationSuffix": "天",
   "settings.generalSaved": "已儲存一般設定。",
-  "settings.verificationDepthTitle": "匯入副本校驗",
   "settings.verificationDepthHelp":
     "Scryer 在動原始檔之前，對複製出的檔案核對得有多嚴格。",
-  "settings.verificationDepthScope":
-    "僅適用於下載使用者端的匯入副本。無論此處如何選擇，媒體庫和根目錄的移動始終執行完整校驗。",
   "settings.verificationDepthLabel": "校驗深度",
   "settings.verificationDepthFull": "完整回讀",
   "settings.verificationDepthFullHelp":

@@ -240,12 +240,11 @@ pub struct UpdateRecycleBinSettings {
     pub retention_days: Option<i64>,
 }
 
-/// How thoroughly a download-client completed-download copy is proven before
-/// its source may be touched (FR-042).
-///
-/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
-/// forces full depth for every library move, root change, and consolidation,
-/// because those relocate the user's only copy.
+/// How thoroughly a copied file is proven before its source may be touched:
+/// download-client completed-download copies and every location operation
+/// (library move, root change, consolidation) use this depth.
+/// `LOCATION_OPERATION_VERIFICATION_DEPTH` is only the default a location plan
+/// carries before the workflow resolves this setting.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationSettings {
     pub depth: crate::location::model::VerificationDepth,

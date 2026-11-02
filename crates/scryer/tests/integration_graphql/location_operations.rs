@@ -609,7 +609,7 @@ async fn graphql_location_operation_preview_classifies_a_mixed_selection() {
     // FR-043: the depth is stated before anything moves, and the statement says
     // how much it covers. A same-volume rename copies nothing, so the depth
     // applies to no files (FR-032); the statement stays consistent either way.
-    assert_eq!(preview["verification"]["depth"], "FULL");
+    assert_eq!(preview["verification"]["depth"], "QUICK");
     let verified_files = preview["verification"]["files"]
         .as_i64()
         .expect("verification file count");
@@ -785,7 +785,8 @@ async fn graphql_start_location_operation_accepts_the_previewed_plan() {
     assert_eq!(operation["sourceLibraryId"], library_id);
     assert_eq!(operation["destinationRootId"], destination_root_id);
     assert_eq!(operation["planFingerprint"], fingerprint);
-    assert_eq!(operation["verificationDepth"], "FULL");
+    // No saved preference: the operation records the configured default depth.
+    assert_eq!(operation["verificationDepth"], "QUICK");
     assert_eq!(operation["verificationFallbackCount"], 0);
     assert_eq!(operation["counters"]["titlesTotal"], 1);
     assert_eq!(operation["counters"]["filesTotal"], 1);
@@ -1730,8 +1731,8 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
     assert_eq!(plan["sourceRootId"], source_root_id);
     assert_eq!(plan["destinationRootId"], source_root_id);
     assert_eq!(plan["blocksStart"], false, "{preview}");
-    // FR-031: a location operation always verifies at full depth.
-    assert_eq!(plan["verification"]["depth"], "FULL");
+    // With no saved preference the plan carries the configured default depth.
+    assert_eq!(plan["verification"]["depth"], "QUICK");
 
     // FR-029: the stronger confirmation, and the phrase is the shared MOVE.
     assert_eq!(plan["confirmation"]["requirement"], "TYPED");

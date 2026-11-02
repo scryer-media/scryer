@@ -5801,11 +5801,8 @@ const en: LocaleDictionary = {
   "settings.historyRetentionDaysSuffix": "days",
   "settings.securitySessionDurationSuffix": "days",
   "settings.generalSaved": "General settings saved.",
-  "settings.verificationDepthTitle": "Import copy verification",
   "settings.verificationDepthHelp":
     "How thoroughly Scryer proves a copied file before it touches the source.",
-  "settings.verificationDepthScope":
-    "This applies to download-client import copies only. Library and root moves always verify in full, whatever is chosen here.",
   "settings.verificationDepthLabel": "Verification depth",
   "settings.verificationDepthFull": "Full read-back",
   "settings.verificationDepthFullHelp":

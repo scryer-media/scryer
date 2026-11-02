@@ -94,9 +94,8 @@ export type UiDateTimeFormat = "LOCALE" | "ISO24H";
 /**
  * How thoroughly a copied file is proven before its source may be touched.
  *
- * The preference governs **download-client import copies only**. Library and
- * root moves always verify in full, whatever this says, because they move the
- * only copy of the content.
+ * The preference governs download-client import copies and location
+ * operations (library moves, root changes, consolidations) alike.
  */
 export type VerificationDepth = "FULL" | "QUICK";
 

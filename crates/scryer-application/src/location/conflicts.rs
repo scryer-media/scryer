@@ -220,71 +220,80 @@ fn overlaps(a: &str, b: &str) -> bool {
 }
 
 /// Reuse the release parser's title and metadata identities; explicit disagreement loses.
+///
+/// Names compare in the catalog's lookup form (the same key the library scan
+/// resolves folders with), so a trailing article or `&` for `and` still names
+/// this title. A year one off still matches, since release and catalog years
+/// routinely disagree by one around a festival or regional premiere.
 fn folder_name_rank(title: &Title, folder: &str) -> i8 {
     let path = stored_path_to_path_buf(folder);
     let raw = path.file_name().unwrap_or_default().to_string_lossy();
     let parsed = crate::release_parser::parse_release_metadata(&raw);
     let mut identity_match = false;
+    let mut carries_id = false;
     for (source, value) in [
         ("tmdb", parsed.tmdb_id.as_deref()),
         ("imdb", parsed.imdb_id.as_deref()),
         ("tvdb", parsed.tvdb_id.as_deref()),
     ] {
-        if let Some(value) = value {
-            let expected = title
-                .external_ids
-                .iter()
-                .find(|id| id.source.eq_ignore_ascii_case(source))
-                .map(|id| id.value.as_str())
-                .or_else(|| {
-                    (source == "imdb")
-                        .then_some(title.imdb_id.as_deref())
-                        .flatten()
-                });
-            if let Some(expected) = expected {
-                if expected != value {
-                    return -1;
-                }
-                identity_match = true;
-            } else {
-                return -1;
-            }
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        carries_id = true;
+        // An id the title does not carry is no evidence either way.
+        let Some(expected) = folder_rank_external_id(title, source) else {
+            continue;
+        };
+        if !expected.eq_ignore_ascii_case(value) {
+            return -1;
         }
+        identity_match = true;
     }
     if identity_match {
         return 1;
     }
-    let normalize = |s: &str| {
-        s.chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-    };
-    let target = normalize(&title.name);
-    let matches = normalize(&parsed.normalized_title) == target
-        || parsed
-            .normalized_title_variants
-            .iter()
-            .any(|name| normalize(name) == target)
-        || title
-            .aliases
-            .iter()
-            .any(|name| normalize(name) == normalize(&parsed.normalized_title));
-    if matches
-        && parsed
+    let key = |name: &str| crate::title_matching::canonical_lookup_key(&name.replace('&', " and "));
+    let candidates = std::iter::once(parsed.normalized_title.as_str())
+        .chain(parsed.normalized_title_variants.iter().map(String::as_str))
+        .map(key)
+        .filter(|candidate| !candidate.is_empty())
+        .collect::<Vec<_>>();
+    let name_matches = std::iter::once(title.name.as_str())
+        .chain(title.aliases.iter().map(String::as_str))
+        .map(key)
+        .filter(|expected| !expected.is_empty())
+        .any(|expected| candidates.contains(&expected));
+    let year_matches = parsed.year.is_none_or(|year| {
+        title
             .year
-            .is_none_or(|year| title.year.is_none_or(|expected| year == expected))
-    {
+            .is_none_or(|expected| (year - expected).abs() <= 1)
+    });
+    if name_matches && year_matches {
         return 1;
     }
-    // A recognizable release or year identifies a different work, never junk.
-    if (parsed.year.is_some() || parsed.quality.is_some() || parsed.source.is_some())
-        && !parsed.normalized_title.is_empty()
+    // A recognizable release, year or id tag identifies a different work, never junk.
+    if (carries_id || parsed.year.is_some() || parsed.quality.is_some() || parsed.source.is_some())
+        && !candidates.is_empty()
     {
         -1
     } else {
         0
     }
+}
+
+/// The title's id for `source`, trimmed, the way the library scan reads it.
+fn folder_rank_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
+    if source == "imdb"
+        && let Some(imdb_id) = title.imdb_id.as_deref().map(str::trim)
+        && !imdb_id.is_empty()
+    {
+        return Some(imdb_id);
+    }
+    title
+        .external_ids
+        .iter()
+        .find(|id| id.source.eq_ignore_ascii_case(source) && !id.value.trim().is_empty())
+        .map(|id| id.value.trim())
 }
 
 async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Vec<String>)> {
@@ -429,7 +438,22 @@ impl AppUseCase {
         }
         let mut files = Vec::new();
         let mut directories = Vec::new();
-        for folder in &folders {
+        // Distinct spellings can name one directory on a case-insensitive
+        // volume. Planning them as two folders would let keep-one dispose the
+        // only copy, so physical identity, not spelling, decides.
+        let mut folder_identities = BTreeMap::new();
+        for (index, folder) in folders.iter().enumerate() {
+            if let Some(identity) = directory_identity(&stored_path_to_path_buf(folder)).await?
+                && folder_identities.insert(identity, index).is_some()
+            {
+                return Err(refused(
+                    refusal::FOLDER_UNSAFE,
+                    "Two conflict folders are the same directory under different spellings",
+                ));
+            }
+        }
+        let mut seen_inodes: BTreeMap<String, usize> = BTreeMap::new();
+        for (index, folder) in folders.iter().enumerate() {
             if !crate::stored_paths::stored_path_is_native(folder) {
                 return Err(refused(
                     refusal::FOLDER_UNSAFE,
@@ -474,6 +498,42 @@ impl AppUseCase {
                 ));
             }
             let (mut entries, mut dirs) = enumerate(folder, &root.path).await?;
+            for dir in &dirs {
+                if let Some(identity) = directory_identity(&stored_path_to_path_buf(dir)).await?
+                    && folder_identities
+                        .get(&identity)
+                        .is_some_and(|other| *other != index)
+                {
+                    return Err(refused(
+                        refusal::FOLDER_UNSAFE,
+                        "A conflict folder is reachable inside another under a different spelling",
+                    ));
+                }
+            }
+            for entry in &entries {
+                let Some(inode) = inode_key(&entry.version) else {
+                    continue;
+                };
+                match seen_inodes.get(&inode) {
+                    Some(other)
+                        if *other != index
+                            && super::hardlinks::link_count(&stored_path_to_path_buf(
+                                &entry.path,
+                            ))?
+                            .count()
+                                == Some(1) =>
+                    {
+                        return Err(refused(
+                            refusal::FOLDER_UNSAFE,
+                            "One file is reachable from two conflict folders; its folders may be one directory",
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen_inodes.insert(inode, index);
+                    }
+                }
+            }
             files.append(&mut entries);
             directories.append(&mut dirs);
         }
@@ -498,6 +558,11 @@ impl AppUseCase {
                 .iter()
                 .find(|media| folder_paths_match(&media.file_path, &file.path))
                 .map(|media| media.id.clone());
+            // A tracked row is this title's media wherever it sits and whatever
+            // its stem says; the feature filter only classifies untracked files.
+            if file.media_file_id.is_some() {
+                file.media = true;
+            }
         }
         let profile = self
             .resolve_quality_profile(crate::catalog::release_search::QualityProfileLookup {
@@ -698,8 +763,11 @@ impl AppUseCase {
                 permanent_delete_paths.push(path.clone());
             }
         }
+        // Only an inode a disposal could unlink needs a content proof. Every
+        // pathname of that inode shares the proof, so hashing the disposal
+        // targets themselves covers the files linked to them.
         if !dispose.is_empty() {
-            for file in &files {
+            for file in files.iter().filter(|file| dispose.contains(&file.path)) {
                 if let Some(link_count) =
                     super::hardlinks::link_count(&stored_path_to_path_buf(&file.path))?.count()
                     && link_count > 1
@@ -930,6 +998,106 @@ mod native_name_tests {
     }
 }
 
+#[cfg(test)]
+mod folder_name_rank_tests {
+    use super::*;
+    use scryer_domain::{ExternalId, MediaFacet};
+
+    fn movie(name: &str, year: i32, external_ids: &[(&str, &str)]) -> Title {
+        Title {
+            id: "title-1".into(),
+            name: name.into(),
+            library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+            root_folder_id: scryer_domain::root_folder_id_for_path("/library"),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            tags: vec![],
+            canonical_tags: vec![],
+            external_ids: external_ids
+                .iter()
+                .map(|(source, value)| ExternalId {
+                    source: (*source).into(),
+                    kind: None,
+                    value: (*value).into(),
+                })
+                .collect(),
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            year: Some(year),
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            movie_release_dates: None,
+            folder_path: None,
+        }
+    }
+
+    fn rank(title: &Title, name: &str) -> i8 {
+        folder_name_rank(title, &path_to_stored_string(format!("/library/{name}")))
+    }
+
+    #[test]
+    fn a_trailing_article_still_names_the_title() {
+        let title = movie("The Emberfall", 2024, &[]);
+        assert_eq!(rank(&title, "Emberfall, The (2024)"), 1);
+        assert_eq!(rank(&title, "The Emberfall (2024)"), 1);
+    }
+
+    #[test]
+    fn an_ampersand_and_the_word_and_name_the_same_title() {
+        let title = movie("Ash & Ember", 2024, &[]);
+        assert_eq!(rank(&title, "Ash and Ember (2024)"), 1);
+        let title = movie("Ash and Ember", 2024, &[]);
+        assert_eq!(rank(&title, "Ash & Ember (2024)"), 1);
+    }
+
+    #[test]
+    fn a_year_one_off_matches_but_a_distant_year_is_another_work() {
+        let title = movie("Emberfall", 2024, &[]);
+        assert_eq!(rank(&title, "Emberfall (2023)"), 1);
+        assert_eq!(rank(&title, "Emberfall (2025)"), 1);
+        assert_eq!(rank(&title, "Emberfall (2019)"), -1);
+    }
+
+    #[test]
+    fn tag_ids_compare_trimmed_and_unknown_sources_are_no_evidence() {
+        let title = movie("Emberfall", 2024, &[("tmdb", " 603 "), ("imdb", " ")]);
+        assert_eq!(rank(&title, "Ashen Harbor (2024) {tmdb-603}"), 1);
+        assert_eq!(rank(&title, "Emberfall (2024) {tmdb-604}"), -1);
+        // The title's imdb id is blank, so an imdb tag decides nothing.
+        assert_eq!(rank(&title, "Emberfall (2024) {imdb-tt9999999}"), 1);
+        assert_eq!(rank(&title, "Different Feature {imdb-tt9999999}"), -1);
+    }
+
+    #[test]
+    fn junk_names_are_neutral_and_other_works_lose() {
+        let title = movie("Emberfall", 2024, &[]);
+        assert_eq!(rank(&title, "ADEG78"), 0);
+        assert_eq!(rank(&title, "Different Feature (2024)"), -1);
+        assert_eq!(rank(&title, "Different.Feature.2160p.BluRay"), -1);
+    }
+}
+
 fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
     let parsed = crate::release_parser::parse_release_metadata(
         &stored_path_to_path_buf(&file.path)
@@ -949,6 +1117,32 @@ fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
         release_group: parsed.release_group,
         edition: parsed.edition,
         ..Default::default()
+    }
+}
+
+/// The `dev:ino` prefix of a unix file version; `None` where versions carry no inode.
+fn inode_key(version: &str) -> Option<String> {
+    if !cfg!(unix) || version.starts_with("symlink:") {
+        return None;
+    }
+    let mut parts = version.split(':');
+    Some(format!("{}:{}", parts.next()?, parts.next()?))
+}
+
+/// A directory's physical `(dev, ino)`, or `None` on platforms without inodes.
+async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u64)>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = tokio::fs::symlink_metadata(path)
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+        Ok(Some((metadata.dev(), metadata.ino())))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(None)
     }
 }
 
@@ -1409,6 +1603,11 @@ impl AppUseCase {
         let journal: ConflictTaskJournal =
             serde_json::from_str(run.progress_json.as_deref().unwrap_or(""))
                 .map_err(|e| AppError::Repository(e.to_string()))?;
+        // A journal naming no library authorizes nobody: hide it rather than
+        // let an empty list skip the permission check.
+        if journal.library_ids.is_empty() {
+            return Ok(None);
+        }
         for library in &journal.library_ids {
             self.require_library_permission(actor, library, LibraryPermission::ResolveImports)
                 .await?;
@@ -1968,6 +2167,17 @@ impl AppUseCase {
                 "The chosen Primary could not be registered",
             )
         })?;
+        // A disposal target keeps its row until cleanup removes it. Demote it
+        // with the same write, so a failed cleanup never leaves two Primaries.
+        let current = repo.list_media_files_for_title(&planned.title_id).await?;
+        additional.extend(
+            conflict
+                .files
+                .iter()
+                .filter(|file| conflict.dispose_paths.contains(&file.path))
+                .filter_map(|file| file.media_file_id.clone())
+                .filter(|id| current.iter().any(|media| &media.id == id)),
+        );
         additional.retain(|id| id != &primary);
         additional.sort();
         additional.dedup();

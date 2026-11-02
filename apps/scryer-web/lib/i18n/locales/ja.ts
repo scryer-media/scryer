@@ -878,11 +878,8 @@ const ja: LocaleDictionary = {
     "{{total}}件、{{renamable}}件変更可能、{{noop}}件変更なし、{{conflicts}}件競合、{{errors}}件エラー",
   "settings.sectionTitle": "設定 • {{section}}",
   "settings.generalText": "一般アプリケーション設定。",
-  "settings.verificationDepthTitle": "インポートコピーの検証",
   "settings.verificationDepthHelp":
     "コピーしたファイルをどこまで厳密に検証してから元のファイルに手を付けるかを決めます。",
-  "settings.verificationDepthScope":
-    "これはダウンロードクライアントからのインポートコピーにのみ適用されます。ライブラリやルートの移動は、ここでの選択に関係なく常に完全に検証されます。",
   "settings.verificationDepthLabel": "検証の深さ",
   "settings.verificationDepthFull": "完全な読み戻し",
   "settings.verificationDepthFullHelp":
