@@ -1,15 +1,11 @@
 use crate::{AppResult, AppUseCase, RecycledItemHistory, recycle_bin::RecycleManifest};
 use scryer_domain::{DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const CANDIDATE_LIMIT: usize = 5_000;
 const SUMMARY_LIMIT: usize = 50;
 
-pub(super) async fn load_summary(
-    app: &AppUseCase,
-    manifest: &RecycleManifest,
-    title_id: &str,
-) -> AppResult<RecycledItemHistory> {
+async fn load_candidates(app: &AppUseCase, title_id: &str) -> AppResult<(Vec<DomainEvent>, bool)> {
     let mut candidates = Vec::new();
     let mut filter = DomainEventFilter {
         title_id: Some(title_id.to_string()),
@@ -34,6 +30,15 @@ pub(super) async fn load_summary(
     }
     let scan_limited = candidates.len() > CANDIDATE_LIMIT;
     candidates.truncate(CANDIDATE_LIMIT);
+    Ok((candidates, scan_limited))
+}
+
+pub(super) async fn load_summary(
+    app: &AppUseCase,
+    manifest: &RecycleManifest,
+    title_id: &str,
+) -> AppResult<RecycledItemHistory> {
+    let (candidates, scan_limited) = load_candidates(app, title_id).await?;
     let mut matched = correlated_events(manifest, &candidates);
     matched.sort_by_key(|event| std::cmp::Reverse((event.occurred_at, event.sequence)));
     let truncated = scan_limited || matched.len() > SUMMARY_LIMIT;
@@ -46,6 +51,73 @@ pub(super) async fn load_summary(
             .collect(),
         truncated,
     })
+}
+
+impl AppUseCase {
+    /// Resolve episode links for the selected page, reading history once per title.
+    pub async fn populate_recycled_item_episode_ids(
+        &self,
+        actor: &scryer_domain::User,
+        items: &mut [crate::RecycledItem],
+    ) -> AppResult<()> {
+        let mut by_title: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, item) in items.iter().enumerate() {
+            if matches!(
+                item.title_facet,
+                Some(scryer_domain::MediaFacet::Series | scryer_domain::MediaFacet::Anime)
+            ) && item.original_file_id.is_some()
+                && let Some(title_id) = &item.title_id
+            {
+                by_title.entry(title_id.clone()).or_default().push(index);
+            }
+        }
+        for (title_id, indices) in by_title {
+            self.require_library_permission(
+                actor,
+                &items[indices[0]].library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            let (events, _) = load_candidates(self, &title_id).await?;
+            for index in indices {
+                let item = &mut items[index];
+                let mut episodes = HashSet::new();
+                for event in events
+                    .iter()
+                    .filter(|event| event.title_id.as_deref() == Some(&title_id))
+                {
+                    let episode_ids = match &event.payload {
+                        DomainEventPayload::MediaFileDeleted(data)
+                            if data.file_id == item.original_file_id =>
+                        {
+                            &data.episode_ids
+                        }
+                        DomainEventPayload::MediaFileUpgraded(data)
+                            if data.previous_file_id == item.original_file_id
+                                && item
+                                    .replacement_file_id
+                                    .as_ref()
+                                    .is_none_or(|id| data.current_file_id.as_ref() == Some(id)) =>
+                        {
+                            &data.episode_ids
+                        }
+                        _ => continue,
+                    };
+                    episodes.extend(
+                        episode_ids
+                            .iter()
+                            .filter(|id| !id.trim().is_empty())
+                            .cloned(),
+                    );
+                }
+                // Multi-episode files and missing identities link to the title overview.
+                item.episode_id = (episodes.len() == 1)
+                    .then(|| episodes.into_iter().next())
+                    .flatten();
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Correlate by retained file/import/download identities, never by a title's

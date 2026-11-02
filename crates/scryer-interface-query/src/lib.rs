@@ -3423,10 +3423,14 @@ impl SystemQueries {
         let total_count = all.len() as i32;
         let limit = limit.clamp(1, 500) as usize;
         let offset = offset.max(0) as usize;
-        let items = all
+        let mut page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+        if ctx.look_ahead().field("items").field("episodeId").exists() {
+            app.populate_recycled_item_episode_ids(&actor, &mut page)
+                .await
+                .map_err(to_gql_error)?;
+        }
+        let items = page
             .into_iter()
-            .skip(offset)
-            .take(limit)
             .map(|item| {
                 Ok(RecycledItemPayload {
                     id: ID::from(item.id),
@@ -3435,6 +3439,8 @@ impl SystemQueries {
                     size_bytes: Long::from_u64_saturating(item.size_bytes),
                     title_id: item.title_id.map(ID::from),
                     title_name: item.title_name,
+                    title_facet: item.title_facet.map(|facet| facet.as_str().to_string()),
+                    episode_id: item.episode_id.map(ID::from),
                     reason: item.reason,
                     recycled_at: parse_required_datetime(
                         &item.recycled_at,

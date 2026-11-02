@@ -19,6 +19,10 @@ pub struct RecycledItemPayload {
     pub title_id: Option<async_graphql::ID>,
     /// Associated title name, or null when no title was matched.
     pub title_name: Option<String>,
+    /// Current local title facet, or null when the entry has no matching local title.
+    pub title_facet: Option<String>,
+    /// Single episode tied to the recycled file; null for movies or ambiguous history.
+    pub episode_id: Option<async_graphql::ID>,
     /// Reason the file entered the recycle bin.
     pub reason: String,
     /// Time the file entered the recycle bin in UTC.

@@ -26484,6 +26484,14 @@ type RecycledItemPayload {
 	"""
 	titleName: String
 	"""
+	Current local title facet, or null when the entry has no matching local title.
+	"""
+	titleFacet: String
+	"""
+	Single episode tied to the recycled file; null for movies or ambiguous history.
+	"""
+	episodeId: ID
+	"""
 	Reason the file entered the recycle bin.
 	"""
 	reason: String!

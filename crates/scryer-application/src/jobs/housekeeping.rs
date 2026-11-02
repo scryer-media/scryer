@@ -178,6 +178,7 @@ fn recycled_item_from_entry(
     entry: crate::recycle_bin::RecycleEntry,
     library: &RecycleEntryLibrary,
     title_name: Option<String>,
+    title_facet: Option<scryer_domain::MediaFacet>,
     retention_days: u32,
 ) -> RecycledItem {
     let original_path = entry.manifest.original_path_buf();
@@ -200,6 +201,10 @@ fn recycled_item_from_entry(
         size_bytes: entry.manifest.size_bytes,
         title_id: entry.manifest.title_id,
         title_name,
+        title_facet,
+        episode_id: None,
+        original_file_id: entry.manifest.original_file_id,
+        replacement_file_id: entry.manifest.replacement_file_id,
         reason: entry.manifest.reason,
         recycled_at: entry.manifest.recycled_at,
         scheduled_deletion_at,
@@ -1029,7 +1034,7 @@ impl AppUseCase {
             let Some(library) = resolve_recycle_entry_library_with_title(
                 &entry,
                 &roots,
-                title.map(|(library_id, _)| library_id.as_str()),
+                title.map(|(library_id, _, _)| library_id.as_str()),
             ) else {
                 continue;
             };
@@ -1037,7 +1042,10 @@ impl AppUseCase {
                 items.push(recycled_item_from_entry(
                     entry,
                     &library,
-                    title.map(|(_, title_name)| title_name.clone()),
+                    title.map(|(_, title_name, _)| title_name.clone()),
+                    title
+                        .filter(|(library_id, _, _)| library_id == &library.id)
+                        .map(|(_, _, facet)| facet.clone()),
                     retention_days,
                 ));
             }
@@ -1138,7 +1146,7 @@ impl AppUseCase {
     async fn recycle_entry_titles_by_id(
         &self,
         mut title_ids: Vec<String>,
-    ) -> AppResult<HashMap<String, (String, String)>> {
+    ) -> AppResult<HashMap<String, (String, String, scryer_domain::MediaFacet)>> {
         const MAX_CONCURRENT_TITLE_LOOKUPS: usize = 16;
 
         title_ids.sort();
@@ -1163,7 +1171,7 @@ impl AppUseCase {
                 AppError::Repository(format!("recycle-bin title lookup task failed: {error}"))
             })?;
             if let Some(title) = title? {
-                titles_by_id.insert(title_id, (title.library_id, title.name));
+                titles_by_id.insert(title_id, (title.library_id, title.name, title.facet));
             }
 
             if let Some(next_title_id) = remaining_ids.next() {

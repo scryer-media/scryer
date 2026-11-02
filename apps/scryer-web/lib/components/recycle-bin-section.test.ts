@@ -9,6 +9,18 @@ const require = createRequire(import.meta.url);
 type Props = Parameters<typeof SettingsRecycleBinSection>[0];
 type Element = { type: unknown; props: Record<string, unknown> };
 
+class ClickTarget {
+  readonly selector: string;
+
+  constructor(selector: string) {
+    this.selector = selector;
+  }
+
+  closest(selectors: string) {
+    return selectors.split(", ").includes(this.selector) ? this : null;
+  }
+}
+
 function elements(node: unknown): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!node || typeof node !== "object" || !("props" in node)) return [];
@@ -16,10 +28,11 @@ function elements(node: unknown): Element[] {
   return [element, ...elements(element.props.children)];
 }
 
-function mountSection() {
+function mountSection(itemOverrides: Partial<Props["items"][number]> = {}) {
   const slots: unknown[] = [];
   let cursor = 0;
   const overrides: Record<string, unknown> = {
+    "react-router": { Link: "Link" },
     react: {
       Fragment: require("react").Fragment,
       useMemo: (factory: () => unknown) => factory(),
@@ -41,6 +54,7 @@ function mountSection() {
     "@/lib/context/ui-settings-context": { useUiDateTimeFormat: () => "auto" },
     "@/lib/utils/recycle-bin": require("../utils/recycle-bin.ts"),
     "@/lib/utils/dom-ids": require("../utils/dom-ids.ts"),
+    "@/lib/utils/calendar-event-href": require("../utils/calendar-event-href.ts"),
     "@/lib/utils/date-format": { formatUiDateTime: (value: string) => value },
     "./recycle-bin-history": { RecycleBinHistory: "recycle-history" },
   };
@@ -60,7 +74,7 @@ function mountSection() {
   const module = {
     exports: {} as { SettingsRecycleBinSection: (props: Props) => unknown },
   };
-  new Function("require", "module", "exports", code)(
+  new Function("require", "module", "exports", "Element", code)(
     (id: string) => {
       if (overrides[id]) return overrides[id];
       if (id.startsWith("@/components/") || id === "lucide-react")
@@ -69,11 +83,14 @@ function mountSection() {
     },
     module,
     module.exports,
+    ClickTarget,
   );
   const items = ["first", "second"].map((id) => ({
     id,
     titleId: "title",
     titleName: "Fixture title",
+    titleFacet: "movie",
+    episodeId: null,
     libraryId: "library",
     libraryName: "Fixture library",
     fileName: `${id}.mkv`,
@@ -83,6 +100,7 @@ function mountSection() {
     recycledAt: "2026-01-01T00:00:00Z",
     scheduledDeletionAt: "2026-01-08T00:00:00Z",
     reason: "upgrade_replaced",
+    ...itemOverrides,
   }));
   const noop = () => {};
   const props: Props = {
@@ -146,4 +164,70 @@ test("history mounts only for the expanded item and changes scope when another r
   );
   toggle(tree, "second");
   assert.equal(history(render()).length, 0);
+});
+
+test("file titles link to movies, exact episodes, or a title overview when no single episode is known", () => {
+  for (const [item, expected] of [
+    [{ titleFacet: "movie", episodeId: null }, "/movies?id=title"],
+    [
+      { titleFacet: "series", episodeId: "episode-1" },
+      "/series?id=title&episodeId=episode-1",
+    ],
+    [
+      { titleFacet: "anime", episodeId: "episode-2" },
+      "/anime?id=title&episodeId=episode-2",
+    ],
+    [{ titleFacet: "series", episodeId: null }, "/series?id=title"],
+  ] as const) {
+    const tree = mountSection(item)();
+    const link = tree.find(
+      (node) => node.props.id === "settings-recycle-bin-item-link-first",
+    );
+    assert.ok(link);
+    assert.equal(link.type, "Link");
+    assert.equal(link.props.to, expected);
+  }
+  for (const item of [{ titleId: null }, { titleFacet: null }]) {
+    assert.equal(
+      mountSection(item)().some((node) => node.type === "Link"),
+      false,
+    );
+  }
+});
+
+test("row clicks toggle history while embedded controls leave disclosure state unchanged", () => {
+  const render = mountSection();
+  const clickRow = (selector: string) => {
+    const row = render().find(
+      (node) => node.props.id === "settings-recycle-bin-row-first",
+    );
+    assert.ok(row);
+    (row.props.onClick as (event: { target: ClickTarget }) => void)({
+      target: new ClickTarget(selector),
+    });
+  };
+  const expanded = () =>
+    render().some((node) => node.type === "recycle-history");
+  const controls = [
+    "button",
+    "a",
+    "input",
+    "select",
+    "textarea",
+    "[role='button']",
+    "[role='checkbox']",
+  ];
+
+  for (const control of controls) {
+    clickRow(control);
+    assert.equal(expanded(), false, control);
+  }
+  clickRow("span");
+  assert.equal(expanded(), true);
+  for (const control of controls) {
+    clickRow(control);
+    assert.equal(expanded(), true, control);
+  }
+  clickRow("span");
+  assert.equal(expanded(), false);
 });

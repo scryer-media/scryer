@@ -20,17 +20,18 @@ export function RecycleBinHistory({ id }: { id: string }) {
   const summary = data?.recycledItemHistory;
 
   return (
-    <div className="min-w-0 space-y-3 p-2" aria-busy={fetching}>
-      <p className="text-sm font-medium">{t("settings.recycleBinHistory")}</p>
-      <p className="text-xs text-muted-foreground">
-        {t("settings.recycleBinHistoryHelp")}
-      </p>
+    <div
+      className="min-w-0 w-full space-y-3"
+      role="region"
+      aria-label={t("settings.recycleBinHistory")}
+      aria-busy={fetching}
+    >
       {error ? (
         <div
           role="alert"
-          className="flex flex-wrap items-center gap-2 text-sm text-destructive"
+          className="flex min-w-0 flex-wrap items-center gap-2 p-3 text-sm text-destructive [overflow-wrap:anywhere]"
         >
-          <span>
+          <span className="min-w-0">
             {userFacingGraphQlErrorMessage(error, t("history.loadError"), t)}
           </span>
           <Button
@@ -44,19 +45,24 @@ export function RecycleBinHistory({ id }: { id: string }) {
         </div>
       ) : null}
       {fetching && !summary ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div
+          role="status"
+          className="flex min-h-24 items-center justify-center gap-2 text-sm text-muted-foreground"
+        >
           <LoadingMark className="h-4 w-4" />
           {t("label.loading")}
         </div>
       ) : summary ? (
         <>
-          <HistoryEventTable
-            events={summary.items}
-            showActor
-            emptyMessage={t("settings.recycleBinHistoryEmpty")}
-          />
+          <div className="overflow-hidden bg-background [&>p]:px-3">
+            <HistoryEventTable
+              events={summary.items}
+              showActor
+              emptyMessage={t("settings.recycleBinHistoryEmpty")}
+            />
+          </div>
           {summary.truncated ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="px-3 pb-3 text-xs text-muted-foreground">
               {t("settings.recycleBinHistoryTruncated")}
             </p>
           ) : null}

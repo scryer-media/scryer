@@ -3849,6 +3849,8 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       sizeBytes
       titleId
       titleName
+      titleFacet
+      episodeId
       reason
       recycledAt
       scheduledDeletionAt

@@ -2,8 +2,9 @@ import { isArchivePasswordFailure } from "@/lib/utils/archive-password-reason";
 import * as React from "react";
 import { Link } from "react-router";
 import { useQuery } from "urql";
-import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableDisclosureButton } from "@/components/ui/table-disclosure-button";
 import {
   CalendarEventHoverCard,
   type CalendarEpisodeItem,
@@ -561,12 +562,10 @@ export function HistoryEventTable({
                 >
                   <TableCell className="align-middle text-center @max-[64rem]/history:absolute @max-[64rem]/history:right-3 @max-[64rem]/history:top-3">
                     {hasExpandableContent ? (
-                      <button
-                        type="button"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-card/80 text-muted-foreground transition hover:text-foreground"
+                      <TableDisclosureButton
                         id={selectorId("history-event-expand", event.id)}
                         onClick={() => toggleExpanded(event.id)}
-                        aria-expanded={isExpanded}
+                        expanded={isExpanded}
                         aria-controls={
                           isExpanded
                             ? `history-event-details-${event.id}`
@@ -577,13 +576,7 @@ export function HistoryEventTable({
                             ? t("history.collapseDetails")
                             : t("history.expandDetails")
                         }
-                      >
-                        {isExpanded ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </button>
+                      />
                     ) : null}
                   </TableCell>
                   <TableCell className="align-middle @max-[64rem]/history:col-span-2 @max-[64rem]/history:pr-10!">
