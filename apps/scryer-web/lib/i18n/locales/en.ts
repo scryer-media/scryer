@@ -3251,6 +3251,23 @@ const en: LocaleDictionary = {
     "The requested value version is not valid semantic version.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE": "Votes cannot be negative.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "The script schedule is invalid.",
+  "error.reason.STANDBY_NOT_FOUND": "This saved candidate no longer exists.",
+  "error.reason.STANDBY_NOT_AVAILABLE":
+    "This saved candidate is no longer available. Refresh the list and try again.",
+  "error.reason.STANDBY_NOT_QUEUEABLE":
+    "The saved release could not be queued. It remains available to retry.",
+  "error.reason.STANDBY_CANCELLATION_UNCONFIRMED":
+    "The download queue or cancellation could not be confirmed. The saved release was not queued.",
+  "error.reason.STANDBY_CANCELLATION_INCOMPLETE":
+    "{{count}} conflicting download(s) were cancelled, but the rest could not be. The saved release was not queued.",
+  "error.reason.STANDBY_CONFLICT_NOT_REPLACEABLE":
+    "A conflicting download is already verifying, extracting or importing and cannot be cancelled. Nothing was cancelled or queued.",
+  "error.reason.STANDBY_RELEASE_BLOCKLISTED":
+    "This release is on the title's blocklist. Remove it from the blocklist to queue it.",
+  "error.reason.STANDBY_ALREADY_ACTIVE":
+    "This release is already in the download queue.",
+  "error.reason.STANDBY_TITLE_BUSY":
+    "Another search or queue action on this title is running. Try again when it finishes.",
   "error.reason.SECURITY_ACCOUNT_NO_PASSWORD_SET":
     "Account has no password set.",
   "error.reason.SECURITY_ACTOR_CAPABILITY_CLAIM_UNKNOWN":
@@ -8355,13 +8372,6 @@ const en: LocaleDictionary = {
   "wanted.standbyQueuedRefreshFailed":
     "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
   "wanted.standbyCancelAndQueue": "Cancel and queue",
-  "wanted.standbyNotFound": "This saved candidate no longer exists.",
-  "wanted.standbyNotAvailable":
-    "This saved candidate is no longer available. Refresh the list and try again.",
-  "wanted.standbyNotQueueable":
-    "The saved release could not be queued. It remains available to retry.",
-  "wanted.standbyCancellationUnconfirmed":
-    "The download queue or cancellation could not be confirmed. The saved release was not queued.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",

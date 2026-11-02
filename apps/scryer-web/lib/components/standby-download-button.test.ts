@@ -31,6 +31,7 @@ const conflict = (id: string) => ({
 
 function mount(responses: unknown[], refreshFails = false) {
   const slots: unknown[] = [];
+  const initials: unknown[] = [];
   let cursor = 0;
   let complete: (() => void) | undefined;
   let refreshed = 0;
@@ -43,12 +44,17 @@ function mount(responses: unknown[], refreshFails = false) {
     },
     useState(initial: unknown) {
       const index = cursor++;
-      if (!(index in slots)) slots[index] = initial;
+      if (!(index in slots)) {
+        slots[index] = initial;
+        initials[index] = initial;
+      }
       return [
         slots[index],
         (value: unknown) => {
           slots[index] = value;
-          if (index === 1 && value === false) complete?.();
+          // The busy flag is the only boolean state; its return to false
+          // ends a request, whatever order the hooks are declared in.
+          if (initials[index] === false && value === false) complete?.();
         },
       ];
     },
@@ -77,14 +83,19 @@ function mount(responses: unknown[], refreshFails = false) {
       DialogDescription: "description",
     },
     "@/lib/context/translate-context": {
-      useTranslate: () => (key: string) => key,
+      useTranslate:
+        () => (key: string, values?: Record<string, unknown>) =>
+          values?.count === undefined ? key : `${key}:${values.count}`,
     },
     "@/lib/context/global-status-context": {
       useGlobalStatus: () => (message: string) => statuses.push(message),
     },
     "@/lib/graphql/mutations": { queueStandbyReleaseMutation: "queue" },
     "@/lib/graphql/error-message": {
-      graphQlErrorExtension: () => undefined,
+      ERROR_REASON_KEYS: {
+        STANDBY_CANCELLATION_INCOMPLETE:
+          "error.reason.STANDBY_CANCELLATION_INCOMPLETE",
+      },
       userFacingGraphQlErrorMessage: () => "failure",
     },
   };
@@ -282,6 +293,85 @@ test(
     );
     assert.ok(
       h.elements(h.render()).some((item) => item.props.role === "alert"),
+    );
+  },
+);
+
+test(
+  "standby partial cancellation keeps the remaining conflicts and refreshes",
+  { timeout: 5000 },
+  async () => {
+    const h = mount([
+      {
+        data: {
+          queueStandbyRelease: {
+            grabbed: false,
+            conflicts: [conflict("one"), conflict("two")],
+          },
+        },
+      },
+      {
+        data: {
+          queueStandbyRelease: {
+            grabbed: false,
+            conflicts: [conflict("two")],
+            cancelled: [conflict("one")],
+            reason: "STANDBY_CANCELLATION_INCOMPLETE",
+          },
+        },
+      },
+    ]);
+    await h.click("wanted.downloadStandby");
+    await h.click("wanted.standbyCancelAndQueue");
+    const tree = h.render();
+    assert.deepEqual(
+      h
+        .elements(tree)
+        .filter((item) => item.type === "li")
+        .map((item) => [item.props.children].flat()[0]),
+      ["Release two"],
+    );
+    assert.equal(
+      h.statuses.at(-1),
+      "error.reason.STANDBY_CANCELLATION_INCOMPLETE:1",
+    );
+    assert.equal(h.refreshed(), 1);
+  },
+);
+
+test(
+  "dismissing the conflict dialog clears a stale error",
+  { timeout: 5000 },
+  async () => {
+    const h = mount([
+      {
+        data: {
+          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
+        },
+      },
+      { error: new Error("synthetic cancellation failure") },
+      {
+        data: {
+          queueStandbyRelease: { grabbed: false, conflicts: [conflict("one")] },
+        },
+      },
+    ]);
+    await h.click("wanted.downloadStandby");
+    await h.click("wanted.standbyCancelAndQueue");
+    assert.ok(
+      h.elements(h.render()).some((item) => item.props.role === "alert"),
+    );
+    const dismiss = h
+      .elements(h.render())
+      .find(
+        (item) =>
+          item.type === "button" &&
+          [item.props.children].flat().includes("label.cancel"),
+      );
+    dismiss!.props.onClick();
+    await h.click("wanted.downloadStandby");
+    assert.ok(
+      !h.elements(h.render()).some((item) => item.props.role === "alert"),
     );
   },
 );

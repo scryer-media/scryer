@@ -12,7 +12,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { queueStandbyReleaseMutation } from "@/lib/graphql/mutations";
 import {
-  graphQlErrorExtension,
+  ERROR_REASON_KEYS,
   userFacingGraphQlErrorMessage,
 } from "@/lib/graphql/error-message";
 import type { PendingReleaseItem } from "@/lib/types";
@@ -24,13 +24,6 @@ type Conflict = {
   sourceTitle: string | null;
   titleName: string;
   state: string | null;
-};
-
-const STANDBY_REFUSAL_KEYS: Record<string, string> = {
-  STANDBY_NOT_FOUND: "wanted.standbyNotFound",
-  STANDBY_NOT_AVAILABLE: "wanted.standbyNotAvailable",
-  STANDBY_NOT_QUEUEABLE: "wanted.standbyNotQueueable",
-  STANDBY_CANCELLATION_UNCONFIRMED: "wanted.standbyCancellationUnconfirmed",
 };
 
 export function StandbyDownloadButton({
@@ -80,20 +73,32 @@ export function StandbyDownloadButton({
             level: "ERROR",
           });
         }
+      } else if (result?.reason) {
+        // Cancellation stopped part-way: some downloads are gone, the rest
+        // still run, and nothing was queued.
+        const key = ERROR_REASON_KEYS[result.reason];
+        const message = key
+          ? t(key, { count: result.cancelled?.length ?? 0 })
+          : t("status.apiError");
+        setConflicts(result.conflicts ?? []);
+        setErrorMessage(message);
+        setGlobalStatus(message, { level: "ERROR" });
+        try {
+          await onQueued();
+        } catch {
+          // The refusal above is the message that matters.
+        }
       } else if (result?.conflicts?.length) {
         setConflicts(result.conflicts);
       } else {
-        setErrorMessage(t("wanted.standbyNotQueueable"));
+        setErrorMessage(t("error.reason.STANDBY_NOT_QUEUEABLE"));
       }
     } catch (error) {
-      const reason =
-        graphQlErrorExtension(error, "VALIDATION_ERROR", "reason") ??
-        graphQlErrorExtension(error, "NOT_FOUND", "reason");
-      const key =
-        typeof reason === "string" ? STANDBY_REFUSAL_KEYS[reason] : undefined;
-      const message = key
-        ? t(key)
-        : userFacingGraphQlErrorMessage(error, t("status.apiError"), t);
+      const message = userFacingGraphQlErrorMessage(
+        error,
+        t("status.apiError"),
+        t,
+      );
       setErrorMessage(message);
       setGlobalStatus(message, { level: "ERROR" });
     } finally {
@@ -158,7 +163,10 @@ export function StandbyDownloadButton({
             <Button
               variant="ghost"
               disabled={busy}
-              onClick={() => setConflicts([])}
+              onClick={() => {
+                setConflicts([]);
+                setErrorMessage(null);
+              }}
             >
               {t("label.cancel")}
             </Button>
