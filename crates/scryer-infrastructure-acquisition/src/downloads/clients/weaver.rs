@@ -86,6 +86,26 @@ impl WeaverErrorCode {
     }
 }
 
+/// Codes Weaver sends in the JSON body of an HTTP refusal, `{"code", "error"}`,
+/// when it turns a request away before GraphQL runs. They are distinct from
+/// the GraphQL `extensions.code` above and from the schema features below.
+mod weaver_http_refusal {
+    /// 401: an API key was sent and refused.
+    pub const INVALID_API_KEY: &str = "INVALID_API_KEY";
+    /// 401: no API key was sent.
+    pub const AUTHENTICATION_REQUIRED: &str = "AUTHENTICATION_REQUIRED";
+    /// 403: a browser session failed its origin or CSRF binding.
+    pub const BROWSER_VERIFICATION_REQUIRED: &str = "BROWSER_VERIFICATION_REQUIRED";
+}
+
+/// The body Weaver sends with an HTTP refusal. Older Weavers send no body;
+/// routes without a code send `{"error"}` alone.
+#[derive(serde::Deserialize)]
+struct WeaverHttpRefusal {
+    code: Option<String>,
+    error: Option<String>,
+}
+
 /// Compatibility features recognized from async-graphql's schema validator.
 /// This is distinct from Weaver's runtime refusal codes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1613,12 +1633,34 @@ fn weaver_transport_failure(operation: &str, error: &reqwest::Error) -> AppError
     )
 }
 
-/// The one place a non-success HTTP answer from Weaver is classified, by its
-/// status alone. Weaver answers a bad bearer key with a bare 401 and no body,
-/// so that sentence is Scryer's own.
+/// The one place a non-success HTTP answer from Weaver is classified. A coded
+/// body decides first; the status decides when Weaver sent no code, which an
+/// older Weaver does for a bad bearer key (a bare 401 and no body), so the
+/// sentences here are Scryer's own.
 fn weaver_http_failure(status: reqwest::StatusCode, body: &str) -> AppError {
+    let refusal: Option<WeaverHttpRefusal> = serde_json::from_str(body.trim()).ok();
+    let coded = match refusal.as_ref().and_then(|refusal| refusal.code.as_deref()) {
+        Some(weaver_http_refusal::INVALID_API_KEY) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver rejected the API key",
+        )),
+        Some(weaver_http_refusal::AUTHENTICATION_REQUIRED) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver requires an API key and none was sent",
+        )),
+        Some(weaver_http_refusal::BROWSER_VERIFICATION_REQUIRED) => Some((
+            PluginFailureReason::AuthFailed,
+            "weaver refused the request as an unverified browser session",
+        )),
+        _ => None,
+    };
+    if let Some((reason, message)) = coded {
+        return AppError::native_client_failed(reason, message.to_string());
+    }
     let reason = PluginFailureReason::for_http_status(status);
-    let preview: String = body.trim().chars().take(500).collect();
+    let preview: String = refusal
+        .and_then(|refusal| refusal.error)
+        .unwrap_or_else(|| body.trim().chars().take(500).collect());
     let message = match (&reason, preview.is_empty()) {
         (PluginFailureReason::AuthFailed, true) => "weaver rejected the API key".to_string(),
         (PluginFailureReason::AuthFailed, false) => {
@@ -2514,7 +2556,8 @@ mod tests {
 
     use super::{
         QueueItemsPayload, SubmissionPayload, WeaverDownloadClient, WeaverQueueItem,
-        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_item_to_queue_item,
+        WeaverQueueState, map_weaver_outbound_error, map_weaver_status, weaver_http_failure,
+        weaver_item_to_queue_item,
     };
     use scryer_application::{
         AppError, DownloadClient, DownloadClientAddRequest, DownloadSubmissionPurpose,
@@ -4717,6 +4760,68 @@ mod tests {
         match error {
             AppError::PluginFailed { message, .. } => {
                 assert_eq!(message, "weaver rejected the API key")
+            }
+            other => panic!("expected PluginFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coded_invalid_api_key_body_is_matched_by_its_code() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "code": "INVALID_API_KEY",
+                "error": "invalid API key"
+            })))
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), Some("synthetic-wrong-key".into()));
+
+        let error = client.test_connection().await.expect_err("401");
+
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+        match error {
+            AppError::PluginFailed { message, .. } => {
+                assert_eq!(message, "weaver rejected the API key")
+            }
+            other => panic!("expected PluginFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coded_body_decides_ahead_of_the_status() {
+        // A 503 carrying an auth code is still an auth failure: the code is
+        // Weaver's verdict, the status is only the fallback.
+        let error = weaver_http_failure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"code":"AUTHENTICATION_REQUIRED","error":"authentication required"}"#,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::AuthFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_code_falls_back_to_the_status_and_keeps_weavers_sentence() {
+        let error = weaver_http_failure(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"code":"SOMETHING_NEW","error":"draining"}"#,
+        );
+        assert_eq!(
+            failure_reason(&error),
+            scryer_application::PluginFailureReason::UpstreamUnavailable
+        );
+        match error {
+            AppError::PluginFailed { message, .. } => {
+                assert_eq!(
+                    message,
+                    "weaver returned status 503 Service Unavailable: draining"
+                )
             }
             other => panic!("expected PluginFailed, got {other:?}"),
         }
