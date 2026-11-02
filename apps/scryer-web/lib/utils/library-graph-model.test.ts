@@ -103,37 +103,58 @@ test("the fixture source answers with the fixture, naming nodes by the given key
   assert.equal(loaded.nodes[1].targetKey, fixtureTargetKey("SERIES", 1));
 });
 
-test("target keys match titles by source, kind and id", () => {
-  assert.deepEqual(targetKeyMatchKeys("TMDB:movie:0042").sort(), [
-    "tmdb:movie:0042",
-    "tmdb:movie:42",
+test("titles answer to the server's target keys, kind and all", () => {
+  // Keys normalize the way the server writes them.
+  assert.deepEqual(targetKeyMatchKeys("TMDB:movie:0042"), ["tmdb:movie:42"]);
+  assert.deepEqual(targetKeyMatchKeys("imdb:title:0000006"), [
+    "imdb:title:tt0000006",
   ]);
   // A key without a kind names nothing.
   assert.deepEqual(targetKeyMatchKeys("tmdb:42"), []);
-  // The same provider id on a series never answers for a movie.
+
+  // TMDB and TVDB carry the facet's kind; anime is keyed as series.
+  const movie = fixtureTitle(3);
+  assert.equal(titleTargetKey(movie), "tmdb:movie:910003");
+  const anime = fixtureTitle(4, {
+    facet: "ANIME",
+    externalIds: [{ source: "tmdb", value: "55" }],
+  });
+  assert.deepEqual(titleMatchKeys(anime), ["tmdb:series:55"]);
+
+  // MAL, AniDB and AniList are always anime, whatever the title's facet.
   const series = fixtureTitle(8, {
     facet: "SERIES",
-    externalIds: [{ source: "tmdb", value: "123" }],
+    externalIds: [
+      { source: "tmdb", value: "123" },
+      { source: "MyAnimeList", value: "77" },
+      { source: "anidb", value: "88" },
+      { source: "AniList", value: "99" },
+    ],
+    imdbId: "tt0000008",
   });
-  const seriesIndex = titleIndexByMatchKey([series]);
-  assert.equal(titleForTargetKey("tmdb:movie:123", seriesIndex), null);
-  assert.equal(titleForTargetKey("tmdb:series:123", seriesIndex), series);
-  assert.ok(titleMatchKeys(series).every((key) => key.split(":").length === 3));
-  const anime = fixtureTitle(5, {
-    facet: "ANIME",
-    externalIds: [{ source: "AniList", value: "77" }],
-  });
-  const index = titleIndexByMatchKey([anime]);
-  assert.equal(titleForTargetKey("anilist:anime:77", index), anime);
-  assert.equal(titleForTargetKey("anilist:series:77", index), anime);
-  assert.equal(titleForTargetKey("anilist:movie:78", index), null);
+  assert.deepEqual(titleMatchKeys(series).sort(), [
+    "anidb:anime:88",
+    "anilist:anime:99",
+    "imdb:title:tt0000008",
+    "mal:anime:77",
+    "tmdb:series:123",
+  ]);
+  const index = titleIndexByMatchKey([series]);
+  assert.equal(titleForTargetKey("mal:anime:77", index), series);
+  assert.equal(titleForTargetKey("imdb:title:tt0000008", index), series);
+  // The same TMDB id under another kind is another title.
+  assert.equal(titleForTargetKey("tmdb:movie:123", index), null);
+  assert.equal(titleForTargetKey("mal:series:77", index), null);
+  // The server's source order picks the key a title is named by.
+  assert.equal(titleTargetKey(series), "tmdb:series:123");
+
+  // IMDb alone names the title under `title`.
   const imdbOnly = fixtureTitle(6, { externalIds: [], imdbId: "tt0000006" });
+  assert.equal(titleTargetKey(imdbOnly), "imdb:title:tt0000006");
   assert.equal(
-    titleForTargetKey("imdb:movie:tt0000006", titleIndexByMatchKey([imdbOnly])),
+    titleForTargetKey("imdb:title:tt0000006", titleIndexByMatchKey([imdbOnly])),
     imdbOnly,
   );
-  assert.equal(titleTargetKey(fixtureTitle(3)), "tmdb:movie:910003");
-  assert.equal(titleTargetKey(imdbOnly), "imdb:movie:tt0000006");
   assert.equal(titleTargetKey(fixtureTitle(7, { externalIds: [] })), null);
 });
 

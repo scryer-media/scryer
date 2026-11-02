@@ -22,7 +22,9 @@ export function fixtureSubjectKey(index: number): string {
 
 /** The synthetic target key fixture node `index` carries for a facet. */
 export function fixtureTargetKey(facet: Facet, index: number): string {
-  return `tmdb:${facet.toLowerCase()}:${FIXTURE_ID_BASE + index}`;
+  // The server keys TMDB anime under series.
+  const kind = facet === "MOVIE" ? "movie" : "series";
+  return `tmdb:${kind}:${FIXTURE_ID_BASE + index}`;
 }
 
 // A small seeded generator so weights are stable from run to run.

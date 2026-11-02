@@ -5289,6 +5289,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           catalogHasMoreTitles:
             catalogPaginationState.hasMore && !catalogPageError,
           catalogPageError,
+          catalogListingKey: catalogPaginationState.queryKey,
           retryCatalogPage,
           catalogLoadingMoreTitles: catalogPaginationState.loadingMore,
           loadMoreCatalogTitles,

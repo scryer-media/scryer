@@ -180,6 +180,7 @@ import { catalogViewModeOptions } from "@/lib/utils/catalog-view-preferences";
 import {
   INITIAL_GRAPH_PAGING_STATE,
   graphPagingStep,
+  graphTitlesComplete,
   type GraphPagingState,
 } from "@/lib/utils/library-graph-paging";
 import { TitleSettingsPanel } from "./title-settings-panel";
@@ -1898,6 +1899,8 @@ export function MediaContentView({
     catalogHasMoreTitles: boolean;
     catalogLoadingMoreTitles: boolean;
     catalogPageError: string | null;
+    /** Identifies the catalog listing the loaded titles belong to. */
+    catalogListingKey: string;
     retryCatalogPage: () => Promise<void>;
     loadMoreCatalogTitles: () => Promise<void> | void;
     titleCatalogSortKey: TitleTableSortKey;
@@ -2176,6 +2179,7 @@ export function MediaContentView({
     catalogHasMoreTitles,
     catalogLoadingMoreTitles,
     catalogPageError,
+    catalogListingKey,
     retryCatalogPage,
     loadMoreCatalogTitles,
     titleCatalogSortKey,
@@ -2687,26 +2691,39 @@ export function MediaContentView({
     (collectionViewMode === "compact" || collectionViewMode === "poster-table");
 
   // The graph draws the whole filtered catalog, so it keeps paging until every
-  // title is loaded and builds once paging is over.
+  // title of the listing in view is loaded and builds once paging is over.
   const graphPagingRef = React.useRef<GraphPagingState>(
     INITIAL_GRAPH_PAGING_STATE,
   );
-  const [graphTitlesComplete, setGraphTitlesComplete] = React.useState(false);
+  const [graphStalledListingKey, setGraphStalledListingKey] = React.useState<
+    string | null
+  >(null);
+  const graphTitlesAreComplete = graphTitlesComplete({
+    listingKey: catalogListingKey,
+    titleLoading,
+    hasMore: catalogHasMoreTitles,
+    pageFailed: catalogPageError !== null,
+    stalledListingKey: graphStalledListingKey,
+  });
   React.useEffect(() => {
     const step = graphPagingStep(graphPagingRef.current, {
       active: isTitleCatalogView && collectionViewMode === "graph",
+      listingKey: catalogListingKey,
       hasMore: catalogHasMoreTitles,
       loadingMore: catalogLoadingMoreTitles,
       pageFailed: catalogPageError !== null,
       loadedCount: monitoredTitles.length,
     });
     graphPagingRef.current = step.state;
-    setGraphTitlesComplete(step.complete);
+    if (step.state.stalled) {
+      setGraphStalledListingKey(step.state.listingKey);
+    }
     if (step.request) {
       void loadMoreCatalogTitles();
     }
   }, [
     catalogHasMoreTitles,
+    catalogListingKey,
     catalogLoadingMoreTitles,
     catalogPageError,
     collectionViewMode,
@@ -3877,7 +3894,7 @@ export function MediaContentView({
                               : "SERIES"
                         }
                         titles={monitoredTitles}
-                        titlesComplete={graphTitlesComplete}
+                        titlesComplete={graphTitlesAreComplete}
                         libraryIds={selectedLibraryIds}
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}

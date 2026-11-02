@@ -42,85 +42,161 @@ function normalizeKey(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function canonicalIdValue(value: string): string {
-  return /^\d+$/.test(value) ? String(Number.parseInt(value, 10)) : value;
+// The rest of this section mirrors how the server keys discovery targets
+// (the discovery records module in scryer-application), so the graph joins
+// on exactly the keys the server and the gateway use.
+
+type DiscoverySource = "tvdb" | "tmdb" | "mal" | "anidb" | "anilist" | "imdb";
+
+/** The order the server prefers sources in when a title has several. */
+const DISCOVERY_SOURCE_PRIORITY: readonly DiscoverySource[] = [
+  "tvdb",
+  "tmdb",
+  "mal",
+  "anidb",
+  "anilist",
+  "imdb",
+];
+
+function discoverySource(raw: string): DiscoverySource | null {
+  switch (normalizeKey(raw)) {
+    case "imdb":
+    case "imdb_id":
+      return "imdb";
+    case "tvdb":
+    case "thetvdb":
+    case "tvdb_show":
+    case "tvdb_series":
+    case "tvdb_movie":
+      return "tvdb";
+    case "tmdb":
+    case "themoviedb":
+    case "tmdb_tv":
+    case "tmdb_show":
+    case "tmdb_series":
+    case "tmdb_movie":
+      return "tmdb";
+    case "anidb":
+      return "anidb";
+    case "mal":
+    case "myanimelist":
+      return "mal";
+    case "anilist":
+    case "anilist_anime":
+    case "anilist:anime":
+      return "anilist";
+    default:
+      return null;
+  }
 }
 
-function facetSlug(facet: Facet): string {
-  return facet.toLowerCase();
+/** An IMDb id as `tt` and its digits, or null. */
+function normalizedImdbId(raw: string): string | null {
+  const value = raw.trim().toLowerCase();
+  if (!value) {
+    return null;
+  }
+  const match = /tt(\d+)/.exec(value);
+  if (match) {
+    return `tt${match[1]}`;
+  }
+  return /^\d+$/.test(value) ? `tt${value}` : null;
+}
+
+/** A positive numeric id, taken from the last `:` part, or null. */
+function positiveNumericId(raw: string): string | null {
+  const value = raw.trim();
+  const last = value.slice(value.lastIndexOf(":") + 1).trim();
+  if (!/^\d+$/.test(last)) {
+    return null;
+  }
+  const id = BigInt(last);
+  return id > 0n ? id.toString() : null;
+}
+
+function discoveryIdValue(source: DiscoverySource, raw: string): string | null {
+  return source === "imdb" ? normalizedImdbId(raw) : positiveNumericId(raw);
 }
 
 /**
- * The keys a discovery target key can match a catalog title by. Every key
- * carries the kind, so `tmdb:movie:123` never matches a series with TMDB id
- * 123; a key without a kind matches nothing.
+ * The target key an id names for a title of `facet`, in the server's forms:
+ * `tvdb`/`tmdb` under `movie` or `series` (anime counts as series), MAL,
+ * AniDB and AniList always under `anime`, and IMDb under `title`.
  */
-export function targetKeyMatchKeys(targetKey: string): string[] {
-  const parts = targetKey
-    .split(":")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 3) {
-    return [];
+function discoveryTargetKey(
+  source: DiscoverySource,
+  value: string,
+  facet: Facet,
+): string {
+  switch (source) {
+    case "tvdb":
+    case "tmdb":
+      return `${source}:${facet === "MOVIE" ? "movie" : "series"}:${value}`;
+    case "imdb":
+      return `imdb:title:${value}`;
+    default:
+      return `${source}:anime:${value}`;
   }
-  const source = normalizeKey(parts[0]);
-  const kind = normalizeKey(parts[1]);
-  const value = normalizeKey(parts.slice(2).join(":"));
-  if (!source || !kind || !value) {
-    return [];
-  }
-  return Array.from(
-    new Set([
-      `${source}:${kind}:${value}`,
-      `${source}:${kind}:${canonicalIdValue(value)}`,
-    ]),
-  );
 }
 
-/**
- * The keys a catalog title answers to, from its IMDb id and external ids,
- * each under the title's own kind. Anime also answers to the series kind,
- * which is how providers that do not tell anime apart name it.
- */
-export function titleMatchKeys(title: TitleRecord): string[] {
-  const keys = new Set<string>();
-  const kinds =
-    title.facet === "ANIME"
-      ? [facetSlug(title.facet), "series"]
-      : [facetSlug(title.facet)];
-  const add = (source: string, rawValue: string | null | undefined) => {
-    const normalizedSource = normalizeKey(source);
-    const value = normalizeKey(rawValue);
-    if (!normalizedSource || !value) {
-      return;
-    }
-    for (const candidate of new Set([value, canonicalIdValue(value)])) {
-      for (const kind of kinds) {
-        keys.add(`${normalizedSource}:${kind}:${candidate}`);
-      }
+function titleDiscoveryIds(title: TitleRecord): Map<DiscoverySource, string> {
+  const ids = new Map<DiscoverySource, string>();
+  const add = (rawSource: string, rawValue: string | null | undefined) => {
+    const source = discoverySource(rawSource);
+    const value =
+      source && rawValue ? discoveryIdValue(source, rawValue) : null;
+    if (source && value && !ids.has(source)) {
+      ids.set(source, value);
     }
   };
-  add("imdb", title.imdbId);
   for (const externalId of title.externalIds ?? []) {
     add(externalId.source, externalId.value);
   }
-  return Array.from(keys);
+  add("imdb", title.imdbId);
+  return ids;
 }
 
 /**
- * The discovery target key a catalog title would carry, from its first
- * external id, or null when it has none.
+ * The key a discovery target key matches a catalog title by: the key in its
+ * normalized form. Keys keep their kind, so `tmdb:movie:123` never matches a
+ * series with TMDB id 123; a key without a kind matches nothing.
+ */
+export function targetKeyMatchKeys(targetKey: string): string[] {
+  const parts = targetKey.split(":").map((part) => part.trim());
+  if (parts.length < 3) {
+    return [];
+  }
+  const source = discoverySource(parts[0]);
+  const kind = normalizeKey(parts[1]);
+  const value = source
+    ? discoveryIdValue(source, parts.slice(2).join(":"))
+    : null;
+  if (!source || !kind || !value) {
+    return [];
+  }
+  return [`${source}:${kind}:${value}`];
+}
+
+/** The target keys the server would give a catalog title, one per source. */
+export function titleMatchKeys(title: TitleRecord): string[] {
+  return Array.from(titleDiscoveryIds(title), ([source, value]) =>
+    discoveryTargetKey(source, value, title.facet),
+  );
+}
+
+/**
+ * The discovery target key the server prefers for a catalog title, from its
+ * ids in the server's source order, or null when it has none.
  */
 export function titleTargetKey(title: TitleRecord): string | null {
-  const first = (title.externalIds ?? []).find(
-    (externalId) => externalId.source.trim() && externalId.value.trim(),
-  );
-  if (first) {
-    return `${normalizeKey(first.source)}:${facetSlug(title.facet)}:${first.value.trim()}`;
+  const ids = titleDiscoveryIds(title);
+  for (const source of DISCOVERY_SOURCE_PRIORITY) {
+    const value = ids.get(source);
+    if (value) {
+      return discoveryTargetKey(source, value, title.facet);
+    }
   }
-  return title.imdbId?.trim()
-    ? `imdb:${facetSlug(title.facet)}:${title.imdbId.trim()}`
-    : null;
+  return null;
 }
 
 /** A lookup from target key to the catalog title it names. */

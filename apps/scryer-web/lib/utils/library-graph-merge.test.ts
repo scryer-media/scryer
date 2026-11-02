@@ -278,3 +278,27 @@ test("edge weights are clamped to [0, 1] and a non-number counts as 0", () => {
   );
   assert.ok(merged.edges.every((edge) => Number.isFinite(edge.weight)));
 });
+
+test("ghosts with blank target keys stay separate", () => {
+  const merged = mergeLibraryGraphResult(owned(), {
+    generatedAt: "2026-01-02T00:00:00Z",
+    nodes: [
+      { subjectKey: "x:blank-1", targetKey: "", clusterId: 4 },
+      { subjectKey: "x:blank-2", targetKey: "  ", clusterId: 4 },
+    ],
+    edges: [
+      { from: "x:blank-1", to: "s:a", weight: 0.4, kinds: ["semantic"] },
+      { from: "x:blank-2", to: "s:c", weight: 0.4, kinds: ["semantic"] },
+    ],
+    clusters: [],
+  });
+  assert.deepEqual(
+    merged.nodes
+      .filter((node) => node.ghost)
+      .map((node) => node.subjectKey)
+      .sort(),
+    ["x:blank-1", "x:blank-2"],
+  );
+  assert.ok(edgeBetween(merged, "x:blank-1", "s:a"));
+  assert.ok(edgeBetween(merged, "x:blank-2", "s:c"));
+});

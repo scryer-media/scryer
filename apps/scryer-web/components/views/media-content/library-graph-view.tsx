@@ -217,30 +217,41 @@ export default function LibraryGraphView({
 
   // The graph covers the facet's selected libraries; filters only prune it.
   // It loads once per facet and library set, so a filter change keeps every
-  // node where it was. The fixture names its nodes after the titles loaded
-  // when it was built.
+  // node where it was, and a filter that leaves no titles and is then cleared
+  // does not load it again. The fixture names its nodes after the titles
+  // loaded when it was built.
+  const loadedSourceKeyRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (!hasTitles) {
+    const sourceKey = `${facet}|${libraryIdSignature}`;
+    if (!hasTitles || loadedSourceKeyRef.current === sourceKey) {
       return;
     }
+    loadedSourceKeyRef.current = sourceKey;
     let cancelled = false;
+    let settled = false;
     void libraryGraphSourceForCatalog(catalogTargetKeysRef.current)
       .load({
         facet,
         libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
       })
       .then((loaded) => {
+        settled = true;
         if (!cancelled) {
           setResult(loaded);
         }
       })
       .catch(() => {
+        settled = true;
         if (!cancelled) {
           setResult(null);
         }
       });
     return () => {
       cancelled = true;
+      // A load cut short is not a load: the next run starts it again.
+      if (!settled && loadedSourceKeyRef.current === sourceKey) {
+        loadedSourceKeyRef.current = null;
+      }
     };
   }, [facet, hasTitles, libraryIdSignature]);
 
@@ -790,6 +801,17 @@ export default function LibraryGraphView({
   const collapsing = visibleNodeCount > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
   const selectedVisible =
     selectedTitleId !== null && titlesById.has(selectedTitleId);
+  // Titles still paging, or the graph still loading for them, show as
+  // loading; a finished listing with nothing to draw shows as empty.
+  const graphStatus: "loading" | "empty" | "ready" = !titlesComplete
+    ? "loading"
+    : !hasTitles
+      ? "empty"
+      : result === null
+        ? "loading"
+        : visibleNodeCount === 0
+          ? "empty"
+          : "ready";
 
   return (
     <section
@@ -939,7 +961,14 @@ export default function LibraryGraphView({
             ))}
           </div>
         ) : null}
-        {result && visibleNodeCount === 0 ? (
+        {graphStatus === "loading" ? (
+          <div
+            role="status"
+            className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-[var(--scry-muted2)]"
+          >
+            {t("label.loading")}
+          </div>
+        ) : graphStatus === "empty" ? (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-[var(--scry-muted2)]">
             {t("libraryGraph.empty")}
           </div>

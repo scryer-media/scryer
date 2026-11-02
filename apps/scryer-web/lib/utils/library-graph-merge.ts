@@ -144,6 +144,9 @@ export function mergeLibraryGraphResult(
   const bySubject = new Map(base.nodes.map((node) => [node.subjectKey, node]));
   const byTarget = new Map<string, GraphNode>();
   for (const node of base.nodes) {
+    if (!node.targetKey.trim()) {
+      continue;
+    }
     const current = byTarget.get(node.targetKey);
     if (!current || (current.ghost && !node.ghost)) {
       byTarget.set(node.targetKey, node);
@@ -153,8 +156,11 @@ export function mergeLibraryGraphResult(
   const snapTo = new Map<string, string>();
   const ghosts: GraphNode[] = [];
   for (const node of incoming.nodes) {
+    // A blank target names no title, so it never joins two nodes.
+    const hasTarget = node.targetKey.trim() !== "";
     const existing =
-      bySubject.get(node.subjectKey) ?? byTarget.get(node.targetKey);
+      bySubject.get(node.subjectKey) ??
+      (hasTarget ? byTarget.get(node.targetKey) : undefined);
     if (existing) {
       snapTo.set(node.subjectKey, existing.subjectKey);
       continue;
@@ -171,7 +177,9 @@ export function mergeLibraryGraphResult(
     };
     ghosts.push(ghost);
     // A later node naming the same new title snaps to this one.
-    byTarget.set(node.targetKey, ghost);
+    if (hasTarget) {
+      byTarget.set(node.targetKey, ghost);
+    }
   }
 
   const edges = incoming.edges.map((edge) => ({
