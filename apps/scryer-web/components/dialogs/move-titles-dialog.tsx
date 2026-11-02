@@ -605,7 +605,12 @@ export function MoveTitlesDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent id="move-titles-dialog" className="sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{t("move.dialogTitle")}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {t("move.dialogTitle")}
+            <Badge id="move-titles-beta" tone="warning" className="text-[11px]">
+              {t("settings.pluginBeta")}
+            </Badge>
+          </DialogTitle>
           <DialogDescription>
             {step === "kind"
               ? t("move.wizardKindDescription")

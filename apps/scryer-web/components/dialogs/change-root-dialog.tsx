@@ -7,6 +7,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -275,7 +276,12 @@ export function ChangeRootDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent id="root-change-dialog" className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{t("rootChange.dialogTitle")}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {t("rootChange.dialogTitle")}
+            <Badge id="root-change-beta" tone="warning" className="text-[11px]">
+              {t("settings.pluginBeta")}
+            </Badge>
+          </DialogTitle>
           <DialogDescription>
             {t("rootChange.dialogDescription", { path: root.path })}
           </DialogDescription>
