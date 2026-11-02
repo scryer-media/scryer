@@ -876,7 +876,13 @@ pub enum StandbyQueueChoice {
 #[derive(Clone, Debug, Default)]
 pub struct StandbyQueueOutcome {
     pub grabbed: bool,
+    /// Live downloads that still need the operator's choice.
     pub conflicts: Vec<SubmissionScopeConflict>,
+    /// Conflicts the client confirmed cancelled before a later one could not
+    /// be; their local rows are gone. Empty unless `refusal` is set.
+    pub cancelled: Vec<SubmissionScopeConflict>,
+    /// Set when cancellation stopped part-way and nothing was queued.
+    pub refusal: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

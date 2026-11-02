@@ -1,4 +1,24 @@
 use super::*;
+use crate::error_reasons::standby as reason;
+
+#[track_caller]
+fn assert_refused<T: std::fmt::Debug>(result: AppResult<T>, expected: &str) {
+    let error = result.expect_err("expected a refusal");
+    assert_eq!(error.reason(), Some(expected), "{error:?}");
+}
+
+fn identities(conflicts: &[SubmissionScopeConflict]) -> Vec<ClientJobLocator> {
+    conflicts
+        .iter()
+        .map(|item| {
+            ClientJobLocator::new(
+                item.download_client_id.as_deref(),
+                &item.download_client_type,
+                &item.download_client_item_id,
+            )
+        })
+        .collect()
+}
 
 struct Fixture {
     app: AppUseCase,
@@ -11,11 +31,16 @@ struct Fixture {
 
 impl Fixture {
     async fn new(remove_on_delete: bool) -> Self {
-        let client = Arc::new(StubDownloadClient {
+        Self::with_client(StubDownloadClient {
             remove_queue_item_on_delete: remove_on_delete,
             unique_job_ids: true,
             ..Default::default()
-        });
+        })
+        .await
+    }
+
+    async fn with_client(client: StubDownloadClient) -> Self {
+        let client = Arc::new(client);
         let pending = Arc::new(TrackingPendingReleaseRepo::default());
         let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
         let (app, actor) = bootstrap_with_acquisition_tracking(
@@ -46,6 +71,18 @@ impl Fixture {
     }
 
     async fn conflict(&self, id: &str, title_id: &str) {
+        self.conflict_in_state(id, title_id, DownloadQueueState::Downloading)
+            .await;
+    }
+
+    async fn conflict_in_state(&self, id: &str, title_id: &str, state: DownloadQueueState) {
+        self.record_row(id, title_id, "primary").await;
+        let mut item = queue_history_fixture_item(id, state, 0);
+        item.title_id = Some(title_id.into());
+        self.client.queue_items.lock().await.push(item);
+    }
+
+    async fn record_row(&self, id: &str, title_id: &str, client_id: &str) {
         self.app
             .services
             .workflow
@@ -55,7 +92,7 @@ impl Fixture {
                 title_id: title_id.to_string(),
                 purpose: DownloadSubmissionPurpose::Standard,
                 facet: "movie".into(),
-                download_client_id: Some("primary".into()),
+                download_client_id: Some(client_id.into()),
                 download_client_type: "nzbget".into(),
                 download_client_item_id: id.into(),
                 source_hint: None,
@@ -71,9 +108,17 @@ impl Fixture {
             })
             .await
             .unwrap();
-        let mut item = queue_history_fixture_item(id, DownloadQueueState::Downloading, 0);
-        item.title_id = Some(title_id.into());
-        self.client.queue_items.lock().await.push(item);
+    }
+
+    async fn rows(&self) -> usize {
+        self.app
+            .services
+            .workflow
+            .download_submissions
+            .list_for_title(&self.title.id)
+            .await
+            .unwrap()
+            .len()
     }
 
     async fn queue(
@@ -81,18 +126,13 @@ impl Fixture {
         choice: StandbyQueueChoice,
         conflicts: &[SubmissionScopeConflict],
     ) -> AppResult<StandbyQueueOutcome> {
-        let identities = conflicts
-            .iter()
-            .map(|item| {
-                ClientJobLocator::new(
-                    item.download_client_id.as_deref(),
-                    &item.download_client_type,
-                    &item.download_client_item_id,
-                )
-            })
-            .collect::<Vec<_>>();
         self.app
-            .queue_standby_release(&self.actor, &self.candidate.id, choice, &identities)
+            .queue_standby_release(
+                &self.actor,
+                &self.candidate.id,
+                choice,
+                &identities(conflicts),
+            )
             .await
     }
 
@@ -236,24 +276,14 @@ async fn standby_queue_failed_or_unresolved_cancel_never_submits() {
         if fail {
             f.client.set_delete_error(Some("synthetic refusal")).await;
         }
-        assert!(
+        assert_refused(
             f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
-                .await
-                .is_err()
+                .await,
+            reason::CANCELLATION_UNCONFIRMED,
         );
         assert!(f.client.submitted_release_titles.lock().await.is_empty());
         assert_eq!(f.status().await, PendingReleaseStatus::Standby);
-        assert_eq!(
-            f.app
-                .services
-                .workflow
-                .download_submissions
-                .list_for_title(&f.title.id)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(f.rows().await, 1);
     }
 }
 
@@ -263,7 +293,10 @@ async fn standby_queue_submission_failure_is_retryable() {
     f.client
         .set_submit_error(Some(StubSubmitError::Rejected("synthetic refusal".into())))
         .await;
-    assert!(f.queue(StandbyQueueChoice::Check, &[]).await.is_err());
+    assert!(matches!(
+        f.queue(StandbyQueueChoice::Check, &[]).await,
+        Err(AppError::DownloadSubmitRejected(_))
+    ));
     assert_eq!(f.status().await, PendingReleaseStatus::Standby);
     f.client.set_submit_error(None).await;
     assert!(
@@ -278,11 +311,11 @@ async fn standby_queue_submission_failure_is_retryable() {
 async fn standby_queue_requires_library_manage_permission() {
     let f = Fixture::new(true).await;
     let viewer = test_user_with_app_permissions("viewer", AppPermissionMask::default());
-    assert!(
+    assert_refused(
         f.app
             .queue_standby_release(&viewer, &f.candidate.id, StandbyQueueChoice::Check, &[])
-            .await
-            .is_err()
+            .await,
+        crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
     );
     assert!(f.client.submitted_release_titles.lock().await.is_empty());
     assert!(f.pending.status_writes().is_empty());
@@ -300,31 +333,27 @@ async fn standby_queue_deduplicates_the_same_release_saved_twice() {
     let mut duplicate = f.candidate.clone();
     duplicate.id = Id::new().0;
     f.pending.insert_pending_release(&duplicate).await.unwrap();
+    // The first copy is running, so the duplicate first lists it as a
+    // conflict; queueing alongside it reuses that same client job.
     let result = f
         .app
         .queue_standby_release(&f.actor, &duplicate.id, StandbyQueueChoice::Check, &[])
         .await
         .unwrap();
-    if !result.grabbed {
-        let ids = result
-            .conflicts
-            .iter()
-            .map(|item| {
-                ClientJobLocator::new(
-                    item.download_client_id.as_deref(),
-                    &item.download_client_type,
-                    &item.download_client_item_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            f.app
-                .queue_standby_release(&f.actor, &duplicate.id, StandbyQueueChoice::Queue, &ids)
-                .await
-                .unwrap()
-                .grabbed
-        );
-    }
+    assert!(!result.grabbed);
+    assert_eq!(result.conflicts.len(), 1);
+    assert!(
+        f.app
+            .queue_standby_release(
+                &f.actor,
+                &duplicate.id,
+                StandbyQueueChoice::Queue,
+                &identities(&result.conflicts),
+            )
+            .await
+            .unwrap()
+            .grabbed
+    );
     assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
 }
 
@@ -362,9 +391,10 @@ async fn standby_queue_retries_explicit_failure_despite_recent_acceptance() {
 }
 
 #[tokio::test]
-async fn standby_queue_interrupted_request_keeps_candidate_retryable() {
+async fn standby_queue_interrupted_request_still_submits_exactly_once() {
     let f = Fixture::new(true).await;
-    *f.client.submit_gate.lock().await = Some(Arc::new(tokio::sync::Notify::new()));
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *f.client.submit_gate.lock().await = Some(gate.clone());
     let mut request = Box::pin(f.queue(StandbyQueueChoice::Check, &[]));
     crate::test_wait::within_deadline("operator reaches gated client submission", async {
         tokio::select! {
@@ -373,17 +403,25 @@ async fn standby_queue_interrupted_request_keeps_candidate_retryable() {
         }
     })
     .await;
-    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+    // The caller gives up while the client holds the job.
     drop(request);
-    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
-    *f.client.submit_gate.lock().await = None;
-    let result = crate::test_wait::within_deadline(
-        "retry interrupted standby queue",
+    // The request still owns the title, so a retry is refused, not doubled.
+    assert_refused(
+        f.queue(StandbyQueueChoice::Check, &[]).await,
+        reason::TITLE_BUSY,
+    );
+    gate.notify_one();
+    crate::test_wait::wait_until("abandoned standby request finishes", || async {
+        f.status().await == PendingReleaseStatus::Grabbed
+    })
+    .await;
+    let retry = crate::test_wait::within_deadline(
+        "retry after the abandoned request",
         f.queue(StandbyQueueChoice::Check, &[]),
     )
     .await
     .unwrap();
-    assert!(result.grabbed);
+    assert!(retry.grabbed);
     assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
 }
 
@@ -398,10 +436,192 @@ async fn standby_queue_concurrent_clicks_submit_once_without_a_durable_claim() {
             )
         })
         .await;
-    assert!(first.unwrap().grabbed);
-    assert!(second.unwrap().grabbed);
+    // Whichever click arrives second either sees the grab or is told the
+    // first still holds the title; neither submits again.
+    for result in [first, second] {
+        match result {
+            Ok(outcome) => assert!(outcome.grabbed),
+            Err(error) => assert_eq!(error.reason(), Some(reason::TITLE_BUSY)),
+        }
+    }
     assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
     assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
+}
+
+#[tokio::test]
+async fn standby_queue_refuses_to_cancel_a_download_being_processed() {
+    for state in [
+        DownloadQueueState::Verifying,
+        DownloadQueueState::Extracting,
+        DownloadQueueState::ImportPending,
+    ] {
+        let f = Fixture::new(true).await;
+        f.conflict("first", &f.title.id).await;
+        f.conflict_in_state("importing", &f.title.id, state).await;
+        let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+        assert_eq!(result.conflicts.len(), 2);
+        assert_refused(
+            f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+                .await,
+            reason::CONFLICT_NOT_REPLACEABLE,
+        );
+        assert!(f.client.delete_attempts.lock().await.is_empty());
+        assert!(f.client.submitted_release_titles.lock().await.is_empty());
+        assert_eq!(f.rows().await, 2);
+        assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+    }
+}
+
+#[tokio::test]
+async fn standby_queue_confirms_a_cancel_the_client_keeps_in_history() {
+    let f = Fixture::with_client(StubDownloadClient {
+        remove_queue_item_on_delete: true,
+        keep_cancelled_in_history: true,
+        unique_job_ids: true,
+        ..Default::default()
+    })
+    .await;
+    f.conflict("first", &f.title.id).await;
+    let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+    assert!(
+        f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+            .await
+            .unwrap()
+            .grabbed
+    );
+    // The cancelled job is still listed, as a failed history row.
+    assert!(f.client.queue_items.lock().await.iter().any(|item| {
+        item.download_client_item_id == "first" && item.state == DownloadQueueState::Failed
+    }));
+    assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+    assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
+}
+
+#[tokio::test]
+async fn standby_queue_ignores_rows_on_clients_that_cannot_be_reached() {
+    let f = Fixture::new(true).await;
+    // A row left on a client that is disabled, removed or not answering.
+    f.record_row("stale", &f.title.id, "retired-client").await;
+    let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+    assert!(result.grabbed);
+    assert!(result.conflicts.is_empty());
+    assert!(f.client.delete_attempts.lock().await.is_empty());
+    assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn standby_queue_partial_cancel_reports_what_was_cancelled() {
+    let f = Fixture::new(true).await;
+    f.conflict("first", &f.title.id).await;
+    f.conflict("second", &f.title.id).await;
+    let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
+    assert_eq!(result.conflicts.len(), 2);
+    f.client
+        .delete_refused_ids
+        .lock()
+        .await
+        .insert("second".into());
+    let partial = f
+        .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+        .await
+        .unwrap();
+    assert!(!partial.grabbed);
+    assert_eq!(partial.refusal, Some(reason::CANCELLATION_INCOMPLETE));
+    assert_eq!(
+        partial
+            .cancelled
+            .iter()
+            .map(|item| item.download_client_item_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first"]
+    );
+    assert_eq!(
+        partial
+            .conflicts
+            .iter()
+            .map(|item| item.download_client_item_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["second"]
+    );
+    // Only the cancelled job's row is gone; nothing was submitted.
+    let rows = f
+        .app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_title(&f.title.id)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].download_client_item_id, "second");
+    assert!(f.client.submitted_release_titles.lock().await.is_empty());
+    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+}
+
+#[tokio::test]
+async fn standby_queue_honours_the_blocklist() {
+    let f = Fixture::new(true).await;
+    f.app
+        .services
+        .workflow
+        .blocklist_repo
+        .block(&NewBlocklistEntry {
+            title_id: f.title.id.clone(),
+            release_name: f.candidate.release_title.clone(),
+            indexer_id: String::new(),
+            info_hash: None,
+            reason: Some("synthetic".into()),
+        })
+        .await
+        .unwrap();
+    assert_refused(
+        f.queue(StandbyQueueChoice::Check, &[]).await,
+        reason::RELEASE_BLOCKLISTED,
+    );
+    assert!(f.client.submitted_release_titles.lock().await.is_empty());
+    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+}
+
+#[tokio::test]
+async fn standby_queue_refuses_a_release_already_in_the_client() {
+    let f = Fixture::new(true).await;
+    let mut item = queue_history_fixture_item("same", DownloadQueueState::Downloading, 0);
+    item.title_name = f.candidate.release_title.clone();
+    f.client.queue_items.lock().await.push(item);
+    assert_refused(
+        f.queue(StandbyQueueChoice::Check, &[]).await,
+        reason::ALREADY_ACTIVE,
+    );
+    assert!(f.client.submitted_release_titles.lock().await.is_empty());
+    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+}
+
+#[tokio::test]
+async fn standby_queue_refuses_while_an_operator_walk_holds_the_title() {
+    let f = Fixture::new(true).await;
+    let walk = f
+        .app
+        .runtime
+        .acquisition
+        .title_walk_locks
+        .try_acquire(&f.title.id)
+        .await
+        .expect("walk lock is free");
+    assert_refused(
+        crate::test_wait::within_deadline(
+            "standby request behind an operator walk",
+            f.queue(StandbyQueueChoice::Check, &[]),
+        )
+        .await,
+        reason::TITLE_BUSY,
+    );
+    drop(walk);
+    assert!(
+        f.queue(StandbyQueueChoice::Check, &[])
+            .await
+            .unwrap()
+            .grabbed
+    );
 }
 
 #[tokio::test]
@@ -440,22 +660,16 @@ async fn standby_queue_preserves_episode_and_pack_coverage() {
             .await
             .unwrap();
         assert_eq!(conflicts.conflicts.len(), 1);
-        let identities = conflicts
-            .conflicts
-            .iter()
-            .map(|item| {
-                ClientJobLocator::new(
-                    item.download_client_id.as_deref(),
-                    &item.download_client_type,
-                    &item.download_client_item_id,
-                )
-            })
-            .collect::<Vec<_>>();
         assert!(
-            app.queue_standby_release(&actor, &id, StandbyQueueChoice::Queue, &identities)
-                .await
-                .unwrap()
-                .grabbed
+            app.queue_standby_release(
+                &actor,
+                &id,
+                StandbyQueueChoice::Queue,
+                &identities(&conflicts.conflicts)
+            )
+            .await
+            .unwrap()
+            .grabbed
         );
         let submissions = app
             .services
@@ -509,27 +723,18 @@ async fn standby_queue_deduplicates_an_automatic_grab() {
         .unwrap();
     let id = saved.id;
     let actor = test_admin_user();
-    let result = app
-        .queue_standby_release(&actor, &id, StandbyQueueChoice::Check, &[])
-        .await
-        .unwrap();
-    assert_eq!(result.conflicts.len(), 1);
-    let identities = result
-        .conflicts
-        .iter()
-        .map(|item| {
-            ClientJobLocator::new(
-                item.download_client_id.as_deref(),
-                &item.download_client_type,
-                &item.download_client_item_id,
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        app.queue_standby_release(&actor, &id, StandbyQueueChoice::Queue, &identities)
-            .await
-            .unwrap()
-            .grabbed
-    );
+    // The automatic grab already runs this exact release in the client, so
+    // the saved copy is refused rather than submitted a second time.
+    for choice in [
+        StandbyQueueChoice::Check,
+        StandbyQueueChoice::Queue,
+        StandbyQueueChoice::CancelAndQueue,
+    ] {
+        assert_refused(
+            app.queue_standby_release(&actor, &id, choice, &[]).await,
+            reason::ALREADY_ACTIVE,
+        );
+    }
     assert_eq!(client.submitted_release_titles.lock().await.len(), 1);
+    assert!(client.deleted_requests.lock().await.is_empty());
 }

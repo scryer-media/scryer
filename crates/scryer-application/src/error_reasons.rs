@@ -2102,6 +2102,40 @@ pub mod acquisition {
     ];
 }
 
+/// Refusals of an operator's "queue now" on a saved standby candidate.
+pub mod standby {
+    /// The saved candidate no longer exists.
+    pub const NOT_FOUND: &str = "STANDBY_NOT_FOUND";
+    /// Another workflow owns or has retired this candidate.
+    pub const NOT_AVAILABLE: &str = "STANDBY_NOT_AVAILABLE";
+    /// Current coverage cannot safely identify what to queue.
+    pub const NOT_QUEUEABLE: &str = "STANDBY_NOT_QUEUEABLE";
+    /// The client has not confirmed cancellation or queue visibility.
+    pub const CANCELLATION_UNCONFIRMED: &str = "STANDBY_CANCELLATION_UNCONFIRMED";
+    /// Some conflicting downloads were cancelled, the rest were not, and nothing was queued.
+    pub const CANCELLATION_INCOMPLETE: &str = "STANDBY_CANCELLATION_INCOMPLETE";
+    /// A conflicting download is past the point where it may be cancelled (verifying, extracting, importing).
+    pub const CONFLICT_NOT_REPLACEABLE: &str = "STANDBY_CONFLICT_NOT_REPLACEABLE";
+    /// The release is on this title's blocklist.
+    pub const RELEASE_BLOCKLISTED: &str = "STANDBY_RELEASE_BLOCKLISTED";
+    /// The same release is already active in a download client.
+    pub const ALREADY_ACTIVE: &str = "STANDBY_ALREADY_ACTIVE";
+    /// An operator search or another queue action holds this title; try again once it finishes.
+    pub const TITLE_BUSY: &str = "STANDBY_TITLE_BUSY";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        NOT_FOUND,
+        NOT_AVAILABLE,
+        NOT_QUEUEABLE,
+        CANCELLATION_UNCONFIRMED,
+        CANCELLATION_INCOMPLETE,
+        CONFLICT_NOT_REPLACEABLE,
+        RELEASE_BLOCKLISTED,
+        ALREADY_ACTIVE,
+        TITLE_BUSY,
+    ];
+}
+
 pub mod location {
     /// The plan changed. Preview it again.
     pub const STALE_PLAN: &str = "LOCATION_STALE_PLAN";
@@ -5966,6 +6000,7 @@ mod tests {
             ("OAUTH_", oauth::ALL),
             ("MAINTENANCE_", maintenance::ALL),
             ("ACQUISITION_", acquisition::ALL),
+            ("STANDBY_", standby::ALL),
             ("LOCATION_", location::ALL),
             ("PLUGIN_", plugins::ALL),
             ("PORTS_", ports::ALL),

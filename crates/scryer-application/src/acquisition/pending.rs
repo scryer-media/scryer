@@ -1132,14 +1132,21 @@ impl AppUseCase {
             .load_title_release_blocklist_signatures(&title.id)
             .await;
 
-        if trigger != PendingGrabTrigger::StandbyOperator
-            && crate::app_usecase_discovery::is_release_blocklisted(
-                pr.indexer_id.as_deref(),
-                &pr.release_title,
-                pr.info_hash.as_deref(),
-                &db_blocklist,
-            )
-        {
+        // An operator override still honours the blocklist, like Sonarr's
+        // `BlocklistSpecification` (a permanent rejection) and the operator
+        // force-grab here; the operator removes the entry to override it.
+        if crate::app_usecase_discovery::is_release_blocklisted(
+            pr.indexer_id.as_deref(),
+            &pr.release_title,
+            pr.info_hash.as_deref(),
+            &db_blocklist,
+        ) {
+            if trigger == PendingGrabTrigger::StandbyOperator {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::standby::RELEASE_BLOCKLISTED,
+                    "This release is on the title's blocklist",
+                ));
+            }
             return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
         }
 
@@ -1154,10 +1161,21 @@ impl AppUseCase {
         // find out by asking it.
         let route_pinned = dl_snapshot.queue_listing_failed()
             && self.release_route_is_pinned(pr.indexer_id.as_deref()).await;
-        if trigger != PendingGrabTrigger::StandbyOperator
-            && !route_pinned
-            && dl_snapshot.is_active(&pr.release_title)
-        {
+        if !route_pinned && dl_snapshot.is_active(&pr.release_title) {
+            if trigger == PendingGrabTrigger::StandbyOperator {
+                // An unreadable queue is "unknown", not "active".
+                return Err(if dl_snapshot.queue_listing_failed() {
+                    AppError::validation_refused(
+                        crate::error_reasons::standby::CANCELLATION_UNCONFIRMED,
+                        "The current download queue could not be verified",
+                    )
+                } else {
+                    AppError::validation_refused(
+                        crate::error_reasons::standby::ALREADY_ACTIVE,
+                        "This release is already in the download queue",
+                    )
+                });
+            }
             info!(
                 release = pr.release_title.as_str(),
                 "pending release: skipping, already active in download client"
