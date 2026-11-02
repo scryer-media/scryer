@@ -7,6 +7,17 @@ const nl: LocaleDictionary = {
     "Kopiëren mislukt. De tekst is geselecteerd; druk op Ctrl+C of ⌘C.",
   "status.copyFailed":
     "Kopiëren mislukt: de browser weigerde toegang tot het klembord.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Het mediabestand kon niet worden geverifieerd en kan daarom geen bestaand bibliotheekbestand vervangen.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Deze afspeellijst of dit bijbehorende bestand moet worden gecontroleerd omdat het van andere bestanden kan afhangen.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Het mediabestand kon niet worden gelezen. Controleer de toegang tot de bron en probeer het opnieuw.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "De mediastructuur is ongeldig. Controleer het bronbestand voordat je het importeert.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Het mediabestand is versleuteld en kon niet worden geverifieerd.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
   "httpRelease.refusal.detailsUnavailable":

@@ -7,6 +7,17 @@ const pt_BR: LocaleDictionary = {
     "Não foi possível copiar. O texto está selecionado; pressione Ctrl+C ou ⌘C.",
   "status.copyFailed":
     "Não foi possível copiar: o navegador recusou o acesso à área de transferência.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Não foi possível verificar a mídia, portanto ela não pode substituir um arquivo existente da biblioteca.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Esta lista de reprodução ou arquivo complementar precisa de revisão porque pode depender de outros arquivos.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Não foi possível ler a mídia. Verifique o acesso à origem e tente novamente.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "A estrutura da mídia está malformada. Revise o arquivo de origem antes de importar.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "A mídia está criptografada e não pôde ser verificada.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "O Scryer não consegue se conectar ao gateway de metadados porque o relógio do sistema está com uma diferença de mais de 5 minutos. Sincronize o relógio do sistema e reinicie o Scryer.",
   "httpRelease.refusal.detailsUnavailable":

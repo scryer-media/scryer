@@ -300,7 +300,6 @@ pub(crate) fn resolve_audio_languages_from_track_title(title: &str) -> Vec<Strin
 /// tag (e.g. a codec string mis-stored in the language field) is treated as
 /// unresolved rather than a bogus "known" language that could flip an
 /// indeterminate result into a false rejection.
-#[cfg(any(test, feature = "runtime-media-analysis"))]
 fn resolved_track_languages(stream: &crate::AudioStreamDetail) -> Vec<String> {
     if let Some(code) = stream
         .language
@@ -336,7 +335,6 @@ pub fn inferred_audio_track_language(language: Option<&str>, name: Option<&str>)
 }
 
 /// Verdict for the post-download required-audio-language gate.
-#[cfg(any(test, feature = "runtime-media-analysis"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RequiredAudioVerdict {
     /// Every required language is present.
@@ -356,7 +354,6 @@ pub(crate) enum RequiredAudioVerdict {
 /// provable absence (`Missing` → reject) from an indeterminate result
 /// (`Indeterminate` → accept + flag) so a correctly-dubbed file whose tracks are
 /// untagged ("und") is not falsely rejected.
-#[cfg(any(test, feature = "runtime-media-analysis"))]
 pub(crate) fn classify_required_audio(
     required: &[String],
     audio_streams: &[crate::AudioStreamDetail],

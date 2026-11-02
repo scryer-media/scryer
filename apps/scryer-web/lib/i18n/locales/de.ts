@@ -7,6 +7,17 @@ const de: LocaleDictionary = {
     "Kopieren fehlgeschlagen. Der Text ist markiert; Strg+C oder ⌘C drücken.",
   "status.copyFailed":
     "Kopieren fehlgeschlagen: Der Browser hat den Zugriff auf die Zwischenablage verweigert.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Die Mediendatei konnte nicht überprüft werden und kann daher keine vorhandene Bibliotheksdatei ersetzen.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Diese Wiedergabeliste oder Begleitdatei muss überprüft werden, da sie von anderen Dateien abhängen kann.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Die Mediendatei konnte nicht gelesen werden. Prüfe den Zugriff auf die Quelle und versuche es erneut.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Die Medienstruktur ist fehlerhaft. Prüfe die Quelldatei vor dem Import.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Die Mediendatei ist verschlüsselt und konnte nicht überprüft werden.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kann keine Verbindung zum Metadaten-Gateway herstellen, da Ihre Systemuhr um mehr als 5 Minuten abweicht. Synchronisieren Sie Ihre Systemuhr und starten Sie Scryer neu.",
   "httpRelease.refusal.detailsUnavailable":

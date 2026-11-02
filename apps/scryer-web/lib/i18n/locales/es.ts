@@ -7,6 +7,17 @@ const es: LocaleDictionary = {
     "No se pudo copiar. El texto está seleccionado; pulsa Ctrl+C o ⌘C.",
   "status.copyFailed":
     "No se pudo copiar: el navegador denegó el acceso al portapapeles.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "No se pudo verificar el archivo multimedia, por lo que no puede reemplazar un archivo existente de la biblioteca.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Esta lista de reproducción o archivo complementario requiere revisión porque puede depender de otros archivos.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "No se pudo leer el archivo multimedia. Comprueba el acceso al origen y vuelve a intentarlo.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La estructura del archivo multimedia no es válida. Revisa el archivo de origen antes de importarlo.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "El archivo multimedia está cifrado y no se pudo verificar.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer no puede conectarse a la pasarela de metadatos porque el reloj del sistema tiene un desfase de más de 5 minutos. Sincronice el reloj del sistema y reinicie Scryer.",
   "httpRelease.refusal.detailsUnavailable":

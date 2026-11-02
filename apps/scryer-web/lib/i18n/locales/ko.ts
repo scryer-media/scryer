@@ -7,6 +7,17 @@ const ko: LocaleDictionary = {
     "복사하지 못했습니다. 텍스트가 선택되어 있으니 Ctrl+C 또는 ⌘C를 누르세요.",
   "status.copyFailed":
     "복사하지 못했습니다. 브라우저가 클립보드 접근을 거부했습니다.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "미디어를 검증할 수 없어 기존 라이브러리 파일을 대체할 수 없습니다.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "이 재생 목록 또는 동반 파일은 다른 파일에 의존할 수 있으므로 검토가 필요합니다.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "미디어를 읽을 수 없습니다. 원본에 대한 접근 권한을 확인하고 다시 시도하세요.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "미디어 구조가 잘못되었습니다. 가져오기 전에 원본 파일을 확인하세요.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "미디어가 암호화되어 검증할 수 없습니다.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "시스템 시계가 5분 이상 차이 나서 Scryer가 메타데이터 게이트웨이에 연결할 수 없습니다. 시스템 시계를 동기화한 후 Scryer를 다시 시작하세요.",
   "httpRelease.refusal.detailsUnavailable":

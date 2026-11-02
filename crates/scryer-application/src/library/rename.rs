@@ -4578,6 +4578,7 @@ fn title_external_id_value(title: &Title, source: &str) -> Option<String> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RenameMediaEvidence {
     analyzed: crate::media::release_labels::ResolvedAnalysisReleaseLabels,
+    has_audio_stream_evidence: bool,
     quality_label: Option<String>,
     source_type: Option<String>,
     video_hdr_format: Option<String>,
@@ -4593,6 +4594,7 @@ pub(crate) struct RenameMediaEvidence {
 impl RenameMediaEvidence {
     pub(crate) fn from_media_file(media_file: &TitleMediaFile) -> Self {
         Self {
+            has_audio_stream_evidence: !media_file.audio_streams.is_empty(),
             analyzed: resolve_release_labels_from_analysis(
                 media_file.video_width,
                 media_file.video_height,
@@ -4617,9 +4619,11 @@ impl RenameMediaEvidence {
     }
 
     /// A file still being imported has its probe but no recorded row yet; the
-    /// parsed release name supplies everything the probe cannot.
+    /// parsed release name supplies missing facts, except unknown fields of
+    /// an explicitly analyzed primary audio track.
     pub(crate) fn from_analysis(analysis: &crate::MediaFileAnalysis) -> Self {
         Self {
+            has_audio_stream_evidence: !analysis.audio_streams.is_empty(),
             analyzed: resolve_release_labels_from_analysis(
                 analysis.video_width,
                 analysis.video_height,
@@ -4667,6 +4671,7 @@ fn resolve_rename_common_metadata_from_evidence(
 ) -> ResolvedRenameCommonMetadata {
     let RenameMediaEvidence {
         analyzed,
+        has_audio_stream_evidence,
         quality_label,
         source_type,
         video_hdr_format,
@@ -4710,13 +4715,22 @@ fn resolve_rename_common_metadata_from_evidence(
         .unwrap_or_default();
     let audio_codec = analyzed
         .audio_codec
-        .or(audio_codec_parsed)
-        .or_else(|| parsed_current.audio.as_ref().map(ToString::to_string))
+        .or_else(|| {
+            (!has_audio_stream_evidence)
+                .then(|| {
+                    audio_codec_parsed
+                        .or_else(|| parsed_current.audio.as_ref().map(ToString::to_string))
+                })
+                .flatten()
+        })
         .unwrap_or_default();
     let audio_channels = analyzed
         .audio_channels
-        .or(audio_channels_parsed)
-        .or_else(|| parsed_current.audio_channels.clone())
+        .or_else(|| {
+            (!has_audio_stream_evidence)
+                .then(|| audio_channels_parsed.or_else(|| parsed_current.audio_channels.clone()))
+                .flatten()
+        })
         .unwrap_or_default();
     let group = release_group
         .or_else(|| parsed_current.release_group.clone())

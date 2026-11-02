@@ -5,6 +5,7 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 import type { Translate } from "@/components/root/types";
+import { MEDIA_REFUSAL_KEYS } from "./media-error-message.ts";
 import { HTTP_RELEASE_REFUSAL_KEYS } from "./http-release-error-message.ts";
 
 export function importRetrySucceeded(
@@ -481,6 +482,7 @@ export function mergeAuthoritativeQueueItems(
 
 const QUEUE_ATTENTION_REASON_KEYS: Readonly<Record<string, string>> = {
   ...HTTP_RELEASE_REFUSAL_KEYS,
+  ...MEDIA_REFUSAL_KEYS,
   download_password_retry: "queue.attention.downloadPasswordRetry",
 };
 
@@ -495,12 +497,14 @@ export function buildQueueStatusDetail(
       ? QUEUE_ATTENTION_REASON_KEYS[code]
       : null;
   const messages = [
-    ...(code && t && Object.hasOwn(HTTP_RELEASE_REFUSAL_KEYS, code)
+    ...(code && t && Object.hasOwn(QUEUE_ATTENTION_REASON_KEYS, code)
       ? []
       : (queueItem.trackedStatusMessages ?? [])),
     key && t ? t(key) : reason,
     queueItem.deleteErrorMessage,
-    queueItem.importErrorMessage,
+    code && t && Object.hasOwn(MEDIA_REFUSAL_KEYS, code)
+      ? null
+      : queueItem.importErrorMessage,
   ]
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));

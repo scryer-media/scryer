@@ -94,6 +94,17 @@ const en: LocaleDictionary = {
   "settings.copyVerificationTitle": "Copy verification",
   "settings.copyVerificationScope":
     "Applies to download-client imports and library and root moves. Quick is the default. Choose Full when moving off a disk you plan to erase.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Media could not be verified, so it cannot replace an existing library file.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "This playlist or companion needs review because it may depend on other files.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Media could not be read. Check access to the source and retry.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "The media structure is malformed. Review the source file before importing.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "The media is encrypted and could not be verified.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",

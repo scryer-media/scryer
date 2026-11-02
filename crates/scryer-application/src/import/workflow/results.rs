@@ -1373,11 +1373,23 @@ struct PayloadRemovalResult {
     directory_removed: bool,
 }
 
+/// The media suffixes payload cleanup removes. This is deliberately the list
+/// cleanup has always covered, not the wider format registry: a suffix the
+/// registry recognizes for import stays on disk after import until cleanup for
+/// it is approved separately.
+const PAYLOAD_MEDIA_EXTENSIONS: &[&str] = &[
+    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm", "mpg",
+    "mpeg", "vob", "iso",
+];
+
 /// Payload classes a download client leaves behind for a job: the media
 /// itself, its subtitles and artwork, archive volumes, parity, and the scene
 /// sidecars. Anything else is unknown to Scryer and stays on disk.
 fn is_payload_class_file(path: &std::path::Path) -> bool {
-    if scryer_domain::is_video_file(path) || scryer_domain::is_subtitle_file(path) {
+    if scryer_domain::canonical_video_extension(path)
+        .is_some_and(|extension| PAYLOAD_MEDIA_EXTENSIONS.contains(&extension))
+        || scryer_domain::is_subtitle_file(path)
+    {
         return true;
     }
     let Some(extension) = path
@@ -3241,5 +3253,131 @@ mod move_import_source_cleanup_gate_tests {
             Some(guard()),
         ))
         .expect_err("a rename never builds a guard, so this result is inconsistent");
+    }
+
+    #[test]
+    fn payload_cleanup_removes_verified_media_and_preserves_unknown_or_changed_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        for name in ["Movie.mkv", "Episode.MKV_", "changed.mkv", "notes.unknown"] {
+            std::fs::write(directory.path().join(name), b"synthetic payload").expect("fixture");
+        }
+        let inventory =
+            super::inventory_payload_directory_blocking(directory.path()).expect("inventory");
+        assert_eq!(inventory.entries.len(), 3);
+        assert_eq!(inventory.retained, ["notes.unknown"]);
+        // A different length makes the proof mismatch independent of timestamp resolution.
+        std::fs::write(directory.path().join("changed.mkv"), b"replacement")
+            .expect("change fixture");
+        let removed = super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[])
+            .expect("remove verified payload");
+        assert_eq!(removed.removed, 2);
+        assert!(!removed.directory_removed);
+        for name in ["Movie.mkv", "Episode.MKV_"] {
+            assert!(!directory.path().join(name).exists());
+        }
+        assert_eq!(
+            std::fs::read(directory.path().join("changed.mkv")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("notes.unknown")).unwrap(),
+            b"synthetic payload"
+        );
+    }
+
+    #[test]
+    fn newly_registered_media_suffixes_are_never_payload_cleanup_targets() {
+        // Cleanup keeps the release-0.22.0 scope: suffixes the registry added
+        // for import stay on disk, each retaining only itself.
+        let directory = tempfile::tempdir().unwrap();
+        let added = [
+            "Movie.ogm",
+            "Movie.xvid",
+            "Movie.wtv",
+            "Movie.mts",
+            "Movie.ogg",
+            "Movie.dat",
+            "Movie.bin",
+            "Movie.img",
+            "Movie.nrg",
+            "VIDEO_TS.ifo",
+            "Movie.asx",
+            "Movie.wpl",
+        ];
+        for name in added.iter().chain(["Movie.mkv", "Movie.nfo"].iter()) {
+            std::fs::write(directory.path().join(name), b"synthetic payload").unwrap();
+        }
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        let mut retained = inventory.retained.clone();
+        retained.sort();
+        let mut expected = added.map(str::to_owned).to_vec();
+        expected.sort();
+        assert_eq!(retained, expected);
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 2);
+        assert!(!result.directory_removed);
+        for name in added {
+            assert_eq!(
+                std::fs::read(directory.path().join(name)).unwrap(),
+                b"synthetic payload",
+                "{name}"
+            );
+        }
+        assert!(!directory.path().join("Movie.mkv").exists());
+        assert!(!directory.path().join("Movie.nfo").exists());
+    }
+
+    #[test]
+    fn imported_disc_image_payload_is_cleaned_as_before() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["Movie.iso", "Movie.nfo"] {
+            std::fs::write(directory.path().join(name), b"synthetic payload").unwrap();
+        }
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        assert!(inventory.retained.is_empty());
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 2);
+        assert!(result.directory_removed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_retains_only_itself() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("target.mkv");
+        std::fs::write(&target, b"link target").unwrap();
+        std::fs::write(directory.path().join("Movie.mkv"), b"synthetic video").unwrap();
+        std::os::unix::fs::symlink(&target, directory.path().join("Linked.mkv")).unwrap();
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        assert_eq!(inventory.retained, ["Linked.mkv"]);
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 1);
+        assert!(!result.directory_removed);
+        assert!(!directory.path().join("Movie.mkv").exists());
+        assert!(
+            std::fs::symlink_metadata(directory.path().join("Linked.mkv"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"link target");
+    }
+
+    #[test]
+    fn playlists_and_stream_links_are_cleaned_without_fetching_them() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["Movie.m3u", "Movie.strm"] {
+            std::fs::write(directory.path().join(name), "https://example.invalid/movie").unwrap();
+        }
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        assert!(inventory.retained.is_empty());
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 2);
+        assert!(result.directory_removed);
     }
 }

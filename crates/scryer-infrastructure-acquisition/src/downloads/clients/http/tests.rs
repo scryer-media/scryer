@@ -2836,6 +2836,18 @@ fn an_unnamed_media_file_takes_the_extension_of_the_container_it_holds() {
         media_path_for_probed_container(&named, &read(Some("mp4"))),
         None
     );
+    for (container, extension) in [("ogm", "ogm"), ("OGM", "ogm"), ("ogg", "ogv")] {
+        assert_eq!(
+            media_path_for_probed_container(planned, &read(Some(container))),
+            Some(planned.with_extension(extension)),
+        );
+    }
+    for name in ["Movie.ogm", "Movie.OGM", "Movie.OgM_"] {
+        assert_eq!(
+            media_path_for_probed_container(Path::new(name), &read(Some("ogg"))),
+            None
+        );
+    }
 }
 
 #[tokio::test]

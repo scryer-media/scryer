@@ -5811,6 +5811,16 @@ pub mod services {
 }
 
 pub mod media {
+    /// Unavailable media analysis cannot authorize replacement of an existing file.
+    pub const UNVERIFIED_REPLACEMENT: &str = "MEDIA_UNVERIFIED_REPLACEMENT";
+    /// References or companion files cannot safely survive relocation.
+    pub const REFERENCES_REQUIRE_REVIEW: &str = "MEDIA_REFERENCES_REQUIRE_REVIEW";
+    /// The source could not be read during media analysis.
+    pub const PROBE_IO_FAILED: &str = "MEDIA_PROBE_IO_FAILED";
+    /// The source has malformed media structure.
+    pub const PROBE_MALFORMED: &str = "MEDIA_PROBE_MALFORMED";
+    /// Encrypted media requires manual review.
+    pub const PROBE_ENCRYPTED: &str = "MEDIA_PROBE_ENCRYPTED";
     /// Media file was not found.
     pub const FILE_NOT_FOUND: &str = "MEDIA_FILE_NOT_FOUND";
     /// Registered media path changed before inspection.
@@ -5883,6 +5893,11 @@ pub mod media {
     pub const ANALYSIS_INVALID: &str = "MEDIA_ANALYSIS_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        UNVERIFIED_REPLACEMENT,
+        REFERENCES_REQUIRE_REVIEW,
+        PROBE_IO_FAILED,
+        PROBE_MALFORMED,
+        PROBE_ENCRYPTED,
         FILE_NOT_FOUND,
         REGISTERED_MEDIA_PATH_CHANGED_BEFORE_INSPECTION,
         SOURCE_CHANGED_DURING_INSPECTION,

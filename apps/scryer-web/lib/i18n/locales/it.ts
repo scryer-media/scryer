@@ -8,6 +8,17 @@ const it: LocaleDictionary = {
     "Copia non riuscita. Il testo è selezionato; premi Ctrl+C o ⌘C.",
   "status.copyFailed":
     "Copia non riuscita: il browser ha negato l'accesso agli appunti.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Il file multimediale non è stato verificato e non può sostituire un file già presente nella libreria.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Questa playlist o questo file complementare richiede una verifica perché potrebbe dipendere da altri file.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Impossibile leggere il file multimediale. Controlla l’accesso alla sorgente e riprova.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La struttura del file multimediale non è valida. Controlla il file sorgente prima di importarlo.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Il file multimediale è crittografato e non è stato possibile verificarlo.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer non può connettersi al gateway dei metadati perché l’orologio di sistema ha uno scarto superiore a 5 minuti. Sincronizza l’orologio di sistema e riavvia Scryer.",
   "httpRelease.refusal.detailsUnavailable":

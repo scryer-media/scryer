@@ -8,6 +8,17 @@ const ru: LocaleDictionary = {
     "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
   "status.copyFailed":
     "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Не удалось проверить медиафайл, поэтому он не может заменить существующий файл библиотеки.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Этот плейлист или сопутствующий файл требует проверки, так как может зависеть от других файлов.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Не удалось прочитать медиафайл. Проверьте доступ к источнику и повторите попытку.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Структура медиафайла повреждена. Проверьте исходный файл перед импортом.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Медиафайл зашифрован, и его не удалось проверить.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
   "httpRelease.refusal.detailsUnavailable":

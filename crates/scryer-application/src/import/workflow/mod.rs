@@ -28,8 +28,11 @@ use scryer_domain::{
     Collection, CollectionType, CompletedDownload, DomainEventPayload, DownloadQueueItem, Id,
     ImportCompletedEventData, ImportDecision, ImportErrorCode, ImportRecord, ImportResult,
     ImportSkipReason, ImportStatus, ImportType, MediaFacet, PostedFileName, Title,
-    TrackedDownloadState, User, is_video_file,
+    TrackedDownloadState, User,
 };
+// Only a standalone library suffix makes an import candidate, the same list
+// library scans catalog; probe-only suffixes and disc companions never do.
+use scryer_domain::is_standalone_video_file as is_video_file;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

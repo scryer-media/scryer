@@ -1,5 +1,8 @@
+import { MEDIA_REFUSAL_KEYS } from "../utils/media-error-message.ts";
+
 /** Stable public reasons and their localization keys. Unknown future reasons use server copy. */
 export const PUBLIC_ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
+  ...MEDIA_REFUSAL_KEYS,
   METADATA_GATEWAY_CLOCK_SKEW: "error.reason.METADATA_GATEWAY_CLOCK_SKEW",
   EXTERNAL_ACCOUNT_LINK_FAILED: "error.reason.EXTERNAL_ACCOUNT_LINK_FAILED",
   CATALOG_TAG_INVALID: "error.reason.CATALOG_TAG_INVALID",
