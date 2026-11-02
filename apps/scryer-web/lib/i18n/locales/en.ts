@@ -5506,6 +5506,13 @@ const en: LocaleDictionary = {
   "settings.noMediaServersFound": "No media server connections found.",
   "settings.capabilities": "Capabilities",
   "settings.credentials": "Credentials",
+  "settings.watchHistory": "Watch history",
+  "settings.watchHistoryNotRead": "Not read yet",
+  "settings.watchHistoryLastFullRead": "Last full read {{time}}",
+  "settings.watchHistoryIncomplete": "Last read incomplete",
+  "settings.watchHistoryIncompleteHelp":
+    "Lifecycle rules treat watch history as unknown until every enabled media server is read in full. Reason: {{reason}}",
+  "settings.watchHistorySignalCount": "{{count}} watched items from {{accounts}} linked accounts",
   "settings.apiKeyConfigured": "API key saved",
   "settings.apiKeyMissing": "API key missing",
   "settings.plexServerSelected": "Plex server selected",

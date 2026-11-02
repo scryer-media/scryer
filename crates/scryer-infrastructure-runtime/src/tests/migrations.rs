@@ -6979,6 +6979,67 @@ async fn migration_0317_drops_saved_glow_preferences_and_keeps_the_rest() {
 }
 
 #[tokio::test]
+async fn migration_0318_adds_favourites_without_marking_existing_signals() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-favorites-0318.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("favourite column connection");
+
+    let columns: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_table_info('media_server_user_media_signals')")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read migrated columns");
+    assert!(
+        columns.iter().any(|(name,)| name == "is_favorite"),
+        "a fully migrated schema stores favourites"
+    );
+
+    // Return the table to its pre-0318 shape, keep a played observation in
+    // it, and replay the migration over that row.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded row");
+    sqlx::query("ALTER TABLE media_server_user_media_signals DROP COLUMN is_favorite")
+        .execute(&mut *conn)
+        .await
+        .expect("restore the pre-0318 shape");
+    sqlx::query(
+        "INSERT INTO media_server_user_media_signals
+         (id, connection_id, provider, external_user_id, provider_item_id, kind, played,
+          play_count)
+         VALUES ('signal-synthetic', 'connection-synthetic', 'jellyfin', 'user-synthetic',
+                 'item-synthetic', 'movie', 1, 2)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a stored signal");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0318_media_server_signal_favorites.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0318 should apply");
+
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, played, play_count, is_favorite FROM media_server_user_media_signals",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read signals after 0318");
+    assert_eq!(rows, vec![("signal-synthetic".to_string(), 1, 2, 0)]);
+}
+
+#[tokio::test]
 async fn migration_0307_removes_operator_keeps_and_nothing_else() {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
     let services = SqliteServices::new(directory.path().join("keeps-0307.db").to_string_lossy())

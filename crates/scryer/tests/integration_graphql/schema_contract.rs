@@ -1282,12 +1282,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     for name in ["BindPinValue", "InitialNetworkAccess"] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Watch-history sweep state on media-server connections adds
+    // MediaServerWatchSignalSyncPayload: public types 995->996, OBJECT 537->538.
+    assert!(public_type_names.contains(&"MediaServerWatchSignalSyncPayload"));
     assert_eq!(
         public_types.len(),
-        995,
+        996,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 537);
+    assert_eq!(kind_count("OBJECT"), 538);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
     assert_eq!(kind_count("ENUM"), 203);
     assert_eq!(kind_count("SCALAR"), 10);

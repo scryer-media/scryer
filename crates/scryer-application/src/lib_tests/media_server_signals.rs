@@ -93,6 +93,7 @@ fn played_movie(item_id: &str, tmdb: &str) -> ProviderPlayedItem {
         played: true,
         play_count: 2,
         last_played_at: Some(Utc::now()),
+        is_favorite: false,
     }
 }
 
@@ -114,6 +115,7 @@ fn played_episode(
         played: true,
         play_count: 1,
         last_played_at: Some(Utc::now()),
+        is_favorite: false,
     }
 }
 
@@ -524,6 +526,7 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
                 played: signal.played,
                 play_count: signal.play_count,
                 last_played_at: signal.last_played_at,
+                is_favorite: signal.is_favorite,
                 observed_at: signal.observed_at,
                 sync_generation: generation,
                 created_at: Utc::now(),
@@ -1049,4 +1052,100 @@ async fn a_successful_sync_retires_unlinked_or_unverified_watchers() {
     assert_eq!(state.participant_count, 0);
     assert_eq!(state.signal_count, 0);
     assert!(state.last_error.is_none());
+}
+
+/// Emby and Plex connections are swept beside Jellyfin's. A connection whose
+/// participant read was incomplete gets no clean-sweep time and keeps its
+/// reason; a connection that read cleanly gets one, and a favourite flag
+/// reported by the adapter is stored with the play.
+#[tokio::test]
+async fn emby_and_plex_connections_are_swept_and_only_a_clean_one_records_a_clean_sweep() {
+    let mut emby = named_jellyfin_connection("conn-emby", true);
+    emby.provider = MediaServerProvider::Emby;
+    let mut plex = named_jellyfin_connection("conn-plex", true);
+    plex.provider = MediaServerProvider::Plex;
+
+    let mut emby_viewer = verified_account();
+    emby_viewer.id = "link-emby".to_string();
+    emby_viewer.provider = ExternalAccountProvider::Emby;
+    emby_viewer.connection_id = "conn-emby".to_string();
+    emby_viewer.external_user_id = Some("emby-user-alpha".to_string());
+    let mut plex_viewer = verified_account();
+    plex_viewer.id = "link-plex".to_string();
+    plex_viewer.provider = ExternalAccountProvider::Plex;
+    plex_viewer.connection_id = "conn-plex".to_string();
+    plex_viewer.external_user_id = Some("2002".to_string());
+
+    let mut favourite = played_movie("emby-movie-1", "603");
+    favourite.is_favorite = true;
+    let fixture = sync_app(
+        vec![emby, plex],
+        vec![emby_viewer, plex_viewer],
+        StubSignalSource {
+            items: HashMap::from([
+                ("emby-user-alpha".to_string(), vec![favourite]),
+                ("2002".to_string(), vec![played_movie("101", "603")]),
+            ]),
+            ..Default::default()
+        },
+    );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
+
+    // First sweep: both read cleanly.
+    let report = fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    assert_eq!(report.connections_considered, 2);
+    assert_eq!(report.connections_synced, 2);
+    let emby_rows = fixture.signals.rows_for("emby-user-alpha").await;
+    assert_eq!(emby_rows.len(), 1);
+    assert!(emby_rows[0].is_favorite);
+    assert_eq!(emby_rows[0].provider, MediaServerProvider::Emby);
+    let plex_rows = fixture.signals.rows_for("2002").await;
+    assert_eq!(plex_rows.len(), 1);
+    assert!(!plex_rows[0].is_favorite);
+    let first_plex = fixture
+        .signals
+        .state_for("conn-plex")
+        .await
+        .expect("plex state");
+    assert!(first_plex.last_success_at.is_some());
+    assert!(first_plex.last_error.is_none());
+}
+
+#[tokio::test]
+async fn an_incomplete_emby_read_leaves_the_connection_without_a_clean_sweep() {
+    let mut emby = named_jellyfin_connection("conn-emby", true);
+    emby.provider = MediaServerProvider::Emby;
+    let mut viewer = verified_account();
+    viewer.provider = ExternalAccountProvider::Emby;
+    viewer.connection_id = "conn-emby".to_string();
+    viewer.external_user_id = Some("emby-user-alpha".to_string());
+
+    let fixture = sync_app(
+        vec![emby],
+        vec![viewer],
+        StubSignalSource {
+            failing: HashSet::from(["emby-user-alpha".to_string()]),
+            ..Default::default()
+        },
+    );
+
+    let report = fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    assert_eq!(report.connections_failed, 1);
+    assert_eq!(report.participants_failed, 1);
+    let state = fixture
+        .signals
+        .state_for("conn-emby")
+        .await
+        .expect("emby state");
+    assert!(state.last_success_at.is_none(), "no clean sweep yet");
+    assert!(state.last_error.is_some());
+    assert_eq!(state.provider, MediaServerProvider::Emby);
 }

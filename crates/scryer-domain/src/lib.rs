@@ -7140,6 +7140,10 @@ pub struct NewUserMediaSignal {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// The person marked the item as a favourite on the server. An intent
+    /// signal beside the played state; always `false` for Plex, which has no
+    /// favourite.
+    pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -7158,6 +7162,7 @@ pub struct UserMediaSignal {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
     /// Sweep that wrote this row. Rows from older generations for the same
     /// participant are deleted by the next successful sweep, which is how an

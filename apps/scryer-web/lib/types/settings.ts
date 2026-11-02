@@ -261,6 +261,17 @@ export type MediaServerConnection = {
   pathMappings: MediaServerPathMapping[];
   createdAt: string;
   updatedAt: string;
+  /** Selected by the connection list only; null until the first sweep. */
+  watchSignalSync?: MediaServerWatchSignalSync | null;
+};
+
+/** Watch-history sweep state of one media-server connection. */
+export type MediaServerWatchSignalSync = {
+  lastStartedAt: string | null;
+  lastCleanSweepAt: string | null;
+  lastError: string | null;
+  participantCount: number;
+  signalCount: number;
 };
 
 export type PlexServerDiscovery = {

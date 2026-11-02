@@ -2509,6 +2509,13 @@ export const downloadClientsQuery = `query DownloadClients {
 
 export const mediaServerConnectionsQuery = `query MediaServerConnections($provider: MediaServerProviderValue) {
   mediaServerConnections(provider: $provider) {${MEDIA_SERVER_CONNECTION_FIELDS}
+    watchSignalSync {
+      lastStartedAt
+      lastCleanSweepAt
+      lastError
+      participantCount
+      signalCount
+    }
   }
   runtimeInfo {
     runtimePathStyle

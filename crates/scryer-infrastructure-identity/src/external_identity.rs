@@ -1792,7 +1792,7 @@ fn plex_provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
         .collect()
 }
 
-fn plex_external_id(value: &str) -> Option<ExternalId> {
+pub(crate) fn plex_external_id(value: &str) -> Option<ExternalId> {
     let (raw_source, raw_value) = value.trim().split_once("://")?;
     let source = match raw_source.trim().to_ascii_lowercase().as_str() {
         "tmdb" | "themoviedb" | "com.plexapp.agents.tmdb" | "com.plexapp.agents.themoviedb" => {

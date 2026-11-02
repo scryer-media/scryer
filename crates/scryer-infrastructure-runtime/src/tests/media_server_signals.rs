@@ -60,6 +60,9 @@ fn movie_signal(item_id: &str, title_id: Option<&str>, play_count: i64) -> NewUs
         played: true,
         play_count,
         last_played_at: Some(Utc::now()),
+        // Only the movie fixture is a favourite, so a round trip proves the
+        // flag is stored rather than defaulted.
+        is_favorite: true,
         observed_at: Utc::now(),
     }
 }
@@ -75,6 +78,7 @@ fn episode_signal(item_id: &str, title_id: &str, episode_id: &str) -> NewUserMed
         played: true,
         play_count: 1,
         last_played_at: Some(Utc::now()),
+        is_favorite: false,
         observed_at: Utc::now(),
     }
 }
@@ -110,6 +114,7 @@ async fn signals_round_trip_with_their_subject_and_play_facts() {
     assert_eq!(signal.play_count, 3);
     assert!(signal.played);
     assert!(signal.last_played_at.is_some());
+    assert!(signal.is_favorite);
     assert!(signal.scryer_episode_id.is_none());
     assert_eq!(signal.sync_generation, 1);
 

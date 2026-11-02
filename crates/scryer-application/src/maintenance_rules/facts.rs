@@ -1346,6 +1346,7 @@ pub(crate) mod tests {
                     .expect("fixture timestamp parses")
                     .with_timezone(&Utc),
             ),
+            is_favorite: false,
             observed_at: Utc::now(),
             sync_generation: 1,
             created_at: Utc::now(),

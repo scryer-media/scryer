@@ -178,6 +178,7 @@ async fn record_play(
                 played: true,
                 play_count: 1,
                 last_played_at: Some(Utc::now()),
+                is_favorite: false,
                 observed_at: Utc::now(),
             }],
         )

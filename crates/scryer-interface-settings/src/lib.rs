@@ -10,10 +10,10 @@ use scryer_interface_core::{
 use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
     from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
-    from_library_paths_settings, from_media_server_connection, from_media_server_user_group,
-    from_media_settings, from_proxy_config, from_public_url_change_preview,
-    from_quality_profile_settings, from_seeding_profile, from_service_settings,
-    from_subtitle_provider_config, from_user_with_auth_factor_status,
+    from_library_paths_settings, from_media_server_connection, from_media_server_signal_sync_state,
+    from_media_server_user_group, from_media_settings, from_proxy_config,
+    from_public_url_change_preview, from_quality_profile_settings, from_seeding_profile,
+    from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -1101,18 +1101,29 @@ impl SettingsQueries {
     ) -> GqlResult<Vec<MediaServerConnectionPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.list_media_server_connections(
-            &actor,
-            provider.map(MediaServerProviderValue::into_domain),
-        )
-        .await
-        .map(|connections| {
-            connections
-                .into_iter()
-                .map(from_media_server_connection)
-                .collect()
-        })
-        .map_err(to_gql_error)
+        let connections = app
+            .list_media_server_connections(
+                &actor,
+                provider.map(MediaServerProviderValue::into_domain),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        let mut states = app
+            .list_media_server_signal_sync_states(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(|state| (state.connection_id.clone(), state))
+            .collect::<std::collections::HashMap<_, _>>();
+        Ok(connections
+            .into_iter()
+            .map(|connection| {
+                let state = states.remove(&connection.id);
+                let mut payload = from_media_server_connection(connection);
+                payload.watch_signal_sync = state.map(from_media_server_signal_sync_state);
+                payload
+            })
+            .collect())
     }
 
     /// Lists users from the media-server connection identified by `connection_id`.

@@ -15,6 +15,22 @@ impl AppUseCase {
             .await
     }
 
+    /// Every connection's watch-signal sweep state: when it last swept
+    /// cleanly and why the latest sweep did not, if it did not. A connection
+    /// that has never been swept has no entry.
+    pub async fn list_media_server_signal_sync_states(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>> {
+        self.require_app_permission(actor, AppPermission::ManageSystemSettings)
+            .await?;
+        self.services
+            .integrations
+            .media_server_signals
+            .signal_sync_states()
+            .await
+    }
+
     pub async fn get_media_server_connection(
         &self,
         actor: &User,

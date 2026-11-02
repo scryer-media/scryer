@@ -48,12 +48,12 @@ impl MediaServerSignalStore {
 
 const SIGNAL_COLUMNS: &str = "id, connection_id, provider, external_user_id, scryer_user_id,
     provider_item_id, kind, scryer_title_id, scryer_episode_id, played, play_count,
-    last_played_at, observed_at, sync_generation, created_at, updated_at";
+    last_played_at, is_favorite, observed_at, sync_generation, created_at, updated_at";
 
 const SIGNAL_INSERT_PREFIX: &str = "INSERT INTO media_server_user_media_signals
         (id, connection_id, provider, external_user_id, scryer_user_id, provider_item_id, kind,
-         scryer_title_id, scryer_episode_id, played, play_count, last_played_at, observed_at,
-         sync_generation, created_at, updated_at)";
+         scryer_title_id, scryer_episode_id, played, play_count, last_played_at, is_favorite,
+         observed_at, sync_generation, created_at, updated_at)";
 
 /// The conflict target is the table's natural key. `id` and `created_at` are
 /// deliberately absent from the update list: a row that survives a sweep is the
@@ -68,11 +68,12 @@ const SIGNAL_UPSERT_SUFFIX: &str =
          played = excluded.played,
          play_count = excluded.play_count,
          last_played_at = excluded.last_played_at,
+         is_favorite = excluded.is_favorite,
          observed_at = excluded.observed_at,
          sync_generation = excluded.sync_generation,
          updated_at = excluded.updated_at";
 
-const SIGNAL_ROW_WIDTH: usize = 16;
+const SIGNAL_ROW_WIDTH: usize = 17;
 
 const SYNC_STATE_COLUMNS: &str = "connection_id, provider, enabled, last_started_at,
     last_success_at, last_error, participant_count, signal_count, updated_at";
@@ -350,6 +351,7 @@ fn signal_args(
         SqlArg::Bool(signal.played),
         SqlArg::I64(signal.play_count),
         SqlArg::OptTimestamp(signal.last_played_at),
+        SqlArg::Bool(signal.is_favorite),
         SqlArg::Timestamp(signal.observed_at),
         SqlArg::I64(generation),
         SqlArg::Timestamp(now),
@@ -375,6 +377,7 @@ fn row_to_signal(row: &SqlRow) -> AppResult<UserMediaSignal> {
         played: row.bool("played")?,
         play_count: row.i64("play_count")?,
         last_played_at: row.opt_timestamp("last_played_at")?,
+        is_favorite: row.bool("is_favorite")?,
         observed_at: row.timestamp("observed_at")?,
         sync_generation: row.i64("sync_generation")?,
         created_at: row.timestamp("created_at")?,

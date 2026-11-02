@@ -1,6 +1,6 @@
 //! Scheduled media-server signal synchronization (RFC 137 sections 4.4, 7.3).
 //!
-//! One pass over every Jellyfin connection. Per connection: resolve the
+//! One pass over every Jellyfin, Emby, and Plex connection. Per connection: resolve the
 //! participant set, read each participant's played items through the adapter,
 //! map them onto Scryer subjects, and replace that participant's stored signal
 //! set atomically. Per connection the outcome is recorded in
@@ -25,9 +25,13 @@
 //!
 //! # Provider scope
 //!
-//! Jellyfin only for now. The tables, the normalized item, the store, and this
-//! orchestration are all provider-neutral; adding Emby is a new arm in the
-//! adapter plus adding its provider to [`SIGNAL_SYNC_PROVIDERS`].
+//! Jellyfin, Emby, and Plex. The tables, the normalized item, the store, and
+//! this orchestration are all provider-neutral; each provider is one arm in the
+//! adapter plus an entry in [`SIGNAL_SYNC_PROVIDERS`].
+//!
+//! A provider in that list is also part of the lifecycle-rule freshness gate:
+//! until every enabled connection of every listed provider has swept cleanly,
+//! watch facts stay unobserved rather than answering from a partial roster.
 
 use std::collections::{HashMap, HashSet};
 
@@ -46,9 +50,14 @@ use crate::media_server_signals::mapping::{
 use crate::ports::{ProviderPlayedItem, TitleExternalIdLookup};
 use crate::{AppResult, AppUseCase};
 
-/// Providers this wave synchronizes. Emby and Plex join the list when their
-/// adapters land; nothing else in this file changes.
-pub const SIGNAL_SYNC_PROVIDERS: [MediaServerProvider; 1] = [MediaServerProvider::Jellyfin];
+/// Providers the sweep synchronizes. Every provider here has a reading arm in
+/// the signal source; listing one without it would report an error per sweep
+/// and hold every watch fact unobserved.
+pub const SIGNAL_SYNC_PROVIDERS: [MediaServerProvider; 3] = [
+    MediaServerProvider::Jellyfin,
+    MediaServerProvider::Emby,
+    MediaServerProvider::Plex,
+];
 
 /// What one sweep did, for the job summary.
 ///
@@ -329,6 +338,7 @@ impl AppUseCase {
                     played: item.played,
                     play_count: item.play_count,
                     last_played_at: item.last_played_at,
+                    is_favorite: item.is_favorite,
                     observed_at,
                 }
             })

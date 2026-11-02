@@ -12404,8 +12404,8 @@ pub trait MediaServerPlaybackProbe: Send + Sync {
 /// One played item exactly as a provider reported it, before any Scryer
 /// identity is attached.
 ///
-/// This is the provider-neutral shape every adapter normalizes into: Jellyfin
-/// today, Emby and Plex next. It carries the provider's own ids and the
+/// This is the provider-neutral shape every adapter normalizes into, whatever
+/// the provider. It carries the provider's own ids and the
 /// external ids needed to map the item, and nothing else — no Scryer title id,
 /// because the adapter has no business resolving one, and no credential.
 ///
@@ -12428,6 +12428,9 @@ pub struct ProviderPlayedItem {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// Marked as a favourite by this person. Plex has no favourite, so its
+    /// adapter always reports `false`.
+    pub is_favorite: bool,
 }
 
 /// Reads one participant's played items from one media-server connection.
