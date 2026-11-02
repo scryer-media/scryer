@@ -579,6 +579,8 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
         high_contrast_mode: settings.high_contrast_mode,
         reduce_motion: settings.reduce_motion,
         hide_sponsor_button: settings.hide_sponsor_button,
+        discovery_grid_hide_owned: settings.discovery_grid_hide_owned,
+        discovery_grid_hide_requested: settings.discovery_grid_hide_requested,
         density: from_ui_density(settings.density),
         sidebar_mode: from_ui_sidebar_mode(settings.sidebar_mode),
         default_landing_view: from_ui_default_landing_view(settings.default_landing_view),
@@ -687,6 +689,12 @@ pub(crate) fn ui_settings_update_from_input(
         high_contrast_mode: input.high_contrast_mode,
         reduce_motion: input.reduce_motion,
         hide_sponsor_button: input.hide_sponsor_button,
+        discovery_grid_hide_owned: input
+            .discovery_grid_hide_owned
+            .unwrap_or(current.discovery_grid_hide_owned),
+        discovery_grid_hide_requested: input
+            .discovery_grid_hide_requested
+            .unwrap_or(current.discovery_grid_hide_requested),
         density: to_app_ui_density(input.density),
         sidebar_mode: to_app_ui_sidebar_mode(input.sidebar_mode),
         default_landing_view: to_app_ui_default_landing_view(input.default_landing_view),

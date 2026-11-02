@@ -132,6 +132,10 @@ export type UiSettings = {
   highContrastMode: boolean;
   reduceMotion: boolean;
   hideSponsorButton: boolean;
+  /** Whether discovery section grids leave out titles already in a library. */
+  discoveryGridHideOwned: boolean;
+  /** Whether discovery section grids leave out titles with a pending request. */
+  discoveryGridHideRequested: boolean;
   density: "COMPACT" | "COMFORTABLE";
   sidebarMode: "EXPANDED" | "COLLAPSED";
   defaultLandingView:
@@ -190,9 +194,18 @@ export type UiCatalogViewSetting = {
  */
 export type SetMyUiSettingsInput = Omit<
   UiSettings,
-  "language" | "tableColumns" | "catalogViews" | "dashboardLayouts"
+  | "language"
+  | "tableColumns"
+  | "catalogViews"
+  | "dashboardLayouts"
+  | "discoveryGridHideOwned"
+  | "discoveryGridHideRequested"
 > & {
   language?: string;
+  /** Omitted keeps the saved value. */
+  discoveryGridHideOwned?: boolean;
+  /** Omitted keeps the saved value. */
+  discoveryGridHideRequested?: boolean;
 };
 
 export type SetMyCatalogViewInput = {

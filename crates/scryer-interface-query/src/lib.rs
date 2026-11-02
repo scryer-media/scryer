@@ -2905,11 +2905,12 @@ impl JobAndDownloadQueries {
     ) -> GqlResult<DiscoveryItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let query = discovery_items_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_items(&actor, discovery_items_query_from_input(input))
+            .discovery_items(&actor, query)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_discovery_items_result(&app, result))
+        from_discovery_items_result(&app, result).map_err(to_gql_error)
     }
 
     /// Fetch one discovery item by identity and scope, returning null when unavailable.

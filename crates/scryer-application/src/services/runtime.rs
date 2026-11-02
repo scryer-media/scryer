@@ -2307,6 +2307,8 @@ pub struct AppRuntimeLibraryState {
     /// Which location operations have a runner alive in this process, so a
     /// resume can never start a second one over live checkpoints (FR-033).
     pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
+    /// Composed discovery section lists for paging past the first page.
+    pub(crate) discovery_section_cache: Arc<crate::discovery::DiscoverySectionCache>,
 }
 
 #[derive(Clone)]
@@ -2699,6 +2701,7 @@ impl AppRuntimeState {
                 location_ownership:
                     crate::location::ownership_guard::LocationOwnershipRegistry::new(),
                 location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
+                discovery_section_cache: Arc::default(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),

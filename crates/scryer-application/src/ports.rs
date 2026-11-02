@@ -361,6 +361,30 @@ pub struct DiscoveryHomeResult {
     pub complete_collection: Option<DiscoverySectionResult>,
     pub facets: Vec<DiscoveryFacetRecord>,
     pub can_view_personalized: bool,
+    /// The allowlisted genres and themes the viewer's personalized pool holds
+    /// enough of to browse, in allowlist order. Each one opens a section
+    /// through [`DiscoveryItemsQuery::section`].
+    pub browse_labels: Vec<DiscoveryBrowseLabel>,
+}
+
+/// The label family a "browse by" entry lists titles under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoveryBrowseLabelFamily {
+    Genre,
+    Theme,
+}
+
+/// One "browse by" entry: an allowlisted label and the section that lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveryBrowseLabel {
+    pub family: DiscoveryBrowseLabelFamily,
+    /// Canonical hyphenated allowlist key, as on a rail's `label_key`.
+    pub label_key: String,
+    pub section_id: String,
+    /// English fallback noun for clients that do not know the key.
+    pub title: String,
+    /// Items the section holds before paging.
+    pub item_count: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -409,7 +433,7 @@ pub enum CatalogDiscoverySurface {
     Personalized,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiscoveryItemsQuery {
     pub query: Option<String>,
     pub target_keys: Vec<String>,
@@ -425,6 +449,36 @@ pub struct DiscoveryItemsQuery {
     pub include_public: bool,
     pub limit: usize,
     pub offset: usize,
+    /// Page one discovery home section in full instead of the general
+    /// listing. The other filters above are ignored except `include_owned`,
+    /// `include_unresolved`, `limit` and `offset`.
+    pub section: Option<DiscoverySectionItemsQuery>,
+}
+
+/// Identity and pinned home state of a section being paged in full.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscoverySectionItemsQuery {
+    pub section_id: String,
+    /// Items per section on the home the section was opened from; 0 means
+    /// the home default. Earlier rails claim titles at this size, so it is
+    /// what keeps the section's first page equal to its home rail.
+    pub rail_limit: usize,
+    /// The home filters the section was opened under.
+    pub filters: DiscoveryHomeFilters,
+    pub sort: DiscoverySectionSort,
+    /// Drop titles with a pending request in a library the viewer can read.
+    pub hide_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DiscoverySectionSort {
+    /// The section's own order: what its home rail shows first.
+    #[default]
+    Relevance,
+    Popularity,
+    Rating,
+    ReleaseDate,
+    Title,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +486,12 @@ pub struct DiscoveryItemsResult {
     pub items: Vec<DiscoveryItemRecord>,
     pub total_count: i64,
     pub can_view_personalized: bool,
+    /// The paged section's header with this page as its items, when the query
+    /// named a section that exists for this viewer.
+    pub section: Option<DiscoverySectionResult>,
+    /// The discovery generations a section page was composed from; empty
+    /// outside section paging.
+    pub generation_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -815,20 +875,27 @@ pub trait DiscoveryRepository: Send + Sync {
         run_id: &str,
         surface: Option<&str>,
     ) -> AppResult<Vec<DiscoverySectionRecord>>;
+    /// Public section candidates, `limit_per_section` deep. `section_ids`
+    /// narrows the load to those sections; empty loads every public section.
     async fn list_public_discovery_section_items(
         &self,
         run_id: &str,
+        section_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>>;
+    /// The personalized pool. Rows the gateway marked as owned in the
+    /// submitted context are left out unless `include_owned` is set.
+    #[allow(clippy::too_many_arguments)]
     async fn list_personalized_discovery_home_items(
         &self,
         run_id: &str,
         readable_library_ids: &[String],
         allowed_media_kinds: &[String],
         include_unresolved: bool,
+        include_owned: bool,
         filters: &DiscoveryHomeFilters,
         limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>>;

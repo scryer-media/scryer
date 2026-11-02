@@ -1285,14 +1285,26 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Watch-history sweep state on media-server connections adds
     // MediaServerWatchSignalSyncPayload: public types 995->996, OBJECT 537->538.
     assert!(public_type_names.contains(&"MediaServerWatchSignalSyncPayload"));
+    // Paged discovery sections and the "browse by" cards add the browse card
+    // payload and two enums (section sort and browse label family): public
+    // types 996->999, OBJECT 538->539, ENUM 203->205. The section input fields,
+    // the section on the items payload and the grid preferences are additive
+    // fields on types that already existed.
+    for name in [
+        "DiscoveryBrowseLabelPayload",
+        "DiscoveryBrowseLabelFamilyValue",
+        "DiscoverySectionSortValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        996,
+        999,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 538);
+    assert_eq!(kind_count("OBJECT"), 539);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 203);
+    assert_eq!(kind_count("ENUM"), 205);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

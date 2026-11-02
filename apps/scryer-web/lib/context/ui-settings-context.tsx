@@ -24,6 +24,8 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   highContrastMode: false,
   reduceMotion: false,
   hideSponsorButton: false,
+  discoveryGridHideOwned: true,
+  discoveryGridHideRequested: false,
   density: "COMFORTABLE",
   sidebarMode: "EXPANDED",
   defaultLandingView: "MOVIES",
