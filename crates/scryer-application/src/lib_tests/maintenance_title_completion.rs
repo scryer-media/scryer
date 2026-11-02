@@ -733,6 +733,7 @@ async fn record_complete_sweep(signals: &InMemorySignalRepo) {
             last_started_at: Some(Utc::now()),
             last_success_at: Some(Utc::now()),
             last_error: None,
+            last_error_code: None,
             participant_count: 2,
             signal_count: 2,
             updated_at: Utc::now(),
@@ -760,6 +761,7 @@ async fn record_episode_plays(
             played: true,
             play_count: 1,
             last_played_at: Some(Utc::now()),
+            is_favorite: false,
             observed_at: Utc::now(),
         })
         .collect::<Vec<_>>();

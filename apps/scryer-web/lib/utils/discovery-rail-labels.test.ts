@@ -7,8 +7,11 @@ import { fileURLToPath } from "node:url";
 import railLabels from "../contracts/discovery-rail-labels.json" with { type: "json" };
 import en from "../i18n/locales/en.ts";
 import {
+  discoveryBrowseLabelTitle,
+  discoveryBrowseLabelTitleKey,
   discoveryRailLabelTitle,
   discoveryRailLabelTitleKey,
+  discoverySectionIsBrowse,
 } from "./discovery-sections.ts";
 
 const RAIL_PREFIX = "discovery.rail.becauseYouLike.";
@@ -79,4 +82,32 @@ test("a rail title resolves from its key and leaves unknown keys to the caller",
   assert.equal(discoveryRailLabelTitle("not-a-rail-label", t), null);
   assert.equal(discoveryRailLabelTitle(null, t), null);
   assert.equal(discoveryRailLabelTitle("  ", t), null);
+});
+
+test("English names every browse card the server can send, and no other", () => {
+  const nonLabelKeys = new Set(["genreHeading", "themeHeading", "titleCount"]);
+  const prefix = "discovery.browseBy.";
+  const englishKeys = Object.keys(en)
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length))
+    .filter((key) => !nonLabelKeys.has(key));
+  assert.deepEqual([...englishKeys].sort(), [...contractKeys].sort());
+  const nouns = new Set<string>();
+  for (const key of contractKeys) {
+    assert.equal(discoveryBrowseLabelTitleKey(key), `${prefix}${key}`);
+    const noun = (en as Record<string, string>)[`${prefix}${key}`];
+    assert.ok(noun?.trim(), `no browse noun for ${key}`);
+    assert.ok(!nouns.has(noun), `browse noun for ${key} repeats`);
+    nouns.add(noun);
+  }
+});
+
+test("a browse title resolves from its key and leaves unknown keys to the caller", () => {
+  const t = (key: string) => (en as Record<string, string>)[key] ?? key;
+  assert.equal(discoveryBrowseLabelTitle("time-travel", t), "Time Travel");
+  assert.equal(discoveryBrowseLabelTitle("not-a-rail-label", t), null);
+  assert.equal(discoveryBrowseLabelTitle(undefined, t), null);
+  assert.equal(discoverySectionIsBrowse({ sectionType: "browse_genre" }), true);
+  assert.equal(discoverySectionIsBrowse({ sectionType: "BROWSE_THEME" }), true);
+  assert.equal(discoverySectionIsBrowse({ sectionType: "FOR_YOU" }), false);
 });

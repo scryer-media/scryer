@@ -94,9 +94,8 @@ export type UiDateTimeFormat = "LOCALE" | "ISO24H";
 /**
  * How thoroughly a copied file is proven before its source may be touched.
  *
- * The preference governs **download-client import copies only**. Library and
- * root moves always verify in full, whatever this says, because they move the
- * only copy of the content.
+ * The preference governs download-client import copies and location
+ * operations (library moves, root changes, consolidations) alike.
  */
 export type VerificationDepth = "FULL" | "QUICK";
 
@@ -133,6 +132,10 @@ export type UiSettings = {
   highContrastMode: boolean;
   reduceMotion: boolean;
   hideSponsorButton: boolean;
+  /** Whether discovery section grids leave out titles already in a library. */
+  discoveryGridHideOwned: boolean;
+  /** Whether discovery section grids leave out titles with a pending request. */
+  discoveryGridHideRequested: boolean;
   density: "COMPACT" | "COMFORTABLE";
   sidebarMode: "EXPANDED" | "COLLAPSED";
   defaultLandingView:
@@ -191,9 +194,18 @@ export type UiCatalogViewSetting = {
  */
 export type SetMyUiSettingsInput = Omit<
   UiSettings,
-  "language" | "tableColumns" | "catalogViews" | "dashboardLayouts"
+  | "language"
+  | "tableColumns"
+  | "catalogViews"
+  | "dashboardLayouts"
+  | "discoveryGridHideOwned"
+  | "discoveryGridHideRequested"
 > & {
   language?: string;
+  /** Omitted keeps the saved value. */
+  discoveryGridHideOwned?: boolean;
+  /** Omitted keeps the saved value. */
+  discoveryGridHideRequested?: boolean;
 };
 
 export type SetMyCatalogViewInput = {
@@ -261,6 +273,22 @@ export type MediaServerConnection = {
   pathMappings: MediaServerPathMapping[];
   createdAt: string;
   updatedAt: string;
+  /** Selected by the connection list only; null until the first sweep. */
+  watchSignalSync?: MediaServerWatchSignalSync | null;
+};
+
+/** Watch-history sweep state of one media-server connection. */
+export type MediaServerWatchSignalSync = {
+  lastStartedAt: string | null;
+  lastCleanSweepAt: string | null;
+  /** Sentence for people; explain the condition from `lastErrorCode`. */
+  lastError: string | null;
+  /** Stable `WATCH_SYNC_*` code; null on sweeps recorded before codes. */
+  lastErrorCode: string | null;
+  /** A clean sweep is on record but no longer counts for lifecycle rules. */
+  cleanSweepStale: boolean;
+  participantCount: number;
+  signalCount: number;
 };
 
 export type PlexServerDiscovery = {

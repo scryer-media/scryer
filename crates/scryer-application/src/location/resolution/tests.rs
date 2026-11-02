@@ -13,6 +13,7 @@ fn title(source: &Path, destination: &Path, name: &str, size: u64) -> PlannedTit
         classification: None,
         placement: TitleCheckpointPlacement::default(),
         outcomes: TitleOutcomeCounts::default(),
+        planned_rename_sources: Default::default(),
         files: vec![PlannedFile {
             media_file_id: Some("media".into()),
             source_path: source.join(name),

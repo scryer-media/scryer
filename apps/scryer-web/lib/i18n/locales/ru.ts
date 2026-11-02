@@ -1258,11 +1258,8 @@ const ru: LocaleDictionary = {
   "settings.title": "Настройки",
   "settings.sectionTitle": "Настройки • {{section}}",
   "settings.generalText": "Общие настройки приложения.",
-  "settings.verificationDepthTitle": "Проверка копий при импорте",
   "settings.verificationDepthHelp":
     "Насколько тщательно Scryer проверяет скопированный файл, прежде чем трогать оригинал.",
-  "settings.verificationDepthScope":
-    "Относится только к копиям, создаваемым при импорте из клиентов загрузки. Перемещения библиотек и корней всегда проверяются полностью, независимо от этой настройки.",
   "settings.verificationDepthLabel": "Глубина проверки",
   "settings.verificationDepthFull": "Полное перечитывание",
   "settings.verificationDepthFullHelp":

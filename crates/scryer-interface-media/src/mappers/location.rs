@@ -173,6 +173,101 @@ fn bytes(value: u64) -> Long {
     Long::from_u64_saturating(value)
 }
 
+pub fn pending_import_conflict_request(
+    input: crate::types::PendingImportConflictInput,
+) -> scryer_application::location::conflicts::ConflictRequest {
+    use crate::types::{PendingImportConflictLeftovers, PendingImportConflictPolicy};
+    use scryer_application::location::conflicts::{
+        ConflictLeftovers, ConflictPolicy, ConflictRequest,
+    };
+    ConflictRequest {
+        pending_import_ids: input
+            .pending_import_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
+        policy: match input.policy {
+            PendingImportConflictPolicy::AdoptAll => ConflictPolicy::AdoptAll,
+            PendingImportConflictPolicy::KeepOne => ConflictPolicy::KeepOne,
+        },
+        leftovers: match input.leftovers {
+            PendingImportConflictLeftovers::PreserveAll => ConflictLeftovers::PreserveAll,
+            PendingImportConflictLeftovers::MediaOnly => ConflictLeftovers::MediaOnly,
+        },
+    }
+}
+
+pub fn from_pending_import_conflict_preview(
+    preview: scryer_application::location::conflicts::ConflictPreview,
+) -> crate::types::PendingImportConflictPreviewPayload {
+    use crate::types::{PendingImportConflictPreviewPayload, PendingImportConflictRowPayload};
+    PendingImportConflictPreviewPayload {
+        plan_fingerprint: preview.plan_fingerprint,
+        total_count: preview.total_count,
+        sampled: preview.sampled,
+        rows: preview
+            .rows
+            .into_iter()
+            .map(|row| PendingImportConflictRowPayload {
+                pending_import_id: ID(row.pending_import_id),
+                title_id: ID(row.title_id),
+                title_name: row.title_name,
+                survivor_path: display_path(&row.survivor_path),
+                primary_path: display_path(&row.primary_path),
+                move_bytes: bytes(row.move_bytes),
+                recycle_bytes: bytes(row.recycle_bytes),
+                recycle_count: row.recycle_count,
+                collision_renames: row.collision_renames,
+                collision_rename_samples: row
+                    .collision_rename_samples
+                    .into_iter()
+                    .map(|rename| crate::types::PendingImportConflictRenamePayload {
+                        source_path: display_path(&rename.source_path),
+                        destination_path: display_path(&rename.destination_path),
+                    })
+                    .collect(),
+                leftover_count: row.leftover_count,
+                leftover_bytes: bytes(row.leftover_bytes),
+                leftover_paths: row
+                    .leftover_paths
+                    .iter()
+                    .map(|path| display_path(path))
+                    .collect(),
+                recycle_paths: row
+                    .recycle_paths
+                    .iter()
+                    .map(|path| display_path(path))
+                    .collect(),
+                files_sampled: row.files_sampled,
+                error_reason: row.error_reason,
+                error_message: row.error_message,
+            })
+            .collect(),
+        permanent_delete_count: preview.permanent_delete_count,
+        permanent_delete_bytes: bytes(preview.permanent_delete_bytes),
+        permanent_delete_paths: preview
+            .permanent_delete_paths
+            .iter()
+            .map(|path| display_path(path))
+            .collect(),
+        permanent_delete_sampled: preview.permanent_delete_sampled,
+        requires_permanent_delete_confirmation: preview.requires_permanent_delete_confirmation,
+    }
+}
+
+pub fn from_pending_import_conflict_task(
+    task: scryer_application::location::conflicts::ConflictTask,
+) -> crate::types::PendingImportConflictTaskPayload {
+    crate::types::PendingImportConflictTaskPayload {
+        job_run_id: ID(task.job_run_id),
+        total_count: task.total_count,
+        settled_count: task.settled_count,
+        failed_count: task.failed_count,
+        operation_ids: task.operation_ids.into_iter().map(ID).collect(),
+        completed: task.completed,
+    }
+}
+
 fn from_verification_depth(value: VerificationDepth) -> VerificationDepthValue {
     match value {
         VerificationDepth::Full => VerificationDepthValue::Full,

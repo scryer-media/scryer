@@ -118,6 +118,10 @@ pub enum LocationOperationTypeValue {
     RootConsolidation,
     /// Move titles into a different library, with or without a merge.
     CrossLibraryTransfer,
+    /// Consolidate conflicting folders into the title's selected survivor.
+    FolderConsolidation,
+    /// Retain the best media and recycle inferior files in conflicting folders.
+    FolderKeepOne,
 }
 
 /// How the filesystem side of an operation is performed.
@@ -1385,4 +1389,139 @@ pub struct LocationRootScopePreviewPayload {
     pub content: LocationRootContentInventoryPayload,
     /// What happens to the old location afterwards.
     pub retirement: LocationRootRetirementContractPayload,
+}
+
+/// How conflicting movie folders are settled.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum PendingImportConflictPolicy {
+    /// Keep every movie file in the survivor folder.
+    AdoptAll,
+    /// Keep the best movie file and recycle inferior media.
+    KeepOne,
+}
+
+/// Disposition of files remaining after the media is safe.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum PendingImportConflictLeftovers {
+    /// Move every remaining file into the survivor folder.
+    PreserveAll,
+    /// Recycle the previewed non-media remainder.
+    MediaOnly,
+}
+
+/// A selected set of title-bound folder conflicts and the requested policy.
+#[derive(InputObject)]
+pub struct PendingImportConflictInput {
+    /// Pending-import identities to preview.
+    pub pending_import_ids: Vec<ID>,
+    /// Media disposition applied independently to each conflict.
+    pub policy: PendingImportConflictPolicy,
+    /// Disposition of the remaining non-media files.
+    pub leftovers: PendingImportConflictLeftovers,
+}
+
+/// Confirm a preview, including separate consent when no recycle bin exists.
+#[derive(InputObject)]
+pub struct ResolvePendingImportConflictsInput {
+    /// Pending-import identities confirmed by the preview.
+    pub pending_import_ids: Vec<ID>,
+    /// Media disposition applied independently to each conflict.
+    pub policy: PendingImportConflictPolicy,
+    /// Disposition of the remaining non-media files.
+    pub leftovers: PendingImportConflictLeftovers,
+    /// Fingerprint of the complete preview being confirmed.
+    pub plan_fingerprint: String,
+    /// Explicit consent to the previewed permanent deletion when no bin exists.
+    #[graphql(default)]
+    pub confirm_permanent_delete: bool,
+}
+
+/// One collision rename, sampled alongside its conflict's complete count.
+#[derive(SimpleObject, Clone)]
+pub struct PendingImportConflictRenamePayload {
+    /// File before consolidation.
+    pub source_path: String,
+    /// File's disambiguated destination in the survivor folder.
+    pub destination_path: String,
+}
+
+/// One conflict's survivor, file dispositions and any refusal.
+#[derive(SimpleObject, Clone)]
+pub struct PendingImportConflictRowPayload {
+    /// Pending-import identity represented by this row.
+    pub pending_import_id: ID,
+    /// Title whose folders are being settled.
+    pub title_id: ID,
+    /// Display name of the title.
+    pub title_name: String,
+    /// Folder that survives, independently of which file becomes primary.
+    pub survivor_path: String,
+    /// Best movie file chosen by the quality ladder.
+    pub primary_path: String,
+    /// Complete bytes that must move into the survivor.
+    pub move_bytes: Long,
+    /// Complete bytes selected for recycling or confirmed permanent deletion.
+    pub recycle_bytes: Long,
+    /// Complete count selected for recycling or confirmed permanent deletion.
+    pub recycle_count: i32,
+    /// Count of collision renames needed in the survivor folder.
+    pub collision_renames: i32,
+    /// Bounded sample of the source and destination of collision renames.
+    pub collision_rename_samples: Vec<PendingImportConflictRenamePayload>,
+    /// Complete count of non-media files remaining after media handling.
+    pub leftover_count: i32,
+    /// Complete bytes in the non-media remainder.
+    pub leftover_bytes: Long,
+    /// Sample of the non-media remainder's paths.
+    pub leftover_paths: Vec<String>,
+    /// Sample of paths selected for recycling or permanent deletion.
+    pub recycle_paths: Vec<String>,
+    /// True when the path lists are samples rather than complete enumerations.
+    pub files_sampled: bool,
+    /// Stable refusal reason when this conflict cannot be settled.
+    pub error_reason: Option<String>,
+    /// Operator-facing explanation of the refusal.
+    pub error_message: Option<String>,
+}
+
+/// Complete conflict counts and a bounded sample of per-conflict plans.
+#[derive(SimpleObject, Clone)]
+pub struct PendingImportConflictPreviewPayload {
+    /// Fingerprint covering every selected conflict and all file dispositions.
+    pub plan_fingerprint: String,
+    /// Complete number of selected conflicts.
+    pub total_count: i32,
+    /// True when the rows are a sample of the complete selection.
+    pub sampled: bool,
+    /// Per-conflict survivor and disposition summary.
+    pub rows: Vec<PendingImportConflictRowPayload>,
+    /// Complete file count requiring permanent-deletion consent.
+    pub permanent_delete_count: i32,
+    /// Complete bytes requiring permanent-deletion consent.
+    pub permanent_delete_bytes: Long,
+    /// Paths requiring permanent-deletion consent, bounded independently of rows.
+    pub permanent_delete_paths: Vec<String>,
+    /// True when permanent-deletion paths are a sample.
+    pub permanent_delete_sampled: bool,
+    /// True only when the preview requires the additional no-bin confirmation.
+    pub requires_permanent_delete_confirmation: bool,
+}
+
+/// Progress of the background task that starts one operation per conflict.
+#[derive(SimpleObject, Clone)]
+pub struct PendingImportConflictTaskPayload {
+    /// Background job identity used to read progress.
+    pub job_run_id: ID,
+    /// Number of conflicts in the task.
+    pub total_count: i32,
+    /// Number of conflicts whose individual operation has settled.
+    pub settled_count: i32,
+    /// Number of conflicts that failed without stopping the remaining walk.
+    pub failed_count: i32,
+    /// Individual location-operation identities, in selection order.
+    pub operation_ids: Vec<ID>,
+    /// True once every selected conflict has settled.
+    pub completed: bool,
 }

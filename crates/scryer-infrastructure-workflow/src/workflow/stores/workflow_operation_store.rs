@@ -328,6 +328,37 @@ impl JobRunRepository for WorkflowOperationStore {
         .collect()
     }
 
+    async fn list_job_runs_by_operation_type_before(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        before: Option<(chrono::DateTime<chrono::Utc>, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        let mut sql =
+            "SELECT * FROM workflow_operations WHERE job_key = {} AND operation_type = {}"
+                .to_owned();
+        let mut args = vec![
+            SqlArg::Text(job_key.as_str().to_owned()),
+            SqlArg::Text(operation_type.to_owned()),
+        ];
+        if let Some((started_at, id)) = before {
+            sql.push_str(" AND (started_at < {} OR (started_at = {} AND id < {}))");
+            args.extend([
+                SqlArg::Timestamp(started_at),
+                SqlArg::Timestamp(started_at),
+                SqlArg::Text(id),
+            ]);
+        }
+        sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT {}");
+        args.push(SqlArg::I64(limit.min(i64::MAX as usize) as i64));
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .into_iter()
+            .map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow))
+            .collect()
+    }
+
     async fn list_latest_job_run_per_operation_type(
         &self,
         job_key: JobKey,

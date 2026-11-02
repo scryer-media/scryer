@@ -37,7 +37,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { METADATA_LANGUAGES } from "@/lib/i18n";
@@ -322,9 +321,6 @@ export const MediaLibrarySettingsPanel = React.memo(
     onActiveLibraryNameChange,
   }: MediaLibrarySettingsPanelProps) {
     const t = useTranslate();
-    // Root changes are still being finished, so the row action and its dialog
-    // only exist when the instance has opted in.
-    const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
     const [mode, setMode] = React.useState<"existing" | "new">("existing");
     // `saving` covers the container's mutation and refreshes only; this also
     // covers the panel adopting the saved library afterwards.
@@ -918,11 +914,7 @@ export const MediaLibrarySettingsPanel = React.memo(
     // A root change is planned against the *stored* configuration, so it is
     // offered only while the panel has nothing unsaved to contradict it.
     const canChangeRoot =
-      experimentalFeaturesEnabled &&
-      mode !== "new" &&
-      !!activeLibrary &&
-      !hasDraftChanges &&
-      !actionBusy;
+      mode !== "new" && !!activeLibrary && !hasDraftChanges && !actionBusy;
     const changeRootTarget = React.useMemo(
       () =>
         savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
@@ -1526,7 +1518,7 @@ export const MediaLibrarySettingsPanel = React.memo(
                                   {t("settings.rootFolderSetDefault")}
                                 </Button>
                               )}
-                              {rf.id && experimentalFeaturesEnabled ? (
+                              {rf.id ? (
                                 <Button
                                   id={selectorId(
                                     "media-library-root-change",
@@ -2503,9 +2495,7 @@ export const MediaLibrarySettingsPanel = React.memo(
           initialPath={browserInitialPath}
           title={browserTitle}
         />
-        {experimentalFeaturesEnabled &&
-        activeLibrary &&
-        changeRootTarget?.id ? (
+        {activeLibrary && changeRootTarget?.id ? (
           <ChangeRootDialog
             open
             onOpenChange={(next) => {

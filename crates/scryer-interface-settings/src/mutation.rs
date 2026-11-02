@@ -790,7 +790,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value."
+            desc = "Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value."
         )]
         input: SetMyUiSettingsInput,
     ) -> GqlResult<UiSettingsPayload> {
@@ -1031,7 +1031,7 @@ impl SettingsMutations {
         Ok(from_recycle_bin_settings(settings))
     }
 
-    /// Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+    /// Saves the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations), after checking the system-settings permission.
     async fn update_verification_settings(
         &self,
         ctx: &Context<'_>,

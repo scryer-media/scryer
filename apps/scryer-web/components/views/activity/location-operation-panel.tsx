@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useClient, useQuery } from "urql";
+import { Link } from "react-router";
 import { ChevronDown, ChevronRight, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ import {
   operationGuidanceKey,
   operationStateLabelKey,
   retrySelectionTitleRefs,
+  verificationStampText,
   toCount,
   type LocationRetrySelection,
 } from "@/lib/location-operations";
@@ -103,7 +105,10 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   // Plan again needs the stored plan joined with the checkpoints, which is a
   // read of its own rather than part of every progress snapshot. It is only
   // worth asking for once the operation has stopped.
-  const retryable = canRetryOperation(operation);
+  const conflictOperation =
+    operation?.operationType === "FOLDER_CONSOLIDATION" ||
+    operation?.operationType === "FOLDER_KEEP_ONE";
+  const retryable = canRetryOperation(operation) && !conflictOperation;
   const [retrySelection, setRetrySelection] =
     React.useState<LocationRetrySelection | null>(null);
   React.useEffect(() => {
@@ -157,6 +162,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
   // destination it had, and the titles it did not finish (or the one whose
   // row the action was taken from). The preview does the rest.
   async function openPlanAgain(titleId: string | null = null) {
+    if (conflictOperation) return;
     const titles = retrySelectionTitleRefs(retrySelection, titleId);
     if (!titles.length) return;
     setBusy(true);
@@ -385,6 +391,16 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                 {t("move.retryAction")}
               </Button>
             )}
+            {conflictOperation && canRetryOperation(operation) && (
+              <Button asChild variant="outline" size="sm">
+                <Link
+                  id="location-operation-return-conflicts"
+                  to="/movies/import"
+                >
+                  {t("pendingImports.conflict.returnToConflicts")}
+                </Link>
+              </Button>
+            )}
             {canPlanAgainOperation(operation, retrySelection) && (
               <Button
                 id="location-operation-plan-again"
@@ -429,6 +445,26 @@ function OperationPanel({ operationId, onDismiss }: Props) {
             })}
           </p>
         </div>
+        {operation.mode !== "USER_MOVED_FILES" && (
+          <p
+            id="location-operation-verification-stamp"
+            className="text-xs text-muted-foreground"
+          >
+            {verificationStampText(
+              operation.verificationDepth,
+              toCount(operation.verificationFallbackCount),
+              t,
+            )}
+          </p>
+        )}
+        {operation.operationType === "CROSS_LIBRARY_TRANSFER" && (
+          <p
+            id="location-operation-transfer-note"
+            className="text-sm text-muted-foreground"
+          >
+            {t("move.operationTransferNote")}
+          </p>
+        )}
         <div>
           <Button
             variant="ghost"
@@ -491,7 +527,9 @@ function OperationPanel({ operationId, onDismiss }: Props) {
                       posterUrl={posters.get(row.titleId)}
                       guidanceKey={titleGuidanceKeys.get(row.titleId) ?? null}
                       onPlanAgain={
-                        !busy && planAgainTitleIds.has(row.titleId)
+                        !conflictOperation &&
+                        !busy &&
+                        planAgainTitleIds.has(row.titleId)
                           ? () => void openPlanAgain(row.titleId)
                           : null
                       }

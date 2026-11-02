@@ -1928,6 +1928,20 @@ impl CatalogQueries {
             })
     }
 
+    /// Read progress while a background task settles a selected set of folder conflicts.
+    async fn pending_import_conflict_task(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Background job identity returned when conflicts were accepted.")]
+        job_run_id: ID,
+    ) -> GqlResult<Option<PendingImportConflictTaskPayload>> {
+        app_from_ctx(ctx)?
+            .pending_import_conflict_task(&actor_from_ctx(ctx)?, job_run_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|task| task.map(mappers::from_pending_import_conflict_task))
+    }
+
     /// Read one location operation with its per-title checkpoints.
     async fn location_operation(
         &self,
@@ -2891,11 +2905,12 @@ impl JobAndDownloadQueries {
     ) -> GqlResult<DiscoveryItemsPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let query = discovery_items_query_from_input(input).map_err(to_gql_error)?;
         let result = app
-            .discovery_items(&actor, discovery_items_query_from_input(input))
+            .discovery_items(&actor, query)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_discovery_items_result(&app, result))
+        from_discovery_items_result(&app, result).map_err(to_gql_error)
     }
 
     /// Fetch one discovery item by identity and scope, returning null when unavailable.

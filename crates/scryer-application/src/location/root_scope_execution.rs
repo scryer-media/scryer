@@ -84,9 +84,8 @@ use crate::location::merge::engine::plan_merge;
 use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
 use crate::location::operations::{
-    LOCATION_OPERATION_VERIFICATION_DEPTH, LOCATION_PREVIEW_TITLE_CONCURRENCY,
-    LocationOperationAccepted, LocationOperationAdmission, TitleMoveFacts, confirmation_error,
-    source_folder_refusal,
+    LOCATION_PREVIEW_TITLE_CONCURRENCY, LocationOperationAccepted, LocationOperationAdmission,
+    TitleMoveFacts, confirmation_error, source_folder_refusal,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
@@ -581,10 +580,7 @@ impl AppUseCase {
             },
             titles: drafts,
             entries,
-            // Forced full for every location operation; the operator's depth
-            // preference governs import copies only
-            // (`LOCATION_OPERATION_VERIFICATION_DEPTH`).
-            verification_depth: LOCATION_OPERATION_VERIFICATION_DEPTH,
+            verification_depth: self.resolve_verification_depth().await,
             free_space,
             same_volume,
             case_rule,
@@ -1448,6 +1444,8 @@ pub(super) fn resumes_through_root_move_runner(operation_type: LocationOperation
     matches!(
         operation_type,
         LocationOperationType::RootMove
+            | LocationOperationType::FolderConsolidation
+            | LocationOperationType::FolderKeepOne
             | LocationOperationType::RootChange
             | LocationOperationType::RootConsolidation
             | LocationOperationType::CrossLibraryTransfer

@@ -18,6 +18,7 @@ import type {
   PendingImportBindingPreview,
   PendingImportItem,
 } from "@/lib/types";
+import { isResolvableConflict } from "@/lib/pending-import-conflicts";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type MetadataSearchResult = {
@@ -68,6 +69,16 @@ export type PendingImportCardProps = {
   onOpenSearch: (item: PendingImportItem) => void;
   onRequestIgnore: (item: PendingImportItem) => void;
   onBind: () => void;
+  conflictSelected?: boolean;
+  conflictBusy?: boolean;
+  onConflictSelectedChange?: (
+    item: PendingImportItem,
+    checked: boolean,
+  ) => void;
+  onResolveConflict?: (
+    item: PendingImportItem,
+    policy: "ADOPT_ALL" | "KEEP_ONE",
+  ) => void;
   /** Opens the episode picker for an import whose numbering was ambiguous. */
   onAssignEpisode?: (item: PendingImportItem) => void;
   onResolve: (
@@ -109,6 +120,10 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onRequestIgnore,
   onBind,
   onAssignEpisode,
+  conflictSelected,
+  conflictBusy,
+  onConflictSelectedChange,
+  onResolveConflict,
   onResolve,
   onToggleEpisodeSelection,
   onSetSelectedEpisodeIds,
@@ -157,6 +172,38 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            {isResolvableConflict(item) && onResolveConflict ? (
+              <>
+                <label className="flex items-center gap-2 text-xs">
+                  <Checkbox
+                    id={`pending-import-conflict-select-${item.id}`}
+                    checked={conflictSelected ?? false}
+                    disabled={isBusy || conflictBusy}
+                    onCheckedChange={(checked) =>
+                      onConflictSelectedChange?.(item, checked === true)
+                    }
+                  />
+                  {t("pendingImports.conflict.select")}
+                </label>
+                <Button
+                  id={`pending-import-conflict-adopt-${item.id}`}
+                  size="sm"
+                  disabled={isBusy || conflictBusy}
+                  onClick={() => onResolveConflict(item, "ADOPT_ALL")}
+                >
+                  {t("pendingImports.conflict.adoptAll")}
+                </Button>
+                <Button
+                  id={`pending-import-conflict-keep-one-${item.id}`}
+                  size="sm"
+                  variant="outline"
+                  disabled={isBusy || conflictBusy}
+                  onClick={() => onResolveConflict(item, "KEEP_ONE")}
+                >
+                  {t("pendingImports.conflict.keepOne")}
+                </Button>
+              </>
+            ) : null}
             {canAssignEpisode ? (
               <Button
                 type="button"
@@ -239,9 +286,14 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               ? t("pendingImports.invalidOwnershipHelp")
               : isFolderOwnershipChange
                 ? t("pendingImports.folderOwnershipChangedHelp")
-                : t("pendingImports.ownershipConflictHelp", {
-                    folder: item.titleFolderPath,
-                  })}
+                : t(
+                    isResolvableConflict(item)
+                      ? "pendingImports.conflict.ownershipHelp"
+                      : "pendingImports.ownershipConflictHelp",
+                    {
+                      folder: item.titleFolderPath,
+                    },
+                  )}
           </p>
         ) : null}
         {isActive && canSearchOrBind ? (

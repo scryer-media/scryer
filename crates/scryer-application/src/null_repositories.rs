@@ -476,6 +476,7 @@ impl DiscoveryRepository for NullDiscoveryRepository {
     async fn list_public_discovery_section_items(
         &self,
         _run_id: &str,
+        _section_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
         _filters: &DiscoveryHomeFilters,
@@ -490,6 +491,7 @@ impl DiscoveryRepository for NullDiscoveryRepository {
         _readable_library_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
+        _include_owned: bool,
         _filters: &DiscoveryHomeFilters,
         _limit: i64,
     ) -> AppResult<Vec<DiscoveryHomeCandidate>> {
@@ -4100,6 +4102,8 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.high_contrast_mode = settings.high_contrast_mode;
         current.reduce_motion = settings.reduce_motion;
         current.hide_sponsor_button = settings.hide_sponsor_button;
+        current.discovery_grid_hide_owned = settings.discovery_grid_hide_owned;
+        current.discovery_grid_hide_requested = settings.discovery_grid_hide_requested;
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
@@ -4351,13 +4355,14 @@ pub struct NullMediaServerSignalSource;
 
 #[async_trait]
 impl crate::ports::MediaServerSignalSource for NullMediaServerSignalSource {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         _: &scryer_domain::MediaServerConnection,
-        _: &str,
-    ) -> AppResult<Vec<crate::ports::ProviderPlayedItem>> {
-        Err(AppError::Repository(
-            "media-server signal source is not configured".into(),
+    ) -> Result<Box<dyn crate::ports::MediaServerSignalReader>, crate::ports::SignalReadFailure>
+    {
+        Err(crate::ports::SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "media-server signal source is not configured",
         ))
     }
 }

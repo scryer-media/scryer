@@ -2605,7 +2605,7 @@ fn discovery_comparators_tolerate_nan_scores() {
     assert_eq!(discovery_item_comparable_rating(&nan_rated), 0.0);
 }
 
-fn test_discovery_item(
+pub(super) fn test_discovery_item(
     id: &str,
     target_kind: &str,
     content_type: Option<&str>,
@@ -3650,4 +3650,418 @@ fn personalized_sections_never_offer_watchlist_claimed_titles() {
             .flat_map(|section| section.items.iter())
             .any(|item| item.target_key == "tmdb:movie:2")
     );
+}
+
+/// A synthetic personalized pool shaped like a large library's: every item
+/// edge-backed, spread over several allowlisted genres and themes and all
+/// three mediums, with strictly falling relevance so pool order is SMG order.
+fn timing_pool(size: usize) -> Vec<DiscoveryItemRecord> {
+    const GENRES: &[&str] = &[
+        "crime", "drama", "comedy", "thriller", "fantasy", "horror", "mystery", "romance",
+    ];
+    const THEMES: &[&str] = &[
+        "heist",
+        "revenge",
+        "survival",
+        "dystopia",
+        "space",
+        "detective",
+    ];
+    const MEDIUMS: &[&str] = &["movie", "series", "anime"];
+    (0..size)
+        .map(|index| {
+            let genre_a = GENRES[index % GENRES.len()];
+            let genre_b = GENRES[(index / GENRES.len()) % GENRES.len()];
+            let theme = THEMES[index % THEMES.len()];
+            let facet_terms = [
+                format!("canonical:genre:{genre_a}"),
+                format!("canonical:genre:{genre_b}"),
+                format!("canonical:theme:{theme}"),
+            ];
+            let mut item = affinity_test_item(
+                &format!("pool-{index}"),
+                MEDIUMS[index % MEDIUMS.len()],
+                &facet_terms.iter().map(String::as_str).collect::<Vec<_>>(),
+            );
+            item.recommendation_score = Some((size - index) as f64);
+            item.base_rank = Some(((index * 7919) % 1000) as f64);
+            item.sort_index = index as i32;
+            item
+        })
+        .collect()
+}
+
+/// Wall-clock cost of composing the personalized shelf at the home's pool
+/// size and at a section page's. Ignored by default because it reads the
+/// clock; when run it asserts the shelf composes and that the slowest round
+/// stays inside a deliberately generous bound, and prints the timings. Run it
+/// with
+/// `cargo nextest run --locked -p scryer-application --run-ignored only
+/// discovery_home_composition_timing --no-capture`.
+#[test]
+#[ignore = "timing measurement, run on demand"]
+fn discovery_home_composition_timing() {
+    let pool = timing_pool(2_500);
+    let profile = affinity_profile(
+        &["crime", "drama"],
+        &["heist", "revenge"],
+        balanced_library_mix(),
+    );
+    const ROUNDS: usize = 20;
+    for pool_size in [1_000usize, 2_500] {
+        let items = &pool[..pool_size];
+        let mut samples = Vec::with_capacity(ROUNDS);
+        let mut browse_samples = Vec::with_capacity(ROUNDS);
+        let mut rails = 0;
+        let mut browse = 0;
+        let candidates_by_id = HashMap::new();
+        for _ in 0..ROUNDS {
+            let started = Instant::now();
+            // The same steps the home runs: visibility, the shared rail
+            // context, the browse cards, then the shelf.
+            let visible_items = discovery_home_visible_items(items, true);
+            let context = DiscoveryRailContext::new(
+                &candidates_by_id,
+                DiscoveryRailCompositionSettings::default(),
+                &profile,
+                &visible_items,
+                18,
+            );
+            let browse_started = Instant::now();
+            let labels = discovery_browse_labels(&visible_items, &context);
+            browse_samples.push(browse_started.elapsed());
+            let sections = personalized_section_results_in_context(
+                visible_items,
+                &profile,
+                &context,
+                &HashSet::new(),
+            );
+            samples.push(started.elapsed());
+            rails = sections.len();
+            browse = labels.len();
+        }
+        samples.sort();
+        browse_samples.sort();
+        assert!(rails > 0, "the synthetic pool composes a shelf");
+        assert!(browse > 0, "the synthetic pool offers browse cards");
+        assert!(
+            samples[ROUNDS - 1] < std::time::Duration::from_secs(5),
+            "composing a {pool_size}-title pool took {:?}",
+            samples[ROUNDS - 1]
+        );
+        println!(
+            "discovery home composition: pool={pool_size} rails={rails} browse={browse} median={:?} max={:?} (browse cards median={:?})",
+            samples[ROUNDS / 2],
+            samples[ROUNDS - 1],
+            browse_samples[ROUNDS / 2]
+        );
+    }
+}
+
+#[test]
+fn section_reading_order_matches_the_web_contract() {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SectionOrderContract {
+        personalized_shelf: Vec<String>,
+        generic_for_you_fallback: Vec<String>,
+        public_promotion: Vec<String>,
+        world_shelf: Vec<String>,
+        curated: Vec<String>,
+        suppressed_legacy: Vec<String>,
+        merged_section_targets: Vec<(String, String)>,
+        anime_only_public: Vec<String>,
+        anime_excluding_public: Vec<String>,
+        min_public_rail_items: usize,
+    }
+    let contract: SectionOrderContract = serde_json::from_str(include_str!(
+        "../../../../apps/scryer-web/lib/contracts/discovery-section-order.json"
+    ))
+    .expect("section order contract is JSON");
+    let owned = |list: &[&str]| {
+        list.iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        contract.personalized_shelf,
+        owned(DISCOVERY_PERSONALIZED_SHELF_ORDER)
+    );
+    assert_eq!(
+        contract.generic_for_you_fallback,
+        owned(DISCOVERY_GENERIC_FOR_YOU_FALLBACK_TYPES)
+    );
+    assert_eq!(
+        contract.public_promotion,
+        owned(DISCOVERY_PUBLIC_PROMOTION_TYPES)
+    );
+    assert_eq!(contract.world_shelf, owned(DISCOVERY_WORLD_SHELF_ORDER));
+    assert_eq!(contract.curated, owned(DISCOVERY_CURATED_TYPES));
+    assert_eq!(
+        contract.suppressed_legacy,
+        owned(DISCOVERY_SUPPRESSED_LEGACY_TYPES)
+    );
+    assert_eq!(
+        contract.merged_section_targets,
+        DISCOVERY_PUBLIC_FOLDED_SECTION_TYPES
+            .iter()
+            .map(|(source, target)| (source.to_string(), target.to_string()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        contract.anime_only_public,
+        owned(DISCOVERY_PUBLIC_ANIME_ONLY_SECTION_TYPES)
+    );
+    assert_eq!(
+        contract.anime_excluding_public,
+        owned(DISCOVERY_PUBLIC_ANIME_EXCLUDING_SECTION_TYPES)
+    );
+    assert_eq!(
+        contract.min_public_rail_items,
+        DISCOVERY_MIN_PUBLIC_RAIL_ITEMS
+    );
+}
+
+fn rendered_test_item(key: &str, content_type: &str) -> DiscoveryItemRecord {
+    let target_kind = if content_type == "movie" {
+        "movie"
+    } else {
+        "series"
+    };
+    let mut item = test_discovery_item(key, target_kind, Some(content_type));
+    item.target_key = key.to_string();
+    item
+}
+
+fn rendered_test_section(
+    section_id: &str,
+    section_type: &str,
+    surface: &str,
+    keys: &[&str],
+) -> DiscoverySectionResult {
+    let items = keys
+        .iter()
+        .map(|key| rendered_test_item(key, "movie"))
+        .collect::<Vec<_>>();
+    DiscoverySectionResult {
+        section_id: section_id.to_string(),
+        section_type: section_type.to_string(),
+        title: section_id.to_string(),
+        surface: surface.to_string(),
+        total_count: items.len() as i64,
+        items,
+        label_key: None,
+    }
+}
+
+fn rendered_test_home(
+    personalized_sections: Vec<DiscoverySectionResult>,
+    public_sections: Vec<DiscoverySectionResult>,
+) -> DiscoveryHomeResult {
+    DiscoveryHomeResult {
+        status: DiscoverySyncStatus {
+            state: crate::DiscoverySyncStateRecord::default(),
+            recent_runs: Vec::new(),
+            pending_context_change_count: 0,
+        },
+        hero_item: None,
+        public_sections,
+        personalized_sections,
+        complete_collection: None,
+        facets: Vec::new(),
+        can_view_personalized: true,
+        browse_labels: Vec::new(),
+    }
+}
+
+fn rendered_keys(section: &DiscoverySectionResult) -> Vec<&str> {
+    section
+        .items
+        .iter()
+        .map(|item| item.target_key.as_str())
+        .collect()
+}
+
+#[test]
+fn rendered_window_drops_what_earlier_rails_showed_in_the_dashboard_order() {
+    let home = rendered_test_home(
+        vec![
+            // Delivered after Top Rated, read before it.
+            rendered_test_section("top_rated", "TOP_RATED", "mixed", &["b", "d", "e"]),
+            rendered_test_section(
+                "because_you_like_genre_drama",
+                "BECAUSE_YOU_LIKE_GENRE",
+                "personalized",
+                &["a", "b", "c"],
+            ),
+        ],
+        vec![
+            rendered_test_section("trending", "TRENDING_NOW", "public", &["x", "y"]),
+            rendered_test_section("thin", "NEW_ON_STREAMING", "public", &["d", "z"]),
+            rendered_test_section("popular", "POPULAR_RIGHT_NOW", "public", &["p", "a"]),
+        ],
+    );
+
+    let top_rated = discovery_rendered_window(&home, "top_rated", None).expect("top rated renders");
+    assert_eq!(rendered_keys(&top_rated.section), ["d", "e"]);
+    assert_eq!(
+        top_rated.preceding_keys,
+        ["MOVIE:a", "MOVIE:b", "MOVIE:c"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>()
+    );
+
+    // The trending source folds behind its target, and a title an earlier
+    // rail showed drops out of the folded rail.
+    let popular = discovery_rendered_window(&home, "popular", None).expect("popular renders");
+    assert_eq!(rendered_keys(&popular.section), ["p", "x", "y"]);
+    assert!(discovery_rendered_window(&home, "trending", None).is_none());
+
+    // A public rail left under the floor is hidden, but what it would have
+    // shown still counts as shown.
+    assert!(discovery_rendered_window(&home, "thin", None).is_none());
+    let continued = continue_discovery_rendered_window(
+        discovery_rendered_window(&home, "popular", None),
+        Some(rendered_test_section(
+            "popular",
+            "POPULAR_RIGHT_NOW",
+            "public",
+            &["p", "a", "x", "z", "q"],
+        )),
+    )
+    .expect("the section continues");
+    assert_eq!(rendered_keys(&continued), ["p", "x", "y", "q"]);
+}
+
+#[test]
+fn rendered_window_counts_a_shown_hero_as_shown_before_every_rail() {
+    let mut home = rendered_test_home(
+        Vec::new(),
+        vec![
+            rendered_test_section(
+                "popular",
+                "POPULAR_RIGHT_NOW",
+                "public",
+                &["h", "a", "b", "c"],
+            ),
+            rendered_test_section(
+                "next",
+                "UPCOMING_NEXT_SEASON",
+                "public",
+                &["d", "h", "e", "f"],
+            ),
+        ],
+    );
+    home.hero_item = Some(rendered_test_item("h", "movie"));
+    let hero_key = discovery_home_hero_key(&home);
+    assert_eq!(hero_key.as_deref(), Some("MOVIE:h"));
+
+    let popular =
+        discovery_rendered_window(&home, "popular", hero_key.as_deref()).expect("popular renders");
+    assert_eq!(rendered_keys(&popular.section), ["a", "b", "c"]);
+    assert_eq!(popular.section.total_count, 3);
+    assert!(popular.preceding_keys.contains("MOVIE:h"));
+    let continued = continue_discovery_rendered_window(
+        Some(popular),
+        Some(rendered_test_section(
+            "popular",
+            "POPULAR_RIGHT_NOW",
+            "public",
+            &["h", "a", "b", "c", "g"],
+        )),
+    )
+    .expect("the section continues");
+    assert_eq!(rendered_keys(&continued), ["a", "b", "c", "g"]);
+
+    // A hero no rendered rail shows is not shown, so nothing is taken out.
+    home.hero_item = Some(rendered_test_item("elsewhere", "movie"));
+    let hero_key = discovery_home_hero_key(&home);
+    let next = discovery_rendered_window(&home, "next", hero_key.as_deref()).expect("next renders");
+    assert_eq!(rendered_keys(&next.section), ["d", "e", "f"]);
+    assert!(!next.preceding_keys.contains("MOVIE:elsewhere"));
+}
+
+#[test]
+fn folded_public_section_page_one_is_each_rail_window_first() {
+    let mut anime = rendered_test_section("trending", "TRENDING_NOW", "public", &[]);
+    anime.items = vec![
+        rendered_test_item("t1", "movie"),
+        rendered_test_item("t-anime", "anime"),
+        rendered_test_item("t2", "movie"),
+        rendered_test_item("t3", "movie"),
+    ];
+    let folded = fold_discovery_public_section(
+        "popular",
+        vec![
+            rendered_test_section(
+                "popular",
+                "POPULAR_RIGHT_NOW",
+                "public",
+                &["p1", "p2", "p3", "p4"],
+            ),
+            anime,
+        ],
+        2,
+    )
+    .expect("the folded section has items");
+    // Window of two from each rail, narrowed after the cut, then the rest.
+    assert_eq!(
+        rendered_keys(&folded),
+        ["p1", "p2", "t1", "p3", "p4", "t2", "t3"]
+    );
+    assert_eq!(folded.section_id, "popular");
+    assert_eq!(folded.total_count, 7);
+}
+
+#[test]
+fn requested_titles_match_by_media_kind_as_well_as_external_id() {
+    let now = Utc.timestamp_opt(3_000, 0).unwrap();
+    let request = scryer_domain::MediaRequest {
+        background_url: None,
+        requested_monitor_selection: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
+        id: "requested-kind".to_string(),
+        library_id: "movies".to_string(),
+        facet: MediaFacet::Movie,
+        status: scryer_domain::MediaRequestStatus::Pending,
+        identity_fingerprint: "requested-kind".to_string(),
+        title: "Requested Kind".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        resolved_by_user_id: None,
+        resolved_at: None,
+        created_title_id: None,
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        external_ids: vec![ExternalId {
+            source: "tmdb".to_string(),
+            kind: None,
+            value: "4100".to_string(),
+        }],
+        requesters: Vec::new(),
+        created_by_user_id: "requester".to_string(),
+        origin: Default::default(),
+        created_at: now,
+        updated_at: now,
+    };
+    let requested = DiscoveryRequestedVisibility::from_media_requests(&[request]);
+    assert!(requested.item_is_requested(&rendered_test_item("tmdb:movie:4100", "movie")));
+    assert!(!requested.item_is_requested(&rendered_test_item("tmdb:series:4100", "series")));
+    assert!(!requested.item_is_requested(&rendered_test_item("tmdb:movie:4101", "movie")));
 }

@@ -148,6 +148,14 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         .map(|rows| rows as u32)
     }
 
+    async fn list_pending_folder_conflicts_for_title(
+        &self,
+        library_id: &str,
+        title_id: &str,
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        fetch_unmatched_items(self.datastore.read_exec(), &format!("SELECT {UNMATCHED_COLUMNS} FROM library_scan_unmatched_items WHERE library_id = {{}} AND title_id = {{}} AND status = 'pending' AND reason_code = {{}} ORDER BY id LIMIT 1001"), &[SqlArg::Text(library_id.to_owned()), SqlArg::Text(title_id.to_owned()), SqlArg::Text(scryer_application::location::conflicts::PENDING_REASON.to_owned())]).await
+    }
+
     async fn list_library_scan_unmatched_items(
         &self,
         facet: Option<MediaFacet>,

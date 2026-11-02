@@ -863,11 +863,8 @@ const ko: LocaleDictionary = {
     "{{total}}개 항목, {{renamable}}개 변경 가능, {{noop}}개 변경 없음, {{conflicts}}개 충돌, {{errors}}개 오류",
   "settings.sectionTitle": "설정 • {{section}}",
   "settings.generalText": "일반 애플리케이션 설정.",
-  "settings.verificationDepthTitle": "가져오기 복사본 검증",
   "settings.verificationDepthHelp":
     "원본에 손대기 전에 복사된 파일을 얼마나 엄격하게 검증할지 정합니다.",
-  "settings.verificationDepthScope":
-    "다운로드 클라이언트의 가져오기 복사본에만 적용됩니다. 라이브러리와 루트 이동은 여기서 무엇을 고르든 항상 전체 검증합니다.",
   "settings.verificationDepthLabel": "검증 깊이",
   "settings.verificationDepthFull": "전체 다시 읽기",
   "settings.verificationDepthFullHelp":

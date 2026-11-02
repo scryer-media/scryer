@@ -36,7 +36,6 @@ import {
 } from "@/components/common/external-media-links";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
@@ -1108,9 +1107,6 @@ function TitleContextPanel({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
-  // Library and root moves are still being finished, so the panel's move entry
-  // point only exists when the instance has opted in.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [releaseSearchRequestId, setReleaseSearchRequestId] = React.useState(0);
   const [releaseSearchLoading, setReleaseSearchLoading] = React.useState(false);
   const [releaseSearchTitleId, setReleaseSearchTitleId] = React.useState<
@@ -1544,7 +1540,6 @@ function TitleContextPanel({
                   Promise.resolve(onTitleOptionsChanged(title))
                 }
                 onOpenFixMatch={() => setFixMatchOpen(true)}
-                experimentalFeaturesEnabled={experimentalFeaturesEnabled}
               />
             }
             deleteLoading={isDeleting}

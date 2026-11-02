@@ -1,6 +1,94 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "pendingImports.conflict.returnToConflicts": "Return to folder conflicts",
+  "error.reason.LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED":
+    "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
+  "pendingImports.conflict.taskMissing":
+    "This resolution task is no longer available. Check Activity for its location operations or dismiss this progress panel.",
+  "pendingImports.conflict.hideProgress": "Hide progress",
+  "pendingImports.conflict.showFiles": "Show files",
+  "pendingImports.conflict.sampledFiles":
+    "Only a sample of paths is shown; the counts include all files.",
+  "pendingImports.conflict.ownershipHelp":
+    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders.",
+  "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
+    "Select pending folder conflicts to resolve.",
+  "error.reason.LOCATION_CONFLICT_NOT_FOUND":
+    "A selected conflict no longer exists. Refresh the page.",
+  "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
+    "This conflict cannot be resolved with this workflow.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
+    "A folder is outside the permitted roots or cannot be safely accessed.",
+  "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
+    "Folder ownership changed. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_MEDIA_MISSING":
+    "The media needed to resolve this conflict is missing.",
+  "error.reason.LOCATION_CONFLICT_PLAN_CHANGED":
+    "Files or folder ownership changed. Refresh the preview before applying.",
+  "error.reason.LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED":
+    "Confirm the listed permanent deletions before continuing.",
+  "error.reason.LOCATION_CONFLICT_FILE_CHANGED":
+    "A file changed since the preview. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
+    "The recycle destination is unavailable. Restore access and try again.",
+
+  "pendingImports.conflict.select": "Select conflict",
+  "pendingImports.conflict.adoptAll": "Adopt all",
+  "pendingImports.conflict.keepOne": "Keep one",
+  "pendingImports.conflict.title": "Resolve folder conflicts",
+  "pendingImports.conflict.description":
+    "Preview how {{count}} conflicts will be settled. Each conflict runs as its own location operation in Activity.",
+  "pendingImports.conflict.policy": "Media policy",
+  "pendingImports.conflict.leftovers": "Remaining files",
+  "pendingImports.conflict.adoptHelp":
+    "Move every media file into the survivor folder. The best file becomes Primary; other movie files become Additional.",
+  "pendingImports.conflict.keepHelp":
+    "Keep the best media in the survivor folder, moving it there if needed. Recycle inferior media.",
+  "pendingImports.conflict.preserveAll": "Preserve all files (default)",
+  "pendingImports.conflict.mediaOnly": "Preserve media files only",
+  "pendingImports.conflict.preserveHelp":
+    "Move remaining files into the survivor folder, resolving collisions without overwriting files.",
+  "pendingImports.conflict.mediaOnlyHelp":
+    "Recycle the previewed non-media remainder only after the media is safe at its destination.",
+  "pendingImports.conflict.preview": "Refresh preview",
+  "pendingImports.conflict.previewCount":
+    "{{count}} conflicts; showing {{shown}} rows.",
+  "pendingImports.conflict.sampled":
+    "This is a sample. Counts include the entire selection.",
+  "pendingImports.conflict.titleColumn": "Title",
+  "pendingImports.conflict.survivor": "Survivor folder",
+  "pendingImports.conflict.primary": "Primary file",
+  "pendingImports.conflict.moveBytes": "To move",
+  "pendingImports.conflict.recycleBytes": "To recycle",
+  "pendingImports.conflict.renames": "Collision renames",
+  "pendingImports.conflict.leftoverFiles": "Remaining files",
+  "pendingImports.conflict.filesBytes": "{{count}} files · {{bytes}}",
+  "pendingImports.conflict.apply": "Apply resolution",
+  "pendingImports.conflict.permanentTitle": "Delete files permanently?",
+  "pendingImports.conflict.permanentDescription":
+    "No recycle bin is configured. The {{count}} previewed files ({{bytes}}) will be deleted permanently. This cannot be undone.",
+  "pendingImports.conflict.permanentConfirm": "Delete permanently",
+  "pendingImports.conflict.previewFailed":
+    "Could not preview these conflicts. Try again.",
+  "pendingImports.conflict.applyFailed":
+    "Could not start conflict resolution. Refresh the preview and try again.",
+  "pendingImports.conflict.progress":
+    "Settled {{settled}} of {{total}} conflicts; {{failed}} failed.",
+  "pendingImports.conflict.completed":
+    "Resolution finished: {{settled}} of {{total}} settled; {{failed}} failed.",
+  "pendingImports.conflict.progressUnavailable":
+    "Progress is temporarily unavailable. The background task can continue; check Activity.",
+  "pendingImports.conflict.operation": "View operation {{id}}",
+  "pendingImports.conflict.selectPage": "Select conflicts on this page",
+  "pendingImports.conflict.selected": "{{count}} selected",
+  "pendingImports.conflict.resolveSelected": "Resolve selected",
+  "move.operationType.FOLDER_CONSOLIDATION": "Folder consolidation",
+  "move.operationType.FOLDER_KEEP_ONE": "Keep one folder",
+
+  "settings.copyVerificationTitle": "Copy verification",
+  "settings.copyVerificationScope":
+    "Applies to download-client imports and library and root moves. Quick is the default. Choose Full when moving off a disk you plan to erase.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",
@@ -3960,6 +4048,8 @@ const en: LocaleDictionary = {
     "Discovery filter entries cannot be blank.",
   "error.reason.INTERFACE_DISCOVERY_LIMIT_INVALID":
     "Choose a valid number of results per section.",
+  "error.reason.INTERFACE_DISCOVERY_SECTION_BLANK":
+    "Choose a discovery section to open.",
   "error.reason.INTERFACE_DISCOVERY_RATING_INVALID":
     "Choose a minimum rating between 0 and 10.",
   "error.reason.INTERFACE_DISCOVERY_SURFACE_UNSUPPORTED":
@@ -5507,6 +5597,35 @@ const en: LocaleDictionary = {
   "settings.noMediaServersFound": "No media server connections found.",
   "settings.capabilities": "Capabilities",
   "settings.credentials": "Credentials",
+  "settings.watchHistory": "Watch history",
+  "settings.watchHistoryNotRead": "Not read yet",
+  "settings.watchHistoryLastFullRead": "Last full read {{time}}",
+  "settings.watchHistoryIncomplete": "Last read incomplete",
+  "settings.watchHistoryIncompleteHelp":
+    "Lifecycle rules treat watch history as unknown until every enabled media server is read in full. Reason: {{reason}}",
+  "settings.watchHistorySignalCount": "{{count}} watched items from {{accounts}} linked accounts",
+  "settings.watchHistoryDisabled": "Not read while disabled",
+  "settings.watchHistoryStale": "Out of date",
+  "settings.watchHistoryStaleHelp":
+    "Lifecycle rules treat watch history as unknown until every enabled media server has been read in full recently.",
+  "settings.watchSyncReason.credentialMissing": "No API key is saved for this connection.",
+  "settings.watchSyncReason.providerUnsupported": "This media server type does not support reading watch history.",
+  "settings.watchSyncReason.baseUrlInvalid": "The connection's base URL is not a usable address.",
+  "settings.watchSyncReason.plexServerNotSelected": "No Plex server is selected for this connection.",
+  "settings.watchSyncReason.plexServerUnreachable": "The selected Plex server is not listed on the account, or lists no address to reach it at.",
+  "settings.watchSyncReason.plexAccountIdInvalid": "A linked Plex account has an id the server cannot look up.",
+  "settings.watchSyncReason.participantIdMissing": "A linked account has no media server user id.",
+  "settings.watchSyncReason.accessDenied": "The media server refused access.",
+  "settings.watchSyncReason.requestRejected": "The media server refused the request.",
+  "settings.watchSyncReason.requestFailed": "The media server could not be reached.",
+  "settings.watchSyncReason.responseUnreadable": "The media server sent an answer Scryer could not read.",
+  "settings.watchSyncReason.itemsUnreadable": "Some watched items could not be read.",
+  "settings.watchSyncReason.pagingNotHonoured": "The media server did not return its watch history page by page as asked.",
+  "settings.watchSyncReason.filterNotHonoured": "The media server returned unwatched items when asked for watched ones.",
+  "settings.watchSyncReason.itemCapReached": "A linked account's watch history is larger than one read covers.",
+  "settings.watchSyncReason.unmappedPlayedMovies": "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.storeFailed": "Scryer could not save the watch history it read.",
+  "settings.watchSyncReason.sourceUnavailable": "Watch history reading is not available in this build.",
   "settings.apiKeyConfigured": "API key saved",
   "settings.apiKeyMissing": "API key missing",
   "settings.plexServerSelected": "Plex server selected",
@@ -5787,6 +5906,76 @@ const en: LocaleDictionary = {
     "When an automatic import from SABnzbd or NZBGet contains video files with obfuscated names, Scryer sends each file's CRC-32 checksum and size to srrdb.com, a third-party service, to look up the original filename. Nothing else about your library or the file is sent. Files on disk are never renamed.",
   "discovery.personalizedDisabled":
     "Personalized discovery is turned off for this instance.",
+  "discovery.browseBy.action": "Action",
+  "discovery.browseBy.adventure": "Adventure",
+  "discovery.browseBy.comedy": "Comedy",
+  "discovery.browseBy.crime": "Crime",
+  "discovery.browseBy.documentary": "Documentaries",
+  "discovery.browseBy.drama": "Drama",
+  "discovery.browseBy.family": "Family",
+  "discovery.browseBy.fantasy": "Fantasy",
+  "discovery.browseBy.history": "History",
+  "discovery.browseBy.horror": "Horror",
+  "discovery.browseBy.mystery": "Mystery",
+  "discovery.browseBy.romance": "Romance",
+  "discovery.browseBy.science-fiction": "Science Fiction",
+  "discovery.browseBy.thriller": "Thrillers",
+  "discovery.browseBy.war": "War",
+  "discovery.browseBy.western": "Westerns",
+  "discovery.browseBy.sports": "Sports",
+  "discovery.browseBy.supernatural": "Supernatural",
+  "discovery.browseBy.coming-of-age": "Coming of Age",
+  "discovery.browseBy.found-family": "Found Family",
+  "discovery.browseBy.revenge": "Revenge",
+  "discovery.browseBy.heist": "Heists",
+  "discovery.browseBy.time-travel": "Time Travel",
+  "discovery.browseBy.dystopia": "Dystopia",
+  "discovery.browseBy.cyberpunk": "Cyberpunk",
+  "discovery.browseBy.superhero": "Superheroes",
+  "discovery.browseBy.vampire": "Vampires",
+  "discovery.browseBy.zombie": "Zombies",
+  "discovery.browseBy.survival": "Survival",
+  "discovery.browseBy.space": "Space",
+  "discovery.browseBy.detective": "Detectives",
+  "discovery.browseBy.organized-crime": "Organized Crime",
+  "discovery.browseBy.period-drama": "Period Dramas",
+  "discovery.browseBy.psychological": "Psychological",
+  "discovery.browseBy.mythology": "Mythology",
+  "discovery.browseBy.isekai": "Isekai",
+  "discovery.browseBy.mecha": "Mecha",
+  "discovery.browseBy.martial-arts": "Martial Arts",
+  "discovery.browseBy.music": "Music",
+  "discovery.browseBy.workplace": "Workplace",
+  "discovery.browseBy.medical": "Medical",
+  "discovery.browseBy.military": "Military",
+  "discovery.browseBy.spy": "Spies",
+  "discovery.browseBy.royal-politics": "Royal Intrigue",
+  "discovery.browseBy.first-love": "First Love",
+  "discovery.browseBy.forbidden-love": "Forbidden Love",
+  "discovery.browseBy.lgbtq": "LGBTQ+",
+  "discovery.browseBy.samurai": "Samurai",
+  "discovery.browseBy.magical-girl": "Magical Girls",
+  "discovery.browseBy.genreHeading": "Browse by genre",
+  "discovery.browseBy.themeHeading": "Browse by theme",
+  "discovery.browseBy.titleCount": "{{count}} titles",
+  "discovery.railScroll.right": "{{heading}}: scroll right",
+  "discovery.railScroll.left": "{{heading}}: scroll left",
+  "discovery.section.seeAll": "See all",
+  "discovery.section.seeAllLabel": "See all: {{section}}",
+  "discovery.section.backToDiscovery": "Back to Discovery",
+  "discovery.section.titleCount": "{{count}} titles",
+  "discovery.section.sortLabel": "Sort by",
+  "discovery.section.sort.relevance": "Relevance",
+  "discovery.section.sort.popularity": "Popularity",
+  "discovery.section.sort.rating": "Rating",
+  "discovery.section.sort.releaseDate": "Release date",
+  "discovery.section.sort.title": "Title",
+  "discovery.section.hideOwned": "Hide owned",
+  "discovery.section.hideRequested": "Hide requested",
+  "discovery.section.empty": "No titles match these filters.",
+  "discovery.section.loadMore": "Load more",
+  "discovery.section.preferenceSaveFailed":
+    "Could not save the grid preference.",
   "discovery.rail.becauseYouLike.action": "Because you like action",
   "discovery.rail.becauseYouLike.adventure": "Because you like adventure",
   "discovery.rail.becauseYouLike.comedy": "Because you like comedy",
@@ -5841,11 +6030,8 @@ const en: LocaleDictionary = {
   "settings.historyRetentionDaysSuffix": "days",
   "settings.securitySessionDurationSuffix": "days",
   "settings.generalSaved": "General settings saved.",
-  "settings.verificationDepthTitle": "Import copy verification",
   "settings.verificationDepthHelp":
     "How thoroughly Scryer proves a copied file before it touches the source.",
-  "settings.verificationDepthScope":
-    "This applies to download-client import copies only. Library and root moves always verify in full, whatever is chosen here.",
   "settings.verificationDepthLabel": "Verification depth",
   "settings.verificationDepthFull": "Full read-back",
   "settings.verificationDepthFullHelp":

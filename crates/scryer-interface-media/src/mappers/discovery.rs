@@ -37,23 +37,43 @@ fn discovery_home_canonical_tag_keys(
     Ok(keys)
 }
 
+fn discovery_home_section_limit(
+    field_name: &str,
+    value: Option<i32>,
+) -> scryer_application::AppResult<usize> {
+    match value {
+        Some(value) if !(1..=DISCOVERY_HOME_MAX_SECTION_LIMIT).contains(&value) => {
+            Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_DISCOVERY_LIMIT_INVALID,
+                format!(
+                    "discovery {field_name} must be between 1 and {DISCOVERY_HOME_MAX_SECTION_LIMIT}"
+                ),
+            ))
+        }
+        Some(value) => Ok(value as usize),
+        None => Ok(25),
+    }
+}
+
 pub fn discovery_home_query_from_input(
     input: Option<DiscoveryHomeInput>,
 ) -> scryer_application::AppResult<DiscoveryHomeQuery> {
     let input = input.unwrap_or_default();
-    let filters = input.filters.unwrap_or_default();
-    let limit_per_section = match input.limit_per_section {
-        Some(value) if !(1..=DISCOVERY_HOME_MAX_SECTION_LIMIT).contains(&value) => {
-            return Err(scryer_application::AppError::validation_refused(
-                scryer_interface_core::refusal::INTERFACE_DISCOVERY_LIMIT_INVALID,
-                format!(
-                    "discovery home limitPerSection must be between 1 and {DISCOVERY_HOME_MAX_SECTION_LIMIT}"
-                ),
-            ));
-        }
-        Some(value) => value as usize,
-        None => 25,
-    };
+    let limit_per_section =
+        discovery_home_section_limit("home limitPerSection", input.limit_per_section)?;
+    Ok(DiscoveryHomeQuery {
+        include_public: input.include_public.unwrap_or(true),
+        include_personalized: input.include_personalized.unwrap_or(true),
+        include_unresolved: input.include_unresolved.unwrap_or(false),
+        limit_per_section,
+        filters: discovery_home_filters_from_input(input.filters)?,
+    })
+}
+
+fn discovery_home_filters_from_input(
+    filters: Option<DiscoveryHomeFiltersInput>,
+) -> scryer_application::AppResult<DiscoveryHomeFilters> {
+    let filters = filters.unwrap_or_default();
     let minimum_rating = filters.minimum_rating;
     if minimum_rating.is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value)) {
         return Err(scryer_application::AppError::validation_refused(
@@ -72,26 +92,20 @@ pub fn discovery_home_query_from_input(
     let genre_tag_keys = discovery_home_canonical_tag_keys("genreTagKeys", filters.genre_tag_keys)?;
     let theme_tag_keys = discovery_home_canonical_tag_keys("themeTagKeys", filters.theme_tag_keys)?;
 
-    Ok(DiscoveryHomeQuery {
-        include_public: input.include_public.unwrap_or(true),
-        include_personalized: input.include_personalized.unwrap_or(true),
-        include_unresolved: input.include_unresolved.unwrap_or(false),
-        limit_per_section,
-        filters: DiscoveryHomeFilters {
-            content_types: filters
-                .content_types
-                .unwrap_or_default()
-                .into_iter()
-                .map(MediaFacetValue::as_scope_id)
-                .map(str::to_owned)
-                .collect(),
-            genre_tag_keys,
-            theme_tag_keys,
-            studio_slugs: filters.studio_slugs.unwrap_or_default(),
-            minimum_year: filters.minimum_year,
-            maximum_year: filters.maximum_year,
-            minimum_rating,
-        },
+    Ok(DiscoveryHomeFilters {
+        content_types: filters
+            .content_types
+            .unwrap_or_default()
+            .into_iter()
+            .map(MediaFacetValue::as_scope_id)
+            .map(str::to_owned)
+            .collect(),
+        genre_tag_keys,
+        theme_tag_keys,
+        studio_slugs: filters.studio_slugs.unwrap_or_default(),
+        minimum_year: filters.minimum_year,
+        maximum_year: filters.maximum_year,
+        minimum_rating,
     })
 }
 
@@ -107,9 +121,30 @@ pub fn discovery_home_filter_options_query_from_input(
     }
 }
 
-pub fn discovery_items_query_from_input(input: Option<DiscoveryItemsInput>) -> DiscoveryItemsQuery {
+pub fn discovery_items_query_from_input(
+    input: Option<DiscoveryItemsInput>,
+) -> scryer_application::AppResult<DiscoveryItemsQuery> {
     let input = input.unwrap_or_default();
-    DiscoveryItemsQuery {
+    let section = match input.section_id {
+        Some(section_id) if section_id.trim().is_empty() => {
+            return Err(scryer_application::AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_DISCOVERY_SECTION_BLANK,
+                "discovery items sectionId must not be blank".to_owned(),
+            ));
+        }
+        Some(section_id) => Some(DiscoverySectionItemsQuery {
+            section_id: section_id.trim().to_owned(),
+            rail_limit: discovery_home_section_limit(
+                "items sectionRailLimit",
+                input.section_rail_limit,
+            )?,
+            filters: discovery_home_filters_from_input(input.home_filters)?,
+            sort: input.sort.map(discovery_section_sort).unwrap_or_default(),
+            hide_requested: input.hide_requested.unwrap_or(false),
+        }),
+        None => None,
+    };
+    Ok(DiscoveryItemsQuery {
         query: input.query,
         target_keys: Vec::new(),
         target_kinds: input.target_kinds.unwrap_or_default(),
@@ -124,6 +159,30 @@ pub fn discovery_items_query_from_input(input: Option<DiscoveryItemsInput>) -> D
         include_public: input.include_public.unwrap_or(false),
         limit: input.limit.map(|value| value.max(1) as usize).unwrap_or(50),
         offset: input.offset.map(|value| value.max(0) as usize).unwrap_or(0),
+        section,
+    })
+}
+
+fn discovery_section_sort(value: DiscoverySectionSortValue) -> DiscoverySectionSort {
+    match value {
+        DiscoverySectionSortValue::Relevance => DiscoverySectionSort::Relevance,
+        DiscoverySectionSortValue::Popularity => DiscoverySectionSort::Popularity,
+        DiscoverySectionSortValue::Rating => DiscoverySectionSort::Rating,
+        DiscoverySectionSortValue::ReleaseDate => DiscoverySectionSort::ReleaseDate,
+        DiscoverySectionSortValue::Title => DiscoverySectionSort::Title,
+    }
+}
+
+fn from_discovery_browse_label(label: DiscoveryBrowseLabel) -> DiscoveryBrowseLabelPayload {
+    DiscoveryBrowseLabelPayload {
+        family: match label.family {
+            DiscoveryBrowseLabelFamily::Genre => DiscoveryBrowseLabelFamilyValue::Genre,
+            DiscoveryBrowseLabelFamily::Theme => DiscoveryBrowseLabelFamilyValue::Theme,
+        },
+        label_key: label.label_key,
+        section_id: label.section_id,
+        title: label.title,
+        item_count: Long(label.item_count),
     }
 }
 
@@ -179,6 +238,11 @@ pub fn from_discovery_home(app: &AppUseCase, result: DiscoveryHomeResult) -> Dis
             .into_iter()
             .map(from_discovery_facet)
             .collect(),
+        browse_labels: result
+            .browse_labels
+            .into_iter()
+            .map(from_discovery_browse_label)
+            .collect(),
         can_view_personalized: result.can_view_personalized,
     }
 }
@@ -205,6 +269,11 @@ pub fn from_discovery_home_cards(
         .complete_collection
         .map(|section| from_discovery_home_section(app, section))
         .transpose()?;
+    let browse_labels = result
+        .browse_labels
+        .into_iter()
+        .map(from_discovery_browse_label)
+        .collect();
 
     Ok(DiscoveryHomeCardsPayload {
         status: from_discovery_sync_status(result.status),
@@ -212,6 +281,7 @@ pub fn from_discovery_home_cards(
         public_sections,
         personalized_sections,
         complete_collection,
+        browse_labels,
         can_view_personalized: result.can_view_personalized,
     })
 }
@@ -243,8 +313,18 @@ pub fn from_discovery_home_filter_options(
 pub fn from_discovery_items_result(
     app: &AppUseCase,
     result: DiscoveryItemsResult,
-) -> DiscoveryItemsPayload {
-    DiscoveryItemsPayload {
+) -> scryer_application::AppResult<DiscoveryItemsPayload> {
+    let generation_ids = result.generation_ids;
+    let section = result
+        .section
+        .map(|section| {
+            from_discovery_home_section(app, section).map(|payload| DiscoveryHomeSectionPayload {
+                generation_ids: generation_ids.clone(),
+                ..payload
+            })
+        })
+        .transpose()?;
+    Ok(DiscoveryItemsPayload {
         items: result
             .items
             .into_iter()
@@ -252,7 +332,8 @@ pub fn from_discovery_items_result(
             .collect(),
         total_count: Long(result.total_count),
         can_view_personalized: result.can_view_personalized,
-    }
+        section,
+    })
 }
 
 pub fn from_catalog_discovery(
@@ -363,6 +444,7 @@ fn from_discovery_home_section(
         label_key: section.label_key,
         total_count: Long(section.total_count),
         items,
+        generation_ids: Vec::new(),
     })
 }
 
@@ -636,5 +718,81 @@ pub fn from_discovery_facet(facet: DiscoveryFacetRecord) -> DiscoveryFacetPayloa
         value: facet.facet_value,
         smg_count: facet.smg_count.map(Long),
         local_count: facet.local_count.map(Long),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section_input(section_id: &str) -> DiscoveryItemsInput {
+        DiscoveryItemsInput {
+            section_id: Some(section_id.to_owned()),
+            ..DiscoveryItemsInput::default()
+        }
+    }
+
+    #[test]
+    fn section_items_input_carries_the_section_and_its_defaults() {
+        let query = discovery_items_query_from_input(Some(DiscoveryItemsInput {
+            sort: Some(DiscoverySectionSortValue::ReleaseDate),
+            hide_requested: Some(true),
+            section_rail_limit: Some(18),
+            home_filters: Some(DiscoveryHomeFiltersInput {
+                minimum_year: Some(1990),
+                ..DiscoveryHomeFiltersInput::default()
+            }),
+            ..section_input(" because_you_like_genre_drama ")
+        }))
+        .expect("a section request should map");
+        let section = query.section.expect("the section is carried");
+        assert_eq!(section.section_id, "because_you_like_genre_drama");
+        assert_eq!(section.rail_limit, 18);
+        assert_eq!(section.sort, DiscoverySectionSort::ReleaseDate);
+        assert!(section.hide_requested);
+        assert_eq!(section.filters.minimum_year, Some(1990));
+
+        let defaults = discovery_items_query_from_input(Some(section_input("for_you")))
+            .expect("defaults should map")
+            .section
+            .expect("the section is carried");
+        assert_eq!(defaults.rail_limit, 25);
+        assert_eq!(defaults.sort, DiscoverySectionSort::Relevance);
+        assert!(!defaults.hide_requested);
+
+        let plain = discovery_items_query_from_input(None).expect("no input should map");
+        assert!(plain.section.is_none());
+    }
+
+    #[test]
+    fn section_items_input_refuses_with_codes() {
+        let blank = discovery_items_query_from_input(Some(section_input("  ")))
+            .expect_err("a blank section id is refused");
+        assert_eq!(
+            blank.validation_reason(),
+            Some(scryer_interface_core::refusal::INTERFACE_DISCOVERY_SECTION_BLANK)
+        );
+        let limit = discovery_items_query_from_input(Some(DiscoveryItemsInput {
+            section_rail_limit: Some(0),
+            ..section_input("for_you")
+        }))
+        .expect_err("an out-of-range rail limit is refused");
+        assert_eq!(
+            limit.validation_reason(),
+            Some(scryer_interface_core::refusal::INTERFACE_DISCOVERY_LIMIT_INVALID)
+        );
+        let years = discovery_items_query_from_input(Some(DiscoveryItemsInput {
+            home_filters: Some(DiscoveryHomeFiltersInput {
+                minimum_year: Some(2000),
+                maximum_year: Some(1990),
+                ..DiscoveryHomeFiltersInput::default()
+            }),
+            ..section_input("for_you")
+        }))
+        .expect_err("inverted years are refused");
+        assert_eq!(
+            years.validation_reason(),
+            Some(scryer_interface_core::refusal::INTERFACE_DISCOVERY_YEARS_INVALID)
+        );
     }
 }

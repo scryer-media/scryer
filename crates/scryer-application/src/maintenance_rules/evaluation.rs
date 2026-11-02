@@ -43,8 +43,9 @@ use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::action_sequence::MaintenanceActionDefinition;
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
-    MaintenanceWatchContext, WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness,
+    MaintenanceWatchContext, WatchSignalFreshness,
     build_subject_input_with_completed_retention_episodes, unknown_reason,
+    watch_signal_sweep_is_fresh,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
@@ -2087,11 +2088,11 @@ impl AppUseCase {
                 enabled_connection_ids: enabled_connection_ids.clone(),
             });
         }
-        let oldest_allowed = Utc::now() - Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS);
+        let now = Utc::now();
         if connections
             .iter()
             .filter_map(|connection| states.get(&connection.id))
-            .any(|last_success_at| *last_success_at < oldest_allowed)
+            .any(|last_success_at| !watch_signal_sweep_is_fresh(*last_success_at, now))
         {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),

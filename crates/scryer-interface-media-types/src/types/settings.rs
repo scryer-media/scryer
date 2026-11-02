@@ -85,10 +85,8 @@ pub struct RecycleBinRelocationFailurePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct VerificationSettingsPayload {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
@@ -486,6 +484,10 @@ pub struct UiSettingsPayload {
     pub reduce_motion: bool,
     /// Whether the sponsor button is hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Whether discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -589,6 +591,12 @@ pub struct SetMyUiSettingsInput {
     pub reduce_motion: bool,
     /// Whether the sponsor button should be hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library;
+    /// omitted or null preserves the saved value.
+    pub discovery_grid_hide_owned: Option<bool>,
+    /// Whether discovery section grids leave out titles with a pending
+    /// request; omitted or null preserves the saved value.
+    pub discovery_grid_hide_requested: Option<bool>,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -1539,10 +1547,8 @@ pub struct UpdateRecycleBinSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct UpdateVerificationSettingsInput {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
