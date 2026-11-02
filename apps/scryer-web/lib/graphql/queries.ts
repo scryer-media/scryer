@@ -2781,6 +2781,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
@@ -3357,6 +3365,8 @@ export const authRuntimeStateQuery = `query AuthRuntimeState {
     mfaRequirePasswordLogin
     mfaRequireConfigStepUp
     mfaRequireJellyfinLogin
+    bindEditable
+    bindPinnedBy
   }
 }`;
 

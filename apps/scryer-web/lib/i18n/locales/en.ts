@@ -18,6 +18,26 @@ const en: LocaleDictionary = {
   "initialAuth.mismatch": "The passwords do not match.",
   "initialAuth.acknowledge":
     "I understand that anyone allowed to reach this unauthenticated instance can act as administrator. Existing network restrictions still apply.",
+  "initialAuth.networkHeading": "Who can reach Scryer?",
+  "initialAuth.networkLocal": "Only this computer",
+  "initialAuth.networkLocalBody": "Reachable at localhost.",
+  "initialAuth.networkOther": "Other computers can talk to Scryer",
+  "initialAuth.networkOtherBody":
+    "Other devices on your network can reach Scryer. Takes effect after a restart.",
+  "initialAuth.networkContainer":
+    "Network access is decided by the ports your container publishes.",
+  "initialAuth.networkEnvironment":
+    "This install pins Scryer's address with SCRYER_BIND.",
+  "initialAuth.noAuthNetworkWarning":
+    "Without authentication, anyone on your network who can reach Scryer gets full administrator access, and unauthenticated access from other computers is deprecated. If other computers should use Scryer, choose “Require an administrator password” instead.",
+  "initialAuth.restartTitle": "Restart Scryer",
+  "initialAuth.restartBody":
+    "Setup is saved. Other computers can reach Scryer after it restarts.",
+  "initialAuth.restartNow": "Restart now",
+  "initialAuth.restartLater": "Restart later",
+  "initialAuth.restarting": "Restarting Scryer…",
+  "initialAuth.restartUnreachable":
+    "Scryer has not answered for 45 seconds. Check the server output, then reload this page.",
   "initialAuth.code": "Setup code",
   "initialAuth.codeHelp":
     "Find the one-time code in the server console or container/service output. On desktop, open logs/console.log in Scryer’s data folder. Restarting Scryer replaces the code.",
@@ -51,6 +71,16 @@ const en: LocaleDictionary = {
   "error.reason.EXTERNAL_ACCOUNT_LINK_FAILED":
     "The external account could not be linked.",
   "error.reason.CATALOG_TAG_INVALID": "The title tag is invalid.",
+  "error.reason.NETWORK_BIND_HOST_INVALID":
+    "Enter an IP address, such as 127.0.0.1 or 192.168.1.20, without a port.",
+  "error.reason.NETWORK_BIND_ENV_PINNED":
+    "SCRYER_BIND sets Scryer's address on this install, so it cannot be changed here.",
+  "error.reason.NETWORK_BIND_SAVE_AND_RESET":
+    "Choose an address or the default, not both.",
+  "error.reason.NETWORK_RESTART_NOT_REQUIRED":
+    "Scryer is already using this network setting, so no restart is needed.",
+  "error.reason.NETWORK_RESTART_UNAVAILABLE":
+    "Scryer cannot restart itself here. Restart it the way you started it.",
   "error.reason.SETTINGS_DELAY_PROFILE_CATALOG_INVALID":
     "The delay profile catalog is invalid.",
   "error.reason.SETTINGS_TRUSTED_PROXY_POLICY_INVALID":
@@ -4220,7 +4250,41 @@ const en: LocaleDictionary = {
   "settings.publicUrlColumnSource": "Source",
   "settings.publicUrlEffective": "Public URL",
   "settings.publicUrlBasePath": "Base path",
-  "settings.publicUrlBindAddress": "Bind address",
+  "settings.publicUrlBindAddress": "Listening address",
+  "settings.publicUrlBindPending": "Listening address after restart",
+  "settings.networkGroupTitle": "Network",
+  "settings.networkTitle": "Who can reach Scryer",
+  "settings.networkHelp":
+    "Choose whether only this computer or other computers on your network can open Scryer. Changes take effect after Scryer restarts.",
+  "settings.networkAdvanced": "Advanced",
+  "settings.networkCustom": "A specific address on this computer",
+  "settings.networkCustomLabel": "IP address",
+  "settings.networkCustomHelp":
+    "Enter an IP address that belongs to this computer, such as its address on your network. Scryer keeps its current port.",
+  "settings.networkPinnedEnvironment":
+    "This install pins Scryer's address with SCRYER_BIND, so it cannot be changed here.",
+  "settings.networkPinnedContainer":
+    "Network access is decided by the ports your container publishes, so it cannot be changed here.",
+  "settings.networkClear": "Use the default",
+  "settings.networkSaved": "Network access saved.",
+  "settings.networkLoadError": "Unable to load network access.",
+  "settings.networkSaveError": "Unable to save network access.",
+  "settings.networkPendingSource": "After restart",
+  "settings.networkRestartPending":
+    "Scryer will listen on {{address}} after it restarts.",
+  "settings.networkRestartNow": "Restart now",
+  "settings.networkRestarting": "Restarting Scryer…",
+  "settings.networkRestartUnreachable":
+    "Scryer has not answered for 45 seconds. If you changed who can reach it, open it at its new address ({{address}}), or check the server output.",
+  "settings.networkRestartFailed": "Unable to restart Scryer.",
+  "settings.networkFallbackTitle":
+    "Scryer is listening on {{address}} instead of the configured address.",
+  "settings.networkFallback.unbindable":
+    "Scryer could not use {{address}}, so it stayed reachable from this computer only. Check that the address belongs to this computer, then choose again.",
+  "settings.networkFallback.storedInvalid":
+    "The saved network address is not valid, so Scryer used its default. Choose again to replace it.",
+  "settings.networkFallback.storedUnreadable":
+    "The saved network address could not be read, so Scryer used its default. Choose again to replace it.",
   "settings.publicUrlTrustedProxies": "Trusted proxies",
   "settings.publicUrlPasskeyRpId": "Passkey relying party ID",
   "settings.publicUrlPasskeyRpOrigin": "Passkey origin",
@@ -4423,7 +4487,8 @@ const en: LocaleDictionary = {
   "nav.logs": "Logs",
   "nav.serviceLogs": "Service Logs",
   "nav.auditLogs": "Audit Logs",
-  "nav.usersAccess": "Users & Access",
+  "nav.users": "Users",
+  "nav.securityAccess": "Security & Access",
   "nav.mobileTitle": "Scryer navigation",
   "nav.mobileDescription": "Primary Scryer navigation",
   "nav.mobileTrigger": "Open navigation",
@@ -4618,7 +4683,6 @@ const en: LocaleDictionary = {
   "settings.profile": "Profile",
   "settings.general": "General",
   "settings.backups": "Backups",
-  "settings.security": "Security",
   "settings.enableFormLogin": "Enable login",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":

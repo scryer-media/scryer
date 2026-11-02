@@ -304,7 +304,8 @@ const cs: LocaleDictionary = {
   "nav.logs": "Protokoly",
   "nav.serviceLogs": "Protokoly služby",
   "nav.auditLogs": "Auditní protokoly",
-  "nav.usersAccess": "Uživatelé a přístup",
+  "nav.users": "Uživatelé",
+  "nav.securityAccess": "Zabezpečení a přístup",
   "nav.mobileTitle": "Navigace Scryer",
   "nav.mobileDescription": "Hlavní navigace Scryer",
   "nav.mobileTrigger": "Otevřít navigaci",
@@ -432,7 +433,6 @@ const cs: LocaleDictionary = {
   "settings.profile": "Profil",
   "settings.general": "Obecné",
   "settings.backups": "Zálohy",
-  "settings.security": "Zabezpečení",
   "settings.enableFormLogin": "Zapnout přihlašování",
   "settings.securityLoginSettings": "Nastavení přihlašování",
   "settings.securityEnableFormLoginHelp":

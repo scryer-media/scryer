@@ -788,8 +788,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"restoreStatus"));
     // Indexer clients add `indexerClients`, the administration list: 196->197.
     assert!(query_field_names.contains(&"indexerClients"));
+    // Recycle-bin item history adds `recycledItemHistory`: 197->198.
+    assert!(query_field_names.contains(&"recycledItemHistory"));
     assert_eq!(
-        query_field_count, 197,
+        query_field_count, 198,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -867,8 +869,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createFolder"));
     // The first-run authentication decision adds one mutation: 284->285.
     assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
+    // Restarting so a saved listening address takes effect adds one
+    // mutation: 285->286.
+    assert!(mutation_field_names.contains(&"restartForNetworkChange"));
     assert_eq!(
-        mutation_field_count, 285,
+        mutation_field_count, 286,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1270,14 +1275,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Unroutable search results add InteractiveReleaseSearchUnroutableResultsPayload:
     // public types 991->992, OBJECT 535->536.
     assert!(public_type_names.contains(&"InteractiveReleaseSearchUnroutableResultsPayload"));
+    // The listening address adds what pins it and the first-run network
+    // choice: public types 992->994, ENUM 201->203. The stated baseline was
+    // also one OBJECT behind the schema it ran against, so the totals absorb
+    // that drift: public types 994->995, OBJECT 536->537.
+    for name in ["BindPinValue", "InitialNetworkAccess"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        992,
+        995,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 536);
+    assert_eq!(kind_count("OBJECT"), 537);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 201);
+    assert_eq!(kind_count("ENUM"), 203);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

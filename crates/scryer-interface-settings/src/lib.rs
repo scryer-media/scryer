@@ -778,6 +778,8 @@ fn from_auth_runtime_state(
     AuthRuntimeStatePayload {
         initial_authentication_stage: None,
         initial_authentication_code_required: false,
+        bind_editable: false,
+        bind_pinned_by: None,
         password_min_length: security_settings.password_min_length,
         effective_form_login_enabled: auth_runtime.effective_form_login_enabled,
         skip_login_for_local_ips: auth_runtime.skip_login_for_local_ips,
@@ -1164,11 +1166,17 @@ impl SettingsQueries {
             default_persist_session_from_ctx(ctx),
         );
         payload.initial_authentication_stage = setup.as_ref().map(|state| state.stage().to_owned());
+        let choice_pending = matches!(
+            setup,
+            Some(scryer_application::initial_auth::SetupState::Choice)
+        );
         payload.initial_authentication_code_required =
-            matches!(
-                setup,
-                Some(scryer_application::initial_auth::SetupState::Choice)
-            ) && auth_runtime.initial_authentication.code_required();
+            choice_pending && auth_runtime.initial_authentication.code_required();
+        if choice_pending {
+            let bind = app.public_url_runtime().addressing().bind.clone();
+            payload.bind_editable = bind.editable();
+            payload.bind_pinned_by = bind.pinned_by.map(BindPinValue::from_application);
+        }
         Ok(payload)
     }
 

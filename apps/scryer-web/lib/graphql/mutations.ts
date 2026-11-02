@@ -55,8 +55,14 @@ ${LOGIN_PAYLOAD_FIELDS}
 export const completeInitialAuthenticationMutation = `mutation CompleteInitialAuthentication($input: CompleteInitialAuthenticationInput!) {
   completeInitialAuthentication(input: $input) {
     completed
+    restartRequiredForBind
+    bindIgnoredBecausePinned
     login { ${LOGIN_PAYLOAD_FIELDS} }
   }
+}`;
+
+export const restartForNetworkChangeMutation = `mutation RestartForNetworkChange {
+  restartForNetworkChange
 }`;
 
 export const completeRequiredPasswordChangeMutation = `mutation CompleteRequiredPasswordChange($input: CompleteRequiredPasswordChangeInput!) {
@@ -1454,6 +1460,14 @@ const serviceSettingsFieldSelection = `
     basePathSource
     bindAddress
     bindSource
+    bindSavedHost
+    bindEditable
+    bindPinnedBy
+    bindPending
+    bindRestartRequired
+    bindFallbackCode
+    bindFallbackAddress
+    bindFallbackReason
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource

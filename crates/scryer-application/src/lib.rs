@@ -14,6 +14,7 @@ pub mod http_release_refusal;
 pub mod indexer_clients;
 pub mod initial_auth;
 pub mod login_challenge_refusal;
+pub mod network_bind;
 pub mod public_url;
 pub mod rate_limit_proxy_policy;
 pub mod title_delete;

@@ -1759,6 +1759,8 @@ impl SettingsMutations {
                 public_url: input.public_url,
                 reset_public_url: input.reset_public_url.unwrap_or(false),
                 acknowledge_passkey_impact: input.acknowledge_passkey_impact.unwrap_or(false),
+                bind_host: input.bind_host,
+                reset_bind_host: input.reset_bind_host.unwrap_or(false),
             },
         )
         .await
@@ -2632,8 +2634,14 @@ impl SettingsMutations {
                 "the authentication choice conflicts with its password or environment configuration",
             )));
         }
-        let user = app
-            .complete_initial_authentication(input.password, input.acknowledge_no_authentication)
+        let (user, bind_outcome) = app
+            .complete_initial_authentication_with_network(
+                input.password,
+                input.acknowledge_no_authentication,
+                input
+                    .network_access
+                    .map(InitialNetworkAccess::to_application),
+            )
             .await
             .map_err(to_gql_error)?;
         runtime.apply_saved_security_settings(password_mode, false);
@@ -2658,7 +2666,21 @@ impl SettingsMutations {
         Ok(InitialAuthenticationPayload {
             completed: true,
             login,
+            restart_required_for_bind: bind_outcome.restart_required,
+            bind_ignored_because_pinned: bind_outcome.ignored_because_pinned,
         })
+    }
+
+    /// Restarts Scryer so a saved listening address takes effect.
+    async fn restart_for_network_change(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        app.restart_for_bind_change(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(true)
     }
 
     /// Replaces an administrator-provided temporary password and issues the full session.

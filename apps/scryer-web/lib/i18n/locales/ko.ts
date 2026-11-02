@@ -236,7 +236,8 @@ const ko: LocaleDictionary = {
   "nav.logs": "로그",
   "nav.serviceLogs": "서비스 로그",
   "nav.auditLogs": "감사 로그",
-  "nav.usersAccess": "사용자 및 접근",
+  "nav.users": "사용자",
+  "nav.securityAccess": "보안 및 접근",
   "nav.mobileTitle": "Scryer 내비게이션",
   "nav.mobileDescription": "기본 Scryer 내비게이션",
   "nav.mobileTrigger": "내비게이션 열기",
@@ -318,7 +319,6 @@ const ko: LocaleDictionary = {
   "dashboard.queueCountOne": "1개 활성",
   "settings.profile": "프로필",
   "settings.general": "일반",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",

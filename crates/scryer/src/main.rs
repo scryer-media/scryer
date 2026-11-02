@@ -737,6 +737,13 @@ async fn run_application() {
             std::process::exit(1);
         }
     };
+    let port_override = match extract_port(&mut args) {
+        Ok(port) => port,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
 
     // Phase 2: Handle CLI subcommands before any startup work.
     // args[0] is the binary name; subcommand (if any) is args[1].
@@ -770,7 +777,7 @@ async fn run_application() {
             other => {
                 eprintln!("unknown argument: {other}");
                 eprintln!(
-                    "usage: scryer [--data-dir <path>] [--log-file <path>] [init | --generate-key | --version]"
+                    "usage: scryer [--data-dir <path>] [--log-file <path>] [--port <number>] [init | --generate-key | --version]"
                 );
                 std::process::exit(1);
             }
@@ -971,7 +978,6 @@ async fn run_application() {
         let _ = std::fs::create_dir_all(parent);
     }
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
-    let bind = std::env::var("SCRYER_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let development_mode = resolve_development_mode_from_env().unwrap_or_else(|error| {
         eprintln!("invalid {DEVELOPMENT_MODE_ENV}: {error}");
         std::process::exit(1);
@@ -999,6 +1005,11 @@ async fn run_application() {
         return;
     }
 
+    let bind_resolution = resolve_startup_bind(&datastore_config, port_override).await;
+    let bind_pin = (application_upgrade_assessment.kind
+        == scryer_application::application_upgrade::InstallationKind::Docker)
+        .then_some(scryer_application::network_bind::BindPin::Container);
+
     // Read TLS config from env vars (available before DB bootstrap).
     let tls_cert_path = normalize_env_option("SCRYER_TLS_CERT");
     let tls_key_path = normalize_env_option("SCRYER_TLS_KEY");
@@ -1023,7 +1034,20 @@ async fn run_application() {
         tracing::info!(origins = ?cors.allowed_origins, "CORS configured with explicit origin list");
     }
 
-    let addr: SocketAddr = bind.parse().expect("invalid bind address");
+    let (listener, bind_fallback) = match bind_listener(bind_resolution.address).await {
+        Ok(bound) => bound,
+        Err(error) => {
+            tracing::error!(%error, "failed to bind the listening address");
+            std::process::exit(1);
+        }
+    };
+    let addr = listener.local_addr().expect("bound addr");
+    let bind_state = scryer_application::network_bind::BindState::from_resolution(
+        &bind_resolution,
+        addr,
+        bind_pin,
+        bind_fallback,
+    );
     let shutdown_token = CancellationToken::new();
 
     // Drain raw histogram samples on a timer; without upkeep an instance with metrics enabled
@@ -1041,7 +1065,7 @@ async fn run_application() {
     let bootstrap_indexer_accounting_shutdown = indexer_accounting_shutdown.clone();
     let script_shutdown = ScriptShutdown::default();
     let bootstrap_script_shutdown = script_shutdown.clone();
-    let bootstrap_bind = bind.clone();
+    let bootstrap_bind = bind_state;
     let bootstrap_development_mode = development_mode;
     let runtime_handle = tokio::runtime::Handle::current();
     let shutdown_restore = restore_coordinator.clone();
@@ -1196,7 +1220,17 @@ async fn run_application() {
             let url = format!("https://{addr}{}", startup_base_path.ui_root());
             tracing::info!("open the web UI at {url}");
             maybe_open_browser(&url);
-            if let Err(error) = axum_server::bind_rustls(addr, rustls_config)
+            let listener = listener.into_std().unwrap_or_else(|error| {
+                tracing::error!(%error, "failed to hand the listener to TLS");
+                std::process::exit(1);
+            });
+            let server = axum_server::from_tcp_rustls(listener, rustls_config).unwrap_or_else(
+                |error| {
+                    tracing::error!(%error, "failed to start the TLS listener");
+                    std::process::exit(1);
+                },
+            );
+            if let Err(error) = server
                 .handle(handle)
                 .serve(splash_app.into_make_service_with_connect_info::<SocketAddr>())
                 .await
@@ -1209,13 +1243,7 @@ async fn run_application() {
             panic!("both SCRYER_TLS_CERT and SCRYER_TLS_KEY must be set for TLS, or neither");
         }
         (None, None) => {
-            let listener = TcpListener::bind(addr)
-                .await
-                .expect("failed to bind address");
-            tracing::info!(
-                "scryer service listening on {}",
-                listener.local_addr().expect("bound addr")
-            );
+            tracing::info!("scryer service listening on {addr}");
             let url = format!("http://{addr}{}", startup_base_path.ui_root());
             tracing::info!("open the web UI at {url}");
             maybe_open_browser(&url);
@@ -1318,7 +1346,7 @@ async fn bootstrap_application(
     _migration_mode: MigrationMode,
     plugin_recovery_pending: bool,
     jwt_issuer: String,
-    bind: String,
+    bind: scryer_application::network_bind::BindState,
     development_mode: bool,
     cors: CorsConfig,
     shutdown_token: CancellationToken,
@@ -1941,8 +1969,7 @@ async fn bootstrap_application(
             InstanceAddressing {
                 base_path: base_path.prefix().to_string(),
                 base_path_source: env_source(BasePath::env_configured()),
-                bind_address: bind.clone(),
-                bind_source: env_source(std::env::var_os("SCRYER_BIND").is_some()),
+                bind: bind.clone(),
                 passkey_rp_id,
                 passkey_rp_origin,
                 passkey_rp_source,
@@ -2320,7 +2347,7 @@ async fn bootstrap_application(
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     warn_about_deprecated_public_authless_release_bind(
         !cfg!(debug_assertions),
-        &bind,
+        &bind.listening.to_string(),
         auth_runtime.snapshot().effective_form_login_enabled,
     );
     if auth_mode.used_legacy_dev_auto_login {
@@ -2489,12 +2516,19 @@ async fn bootstrap_application(
         initial_auth_state,
         Some(scryer_application::initial_auth::SetupState::Choice)
     ) {
-        // The choice itself is always required. Operators who expose a fresh
-        // instance before making it can also require console proof.
+        // The choice itself is always required. A fresh instance that other
+        // computers can reach also requires console proof, unless the
+        // operator turned that off.
         if initial_auth::setup_code_required(
             std::env::var(initial_auth::REQUIRE_SETUP_CODE_ENV)
                 .ok()
                 .as_deref(),
+            bind.listening.ip(),
+            !app_use_case
+                .trusted_proxy_runtime()
+                .snapshot()
+                .addresses
+                .is_empty(),
         ) {
             let code = auth_runtime.initial_authentication.initialize()?;
             // Operator-only output: deliberately bypass tracing and its web log ring.
@@ -2516,7 +2550,7 @@ async fn bootstrap_application(
         rate_limiter: rate_limiter.clone(),
         ws_origin_policy: WebSocketOriginPolicy::from_env(&cors),
         list_account_origin_policy: list_account_origin::ListAccountOriginPolicy::from_env(
-            &bind,
+            &bind.listening.to_string(),
             app_use_case.public_url_runtime(),
         ),
         authless_web_client_proof: authless_web_client_proof.clone(),
@@ -2934,6 +2968,19 @@ fn extract_log_file(args: &mut Vec<String>) -> Result<Option<PathBuf>, String> {
     extract_path_arg(args, "--log-file")
 }
 
+/// Extract `--port <n>` or `--port=<n>`: the port a saved or default listening
+/// host is served on. `SCRYER_BIND` still sets the whole address when present.
+fn extract_port(args: &mut Vec<String>) -> Result<Option<u16>, String> {
+    let Some(raw) = extract_path_arg(args, "--port")? else {
+        return Ok(None);
+    };
+    let raw = raw.to_string_lossy();
+    match raw.trim().parse::<u16>() {
+        Ok(port) if port != 0 => Ok(Some(port)),
+        _ => Err(format!("--port requires a port number from 1 to 65535, not {raw:?}")),
+    }
+}
+
 fn extract_path_arg(args: &mut Vec<String>, flag: &str) -> Result<Option<PathBuf>, String> {
     let mut i = 1; // skip binary name
     let equals_flag = format!("{flag}=");
@@ -2964,9 +3011,10 @@ fn extract_path_arg(args: &mut Vec<String>, flag: &str) -> Result<Option<PathBuf
 fn is_startup_arg_token(value: &str) -> bool {
     matches!(
         value,
-        "--data-dir" | "--log-file" | "--generate-key" | "--version" | "-V" | "init"
+        "--data-dir" | "--log-file" | "--port" | "--generate-key" | "--version" | "-V" | "init"
     ) || value.starts_with("--data-dir=")
         || value.starts_with("--log-file=")
+        || value.starts_with("--port=")
 }
 
 /// Resolve the data directory from CLI flag or platform default.
@@ -3100,6 +3148,7 @@ fn load_startup_environment() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().collect();
     let data_dir = extract_data_dir(&mut args)?;
     extract_log_file(&mut args)?;
+    extract_port(&mut args)?;
     // Subcommands have their own configuration. The desktop supervisor parses
     // only its profile file and supplies the fully validated child environment.
     if args.len() != 1 || std::env::var("SCRYER_TRAY_SUPERVISED").as_deref() == Ok("1") {
@@ -3419,6 +3468,91 @@ fn validate_authless_runtime_config(
         ));
     }
     Ok(())
+}
+
+/// Resolve the listening address before anything binds: `SCRYER_BIND`, then
+/// the saved host, then loopback. An invalid `SCRYER_BIND` stops startup; a
+/// saved value that cannot be used never does.
+async fn resolve_startup_bind(
+    datastore_config: &DatastoreConfig,
+    port: Option<u16>,
+) -> scryer_application::network_bind::BindResolution {
+    use scryer_application::network_bind;
+    let environment = normalize_env_option(network_bind::BIND_ENV);
+    let saved = if environment.is_some() {
+        Ok(None)
+    } else {
+        scryer_infrastructure_runtime::read_saved_bind_host(datastore_config).await
+    };
+    let resolution = network_bind::resolve_bind(
+        environment.as_deref(),
+        saved
+            .as_ref()
+            .map(Option::as_deref)
+            .map_err(String::as_str),
+        port,
+    )
+    .unwrap_or_else(|error| {
+        tracing::error!("{error}");
+        std::process::exit(1);
+    });
+    if environment.is_some() && port.is_some() {
+        tracing::info!("--port is ignored because SCRYER_BIND sets the whole listening address");
+    }
+    if let Some(fallback) = &resolution.fallback {
+        tracing::warn!(
+            code = fallback.code,
+            detail = %fallback.detail,
+            address = %resolution.address,
+            "the saved listening address cannot be used; using the default"
+        );
+    }
+    resolution
+}
+
+/// Bind the listener. A configured address this host cannot listen on must
+/// not cost the operator the process, because the UI it serves is where the
+/// address is fixed: loopback on the same port is tried instead and the
+/// deviation is reported. A loopback failure stays fatal.
+async fn bind_listener(
+    desired: SocketAddr,
+) -> io::Result<(
+    TcpListener,
+    Option<scryer_application::network_bind::BindFallback>,
+)> {
+    use scryer_application::network_bind;
+    let error = match TcpListener::bind(desired).await {
+        Ok(listener) => return Ok((listener, None)),
+        Err(error) => error,
+    };
+    let Some(fallback) = network_bind::fallback_address(desired) else {
+        return Err(io::Error::new(
+            error.kind(),
+            format!("could not listen on {desired}: {error}; is another program using this port?"),
+        ));
+    };
+    tracing::warn!(
+        %desired,
+        %error,
+        %fallback,
+        "the configured listening address is not usable on this host; falling back to loopback"
+    );
+    let listener = TcpListener::bind(fallback).await.map_err(|fallback_error| {
+        io::Error::new(
+            fallback_error.kind(),
+            format!(
+                "could not listen on {fallback} after {desired} failed: {fallback_error}; is another program using this port?"
+            ),
+        )
+    })?;
+    Ok((
+        listener,
+        Some(network_bind::BindFallback {
+            code: scryer_application::error_reasons::network::BIND_FALLBACK_UNBINDABLE,
+            attempted: Some(desired),
+            detail: error.to_string(),
+        }),
+    ))
 }
 
 fn warn_about_deprecated_public_authless_release_bind(
@@ -4452,6 +4586,55 @@ mod tests {
 
         assert_eq!(path, PathBuf::from("/config"));
         assert_eq!(args, vec!["scryer".to_string(), "--version".to_string()]);
+    }
+
+    #[test]
+    fn extract_port_reads_both_spellings_and_refuses_bad_values() {
+        let args = |rest: &[&str]| {
+            std::iter::once("scryer")
+                .chain(rest.iter().copied())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let mut plain = args(&["--port", "18080", "--version"]);
+        assert_eq!(super::extract_port(&mut plain), Ok(Some(18080)));
+        assert_eq!(plain, args(&["--version"]));
+        let mut equals = args(&["--port=9090"]);
+        assert_eq!(super::extract_port(&mut equals), Ok(Some(9090)));
+        assert_eq!(equals, args(&[]));
+        let mut absent = args(&["--version"]);
+        assert_eq!(super::extract_port(&mut absent), Ok(None));
+        for bad in ["0", "65536", "http", "-1"] {
+            let mut invalid = args(&["--port", bad]);
+            assert!(super::extract_port(&mut invalid).is_err(), "{bad}");
+        }
+        let mut flag_value = args(&["--port", "--data-dir"]);
+        assert!(super::extract_port(&mut flag_value).is_err());
+    }
+
+    /// An address this host cannot listen on falls back to loopback on the
+    /// same port and records why, so the UI stays reachable to fix it.
+    #[tokio::test]
+    async fn bind_listener_falls_back_to_loopback_when_the_address_is_unusable() {
+        // TEST-NET-1 is never assigned to a local interface.
+        let unusable: std::net::SocketAddr = "192.0.2.1:0".parse().unwrap();
+        let (listener, fallback) = super::bind_listener(unusable).await.unwrap();
+        assert!(listener.local_addr().unwrap().ip().is_loopback());
+        let fallback = fallback.expect("the fallback is recorded");
+        assert_eq!(
+            fallback.code,
+            scryer_application::error_reasons::network::BIND_FALLBACK_UNBINDABLE
+        );
+        assert_eq!(fallback.attempted, Some(unusable));
+
+        let (_, none) = super::bind_listener("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        assert!(none.is_none());
+
+        // Loopback that cannot be bound is fatal, never a silent fallback.
+        let taken = listener.local_addr().unwrap();
+        assert!(super::bind_listener(taken).await.is_err());
     }
 
     #[test]

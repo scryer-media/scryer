@@ -253,10 +253,15 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       {
         kind: "settings",
         id: "users",
-        labelKey: "nav.usersAccess",
+        labelKey: "nav.users",
         icon: Users,
       },
-      { kind: "settings", id: "security", icon: ShieldCheck },
+      {
+        kind: "settings",
+        id: "security",
+        labelKey: "nav.securityAccess",
+        icon: ShieldCheck,
+      },
       { kind: "view", id: "system" },
       { kind: "apiExplorer", icon: Code2 },
       { kind: "system", id: "jobs", labelKey: "system.jobsTitle", icon: Timer },
@@ -375,7 +380,7 @@ const settingsEntries: Array<{
   },
   {
     id: "security",
-    label: (t) => t("settings.security"),
+    label: (t) => t("nav.securityAccess"),
     icon: ShieldCheck,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageUsers],
   },

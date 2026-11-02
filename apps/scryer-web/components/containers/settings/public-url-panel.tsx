@@ -238,6 +238,15 @@ export function PublicUrlPanel() {
           settings.bindAddress,
           t(SOURCE_KEYS[settings.bindSource]),
         ],
+        ...(settings.bindRestartRequired
+          ? ([
+              [
+                t("settings.publicUrlBindPending"),
+                settings.bindPending,
+                t("settings.networkPendingSource"),
+              ],
+            ] as Array<[string, string, string]>)
+          : []),
         [
           t("settings.publicUrlTrustedProxies"),
           settings.trustedProxyIps.length > 0
