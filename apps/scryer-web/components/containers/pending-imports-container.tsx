@@ -23,6 +23,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { PendingImportCard } from "@/components/containers/pending-import-card";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -1534,6 +1535,13 @@ export const PendingImportsContainer = React.memo(
                       count: selectedConflictIds.length,
                     })}
                   </span>
+                  <Badge
+                    id="pending-import-conflict-bulk-beta"
+                    tone="warning"
+                    className="text-[11px]"
+                  >
+                    {t("settings.pluginBeta")}
+                  </Badge>
                   <Button
                     id="pending-import-conflict-bulk"
                     size="sm"

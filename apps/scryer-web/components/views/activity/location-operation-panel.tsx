@@ -314,6 +314,13 @@ function OperationPanel({ operationId, onDismiss }: Props) {
               {t(`move.operationType.${operation.operationType}`)}
             </span>
             <Badge
+              id="location-operation-beta"
+              tone="warning"
+              className="text-[11px]"
+            >
+              {t("settings.pluginBeta")}
+            </Badge>
+            <Badge
               id="location-operation-state"
               tone={
                 operation.state === "FAILED"
