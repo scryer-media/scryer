@@ -70,6 +70,8 @@ export type TitleCatalogProjection = {
   ratings: boolean;
   movieMedia: boolean;
   popularity: boolean;
+  /** The title's provider ids, which the library graph joins on. */
+  externalIds?: boolean;
 };
 
 export type TitleCatalogQueryOptions = {
@@ -271,9 +273,25 @@ export function titleCatalogProjectionSignature(
     normalized.ratings && "ratings",
     normalized.movieMedia && "movieMedia",
     normalized.popularity && "popularity",
+    normalized.externalIds && "externalIds",
   ]
     .filter(Boolean)
     .join(":");
+}
+
+/**
+ * What the catalog fetches while the library graph is shown: the provider ids
+ * the graph joins on and every value a node can be sized by. The graph shows
+ * no settings or table columns, so it asks for none.
+ */
+export function titleCatalogProjectionForGraph(): TitleCatalogProjection {
+  return {
+    ...EMPTY_TITLE_CATALOG_PROJECTION,
+    includeSettings: false,
+    ratings: true,
+    popularity: true,
+    externalIds: true,
+  };
 }
 
 export function titleCatalogProjectionForTable({

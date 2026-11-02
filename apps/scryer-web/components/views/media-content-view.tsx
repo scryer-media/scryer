@@ -14,6 +14,7 @@ import {
   FolderPen,
   LayoutGrid,
   LayoutList,
+  Network,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
@@ -175,6 +176,13 @@ import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scr
 import { releaseSupportsAdditionalFileQueue } from "@/lib/utils/release-queue-scope";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import type { ContentViewMode } from "./media-content/content-view-mode";
+import { catalogViewModeOptions } from "@/lib/utils/catalog-view-preferences";
+import {
+  INITIAL_GRAPH_PAGING_STATE,
+  graphPagingStep,
+  graphTitlesComplete,
+  type GraphPagingState,
+} from "@/lib/utils/library-graph-paging";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { TitleOverviewActions } from "./title-overview-actions";
 import { TitleBlockedReleasesSection } from "@/components/common/title-blocked-releases-section";
@@ -266,6 +274,10 @@ type ParsedQualityProfile = {
 };
 
 const TITLE_OVERVIEW_PANE_MIN_WIDTH = 700;
+// The graph view carries its WebGL renderer; load it only when it is shown.
+const LibraryGraphView = React.lazy(
+  () => import("./media-content/library-graph-view"),
+);
 const TITLE_WORKSPACE_PANE_GAP = 16;
 const TITLE_POSTER_GRID_MIN_COLUMN_WIDTH = 200;
 const CATALOG_DISCOVERY_INLINE_MIN_WIDTH = 900;
@@ -1887,6 +1899,8 @@ export function MediaContentView({
     catalogHasMoreTitles: boolean;
     catalogLoadingMoreTitles: boolean;
     catalogPageError: string | null;
+    /** Identifies the catalog listing the loaded titles belong to. */
+    catalogListingKey: string;
     retryCatalogPage: () => Promise<void>;
     loadMoreCatalogTitles: () => Promise<void> | void;
     titleCatalogSortKey: TitleTableSortKey;
@@ -2165,6 +2179,7 @@ export function MediaContentView({
     catalogHasMoreTitles,
     catalogLoadingMoreTitles,
     catalogPageError,
+    catalogListingKey,
     retryCatalogPage,
     loadMoreCatalogTitles,
     titleCatalogSortKey,
@@ -2665,7 +2680,8 @@ export function MediaContentView({
     [canSeeRootColumn, visibleTitleTableColumns],
   );
   const showTitleTableColumnControls =
-    effectiveViewMode !== "poster" && !selectedTitleCompactDrawerActive;
+    (effectiveViewMode === "compact" || effectiveViewMode === "poster-table") &&
+    !selectedTitleCompactDrawerActive;
   const multiSelectActive = selectedTitleIds.size > 0;
   // In multi-select mode the bulk actions live in the side panel; the inline
   // bar is only a fallback for widths too narrow to show the panel.
@@ -2673,6 +2689,48 @@ export function MediaContentView({
     multiSelectActive &&
     !contextPanelAvailable &&
     (collectionViewMode === "compact" || collectionViewMode === "poster-table");
+
+  // The graph draws the whole filtered catalog, so it keeps paging until every
+  // title of the listing in view is loaded and builds once paging is over.
+  const graphPagingRef = React.useRef<GraphPagingState>(
+    INITIAL_GRAPH_PAGING_STATE,
+  );
+  const [graphStalledListingKey, setGraphStalledListingKey] = React.useState<
+    string | null
+  >(null);
+  const graphTitlesAreComplete = graphTitlesComplete({
+    listingKey: catalogListingKey,
+    titleLoading,
+    hasMore: catalogHasMoreTitles,
+    pageFailed: catalogPageError !== null,
+    stalledListingKey: graphStalledListingKey,
+  });
+  React.useEffect(() => {
+    const step = graphPagingStep(graphPagingRef.current, {
+      active: isTitleCatalogView && collectionViewMode === "graph",
+      listingKey: catalogListingKey,
+      hasMore: catalogHasMoreTitles,
+      loadingMore: catalogLoadingMoreTitles,
+      pageFailed: catalogPageError !== null,
+      loadedCount: monitoredTitles.length,
+    });
+    graphPagingRef.current = step.state;
+    if (step.state.stalled) {
+      setGraphStalledListingKey(step.state.listingKey);
+    }
+    if (step.request) {
+      void loadMoreCatalogTitles();
+    }
+  }, [
+    catalogHasMoreTitles,
+    catalogListingKey,
+    catalogLoadingMoreTitles,
+    catalogPageError,
+    collectionViewMode,
+    isTitleCatalogView,
+    loadMoreCatalogTitles,
+    monitoredTitles.length,
+  ]);
 
   React.useEffect(() => {
     if (
@@ -3237,8 +3295,9 @@ export function MediaContentView({
         variant="outline"
         value={effectiveViewMode}
         onValueChange={(v) => {
-          if (v === "compact" || v === "poster-table" || v === "poster") {
-            setViewMode(v);
+          const next = catalogViewModeOptions().find((mode) => mode === v);
+          if (next) {
+            setViewMode(next);
           }
         }}
         size="sm"
@@ -3275,6 +3334,18 @@ export function MediaContentView({
         >
           <LayoutGrid className="h-[1.125rem] w-[1.125rem]" />
         </ToggleGroupItem>
+        {catalogViewModeOptions().includes("graph") ? (
+          <ToggleGroupItem
+            id={titleOverviewViewModeId(view, "graph")}
+            value="graph"
+            size="sm"
+            aria-label={t("title.viewModeGraph")}
+            title={t("title.viewModeGraph")}
+            className="h-9 w-9 rounded-[9px] px-0 text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] data-[state=on]:!border-transparent data-[state=on]:!bg-[var(--scry-accent)] data-[state=on]:!text-primary-foreground data-[state=on]:!shadow-none"
+          >
+            <Network className="h-[1.125rem] w-[1.125rem]" />
+          </ToggleGroupItem>
+        ) : null}
       </ToggleGroup>
       {catalogContextRailCollapsed &&
       activeOverviewTitleId === null &&
@@ -3803,6 +3874,33 @@ export function MediaContentView({
                       scrollContainer={!selectedTitleLayoutActive}
                       activeDownloadTitleIds={activeDownloadTitleIds}
                     />
+                  );
+                } else if (collectionViewMode === "graph") {
+                  titleCollectionView = (
+                    <React.Suspense
+                      fallback={
+                        <div className="flex min-h-[22rem] items-start justify-center">
+                          <TitleCollectionLoadingState />
+                        </div>
+                      }
+                    >
+                      <LibraryGraphView
+                        key={`${view}-library-graph`}
+                        facet={
+                          isMovieView
+                            ? "MOVIE"
+                            : view === "anime"
+                              ? "ANIME"
+                              : "SERIES"
+                        }
+                        titles={monitoredTitles}
+                        titlesComplete={graphTitlesAreComplete}
+                        libraryIds={selectedLibraryIds}
+                        selectedTitleId={contextPanelSelectedTitleId}
+                        contextPanelId={selectedTitleContextPanelId}
+                        onSelectTitle={onSelectTitleForContextPanel}
+                      />
+                    </React.Suspense>
                   );
                 } else if (collectionViewMode === "compact") {
                   titleCollectionView = (

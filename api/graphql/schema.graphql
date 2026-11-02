@@ -33036,6 +33036,10 @@ enum UiCatalogViewModeValue {
 	Poster grid.
 	"""
 	POSTER
+	"""
+	Graph of how the library's titles relate.
+	"""
+	GRAPH
 }
 
 """

@@ -518,6 +518,42 @@ async fn graphql_catalog_views_and_language_are_saved_per_user_and_device_class(
 }
 
 #[tokio::test]
+async fn graphql_catalog_graph_view_mode_is_saved_and_read_back() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "catalog_graph_user").await;
+
+    let saved = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation {{
+              setMyCatalogView(input: {{
+                deviceClass: DESKTOP
+                facet: SERIES
+                viewMode: GRAPH
+              }}) {{ {CATALOG_VIEW_SELECTION} }}
+            }}
+            "#
+        ),
+        Some(user.clone()),
+    )
+    .await;
+    assert_no_errors(&saved);
+
+    let read = schema_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {CATALOG_VIEW_SELECTION} }} }}"),
+        Some(user),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["myUiSettings"]["catalogViews"],
+        json!([{ "deviceClass": "DESKTOP", "facet": "SERIES", "viewMode": "GRAPH" }])
+    );
+}
+
+#[tokio::test]
 async fn graphql_ui_settings_ignore_column_ids_this_version_no_longer_offers() {
     let ctx = TestContext::new().await;
     let user = create_ui_settings_test_user(&ctx, "catalog_retired_column_user").await;

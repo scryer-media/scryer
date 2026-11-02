@@ -101,7 +101,7 @@ export type VerificationDepth = "FULL" | "QUICK";
 
 export type UiDeviceClass = "DESKTOP" | "MOBILE";
 
-export type UiCatalogViewMode = "COMPACT" | "POSTER_TABLE" | "POSTER";
+export type UiCatalogViewMode = "COMPACT" | "POSTER_TABLE" | "POSTER" | "GRAPH";
 
 export type UiTableColumnSetting = {
   deviceClass: UiDeviceClass;

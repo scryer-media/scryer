@@ -1321,6 +1321,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // The library graph catalog view is a GRAPH value on the existing catalog
+    // view mode enum, so every count below is unchanged.
     assert_eq!(
         public_types.len(),
         1007,

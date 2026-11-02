@@ -446,6 +446,8 @@ pub enum UiCatalogViewModeValue {
     PosterTable,
     /// Poster grid.
     Poster,
+    /// Graph of how the library's titles relate.
+    Graph,
 }
 
 #[derive(SimpleObject, Clone)]

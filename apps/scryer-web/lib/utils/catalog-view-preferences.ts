@@ -5,10 +5,35 @@ import type {
   UiSettings,
 } from "../types/settings.ts";
 
-export type CatalogContentViewMode = "compact" | "poster-table" | "poster";
+export type CatalogContentViewMode =
+  "compact" | "poster-table" | "poster" | "graph";
 export type CatalogFacet = "MOVIES" | "SERIES" | "ANIME";
 export type CatalogTableViewMode = "COMPACT" | "POSTER_TABLE";
 export type CatalogColumnsInput = NonNullable<SetMyCatalogViewInput["columns"]>;
+
+/**
+ * Whether the catalog offers the graph view. It stays off until the server
+ * serves the library graph; while it is off the view-mode selector leaves the
+ * graph out and a saved graph preference shows the poster grid instead.
+ */
+export const DISCOVERY_GRAPH_VIEW_ENABLED = false;
+
+/** The view modes the selector offers, in display order. */
+export function catalogViewModeOptions(
+  graphEnabled: boolean = DISCOVERY_GRAPH_VIEW_ENABLED,
+): CatalogContentViewMode[] {
+  return graphEnabled
+    ? ["compact", "poster-table", "poster", "graph"]
+    : ["compact", "poster-table", "poster"];
+}
+
+/** The view mode to show for a chosen one: the graph falls back to posters while it is off. */
+export function availableCatalogViewMode(
+  mode: CatalogContentViewMode,
+  graphEnabled: boolean = DISCOVERY_GRAPH_VIEW_ENABLED,
+): CatalogContentViewMode {
+  return mode === "graph" && !graphEnabled ? "poster" : mode;
+}
 
 /** The column choices both table layouts share, in display order. */
 const TABLE_VIEW_MODES: readonly CatalogTableViewMode[] = [
@@ -41,6 +66,8 @@ export function catalogViewModeToProfile(
       return "COMPACT";
     case "poster-table":
       return "POSTER_TABLE";
+    case "graph":
+      return "GRAPH";
     default:
       return "POSTER";
   }
@@ -56,6 +83,8 @@ function catalogViewModeFromProfile(
       return "poster-table";
     case "POSTER":
       return "poster";
+    case "GRAPH":
+      return "graph";
     default:
       return null;
   }

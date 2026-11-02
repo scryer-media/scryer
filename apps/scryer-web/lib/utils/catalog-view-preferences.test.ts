@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { UiSettings, UiTableColumnSetting } from "../types/settings.ts";
 import {
+  availableCatalogViewMode,
   catalogColumnsInput,
   catalogDeviceClass,
   catalogFacetForView,
+  catalogViewModeOptions,
   catalogViewModeToProfile,
   savedCatalogViewMode,
   savedCatalogVisibleColumns,
@@ -192,4 +194,31 @@ test("the saved slice lists every supported column for both table layouts", () =
       visible: true,
     },
   ]);
+});
+
+test("the graph view mode is saved and read back", () => {
+  assert.equal(catalogViewModeToProfile("graph"), "GRAPH");
+  const settings: Pick<UiSettings, "catalogViews"> = {
+    catalogViews: [
+      { deviceClass: "DESKTOP", facet: "ANIME", viewMode: "GRAPH" },
+    ],
+  };
+  assert.equal(savedCatalogViewMode(settings, "DESKTOP", "ANIME"), "graph");
+});
+
+test("the graph view is offered only while its gate is on", () => {
+  assert.deepEqual(catalogViewModeOptions(false), [
+    "compact",
+    "poster-table",
+    "poster",
+  ]);
+  assert.deepEqual(catalogViewModeOptions(true), [
+    "compact",
+    "poster-table",
+    "poster",
+    "graph",
+  ]);
+  assert.equal(availableCatalogViewMode("graph", false), "poster");
+  assert.equal(availableCatalogViewMode("graph", true), "graph");
+  assert.equal(availableCatalogViewMode("compact", false), "compact");
 });

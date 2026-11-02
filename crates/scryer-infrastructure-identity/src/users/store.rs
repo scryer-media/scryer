@@ -2621,6 +2621,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_graph_view_mode_round_trips() {
+        let store = test_store().await;
+        let user = UserRepository::create(&store, test_user("catalog_graph_user"))
+            .await
+            .expect("create user");
+
+        UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Anime,
+                view_mode: Some(UiCatalogViewMode::Graph),
+                columns: None,
+            },
+        )
+        .await
+        .expect("save graph view mode");
+
+        let loaded = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load settings")
+            .expect("settings exist");
+        assert_eq!(
+            loaded.catalog_views,
+            vec![UiCatalogViewSetting {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Anime,
+                view_mode: UiCatalogViewMode::Graph,
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn catalog_views_are_kept_per_user_device_class_and_facet() {
         let store = test_store().await;
         let user_a = UserRepository::create(&store, test_user("catalog_user_a"))
