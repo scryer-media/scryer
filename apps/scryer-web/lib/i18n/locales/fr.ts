@@ -1,6 +1,17 @@
 import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Le média n’a pas pu être vérifié et ne peut donc pas remplacer un fichier existant de la bibliothèque.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Cette liste de lecture ou ce fichier complémentaire nécessite une vérification, car il peut dépendre d’autres fichiers.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Le média n’a pas pu être lu. Vérifiez l’accès à la source et réessayez.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "La structure du média est incorrecte. Vérifiez le fichier source avant de l’importer.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Le média est chiffré et n’a pas pu être vérifié.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer ne peut pas se connecter à la passerelle de métadonnées car l’horloge de votre système présente un décalage de plus de 5 minutes. Synchronisez l’horloge de votre système et redémarrez Scryer.",
   "initialAuth.title": "Configurer l’accès à Scryer",

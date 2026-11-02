@@ -1,8 +1,11 @@
+import { MEDIA_REFUSAL_KEYS } from "../utils/media-error-message.ts";
+
 /** Coarse error families from current producer and inventory metadata. */
 const GROUPS: readonly {
   codes: readonly string[];
   reasons: readonly string[];
 }[] = [
+  { codes: ["VALIDATION_ERROR"], reasons: Object.keys(MEDIA_REFUSAL_KEYS) },
   { codes: ["VALIDATION_ERROR"], reasons: ["METADATA_GATEWAY_CLOCK_SKEW"] },
   {
     codes: ["VALIDATION_ERROR"],

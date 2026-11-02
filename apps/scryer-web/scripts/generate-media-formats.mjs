@@ -15,7 +15,7 @@ const declaration = readFileSync(source, "utf8").match(
 )?.[1];
 if (!declaration) throw new Error("Media registry declaration is missing");
 const rowPattern =
-  /\("([a-z0-9]+)", \w+, (Native|StreamLink|DiscImage), \[[^\]]*\]\),/g;
+  /\("([a-z0-9-]+)", \w+, (Native|StreamLink|DiscImage|Playlist|Companion|Unsupported), \w+, \[[^\]]*\]\),/g;
 const rows = [...declaration.matchAll(rowPattern)];
 if (!rows.length || declaration.replace(rowPattern, "").trim()) {
   throw new Error("Media registry declaration has an unsupported row");

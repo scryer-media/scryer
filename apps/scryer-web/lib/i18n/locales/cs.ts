@@ -1,6 +1,17 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "Médium se nepodařilo ověřit, a proto nemůže nahradit existující soubor v knihovně.",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "Tento seznam skladeb nebo doprovodný soubor je nutné zkontrolovat, protože může záviset na dalších souborech.",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "Médium nelze přečíst. Zkontrolujte přístup ke zdroji a zkuste to znovu.",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "Struktura média je poškozená. Před importem zkontrolujte zdrojový soubor.",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "Médium je zašifrované a nelze je ověřit.",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer se nemůže připojit k bráně metadat, protože se systémové hodiny liší o více než 5 minut. Synchronizujte systémové hodiny a restartujte Scryer.",
   "httpRelease.refusal.detailsUnavailable":

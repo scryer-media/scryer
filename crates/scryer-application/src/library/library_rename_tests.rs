@@ -1466,6 +1466,51 @@ fn analysed_dolby_vision_names_its_base_layer() {
 }
 
 #[test]
+fn primary_audio_rename_uses_mono_main_track_instead_of_stereo_commentary() {
+    let mut media = test_media_file("/library/Movie.2024.FLAC2.0.mkv");
+    let mut commentary = media.audio_streams[0].clone();
+    commentary.codec = Some("flac".into());
+    commentary.profile = None;
+    commentary.channels = Some(2);
+    commentary.name = Some("Audio Commentary".into());
+    let mut main = commentary.clone();
+    main.codec = Some("aac".into());
+    main.channels = Some(1);
+    main.name = Some("Original Mono".into());
+    media.audio_streams = vec![commentary, main];
+    media.audio_channels = Some(2); // Older cached summary must not override track evidence.
+    let parsed = parse_release_metadata("Movie.2024.FLAC2.0");
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "1.0");
+    assert_eq!(resolved.common.audio_codec, "AAC");
+
+    media.audio_streams[1].channels = None;
+    media.audio_channels_parsed = Some("2.0".into());
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "");
+    assert_eq!(resolved.common.audio_codec, "AAC");
+
+    media.audio_streams[1].channels = Some(1);
+    media.audio_streams[1].codec = None;
+    media.audio_codec_parsed = Some("FLAC".into());
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "1.0");
+    assert_eq!(resolved.common.audio_codec, "");
+
+    media.audio_streams.clear();
+    media.audio_codec = None;
+    media.audio_profile = None;
+    media.audio_channels = None;
+    let resolved =
+        resolve_rename_common_metadata(Some(&media), &parsed, "Movie", Some("2024"), "mkv");
+    assert_eq!(resolved.common.audio_channels, "2.0");
+    assert_eq!(resolved.common.audio_codec, "FLAC");
+}
+
+#[test]
 fn resolve_rename_common_metadata_prefers_analysis_over_parsed_metadata() {
     let media_file = test_media_file("/library/Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed.mkv");
     let parsed = parse_release_metadata("Movie.2024.720p.WEB-DL.AAC2.0.H.264-Parsed");

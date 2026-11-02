@@ -1,6 +1,17 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "メディアを検証できないため、ライブラリの既存ファイルを置き換えることはできません。",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "このプレイリストまたは付随ファイルは他のファイルに依存する可能性があるため、確認が必要です。",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "メディアを読み取れませんでした。ソースへのアクセスを確認して再試行してください。",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "メディアの構造が不正です。インポートする前にソースファイルを確認してください。",
+  "error.reason.MEDIA_PROBE_ENCRYPTED":
+    "メディアは暗号化されているため、検証できませんでした。",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "システム時計が5分以上ずれているため、Scryerはメタデータゲートウェイに接続できません。システム時計を同期してScryerを再起動してください。",
   "httpRelease.refusal.detailsUnavailable":

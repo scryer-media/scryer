@@ -1365,6 +1365,9 @@ pub(crate) struct PayloadInventory {
     /// files (or are symlinks) and are never deleted by Scryer.
     pub(crate) retained: Vec<String>,
     pub(crate) directories: Vec<String>,
+    /// A reference or companion may depend on any other job file.
+    #[serde(default)]
+    pub(crate) references_require_preservation: bool,
 }
 
 struct PayloadRemovalResult {
@@ -1376,7 +1379,21 @@ struct PayloadRemovalResult {
 /// Payload classes a download client leaves behind for a job: the media
 /// itself, its subtitles and artwork, archive volumes, parity, and the scene
 /// sidecars. Anything else is unknown to Scryer and stays on disk.
+fn payload_reference_requires_preservation(path: &std::path::Path) -> bool {
+    use scryer_media_types::formats::{MediaHandling, media_format_for_path};
+    match media_format_for_path(path).map(|entry| entry.handling) {
+        Some(MediaHandling::Companion | MediaHandling::DiscImage) => true,
+        Some(MediaHandling::Playlist | MediaHandling::StreamLink) => {
+            !crate::media_references::playlist_is_relocatable(path).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
 fn is_payload_class_file(path: &std::path::Path) -> bool {
+    if payload_reference_requires_preservation(path) {
+        return false;
+    }
     if scryer_domain::is_video_file(path) || scryer_domain::is_subtitle_file(path) {
         return true;
     }
@@ -1389,7 +1406,7 @@ fn is_payload_class_file(path: &std::path::Path) -> bool {
     };
     const SIDECAR_EXTENSIONS: &[&str] = &[
         "rar", "zip", "7z", "par2", "nfo", "sfv", "srr", "srs", "txt", "log", "md5", "sha1",
-        "sha256", "url", "diz", "m3u", "torrent", "nzb", "jpg", "jpeg", "png", "webp", "gif",
+        "sha256", "url", "diz", "torrent", "nzb", "jpg", "jpeg", "png", "webp", "gif",
     ];
     if SIDECAR_EXTENSIONS.contains(&extension.as_str()) {
         return true;
@@ -1506,17 +1523,22 @@ pub(crate) fn inventory_payload_directory_blocking(
             let metadata = std::fs::symlink_metadata(&path)
                 .map_err(|error| io_error("inspect download payload entry", &path, error))?;
             if metadata.file_type().is_symlink() {
+                inventory.references_require_preservation = true;
                 inventory.retained.push(relative);
                 continue;
             }
             if metadata.is_dir() {
                 if depth + 1 > PAYLOAD_INVENTORY_MAX_DEPTH {
+                    inventory.references_require_preservation = true;
                     inventory.retained.push(relative);
                     continue;
                 }
                 inventory.directories.push(relative);
                 stack.push((path, depth + 1));
                 continue;
+            }
+            if metadata.is_file() && payload_reference_requires_preservation(&path) {
+                inventory.references_require_preservation = true;
             }
             if !metadata.is_file() || !is_payload_class_file(&path) {
                 inventory.retained.push(relative);
@@ -1624,6 +1646,18 @@ fn remove_inventoried_payload_blocking(
     protected_roots: &[String],
 ) -> AppResult<PayloadRemovalResult> {
     let canonical_target = canonical_payload_directory(target)?;
+    // Check again at execution time, including checkpoints written before reference
+    // preservation existed. A newly added playlist can refer to an inventoried file.
+    let current = inventory_payload_directory_blocking(target)?;
+    if inventory.references_require_preservation || current.references_require_preservation {
+        let mut retained = current.retained;
+        retained.extend(current.entries.into_iter().map(|entry| entry.path));
+        return Ok(PayloadRemovalResult {
+            removed: 0,
+            retained,
+            directory_removed: false,
+        });
+    }
     let mut removed = 0usize;
     let mut retained = Vec::new();
     for entry in &inventory.entries {
@@ -3277,5 +3311,80 @@ mod move_import_source_cleanup_gate_tests {
             std::fs::read(directory.path().join("notes.unknown")).unwrap(),
             b"synthetic payload"
         );
+    }
+    #[test]
+    fn expanded_self_contained_media_cleanup_preserves_unknown_and_changed_files() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in [
+            "Movie.xvid",
+            "Movie.wtv",
+            "Movie.mts",
+            "Movie.ogg",
+            "notes.unknown",
+        ] {
+            std::fs::write(directory.path().join(name), b"synthetic payload").unwrap();
+        }
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        std::fs::write(directory.path().join("Movie.wtv"), b"changed").unwrap();
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 3);
+        assert!(directory.path().join("Movie.wtv").exists());
+        assert!(directory.path().join("notes.unknown").exists());
+    }
+
+    #[test]
+    fn unresolved_references_preserve_all_job_files_even_after_inventory() {
+        for (name, contents) in [
+            ("Movie.m3u", "Movie.mkv"),
+            (
+                "Movie.asx",
+                "<asx><entry><ref href=\"Movie.mkv\"/></entry></asx>",
+            ),
+            (
+                "Movie.wpl",
+                "<smil><body><seq><media src=\"Movie.mkv\"/></seq></body></smil>",
+            ),
+            ("Movie.strm", "../Movie.mkv"),
+            ("VIDEO_TS.ifo", "synthetic companion"),
+            ("Movie.bin", "unproven disc"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::write(directory.path().join("Movie.mkv"), b"synthetic video").unwrap();
+            std::fs::write(directory.path().join("Movie.nfo"), b"synthetic sidecar").unwrap();
+            let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+            // A reference appearing after the durable checkpoint must also protect its target.
+            std::fs::write(directory.path().join(name), contents).unwrap();
+            let result =
+                super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[])
+                    .unwrap();
+            assert_eq!(result.removed, 0, "{name}");
+            assert!(!result.directory_removed);
+            for retained in [name, "Movie.mkv", "Movie.nfo"] {
+                assert!(directory.path().join(retained).exists(), "{retained}");
+            }
+            let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+            assert!(inventory.references_require_preservation);
+            assert_eq!(
+                super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[])
+                    .unwrap()
+                    .removed,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn remote_only_playlists_can_be_cleaned_without_fetching_them() {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["Movie.m3u", "Movie.strm"] {
+            std::fs::write(directory.path().join(name), "https://example.invalid/movie").unwrap();
+        }
+        let inventory = super::inventory_payload_directory_blocking(directory.path()).unwrap();
+        assert!(!inventory.references_require_preservation);
+        let result =
+            super::remove_inventoried_payload_blocking(directory.path(), &inventory, &[]).unwrap();
+        assert_eq!(result.removed, 2);
+        assert!(result.directory_removed);
     }
 }

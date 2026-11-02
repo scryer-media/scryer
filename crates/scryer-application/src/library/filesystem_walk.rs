@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{AppError, AppResult};
-use scryer_domain::is_video_file;
+use scryer_domain::is_standalone_video_file as is_video_file;
 
 /// How many times a directory that reads back with zero entries is re-read
 /// before the empty listing is accepted as the truth.
@@ -558,6 +558,22 @@ mod tests {
             .expect("walk with early stop");
 
         assert_eq!(visited, vec![dir.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn walker_recognizes_video_but_never_catalogs_a_companion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("episode.xvid"), b"synthetic video").unwrap();
+        fs::write(dir.path().join("VIDEO_TS.ifo"), b"synthetic companion").unwrap();
+        let walked = FilesystemWalker::new()
+            .supported_video_files_only()
+            .walk(dir.path())
+            .unwrap();
+        assert_eq!(walked.len(), 1);
+        assert_eq!(walked[0].files, vec![dir.path().join("episode.xvid")]);
+        assert!(scryer_domain::is_video_file(
+            &dir.path().join("VIDEO_TS.ifo")
+        ));
     }
 
     #[test]

@@ -4,7 +4,9 @@ use std::sync::OnceLock;
 
 use chrono::NaiveDate;
 use regex::Regex;
-use scryer_domain::{MediaFacet, MovieEntity, SeriesMovieLink, is_video_file};
+use scryer_domain::{
+    MediaFacet, MovieEntity, SeriesMovieLink, is_standalone_video_file as is_video_file,
+};
 use unicode_normalization::UnicodeNormalization;
 
 use super::*;

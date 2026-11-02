@@ -92,6 +92,7 @@ pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub mod location;
 pub mod maintenance_rules;
 mod media;
+pub(crate) mod media_references;
 mod media_requests;
 pub mod media_server_signals;
 mod media_servers;
@@ -335,7 +336,6 @@ pub use app_usecase_rss::RssSyncReport;
 pub use audio_requirements::inferred_audio_track_language;
 #[cfg(test)]
 pub(crate) use audio_requirements::missing_required_audio_languages;
-#[cfg(feature = "runtime-media-analysis")]
 pub(crate) use audio_requirements::{RequiredAudioVerdict, classify_required_audio};
 pub(crate) use audio_requirements::{
     normalize_required_audio_languages, normalize_required_audio_requirements,

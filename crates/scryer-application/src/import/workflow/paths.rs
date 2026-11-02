@@ -924,6 +924,37 @@ pub(crate) fn import_video_destination_extension(
         .unwrap_or("mkv")
 }
 
+#[cfg(test)]
+mod media_registry_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn every_registered_extension_survives_discovery_and_destination_naming() {
+        let dir = tempfile::tempdir().unwrap();
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
+            let name = format!("Fixture.Payload.{}_", entry.extension.to_ascii_uppercase());
+            std::fs::write(dir.path().join(name), b"fixture").unwrap();
+        }
+        std::fs::write(dir.path().join("Fixture.Payload.wtv.exe"), b"MZfixture").unwrap();
+        let files = discover_video_files(dir.path(), false).unwrap();
+        assert_eq!(
+            files.len(),
+            scryer_media_types::formats::MEDIA_FORMATS.len()
+        );
+        for entry in scryer_media_types::formats::MEDIA_FORMATS {
+            let path = dir.path().join(format!(
+                "Fixture.Payload.{}_",
+                entry.extension.to_ascii_uppercase()
+            ));
+            assert!(files.iter().any(|file| file.path() == path));
+            assert_eq!(
+                import_video_destination_extension(&path, None),
+                entry.extension
+            );
+        }
+    }
+}
+
 /// A video file an import is about to process, plus the name parsing should
 /// read for it.
 ///

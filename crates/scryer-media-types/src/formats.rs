@@ -14,9 +14,17 @@ pub enum MediaFormat {
     Flv,
     Ogg,
     Ogm,
+    RealMedia,
+    Dv,
+    H264,
+    MpegVideo,
+    Svq3,
     MpegProgram,
     StreamLink,
     DiscImage,
+    Playlist,
+    Companion,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +32,17 @@ pub enum MediaHandling {
     Native,
     StreamLink,
     DiscImage,
+    Playlist,
+    Companion,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaProbeCapability {
+    Native,
+    ContentOnly,
+    Unsupported,
+    NotApplicable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,16 +51,18 @@ pub struct MediaFormatRegistration {
     pub format: MediaFormat,
     pub container_aliases: &'static [&'static str],
     pub handling: MediaHandling,
+    pub probe: MediaProbeCapability,
 }
 
 macro_rules! media_formats {
-    ($(($extension:literal, $format:ident, $handling:ident, [$($alias:literal),*])),* $(,)?) => {
+    ($(($extension:literal, $format:ident, $handling:ident, $probe:ident, [$($alias:literal),*])),* $(,)?) => {
         pub const MEDIA_FORMATS: &[MediaFormatRegistration] = &[$(
             MediaFormatRegistration {
                 extension: $extension,
                 format: MediaFormat::$format,
                 container_aliases: &[$($alias),*],
                 handling: MediaHandling::$handling,
+                probe: MediaProbeCapability::$probe,
             },
         )*];
         pub const VIDEO_EXTENSIONS: &[&str] = &[$($extension),*];
@@ -51,23 +72,56 @@ macro_rules! media_formats {
 // Container aliases belong to the preferred suffix; filename aliases retain
 // their own suffix when an existing file is imported.
 media_formats! {
-    ("mkv", Matroska, Native, ["matroska", "mkv"]),
-    ("mp4", Mp4, Native, ["mp4"]),
-    ("avi", Avi, Native, ["avi"]),
-    ("wmv", Asf, Native, ["asf", "wmv"]),
-    ("mov", QuickTime, Native, ["mov"]),
-    ("m4v", Mp4, Native, ["m4v"]),
-    ("ts", MpegTs, Native, ["mpegts", "ts"]),
-    ("m2ts", MpegTs, Native, ["m2ts"]),
-    ("webm", WebM, Native, ["webm"]),
-    ("flv", Flv, Native, ["flv"]),
-    ("ogv", Ogg, Native, ["ogg", "ogv"]),
-    ("ogm", Ogm, Native, ["ogm"]),
-    ("strm", StreamLink, StreamLink, []),
-    ("mpg", MpegProgram, Native, ["mpeg", "mpg"]),
-    ("mpeg", MpegProgram, Native, []),
-    ("vob", MpegProgram, Native, ["vob"]),
-    ("iso", DiscImage, DiscImage, []),
+    ("mkv", Matroska, Native, Native, ["matroska", "mkv"]),
+    ("mp4", Mp4, Native, Native, ["mp4"]),
+    ("avi", Avi, Native, Native, ["avi"]),
+    ("wmv", Asf, Native, Native, ["asf", "wmv"]),
+    ("mov", QuickTime, Native, Native, ["mov"]),
+    ("m4v", Mp4, Native, Native, ["m4v"]),
+    ("ts", MpegTs, Native, Native, ["mpegts", "ts"]),
+    ("m2ts", MpegTs, Native, Native, ["m2ts"]),
+    ("webm", WebM, Native, Native, ["webm"]),
+    ("flv", Flv, Native, Native, ["flv"]),
+    ("ogv", Ogg, Native, Native, ["ogg", "ogv"]),
+    ("ogm", Ogm, Native, Native, ["ogm"]),
+    ("strm", StreamLink, StreamLink, NotApplicable, []),
+    ("mpg", MpegProgram, Native, Native, ["mpeg", "mpg"]),
+    ("mpeg", MpegProgram, Native, Native, []),
+    ("vob", MpegProgram, Native, Native, ["vob"]),
+    ("iso", DiscImage, DiscImage, NotApplicable, []),
+    ("3gp", Mp4, Native, Native, []),
+    ("asf", Asf, Native, Native, []),
+    ("asx", Playlist, Playlist, NotApplicable, []),
+    ("avc", H264, Native, Native, ["h264", "avc"]),
+    ("bin", DiscImage, DiscImage, NotApplicable, []),
+    ("bivx", Avi, Native, ContentOnly, []),
+    ("dat", MpegProgram, Native, ContentOnly, []),
+    ("divx", Avi, Native, ContentOnly, []),
+    ("dvr-ms", Asf, Native, Native, []),
+    ("dv", Dv, Native, Native, ["dv"]),
+    ("fli", Unsupported, Unsupported, Unsupported, []),
+    ("ifo", Companion, Companion, NotApplicable, []),
+    ("img", DiscImage, DiscImage, NotApplicable, []),
+    ("m2t", MpegTs, Native, Native, []),
+    ("m2v", MpegVideo, Native, Native, ["mpegvideo", "m2v"]),
+    ("m3u", Playlist, Playlist, NotApplicable, []),
+    ("mts", MpegTs, Native, Native, []),
+    ("nrg", DiscImage, DiscImage, NotApplicable, []),
+    ("nsv", Unsupported, Unsupported, Unsupported, []),
+    ("nuv", Unsupported, Unsupported, Unsupported, []),
+    ("ogg", Ogg, Native, Native, []),
+    ("ogx", Ogg, Native, Native, []),
+    ("pva", Unsupported, Unsupported, Unsupported, []),
+    ("qt", QuickTime, Native, Native, []),
+    ("rm", RealMedia, Native, Native, ["realmedia", "rm"]),
+    ("rmvb", RealMedia, Native, Native, []),
+    ("svq3", Svq3, Native, ContentOnly, []),
+    ("ty", Unsupported, Unsupported, Unsupported, []),
+    ("viv", Unsupported, Unsupported, Unsupported, []),
+    ("vp3", Unsupported, Unsupported, Unsupported, []),
+    ("wpl", Playlist, Playlist, NotApplicable, []),
+    ("wtv", Unsupported, Unsupported, Unsupported, []),
+    ("xvid", Avi, Native, ContentOnly, []),
 }
 
 pub fn media_format_for_extension(extension: &str) -> Option<&'static MediaFormatRegistration> {
@@ -112,8 +166,32 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn recognition_probe_capability_and_handling_are_independent() {
+        for extension in ["dat", "bivx", "divx", "xvid", "svq3"] {
+            let entry = media_format_for_extension(extension).unwrap();
+            assert_eq!(entry.handling, MediaHandling::Native);
+            assert_eq!(entry.probe, MediaProbeCapability::ContentOnly);
+        }
+        for extension in ["fli", "nsv", "nuv", "pva", "ty", "viv", "vp3", "wtv"] {
+            let entry = media_format_for_extension(extension).unwrap();
+            assert_eq!(entry.handling, MediaHandling::Unsupported);
+            assert_eq!(entry.probe, MediaProbeCapability::Unsupported);
+        }
+        for extension in ["asx", "m3u", "wpl"] {
+            assert_eq!(
+                media_format_for_extension(extension).unwrap().handling,
+                MediaHandling::Playlist
+            );
+        }
+        assert_eq!(
+            media_format_for_extension("ifo").unwrap().handling,
+            MediaHandling::Companion
+        );
+    }
+
+    #[test]
     fn registry_is_complete_and_unambiguous() {
-        assert_eq!(MEDIA_FORMATS.len(), 17);
+        assert_eq!(MEDIA_FORMATS.len(), 50);
         assert_eq!(VIDEO_EXTENSIONS.len(), MEDIA_FORMATS.len());
         let mut extensions = HashSet::new();
         let mut aliases = HashSet::new();

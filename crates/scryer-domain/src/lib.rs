@@ -3118,6 +3118,13 @@ pub fn is_video_file(path: &std::path::Path) -> bool {
     canonical_video_extension(path).is_some()
 }
 
+/// A recognized video that can represent its own library item, rather than a companion.
+pub fn is_standalone_video_file(path: &std::path::Path) -> bool {
+    scryer_media_types::formats::media_format_for_path(path).is_some_and(|entry| {
+        entry.handling != scryer_media_types::formats::MediaHandling::Companion
+    })
+}
+
 pub fn is_disc_image(path: &std::path::Path) -> bool {
     scryer_media_types::formats::media_format_for_path(path).is_some_and(|entry| {
         entry.handling == scryer_media_types::formats::MediaHandling::DiscImage

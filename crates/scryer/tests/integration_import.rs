@@ -8,6 +8,9 @@ mod persistence_tests;
 #[path = "import/submission_race_tests.rs"]
 mod submission_race_tests;
 
+#[path = "import/extended_media_tests.rs"]
+mod extended_media_tests;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;

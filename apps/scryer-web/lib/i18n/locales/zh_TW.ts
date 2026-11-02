@@ -1,6 +1,16 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_TW: LocaleDictionary = {
+  "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
+    "無法驗證此媒體，因此不能取代媒體庫中的現有檔案。",
+  "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
+    "此播放清單或附屬檔案可能依賴其他檔案，需要檢查。",
+  "error.reason.MEDIA_PROBE_IO_FAILED":
+    "無法讀取媒體。請檢查來源檔案的存取權限後重試。",
+  "error.reason.MEDIA_PROBE_MALFORMED":
+    "媒體結構格式錯誤。請在匯入前檢查來源檔案。",
+  "error.reason.MEDIA_PROBE_ENCRYPTED": "媒體已加密，無法驗證。",
+
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "系統時鐘偏差超過 5 分鐘，Scryer 無法連線至中繼資料閘道。請同步系統時鐘並重新啟動 Scryer。",
   "httpRelease.refusal.detailsUnavailable":

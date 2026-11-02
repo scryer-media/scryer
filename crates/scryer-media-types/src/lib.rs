@@ -3,7 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 mod audio;
-pub use audio::{audio_codec_rank_for_release_label, normalize_audio_codec_for_release};
+pub use audio::{
+    audio_codec_rank_for_release_label, normalize_audio_codec_for_release,
+    primary_audio_stream_index,
+};
 pub mod formats;
 
 pub const ANALYSIS_REVISION: u32 = 1;

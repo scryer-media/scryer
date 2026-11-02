@@ -464,3 +464,49 @@ test("behavior helpers require the expected broad code and reason together", () 
     "This sentence was reworded",
   );
 });
+
+test("media review conditions translate in every supported language without parsing prose", async () => {
+  const reasons = [
+    "MEDIA_UNVERIFIED_REPLACEMENT",
+    "MEDIA_REFERENCES_REQUIRE_REVIEW",
+    "MEDIA_PROBE_IO_FAILED",
+    "MEDIA_PROBE_MALFORMED",
+    "MEDIA_PROBE_ENCRYPTED",
+  ];
+  for (const language of [
+    "eng",
+    "fra",
+    "deu",
+    "spa",
+    "ita",
+    "por",
+    "kor",
+    "zho",
+    "zh-HK",
+    "zh-TW",
+    "jpn",
+    "rus",
+    "nld",
+    "ces",
+  ]) {
+    await loadLocaleDictionary(language);
+    for (const reason of reasons) {
+      const key = `error.reason.${reason}`;
+      const expected = t(key, language);
+      assert.notEqual(expected, key);
+      assert.equal(
+        userFacingGraphQlErrorMessage(coded(reason), "Failed", (key) =>
+          t(key, language),
+        ),
+        expected,
+      );
+      assert.equal(
+        userFacingGraphQlErrorMessage(
+          coded(reason, "REPOSITORY_ERROR"),
+          "Failed",
+        ),
+        "This sentence was reworded",
+      );
+    }
+  }
+});
