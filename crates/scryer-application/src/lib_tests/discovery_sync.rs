@@ -7944,3 +7944,543 @@ async fn discovery_sync_fails_an_abandoned_library_scan_session() {
         "discovery work must resume once the abandoned scan is finished"
     );
 }
+
+fn watchlist_subscription(id: &str, owner_user_id: &str) -> scryer_domain::ListSubscription {
+    let mut subscription = crate::lists::test_support::subscription(id);
+    subscription.scope = scryer_domain::ListScope::Personal;
+    subscription.owner_user_id = owner_user_id.to_string();
+    subscription.credential_id = Some(format!("{id}-account"));
+    subscription.source.provider = "plex".to_string();
+    subscription.source.source_type = "watchlist".to_string();
+    subscription.source.params.clear();
+    subscription
+}
+
+fn watchlist_row(
+    subscription_id: &str,
+    tmdb_id: &str,
+    added_minute: i64,
+    state: scryer_domain::ListMembershipState,
+) -> scryer_domain::ListMembership {
+    let mut row = crate::lists::test_support::membership(subscription_id, tmdb_id, state);
+    row.external_ids = vec![crate::lists::test_support::tmdb(tmdb_id)];
+    row.display_title = Some(format!("Fixture Row {tmdb_id}"));
+    row.first_seen_at = crate::lists::test_support::at(added_minute);
+    row
+}
+
+fn pending_movie_request(id: &str, tmdb_id: &str) -> scryer_domain::MediaRequest {
+    let now = Utc.timestamp_opt(2_000, 0).unwrap();
+    scryer_domain::MediaRequest {
+        id: id.to_string(),
+        library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+        facet: MediaFacet::Movie,
+        status: scryer_domain::MediaRequestStatus::Pending,
+        identity_fingerprint: format!("fingerprint-{id}"),
+        title: "Fixture Requested Movie".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        background_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        requested_monitor_selection: None,
+        resolved_by_user_id: None,
+        resolved_at: None,
+        created_title_id: None,
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
+        external_ids: vec![ExternalId::new("tmdb", tmdb_id)],
+        requesters: Vec::new(),
+        origin: scryer_domain::MediaRequestOrigin::default(),
+        created_by_user_id: "requester-fixture".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn watchlist_home_query() -> DiscoveryHomeQuery {
+    DiscoveryHomeQuery {
+        include_public: true,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    }
+}
+
+fn watchlist_section_titles(home: &crate::ports::DiscoveryHomeResult) -> Option<Vec<String>> {
+    home.personalized_sections
+        .iter()
+        .find(|section| section.section_type == "FROM_YOUR_WATCHLIST")
+        .map(|section| {
+            section
+                .items
+                .iter()
+                .map(|item| item.display_title.clone())
+                .collect()
+        })
+}
+
+#[tokio::test]
+async fn discovery_home_shows_each_viewer_only_their_own_watchlist() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let media_requests = Arc::new(super::MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+            .with_media_requests(media_requests.clone())
+    });
+    let permissions = || {
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ]
+    };
+    let (_, first_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-first", "password", permissions()).await;
+    let (_, second_viewer) =
+        create_authenticated_user(&app, &admin, "watchlist-second", "password", permissions())
+            .await;
+    let (_, unlinked_viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-unlinked",
+        "password",
+        permissions(),
+    )
+    .await;
+
+    let mut owned = test_title(
+        "watchlist-owned-title",
+        "Fixture Owned Movie",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "7003")],
+    );
+    owned.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    titles.store.lock().await.push(owned);
+    media_requests
+        .requests
+        .lock()
+        .await
+        .push(pending_movie_request("watchlist-request", "7004"));
+
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.extend(
+        [
+            ("7001", "Fixture Watchlist Alpha"),
+            ("7002", "Fixture Watchlist Beta"),
+            ("7003", "Fixture Owned Movie"),
+            ("7004", "Fixture Requested Movie"),
+            ("7005", "Fixture Declined Movie"),
+            ("7006", "Fixture Library Movie"),
+            ("7101", "Fixture Second Viewer Movie"),
+        ]
+        .into_iter()
+        .map(|(tmdb_id, title)| {
+            discovery_item_record(
+                "public-watchlist-run",
+                "public-watchlist-run",
+                None,
+                &format!("tmdb:movie:{tmdb_id}"),
+                title,
+                "movie",
+                10.0,
+                &["Drama"],
+                &[],
+                false,
+                true,
+            )
+        }),
+    );
+
+    let first = watchlist_subscription("watchlist-first", &first_viewer.id);
+    let second = watchlist_subscription("watchlist-second", &second_viewer.id);
+    // A personal list of the first viewer's that is not a watchlist feeds
+    // nothing here.
+    let mut other_list = watchlist_subscription("watchlist-first-other", &first_viewer.id);
+    other_list.source.source_type = "user_list".to_string();
+    *lists.subscriptions.lock().unwrap() = vec![first, second, other_list];
+    use scryer_domain::ListMembershipState as State;
+    lists.insert_rows(vec![
+        watchlist_row("watchlist-first", "7001", 10, State::Pending),
+        watchlist_row("watchlist-first", "7002", 20, State::Pending),
+        watchlist_row("watchlist-first", "7003", 30, State::Pending),
+        watchlist_row("watchlist-first", "7004", 40, State::Pending),
+        watchlist_row("watchlist-first", "7005", 50, State::Excluded),
+        // In no discovery pool this viewer can see: a card from its row.
+        watchlist_row("watchlist-first", "7999", 60, State::Pending),
+        // In a library somewhere: never the watchlist's to offer.
+        watchlist_row("watchlist-first", "7006", 70, State::InLibrary),
+        watchlist_row("watchlist-first-other", "7002", 5, State::Pending),
+        watchlist_row("watchlist-second", "7101", 10, State::Pending),
+    ]);
+    // Known by an AniList id alone: a request could not add it, so no card.
+    let mut anilist_only = watchlist_row("watchlist-first", "7998", 80, State::Pending);
+    anilist_only.external_ids = vec![ExternalId::new("anilist", "7998")];
+    lists.insert_rows(vec![anilist_only]);
+
+    let first_home = app
+        .discovery_home(&first_viewer, watchlist_home_query())
+        .await
+        .expect("first viewer home");
+    assert_eq!(
+        first_home
+            .personalized_sections
+            .first()
+            .map(|section| section.section_type.as_str()),
+        Some("FROM_YOUR_WATCHLIST")
+    );
+    assert_eq!(
+        watchlist_section_titles(&first_home),
+        Some(vec![
+            "Fixture Watchlist Beta".to_string(),
+            "Fixture Watchlist Alpha".to_string(),
+            "Fixture Row 7999".to_string(),
+        ])
+    );
+
+    let second_home = app
+        .discovery_home(&second_viewer, watchlist_home_query())
+        .await
+        .expect("second viewer home");
+    assert_eq!(
+        watchlist_section_titles(&second_home),
+        Some(vec!["Fixture Second Viewer Movie".to_string()])
+    );
+
+    // The row card reads back for the add or request action, for its owner
+    // only.
+    let detail_query = |target_key: &str| DiscoveryItemDetailQuery {
+        target_key: target_key.to_string(),
+        include_unresolved: true,
+    };
+    let row_card = app
+        .discovery_item_detail(&first_viewer, detail_query("tmdb:movie:7999"))
+        .await
+        .expect("row card detail")
+        .expect("the owner reads their row card");
+    assert_eq!(row_card.display_title, "Fixture Row 7999");
+    assert_eq!(row_card.target_key, "tmdb:movie:7999");
+    assert!(!row_card.resolved);
+    assert_eq!(
+        app.discovery_item_detail(&second_viewer, detail_query("tmdb:movie:7999"))
+            .await
+            .expect("other viewer detail"),
+        None
+    );
+    assert_eq!(
+        app.discovery_item_detail(&first_viewer, detail_query("anilist:anime:7998"))
+            .await
+            .expect("anilist-only detail"),
+        None
+    );
+
+    let unlinked_home = app
+        .discovery_home(&unlinked_viewer, watchlist_home_query())
+        .await
+        .expect("unlinked viewer home");
+    assert_eq!(watchlist_section_titles(&unlinked_home), None);
+}
+
+#[tokio::test]
+async fn discovery_home_has_no_watchlist_section_when_personalized_discovery_is_off() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(true).await;
+    let (app, admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway, settings.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-switched-off",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-switched-off", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-switched-off",
+        "7001",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+
+    let shown = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery on");
+    assert!(watchlist_section_titles(&shown).is_some());
+
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            "false",
+        )
+        .await;
+    let hidden = app
+        .discovery_home(&viewer, watchlist_home_query())
+        .await
+        .expect("home with personalized discovery off");
+    assert_eq!(watchlist_section_titles(&hidden), None);
+}
+
+/// Titles on the library's reason rails and the FOR_YOU sweep: the rails the
+/// watchlist claims its titles from.
+fn reason_rail_titles(home: &crate::ports::DiscoveryHomeResult) -> Vec<String> {
+    home.personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_type.starts_with("BECAUSE_YOU_LIKE")
+                || section.section_type == "FOR_YOU"
+        })
+        .flat_map(|section| section.items.iter())
+        .map(|item| item.display_title.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_claims_its_titles_from_the_library_rails() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    let (_, viewer) = create_authenticated_user(
+        &app,
+        &admin,
+        "watchlist-claims",
+        "password",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::MediaRequest,
+        ],
+    )
+    .await;
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut library_title = test_title(
+        "watchlist-claims-library-title",
+        "Fixture Library Title",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "8000")],
+    );
+    library_title.library_id = movie_library_id.clone();
+    titles.store.lock().await.push(library_title);
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("watchlist-claims-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .push(DiscoverySubmittedSubjectRecord {
+            run_id: "watchlist-claims-run".to_string(),
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some("Fixture Library Title".to_string()),
+            external_ids_json: "[]".to_string(),
+            raw_subject_json: "{}".to_string(),
+        });
+    discovery.items.lock().await.extend((0..24).map(|index| {
+        let mut item = discovery_item_record(
+            "watchlist-claims-run",
+            "watchlist-claims-run",
+            None,
+            &format!("tmdb:movie:{}", 8_100 + index),
+            &format!("Fixture Candidate {index}"),
+            "movie",
+            1_000.0 - index as f64,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        );
+        item.matched_subject_keys = vec!["tmdb:movie:8000".to_string()];
+        item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+            subject_key: "tmdb:movie:8000".to_string(),
+            title_id: Some("watchlist-claims-library-title".to_string()),
+            library_id: Some(movie_library_id.clone()),
+        }];
+        item
+    }));
+    let query = || DiscoveryHomeQuery {
+        include_public: false,
+        include_personalized: true,
+        include_unresolved: true,
+        limit_per_section: 10,
+        filters: DiscoveryHomeFilters::default(),
+    };
+
+    let before = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home before the watchlist");
+    assert!(
+        reason_rail_titles(&before).contains(&"Fixture Candidate 0".to_string()),
+        "fixture must offer the candidate on a library rail first"
+    );
+
+    *lists.subscriptions.lock().unwrap() =
+        vec![watchlist_subscription("watchlist-claims", &viewer.id)];
+    lists.insert_rows(vec![watchlist_row(
+        "watchlist-claims",
+        "8100",
+        10,
+        scryer_domain::ListMembershipState::Pending,
+    )]);
+    let with_watchlist = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with the watchlist");
+    assert_eq!(
+        watchlist_section_titles(&with_watchlist),
+        Some(vec!["Fixture Candidate 0".to_string()])
+    );
+    assert!(!reason_rail_titles(&with_watchlist).contains(&"Fixture Candidate 0".to_string()));
+
+    // A member whose list policy is none has no watchlist, and nothing is
+    // claimed on its behalf.
+    lists
+        .policies
+        .lock()
+        .unwrap()
+        .push(scryer_domain::UserListPolicy {
+            user_id: viewer.id.clone(),
+            policy: scryer_domain::ListPolicy::None,
+            updated_by_user_id: None,
+            updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        });
+    let refused = app
+        .discovery_home(&viewer, query())
+        .await
+        .expect("home with personal lists refused");
+    assert_eq!(watchlist_section_titles(&refused), None);
+    assert!(reason_rail_titles(&refused).contains(&"Fixture Candidate 0".to_string()));
+}
+
+#[tokio::test]
+async fn discovery_home_watchlist_needs_an_enabled_personal_linked_list() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_discovery_store(discovery.clone())
+            .with_list_store(lists.clone())
+    });
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_public_feed_generation_id: Some("public-watchlist-run".to_string()),
+        updated_at: Utc.timestamp_opt(3_000, 0).unwrap(),
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery.items.lock().await.push(discovery_item_record(
+        "public-watchlist-run",
+        "public-watchlist-run",
+        None,
+        "tmdb:movie:7001",
+        "Fixture Watchlist Alpha",
+        "movie",
+        10.0,
+        &["Drama"],
+        &[],
+        false,
+        true,
+    ));
+
+    let variants: [(&str, fn(&mut scryer_domain::ListSubscription)); 3] = [
+        ("public", |subscription| {
+            subscription.scope = scryer_domain::ListScope::Public;
+        }),
+        ("disabled", |subscription| subscription.enabled = false),
+        ("unlinked", |subscription| subscription.credential_id = None),
+    ];
+    for (name, adjust) in variants {
+        let (_, viewer) = create_authenticated_user(
+            &app,
+            &admin,
+            &format!("watchlist-{name}"),
+            "password",
+            vec![
+                TestPermissionPreset::CatalogView,
+                TestPermissionPreset::MediaRequest,
+            ],
+        )
+        .await;
+        let subscription_id = format!("watchlist-{name}");
+        let mut subscription = watchlist_subscription(&subscription_id, &viewer.id);
+        adjust(&mut subscription);
+        lists.subscriptions.lock().unwrap().push(subscription);
+        lists.insert_rows(vec![watchlist_row(
+            &subscription_id,
+            "7001",
+            10,
+            scryer_domain::ListMembershipState::Pending,
+        )]);
+
+        let home = app
+            .discovery_home(&viewer, watchlist_home_query())
+            .await
+            .expect("home");
+        assert_eq!(watchlist_section_titles(&home), None, "{name} list");
+    }
+}

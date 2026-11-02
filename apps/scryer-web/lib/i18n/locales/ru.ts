@@ -312,6 +312,7 @@ const ru: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "Любимые за всё время",
   "discovery.section.rightNow": "Прямо сейчас",
   "discovery.section.fromYourTaste": "На основе ваших предпочтений",
+  "discovery.section.fromYourWatchlist": "Из вашего списка «Буду смотреть»",
   "discovery.section.almostComplete": "Почти завершено",
   "discovery.section.nextAnimeSeason": "Следующий сезон аниме",
   "discovery.section.popularInAnime": "Популярное в аниме",

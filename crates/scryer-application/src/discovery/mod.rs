@@ -230,6 +230,7 @@ mod home;
 mod medium;
 mod rail_labels;
 mod records;
+mod watchlist;
 
 use catalog::*;
 use context::*;
@@ -237,6 +238,7 @@ use home::*;
 use medium::*;
 use rail_labels::*;
 use records::*;
+use watchlist::*;
 
 pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
 #[cfg(test)]
@@ -451,8 +453,9 @@ impl AppUseCase {
         // The instance-wide switch is a second input to the same per-caller
         // gate, so every read path below serves public rows only when it is
         // off without needing a branch of its own.
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let can_view_personalized =
-            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
+            !readable_library_ids.is_empty() && personalized_discovery_enabled;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -515,6 +518,25 @@ impl AppUseCase {
                 );
             }
         }
+
+        // The viewer's own watchlist composes ahead of every library rail and
+        // claims its titles first, so a title the viewer already asked for is
+        // never offered again as "because you like".
+        let watchlist = if query.include_personalized && personalized_discovery_enabled {
+            self.discovery_watchlist_composition(
+                actor,
+                &visibility,
+                &owned_visibility,
+                &status.state,
+                can_view_personalized,
+                &query.filters,
+                include_unresolved,
+                limit,
+            )
+            .await?
+        } else {
+            DiscoveryWatchlistComposition::default()
+        };
 
         let mut personalized_sections = Vec::new();
         let mut complete_collection = None;
@@ -589,6 +611,7 @@ impl AppUseCase {
                 &personalized_items,
                 &library_profile,
                 &candidates_by_id,
+                &watchlist.claimed_item_keys,
                 rail_settings,
                 include_unresolved,
                 limit,
@@ -676,6 +699,11 @@ impl AppUseCase {
             &personalized_sections,
             &candidates_by_id,
         );
+        // Added after the hero is chosen: watchlist cards are resolved outside
+        // the candidate pool, so they carry no candidate for hero hydration.
+        if let Some(watchlist_section) = watchlist.section {
+            personalized_sections.insert(0, watchlist_section);
+        }
         let mut result = DiscoveryHomeResult {
             status,
             hero_item,
@@ -819,6 +847,7 @@ impl AppUseCase {
             readable_library_ids: readable_library_id_list,
             allowed_media_kinds: visibility.sorted_allowed_media_kinds(),
             filters: query,
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit,
             offset,
         };
@@ -889,6 +918,7 @@ impl AppUseCase {
                 offset: 0,
                 ..DiscoveryItemsQuery::default()
             },
+            home_filters: crate::ports::DiscoveryHomeFilters::default(),
             limit: 1,
             offset: 0,
         };
@@ -899,7 +929,16 @@ impl AppUseCase {
             .query_discovery_items(&storage_query)
             .await?;
         if page.items.is_empty() {
-            return Ok(None);
+            // A watchlist card built from the viewer's own list rows has no
+            // stored item; it reads back under the rail's own gates.
+            return self
+                .discovery_watchlist_row_card_detail(
+                    actor,
+                    &visibility,
+                    target_key,
+                    query.include_unresolved,
+                )
+                .await;
         }
         if let Some(context_run_id) = context_run_id.as_deref() {
             let submitted_subjects = self

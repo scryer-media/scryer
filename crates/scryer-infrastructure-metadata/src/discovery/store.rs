@@ -3264,12 +3264,23 @@ fn build_discovery_items_sql(
 
     let mut args = Vec::new();
     let mut sources = Vec::new();
+    // The home filter bar reads the joined title row, so it narrows each
+    // source where `t` is in scope rather than the projected union.
+    let home_filter_clause = |args: &mut Vec<SqlArg>| {
+        if query.home_filters == DiscoveryHomeFilters::default() {
+            return String::new();
+        }
+        let mut clauses = Vec::new();
+        append_discovery_home_filters(&mut clauses, args, &query.home_filters);
+        format!(" AND {}", clauses.join(" AND "))
+    };
     if let Some(context_run_id) = query.context_run_id.as_deref()
         && !query.readable_library_ids.is_empty()
     {
         let mut source_args = vec![SqlArg::Text(context_run_id.to_string())];
         let provenance_clause =
             library_provenance_exists_clause("i", &query.readable_library_ids, &mut source_args);
+        let filter_clause = home_filter_clause(&mut source_args);
         args.extend(source_args);
         sources.push(format!(
             "SELECT {}, 0 AS source_priority
@@ -3278,19 +3289,20 @@ fn build_discovery_items_sql(
                ON t.id = i.discovery_title_id
              WHERE i.base_generation_id = {{}}
                AND i.tombstoned_at IS NULL
-               AND {provenance_clause}",
+               AND {provenance_clause}{filter_clause}",
             discovery_item_projection(datastore, "i", "t")
         ));
     }
     if let Some(public_run_id) = query.public_run_id.as_deref() {
         args.push(SqlArg::Text(public_run_id.to_string()));
+        let filter_clause = home_filter_clause(&mut args);
         sources.push(format!(
             "SELECT {}, 1 AS source_priority
              FROM discovery_items i
              JOIN discovery_titles t
                ON t.id = i.discovery_title_id
              WHERE i.base_generation_id = {{}}
-               AND i.tombstoned_at IS NULL",
+               AND i.tombstoned_at IS NULL{filter_clause}",
             discovery_item_projection(datastore, "i", "t")
         ));
     }
@@ -8091,6 +8103,7 @@ mod tests {
         second_movie.sort_title = Some("Second Movie".to_string());
         second_movie.content_type = Some("movie".to_string());
         second_movie.rank_score = Some(0.2);
+        second_movie.year = Some(2099);
         let mut unknown_content_type = movie_template;
         unknown_content_type.id = "item-row-unknown-kind".to_string();
         unknown_content_type.target_key = "tmdb:movie:12".to_string();
@@ -8114,6 +8127,7 @@ mod tests {
                     include_unresolved: false,
                     ..DiscoveryItemsQuery::default()
                 },
+                home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 0,
             })
@@ -8132,6 +8146,7 @@ mod tests {
                     include_unresolved: false,
                     ..DiscoveryItemsQuery::default()
                 },
+                home_filters: DiscoveryHomeFilters::default(),
                 limit: 1,
                 offset: 1,
             })
@@ -8139,6 +8154,43 @@ mod tests {
             .expect("second movie page should preserve filtered pagination");
         assert_eq!(second_movie_page.total_count, 2);
         assert_eq!(second_movie_page.items[0].target_key, "tmdb:movie:11");
+        let filtered_query = |home_filters: DiscoveryHomeFilters| DiscoveryItemsStorageQuery {
+            context_run_id: Some("run-1".to_string()),
+            public_run_id: None,
+            readable_library_ids: vec!["series-library-a".to_string()],
+            allowed_media_kinds: vec!["movie".to_string()],
+            filters: DiscoveryItemsQuery {
+                target_keys: vec!["tmdb:movie:10".to_string(), "tmdb:movie:11".to_string()],
+                include_unresolved: false,
+                ..DiscoveryItemsQuery::default()
+            },
+            home_filters,
+            limit: 10,
+            offset: 0,
+        };
+        let year_page = store
+            .query_discovery_items(&filtered_query(DiscoveryHomeFilters {
+                maximum_year: Some(2050),
+                ..DiscoveryHomeFilters::default()
+            }))
+            .await
+            .expect("home filters should narrow a target-key query");
+        assert_eq!(
+            year_page
+                .items
+                .iter()
+                .map(|item| item.target_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tmdb:movie:10"]
+        );
+        let chip_page = store
+            .query_discovery_items(&filtered_query(DiscoveryHomeFilters {
+                content_types: vec!["series".to_string()],
+                ..DiscoveryHomeFilters::default()
+            }))
+            .await
+            .expect("media-type chips should narrow a target-key query");
+        assert_eq!(chip_page.total_count, 0);
 
         store
             .upsert_pending_discovery_context_change(&DiscoveryPendingContextChangeRecord {

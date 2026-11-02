@@ -98,11 +98,17 @@ function worldShelfSlotType(section: { sectionType: string }) {
   return MERGED_SECTION_TARGETS.get(sectionType) ?? sectionType;
 }
 
+// The viewer's own watchlist, minus what the library has or someone already
+// asked for. The server claims these titles before any reason rail, so it leads
+// the personalized shelf.
+export const FROM_YOUR_WATCHLIST_SECTION_TYPE = "FROM_YOUR_WATCHLIST";
+
 // Personalized shelf, most specific reason first. Theme/tag rails ("Because you
 // like isekai") outrank genre rails ("Because you like fantasy") - the same
 // specificity ladder the Rust composer uses for dedupe priority, so the reading
 // order matches the order in which titles were claimed.
 const PERSONALIZED_SHELF_SECTION_ORDER = [
+  FROM_YOUR_WATCHLIST_SECTION_TYPE,
   "BECAUSE_YOU_LIKE_TAG",
   "BECAUSE_YOU_LIKE_GENRE",
   // Weekly tops. Kept ahead of the top-rated rail so the shelf reads
@@ -121,6 +127,12 @@ const PERSONALIZED_SHELF_SECTION_ORDER = [
 // FOR_YOU is a generic "we have no better reason" rail, so it renders only when
 // there is no library context at all to build reason-based rails from.
 const GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES = new Set(["FOR_YOU"]);
+
+// Rails that say nothing about the library, so they never stand in for the
+// library context FOR_YOU falls back on.
+const NON_LIBRARY_PERSONALIZED_SECTION_TYPES = new Set([
+  FROM_YOUR_WATCHLIST_SECTION_TYPE,
+]);
 
 // World shelf (gateway public feed) in a fixed reading order, regardless of the
 // order the gateway happened to emit. Anything added later that is not listed
@@ -255,7 +267,12 @@ function orderDiscoveryHomeSectionsInternal<
       ),
   );
   const hasLibrarySections =
-    personalizedShelf.length > 0 ||
+    personalizedShelf.some(
+      (section) =>
+        !NON_LIBRARY_PERSONALIZED_SECTION_TYPES.has(
+          discoverySectionType(section),
+        ),
+    ) ||
     completeCollection !== null ||
     unknownPersonalizedSections.length > 0;
   const fallbackSections = hasLibrarySections

@@ -354,6 +354,7 @@ const nl: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "All-time favorieten",
   "discovery.section.rightNow": "Nu populair",
   "discovery.section.fromYourTaste": "Op basis van jouw smaak",
+  "discovery.section.fromYourWatchlist": "Uit je kijklijst",
   "discovery.section.almostComplete": "Bijna compleet",
   "discovery.section.nextAnimeSeason": "Volgend anime-seizoen",
   "discovery.section.popularInAnime": "Populair in anime",

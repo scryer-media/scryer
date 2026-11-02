@@ -4664,6 +4664,7 @@ const en: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "All-Time Favorites",
   "discovery.section.rightNow": "Right Now",
   "discovery.section.fromYourTaste": "From Your Taste",
+  "discovery.section.fromYourWatchlist": "From Your Watchlist",
   "discovery.section.almostComplete": "Almost Complete",
   "discovery.section.nextAnimeSeason": "Next Anime Season",
   "discovery.section.popularInAnime": "Popular in Anime",

@@ -895,6 +895,7 @@ const ko: LocaleDictionary = {
     "SABnzbd 또는 NZBGet의 자동 가져오기에 난독화된 이름의 동영상 파일이 포함된 경우, Scryer는 각 파일의 CRC-32 체크섬과 크기를 제3자 서비스인 srrdb.com으로 보내 원래 파일 이름을 조회합니다. 라이브러리나 파일에 대한 다른 정보는 전송되지 않습니다. 디스크의 파일 이름은 절대 변경되지 않습니다.",
   "discovery.personalizedDisabled":
     "이 인스턴스에서는 개인화된 발견이 꺼져 있습니다.",
+  "discovery.section.fromYourWatchlist": "보고 싶은 목록에서",
   "discovery.rail.becauseYouLike.action": "액션을 좋아하는 분께",
   "discovery.rail.becauseYouLike.adventure": "모험을 좋아하는 분께",
   "discovery.rail.becauseYouLike.comedy": "코미디를 좋아하는 분께",

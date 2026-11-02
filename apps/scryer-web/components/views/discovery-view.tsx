@@ -34,6 +34,7 @@ import {
 } from "@/lib/utils/discovery-display";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import {
+  FROM_YOUR_WATCHLIST_SECTION_TYPE,
   HERO_RAIL_PREFERRED_SECTION_TYPE,
   NEW_ON_PHYSICAL_SECTION_TYPE,
   NEW_ON_STREAMING_SECTION_TYPE,
@@ -222,6 +223,7 @@ const SECTION_DISPLAY_NAME_KEYS: Record<string, string> = {
   POPULAR_RIGHT_NOW: "discovery.section.rightNow",
   TRENDING_NOW: "discovery.section.rightNow",
   FOR_YOU: "discovery.section.fromYourTaste",
+  [FROM_YOUR_WATCHLIST_SECTION_TYPE]: "discovery.section.fromYourWatchlist",
   COMPLETE_THE_COLLECTION: "discovery.section.almostComplete",
   // Sourced from MAL/AniList, so the generic SMG title lies about the content.
   UPCOMING_NEXT_SEASON: "discovery.section.nextAnimeSeason",

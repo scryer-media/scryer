@@ -618,6 +618,7 @@ pub(super) fn personalized_section_results(
     items: &[DiscoveryItemRecord],
     library_profile: &DiscoveryLibraryAffinityProfile,
     candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    claimed_item_keys: &HashSet<String>,
     settings: DiscoveryRailCompositionSettings,
     include_unresolved: bool,
     limit: usize,
@@ -638,7 +639,10 @@ pub(super) fn personalized_section_results(
         limit,
     };
     let mut sections = Vec::new();
-    let mut emitted_item_keys = HashSet::new();
+    // Titles a more personal section already holds (the viewer's watchlist)
+    // count as emitted before the first rail composes, so no reason rail and
+    // not FOR_YOU can show them again.
+    let mut emitted_item_keys = claimed_item_keys.clone();
 
     // A library too small to have said anything gets the one honest rail.
     // Composing a "Because you like crime" out of four titles is the failure
