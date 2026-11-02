@@ -1425,11 +1425,11 @@ impl HousekeepingRepository for HousekeepingStore {
         // The newest terminal run of each job is kept whatever its age. Every
         // user-defined job shares the `custom_job` key, so those runs keep
         // one per operation type (one per script) instead of one in total.
-        execute_housekeeping_delete(
+        let deleted = execute_housekeeping_delete(
             &self.datastore,
             "delete_stale_workflow_operations",
             "DELETE FROM workflow_operations
-             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id)
+             WHERE NOT EXISTS (SELECT 1 FROM workflow_private_inputs WHERE workflow_private_inputs.run_id = workflow_operations.id AND workflow_private_inputs.input_encrypted IS NOT NULL)
                AND job_key IS NOT NULL
                 AND (
                     (status = 'completed' AND started_at <= {})
@@ -1458,7 +1458,20 @@ impl HousekeepingRepository for HousekeepingStore {
                 SqlArg::Timestamp(now - Duration::days(warning_failed_days)),
             ],
         )
-        .await
+        .await?;
+        // A request receipt whose run is gone can no longer resolve a replay.
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_orphaned_workflow_private_inputs",
+            "DELETE FROM workflow_private_inputs
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM workflow_operations
+                  WHERE workflow_operations.id = workflow_private_inputs.run_id
+             )",
+            Vec::new(),
+        )
+        .await?;
+        Ok(deleted)
     }
 
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {

@@ -360,7 +360,9 @@ impl AppUseCase {
 
     pub async fn complete_setup_for_source_import(&self, actor: &User, source_import_run_id: Option<&str>) -> AppResult<bool> {
         if let Some(id) = source_import_run_id { self.require_source_import_resolved(actor, id).await?; }
-        self.complete_setup(actor).await
+        let completed = self.complete_setup(actor).await?;
+        if let Some(id) = source_import_run_id { self.purge_resolved_source_import(id).await?; }
+        Ok(completed)
     }
 }
 impl AppUseCase {

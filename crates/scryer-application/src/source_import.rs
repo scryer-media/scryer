@@ -244,15 +244,23 @@ impl AppUseCase {
         }
         Ok(providers)
     }
+    /// Starts an import and waits at most `wait` for it inside the caller's request.
+    /// Returns the receipt so far and whether the run settled; an unsettled run keeps
+    /// going in the background.
     pub async fn execute_source_import(
         &self,
         actor: &User,
         selections: Vec<SourceImportSelection>,
-    ) -> AppResult<SourceImportProgress> {
+        wait: std::time::Duration,
+    ) -> AppResult<(JobRunRecord, SourceImportProgress, bool)> {
         let run = self
             .start_source_import(actor, &Id::new().0, selections)
             .await?;
-        self.wait_source_import(actor, &run.id).await
+        if let Some(progress) = self.wait_source_import_for(actor, &run.id, wait).await? {
+            return Ok((run, progress, true));
+        }
+        let (run, progress) = self.source_import_status(actor, &run.id).await?;
+        Ok((run, progress, false))
     }
 
     pub async fn wait_source_import(
@@ -260,7 +268,24 @@ impl AppUseCase {
         actor: &User,
         run_id: &str,
     ) -> AppResult<SourceImportProgress> {
-        tokio::time::timeout(std::time::Duration::from_secs(1800), async {
+        self.wait_source_import_for(actor, run_id, std::time::Duration::from_secs(1800))
+            .await?
+            .ok_or_else(|| {
+                refusal(
+                    crate::source_import::refusal::INTERRUPTED,
+                    "source import continues in the background",
+                )
+            })
+    }
+
+    /// Waits up to `wait` for the run to settle; `None` means it is still running.
+    pub async fn wait_source_import_for(
+        &self,
+        actor: &User,
+        run_id: &str,
+        wait: std::time::Duration,
+    ) -> AppResult<Option<SourceImportProgress>> {
+        match tokio::time::timeout(wait, async {
             loop {
                 let changed = self.runtime.imports.source_import.changed.notified();
                 tokio::pin!(changed);
@@ -273,12 +298,10 @@ impl AppUseCase {
             }
         })
         .await
-        .map_err(|_| {
-            refusal(
-                crate::source_import::refusal::INTERRUPTED,
-                "source import continues in the background",
-            )
-        })?
+        {
+            Ok(result) => result.map(Some),
+            Err(_) => Ok(None),
+        }
     }
     /// Acceptance commits resolved inputs and reserved IDs before starting network work.
     pub async fn start_source_import(
@@ -346,18 +369,7 @@ impl AppUseCase {
                             .as_deref()
                             .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
                             .is_some_and(|value| {
-                                value
-                                    .get("base_url")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(|url| {
-                                        url.trim().trim_end_matches('/').to_ascii_lowercase()
-                                    })
-                                    == wanted
-                                        .get("base_url")
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(|url| {
-                                            url.trim().trim_end_matches('/').to_ascii_lowercase()
-                                        })
+                                stored_config_base_url(&value) == stored_config_base_url(&wanted)
                             })
                     })
             } else {
@@ -421,7 +433,20 @@ impl AppUseCase {
             )
             .await?;
         if !created {
-            let existing = self.source_import_inputs(actor, &run.id).await?;
+            let Some(existing) = self.source_import_private_items(actor, &run.id).await? else {
+                // The run resolved and its input was purged; the receipt still answers.
+                return self
+                    .existing_source_import(
+                        actor,
+                        request_key,
+                        private
+                            .iter()
+                            .map(|item| item.selection.key.clone())
+                            .collect(),
+                    )
+                    .await?
+                    .ok_or_else(|| AppError::Repository("source import receipt missing".into()));
+            };
             if existing.len() != private.len()
                 || existing.iter().zip(&private).any(|(left, right)| {
                     left.selection.key != right.selection.key
@@ -454,24 +479,45 @@ impl AppUseCase {
         Ok(run)
     }
 
+    async fn source_import_private_items(
+        &self,
+        actor: &User,
+        run_id: &str,
+    ) -> AppResult<Option<Vec<PrivateItem>>> {
+        self.services
+            .events
+            .job_runs
+            .private_job_input(run_id, &actor.id)
+            .await?
+            .map(|input| decode(&input))
+            .transpose()
+    }
+
+    /// Private inputs of a run the caller already owns. They are purged once every
+    /// item resolves, so a missing input means nothing is left to retry.
     async fn source_import_inputs(
         &self,
         actor: &User,
         run_id: &str,
     ) -> AppResult<Vec<PrivateItem>> {
-        let input = self
-            .services
-            .events
-            .job_runs
-            .private_job_input(run_id, &actor.id)
+        self.source_import_private_items(actor, run_id)
             .await?
             .ok_or_else(|| {
                 refusal(
-                    crate::source_import::refusal::NOT_OWNED,
-                    "source import is unavailable to this user",
+                    crate::source_import::refusal::ITEM_NOT_RETRYABLE,
+                    "imported source credentials were removed after the import resolved",
                 )
-            })?;
-        decode(&input)
+            })
+    }
+
+    /// Erases the stored source credentials once every item has resolved. The
+    /// configurations the import saved keep their own copies.
+    pub(crate) async fn purge_resolved_source_import(&self, run_id: &str) -> AppResult<()> {
+        self.services
+            .events
+            .job_runs
+            .purge_private_job_input(run_id)
+            .await
     }
 
     pub async fn source_import_status(
@@ -635,13 +681,17 @@ impl AppUseCase {
         item.state = SourceImportState::Skipped;
         item.reason = None;
         item.message = None;
-        if progress.items.iter().all(|item| item.state.resolved()) {
+        let resolved = progress.items.iter().all(|item| item.state.resolved());
+        if resolved {
             run.status = JobRunStatus::Completed;
             run.error_text = None;
         }
         apply_source_import_summary(&mut run, &progress);
         self.publish_source_progress(&mut run, &mut progress)
             .await?;
+        if resolved {
+            self.purge_resolved_source_import(run_id).await?;
+        }
         Ok(run)
     }
 
@@ -862,6 +912,9 @@ impl AppUseCase {
         apply_source_import_summary(&mut run, &progress);
         self.publish_source_progress(&mut run, &mut progress)
             .await?;
+        if run.status == JobRunStatus::Completed {
+            self.purge_resolved_source_import(&run.id).await?;
+        }
         let _ = self
             .append_domain_event(crate::domain_events::new_job_run_domain_event(
                 crate::DomainEventActor::from(actor),
@@ -1028,9 +1081,33 @@ fn set_outcome(item: &mut SourceImportItem, result: AppResult<()>) {
                     .unwrap_or(crate::source_import::refusal::ITEM_FAILED)
                     .into(),
             );
-            item.message = Some("Connection check or configuration save failed; verify the endpoint and credentials before retrying".into());
+            item.message = Some(source_import_failure_message(&error));
         }
     }
+}
+
+const MAX_FAILURE_MESSAGE_CHARS: usize = 500;
+
+/// The server's own sentence for a failed item, kept for display only. Credentials
+/// in URLs are masked because progress is stored in plain text.
+fn source_import_failure_message(error: &AppError) -> String {
+    let message = crate::url_redaction::redact_url_credentials(&error.to_string());
+    if message.chars().count() <= MAX_FAILURE_MESSAGE_CHARS {
+        return message;
+    }
+    let mut truncated: String = message.chars().take(MAX_FAILURE_MESSAGE_CHARS).collect();
+    truncated.push('…');
+    truncated
+}
+
+/// The connection URL stored in a source configuration. Older configurations
+/// spell the key `baseUrl`.
+fn stored_config_base_url(value: &serde_json::Value) -> Option<String> {
+    ["base_url", "baseUrl"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str))
+        .map(|url| url.trim().trim_end_matches('/').to_ascii_lowercase())
+        .filter(|url| !url.is_empty())
 }
 
 pub fn imported_indexer_config_json(
@@ -1062,4 +1139,67 @@ pub fn imported_indexer_config_json(
         object.insert(field.key.clone(), api_path.into());
     }
     serde_json::Value::Object(object).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_config_base_url_reads_both_key_spellings() {
+        let snake = serde_json::json!({"base_url": " https://Prowlarr.example.test/ "});
+        let camel = serde_json::json!({"baseUrl": "https://prowlarr.example.test"});
+        assert_eq!(
+            stored_config_base_url(&snake).as_deref(),
+            Some("https://prowlarr.example.test")
+        );
+        assert_eq!(
+            stored_config_base_url(&snake),
+            stored_config_base_url(&camel)
+        );
+        assert_eq!(
+            stored_config_base_url(&serde_json::json!({"base_url": " "})),
+            None
+        );
+        assert_eq!(stored_config_base_url(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn failed_item_keeps_the_server_sentence_and_its_reason() {
+        let mut item = SourceImportItem {
+            key: "fixture".into(),
+            name: "Fixture".into(),
+            config_id: "id".into(),
+            kind: "indexer".into(),
+            state: SourceImportState::Checking,
+            reason: None,
+            message: None,
+        };
+        set_outcome(
+            &mut item,
+            Err(AppError::Repository(
+                "connection to https://indexer.example.test/api?t=caps&apikey=synthetic-secret refused".into(),
+            )),
+        );
+        assert_eq!(item.state, SourceImportState::Failed);
+        assert_eq!(item.reason.as_deref(), Some(refusal::ITEM_FAILED));
+        let message = item.message.clone().expect("failure detail");
+        assert!(message.contains("connection to https://indexer.example.test/api"));
+        assert!(message.contains("refused"));
+        assert!(!message.contains("synthetic-secret"));
+
+        set_outcome(
+            &mut item,
+            Err(AppError::validation_refused(
+                refusal::CONFIG_CONFLICT,
+                "source configuration identity changed",
+            )),
+        );
+        assert_eq!(item.reason.as_deref(), Some(refusal::CONFIG_CONFLICT));
+        assert!(
+            item.message
+                .expect("detail")
+                .contains("source configuration identity changed")
+        );
+    }
 }

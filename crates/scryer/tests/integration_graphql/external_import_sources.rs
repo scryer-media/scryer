@@ -431,13 +431,13 @@ async fn source_import_accepts_before_probe_and_runs_fifteen_workers_with_safe_r
                 );
             }
         }
-        let row: (String,) =
+        let row: (Option<String>,) =
             sqlx::query_as("SELECT input_encrypted FROM workflow_private_inputs WHERE run_id = ?")
                 .bind(&accepted.id)
                 .fetch_one(&ctx.db.pool)
                 .await
-                .expect("private input");
-        assert!(!row.0.contains("synthetic-private-source-key"));
+                .expect("request receipt");
+        assert_eq!(row.0, None, "completed imports purge their private input");
         let run = ctx
             .app
             .source_import_status(&actor, &accepted.id)
@@ -547,6 +547,16 @@ async fn source_import_failure_can_be_skipped_and_backend_finish_is_gated() {
                 .expect("summary JSON");
         assert_eq!(summary["failed"], 0);
         assert_eq!(summary["skipped"], 1);
+        let private: (Option<String>,) =
+            sqlx::query_as("SELECT input_encrypted FROM workflow_private_inputs WHERE run_id = ?")
+                .bind(&accepted.id)
+                .fetch_one(&ctx.db.pool)
+                .await
+                .expect("request receipt");
+        assert_eq!(
+            private.0, None,
+            "skipping the last item purges stored credentials"
+        );
         assert_eq!(
             ctx.app
                 .retry_source_import(&actor, &accepted.id, Vec::new())
@@ -599,4 +609,137 @@ async fn source_import_retry_repairs_reserved_config_after_interrupted_save() {
     assert_eq!(configs.iter().filter(|config| config.id == created.id).count(), 1);
     for scope in ["movie", "series", "anime"] { assert!(ctx.app.get_indexer_routing(&actor, scope).await.expect("repaired routing").iter().any(|route| route.indexer_id == created.id)); }
     }).await.expect("source import scenario completes within its failure bound");
+}
+
+#[tokio::test]
+async fn source_import_purges_credentials_once_resolved_and_housekeeping_prunes_the_run() {
+    use scryer_application::HousekeepingRepository;
+    use scryer_infrastructure_library::media::libraries::state_store::HousekeepingStore;
+    timeout(Duration::from_secs(180), async {
+        let ctx = TestContext::new().await;
+        seed_typed_settings_definitions(&ctx).await;
+        let actor = ctx
+            .users
+            .create(User::new_admin("source-purge-operator"))
+            .await
+            .expect("operator");
+        let selected = selection(0, false);
+        let completed = ctx
+            .app
+            .start_source_import(&actor, "source-purge", vec![selected.clone()])
+            .await
+            .expect("accepted");
+        let progress = ctx
+            .app
+            .wait_source_import(&actor, &completed.id)
+            .await
+            .expect("import settles");
+        assert_eq!(progress.items[0].state, SourceImportState::Succeeded);
+        let private: (Option<String>,) =
+            sqlx::query_as("SELECT input_encrypted FROM workflow_private_inputs WHERE run_id = ?")
+                .bind(&completed.id)
+                .fetch_one(&ctx.db.pool)
+                .await
+                .expect("request receipt is kept");
+        assert_eq!(
+            private.0, None,
+            "a resolved import keeps no stored credentials"
+        );
+        assert_eq!(
+            ctx.app
+                .start_source_import(&actor, "source-purge", vec![selected.clone()])
+                .await
+                .expect("replayed request")
+                .id,
+            completed.id,
+            "the receipt still answers a replayed request"
+        );
+        assert_eq!(
+            ctx.app
+                .retry_source_import(&actor, &completed.id, Vec::new())
+                .await
+                .err()
+                .expect("nothing to retry")
+                .validation_reason(),
+            Some(scryer_application::source_import::refusal::ITEM_NOT_RETRYABLE)
+        );
+
+        let mut invalid = selection(1, false);
+        let SourceImportInput::Indexer(input) = &mut invalid.input else {
+            unreachable!()
+        };
+        input.name.clear();
+        let unresolved = ctx
+            .app
+            .start_source_import(&actor, "source-purge-unresolved", vec![invalid])
+            .await
+            .expect("accepted");
+        assert_eq!(
+            ctx.app
+                .wait_source_import(&actor, &unresolved.id)
+                .await
+                .expect("failure settles")
+                .items[0]
+                .state,
+            SourceImportState::Failed
+        );
+        // A newer terminal run, so neither older run is kept as the job's latest.
+        let newest = ctx
+            .app
+            .start_source_import(&actor, "source-purge-newest", vec![selection(2, false)])
+            .await
+            .expect("accepted");
+        ctx.app
+            .wait_source_import(&actor, &newest.id)
+            .await
+            .expect("newest settles");
+        let old = (chrono::Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+        for id in [&completed.id, &unresolved.id] {
+            sqlx::query("UPDATE workflow_operations SET started_at = ? WHERE id = ?")
+                .bind(&old)
+                .bind(id)
+                .execute(&ctx.db.pool)
+                .await
+                .expect("age run");
+        }
+        HousekeepingStore::new(ctx.db.datastore())
+            .delete_stale_workflow_operations(30, 30)
+            .await
+            .expect("housekeeping");
+        let remaining = |id: String| {
+            let pool = ctx.db.pool.clone();
+            async move {
+                let runs: (i64,) =
+                    sqlx::query_as("SELECT COUNT(*) FROM workflow_operations WHERE id = ?")
+                        .bind(&id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("run count");
+                let receipts: (i64,) =
+                    sqlx::query_as("SELECT COUNT(*) FROM workflow_private_inputs WHERE run_id = ?")
+                        .bind(&id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("receipt count");
+                (runs.0, receipts.0)
+            }
+        };
+        assert_eq!(
+            remaining(completed.id.clone()).await,
+            (0, 0),
+            "a purged run and its receipt are pruned"
+        );
+        assert_eq!(
+            remaining(unresolved.id.clone()).await,
+            (1, 1),
+            "an unresolved import keeps its run and credentials for retry"
+        );
+        assert_eq!(
+            remaining(newest.id.clone()).await,
+            (1, 1),
+            "the latest run is retained"
+        );
+    })
+    .await
+    .expect("credential purge scenario failure bound");
 }

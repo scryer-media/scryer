@@ -6933,6 +6933,12 @@ pub trait JobRunRepository: Send + Sync {
         ))
     }
 
+    /// Erase a job's private input once nothing can need it again. The
+    /// idempotency receipt survives so a replayed request still finds its run.
+    async fn purge_private_job_input(&self, _run_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn list_unresolved_private_jobs(&self, _job_key: JobKey) -> AppResult<Vec<JobRunRecord>> {
         Ok(Vec::new())
     }

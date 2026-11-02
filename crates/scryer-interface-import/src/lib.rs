@@ -2516,7 +2516,9 @@ impl ExternalImportMutations {
         source_import_payload(&app, &actor, run_id.as_str()).await
     }
 
-    /// Compatibility operation sharing application source import policy.
+    /// Compatibility operation sharing application source import policy. It waits a
+    /// bounded time; a longer import continues in the background and is reported in
+    /// `errors` with its run id.
     async fn execute_external_import(
         &self,
         ctx: &Context<'_>,
@@ -2530,10 +2532,30 @@ impl ExternalImportMutations {
         let selections = source_import_selections(&app, &actor, input)
             .await
             .map_err(to_gql_error)?;
-        let progress = app
-            .execute_source_import(&actor, selections)
+        let (run, progress, settled) = app
+            .execute_source_import(&actor, selections, COMPAT_SOURCE_IMPORT_WAIT)
             .await
             .map_err(to_gql_error)?;
+        let mut errors: Vec<String> = progress
+            .items
+            .iter()
+            .filter(|item| item.reason.is_some())
+            .map(|item| {
+                format!(
+                    "failed to import '{}': {}",
+                    item.name,
+                    item.message
+                        .as_deref()
+                        .unwrap_or("Source import interrupted")
+                )
+            })
+            .collect();
+        if !settled {
+            errors.push(format!(
+                "source import {} continues in the background; follow it with externalImportSourceStatus",
+                run.id
+            ));
+        }
         Ok(ExternalImportResultPayload {
             media_paths_saved: false,
             download_clients_created: progress
@@ -2555,23 +2577,13 @@ impl ExternalImportMutations {
                 })
                 .count() as i32,
             plugins_installed: progress.plugins_installed,
-            errors: progress
-                .items
-                .iter()
-                .filter(|item| item.reason.is_some())
-                .map(|item| {
-                    format!(
-                        "failed to import '{}': {}",
-                        item.name,
-                        item.message
-                            .as_deref()
-                            .unwrap_or("Source import interrupted")
-                    )
-                })
-                .collect(),
+            errors,
         })
     }
 }
+
+/// How long the compatibility mutation holds its request open for a source import.
+const COMPAT_SOURCE_IMPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 async fn source_import_payload(
     app: &scryer_application::AppUseCase,
@@ -2583,7 +2595,10 @@ async fn source_import_payload(
         .await
         .map_err(to_gql_error)?;
     Ok(ExternalImportSourceJobPayload {
-        updated_at: run.updated_at.to_rfc3339(),
+        // Fixed width and offset so clients can order snapshots by comparing strings.
+        updated_at: run
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         run_id: run.id.into(),
         active: !run.status.is_terminal(),
         ready: progress.items.iter().all(|item| item.state.resolved()),

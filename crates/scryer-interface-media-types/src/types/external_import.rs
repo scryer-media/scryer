@@ -648,7 +648,7 @@ pub struct ExternalImportSourceItemPayload {
     pub state: String,
     /// Stable failure reason code, or null for an item without a failure.
     pub reason: Option<String>,
-    /// Safe failure explanation, used when the client does not recognize the reason.
+    /// The server's own failure sentence with URL credentials masked: the fallback for an unrecognized reason and the detail behind SOURCE_IMPORT_ITEM_FAILED.
     pub message: Option<String>,
 }
 

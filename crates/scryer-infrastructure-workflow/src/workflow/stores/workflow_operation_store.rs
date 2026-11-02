@@ -101,7 +101,7 @@ impl JobRunRepository for WorkflowOperationStore {
 
     async fn private_job_input(&self, run_id: &str, actor_id: &str) -> AppResult<Option<String>> {
         let key = crate::config_store::current_encryption_key(&self.encryption_key)?;
-        SqlRuntime::fetch_optional(self.datastore.read_exec(), "SELECT input_encrypted FROM workflow_private_inputs WHERE run_id = {} AND actor_user_id = {}", &[SqlArg::Text(run_id.into()), SqlArg::Text(actor_id.into())]).await?
+        SqlRuntime::fetch_optional(self.datastore.read_exec(), "SELECT input_encrypted FROM workflow_private_inputs WHERE run_id = {} AND actor_user_id = {} AND input_encrypted IS NOT NULL", &[SqlArg::Text(run_id.into()), SqlArg::Text(actor_id.into())]).await?
             .map(|row| crate::config_store::decrypt_value(key.as_ref(), row.text("input_encrypted")?, "job private input", true)).transpose()
     }
 
@@ -114,10 +114,22 @@ impl JobRunRepository for WorkflowOperationStore {
         let key = crate::config_store::current_encryption_key(&self.encryption_key)?;
         let encrypted =
             crate::config_store::encrypt_value(key.as_ref(), input, "job private input", true)?;
-        let count = SqlRuntime::execute_write(&self.datastore, "update_private_job_input", "UPDATE workflow_private_inputs SET input_encrypted = {} WHERE run_id = {} AND actor_user_id = {}", vec![SqlArg::Text(encrypted), SqlArg::Text(run_id.into()), SqlArg::Text(actor_id.into())]).await?;
+        let count = SqlRuntime::execute_write(&self.datastore, "update_private_job_input", "UPDATE workflow_private_inputs SET input_encrypted = {} WHERE run_id = {} AND actor_user_id = {} AND input_encrypted IS NOT NULL", vec![SqlArg::Text(encrypted), SqlArg::Text(run_id.into()), SqlArg::Text(actor_id.into())]).await?;
         if count != 1 {
             return Err(AppError::Repository("private job input unavailable".into()));
         }
+        Ok(())
+    }
+
+    async fn purge_private_job_input(&self, run_id: &str) -> AppResult<()> {
+        // The receipt row stays so a replayed request key still finds its run.
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "purge_private_job_input",
+            "UPDATE workflow_private_inputs SET input_encrypted = NULL WHERE run_id = {} AND input_encrypted IS NOT NULL",
+            vec![SqlArg::Text(run_id.into())],
+        )
+        .await?;
         Ok(())
     }
 
@@ -143,7 +155,7 @@ impl JobRunRepository for WorkflowOperationStore {
     }
 
     async fn list_unresolved_private_jobs(&self, job_key: JobKey) -> AppResult<Vec<JobRunRecord>> {
-        SqlRuntime::fetch_all(self.datastore.read_exec(), "SELECT workflow_operations.* FROM workflow_operations INNER JOIN workflow_private_inputs ON workflow_operations.id = workflow_private_inputs.run_id WHERE job_key = {} AND status != 'completed' ORDER BY started_at ASC LIMIT 1000", &[SqlArg::Text(job_key.as_str().into())]).await?.into_iter().map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow)).collect()
+        SqlRuntime::fetch_all(self.datastore.read_exec(), "SELECT workflow_operations.* FROM workflow_operations INNER JOIN workflow_private_inputs ON workflow_operations.id = workflow_private_inputs.run_id WHERE job_key = {} AND status != 'completed' AND workflow_private_inputs.input_encrypted IS NOT NULL ORDER BY started_at ASC LIMIT 1000", &[SqlArg::Text(job_key.as_str().into())]).await?.into_iter().map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow)).collect()
     }
 
     async fn find_private_job(
