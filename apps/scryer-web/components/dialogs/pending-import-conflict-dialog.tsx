@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -165,7 +166,16 @@ export function PendingImportConflictDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>{t("pendingImports.conflict.title")}</DialogTitle>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {t("pendingImports.conflict.title")}
+            <Badge
+              id="pending-import-conflict-beta"
+              tone="warning"
+              className="text-[11px]"
+            >
+              {t("settings.pluginBeta")}
+            </Badge>
+          </DialogTitle>
           <DialogDescription>
             {t("pendingImports.conflict.description", {
               count: pendingImportIds.length,
