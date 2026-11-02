@@ -920,6 +920,7 @@ const de: LocaleDictionary = {
     "Wenn ein automatischer Import aus SABnzbd oder NZBGet Videodateien mit verschleierten Namen enthält, sendet Scryer die CRC-32-Prüfsumme und die Größe jeder Datei an srrdb.com, einen Drittanbieterdienst, um den ursprünglichen Dateinamen nachzuschlagen. Sonst wird nichts über Ihre Bibliothek oder die Datei gesendet. Dateien auf der Festplatte werden niemals umbenannt.",
   "discovery.personalizedDisabled":
     "Die personalisierte Entdeckung ist für diese Instanz deaktiviert.",
+  "discovery.section.fromYourWatchlist": "Von Ihrer Merkliste",
   "discovery.rail.becauseYouLike.action": "Weil Sie Action mögen",
   "discovery.rail.becauseYouLike.adventure": "Weil Sie Abenteuer mögen",
   "discovery.rail.becauseYouLike.comedy": "Weil Sie Komödien mögen",

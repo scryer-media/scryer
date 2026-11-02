@@ -907,6 +907,7 @@ const ja: LocaleDictionary = {
     "SABnzbd または NZBGet からの自動インポートに難読化された名前の動画ファイルが含まれる場合、Scryer は各ファイルの CRC-32 チェックサムとサイズをサードパーティのサービスである srrdb.com に送信し、元のファイル名を照会します。ライブラリやファイルに関するそれ以外の情報は送信されません。ディスク上のファイルの名前が変更されることはありません。",
   "discovery.personalizedDisabled":
     "このインスタンスではパーソナライズされたディスカバリーが無効になっています。",
+  "discovery.section.fromYourWatchlist": "ウォッチリストから",
   "discovery.rail.becauseYouLike.action": "アクションが好きなあなたへ",
   "discovery.rail.becauseYouLike.adventure": "アドベンチャーが好きなあなたへ",
   "discovery.rail.becauseYouLike.comedy": "コメディが好きなあなたへ",

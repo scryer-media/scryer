@@ -850,6 +850,7 @@ const zh_CN: LocaleDictionary = {
   "settings.srrdbFilenameRecoveryHelp":
     "当来自 SABnzbd 或 NZBGet 的自动导入包含名称被混淆的视频文件时，Scryer 会将每个文件的 CRC-32 校验和与大小发送到第三方服务 srrdb.com，以查询原始文件名。不会发送有关你的媒体库或该文件的其他任何信息。磁盘上的文件永远不会被重命名。",
   "discovery.personalizedDisabled": "此实例已关闭个性化发现。",
+  "discovery.section.fromYourWatchlist": "来自你的待看清单",
   "discovery.rail.becauseYouLike.action": "因为你喜欢动作",
   "discovery.rail.becauseYouLike.adventure": "因为你喜欢冒险",
   "discovery.rail.becauseYouLike.comedy": "因为你喜欢喜剧",

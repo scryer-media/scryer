@@ -415,6 +415,7 @@ const cs: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "Oblíbené všech dob",
   "discovery.section.rightNow": "Právě teď",
   "discovery.section.fromYourTaste": "Podle vašeho vkusu",
+  "discovery.section.fromYourWatchlist": "Z vašeho seznamu ke zhlédnutí",
   "discovery.section.almostComplete": "Téměř dokončené",
   "discovery.section.nextAnimeSeason": "Příští sezóna anime",
   "discovery.section.popularInAnime": "Oblíbené v anime",

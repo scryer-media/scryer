@@ -1131,6 +1131,7 @@ fn compose_affinity_sections(
         items,
         profile,
         &HashMap::new(),
+        &HashSet::new(),
         DiscoveryRailCompositionSettings::default(),
         true,
         limit,
@@ -1143,7 +1144,15 @@ fn compose_affinity_sections_with_settings(
     settings: DiscoveryRailCompositionSettings,
     limit: usize,
 ) -> Vec<DiscoverySectionResult> {
-    personalized_section_results(items, profile, &HashMap::new(), settings, true, limit)
+    personalized_section_results(
+        items,
+        profile,
+        &HashMap::new(),
+        &HashSet::new(),
+        settings,
+        true,
+        limit,
+    )
 }
 
 /// Rails ship only when they have enough to say, so a fixture that wants a rail
@@ -2950,6 +2959,699 @@ fn catalog_affinity_groups_carry_the_rail_label_and_skip_unsayable_labels() {
     );
 }
 
+fn watchlist_member(
+    kind: MediaFacet,
+    ids: &[(&str, &str)],
+    first_seen_at: i64,
+) -> DiscoveryWatchlistMember {
+    DiscoveryWatchlistMember {
+        kind,
+        external_ids: ids
+            .iter()
+            .map(|(source, value)| ExternalId::new(*source, *value))
+            .collect(),
+        display_title: Some(format!("Row {}", ids.first().map(|id| id.1).unwrap_or("?"))),
+        year: None,
+        smg_title_id: None,
+        first_seen_at: Utc.timestamp_opt(first_seen_at, 0).unwrap(),
+        rank: None,
+        declined: false,
+    }
+}
+
+fn pending_watchlist_request(
+    facet: MediaFacet,
+    ids: &[(&str, &str)],
+) -> scryer_domain::MediaRequest {
+    let now = Utc.timestamp_opt(0, 0).unwrap();
+    scryer_domain::MediaRequest {
+        id: "request-fixture".to_string(),
+        library_id: "library-fixture".to_string(),
+        facet,
+        status: scryer_domain::MediaRequestStatus::Pending,
+        identity_fingerprint: "fingerprint-fixture".to_string(),
+        title: "Fixture Request".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        background_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        requested_monitor_selection: None,
+        resolved_by_user_id: None,
+        resolved_at: None,
+        created_title_id: None,
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        requested_lease_days: None,
+        approved_lease_days: None,
+        decision_id: None,
+        decided_by_rule_set_ids: Vec::new(),
+        policy_tags: Vec::new(),
+        metadata_snapshot_json: "{}".to_string(),
+        external_ids: ids
+            .iter()
+            .map(|(source, value)| ExternalId::new(*source, *value))
+            .collect(),
+        requesters: Vec::new(),
+        origin: scryer_domain::MediaRequestOrigin::default(),
+        created_by_user_id: "requester-fixture".to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+struct WatchlistFixture {
+    owned: CatalogOwnedVisibility,
+    requests: Vec<scryer_domain::MediaRequest>,
+    admitted: Option<HashSet<String>>,
+    filters: crate::ports::DiscoveryHomeFilters,
+    row_kinds: Vec<String>,
+    include_unresolved: bool,
+    limit: usize,
+}
+
+impl Default for WatchlistFixture {
+    fn default() -> Self {
+        Self {
+            owned: CatalogOwnedVisibility::default(),
+            requests: Vec::new(),
+            admitted: None,
+            filters: crate::ports::DiscoveryHomeFilters::default(),
+            row_kinds: vec![
+                "anime".to_string(),
+                "movie".to_string(),
+                "series".to_string(),
+            ],
+            include_unresolved: true,
+            limit: 10,
+        }
+    }
+}
+
+impl WatchlistFixture {
+    fn compose(
+        &self,
+        members: &[DiscoveryWatchlistMember],
+        items: Vec<DiscoveryItemRecord>,
+    ) -> DiscoveryWatchlistComposition {
+        compose_discovery_watchlist(
+            members,
+            items,
+            &DiscoveryWatchlistRules {
+                owned_visibility: &self.owned,
+                pending_requests: &self.requests,
+                admitted_item_keys: self.admitted.as_ref(),
+                filters: &self.filters,
+                row_card_media_kinds: &self.row_kinds,
+                include_unresolved: self.include_unresolved,
+                limit: self.limit,
+            },
+        )
+    }
+}
+
+fn owned_movie(tmdb_id: &str) -> CatalogOwnedVisibility {
+    CatalogOwnedVisibility::from_titles(&[test_title(
+        "owned-fixture",
+        "Owned Fixture",
+        MediaFacet::Movie,
+        vec![("tmdb", tmdb_id)],
+    )])
+}
+
+fn watchlist_section_titles(composition: &DiscoveryWatchlistComposition) -> Vec<&str> {
+    composition
+        .section
+        .as_ref()
+        .map(affinity_section_titles)
+        .unwrap_or_default()
+}
+
+fn claimed(keys: &[&str]) -> HashSet<String> {
+    keys.iter().map(|key| key.to_string()).collect()
+}
+
+#[test]
+fn watchlist_member_target_keys_follow_the_member_kind() {
+    let movie = watchlist_member(
+        MediaFacet::Movie,
+        &[("tmdb", "9101"), ("imdb", "tt9900101")],
+        0,
+    );
+    assert_eq!(
+        discovery_watchlist_member_target_keys(&movie),
+        vec!["tmdb:movie:9101", "imdb:title:tt9900101"]
+    );
+    let series = watchlist_member(MediaFacet::Series, &[("tvdb", "9201"), ("tmdb", "9202")], 0);
+    assert_eq!(
+        discovery_watchlist_member_target_keys(&series),
+        vec!["tvdb:series:9201", "tmdb:series:9202"]
+    );
+    let unusable = watchlist_member(MediaFacet::Movie, &[("tmdb", "not-a-number")], 0);
+    assert!(discovery_watchlist_member_target_keys(&unusable).is_empty());
+}
+
+#[test]
+fn watchlist_members_sort_by_provider_rank_then_newest_first_seen() {
+    let ranked = |id: &str, rank: Option<i64>, first_seen_at: i64| DiscoveryWatchlistMember {
+        rank,
+        ..watchlist_member(MediaFacet::Movie, &[("tmdb", id)], first_seen_at)
+    };
+    let mut members = vec![
+        ranked("1", None, 10),
+        ranked("2", Some(2), 90),
+        ranked("3", None, 30),
+        ranked("4", Some(1), 0),
+        ranked("5", Some(2), 95),
+    ];
+    sort_discovery_watchlist_members(&mut members);
+    assert_eq!(
+        members
+            .iter()
+            .map(|member| member.external_ids[0].value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["4", "5", "2", "3", "1"]
+    );
+}
+
+#[test]
+fn watchlist_sources_match_each_providers_watch_later_list_only() {
+    let source = |provider: &str, source_type: &str, params: &[(&str, &str)]| {
+        let mut subscription = crate::lists::test_support::subscription("watchlist-source");
+        subscription.source.provider = provider.to_string();
+        subscription.source.source_type = source_type.to_string();
+        subscription.source.params = params
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        discovery_watchlist_source_matches(&subscription)
+    };
+    assert!(source("plex", "watchlist", &[]));
+    assert!(source("trakt", "watchlist", &[]));
+    assert!(source("tmdb", "watchlist", &[]));
+    assert!(source("mdblist", "watchlist", &[]));
+    assert!(source("simkl", "plantowatch", &[]));
+    assert!(source("mal", "status:plan_to_watch", &[]));
+    assert!(source("anilist", "status", &[("status", "planning")]));
+    assert!(source("anilist", "status", &[("status", "PLANNING")]));
+    // A feed URL anyone could paste, read without the member's account.
+    assert!(!source("plex", "watchlist_rss", &[]));
+    assert!(!source("anilist", "status", &[("status", "current")]));
+    assert!(!source("anilist", "status", &[]));
+    assert!(!source("mal", "status:watching", &[]));
+    assert!(!source("trakt", "user_list", &[("list", "watchlist")]));
+    assert!(!source("custom", "watchlist", &[]));
+}
+
+#[test]
+fn watchlist_composition_offers_stored_cards_then_row_cards_in_watchlist_order() {
+    let members = vec![
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 50),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "71")], 40),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "2")], 30),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "72")], 20),
+    ];
+    let items = vec![
+        affinity_test_item("2", "movie", &[]),
+        affinity_test_item("1", "movie", &[]),
+    ];
+
+    let composition = WatchlistFixture::default().compose(&members, items);
+
+    assert_eq!(
+        watchlist_section_titles(&composition),
+        vec!["Title 1", "Title 2", "Row 71", "Row 72"]
+    );
+    let section = composition.section.as_ref().expect("watchlist section");
+    assert_eq!(section.section_type, DISCOVERY_WATCHLIST_SECTION_TYPE);
+    assert_eq!(section.surface, "personalized");
+    assert_eq!(section.label_key, None);
+    assert_eq!(section.total_count, 4);
+    // Only stored items are claimed from the reason rails.
+    assert_eq!(
+        composition.claimed_item_keys,
+        claimed(&["tmdb:movie:1", "tmdb:movie:2"])
+    );
+}
+
+#[test]
+fn watchlist_composition_caps_cards_but_counts_and_claims_every_member() {
+    let members = (1..=6)
+        .map(|index| {
+            watchlist_member(
+                MediaFacet::Movie,
+                &[("tmdb", &index.to_string())],
+                100 - index,
+            )
+        })
+        .collect::<Vec<_>>();
+    let items = (1..=4)
+        .map(|index| affinity_test_item(&index.to_string(), "movie", &[]))
+        .collect::<Vec<_>>();
+
+    let composition = WatchlistFixture {
+        limit: 3,
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, items.clone());
+
+    let section = composition.section.as_ref().expect("watchlist section");
+    assert_eq!(
+        watchlist_section_titles(&composition),
+        vec!["Title 1", "Title 2", "Title 3"]
+    );
+    assert_eq!(section.total_count, 6);
+    assert_eq!(composition.claimed_item_keys.len(), 4);
+
+    let everything = WatchlistFixture {
+        limit: usize::MAX,
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, items);
+    assert_eq!(
+        everything.section.expect("watchlist section").items.len(),
+        6
+    );
+}
+
+#[test]
+fn watchlist_composition_leaves_out_owned_requested_and_declined_members() {
+    let mut declined = watchlist_member(MediaFacet::Movie, &[("tmdb", "4")], 40);
+    declined.declined = true;
+    let mut declined_row = watchlist_member(MediaFacet::Movie, &[("tmdb", "74")], 35);
+    declined_row.declined = true;
+    let mut untitled = watchlist_member(MediaFacet::Movie, &[("tmdb", "75")], 34);
+    untitled.display_title = None;
+    let members = vec![
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 60),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "2")], 50),
+        declined,
+        declined_row,
+        untitled,
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "5")], 30),
+        // Same number as the pending movie request, but a series: a movie
+        // request does not answer for it.
+        watchlist_member(MediaFacet::Series, &[("tmdb", "2")], 20),
+        // Owned, with no stored item: the row card checks the catalog too.
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "73")], 10),
+        // Requested, with no stored item.
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "76")], 5),
+    ];
+    let items = vec![
+        affinity_test_item("1", "movie", &[]),
+        affinity_test_item("2", "movie", &[]),
+        affinity_test_item("4", "movie", &[]),
+        affinity_test_item("5", "movie", &[]),
+        affinity_test_item("2", "series", &[]),
+    ];
+    let owned = CatalogOwnedVisibility::from_titles(&[
+        test_title(
+            "owned-fixture-a",
+            "Owned Fixture A",
+            MediaFacet::Movie,
+            vec![("tmdb", "1")],
+        ),
+        test_title(
+            "owned-fixture-b",
+            "Owned Fixture B",
+            MediaFacet::Movie,
+            vec![("tmdb", "73")],
+        ),
+    ]);
+
+    let composition = WatchlistFixture {
+        owned,
+        requests: vec![
+            pending_watchlist_request(MediaFacet::Movie, &[("tmdb", "2")]),
+            pending_watchlist_request(MediaFacet::Movie, &[("tmdb", "76")]),
+        ],
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, items);
+
+    assert_eq!(
+        watchlist_section_titles(&composition),
+        vec!["Title 5", "Title 2"]
+    );
+    let section = composition.section.as_ref().expect("watchlist section");
+    assert_eq!(section.items[1].target_key, "tmdb:series:2");
+    // Requested and declined members stay on the watchlist, so the reason
+    // rails still may not offer them; the owned one is released.
+    assert_eq!(
+        composition.claimed_item_keys,
+        claimed(&[
+            "tmdb:movie:2",
+            "tmdb:movie:4",
+            "tmdb:movie:5",
+            "tmdb:series:2"
+        ])
+    );
+}
+
+#[test]
+fn watchlist_requests_match_through_the_resolved_items_own_ids() {
+    // The member and the request name the title by ids that never meet
+    // directly; the stored item carries both.
+    let members = vec![watchlist_member(MediaFacet::Movie, &[("tmdb", "9301")], 0)];
+    let mut item = affinity_test_item("9301", "movie", &[]);
+    item.external_ids = vec![crate::ports::DiscoveryExternalIdRecord {
+        source: "imdb".to_string(),
+        kind: "movie".to_string(),
+        id: "tt9909301".to_string(),
+        key: "imdb:movie:tt9909301".to_string(),
+    }];
+
+    let composition = WatchlistFixture {
+        requests: vec![pending_watchlist_request(
+            MediaFacet::Movie,
+            &[("imdb", "tt9909301")],
+        )],
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, vec![item]);
+
+    assert!(composition.section.is_none());
+    assert_eq!(composition.claimed_item_keys, claimed(&["tmdb:movie:9301"]));
+}
+
+#[test]
+fn watchlist_title_on_two_lists_is_offered_unless_every_row_declined_it() {
+    let mut declined = watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 90);
+    declined.declined = true;
+    let wanted = watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 10);
+    let items = vec![affinity_test_item("1", "movie", &[])];
+
+    let composition =
+        WatchlistFixture::default().compose(&[declined.clone(), wanted], items.clone());
+    assert_eq!(watchlist_section_titles(&composition), vec!["Title 1"]);
+
+    let composition = WatchlistFixture::default().compose(&[declined.clone(), declined], items);
+    assert!(composition.section.is_none());
+    assert_eq!(composition.claimed_item_keys, claimed(&["tmdb:movie:1"]));
+}
+
+#[test]
+fn watchlist_composition_with_nothing_to_offer_has_no_section() {
+    let members = vec![watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 0)];
+
+    let composition = WatchlistFixture {
+        owned: owned_movie("1"),
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, vec![affinity_test_item("1", "movie", &[])]);
+
+    assert!(composition.section.is_none());
+    assert!(composition.claimed_item_keys.is_empty());
+    assert!(
+        WatchlistFixture::default()
+            .compose(&[], Vec::new())
+            .section
+            .is_none()
+    );
+}
+
+#[test]
+fn watchlist_composition_honours_the_filter_bar() {
+    let mut old_row = watchlist_member(MediaFacet::Movie, &[("tmdb", "71")], 20);
+    old_row.year = Some(1990);
+    let mut recent_row = watchlist_member(MediaFacet::Movie, &[("tmdb", "72")], 10);
+    recent_row.year = Some(2030);
+    let undated_row = watchlist_member(MediaFacet::Movie, &[("tmdb", "73")], 5);
+    let members = vec![
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 40),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "2")], 30),
+        old_row,
+        recent_row,
+        undated_row,
+    ];
+    let items = vec![
+        affinity_test_item("1", "movie", &[]),
+        affinity_test_item("2", "movie", &[]),
+    ];
+
+    let composition = WatchlistFixture {
+        // Storage admitted only the second stored item.
+        admitted: Some(claimed(&["tmdb:movie:2"])),
+        filters: crate::ports::DiscoveryHomeFilters {
+            minimum_year: Some(2000),
+            ..Default::default()
+        },
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, items);
+
+    assert_eq!(
+        watchlist_section_titles(&composition),
+        vec!["Title 2", "Row 72", "Row 73"]
+    );
+    // A filtered title is still the watchlist's, so the reason rails stay off it.
+    assert_eq!(
+        composition.claimed_item_keys,
+        claimed(&["tmdb:movie:1", "tmdb:movie:2"])
+    );
+}
+
+#[test]
+fn watchlist_row_cards_follow_the_media_kind_chips() {
+    let members = vec![
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "71")], 20),
+        watchlist_member(MediaFacet::Anime, &[("tvdb", "9401")], 10),
+    ];
+    let composition = WatchlistFixture {
+        row_kinds: vec!["anime".to_string()],
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, Vec::new());
+    assert_eq!(watchlist_section_titles(&composition), vec!["Row 9401"]);
+}
+
+#[test]
+fn watchlist_row_cards_need_an_id_a_request_can_add() {
+    let members = vec![
+        watchlist_member(MediaFacet::Anime, &[("anilist", "9411")], 30),
+        watchlist_member(MediaFacet::Anime, &[("mal", "9412"), ("anidb", "9413")], 20),
+        watchlist_member(
+            MediaFacet::Anime,
+            &[("anilist", "9414"), ("tvdb", "9415")],
+            10,
+        ),
+    ];
+
+    let composition = WatchlistFixture::default().compose(&members, Vec::new());
+
+    let section = composition.section.as_ref().expect("watchlist section");
+    assert_eq!(section.total_count, 1);
+    assert_eq!(watchlist_section_titles(&composition), vec!["Row 9414"]);
+    assert_eq!(section.items[0].target_key, "tvdb:series:9415");
+
+    // An AniList-only row still resolves once a stored item names it.
+    let mut stored = affinity_test_item("9411", "series", &[]);
+    stored.target_key = "anilist:anime:9411".to_string();
+    stored.display_title = "Stored 9411".to_string();
+    let resolved = WatchlistFixture::default().compose(&members[..1], vec![stored]);
+    assert_eq!(watchlist_section_titles(&resolved), vec!["Stored 9411"]);
+}
+
+#[test]
+fn watchlist_rows_naming_one_title_merge_into_one_row_card() {
+    // Two lists know one untracked series by different ids; a shared tvdb id
+    // joins them.
+    let mut imdb_and_tvdb = watchlist_member(
+        MediaFacet::Series,
+        &[("imdb", "tt9909801"), ("tvdb", "9801")],
+        30,
+    );
+    imdb_and_tvdb.display_title = Some("Fixture Merged Series".to_string());
+    imdb_and_tvdb.year = Some(2032);
+    let mut tvdb_and_tmdb = watchlist_member(
+        MediaFacet::Series,
+        &[("tvdb", "9801"), ("tmdb", "9802")],
+        20,
+    );
+    tvdb_and_tmdb.smg_title_id = Some(9803);
+    let members = vec![
+        imdb_and_tvdb.clone(),
+        tvdb_and_tmdb.clone(),
+        watchlist_member(MediaFacet::Series, &[("tvdb", "9811")], 10),
+    ];
+
+    let composition = WatchlistFixture::default().compose(&members, Vec::new());
+
+    let section = composition.section.as_ref().expect("watchlist section");
+    assert_eq!(section.total_count, 2);
+    assert_eq!(
+        watchlist_section_titles(&composition),
+        vec!["Fixture Merged Series", "Row 9811"]
+    );
+    let merged = &section.items[0];
+    // tmdb leads the key preference whichever row named the title first.
+    assert_eq!(merged.target_key, "tmdb:series:9802");
+    assert_eq!(merged.year, Some(2032));
+    assert_eq!(
+        merged
+            .external_ids
+            .iter()
+            .map(|id| (id.source.as_str(), id.id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("imdb", "tt9909801"),
+            ("tvdb", "9801"),
+            ("tmdb", "9802"),
+            ("smg", "9803")
+        ]
+    );
+
+    // Declined on one list, wanted on the other: still offered once.
+    let mut declined = imdb_and_tvdb.clone();
+    declined.declined = true;
+    let one_declined =
+        WatchlistFixture::default().compose(&[declined.clone(), tvdb_and_tmdb.clone()], Vec::new());
+    assert_eq!(
+        watchlist_section_titles(&one_declined),
+        vec!["Fixture Merged Series"]
+    );
+
+    // Declined on every list: not offered.
+    let mut also_declined = tvdb_and_tmdb;
+    also_declined.declined = true;
+    let all_declined = WatchlistFixture::default().compose(&[declined, also_declined], Vec::new());
+    assert!(all_declined.section.is_none());
+}
+
+#[test]
+fn watchlist_unresolved_cards_follow_include_unresolved() {
+    let members = vec![
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "1")], 30),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "2")], 20),
+        watchlist_member(MediaFacet::Movie, &[("tmdb", "71")], 10),
+    ];
+    let mut unresolved = affinity_test_item("2", "movie", &[]);
+    unresolved.resolved = false;
+    let items = vec![affinity_test_item("1", "movie", &[]), unresolved];
+
+    let shown = WatchlistFixture::default().compose(&members, items.clone());
+    assert_eq!(
+        watchlist_section_titles(&shown),
+        vec!["Title 1", "Title 2", "Row 71"]
+    );
+
+    let hidden = WatchlistFixture {
+        include_unresolved: false,
+        ..WatchlistFixture::default()
+    }
+    .compose(&members, items);
+    assert_eq!(watchlist_section_titles(&hidden), vec!["Title 1"]);
+}
+
+#[test]
+fn watchlist_row_card_is_an_unresolved_item_with_the_members_ids() {
+    let mut member = watchlist_member(
+        MediaFacet::Series,
+        &[("tvdb", "9501"), ("imdb", "tt9909501")],
+        0,
+    );
+    member.display_title = Some("Fixture Row Series".to_string());
+    member.year = Some(2031);
+    member.smg_title_id = Some(9601);
+
+    let composition = WatchlistFixture::default().compose(&[member], Vec::new());
+
+    let card = &composition.section.expect("watchlist section").items[0];
+    assert!(!card.resolved);
+    assert_eq!(card.target_key, "tvdb:series:9501");
+    assert_eq!(card.target_kind, "series");
+    assert_eq!(card.content_type.as_deref(), Some("series"));
+    assert_eq!(card.display_title, "Fixture Row Series");
+    assert_eq!(card.year, Some(2031));
+    assert_eq!(card.poster_url, None);
+    assert_eq!(card.background_url, None);
+    assert_eq!(
+        card.external_ids
+            .iter()
+            .map(|id| (id.source.as_str(), id.id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("tvdb", "9501"), ("imdb", "tt9909501"), ("smg", "9601")]
+    );
+    assert!(composition.claimed_item_keys.is_empty());
+}
+
+#[test]
+fn watchlist_lookup_ignores_target_key_case() {
+    let members = vec![watchlist_member(
+        MediaFacet::Movie,
+        &[("imdb", "tt9909701")],
+        0,
+    )];
+    let mut item = affinity_test_item("9701", "movie", &[]);
+    item.target_key = "IMDB:title:TT9909701".to_string();
+
+    let composition = WatchlistFixture::default().compose(&members, vec![item]);
+
+    assert_eq!(watchlist_section_titles(&composition), vec!["Title 9701"]);
+    assert_eq!(
+        composition.claimed_item_keys,
+        claimed(&["IMDB:title:TT9909701"])
+    );
+}
+
+#[test]
+fn personalized_sections_never_offer_watchlist_claimed_titles() {
+    let profile = affinity_profile(&["Fantasy"], &[], library_mix(60, 20, 20));
+    let items = extend_with_fillers(
+        vec![
+            affinity_test_item("1", "movie", &["canonical:genre:fantasy"]),
+            affinity_test_item("2", "movie", &["canonical:genre:fantasy"]),
+        ],
+        vec![affinity_filler_items(
+            "fan",
+            "movie",
+            &["canonical:genre:fantasy"],
+            8,
+        )],
+    );
+    let unclaimed = compose_affinity_sections(&items, &profile, 10);
+    assert!(
+        unclaimed
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .any(|item| item.target_key == "tmdb:movie:1"),
+        "fixture must offer the title before it is claimed"
+    );
+
+    let claimed_keys = claimed(&["tmdb:movie:1"]);
+    let sections = personalized_section_results(
+        &items,
+        &profile,
+        &HashMap::new(),
+        &claimed_keys,
+        DiscoveryRailCompositionSettings::default(),
+        true,
+        10,
+    );
+
+    assert!(!sections.is_empty());
+    assert!(
+        sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .all(|item| item.target_key != "tmdb:movie:1")
+    );
+    assert!(
+        sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .any(|item| item.target_key == "tmdb:movie:2")
+    );
+}
+
 /// A synthetic personalized pool shaped like a large library's: every item
 /// edge-backed, spread over several allowlisted genres and themes and all
 /// three mediums, with strictly falling relevance so pool order is SMG order.
@@ -3063,6 +3765,7 @@ fn section_reading_order_matches_the_web_contract() {
     struct SectionOrderContract {
         personalized_shelf: Vec<String>,
         generic_for_you_fallback: Vec<String>,
+        non_library_personalized: Vec<String>,
         public_promotion: Vec<String>,
         world_shelf: Vec<String>,
         curated: Vec<String>,
@@ -3088,6 +3791,10 @@ fn section_reading_order_matches_the_web_contract() {
     assert_eq!(
         contract.generic_for_you_fallback,
         owned(DISCOVERY_GENERIC_FOR_YOU_FALLBACK_TYPES)
+    );
+    assert_eq!(
+        contract.non_library_personalized,
+        owned(DISCOVERY_NON_LIBRARY_PERSONALIZED_TYPES)
     );
     assert_eq!(
         contract.public_promotion,

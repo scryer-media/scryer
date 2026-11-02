@@ -513,6 +513,10 @@ pub struct DiscoveryItemsStorageQuery {
     pub readable_library_ids: Vec<String>,
     pub allowed_media_kinds: Vec<String>,
     pub filters: DiscoveryItemsQuery,
+    /// The discovery home's filter bar (media type, genre, theme, studio, year,
+    /// rating), applied the same way the home rails apply it. Empty filters
+    /// narrow nothing.
+    pub home_filters: DiscoveryHomeFilters,
     pub limit: usize,
     pub offset: usize,
 }

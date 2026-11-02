@@ -353,6 +353,7 @@ const zh_TW: LocaleDictionary = {
   "discovery.section.allTimeFavorites": "歷年最愛",
   "discovery.section.rightNow": "當前熱門",
   "discovery.section.fromYourTaste": "依您的喜好推薦",
+  "discovery.section.fromYourWatchlist": "來自您的待看清單",
   "discovery.section.almostComplete": "即將完整",
   "discovery.section.nextAnimeSeason": "下季新番",
   "discovery.section.popularInAnime": "熱門動畫",

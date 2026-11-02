@@ -923,6 +923,7 @@ const pt_BR: LocaleDictionary = {
     "Quando uma importação automática do SABnzbd ou do NZBGet contém arquivos de vídeo com nomes ofuscados, o Scryer envia a soma de verificação CRC-32 e o tamanho de cada arquivo para o srrdb.com, um serviço de terceiros, para consultar o nome original. Nada mais sobre sua biblioteca ou sobre o arquivo é enviado. Os arquivos no disco nunca são renomeados.",
   "discovery.personalizedDisabled":
     "A descoberta personalizada está desativada nesta instância.",
+  "discovery.section.fromYourWatchlist": "Da sua lista para assistir",
   "discovery.rail.becauseYouLike.action": "Porque você gosta de ação",
   "discovery.rail.becauseYouLike.adventure": "Porque você gosta de aventura",
   "discovery.rail.becauseYouLike.comedy": "Porque você gosta de comédias",

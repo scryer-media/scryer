@@ -983,6 +983,7 @@ const fr: LocaleDictionary = {
     "Lorsqu'un import automatique depuis SABnzbd ou NZBGet contient des fichiers vidéo aux noms obfusqués, Scryer envoie la somme de contrôle CRC-32 et la taille de chaque fichier à srrdb.com, un service tiers, afin de retrouver le nom d'origine. Rien d'autre concernant votre bibliothèque ou le fichier n'est envoyé. Les fichiers sur le disque ne sont jamais renommés.",
   "discovery.personalizedDisabled":
     "La découverte personnalisée est désactivée pour cette instance.",
+  "discovery.section.fromYourWatchlist": "De votre liste à regarder",
   "discovery.rail.becauseYouLike.action": "Parce que vous aimez l'action",
   "discovery.rail.becauseYouLike.adventure": "Parce que vous aimez l'aventure",
   "discovery.rail.becauseYouLike.comedy": "Parce que vous aimez les comédies",

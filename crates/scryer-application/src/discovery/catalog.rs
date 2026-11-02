@@ -103,6 +103,14 @@ impl CatalogOwnedVisibility {
             .into_iter()
             .any(|key| self.keys.contains(&key))
     }
+
+    /// Whether a title named only by a discovery target key is in the
+    /// catalog, for a card that has no stored discovery item to check.
+    pub(super) fn target_key_is_owned(&self, target_key: &str) -> bool {
+        discovery_target_key_ownership_keys(target_key)
+            .into_iter()
+            .any(|key| self.keys.contains(&key))
+    }
 }
 
 pub(super) fn add_catalog_owned_external_keys(
@@ -156,13 +164,16 @@ pub(super) fn insert_catalog_owned_key(
 }
 
 pub(super) fn discovery_item_ownership_keys(item: &DiscoveryItemRecord) -> HashSet<String> {
+    discovery_target_key_ownership_keys(&item.target_key)
+}
+
+pub(super) fn discovery_target_key_ownership_keys(target_key: &str) -> HashSet<String> {
     let mut keys = HashSet::new();
-    let target_key = normalize_catalog_owned_key(&item.target_key);
-    if !target_key.is_empty() {
-        keys.insert(target_key);
+    let normalized_target_key = normalize_catalog_owned_key(target_key);
+    if !normalized_target_key.is_empty() {
+        keys.insert(normalized_target_key);
     }
-    let target_parts = item
-        .target_key
+    let target_parts = target_key
         .split(':')
         .map(str::trim)
         .filter(|part| !part.is_empty())

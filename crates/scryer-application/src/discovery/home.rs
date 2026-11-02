@@ -636,6 +636,7 @@ pub(super) fn personalized_section_results(
     items: &[DiscoveryItemRecord],
     library_profile: &DiscoveryLibraryAffinityProfile,
     candidates_by_id: &HashMap<String, DiscoveryHomeCandidate>,
+    claimed_item_keys: &HashSet<String>,
     settings: DiscoveryRailCompositionSettings,
     include_unresolved: bool,
     limit: usize,
@@ -652,7 +653,7 @@ pub(super) fn personalized_section_results(
         visible_items,
         library_profile,
         &context,
-        &HashSet::new(),
+        claimed_item_keys,
     )
 }
 
@@ -678,6 +679,9 @@ pub(super) fn personalized_section_results_in_context(
     claimed_item_keys: &HashSet<String>,
 ) -> Vec<DiscoverySectionResult> {
     let mut sections = Vec::new();
+    // Titles a more personal section already holds (the viewer's watchlist)
+    // count as emitted before the first rail composes, so no reason rail and
+    // not FOR_YOU can show them again.
     let mut emitted_item_keys = claimed_item_keys.clone();
 
     // A library too small to have said anything gets the one honest rail.

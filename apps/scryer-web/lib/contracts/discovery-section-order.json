@@ -1,5 +1,6 @@
 {
   "personalizedShelf": [
+    "FROM_YOUR_WATCHLIST",
     "BECAUSE_YOU_LIKE_TAG",
     "BECAUSE_YOU_LIKE_GENRE",
     "TOP_MOVIES_THIS_WEEK",
@@ -9,6 +10,7 @@
     "TOP_RATED"
   ],
   "genericForYouFallback": ["FOR_YOU"],
+  "nonLibraryPersonalized": ["FROM_YOUR_WATCHLIST"],
   "publicPromotion": ["NEW_ON_STREAMING", "NEW_ON_PHYSICAL"],
   "worldShelf": [
     "POPULAR_RIGHT_NOW",
