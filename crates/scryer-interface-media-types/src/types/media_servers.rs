@@ -151,8 +151,17 @@ pub struct MediaServerWatchSignalSyncPayload {
     pub last_started_at: Option<DateTime<Utc>>,
     /// When a sweep last read every linked account in full.
     pub last_clean_sweep_at: Option<DateTime<Utc>>,
-    /// Why the latest sweep was incomplete; null after a clean sweep.
+    /// Why the latest sweep was incomplete, as a sentence for people; null
+    /// after a clean sweep. Explain the condition from `lastErrorCode`.
     pub last_error: Option<String>,
+    /// Stable code for why the latest sweep was incomplete (`WATCH_SYNC_*`);
+    /// null after a clean sweep and on sweeps recorded before codes were
+    /// stored, which only have `lastError`.
+    pub last_error_code: Option<String>,
+    /// A clean sweep is on record but no longer counts: it is older than the
+    /// window lifecycle rules accept, or the connection was disabled when it
+    /// was last swept. False when there is no clean sweep at all.
+    pub clean_sweep_stale: bool,
     /// Linked accounts the latest sweep considered.
     pub participant_count: i64,
     /// Watch signals stored for this connection by the latest sweep.

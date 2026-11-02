@@ -2513,6 +2513,8 @@ export const mediaServerConnectionsQuery = `query MediaServerConnections($provid
       lastStartedAt
       lastCleanSweepAt
       lastError
+      lastErrorCode
+      cleanSweepStale
       participantCount
       signalCount
     }

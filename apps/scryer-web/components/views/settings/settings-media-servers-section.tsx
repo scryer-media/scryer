@@ -60,6 +60,7 @@ import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { watchSyncReasonText } from "@/lib/utils/watch-sync-reason";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsMediaServersSectionProps = {
@@ -184,6 +185,13 @@ function WatchHistoryCell({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const sync = connection.watchSignalSync;
+  if (!connection.enabled) {
+    return (
+      <span className="text-muted-foreground">
+        {t("settings.watchHistoryDisabled")}
+      </span>
+    );
+  }
   if (!sync || (!sync.lastCleanSweepAt && !sync.lastError)) {
     return (
       <span className="text-muted-foreground">
@@ -210,10 +218,23 @@ function WatchHistoryCell({
         <span
           className="block text-[var(--scry-danger-text-soft)]"
           title={t("settings.watchHistoryIncompleteHelp", {
-            reason: sync.lastError,
+            reason: watchSyncReasonText(t, sync.lastErrorCode, sync.lastError),
           })}
         >
           {t("settings.watchHistoryIncomplete")}
+        </span>
+        {lastFullRead}
+      </div>
+    );
+  }
+  if (sync.cleanSweepStale) {
+    return (
+      <div className="space-y-1">
+        <span
+          className="block text-[var(--scry-warning-text)]"
+          title={t("settings.watchHistoryStaleHelp")}
+        >
+          {t("settings.watchHistoryStale")}
         </span>
         {lastFullRead}
       </div>

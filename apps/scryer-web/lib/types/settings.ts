@@ -269,7 +269,12 @@ export type MediaServerConnection = {
 export type MediaServerWatchSignalSync = {
   lastStartedAt: string | null;
   lastCleanSweepAt: string | null;
+  /** Sentence for people; explain the condition from `lastErrorCode`. */
   lastError: string | null;
+  /** Stable `WATCH_SYNC_*` code; null on sweeps recorded before codes. */
+  lastErrorCode: string | null;
+  /** A clean sweep is on record but no longer counts for lifecycle rules. */
+  cleanSweepStale: boolean;
   participantCount: number;
   signalCount: number;
 };

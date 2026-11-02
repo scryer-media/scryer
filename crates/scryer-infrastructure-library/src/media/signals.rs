@@ -76,7 +76,7 @@ const SIGNAL_UPSERT_SUFFIX: &str =
 const SIGNAL_ROW_WIDTH: usize = 17;
 
 const SYNC_STATE_COLUMNS: &str = "connection_id, provider, enabled, last_started_at,
-    last_success_at, last_error, participant_count, signal_count, updated_at";
+    last_success_at, last_error, last_error_code, participant_count, signal_count, updated_at";
 
 #[async_trait]
 impl MediaServerSignalRepository for MediaServerSignalStore {
@@ -252,6 +252,7 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
             SqlArg::OptTimestamp(state.last_started_at),
             SqlArg::OptTimestamp(state.last_success_at),
             SqlArg::OptText(state.last_error.clone()),
+            SqlArg::OptText(state.last_error_code.clone()),
             SqlArg::I64(state.participant_count),
             SqlArg::I64(state.signal_count),
             SqlArg::Timestamp(state.updated_at),
@@ -266,14 +267,16 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                         SqlExec::Tx(tx),
                         "INSERT INTO media_server_signal_sync_state
                              (connection_id, provider, enabled, last_started_at, last_success_at,
-                              last_error, participant_count, signal_count, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})
+                              last_error, last_error_code, participant_count, signal_count,
+                              updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
                          ON CONFLICT (connection_id) DO UPDATE SET
                              provider = excluded.provider,
                              enabled = excluded.enabled,
                              last_started_at = excluded.last_started_at,
                              last_success_at = excluded.last_success_at,
                              last_error = excluded.last_error,
+                             last_error_code = excluded.last_error_code,
                              participant_count = excluded.participant_count,
                              signal_count = excluded.signal_count,
                              updated_at = excluded.updated_at",
@@ -395,6 +398,7 @@ fn row_to_sync_state(row: &SqlRow) -> AppResult<MediaServerSignalSyncState> {
         last_started_at: row.opt_timestamp("last_started_at")?,
         last_success_at: row.opt_timestamp("last_success_at")?,
         last_error: row.opt_text("last_error")?,
+        last_error_code: row.opt_text("last_error_code")?,
         participant_count: row.i64("participant_count")?,
         signal_count: row.i64("signal_count")?,
         updated_at: row.timestamp("updated_at")?,

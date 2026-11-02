@@ -139,6 +139,10 @@ pub const IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND: &str =
     "IDENTITY_LOGIN_VERIFICATION_CHALLENGE_NOT_FOUND";
 
 /// media server base URL is invalid
+#[allow(
+    dead_code,
+    reason = "retain the stable reason code for existing clients"
+)]
 pub const IDENTITY_MEDIA_SERVER_BASE_URL_INVALID: &str = "IDENTITY_MEDIA_SERVER_BASE_URL_INVALID";
 
 /// media server catalog scan requires an API key
@@ -150,6 +154,10 @@ pub const IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED: &str =
     "IDENTITY_MEDIA_SERVER_REFRESH_API_KEY_REQUIRED";
 
 /// a media-server signal read needs a provider user id
+#[allow(
+    dead_code,
+    reason = "retain the stable reason code for existing clients"
+)]
 pub const IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED: &str =
     "IDENTITY_MEDIA_SERVER_SIGNAL_USER_ID_REQUIRED";
 

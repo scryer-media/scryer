@@ -17853,9 +17853,22 @@ type MediaServerWatchSignalSyncPayload {
 	"""
 	lastCleanSweepAt: DateTime
 	"""
-	Why the latest sweep was incomplete; null after a clean sweep.
+	Why the latest sweep was incomplete, as a sentence for people; null
+	after a clean sweep. Explain the condition from `lastErrorCode`.
 	"""
 	lastError: String
+	"""
+	Stable code for why the latest sweep was incomplete (`WATCH_SYNC_*`);
+	null after a clean sweep and on sweeps recorded before codes were
+	stored, which only have `lastError`.
+	"""
+	lastErrorCode: String
+	"""
+	A clean sweep is on record but no longer counts: it is older than the
+	window lifecycle rules accept, or the connection was disabled when it
+	was last swept. False when there is no clean sweep at all.
+	"""
+	cleanSweepStale: Boolean!
 	"""
 	Linked accounts the latest sweep considered.
 	"""

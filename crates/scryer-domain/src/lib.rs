@@ -7185,6 +7185,10 @@ pub struct MediaServerSignalSyncState {
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// Stable reason code for `last_error`, from
+    /// `scryer_application::media_server_signals::reasons`. `None` on rows
+    /// written before codes were stored, and whenever `last_error` is `None`.
+    pub last_error_code: Option<String>,
     pub participant_count: i64,
     pub signal_count: i64,
     pub updated_at: DateTime<Utc>,

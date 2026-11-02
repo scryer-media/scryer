@@ -204,6 +204,13 @@ pub mod request_lease_state {
 /// consecutive missed sweeps before rules stop deciding.
 pub const WATCH_SIGNAL_FRESHNESS_HOURS: i64 = 48;
 
+/// Whether a clean sweep finished at `last_success_at` is still inside
+/// [`WATCH_SIGNAL_FRESHNESS_HOURS`] at `now`. The one definition the watch
+/// gate and the settings surface both answer from.
+pub fn watch_signal_sweep_is_fresh(last_success_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    last_success_at >= now - chrono::Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS)
+}
+
 /// Whether media-server watch signals may be reported for this run at all.
 ///
 /// Deliberately whole-instance and all-or-nothing: one stale or never-swept

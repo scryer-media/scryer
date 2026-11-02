@@ -7040,6 +7040,74 @@ async fn migration_0318_adds_favourites_without_marking_existing_signals() {
 }
 
 #[tokio::test]
+async fn migration_0319_adds_a_sync_error_code_and_keeps_existing_state_rows() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("signal-sync-error-code-0319.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("sync state connection");
+
+    let columns: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_table_info('media_server_signal_sync_state')")
+            .fetch_all(&mut *conn)
+            .await
+            .expect("read migrated columns");
+    assert!(
+        columns.iter().any(|(name,)| name == "last_error_code"),
+        "a fully migrated schema stores the sweep's reason code"
+    );
+
+    // Return the table to its pre-0319 shape, keep a failed sweep's row in
+    // it, and replay the migration over that row.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded row");
+    sqlx::query("ALTER TABLE media_server_signal_sync_state DROP COLUMN last_error_code")
+        .execute(&mut *conn)
+        .await
+        .expect("restore the pre-0319 shape");
+    sqlx::query(
+        "INSERT INTO media_server_signal_sync_state
+         (connection_id, provider, enabled, last_error, participant_count, signal_count,
+          updated_at)
+         VALUES ('connection-synthetic', 'jellyfin', 1, 'status 401', 1, 0,
+                 '2026-01-01T00:00:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a sync state row");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0319_media_server_signal_sync_error_code.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0319 should apply");
+
+    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT connection_id, last_error, last_error_code FROM media_server_signal_sync_state",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read sync state after 0319");
+    assert_eq!(
+        rows,
+        vec![(
+            "connection-synthetic".to_string(),
+            Some("status 401".to_string()),
+            None
+        )]
+    );
+}
+
+#[tokio::test]
 async fn migration_0307_removes_operator_keeps_and_nothing_else() {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
     let services = SqliteServices::new(directory.path().join("keeps-0307.db").to_string_lossy())

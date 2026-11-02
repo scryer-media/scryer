@@ -4351,13 +4351,14 @@ pub struct NullMediaServerSignalSource;
 
 #[async_trait]
 impl crate::ports::MediaServerSignalSource for NullMediaServerSignalSource {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         _: &scryer_domain::MediaServerConnection,
-        _: &str,
-    ) -> AppResult<Vec<crate::ports::ProviderPlayedItem>> {
-        Err(AppError::Repository(
-            "media-server signal source is not configured".into(),
+    ) -> Result<Box<dyn crate::ports::MediaServerSignalReader>, crate::ports::SignalReadFailure>
+    {
+        Err(crate::ports::SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "media-server signal source is not configured",
         ))
     }
 }

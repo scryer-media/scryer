@@ -3629,6 +3629,23 @@ file = "postgres/migrations/0318_media_server_signal_favorites.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 319
+description = "media server signal sync error code"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0319_media_server_signal_sync_error_code.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0319_media_server_signal_sync_error_code.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

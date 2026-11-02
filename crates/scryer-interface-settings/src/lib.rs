@@ -1108,12 +1108,14 @@ impl SettingsQueries {
             )
             .await
             .map_err(to_gql_error)?;
+        // A store that cannot read the sweep state answers with none, so
+        // `watchSignalSync` is null rather than the whole listing failing.
         let mut states = app
             .list_media_server_signal_sync_states(&actor)
             .await
             .map_err(to_gql_error)?
             .into_iter()
-            .map(|state| (state.connection_id.clone(), state))
+            .map(|status| (status.state.connection_id.clone(), status))
             .collect::<std::collections::HashMap<_, _>>();
         Ok(connections
             .into_iter()

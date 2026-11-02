@@ -13,12 +13,14 @@ use super::*;
 
 use std::collections::BTreeMap;
 
+use crate::media_server_signals::reasons;
 use crate::media_server_signals::{
-    EpisodeNumberIndex, TitleExternalIdIndex, resolve_episode, resolve_subject, resolve_title,
+    EpisodeNumberIndex, ScryerLibraryPaths, TitleExternalIdIndex, resolve_episode, resolve_subject,
+    resolve_title,
 };
 use crate::ports::{
-    MediaServerConnectionRepository, MediaServerSignalRepository, MediaServerSignalSource,
-    ProviderPlayedItem, UserExternalAccountRepository,
+    MediaServerConnectionRepository, MediaServerSignalReader, MediaServerSignalRepository,
+    MediaServerSignalSource, ProviderPlayedItem, SignalReadFailure, UserExternalAccountRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, ExternalId, LibraryGrant,
@@ -94,6 +96,7 @@ fn played_movie(item_id: &str, tmdb: &str) -> ProviderPlayedItem {
         play_count: 2,
         last_played_at: Some(Utc::now()),
         is_favorite: false,
+        file_paths: Vec::new(),
     }
 }
 
@@ -116,6 +119,7 @@ fn played_episode(
         play_count: 1,
         last_played_at: Some(Utc::now()),
         is_favorite: false,
+        file_paths: Vec::new(),
     }
 }
 
@@ -418,23 +422,49 @@ impl UserExternalAccountRepository for StubExternalAccounts {
 }
 
 /// Replays a fixed played-item list per participant, or fails for them.
+/// `open_failure` fails the whole connection before any participant is read.
 #[derive(Default)]
 struct StubSignalSource {
     items: HashMap<String, Vec<ProviderPlayedItem>>,
     failing: HashSet<String>,
-    calls: AtomicUsize,
+    open_failure: Option<SignalReadFailure>,
+    opens: AtomicUsize,
+    calls: Arc<AtomicUsize>,
+}
+
+struct StubSignalReader {
+    items: HashMap<String, Vec<ProviderPlayedItem>>,
+    failing: HashSet<String>,
+    calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
 impl MediaServerSignalSource for StubSignalSource {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         _: &MediaServerConnection,
+    ) -> Result<Box<dyn MediaServerSignalReader>, SignalReadFailure> {
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        if let Some(failure) = &self.open_failure {
+            return Err(failure.clone());
+        }
+        Ok(Box::new(StubSignalReader {
+            items: self.items.clone(),
+            failing: self.failing.clone(),
+            calls: self.calls.clone(),
+        }))
+    }
+}
+
+#[async_trait]
+impl MediaServerSignalReader for StubSignalReader {
+    async fn fetch_played_items(
+        &self,
         external_user_id: &str,
-    ) -> AppResult<Vec<ProviderPlayedItem>> {
+    ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.failing.contains(external_user_id) {
-            return Err(AppError::Repository("status 401".into()));
+            return Err(SignalReadFailure::new(reasons::ACCESS_DENIED, "status 401"));
         }
         Ok(self
             .items
@@ -694,14 +724,15 @@ async fn a_sweep_stores_a_mapped_movie_signal() {
 #[tokio::test]
 async fn an_unmapped_observation_is_retained_with_no_subject() {
     // RFC identity-mapping rule 4: retained, never guessed onto a subject.
+    // With no external id at all, nothing proves the movie is not a Scryer
+    // title the server failed to identify, so the read is incomplete.
+    let mut unidentified = played_movie("jf-movie-unknown", "999999");
+    unidentified.external_ids.clear();
     let fixture = sync_app(
         vec![jellyfin_connection(true)],
         vec![verified_account()],
         StubSignalSource {
-            items: HashMap::from([(
-                PARTICIPANT_EXTERNAL_ID.to_string(),
-                vec![played_movie("jf-movie-unknown", "999999")],
-            )]),
+            items: HashMap::from([(PARTICIPANT_EXTERNAL_ID.to_string(), vec![unidentified])]),
             ..Default::default()
         },
     );
@@ -721,7 +752,11 @@ async fn an_unmapped_observation_is_retained_with_no_subject() {
     assert!(rows[0].scryer_episode_id.is_none());
     assert_eq!(rows[0].provider_item_id, "jf-movie-unknown");
     let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
-    assert!(state.last_error.as_deref().unwrap().contains("incomplete"));
+    assert!(state.last_error.is_some());
+    assert_eq!(
+        state.last_error_code.as_deref(),
+        Some(reasons::UNMAPPED_PLAYED_MOVIES)
+    );
     assert!(state.last_success_at.is_none());
     // A recent successful sweep must not make a later incomplete answer safe.
     let mut state = state;
@@ -1147,5 +1182,268 @@ async fn an_incomplete_emby_read_leaves_the_connection_without_a_clean_sweep() {
         .expect("emby state");
     assert!(state.last_success_at.is_none(), "no clean sweep yet");
     assert!(state.last_error.is_some());
+    assert_eq!(
+        state.last_error_code.as_deref(),
+        Some(reasons::ACCESS_DENIED)
+    );
     assert_eq!(state.provider, MediaServerProvider::Emby);
+}
+
+/// A played movie whose external ids no Scryer title claims is something
+/// Scryer does not manage. It is kept, unmapped, and does not hold the sweep
+/// incomplete: a whole watched library full of home videos and films outside
+/// every Scryer library must not freeze the watch gate.
+#[tokio::test]
+async fn a_played_movie_whose_ids_match_no_title_is_foreign_and_the_sweep_stays_clean() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource {
+            items: HashMap::from([(
+                PARTICIPANT_EXTERNAL_ID.to_string(),
+                vec![
+                    played_movie("jf-movie-managed", "603"),
+                    played_movie("jf-movie-foreign", "999999"),
+                ],
+            )]),
+            ..Default::default()
+        },
+    );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
+
+    let report = fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    assert_eq!(report.signals_written, 2);
+    assert_eq!(report.signals_unmapped, 1);
+    assert_eq!(report.connections_synced, 1);
+
+    let rows = fixture.signals.rows_for(PARTICIPANT_EXTERNAL_ID).await;
+    let foreign = rows
+        .iter()
+        .find(|row| row.provider_item_id == "jf-movie-foreign")
+        .expect("the foreign movie is retained");
+    assert!(foreign.scryer_title_id.is_none());
+    let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert!(state.last_error.is_none());
+    assert!(state.last_error_code.is_none());
+    assert!(state.last_success_at.is_some());
+}
+
+/// A connection that cannot be opened (no server selected, say) fails before
+/// any participant is read: nobody's stored history is touched, and the reason
+/// is stored as its code beside the sentence.
+#[tokio::test]
+async fn a_connection_that_cannot_be_opened_records_its_code_and_reads_nobody() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource {
+            open_failure: Some(SignalReadFailure::new(
+                reasons::PLEX_SERVER_NOT_SELECTED,
+                "no Plex server selected",
+            )),
+            ..Default::default()
+        },
+    );
+
+    let report = fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    assert_eq!(report.connections_failed, 1);
+    assert_eq!(report.participants_failed, 1);
+    assert_eq!(fixture.source.calls.load(Ordering::SeqCst), 0);
+    let state = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert_eq!(
+        state.last_error_code.as_deref(),
+        Some(reasons::PLEX_SERVER_NOT_SELECTED)
+    );
+    assert!(state.last_success_at.is_none());
+}
+
+/// Whatever a provider reads once per connection is read once per sweep, not
+/// once per participant.
+#[tokio::test]
+async fn a_connection_is_opened_once_for_all_of_its_participants() {
+    let mut second = verified_account();
+    second.id = "link-2".to_string();
+    second.user_id = "scryer-user-beta".to_string();
+    second.external_user_id = Some("jf-user-beta".to_string());
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account(), second],
+        StubSignalSource::default(),
+    );
+
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    assert_eq!(fixture.source.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.source.calls.load(Ordering::SeqCst), 2);
+}
+
+/// The settings surface reads a clean sweep older than the freshness window as
+/// stale, the same way the watch gate does, and a fresh one as current.
+#[test]
+fn a_clean_sweep_outside_the_freshness_window_reads_as_stale() {
+    let now = Utc::now();
+    let state = |hours_ago: i64, enabled: bool| MediaServerSignalSyncState {
+        connection_id: CONNECTION_ID.to_string(),
+        provider: MediaServerProvider::Jellyfin,
+        enabled,
+        last_started_at: None,
+        last_success_at: Some(now - chrono::Duration::hours(hours_ago)),
+        last_error: None,
+        last_error_code: None,
+        participant_count: 1,
+        signal_count: 1,
+        updated_at: now,
+    };
+    let window = crate::maintenance_rules::facts::WATCH_SIGNAL_FRESHNESS_HOURS;
+    let status = crate::media_server_signals::MediaServerSignalSyncStatus::at;
+    assert!(!status(state(1, true), now).clean_sweep_stale);
+    assert!(status(state(window + 1, true), now).clean_sweep_stale);
+    // Recorded while the connection was off: not a sweep the gate accepts.
+    assert!(status(state(1, false), now).clean_sweep_stale);
+    let mut never = state(1, true);
+    never.last_success_at = None;
+    assert!(!status(never, now).clean_sweep_stale);
+}
+
+/// The sweep state sits beside the connection listing as a diagnostic; a store
+/// that cannot read it leaves the listing without it instead of failing it.
+#[tokio::test]
+async fn an_unreadable_sweep_state_is_listed_as_none_rather_than_failing() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource::default(),
+    );
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .unwrap();
+    let admin = User::new_admin("signal-state-viewer");
+    assert_eq!(
+        fixture
+            .app
+            .list_media_server_signal_sync_states(&admin)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    fixture
+        .signals
+        .fail_state_reads
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let statuses = fixture
+        .app
+        .list_media_server_signal_sync_states(&admin)
+        .await
+        .expect("an unreadable state does not fail the listing");
+    assert!(statuses.is_empty());
+}
+
+/// A Scryer library root, as the test app's library store holds it, and a
+/// connection whose server sees that root under a different mount.
+async fn mapped_root_connection(app: &AppUseCase) -> (String, MediaServerConnection) {
+    let root = app
+        .services
+        .catalog
+        .libraries
+        .list(None)
+        .await
+        .expect("libraries")
+        .into_iter()
+        .flat_map(|library| library.roots)
+        .map(|root| root.path)
+        .next()
+        .expect("the test app has a library root");
+    let mut connection = jellyfin_connection(true);
+    connection.path_mappings = vec![scryer_domain::MediaServerPathMapping {
+        source_path: root.clone(),
+        destination_path: "/mnt/server-library".to_string(),
+        sort_order: 0,
+    }];
+    (root, connection)
+}
+
+async fn sweep_one_unmatched_movie(file_paths: Vec<String>) -> MediaServerSignalSyncState {
+    let mut movie = played_movie("jf-movie-unmatched", "999999");
+    movie.file_paths = file_paths;
+    let probe = sync_app(Vec::new(), Vec::new(), StubSignalSource::default());
+    let (_, connection) = mapped_root_connection(&probe.app).await;
+    let fixture = sync_app(
+        vec![connection],
+        vec![verified_account()],
+        StubSignalSource {
+            items: HashMap::from([(PARTICIPANT_EXTERNAL_ID.to_string(), vec![movie])]),
+            ..Default::default()
+        },
+    );
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    fixture.signals.state_for(CONNECTION_ID).await.unwrap()
+}
+
+/// The server identified Scryer's own file as a film Scryer does not have. Its
+/// ids match nothing, but its file is in a Scryer library once the server's
+/// mount is mapped back, so it may be a watched Scryer title: incomplete.
+#[tokio::test]
+async fn an_unmatched_movie_whose_file_is_in_a_library_root_keeps_the_sweep_incomplete() {
+    let state = sweep_one_unmatched_movie(vec![
+        "/mnt/server-library/Example Feature (2001)/feature.mkv".to_string(),
+    ])
+    .await;
+    assert_eq!(
+        state.last_error_code.as_deref(),
+        Some(reasons::UNMAPPED_PLAYED_MOVIES)
+    );
+    assert!(state.last_success_at.is_none());
+}
+
+/// Ids that match nothing and a file outside every library root: something
+/// Scryer does not manage, so the sweep stays clean.
+#[tokio::test]
+async fn an_unmatched_movie_whose_file_is_outside_every_root_is_foreign() {
+    let state =
+        sweep_one_unmatched_movie(vec!["/mnt/home-videos/example-clip.mkv".to_string()]).await;
+    assert!(state.last_error_code.is_none());
+    assert!(state.last_success_at.is_some());
+}
+
+/// With no file path reported, the ids alone decide, as before.
+#[tokio::test]
+async fn an_unmatched_movie_with_no_file_path_falls_back_to_its_ids() {
+    let state = sweep_one_unmatched_movie(Vec::new()).await;
+    assert!(state.last_error_code.is_none());
+    assert!(state.last_success_at.is_some());
+}
+
+#[test]
+fn library_paths_map_server_paths_back_before_comparing() {
+    let mappings = vec![scryer_domain::MediaServerPathMapping {
+        source_path: "/srv/scryer/movies".to_string(),
+        destination_path: "/mnt/server-library".to_string(),
+        sort_order: 0,
+    }];
+    let library = ScryerLibraryPaths::new(Some(vec!["/srv/scryer/movies".to_string()]), &mappings);
+    assert!(library.may_hold("/mnt/server-library/Example Feature/feature.mkv"));
+    assert!(library.may_hold("/srv/scryer/movies/Example Feature/feature.mkv"));
+    assert!(!library.may_hold("/mnt/server-library-other/feature.mkv"));
+    assert!(!library.may_hold("/mnt/home-videos/example-clip.mkv"));
+    // Roots that could not be read prove nothing is outside them.
+    assert!(ScryerLibraryPaths::new(None, &mappings).may_hold("/anywhere/feature.mkv"));
 }
