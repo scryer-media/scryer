@@ -383,6 +383,9 @@ export type AuthRuntimeState = {
   initialAuthenticationStage?:
     "choice" | "password_replacement" | "complete" | null;
   initialAuthenticationCodeRequired?: boolean;
+  /** Whether setup may choose who can reach Scryer. */
+  bindEditable?: boolean;
+  bindPinnedBy?: BindPin | null;
   passwordMinLength?: number;
   effectiveFormLoginEnabled: boolean;
   skipLoginForLocalIps: boolean;
@@ -490,6 +493,14 @@ export type ServiceSettings = {
   basePathSource: ConfigValueSource;
   bindAddress: string;
   bindSource: ConfigValueSource;
+  bindSavedHost: string | null;
+  bindEditable: boolean;
+  bindPinnedBy: BindPin | null;
+  bindPending: string;
+  bindRestartRequired: boolean;
+  bindFallbackCode: string | null;
+  bindFallbackAddress: string | null;
+  bindFallbackReason: string | null;
   passkeyRpId: string | null;
   passkeyRpOrigin: string | null;
   passkeyRpSource: PasskeyRelyingPartySource;
@@ -498,6 +509,8 @@ export type ServiceSettings = {
 };
 
 export type ConfigValueSource = "ENVIRONMENT" | "SETTINGS" | "DEFAULT";
+
+export type BindPin = "ENVIRONMENT" | "CONTAINER";
 
 export type PasskeyRelyingPartySource = "ENVIRONMENT" | "PUBLIC_URL" | "NONE";
 

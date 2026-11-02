@@ -644,7 +644,7 @@ impl AppUseCase {
             .unwrap_or(application_updater::macos_bundle::verify_bundle_signature)
     }
 
-    fn application_upgrade_restart_handle(
+    pub(crate) fn application_upgrade_restart_handle(
         &self,
     ) -> AppResult<crate::application_upgrade::ApplicationUpgradeRestartHandle> {
         self.runtime

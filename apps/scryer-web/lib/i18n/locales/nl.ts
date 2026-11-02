@@ -243,7 +243,8 @@ const nl: LocaleDictionary = {
   "nav.logs": "Logs",
   "nav.serviceLogs": "Servicelogs",
   "nav.auditLogs": "Auditlogs",
-  "nav.usersAccess": "Gebruikers & toegang",
+  "nav.users": "Gebruikers",
+  "nav.securityAccess": "Beveiliging & toegang",
   "nav.mobileTitle": "Scryer-navigatie",
   "nav.mobileDescription": "Primaire Scryer-navigatie",
   "nav.mobileTrigger": "Navigatie openen",
@@ -372,7 +373,6 @@ const nl: LocaleDictionary = {
   "settings.profile": "Profiel",
   "settings.general": "Algemeen",
   "settings.backups": "Back-ups",
-  "settings.security": "Beveiliging",
   "settings.enableFormLogin": "Inloggen inschakelen",
   "settings.securityLoginSettings": "Inloginstellingen",
   "settings.securityEnableFormLoginHelp":

@@ -244,7 +244,8 @@ const zh_TW: LocaleDictionary = {
   "nav.logs": "日誌",
   "nav.serviceLogs": "服務日誌",
   "nav.auditLogs": "審計日誌",
-  "nav.usersAccess": "使用者與訪問",
+  "nav.users": "使用者",
+  "nav.securityAccess": "安全與訪問",
   "nav.mobileTitle": "Scryer 導航",
   "nav.mobileDescription": "Scryer 主導航",
   "nav.mobileTrigger": "開啟導航",
@@ -369,7 +370,6 @@ const zh_TW: LocaleDictionary = {
   "settings.profile": "配置",
   "settings.general": "通用",
   "settings.backups": "備份",
-  "settings.security": "Security",
   "settings.enableFormLogin": "啟用登入",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":

@@ -255,7 +255,8 @@ const ru: LocaleDictionary = {
   "nav.logs": "Журналы",
   "nav.serviceLogs": "Журналы служб",
   "nav.auditLogs": "Журналы аудита",
-  "nav.usersAccess": "Пользователи и доступ",
+  "nav.users": "Пользователи",
+  "nav.securityAccess": "Безопасность и доступ",
   "nav.group": "Навигация",
   "nav.mobileTitle": "Навигация Scryer",
   "nav.mobileDescription": "Основная навигация Scryer",
@@ -353,7 +354,6 @@ const ru: LocaleDictionary = {
   "settings.profile": "Профиль",
   "settings.general": "Общие",
   "settings.backups": "Резервные копии",
-  "settings.security": "Безопасность",
   "settings.securityLoginSettings": "Настройки входа",
   "settings.securityEnableFormLoginHelp":
     "Если параметр включён, Scryer требует аутентифицированный сеанс пользователя. Если параметр отключён, запросы выполняются от имени администратора по умолчанию.",

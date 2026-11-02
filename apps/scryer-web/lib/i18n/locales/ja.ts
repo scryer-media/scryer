@@ -237,7 +237,8 @@ const ja: LocaleDictionary = {
   "nav.logs": "ログ",
   "nav.serviceLogs": "サービスログ",
   "nav.auditLogs": "監査ログ",
-  "nav.usersAccess": "ユーザーとアクセス",
+  "nav.users": "ユーザー",
+  "nav.securityAccess": "セキュリティとアクセス",
   "nav.mobileTitle": "Scryerナビゲーション",
   "nav.mobileDescription": "Scryerのメインナビゲーション",
   "nav.mobileTrigger": "ナビゲーションを開く",
@@ -319,7 +320,6 @@ const ja: LocaleDictionary = {
   "dashboard.queueCountOne": "1 件実行中",
   "settings.profile": "プロファイル",
   "settings.general": "一般",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",

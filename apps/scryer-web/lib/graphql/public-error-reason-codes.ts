@@ -16,6 +16,16 @@ const GROUPS: readonly {
       "INITIAL_AUTH_ACKNOWLEDGEMENT_REQUIRED",
     ],
   },
+  {
+    codes: ["VALIDATION_ERROR"],
+    reasons: [
+      "NETWORK_BIND_HOST_INVALID",
+      "NETWORK_BIND_ENV_PINNED",
+      "NETWORK_BIND_SAVE_AND_RESET",
+      "NETWORK_RESTART_NOT_REQUIRED",
+      "NETWORK_RESTART_UNAVAILABLE",
+    ],
+  },
   { codes: ["AUTHENTICATION_REQUIRED"], reasons: ["AUTHENTICATION_REQUIRED"] },
   { codes: ["INTERNAL_ERROR"], reasons: ["INTERNAL_ERROR"] },
   {

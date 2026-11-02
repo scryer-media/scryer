@@ -1010,6 +1010,16 @@ type AuthRuntimeStatePayload {
 	"""
 	initialAuthenticationCodeRequired: Boolean!
 	"""
+	Whether initial setup may choose who can reach this instance. False
+	outside the pending initial choice and while SCRYER_BIND sets the address.
+	"""
+	bindEditable: Boolean!
+	"""
+	What sets the listening address during the pending initial choice;
+	null when setup may choose it or setup is not pending.
+	"""
+	bindPinnedBy: BindPinValue
+	"""
 	Minimum length for the administrator's new password.
 	"""
 	passwordMinLength: Int!
@@ -1227,6 +1237,20 @@ input BindPendingImportInput {
 	Episode IDs to bind; empty means no explicit episode list.
 	"""
 	episodeIds: [ID!]!
+}
+
+"""
+What sets the listening address when it cannot be changed from Scryer.
+"""
+enum BindPinValue {
+	"""
+	The SCRYER_BIND environment variable.
+	"""
+	ENVIRONMENT
+	"""
+	SCRYER_BIND inside a container; its published ports decide who can reach Scryer.
+	"""
+	CONTAINER
 }
 
 """
@@ -1949,6 +1973,11 @@ input CompleteInitialAuthenticationInput {
 	One-time setup code authorizing the initial authentication decision.
 	"""
 	setupCode: String
+	"""
+	Who may reach this instance. Omission leaves the listening address
+	alone; ignored when SCRYER_BIND sets it.
+	"""
+	networkAccess: InitialNetworkAccess
 }
 
 """
@@ -9352,6 +9381,28 @@ type InitialAuthenticationPayload {
 	Login tokens for password authentication; null when authentication is disabled.
 	"""
 	login: LoginPayload
+	"""
+	Whether the saved network choice takes effect only after a restart.
+	"""
+	restartRequiredForBind: Boolean!
+	"""
+	Whether the network choice was not saved because SCRYER_BIND sets the address.
+	"""
+	bindIgnoredBecausePinned: Boolean!
+}
+
+"""
+Who may reach a newly set up instance.
+"""
+enum InitialNetworkAccess {
+	"""
+	Listen on loopback only.
+	"""
+	THIS_COMPUTER
+	"""
+	Listen on every IPv4 interface.
+	"""
+	OTHER_COMPUTERS
 }
 
 """
@@ -19887,6 +19938,10 @@ type MutationRoot {
 		input: CompleteInitialAuthenticationInput!
 	): InitialAuthenticationPayload!
 	"""
+	Restarts Scryer so a saved listening address takes effect.
+	"""
+	restartForNetworkChange: Boolean!
+	"""
 	Replaces an administrator-provided temporary password and issues the full session.
 	"""
 	completeRequiredPasswordChange(
@@ -25181,7 +25236,7 @@ type QueryRoot {
 		"""
 		Library IDs to include; omitted or empty includes all permitted libraries.
 		"""
-		libraryIds: [ID!]
+		libraryIds: [ID!],
 		"""
 		Only files scheduled for automatic deletion within this many hours, including overdue files; clamped to 1 through 72 and sorted soonest first before pagination. Omit for all entries, newest first.
 		"""
@@ -28891,13 +28946,45 @@ type ServiceSettingsPayload {
 	"""
 	basePathSource: ConfigValueSourceValue!
 	"""
-	Listening address and port.
+	Address and port the server is listening on now.
 	"""
 	bindAddress: String!
 	"""
-	Where the listening address comes from; never the saved settings.
+	Where the listening address comes from.
 	"""
 	bindSource: ConfigValueSourceValue!
+	"""
+	Saved listening host, shown even while SCRYER_BIND overrides it.
+	"""
+	bindSavedHost: String
+	"""
+	False while SCRYER_BIND sets the listening address.
+	"""
+	bindEditable: Boolean!
+	"""
+	What pins the listening address; null when it can be changed here.
+	"""
+	bindPinnedBy: BindPinValue
+	"""
+	Address and port the next start listens on.
+	"""
+	bindPending: String!
+	"""
+	Whether a restart is needed for the saved listening address to apply.
+	"""
+	bindRestartRequired: Boolean!
+	"""
+	Stable reason the server is not listening where configured; null when it is.
+	"""
+	bindFallbackCode: String
+	"""
+	Address that could not be used, when there was one.
+	"""
+	bindFallbackAddress: String
+	"""
+	Operating-system or parse detail for the fallback, for display only.
+	"""
+	bindFallbackReason: String
 	"""
 	Passkey relying-party ID in effect since startup.
 	"""
@@ -34040,6 +34127,15 @@ input UpdateServiceSettingsInput {
 	any are registered.
 	"""
 	acknowledgePasskeyImpact: Boolean
+	"""
+	Save the listening host (an IPv4 or IPv6 address, no port); applies on
+	the next start. Omission preserves the saved value.
+	"""
+	bindHost: String
+	"""
+	Clear the saved listening host so the next start listens on loopback.
+	"""
+	resetBindHost: Boolean
 }
 
 """

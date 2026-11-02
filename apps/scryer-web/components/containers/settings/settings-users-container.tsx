@@ -514,7 +514,9 @@ export function SettingsUsersContainer() {
       <SettingsUsersSection
         settingsUsers={settingsUsers}
         libraries={libraries}
-        externalAccountInvitesPanel={<ExternalAccountInvitesContainer />}
+        externalAccountInvitesPanel={
+          <ExternalAccountInvitesContainer showMediaServersLink />
+        }
         memberListPoliciesPanel={
           canManageLists ? <MemberListPoliciesContainer /> : null
         }

@@ -1,7 +1,5 @@
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import * as React from "react";
-import { PublicUrlPanel } from "@/components/containers/settings/public-url-panel";
-import { TrustedProxiesPanel } from "@/components/containers/settings/trusted-proxies-panel";
 import { SettingsOverviewSection } from "@/components/views/settings/settings-overview-section";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import {
@@ -400,8 +398,6 @@ export function SettingsOverviewContainer({
         verificationSaving={verificationSaving}
         onVerificationDepthChange={handleVerificationDepthChange}
       />
-      <PublicUrlPanel />
-      <TrustedProxiesPanel />
       <ConfirmDialog
         open={experimentalFeaturesConfirmationOpen}
         contentId="settings-general-experimental-features-dialog"

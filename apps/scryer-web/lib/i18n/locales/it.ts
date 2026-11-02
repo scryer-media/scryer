@@ -241,7 +241,8 @@ const it: LocaleDictionary = {
   "nav.logs": "Log",
   "nav.serviceLogs": "Log del servizio",
   "nav.auditLogs": "Log di audit",
-  "nav.usersAccess": "Utenti e accesso",
+  "nav.users": "Utenti",
+  "nav.securityAccess": "Sicurezza e accesso",
   "nav.mobileTitle": "Navigazione Scryer",
   "nav.mobileDescription": "Navigazione principale di Scryer",
   "nav.mobileTrigger": "Apri navigazione",
@@ -323,7 +324,6 @@ const it: LocaleDictionary = {
   "dashboard.queueCountOne": "1 attivo",
   "settings.profile": "Profilo",
   "settings.general": "Generali",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",

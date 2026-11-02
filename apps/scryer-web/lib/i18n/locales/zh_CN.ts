@@ -214,7 +214,8 @@ const zh_CN: LocaleDictionary = {
   "nav.logs": "日志",
   "nav.serviceLogs": "服务日志",
   "nav.auditLogs": "审计日志",
-  "nav.usersAccess": "用户与访问",
+  "nav.users": "用户",
+  "nav.securityAccess": "安全与访问",
   "nav.mobileTitle": "Scryer 导航",
   "nav.mobileDescription": "Scryer 主导航",
   "nav.mobileTrigger": "打开导航",
@@ -296,7 +297,6 @@ const zh_CN: LocaleDictionary = {
   "dashboard.queueCountOne": "1 个进行中",
   "settings.profile": "配置",
   "settings.general": "通用",
-  "settings.security": "Security",
   "settings.securityLoginSettings": "Login settings",
   "settings.securityEnableFormLoginHelp":
     "When enabled, Scryer requires an authenticated user session. When disabled, requests resolve as the default admin user.",

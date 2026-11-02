@@ -570,7 +570,7 @@ export const SettingsContainer = memo(function SettingsContainer({
         : settingsSection === "backups"
           ? t("settings.backups")
           : settingsSection === "security"
-            ? t("settings.security")
+            ? t("nav.securityAccess")
             : settingsSection === "users"
               ? t("settings.users")
               : settingsSection === "mediaServers"

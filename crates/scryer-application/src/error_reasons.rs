@@ -5881,6 +5881,36 @@ pub mod media {
     ];
 }
 
+pub mod network {
+    /// The listening address is not an IPv4 or IPv6 address.
+    pub const BIND_HOST_INVALID: &str = "NETWORK_BIND_HOST_INVALID";
+    /// `SCRYER_BIND` sets the listening address, so the saved one cannot change it.
+    pub const BIND_ENV_PINNED: &str = "NETWORK_BIND_ENV_PINNED";
+    /// A request asked to save and to clear the listening address together.
+    pub const BIND_SAVE_AND_RESET: &str = "NETWORK_BIND_SAVE_AND_RESET";
+    /// The configured address could not be listened on, so loopback is used.
+    pub const BIND_FALLBACK_UNBINDABLE: &str = "NETWORK_BIND_FALLBACK_UNBINDABLE";
+    /// The saved listening address is not a valid address, so the default is used.
+    pub const BIND_STORED_HOST_INVALID: &str = "NETWORK_BIND_STORED_HOST_INVALID";
+    /// The saved listening address could not be read at startup, so the default is used.
+    pub const BIND_STORED_HOST_UNREADABLE: &str = "NETWORK_BIND_STORED_HOST_UNREADABLE";
+    /// Nothing about the listening address waits for a restart.
+    pub const RESTART_NOT_REQUIRED: &str = "NETWORK_RESTART_NOT_REQUIRED";
+    /// This process cannot restart itself.
+    pub const RESTART_UNAVAILABLE: &str = "NETWORK_RESTART_UNAVAILABLE";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        BIND_HOST_INVALID,
+        BIND_ENV_PINNED,
+        BIND_SAVE_AND_RESET,
+        BIND_FALLBACK_UNBINDABLE,
+        BIND_STORED_HOST_INVALID,
+        BIND_STORED_HOST_UNREADABLE,
+        RESTART_NOT_REQUIRED,
+        RESTART_UNAVAILABLE,
+    ];
+}
+
 pub mod scripts {
     /// The script schedule is invalid.
     pub const SCHEDULE_INVALID: &str = "SCRIPTS_SCHEDULE_INVALID";
@@ -5896,6 +5926,7 @@ mod tests {
         let areas: &[(&str, &[&str])] = &[
             ("METADATA_GATEWAY_", metadata_gateway::ALL),
             ("SCRIPTS_", scripts::ALL),
+            ("NETWORK_", network::ALL),
             ("LIBRARY_", library::ALL),
             ("EXTERNAL_IMPORT_", external_import::ALL),
             ("CATALOG_", catalog::ALL),

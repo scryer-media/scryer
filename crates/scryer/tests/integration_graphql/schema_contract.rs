@@ -867,8 +867,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createFolder"));
     // The first-run authentication decision adds one mutation: 284->285.
     assert!(mutation_field_names.contains(&"completeInitialAuthentication"));
+    // Restarting so a saved listening address takes effect adds one
+    // mutation: 285->286.
+    assert!(mutation_field_names.contains(&"restartForNetworkChange"));
     assert_eq!(
-        mutation_field_count, 285,
+        mutation_field_count, 286,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1267,14 +1270,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Tagged alias metadata adds TitleAliasPayload: public types 990->991,
     // OBJECT 534->535.
     assert!(public_type_names.contains(&"TitleAliasPayload"));
+    // The listening address adds what pins it and the first-run network
+    // choice: public types 991->993, ENUM 201->203. The stated baseline was
+    // also one OBJECT behind the schema it ran against, so the totals absorb
+    // that drift: public types 993->994, OBJECT 535->536.
+    for name in ["BindPinValue", "InitialNetworkAccess"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        991,
+        994,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 535);
+    assert_eq!(kind_count("OBJECT"), 536);
     assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 201);
+    assert_eq!(kind_count("ENUM"), 203);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
