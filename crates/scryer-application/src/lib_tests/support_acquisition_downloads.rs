@@ -2518,6 +2518,7 @@ pub(super) struct StubDownloadClient {
     pub(super) delete_requires_absent_paths: Arc<Mutex<Vec<std::path::PathBuf>>>,
     pub(super) recent_completed_downloads: Arc<Mutex<Option<Vec<CompletedDownload>>>>,
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
+    pub(super) remove_queue_item_on_delete: bool,
     pub(super) deleted_requests: DeletedDownloadRequests,
     pub(super) delete_error: Arc<Mutex<Option<String>>>,
     /// A typed refusal returned for every delete while set, after
@@ -2668,6 +2669,13 @@ impl StubDownloadClient {
             .lock()
             .await
             .push((id.to_string(), is_history));
+        if self.remove_queue_item_on_delete && !is_history {
+            self.queue_items.lock().await.retain(|item| {
+                !(item.download_client_item_id == id
+                    && client_id.is_none_or(|client| client == item.client_id)
+                    && client_type.is_none_or(|kind| kind == item.client_type))
+            });
+        }
         Ok(())
     }
 }

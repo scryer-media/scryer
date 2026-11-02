@@ -1,4 +1,4 @@
-use async_graphql::{Context, ID, Object, Result as GqlResult};
+use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult, SimpleObject};
 use scryer_application::WantedSearchOutcome;
 
 use scryer_interface_core::{actor_from_ctx, app_from_ctx, to_gql_error};
@@ -6,6 +6,26 @@ use scryer_interface_media::types::*;
 
 #[derive(Default)]
 pub struct WantedMutations;
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum StandbyQueueChoiceValue {
+    Check,
+    Queue,
+    CancelAndQueue,
+}
+
+#[derive(InputObject)]
+pub struct StandbyConflictIdentityInput {
+    pub client_id: Option<ID>,
+    pub client_type: String,
+    pub item_id: String,
+}
+
+#[derive(SimpleObject)]
+pub struct QueueStandbyReleasePayload {
+    pub grabbed: bool,
+    pub conflicts: Vec<QueueDownloadConflictPayload>,
+}
 
 /// Shared builder for the media-request approval search outcome. The convergence
 /// cutover removed the per-item `trigger*WantedSearch` mutations (the convergence
@@ -20,6 +40,47 @@ pub(crate) fn wanted_search_payload(outcome: WantedSearchOutcome) -> WantedSearc
 
 #[Object]
 impl WantedMutations {
+    /// Queue a saved candidate as an operator override, confirming title-wide conflicts first.
+    async fn queue_standby_release(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        #[graphql(default_with = "StandbyQueueChoiceValue::Check")] choice: StandbyQueueChoiceValue,
+        #[graphql(default)] confirmed: Vec<StandbyConflictIdentityInput>,
+    ) -> GqlResult<QueueStandbyReleasePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let choice = match choice {
+            StandbyQueueChoiceValue::Check => scryer_application::StandbyQueueChoice::Check,
+            StandbyQueueChoiceValue::Queue => scryer_application::StandbyQueueChoice::Queue,
+            StandbyQueueChoiceValue::CancelAndQueue => {
+                scryer_application::StandbyQueueChoice::CancelAndQueue
+            }
+        };
+        let confirmed = confirmed
+            .into_iter()
+            .map(|item| {
+                scryer_application::ClientJobLocator::new(
+                    item.client_id.as_ref().map(|id| id.as_str()),
+                    item.client_type,
+                    item.item_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let outcome = app
+            .queue_standby_release(&actor, id.as_str(), choice, &confirmed)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(QueueStandbyReleasePayload {
+            grabbed: outcome.grabbed,
+            conflicts: outcome
+                .conflicts
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
+        })
+    }
+
     /// Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
     async fn trigger_title_mismatch_recovery_search(
         &self,

@@ -8346,6 +8346,22 @@ const en: LocaleDictionary = {
     "Counts rows keyed to this scope; season packs are counted on the season's anchor episode.",
   "wanted.loadingStandby": "Loading saved candidates…",
   "wanted.standbyCandidates": "Standby candidates · {{count}}",
+  "wanted.downloadStandby": "Download",
+  "wanted.downloadStandbyLabel": "Download {{name}}",
+  "wanted.standbyConflictTitle": "Downloads already in progress",
+  "wanted.standbyConflictDescription":
+    "Queue {{name}} alongside these downloads, or cancel them and queue it instead.",
+  "wanted.standbyQueue": "Queue",
+  "wanted.standbyQueuedRefreshFailed":
+    "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
+  "wanted.standbyCancelAndQueue": "Cancel and queue",
+  "wanted.standbyNotFound": "This saved candidate no longer exists.",
+  "wanted.standbyNotAvailable":
+    "This saved candidate is no longer available. Refresh the list and try again.",
+  "wanted.standbyNotQueueable":
+    "The saved release could not be queued. It remains available to retry.",
+  "wanted.standbyCancellationUnconfirmed":
+    "The download queue or cancellation could not be confirmed. The saved release was not queued.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",

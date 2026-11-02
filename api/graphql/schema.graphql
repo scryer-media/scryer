@@ -20655,6 +20655,10 @@ type MutationRoot {
 		requestId: ID!
 	): MediaRequestActionPayload!
 	"""
+	Queue a saved candidate as an operator override, confirming title-wide conflicts first.
+	"""
+	queueStandbyRelease(id: ID!, choice: StandbyQueueChoiceValue! = CHECK, confirmed: [StandbyConflictIdentityInput!]! = []): QueueStandbyReleasePayload!
+	"""
 	Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
 	"""
 	triggerTitleMismatchRecoverySearch(
@@ -26643,6 +26647,11 @@ input QueueManualImportInput {
 	files: [ManualImportCandidateMappingInput!]!
 }
 
+type QueueStandbyReleasePayload {
+	grabbed: Boolean!
+	conflicts: [QueueDownloadConflictPayload!]!
+}
+
 """
 Names one release of an interactive search to grab without assigning it a title.
 """
@@ -29951,6 +29960,18 @@ enum SortDirectionValue {
 	Highest or latest values first.
 	"""
 	DESC
+}
+
+input StandbyConflictIdentityInput {
+	clientId: ID
+	clientType: String!
+	itemId: String!
+}
+
+enum StandbyQueueChoiceValue {
+	CHECK
+	QUEUE
+	CANCEL_AND_QUEUE
 }
 
 """

@@ -867,6 +867,19 @@ pub struct QueuedReleaseSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandbyQueueChoice {
+    Check,
+    Queue,
+    CancelAndQueue,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StandbyQueueOutcome {
+    pub grabbed: bool,
+    pub conflicts: Vec<SubmissionScopeConflict>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubmissionConflictPolicy {
     Abort,
     Skip,
