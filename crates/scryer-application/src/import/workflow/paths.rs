@@ -929,7 +929,7 @@ mod media_registry_discovery_tests {
     use super::*;
 
     #[test]
-    fn every_registered_extension_survives_discovery_and_destination_naming() {
+    fn every_standalone_extension_survives_discovery_and_destination_naming() {
         let dir = tempfile::tempdir().unwrap();
         for entry in scryer_media_types::formats::MEDIA_FORMATS {
             let name = format!("Fixture.Payload.{}_", entry.extension.to_ascii_uppercase());
@@ -939,18 +939,26 @@ mod media_registry_discovery_tests {
         let files = discover_video_files(dir.path(), false).unwrap();
         assert_eq!(
             files.len(),
-            scryer_media_types::formats::MEDIA_FORMATS.len()
+            scryer_media_types::formats::standalone_video_extensions().count()
         );
         for entry in scryer_media_types::formats::MEDIA_FORMATS {
             let path = dir.path().join(format!(
                 "Fixture.Payload.{}_",
                 entry.extension.to_ascii_uppercase()
             ));
-            assert!(files.iter().any(|file| file.path() == path));
+            // Probe-only suffixes and disc companions are never import candidates.
             assert_eq!(
-                import_video_destination_extension(&path, None),
+                files.iter().any(|file| file.path() == path),
+                entry.is_standalone_video(),
+                "{}",
                 entry.extension
             );
+            if entry.is_standalone_video() {
+                assert_eq!(
+                    import_video_destination_extension(&path, None),
+                    entry.extension
+                );
+            }
         }
     }
 }

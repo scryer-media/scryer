@@ -1771,7 +1771,9 @@ fn find_video_files_accepts_direct_video_file() {
 #[test]
 fn find_video_files_rejects_direct_non_video_without_reading_it_as_a_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let payload = dir.path().join("payload.bin");
+    // `.bin` is a registered disc image, so the non-video payload uses an
+    // unregistered suffix.
+    let payload = dir.path().join("payload.blob");
     std::fs::write(&payload, b"data").expect("write");
 
     assert!(
