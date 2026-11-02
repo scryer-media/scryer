@@ -217,8 +217,11 @@ pub fn analyze_file_with_options(
     let mut source = match source::FileSource::open(file_path) {
         Ok(source) => source,
         // An unregistered suffix is unsupported whether or not the file is
-        // readable; only a registered suffix reports the I/O failure.
-        Err(_) if scryer_media_types::formats::media_format_for_extension(&ext).is_none() => {
+        // readable; a registered suffix, or none at all, reports the I/O failure.
+        Err(_)
+            if !ext.is_empty()
+                && scryer_media_types::formats::media_format_for_extension(&ext).is_none() =>
+        {
             return Err(MediaInfoError::UnsupportedFormat(ext));
         }
         Err(error) => return Err(error.into()),
