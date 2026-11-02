@@ -735,7 +735,7 @@ export function SettingsRecycleBinSection({
                               />
                             </TableCheckboxCell>
                             <TableCell className="w-full min-w-64 max-w-0 @max-[72rem]/recycle:col-span-full @max-[72rem]/recycle:w-auto @max-[72rem]/recycle:min-w-0 @max-[72rem]/recycle:max-w-none @max-[72rem]/recycle:pl-8!">
-                              <div className="flex items-center gap-1 @max-[72rem]/recycle:items-start">
+                              <div className="flex items-center gap-3 @max-[72rem]/recycle:items-start">
                                 <TableDisclosureButton
                                   id={selectorId(
                                     "settings-recycle-bin-history",
