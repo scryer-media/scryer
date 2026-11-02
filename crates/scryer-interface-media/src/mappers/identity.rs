@@ -127,8 +127,25 @@ pub fn from_media_server_connection(
                 destination_path: mapping.destination_path,
             })
             .collect(),
+        // Filled in by the listing that reads sweep state alongside.
+        watch_signal_sync: None,
         created_at: connection.created_at,
         updated_at: connection.updated_at,
+    }
+}
+
+pub fn from_media_server_signal_sync_state(
+    status: scryer_application::media_server_signals::MediaServerSignalSyncStatus,
+) -> MediaServerWatchSignalSyncPayload {
+    let state = status.state;
+    MediaServerWatchSignalSyncPayload {
+        last_started_at: state.last_started_at,
+        last_clean_sweep_at: state.last_success_at,
+        last_error: state.last_error,
+        last_error_code: state.last_error_code,
+        clean_sweep_stale: status.clean_sweep_stale,
+        participant_count: state.participant_count,
+        signal_count: state.signal_count,
     }
 }
 

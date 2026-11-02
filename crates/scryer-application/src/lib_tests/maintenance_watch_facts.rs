@@ -150,6 +150,7 @@ async fn record_sweep(
             last_started_at: Some(Utc::now()),
             last_success_at,
             last_error: None,
+            last_error_code: None,
             participant_count: 1,
             signal_count: 1,
             updated_at: Utc::now(),
@@ -178,6 +179,7 @@ async fn record_play(
                 played: true,
                 play_count: 1,
                 last_played_at: Some(Utc::now()),
+                is_favorite: false,
                 observed_at: Utc::now(),
             }],
         )

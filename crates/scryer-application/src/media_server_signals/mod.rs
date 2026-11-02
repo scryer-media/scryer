@@ -18,10 +18,13 @@
 //!
 //! # Scope of this wave
 //!
-//! Jellyfin only, movies and episodes only, no show-level rollups, and no
-//! consent surface: played state is read with the connection's stored admin
-//! key, which the RFC classifies as `server_admin` visibility. Emby and Plex
-//! are adapter arms, not redesigns.
+//! Jellyfin, Emby, and Plex; movies and episodes only, no show-level rollups,
+//! and no consent surface: played state is read with the connection's stored
+//! admin credential, which the RFC classifies as `server_admin` visibility.
+//! Each provider is an adapter arm, not a redesign.
+//!
+//! * [`reasons`] — the stable codes stored beside an incomplete sweep's
+//!   sentence.
 //!
 //! # What is not here
 //!
@@ -32,13 +35,14 @@
 //! [`crate::ports::MediaServerSignalRepository`].
 
 pub mod mapping;
+pub mod reasons;
 pub mod sync;
 
 pub use mapping::{
-    EpisodeNumberIndex, MappedSignalSubject, SIGNAL_EXTERNAL_ID_SOURCES, TitleExternalIdIndex,
-    resolve_episode, resolve_subject, resolve_title,
+    EpisodeNumberIndex, MappedSignalSubject, SIGNAL_EXTERNAL_ID_SOURCES, ScryerLibraryPaths,
+    TitleExternalIdIndex, is_foreign_item, resolve_episode, resolve_subject, resolve_title,
 };
 pub use sync::{
-    MediaServerSignalSyncReport, SIGNAL_SYNC_PROVIDERS, log_signal_sync_report, new_signal_id,
-    signal_sync_summary,
+    MediaServerSignalSyncReport, MediaServerSignalSyncStatus, SIGNAL_SYNC_PROVIDERS,
+    log_signal_sync_report, new_signal_id, signal_sync_summary,
 };

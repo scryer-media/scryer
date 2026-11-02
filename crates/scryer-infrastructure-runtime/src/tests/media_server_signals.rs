@@ -60,6 +60,9 @@ fn movie_signal(item_id: &str, title_id: Option<&str>, play_count: i64) -> NewUs
         played: true,
         play_count,
         last_played_at: Some(Utc::now()),
+        // Only the movie fixture is a favourite, so a round trip proves the
+        // flag is stored rather than defaulted.
+        is_favorite: true,
         observed_at: Utc::now(),
     }
 }
@@ -75,6 +78,7 @@ fn episode_signal(item_id: &str, title_id: &str, episode_id: &str) -> NewUserMed
         played: true,
         play_count: 1,
         last_played_at: Some(Utc::now()),
+        is_favorite: false,
         observed_at: Utc::now(),
     }
 }
@@ -110,6 +114,7 @@ async fn signals_round_trip_with_their_subject_and_play_facts() {
     assert_eq!(signal.play_count, 3);
     assert!(signal.played);
     assert!(signal.last_played_at.is_some());
+    assert!(signal.is_favorite);
     assert!(signal.scryer_episode_id.is_none());
     assert_eq!(signal.sync_generation, 1);
 
@@ -329,6 +334,7 @@ async fn sync_state_upserts_in_place_and_keeps_its_error_until_the_next_success(
             last_started_at: Some(failed_at),
             last_success_at: None,
             last_error: Some("status 401".to_string()),
+            last_error_code: Some("WATCH_SYNC_ACCESS_DENIED".to_string()),
             participant_count: 2,
             signal_count: 0,
             updated_at: failed_at,
@@ -339,6 +345,10 @@ async fn sync_state_upserts_in_place_and_keeps_its_error_until_the_next_success(
     let states = store.signal_sync_states().await.expect("read states");
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].last_error.as_deref(), Some("status 401"));
+    assert_eq!(
+        states[0].last_error_code.as_deref(),
+        Some("WATCH_SYNC_ACCESS_DENIED")
+    );
     assert!(states[0].last_success_at.is_none());
     assert!(states[0].enabled);
     assert_eq!(states[0].participant_count, 2);
@@ -352,6 +362,7 @@ async fn sync_state_upserts_in_place_and_keeps_its_error_until_the_next_success(
             last_started_at: Some(succeeded_at),
             last_success_at: Some(succeeded_at),
             last_error: None,
+            last_error_code: None,
             participant_count: 2,
             signal_count: 7,
             updated_at: succeeded_at,
@@ -363,6 +374,7 @@ async fn sync_state_upserts_in_place_and_keeps_its_error_until_the_next_success(
     // One row per connection: the upsert replaced, it did not accumulate.
     assert_eq!(states.len(), 1);
     assert!(states[0].last_error.is_none());
+    assert!(states[0].last_error_code.is_none());
     assert!(states[0].last_success_at.is_some());
     assert_eq!(states[0].signal_count, 7);
 

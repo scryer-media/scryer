@@ -12467,8 +12467,8 @@ pub trait MediaServerPlaybackProbe: Send + Sync {
 /// One played item exactly as a provider reported it, before any Scryer
 /// identity is attached.
 ///
-/// This is the provider-neutral shape every adapter normalizes into: Jellyfin
-/// today, Emby and Plex next. It carries the provider's own ids and the
+/// This is the provider-neutral shape every adapter normalizes into, whatever
+/// the provider. It carries the provider's own ids and the
 /// external ids needed to map the item, and nothing else — no Scryer title id,
 /// because the adapter has no business resolving one, and no credential.
 ///
@@ -12477,7 +12477,12 @@ pub trait MediaServerPlaybackProbe: Send + Sync {
 /// `series_external_ids` carries the *series'* ids: episode-level provider ids
 /// are unreliable across providers, so the series plus season/episode numbers
 /// is the join that actually holds.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `file_paths` are where the server keeps the item's files, in the server's
+/// own spelling. They only decide whether an unmatched item could still be a
+/// Scryer title; they are never stored and never logged, which is why `Debug`
+/// shows only how many there are.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ProviderPlayedItem {
     pub provider_item_id: String,
     pub kind: scryer_domain::MediaServerSignalKind,
@@ -12491,27 +12496,83 @@ pub struct ProviderPlayedItem {
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// Marked as a favourite by this person. Plex has no favourite, so its
+    /// adapter always reports `false`.
+    pub is_favorite: bool,
+    /// The item's file paths on the server, when the server reports them.
+    pub file_paths: Vec<String>,
 }
 
-/// Reads one participant's played items from one media-server connection.
+impl std::fmt::Debug for ProviderPlayedItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderPlayedItem")
+            .field("provider_item_id", &self.provider_item_id)
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("external_ids", &self.external_ids)
+            .field("series_external_ids", &self.series_external_ids)
+            .field("series_provider_item_id", &self.series_provider_item_id)
+            .field("season_number", &self.season_number)
+            .field("episode_number", &self.episode_number)
+            .field("played", &self.played)
+            .field("play_count", &self.play_count)
+            .field("last_played_at", &self.last_played_at)
+            .field("is_favorite", &self.is_favorite)
+            .field("file_paths", &self.file_paths.len())
+            .finish()
+    }
+}
+
+/// Why a watch-history read did not produce a complete answer.
+///
+/// `reason` is one of [`crate::media_server_signals::reasons`] and is what
+/// callers decide on; `message` is the credential-free sentence stored beside
+/// it for people.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct SignalReadFailure {
+    pub reason: &'static str,
+    pub message: String,
+}
+
+impl SignalReadFailure {
+    pub fn new(reason: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+}
+
+/// Opens one media-server connection for a watch-history sweep.
 ///
 /// Implemented once in infrastructure and dispatched on
-/// [`scryer_domain::MediaServerConnection::provider`], so adding Emby or Plex
-/// is a new arm rather than a new seam. The implementation owns paging,
-/// truncation, and every provider-specific quirk; callers see only normalized
-/// items.
-///
-/// An `Err` is this participant's failure alone. The sync job records it
-/// against the connection and moves to the next participant; it never aborts
-/// the sweep, because one unreadable account must not blank every other
-/// person's watch history.
+/// [`scryer_domain::MediaServerConnection::provider`]. Opening does whatever
+/// is needed once per connection per sweep (resolving which server to talk
+/// to, which account owns it); the reader it returns then reads each
+/// participant. An `Err` from `open` is the connection's failure: no
+/// participant can be read.
 #[async_trait]
 pub trait MediaServerSignalSource: Send + Sync {
-    async fn fetch_played_items(
+    async fn open(
         &self,
         connection: &scryer_domain::MediaServerConnection,
+    ) -> Result<Box<dyn MediaServerSignalReader>, SignalReadFailure>;
+}
+
+/// Reads one participant's played items from an opened connection.
+///
+/// The implementation owns paging, truncation, and every provider-specific
+/// quirk; callers see only normalized items. An `Err` is this participant's
+/// failure alone. The sync job records it against the connection and moves to
+/// the next participant; it never aborts the sweep, because one unreadable
+/// account must not blank every other person's watch history.
+#[async_trait]
+pub trait MediaServerSignalReader: Send + Sync {
+    async fn fetch_played_items(
+        &self,
         external_user_id: &str,
-    ) -> AppResult<Vec<ProviderPlayedItem>>;
+    ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
 }
 
 /// Durable storage for normalized media-server watch signals.
