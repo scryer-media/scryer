@@ -4235,6 +4235,9 @@ pub mod integration {
         "INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC";
     /// Indexer connection test failed.
     pub const INDEXER_CONNECTION_TEST_FAILED: &str = "INTEGRATION_INDEXER_CONNECTION_TEST_FAILED";
+    /// A built-in download client's connection test failed in a way the client did not classify.
+    pub const DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED: &str =
+        "INTEGRATION_DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED";
     /// Base URL must use http or https.
     pub const BASE_URL_INVALID: &str = "INTEGRATION_BASE_URL_INVALID";
     /// Base URL must include a host.
@@ -4547,6 +4550,7 @@ pub mod integration {
         PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS,
         PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC,
         INDEXER_CONNECTION_TEST_FAILED,
+        DOWNLOAD_CLIENT_CONNECTION_TEST_FAILED,
         BASE_URL_INVALID,
         BASE_URL_HOST_REQUIRED,
         BASE_URL_CREDENTIALS_FORBIDDEN,

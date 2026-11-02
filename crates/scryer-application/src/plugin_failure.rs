@@ -9,6 +9,10 @@
 //!
 //! Most reasons mirror the code a plugin answered with. The rest name what the
 //! host saw when the plugin never answered at all.
+//!
+//! The built-in download clients (NZBGet, SABnzbd, Weaver) report their
+//! failures the same way, through [`AppError::native_client_failed`], so a
+//! wrong key reads the same whether a plugin or the host dialled the service.
 
 use scryer_plugin_sdk::{PluginError, PluginErrorCode};
 
@@ -165,6 +169,23 @@ impl PluginFailureReason {
         }
     }
 
+    /// The reason a service's non-success HTTP status names, for a client the
+    /// host dials itself. Only the status decides: a refused key is 401 or
+    /// 403, a missing API is 404, and a service that cannot answer right now
+    /// is 408 or 5xx. Anything else is a refusal retrying will not change.
+    pub fn for_http_status(status: reqwest::StatusCode) -> Self {
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Self::AuthFailed,
+            reqwest::StatusCode::TOO_MANY_REQUESTS => Self::RateLimited,
+            reqwest::StatusCode::NOT_FOUND => {
+                Self::from_code(&PluginErrorCode::from(plugin_codes::ENDPOINT_NOT_FOUND))
+            }
+            reqwest::StatusCode::REQUEST_TIMEOUT => Self::UpstreamUnavailable,
+            status if status.is_server_error() => Self::UpstreamUnavailable,
+            _ => Self::Permanent,
+        }
+    }
+
     /// Whether this is one of the reasons in [`PluginFailureReason::KNOWN`].
     pub fn is_known(&self) -> bool {
         !matches!(self, Self::PluginCode(_))
@@ -309,6 +330,21 @@ impl AppError {
         Self::PluginFailed {
             message: redact_url_credentials(&message.into()),
             failure: PluginFailure::new(reason),
+        }
+    }
+
+    /// A built-in download client classified a failure at its own boundary.
+    /// The sentence is the client's own and also rides as the detail, bounded
+    /// and with any URL credential removed, because no plugin stands behind it
+    /// to say anything more specific.
+    pub fn native_client_failed(reason: PluginFailureReason, message: impl Into<String>) -> Self {
+        let message = redact_url_credentials(&message.into());
+        Self::PluginFailed {
+            failure: PluginFailure {
+                reason,
+                detail: public_detail(&message),
+            },
+            message,
         }
     }
 
@@ -601,6 +637,45 @@ mod tests {
         let detail = failure.detail.expect("a detail");
         assert_eq!(detail.chars().count(), DETAIL_MAX_CHARS);
         assert!(detail.ends_with('…'));
+    }
+
+    #[test]
+    fn a_native_client_status_names_the_reason_clients_translate() {
+        for (status, reason) in [
+            (401, "PLUGIN_AUTH_FAILED"),
+            (403, "PLUGIN_AUTH_FAILED"),
+            (429, "PLUGIN_RATE_LIMITED"),
+            (404, "PLUGIN_ENDPOINT_NOT_FOUND"),
+            (408, "PLUGIN_UPSTREAM_UNAVAILABLE"),
+            (500, "PLUGIN_UPSTREAM_UNAVAILABLE"),
+            (502, "PLUGIN_UPSTREAM_UNAVAILABLE"),
+            (503, "PLUGIN_UPSTREAM_UNAVAILABLE"),
+            (400, "PLUGIN_PERMANENT_FAILURE"),
+            (405, "PLUGIN_PERMANENT_FAILURE"),
+            (302, "PLUGIN_PERMANENT_FAILURE"),
+        ] {
+            let status = reqwest::StatusCode::from_u16(status).expect("a status");
+            assert_eq!(
+                PluginFailureReason::for_http_status(status).as_str(),
+                reason,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_client_failure_carries_its_sentence_as_a_credential_free_detail() {
+        let error = AppError::native_client_failed(
+            PluginFailureReason::UpstreamUnavailable,
+            "sabnzbd api call failed: error sending request for url \
+             (http://client.invalid/api?apikey=synthetic-key&mode=queue)",
+        );
+        let failure = error.plugin_failure().expect("a typed failure");
+        assert_eq!(failure.reason, PluginFailureReason::UpstreamUnavailable);
+        let detail = failure.detail.as_deref().expect("a detail");
+        assert!(!detail.contains("synthetic-key"), "{detail}");
+        assert!(!error.to_string().contains("synthetic-key"), "{error}");
+        assert!(error.to_string().starts_with("sabnzbd api call failed"));
     }
 
     #[test]
