@@ -113,6 +113,8 @@ export type DiscoverySection = {
   sectionId: string;
   sectionType: string;
   title: string;
+  /** Rail-label key of a "because you like" section; null for the rest. */
+  labelKey?: string | null;
   surface: string;
   totalCount: number;
   items: DiscoveryItem[];
@@ -160,6 +162,8 @@ export type DiscoveryHomeSection = {
   sectionId: string;
   sectionType: string;
   title: string;
+  /** Rail-label key of a "because you like" section; null for the rest. */
+  labelKey?: string | null;
   surface: CatalogDiscoverySurface;
   totalCount: number;
   items: DiscoveryHomeCard[];

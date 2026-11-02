@@ -321,6 +321,7 @@ pub fn from_discovery_section(
         section_type: section.section_type,
         title: section.title,
         surface: section.surface,
+        label_key: section.label_key,
         total_count: Long(section.total_count),
         items: section
             .items
@@ -358,6 +359,7 @@ fn from_discovery_home_section(
         section_type: section.section_type,
         title: section.title,
         surface,
+        label_key: section.label_key,
         total_count: Long(section.total_count),
         items,
     })

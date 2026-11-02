@@ -27,6 +27,13 @@ export function discoverySectionType(section: { sectionType: string }) {
   return section.sectionType.trim().toUpperCase();
 }
 
+// A "because you like" rail carries the allowlisted label it is named after
+// (`coming-of-age`). The allowlist itself is the server's; the keys this client
+// can translate are listed in lib/contracts/discovery-rail-labels.json.
+export function discoveryRailLabelTitleKey(labelKey: string) {
+  return `discovery.rail.becauseYouLike.${labelKey.trim()}`;
+}
+
 // Mirrors the view's own item identity so merge dedupe and hero visibility agree.
 function discoveryItemKey(item: OrderableDiscoveryItem) {
   return `${item.targetKind}:${item.targetKey}`;
@@ -77,8 +84,8 @@ function worldShelfSlotType(section: { sectionType: string }) {
   return MERGED_SECTION_TARGETS.get(sectionType) ?? sectionType;
 }
 
-// Personalized shelf, most specific reason first. Theme/tag rails ("Because You
-// Like Isekai") outrank genre rails ("Because You Like Animation") - the same
+// Personalized shelf, most specific reason first. Theme/tag rails ("Because you
+// like isekai") outrank genre rails ("Because you like fantasy") - the same
 // specificity ladder the Rust composer uses for dedupe priority, so the reading
 // order matches the order in which titles were claimed.
 const PERSONALIZED_SHELF_SECTION_ORDER = [

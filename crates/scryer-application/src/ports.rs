@@ -461,6 +461,10 @@ pub struct DiscoverySectionResult {
     pub surface: String,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
+    /// The allowlisted rail label a "because you like" section is named
+    /// after, in its canonical hyphenated form (`coming-of-age`); `None` for
+    /// every other section. Clients translate it and fall back to `title`.
+    pub label_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

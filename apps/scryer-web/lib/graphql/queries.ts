@@ -108,6 +108,7 @@ export const DISCOVERY_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -118,6 +119,7 @@ const DISCOVERY_HOME_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {

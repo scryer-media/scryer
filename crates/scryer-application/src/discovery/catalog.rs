@@ -348,10 +348,11 @@ pub(super) fn catalog_personalized_groups(
         .collect::<Vec<_>>();
     let items = gated_items.as_slice();
 
-    // Same specificity ladder and same anime/animation boundary as the home
-    // composer (`personalized_section_results`): theme/tag groups claim titles
-    // before the broader genre groups, and neither may comingle Western animation
-    // with anime. The two surfaces must not disagree about what a rail means.
+    // Same specificity ladder as the home composer
+    // (`personalized_section_results`): theme/tag groups claim titles before
+    // the broader genre groups. Labels come from the rail-label allowlist, so
+    // no group is ever named after a medium; medium stays with the gate above.
+    // The two surfaces must not disagree about what a rail means.
     for label in
         canonical_affinity_labels_for_profile(items, &library_profile.theme_labels, "theme")
     {
@@ -368,7 +369,6 @@ pub(super) fn catalog_personalized_groups(
                         "theme",
                         settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -405,7 +405,6 @@ pub(super) fn catalog_personalized_groups(
                         "genre",
                         settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -681,12 +680,18 @@ pub(super) fn corroborated_canonical_genre_labels(
 
 /// Ranked labels the library actually supports.
 ///
+/// Only labels on the rail-label allowlist for `family` are counted
+/// ([`discovery_rail_label`]): a label nobody would say out loud ("School",
+/// "Anime") is skipped and the next allowlisted label considered, however many
+/// owned titles carry it.
+///
 /// `min_carriers` is the evidence floor: a label carried by fewer owned titles
 /// than that is skipped and the next-ranked label considered, rather than
 /// promoted into a rail the library never earned. Three crime titles out of ten
 /// is not a crime library.
 pub(super) fn top_owned_title_labels<'a, F, I>(
     titles: &'a [Title],
+    family: DiscoveryRailLabelFamily,
     labels_for_title: F,
     limit: usize,
     min_carriers: usize,
@@ -703,8 +708,7 @@ where
             let raw_label = raw_label.as_ref();
             let label_key = normalize_discovery_affinity_key(raw_label);
             if label_key.is_empty()
-                || discovery_affinity_label_is_generic(&label_key)
-                || raw_label.trim_start().starts_with("scryer:")
+                || discovery_rail_label(family, raw_label).is_none()
                 || !seen_for_title.insert(label_key.clone())
             {
                 continue;
@@ -800,31 +804,6 @@ pub(super) fn discovery_item_comparable_rating(item: &DiscoveryItemRecord) -> f6
         .filter(|rating| rating.is_finite())
         .map(|rating| if rating <= 1.0 { rating * 10.0 } else { rating })
         .unwrap_or_default()
-}
-
-pub(super) fn discovery_affinity_label_is_generic(normalized: &str) -> bool {
-    matches!(
-        normalized,
-        "movie"
-            | "movies"
-            | "series"
-            | "show"
-            | "shows"
-            // "anime" is deliberately absent: it names a tradition, not a medium
-            // noun, so "Because You Like Anime" is a legitimate rail and the
-            // anime/animation boundary guard depends on the label being reachable.
-            | "recommendation"
-            | "recommendations"
-            | "similar"
-            | "relation"
-            | "list"
-            | "community"
-            | "tmdb"
-            | "tvdb"
-            | "mal"
-            | "anilist"
-            | "myanimelist"
-    )
 }
 
 pub(super) fn normalize_discovery_affinity_key(value: &str) -> String {
@@ -934,6 +913,7 @@ pub(super) fn section_result(
         surface,
         total_count,
         items,
+        label_key: None,
     })
 }
 

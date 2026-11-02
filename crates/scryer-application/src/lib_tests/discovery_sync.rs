@@ -82,7 +82,7 @@ fn rail_floor_padding_titles(library_id: &str, count: usize) -> Vec<Title> {
                 Vec::new(),
             );
             title.library_id = library_id.to_string();
-            title.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+            title.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
             title
                 .canonical_tags
                 .extend(canonical_theme_tags(&["Isekai"]));
@@ -205,7 +205,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -232,7 +232,7 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -368,7 +368,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "603")],
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Science Fiction"]);
     owned_drama_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Horror", "Isekai"]));
@@ -395,7 +395,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         vec![("tmdb_movie", "605")],
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
-    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi.canonical_tags = canonical_genre_tags(&["Science Fiction"]);
     owned_sci_fi
         .canonical_tags
         .extend(canonical_theme_tags(&["Isekai"]));
@@ -521,7 +521,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi One",
         "movie",
         89.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -536,7 +536,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Sci-Fi Two",
         "movie",
         88.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -581,7 +581,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "High-Rated Sci-Fi",
         "movie",
         85.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -656,7 +656,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         "Weekly Series Two",
         "series",
         80.0,
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         false,
         true,
@@ -805,7 +805,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     rail_padding.extend(rail_floor_padding_items(
         "context-run",
         "scifi",
-        &["Sci-Fi"],
+        &["Science Fiction"],
         &[],
         10,
     ));
@@ -892,7 +892,7 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         viewer_home
             .facets
             .iter()
-            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Sci Fi")
+            .any(|facet| facet.facet_name == "genre" && facet.facet_value == "Science Fiction")
     );
     assert!(
         viewer_home
@@ -917,17 +917,20 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     assert!(personalized_section_types.contains(&"BECAUSE_YOU_LIKE_TAG"));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Sci Fi"
+            && section.title == "Because you like science fiction"
+            && section.label_key.as_deref() == Some("science-fiction")
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
         section.section_type == "BECAUSE_YOU_LIKE_GENRE"
-            && section.title == "Because You Like Drama"
+            && section.title == "Because you like drama"
     }));
     assert!(!viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Horror"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because you like horror"
     }));
     assert!(viewer_home.personalized_sections.iter().any(|section| {
-        section.section_type == "BECAUSE_YOU_LIKE_TAG" && section.title == "Because You Like Isekai"
+        section.section_type == "BECAUSE_YOU_LIKE_TAG"
+            && section.title == "Because you like isekai"
+            && section.label_key.as_deref() == Some("isekai")
     }));
 
     let filtered = app

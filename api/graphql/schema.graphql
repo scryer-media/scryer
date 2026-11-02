@@ -4305,6 +4305,13 @@ type DiscoveryHomeSectionPayload {
 	"""
 	surface: DiscoverySurfaceValue!
 	"""
+	Rail-label key a personalized "because you like" section is named after,
+	in canonical hyphenated form such as `coming-of-age`; null for every other
+	section. Clients translate the key and fall back to `title` for a key they
+	do not know.
+	"""
+	labelKey: String
+	"""
 	Total matching items before the returned item page is applied.
 	"""
 	totalCount: Long!
@@ -4590,6 +4597,13 @@ type DiscoverySectionPayload {
 	Surface label for this section.
 	"""
 	surface: String!
+	"""
+	Rail-label key a personalized "because you like" section is named after,
+	in canonical hyphenated form such as `coming-of-age`; null for every other
+	section. Clients translate the key and fall back to `title` for a key they
+	do not know.
+	"""
+	labelKey: String
 	"""
 	Total matching items before the returned item page is applied.
 	"""

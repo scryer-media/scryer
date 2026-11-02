@@ -405,6 +405,7 @@ fn discovery_home_public_sections_filter_owned_catalog_titles() {
             surface: "public".to_string(),
             total_count: 3,
             items: vec![owned_item, visible_item, refill_item],
+            label_key: None,
         }],
         &owned_visibility,
         &visibility,
@@ -994,40 +995,42 @@ fn personalized_sections_dedupe_derived_items_and_require_subject_match() {
         item
     }
 
-    let profile = affinity_profile(&["Adventure", "Animation"], &[], library_mix(60, 30, 10));
+    let profile = affinity_profile(&["Adventure", "Fantasy"], &[], library_mix(60, 30, 10));
     let items = extend_with_fillers(
         vec![
-            discovery_item("1", "Shared Match", &["Adventure", "Animation"], 100.0, 1),
-            discovery_item("2", "Unlinked Animation", &["Animation"], 95.0, 0),
+            discovery_item("1", "Shared Match", &["Adventure", "Fantasy"], 100.0, 1),
+            discovery_item("2", "Unlinked Fantasy", &["Fantasy"], 95.0, 0),
             discovery_item("3", "Adventure Match", &["Adventure"], 90.0, 1),
-            discovery_item("4", "Animation Match", &["Animation"], 80.0, 1),
+            discovery_item("4", "Fantasy Match", &["Fantasy"], 80.0, 1),
         ],
         vec![
             affinity_filler_items("adv", "movie", &["canonical:genre:adventure"], 8),
-            affinity_filler_items("ani", "movie", &["canonical:genre:animation"], 8),
+            affinity_filler_items("fan", "movie", &["canonical:genre:fantasy"], 8),
         ],
     );
 
     let sections = compose_affinity_sections(&items, &profile, 10);
     let adventure = sections
         .iter()
-        .find(|section| section.title == "Because You Like Adventure")
+        .find(|section| section.title == "Because you like adventure")
         .expect("adventure section");
-    let animation = sections
+    let fantasy = sections
         .iter()
-        .find(|section| section.title == "Because You Like Animation")
-        .expect("animation section");
+        .find(|section| section.title == "Because you like fantasy")
+        .expect("fantasy section");
+    assert_eq!(adventure.label_key.as_deref(), Some("adventure"));
+    assert_eq!(fantasy.label_key.as_deref(), Some("fantasy"));
 
     assert_eq!(
         affinity_section_lead(adventure, 2),
         vec!["Shared Match", "Adventure Match"]
     );
-    assert_eq!(affinity_section_lead(animation, 1), vec!["Animation Match"]);
+    assert_eq!(affinity_section_lead(fantasy, 1), vec!["Fantasy Match"]);
     assert!(
-        !animation
+        !fantasy
             .items
             .iter()
-            .any(|item| item.display_title == "Unlinked Animation"),
+            .any(|item| item.display_title == "Unlinked Fantasy"),
         "an item with no matched subject has no business on a reason rail"
     );
 
@@ -1218,45 +1221,47 @@ fn personalized_sections_retire_medium_and_library_rails() {
 #[test]
 fn personalized_sections_prefer_specific_tag_rail_over_broad_genre_rail() {
     // Composition order is dedupe priority. A title that earns the narrow
-    // "Because You Like Isekai" theme rail must not be eaten first by the
-    // far broader "Because You Like Animation" genre rail.
-    let profile = affinity_profile(&["Animation"], &["Isekai"], library_mix(20, 60, 20));
+    // "Because you like isekai" theme rail must not be eaten first by the
+    // far broader "Because you like fantasy" genre rail.
+    let profile = affinity_profile(&["Fantasy"], &["Isekai"], library_mix(60, 20, 20));
     let items = extend_with_fillers(
         vec![
             affinity_test_item(
                 "1",
                 "movie",
-                &["canonical:genre:animation", "canonical:theme:isekai"],
+                &["canonical:genre:fantasy", "canonical:theme:isekai"],
             ),
-            affinity_test_item("2", "movie", &["canonical:genre:animation"]),
+            affinity_test_item("2", "movie", &["canonical:genre:fantasy"]),
         ],
         vec![
             affinity_filler_items(
                 "isekai",
                 "movie",
-                &["canonical:genre:animation", "canonical:theme:isekai"],
+                &["canonical:genre:fantasy", "canonical:theme:isekai"],
                 8,
             ),
-            affinity_filler_items("anim", "movie", &["canonical:genre:animation"], 8),
+            affinity_filler_items("fan", "movie", &["canonical:genre:fantasy"], 8),
         ],
     );
 
     let sections = compose_affinity_sections(&items, &profile, 10);
     let isekai = sections
         .iter()
-        .find(|section| section.title == "Because You Like Isekai")
+        .find(|section| section.title == "Because you like isekai")
         .expect("isekai theme section");
     assert_eq!(isekai.section_type, "BECAUSE_YOU_LIKE_TAG");
+    assert_eq!(isekai.label_key.as_deref(), Some("isekai"));
     assert_eq!(affinity_section_lead(isekai, 1), vec!["Title 1"]);
 
-    let animation = sections
+    let fantasy = sections
         .iter()
-        .find(|section| section.title == "Because You Like Animation")
-        .expect("animation genre section");
-    assert_eq!(animation.section_type, "BECAUSE_YOU_LIKE_GENRE");
-    assert_eq!(affinity_section_lead(animation, 1), vec!["Title 2"]);
+        .find(|section| section.title == "Because you like fantasy")
+        .expect("fantasy genre section");
+    assert_eq!(fantasy.section_type, "BECAUSE_YOU_LIKE_GENRE");
+    assert_eq!(fantasy.label_key.as_deref(), Some("fantasy"));
+    assert_eq!(affinity_section_lead(fantasy, 1), vec!["Title 2"]);
     assert!(
-        !animation
+        !fantasy
             .items
             .iter()
             .any(|item| item.display_title == "Title 1"),
@@ -1275,10 +1280,11 @@ fn personalized_sections_prefer_specific_tag_rail_over_broad_genre_rail() {
 }
 
 #[test]
-fn affinity_label_rails_keep_animation_and_anime_apart() {
-    // Animation is a medium, anime is a tradition. Both titles carry the
-    // canonical `animation` genre facet, so only the media-kind guard keeps
-    // Western animation and anime out of each other's rails.
+fn affinity_label_rails_never_name_a_medium() {
+    // Medium is owned by the facet chips and the medium gate, so no rail is
+    // ever named after one. Even a profile that somehow carries "Animation"
+    // and "Anime" composes no reason rail from them; the titles fall through
+    // to the generic rail instead.
     let profile = affinity_profile(&["Animation", "Anime"], &[], balanced_library_mix());
     let items = extend_with_fillers(
         vec![
@@ -1301,32 +1307,22 @@ fn affinity_label_rails_keep_animation_and_anime_apart() {
     );
 
     let sections = compose_affinity_sections(&items, &profile, 10);
-    let animation = sections
-        .iter()
-        .find(|section| section.title == "Because You Like Animation")
-        .expect("animation genre section");
-    assert_eq!(affinity_section_lead(animation, 1), vec!["Title western"]);
     assert!(
-        animation
-            .items
+        sections
             .iter()
-            .all(|item| discovery_item_medium(item) == DiscoveryMedium::Animation),
-        "the Animation rail must contain only Western animation: {:?}",
-        affinity_section_titles(animation)
+            .all(|section| section.section_type != "BECAUSE_YOU_LIKE_GENRE"
+                && section.label_key.is_none()),
+        "a medium must never name a rail: {:?}",
+        sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>()
     );
-
-    let anime = sections
-        .iter()
-        .find(|section| section.title == "Because You Like Anime")
-        .expect("anime genre section");
-    assert_eq!(affinity_section_lead(anime, 1), vec!["Title shonen"]);
     assert!(
-        anime
-            .items
+        sections
             .iter()
-            .all(|item| discovery_item_medium(item) == DiscoveryMedium::Anime),
-        "the Anime rail must contain only anime: {:?}",
-        affinity_section_titles(anime)
+            .any(|section| section.section_type == "FOR_YOU"),
+        "the titles still reach the generic rail"
     );
 }
 
@@ -1341,9 +1337,9 @@ fn affinity_theme_labels_come_from_canonical_tags_not_from_the_user_tag_bag() {
     bag_only.tags = vec!["isekai".to_string(), "keep".to_string()];
     bag_only.canonical_tags = vec![CanonicalMediaTag {
         affinity_signals: Vec::new(),
-        key: "canonical:theme:slow-burn".to_string(),
+        key: "canonical:theme:heist".to_string(),
         category: "theme".to_string(),
-        name: "Slow Burn".to_string(),
+        name: "Heist".to_string(),
         confidence: None,
         sources: Vec::new(),
         source_tag_keys: Vec::new(),
@@ -1354,11 +1350,12 @@ fn affinity_theme_labels_come_from_canonical_tags_not_from_the_user_tag_bag() {
     let titles = vec![bag_only.clone(), bag_only.clone(), bag_only];
     let theme_labels = top_owned_title_labels(
         &titles,
+        DiscoveryRailLabelFamily::Theme,
         |title| canonical_tag_labels(&title.canonical_tags, "theme"),
         2,
         discovery_rail_label_support_floor(titles.len()),
     );
-    assert_eq!(theme_labels, vec!["Slow Burn".to_string()]);
+    assert_eq!(theme_labels, vec!["Heist".to_string()]);
     assert!(
         !theme_labels.iter().any(|label| label == "isekai"),
         "a user tag must never reach the affinity profile: {theme_labels:?}"
@@ -1372,14 +1369,14 @@ fn affinity_theme_labels_come_from_canonical_tags_not_from_the_user_tag_bag() {
     );
     let items = extend_with_fillers(
         vec![affinity_test_item(
-            "slow",
+            "heist",
             "series",
-            &["canonical:theme:slow-burn"],
+            &["canonical:theme:heist"],
         )],
         vec![affinity_filler_items(
-            "slow",
+            "heist",
             "series",
-            &["canonical:theme:slow-burn"],
+            &["canonical:theme:heist"],
             8,
         )],
     );
@@ -1387,65 +1384,118 @@ fn affinity_theme_labels_come_from_canonical_tags_not_from_the_user_tag_bag() {
     assert!(
         sections
             .iter()
-            .any(|section| section.title == "Because You Like Slow Burn")
+            .any(|section| section.title == "Because you like heists"
+                && section.label_key.as_deref() == Some("heist"))
     );
 }
 
 #[test]
-fn anime_affinity_label_survives_the_generic_label_filter() {
-    // Reachability guard: the boundary's "anime" arm is dead code unless a
-    // real profile can actually carry the label. The profile is built by
-    // `top_owned_title_labels` over owned titles, which drops labels that
-    // `discovery_affinity_label_is_generic` rejects - "anime" must not be
-    // among them, or "Because You Like Anime" can never exist.
-    fn anime_title(id: &str) -> Title {
+fn library_profile_skips_unsayable_labels_for_the_next_allowlisted_pair() {
+    // An anime library's most-carried theme is `school` and its most-carried
+    // genre is `anime`. Neither is something a person says out loud, so
+    // neither may name a rail: the profile skips them and takes the next
+    // allowlisted labels the library supports instead.
+    fn theme_tag(name: &str) -> CanonicalMediaTag {
+        let slug = normalize_discovery_affinity_key(name).replace(' ', "-");
+        CanonicalMediaTag {
+            key: format!("canonical:theme:{slug}"),
+            category: "theme".into(),
+            name: name.into(),
+            confidence: Some(0.95),
+            sources: vec!["anilist".into()],
+            affinity_signals: vec![crate::DiscoveryAffinitySignalRecord {
+                affinity_key: format!("affinity:theme:{slug}"),
+                category: "theme".into(),
+                tier: "strong".into(),
+                confidence: 0.95,
+                sources: vec!["anilist".into()],
+                rail_eligible: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+    fn anime_title(id: &str, genres: &[&str], themes: &[&str]) -> Title {
         let mut title = test_title(id, id, MediaFacet::Series, Vec::new());
-        title.canonical_tags = ["Anime", "Animation"]
-            .into_iter()
-            .map(provider_genre_tag)
+        title.canonical_tags = genres
+            .iter()
+            .map(|genre| provider_genre_tag(genre))
+            .chain(themes.iter().map(|theme| theme_tag(theme)))
             .collect();
         title
     }
 
-    let titles = vec![anime_title("a1"), anime_title("a2"), anime_title("a3")];
-    let genre_labels = top_owned_title_labels(
-        &titles,
-        |title| corroborated_canonical_genre_labels(&title.canonical_tags, true),
-        2,
-        discovery_rail_label_support_floor(titles.len()),
-    );
-    assert!(
-        genre_labels.iter().any(|label| label == "Anime"),
-        "anime-heavy library produced no Anime label: {genre_labels:?}"
-    );
+    let mut titles = Vec::new();
+    for index in 0..6 {
+        titles.push(anime_title(
+            &format!("a{index}"),
+            &["Anime", "Animation", "Drama", "Fantasy"],
+            &["School", "Coming of Age", "Isekai"],
+        ));
+    }
+    for index in 0..4 {
+        titles.push(anime_title(
+            &format!("b{index}"),
+            &["Anime", "Animation", "Drama"],
+            &["School", "Coming of Age"],
+        ));
+    }
 
-    // ...and the label, once reachable, splits the two traditions apart.
-    let profile = affinity_profile(
-        &genre_labels.iter().map(String::as_str).collect::<Vec<_>>(),
-        &[],
-        balanced_library_mix(),
-    );
+    let profile = discovery_library_affinity_profile_from_titles(&titles, true);
+    assert_eq!(profile.genre_labels, vec!["Drama", "Fantasy"]);
+    assert_eq!(profile.theme_labels, vec!["Coming of Age", "Isekai"]);
+
+    // ...and the rails composed from that profile read as sentences.
     let items = extend_with_fillers(
         vec![
-            corroborated_genre_item("western", "movie", &["Animation"]),
-            corroborated_genre_item("shonen", "anime", &["Animation", "Anime"]),
+            corroborated_genre_item("drama", "anime", &["Anime", "Drama"]),
+            affinity_test_item(
+                "coming",
+                "anime",
+                &["canonical:genre:anime", "canonical:theme:coming-of-age"],
+            ),
         ],
         vec![
-            corroborated_genre_fillers("west", "movie", &["Animation"], 8),
-            corroborated_genre_fillers("shonen", "anime", &["Animation", "Anime"], 8),
+            corroborated_genre_fillers("drama", "anime", &["Anime", "Drama"], 8),
+            affinity_filler_items(
+                "coming",
+                "anime",
+                &["canonical:genre:anime", "canonical:theme:coming-of-age"],
+                8,
+            ),
         ],
     );
+    let profile = affinity_profile(
+        &profile
+            .genre_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        &profile
+            .theme_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        library_mix(0, 0, 10),
+    );
     let sections = compose_affinity_sections(&items, &profile, 10);
-    let anime = sections
+    let coming_of_age = sections
         .iter()
-        .find(|section| section.title == "Because You Like Anime")
-        .expect("anime genre section should be reachable from a real profile");
-    assert_eq!(affinity_section_lead(anime, 1), vec!["Title shonen"]);
-    let animation = sections
+        .find(|section| section.label_key.as_deref() == Some("coming-of-age"))
+        .expect("coming-of-age theme section");
+    assert_eq!(
+        coming_of_age.title,
+        "Because you like coming-of-age stories"
+    );
+    let drama = sections
         .iter()
-        .find(|section| section.title == "Because You Like Animation")
-        .expect("animation genre section");
-    assert_eq!(affinity_section_lead(animation, 1), vec!["Title western"]);
+        .find(|section| section.label_key.as_deref() == Some("drama"))
+        .expect("drama genre section");
+    assert_eq!(drama.title, "Because you like drama");
+    assert!(sections.iter().all(|section| !matches!(
+        section.label_key.as_deref(),
+        Some("anime" | "animation" | "school")
+    )));
 }
 
 /// A canonical genre in the shape SMG produces from a provider's own genre
@@ -1517,10 +1567,11 @@ fn corroborated_genre_fillers(
 }
 
 #[test]
-fn anime_without_content_type_does_not_leak_into_the_animation_rail() {
+fn anime_without_content_type_does_not_leak_into_an_animation_library_rail() {
     // `discovery_item_media_kind` falls back to target_kind, so a
     // content_type-less anime reports as a plain "series". Only the canonical
-    // anime genre facet keeps it out of the Western-animation rail.
+    // anime genre facet classifies it as anime, which is what keeps it off the
+    // rails of a library that owns Western animation but no anime.
     let mut untyped_anime = test_discovery_item("untyped", "series", None);
     untyped_anime.target_key = "mal:anime:untyped".to_string();
     untyped_anime.display_title = "Title untyped".to_string();
@@ -1528,9 +1579,13 @@ fn anime_without_content_type_does_not_leak_into_the_animation_rail() {
     untyped_anime.facet_terms = vec![
         "canonical:genre:animation".to_string(),
         "canonical:genre:anime".to_string(),
+        "canonical:genre:fantasy".to_string(),
     ];
-    untyped_anime.canonical_tags =
-        vec![provider_genre_tag("Animation"), provider_genre_tag("Anime")];
+    untyped_anime.canonical_tags = vec![
+        provider_genre_tag("Animation"),
+        provider_genre_tag("Anime"),
+        provider_genre_tag("Fantasy"),
+    ];
     untyped_anime.matched_subject_count = 1;
     untyped_anime.rank_score = Some(5.0);
     assert_eq!(discovery_item_media_kind(&untyped_anime), Some("series"));
@@ -1539,41 +1594,37 @@ fn anime_without_content_type_does_not_leak_into_the_animation_rail() {
         DiscoveryMedium::Anime
     );
 
-    let profile = affinity_profile(&["Animation", "Anime"], &[], balanced_library_mix());
+    let profile = affinity_profile(&["Fantasy"], &[], library_mix(40, 60, 0));
     let items = extend_with_fillers(
         vec![
-            affinity_test_item("western", "movie", &["canonical:genre:animation"]),
+            affinity_test_item(
+                "western",
+                "movie",
+                &["canonical:genre:animation", "canonical:genre:fantasy"],
+            ),
             untyped_anime,
         ],
-        vec![
-            affinity_filler_items("west", "movie", &["canonical:genre:animation"], 8),
-            affinity_filler_items(
-                "untyped",
-                "anime",
-                &["canonical:genre:animation", "canonical:genre:anime"],
-                8,
-            ),
-        ],
+        vec![affinity_filler_items(
+            "west",
+            "movie",
+            &["canonical:genre:animation", "canonical:genre:fantasy"],
+            8,
+        )],
     );
 
     let sections = compose_affinity_sections(&items, &profile, 10);
-    let animation = sections
+    let fantasy = sections
         .iter()
-        .find(|section| section.title == "Because You Like Animation")
-        .expect("animation genre section");
-    assert_eq!(affinity_section_lead(animation, 1), vec!["Title western"]);
+        .find(|section| section.title == "Because you like fantasy")
+        .expect("fantasy genre section");
+    assert_eq!(affinity_section_lead(fantasy, 1), vec!["Title western"]);
     assert!(
-        !animation
-            .items
+        sections
             .iter()
-            .any(|item| item.display_title == "Title untyped"),
-        "an anime without a content type must not leak into the animation rail"
+            .flat_map(|section| section.items.iter())
+            .all(|item| item.display_title != "Title untyped"),
+        "an anime without a content type must not reach a library that owns no anime"
     );
-    let anime = sections
-        .iter()
-        .find(|section| section.title == "Because You Like Anime")
-        .expect("anime genre section");
-    assert_eq!(affinity_section_lead(anime, 1), vec!["Title untyped"]);
 }
 
 // ── Medium law ───────────────────────────────────────────────────────────────
@@ -2626,6 +2677,7 @@ fn test_discovery_section(
         surface: surface.to_string(),
         total_count: items.len() as i64,
         items,
+        label_key: None,
     }
 }
 
@@ -2686,13 +2738,13 @@ fn discovery_theme_admission_follows_smg_rail_eligibility() {
 fn discovery_owned_themes_require_the_same_evidence_as_candidates() {
     let mut title = test_title("owned-theme", "Owned Theme", MediaFacet::Movie, vec![]);
     title.canonical_tags = vec![CanonicalMediaTag {
-        key: "canonical:theme:friendship".into(),
+        key: "canonical:theme:found-family".into(),
         category: "theme".into(),
-        name: "Friendship".into(),
+        name: "Found Family".into(),
         confidence: Some(0.95),
         sources: vec!["tmdb".into()],
         affinity_signals: vec![crate::DiscoveryAffinitySignalRecord {
-            affinity_key: "affinity:theme:friendship".into(),
+            affinity_key: "affinity:theme:found-family".into(),
             category: "theme".into(),
             tier: "key".into(),
             confidence: 1.0,
@@ -2707,7 +2759,7 @@ fn discovery_owned_themes_require_the_same_evidence_as_candidates() {
     };
     assert!(profile(&title).theme_labels.is_empty());
     title.canonical_tags[0].affinity_signals[0].rail_eligible = true;
-    assert_eq!(profile(&title).theme_labels, vec!["Friendship"]);
+    assert_eq!(profile(&title).theme_labels, vec!["Found Family"]);
     title.canonical_tags[0].affinity_signals.clear();
     assert!(profile(&title).theme_labels.is_empty());
 }

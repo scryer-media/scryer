@@ -166,6 +166,11 @@ pub struct DiscoveryHomeSectionPayload {
     pub title: String,
     /// Whether this section is public, personalized, or mixed.
     pub surface: DiscoverySurfaceValue,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section, possibly fewer than the total.
@@ -365,6 +370,11 @@ pub struct DiscoverySectionPayload {
     pub title: String,
     /// Surface label for this section.
     pub surface: String,
+    /// Rail-label key a personalized "because you like" section is named after,
+    /// in canonical hyphenated form such as `coming-of-age`; null for every other
+    /// section. Clients translate the key and fall back to `title` for a key they
+    /// do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this section.

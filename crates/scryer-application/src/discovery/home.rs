@@ -46,6 +46,7 @@ pub(super) fn section_items_record_to_result(
         surface: record.section.surface,
         total_count: record.total_count,
         items: record.items,
+        label_key: None,
     })
 }
 
@@ -640,16 +641,16 @@ pub(super) fn personalized_section_results(
     let mut emitted_item_keys = HashSet::new();
 
     // A library too small to have said anything gets the one honest rail.
-    // Composing a "Because You Like Crime" out of four titles is the failure
+    // Composing a "Because you like crime" out of four titles is the failure
     // this budget exists to prevent, so the ladder widens only as the library
     // earns it.
     let label_budget = discovery_rail_label_budget(library_profile.owned_title_count);
 
     // Composition order is dedupe priority: `emitted_item_keys` lets an earlier
     // section claim a title outright, so the most specific reason must compose
-    // first. Tag/theme rails lead the ladder - a title that earns "Because You
-    // Like Isekai" must not be eaten first by the far broader "Because You Like
-    // Animation" genre rail.
+    // first. Tag/theme rails lead the ladder - a title that earns "Because you
+    // like isekai" must not be eaten first by the far broader "Because you like
+    // fantasy" genre rail.
     sections.extend(label_affinity_sections(
         &visible_items,
         &library_profile.theme_labels,
@@ -681,7 +682,6 @@ pub(super) fn personalized_section_results(
         "FOR_YOU".to_string(),
         "For You".to_string(),
         visible_items,
-        None,
         &context,
         &mut emitted_item_keys,
     ));
@@ -779,17 +779,11 @@ impl DiscoveryRailStats {
 /// Composes one personalized rail: medium gate, evidence floor, relevance
 /// order, per-medium cap with refill, and the never-pad / drop-below-minimum
 /// rule.
-///
-/// `uncapped_medium` names the rail's own medium when the rail *is* about that
-/// medium (the Anime and Animation label rails). Those are exempt from the
-/// proportional cap — an anime rail made of 40% live action is nonsense — but
-/// never from the zero rule.
 pub(super) fn compose_personalized_section(
     section_id: String,
     section_type: String,
     title: String,
     items: Vec<DiscoveryItemRecord>,
-    uncapped_medium: Option<DiscoveryMedium>,
     context: &DiscoveryRailContext<'_>,
     emitted_item_keys: &mut HashSet<String>,
 ) -> Option<DiscoverySectionResult> {
@@ -831,7 +825,6 @@ pub(super) fn compose_personalized_section(
         }
         let medium = discovery_item_medium(&item);
         if context.settings.medium_affinity_gate
-            && uncapped_medium != Some(medium)
             && taken_per_medium.count(medium) >= context.medium_mix.slot_cap(medium, context.limit)
         {
             // Refill rather than truncate: the rail keeps looking down the list
@@ -864,6 +857,7 @@ pub(super) fn compose_personalized_section(
         surface: "personalized".to_string(),
         total_count,
         items: emitted,
+        label_key: None,
     })
 }
 
@@ -1073,10 +1067,18 @@ pub(super) fn label_affinity_sections(
             "discovery candidate admission"
         );
     }
+    let Some(family) = DiscoveryRailLabelFamily::from_canonical_kind(canonical_kind) else {
+        return sections;
+    };
     for label in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
         .into_iter()
         .take(label_budget)
     {
+        // The profile only holds allowlisted labels; this is the floor that
+        // keeps any other path from naming a rail after a raw tag.
+        let Some(rail_label) = discovery_rail_label(family, &label) else {
+            continue;
+        };
         let section_items = items
             .iter()
             .filter(|item| {
@@ -1087,66 +1089,26 @@ pub(super) fn label_affinity_sections(
                         canonical_kind,
                         context.settings.genre_rail_corroboration,
                     )
-                    && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
             .collect::<Vec<_>>();
-        if let Some(section) = compose_personalized_section(
+        if let Some(mut section) = compose_personalized_section(
             format!(
                 "{}_{}",
                 section_id_prefix,
                 slugify_discovery_section_part(&label)
             ),
             section_type.to_string(),
-            format!("Because You Like {}", label),
+            rail_label.title.to_string(),
             section_items,
-            affinity_label_own_medium(&label),
             context,
             emitted_item_keys,
         ) {
+            section.label_key = Some(rail_label.key.to_string());
             sections.push(section);
         }
     }
     sections
-}
-
-/// The medium a rail is *about*, when its label names one. Such a rail is
-/// exempt from the proportional medium cap: "Because You Like Anime" made of
-/// 40% live action would be absurd. It is not exempt from the zero rule — a
-/// library with no anime never gets the rail at all, because the label could
-/// not have entered the profile.
-pub(super) fn affinity_label_own_medium(label: &str) -> Option<DiscoveryMedium> {
-    match normalize_discovery_affinity_key(label).as_str() {
-        "animation" => Some(DiscoveryMedium::Animation),
-        "anime" => Some(DiscoveryMedium::Anime),
-        _ => None,
-    }
-}
-
-/// Animation is a medium; anime is a tradition. Metadata sources tag anime with
-/// the same canonical `animation` genre facet as Western animation, so an
-/// unguarded "Because You Like Animation" rail comingles Paperman with Silver Horizon.
-/// This is a deliberate two-label special case at the point where items are
-/// matched to a label, not a general taxonomy: the animation rail drops anime
-/// items, an anime rail keeps only anime items, and every other label is
-/// untouched.
-///
-/// The guard is keyed on the label name and is **kind-agnostic by design**: a
-/// theme/tag rail named "Anime" or "Animation" carries exactly the same meaning
-/// its genre namesake does, so it has to split the same way.
-///
-/// Both arms are decided by the medium classifier, so "Animation" means
-/// animation — not "anything that is not anime". The old negation let live
-/// action into the animation rail whenever a stray `animation` facet term
-/// appeared on a live-action title.
-pub(super) fn affinity_label_keeps_item_across_anime_boundary(
-    item: &DiscoveryItemRecord,
-    label: &str,
-) -> bool {
-    match affinity_label_own_medium(label) {
-        Some(medium) => discovery_item_medium(item) == medium,
-        None => true,
-    }
 }
 
 /// Media kind is the primary anime signal, but `discovery_item_media_kind` falls
