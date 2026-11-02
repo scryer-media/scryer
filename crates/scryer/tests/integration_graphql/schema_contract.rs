@@ -790,8 +790,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"indexerClients"));
     // Recycle-bin item history adds `recycledItemHistory`: 197->198.
     assert!(query_field_names.contains(&"recycledItemHistory"));
+    // Folder-conflict resolution adds `pendingImportConflictTask`: 198->199.
+    assert!(query_field_names.contains(&"pendingImportConflictTask"));
     assert_eq!(
-        query_field_count, 198,
+        query_field_count, 199,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -872,8 +874,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Restarting so a saved listening address takes effect adds one
     // mutation: 285->286.
     assert!(mutation_field_names.contains(&"restartForNetworkChange"));
+    // Folder-conflict resolution adds `previewPendingImportConflicts` and
+    // `resolvePendingImportConflicts`: 286->288.
+    for name in [
+        "previewPendingImportConflicts",
+        "resolvePendingImportConflicts",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
     assert_eq!(
-        mutation_field_count, 286,
+        mutation_field_count, 288,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1297,14 +1310,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Folder-conflict resolution adds the pending-conflict task, preview, row
+    // and rename payloads, two inputs and two enums: public types 999->1007,
+    // OBJECT 539->543, INPUT_OBJECT 243->245, ENUM 205->207.
+    for name in [
+        "PendingImportConflictTaskPayload",
+        "PendingImportConflictPreviewPayload",
+        "PendingImportConflictInput",
+        "PendingImportConflictPolicy",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        999,
+        1007,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 539);
-    assert_eq!(kind_count("INPUT_OBJECT"), 243);
-    assert_eq!(kind_count("ENUM"), 205);
+    assert_eq!(kind_count("OBJECT"), 543);
+    assert_eq!(kind_count("INPUT_OBJECT"), 245);
+    assert_eq!(kind_count("ENUM"), 207);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
