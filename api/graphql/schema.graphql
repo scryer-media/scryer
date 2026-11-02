@@ -20657,7 +20657,20 @@ type MutationRoot {
 	"""
 	Queue a saved candidate as an operator override, confirming title-wide conflicts first.
 	"""
-	queueStandbyRelease(id: ID!, choice: StandbyQueueChoiceValue! = CHECK, confirmed: [StandbyConflictIdentityInput!]! = []): QueueStandbyReleasePayload!
+	queueStandbyRelease(
+		"""
+		The saved standby candidate to queue.
+		"""
+		id: ID!,
+		"""
+		What to do about downloads of this title that are already running.
+		"""
+		choice: StandbyQueueChoiceValue! = CHECK,
+		"""
+		The conflicts the operator saw and confirmed; any other running download is listed again instead.
+		"""
+		confirmed: [StandbyConflictIdentityInput!]! = []
+	): QueueStandbyReleasePayload!
 	"""
 	Reopen title-mismatch scopes after a rematch so acquisition coverage can converge again.
 	"""
@@ -26647,9 +26660,26 @@ input QueueManualImportInput {
 	files: [ManualImportCandidateMappingInput!]!
 }
 
+"""
+The result of asking to queue a saved standby candidate.
+"""
 type QueueStandbyReleasePayload {
+	"""
+	Whether the release is now queued (or already was).
+	"""
 	grabbed: Boolean!
+	"""
+	Running downloads of this title that still need the operator's choice.
+	"""
 	conflicts: [QueueDownloadConflictPayload!]!
+	"""
+	Conflicts that were cancelled before cancellation stopped part-way.
+	"""
+	cancelled: [QueueDownloadConflictPayload!]!
+	"""
+	A stable reason code when cancellation stopped part-way and nothing was queued.
+	"""
+	reason: String
 }
 
 """
@@ -29962,15 +29992,39 @@ enum SortDirectionValue {
 	DESC
 }
 
+"""
+One conflicting download the operator confirmed, as the client names it.
+"""
 input StandbyConflictIdentityInput {
+	"""
+	The configured download client that holds the job, when known.
+	"""
 	clientId: ID
+	"""
+	The download client's type, such as `sabnzbd` or `weaver`.
+	"""
 	clientType: String!
+	"""
+	The client's own id for the job.
+	"""
 	itemId: String!
 }
 
+"""
+What to do about downloads of the same title that are already running.
+"""
 enum StandbyQueueChoiceValue {
+	"""
+	Queue only when nothing else is downloading; otherwise list the conflicts.
+	"""
 	CHECK
+	"""
+	Queue alongside the confirmed conflicts, leaving them running.
+	"""
 	QUEUE
+	"""
+	Cancel the confirmed conflicts, then queue.
+	"""
 	CANCEL_AND_QUEUE
 }
 

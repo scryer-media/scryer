@@ -7,24 +7,39 @@ use scryer_interface_media::types::*;
 #[derive(Default)]
 pub struct WantedMutations;
 
+/// What to do about downloads of the same title that are already running.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 pub enum StandbyQueueChoiceValue {
+    /// Queue only when nothing else is downloading; otherwise list the conflicts.
     Check,
+    /// Queue alongside the confirmed conflicts, leaving them running.
     Queue,
+    /// Cancel the confirmed conflicts, then queue.
     CancelAndQueue,
 }
 
+/// One conflicting download the operator confirmed, as the client names it.
 #[derive(InputObject)]
 pub struct StandbyConflictIdentityInput {
+    /// The configured download client that holds the job, when known.
     pub client_id: Option<ID>,
+    /// The download client's type, such as `sabnzbd` or `weaver`.
     pub client_type: String,
+    /// The client's own id for the job.
     pub item_id: String,
 }
 
+/// The result of asking to queue a saved standby candidate.
 #[derive(SimpleObject)]
 pub struct QueueStandbyReleasePayload {
+    /// Whether the release is now queued (or already was).
     pub grabbed: bool,
+    /// Running downloads of this title that still need the operator's choice.
     pub conflicts: Vec<QueueDownloadConflictPayload>,
+    /// Conflicts that were cancelled before cancellation stopped part-way.
+    pub cancelled: Vec<QueueDownloadConflictPayload>,
+    /// A stable reason code when cancellation stopped part-way and nothing was queued.
+    pub reason: Option<String>,
 }
 
 /// Shared builder for the media-request approval search outcome. The convergence
@@ -44,9 +59,17 @@ impl WantedMutations {
     async fn queue_standby_release(
         &self,
         ctx: &Context<'_>,
-        id: ID,
-        #[graphql(default_with = "StandbyQueueChoiceValue::Check")] choice: StandbyQueueChoiceValue,
-        #[graphql(default)] confirmed: Vec<StandbyConflictIdentityInput>,
+        #[graphql(desc = "The saved standby candidate to queue.")] id: ID,
+        #[graphql(
+            default_with = "StandbyQueueChoiceValue::Check",
+            desc = "What to do about downloads of this title that are already running."
+        )]
+        choice: StandbyQueueChoiceValue,
+        #[graphql(
+            default,
+            desc = "The conflicts the operator saw and confirmed; any other running download is listed again instead."
+        )]
+        confirmed: Vec<StandbyConflictIdentityInput>,
     ) -> GqlResult<QueueStandbyReleasePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -78,6 +101,12 @@ impl WantedMutations {
                 .into_iter()
                 .map(crate::downloads::queue_download_conflict_payload)
                 .collect(),
+            cancelled: outcome
+                .cancelled
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
+            reason: outcome.refusal.map(str::to_string),
         })
     }
 
