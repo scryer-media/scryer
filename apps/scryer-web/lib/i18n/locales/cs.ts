@@ -1,6 +1,13 @@
 import type { LocaleDictionary } from "../types";
 
 const cs: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied":
+    "URL zpětného volání Jellyfin zkopírována.",
+  "settings.oauthClientIdCopied": "ID klienta OAuth zkopírováno.",
+  "status.copyFailedSelected":
+    "Kopírování se nezdařilo. Text je vybraný; stiskněte Ctrl+C nebo ⌘C.",
+  "status.copyFailed":
+    "Kopírování se nezdařilo: prohlížeč odmítl přístup ke schránce.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer se nemůže připojit k bráně metadat, protože se systémové hodiny liší o více než 5 minut. Synchronizujte systémové hodiny a restartujte Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -698,8 +705,6 @@ const cs: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive je celé číslo sekund, hodnota 0 jej vypíná.",
   "status.proxyTunnelPublicKeyCopied": "Veřejný klíč zkopírován.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Veřejný klíč se nepodařilo zkopírovat.",
   "settings.qualityProfiles": "Profily kvality",
   "settings.downloadClients": "Klienti pro stahování",
   "settings.mediaServers": "Mediální servery",
@@ -1714,6 +1719,8 @@ const cs: LocaleDictionary = {
   "toast.viewInCatalog": "Zobrazit v katalogu",
   "label.back": "Zpět",
   "label.close": "Zavřít",
+  "label.copy": "Kopírovat",
+  "label.copied": "Zkopírováno",
   "label.dismiss": "Zavřít",
   "pwa.offline": "Jste offline. Některé funkce nemusí být dostupné.",
   "pwa.installApp": "Nainstalovat Scryer",

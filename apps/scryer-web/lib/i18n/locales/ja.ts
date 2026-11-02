@@ -1,6 +1,13 @@
 import type { LocaleDictionary } from "../types";
 
 const ja: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied":
+    "Jellyfin のコールバック URL をコピーしました。",
+  "settings.oauthClientIdCopied": "OAuth クライアント ID をコピーしました。",
+  "status.copyFailedSelected":
+    "コピーできませんでした。テキストは選択済みです。Ctrl+C または ⌘C を押してください。",
+  "status.copyFailed":
+    "コピーできませんでした。ブラウザーがクリップボードへのアクセスを拒否しました。",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "システム時計が5分以上ずれているため、Scryerはメタデータゲートウェイに接続できません。システム時計を同期してScryerを再起動してください。",
   "httpRelease.refusal.detailsUnavailable":
@@ -492,7 +499,6 @@ const ja: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "キープアライブは秒単位の整数で、0 を指定すると無効になります。",
   "status.proxyTunnelPublicKeyCopied": "公開鍵をコピーしました。",
-  "status.proxyTunnelPublicKeyCopyFailed": "公開鍵をコピーできませんでした。",
   "settings.qualityProfiles": "品質プロファイル",
   "settings.downloadClients": "ダウンロードクライアント",
   "settings.downloadClientRouting": "ダウンロードクライアントルーティング",
@@ -1063,6 +1069,8 @@ const ja: LocaleDictionary = {
   "toast.viewInCatalog": "カタログで表示",
 
   "label.back": "戻る",
+  "label.copy": "コピー",
+  "label.copied": "コピーしました",
   "label.dismiss": "閉じる",
   "pwa.offline": "オフラインです。一部の機能が利用できない場合があります。",
   "pwa.installApp": "Scryerをインストール",

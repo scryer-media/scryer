@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Check, Copy, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTranslate } from "@/lib/context/translate-context";
+import { copyText } from "@/lib/utils/clipboard";
 
 const PROMPT_PREVIEW_MAX_LINES = 30;
 
@@ -85,17 +87,16 @@ export function RegoAiPromptDialog({
   );
 
   const copyPrompt = React.useCallback(async () => {
-    if (!navigator.clipboard) {
+    if (!(await copyText(prompt))) {
+      toast.error(t("status.copyFailed"));
       return;
     }
-
-    await navigator.clipboard.writeText(prompt);
     setCopied(true);
     if (copyResetTimerRef.current) {
       clearTimeout(copyResetTimerRef.current);
     }
     copyResetTimerRef.current = setTimeout(() => setCopied(false), 1500);
-  }, [prompt]);
+  }, [prompt, t]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

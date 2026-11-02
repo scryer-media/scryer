@@ -18,6 +18,7 @@ import {
   oauthClientRegistrationsQuery,
 } from "@/lib/graphql/queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import { copyText } from "@/lib/utils/clipboard";
 import {
   automaticLinkingStatus,
   canCreateJellyfinPluginClient,
@@ -253,33 +254,26 @@ export function OAuthClientRegistrationsPanel() {
     }
   }, [client, draft, editingClientId, reload, resetDraft, t]);
 
-  const copyClientId = React.useCallback(async (clientId: string) => {
-    if (!navigator.clipboard) {
-      toast.error("Unable to copy the OAuth client ID.");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(clientId);
-      toast.success("OAuth client ID copied.");
-    } catch {
-      toast.error("Unable to copy the OAuth client ID.");
-    }
-  }, []);
+  const copyClientId = React.useCallback(
+    async (clientId: string) => {
+      if (await copyText(clientId)) {
+        toast.success(t("settings.oauthClientIdCopied"));
+      } else {
+        toast.error(t("status.copyFailed"));
+      }
+    },
+    [t],
+  );
 
   const copyJellyfinCallback = React.useCallback(
     async (callbackUrl: string) => {
-      if (!navigator.clipboard) {
-        toast.error("Unable to copy the Jellyfin callback URL.");
-        return;
-      }
-      try {
-        await navigator.clipboard.writeText(callbackUrl);
-        toast.success("Jellyfin callback URL copied.");
-      } catch {
-        toast.error("Unable to copy the Jellyfin callback URL.");
+      if (await copyText(callbackUrl)) {
+        toast.success(t("settings.oauthJellyfinCallbackCopied"));
+      } else {
+        toast.error(t("status.copyFailed"));
       }
     },
-    [],
+    [t],
   );
 
   const createJellyfinPluginClient = React.useCallback(async () => {

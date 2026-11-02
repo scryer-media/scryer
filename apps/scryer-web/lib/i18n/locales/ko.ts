@@ -1,6 +1,12 @@
 import type { LocaleDictionary } from "../types";
 
 const ko: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin 콜백 URL을 복사했습니다.",
+  "settings.oauthClientIdCopied": "OAuth 클라이언트 ID를 복사했습니다.",
+  "status.copyFailedSelected":
+    "복사하지 못했습니다. 텍스트가 선택되어 있으니 Ctrl+C 또는 ⌘C를 누르세요.",
+  "status.copyFailed":
+    "복사하지 못했습니다. 브라우저가 클립보드 접근을 거부했습니다.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "시스템 시계가 5분 이상 차이 나서 Scryer가 메타데이터 게이트웨이에 연결할 수 없습니다. 시스템 시계를 동기화한 후 Scryer를 다시 시작하세요.",
   "httpRelease.refusal.detailsUnavailable":
@@ -488,7 +494,6 @@ const ko: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "킵얼라이브는 초 단위 정수이며 0을 지정하면 꺼집니다.",
   "status.proxyTunnelPublicKeyCopied": "공개 키를 복사했습니다.",
-  "status.proxyTunnelPublicKeyCopyFailed": "공개 키를 복사할 수 없습니다.",
   "settings.qualityProfiles": "품질 프로필",
   "settings.downloadClients": "다운로드 클라이언트",
   "settings.downloadClientRouting": "다운로드 클라이언트 라우팅",
@@ -1048,6 +1053,8 @@ const ko: LocaleDictionary = {
   "toast.viewInCatalog": "카탈로그에서 보기",
 
   "label.back": "뒤로",
+  "label.copy": "복사",
+  "label.copied": "복사됨",
   "label.dismiss": "닫기",
   "pwa.offline": "오프라인 상태입니다. 일부 기능을 사용할 수 없습니다.",
   "pwa.installApp": "Scryer 설치",

@@ -1,6 +1,10 @@
 import type { LocaleDictionary } from "../types";
 
 const zh_CN: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "已复制 Jellyfin 回调 URL。",
+  "settings.oauthClientIdCopied": "已复制 OAuth 客户端 ID。",
+  "status.copyFailedSelected": "无法复制。文本已选中，请按 Ctrl+C 或 ⌘C。",
+  "status.copyFailed": "无法复制：浏览器拒绝了剪贴板访问。",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "系统时钟偏差超过 5 分钟，Scryer 无法连接到元数据网关。请同步系统时钟并重启 Scryer。",
   "httpRelease.refusal.detailsUnavailable":
@@ -458,7 +462,6 @@ const zh_CN: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "保活间隔是以秒为单位的整数，填 0 可关闭。",
   "status.proxyTunnelPublicKeyCopied": "已复制公钥。",
-  "status.proxyTunnelPublicKeyCopyFailed": "无法复制公钥。",
   "settings.qualityProfiles": "质量配置",
   "settings.downloadClients": "下载客户端",
   "settings.downloadClientRouting": "下载客户端路由",
@@ -991,6 +994,8 @@ const zh_CN: LocaleDictionary = {
   "toast.viewInCatalog": "在目录中查看",
 
   "label.back": "返回",
+  "label.copy": "复制",
+  "label.copied": "已复制",
   "label.dismiss": "关闭",
   "pwa.offline": "您处于离线状态。部分功能可能不可用。",
   "pwa.installApp": "安装 Scryer",

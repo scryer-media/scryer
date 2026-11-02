@@ -1,6 +1,12 @@
 import type { LocaleDictionary } from "../types";
 
 const fr: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "URL de rappel Jellyfin copiée.",
+  "settings.oauthClientIdCopied": "ID client OAuth copié.",
+  "status.copyFailedSelected":
+    "Copie impossible. Le texte est sélectionné ; appuyez sur Ctrl+C ou ⌘C.",
+  "status.copyFailed":
+    "Copie impossible : le navigateur a refusé l'accès au presse-papiers.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer ne peut pas se connecter à la passerelle de métadonnées car l’horloge de votre système présente un décalage de plus de 5 minutes. Synchronisez l’horloge de votre système et redémarrez Scryer.",
   "initialAuth.title": "Configurer l’accès à Scryer",
@@ -547,8 +553,6 @@ const fr: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Le keepalive est un nombre entier de secondes ; 0 le désactive.",
   "status.proxyTunnelPublicKeyCopied": "Clé publique copiée.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Impossible de copier la clé publique.",
   "settings.qualityProfiles": "Profils de qualité",
   "settings.downloadClients": "Clients de téléchargement",
   "settings.downloadClientRouting": "Routage des clients de téléchargement",
@@ -1142,6 +1146,8 @@ const fr: LocaleDictionary = {
   "toast.viewInCatalog": "Voir dans le catalogue",
 
   "label.back": "Retour",
+  "label.copy": "Copier",
+  "label.copied": "Copié",
   "label.dismiss": "Fermer",
   "pwa.offline":
     "Vous êtes hors ligne. Certaines fonctionnalités peuvent être indisponibles.",

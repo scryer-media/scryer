@@ -1,6 +1,13 @@
 import type { LocaleDictionary } from "../types";
 
 const it: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied":
+    "URL di callback di Jellyfin copiato.",
+  "settings.oauthClientIdCopied": "ID client OAuth copiato.",
+  "status.copyFailedSelected":
+    "Copia non riuscita. Il testo è selezionato; premi Ctrl+C o ⌘C.",
+  "status.copyFailed":
+    "Copia non riuscita: il browser ha negato l'accesso agli appunti.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer non può connettersi al gateway dei metadati perché l’orologio di sistema ha uno scarto superiore a 5 minuti. Sincronizza l’orologio di sistema e riavvia Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -497,8 +504,6 @@ const it: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Il keepalive è un numero intero di secondi; 0 lo disattiva.",
   "status.proxyTunnelPublicKeyCopied": "Chiave pubblica copiata.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Impossibile copiare la chiave pubblica.",
   "settings.qualityProfiles": "Profili qualità",
   "settings.downloadClients": "Client di download",
   "settings.downloadClientRouting": "Routing client di download",
@@ -1079,6 +1084,8 @@ const it: LocaleDictionary = {
   "toast.viewInCatalog": "Vedi nel catalogo",
 
   "label.back": "Indietro",
+  "label.copy": "Copia",
+  "label.copied": "Copiato",
   "label.dismiss": "Chiudi",
   "pwa.offline":
     "Sei offline. Alcune funzionalità potrebbero non essere disponibili.",

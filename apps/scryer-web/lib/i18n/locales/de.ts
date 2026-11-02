@@ -1,6 +1,12 @@
 import type { LocaleDictionary } from "../types";
 
 const de: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin-Callback-URL kopiert.",
+  "settings.oauthClientIdCopied": "OAuth-Client-ID kopiert.",
+  "status.copyFailedSelected":
+    "Kopieren fehlgeschlagen. Der Text ist markiert; Strg+C oder ⌘C drücken.",
+  "status.copyFailed":
+    "Kopieren fehlgeschlagen: Der Browser hat den Zugriff auf die Zwischenablage verweigert.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kann keine Verbindung zum Metadaten-Gateway herstellen, da Ihre Systemuhr um mehr als 5 Minuten abweicht. Synchronisieren Sie Ihre Systemuhr und starten Sie Scryer neu.",
   "httpRelease.refusal.detailsUnavailable":
@@ -495,8 +501,6 @@ const de: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive ist eine ganze Zahl von Sekunden; 0 schaltet es ab.",
   "status.proxyTunnelPublicKeyCopied": "Öffentlicher Schlüssel kopiert.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Der öffentliche Schlüssel konnte nicht kopiert werden.",
   "settings.qualityProfiles": "Qualitätsprofile",
   "settings.downloadClients": "Download-Clients",
   "settings.downloadClientRouting": "Download-Client-Routing",
@@ -1078,6 +1082,8 @@ const de: LocaleDictionary = {
   "toast.viewInCatalog": "Im Katalog anzeigen",
 
   "label.back": "Zurück",
+  "label.copy": "Kopieren",
+  "label.copied": "Kopiert",
   "label.dismiss": "Ausblenden",
   "pwa.offline":
     "Du bist offline. Einige Funktionen sind möglicherweise nicht verfügbar.",

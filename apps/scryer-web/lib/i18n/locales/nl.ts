@@ -1,6 +1,12 @@
 import type { LocaleDictionary } from "../types";
 
 const nl: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin-callback-URL gekopieerd.",
+  "settings.oauthClientIdCopied": "OAuth-client-ID gekopieerd.",
+  "status.copyFailedSelected":
+    "Kopiëren mislukt. De tekst is geselecteerd; druk op Ctrl+C of ⌘C.",
+  "status.copyFailed":
+    "Kopiëren mislukt: de browser weigerde toegang tot het klembord.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer kan geen verbinding maken met de metadatagateway omdat uw systeemklok meer dan 5 minuten afwijkt. Synchroniseer uw systeemklok en start Scryer opnieuw.",
   "httpRelease.refusal.detailsUnavailable":
@@ -1389,6 +1395,8 @@ const nl: LocaleDictionary = {
 
   "label.back": "Terug",
   "label.close": "Sluiten",
+  "label.copy": "Kopiëren",
+  "label.copied": "Gekopieerd",
   "label.dismiss": "Negeren",
 
   "pwa.offline":

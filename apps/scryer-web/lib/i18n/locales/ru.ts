@@ -1,6 +1,13 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied":
+    "URL обратного вызова Jellyfin скопирован.",
+  "settings.oauthClientIdCopied": "ID клиента OAuth скопирован.",
+  "status.copyFailedSelected":
+    "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
+  "status.copyFailed":
+    "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer не может подключиться к шлюзу метаданных, поскольку системные часы расходятся более чем на 5 минут. Синхронизируйте системные часы и перезапустите Scryer.",
   "httpRelease.refusal.detailsUnavailable":
@@ -610,8 +617,6 @@ const ru: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive — целое число секунд; 0 отключает его.",
   "status.proxyTunnelPublicKeyCopied": "Открытый ключ скопирован.",
-  "status.proxyTunnelPublicKeyCopyFailed":
-    "Не удалось скопировать открытый ключ.",
   "settings.qualityProfiles": "Профили качества",
   "settings.downloadClients": "Клиенты загрузки",
   "settings.mediaServers": "Медиасерверы",
@@ -1508,6 +1513,8 @@ const ru: LocaleDictionary = {
 
   "label.back": "Назад",
   "label.close": "Закрыть",
+  "label.copy": "Копировать",
+  "label.copied": "Скопировано",
   "label.dismiss": "Скрыть",
 
   "pwa.offline": "Вы не в сети. Некоторые функции могут быть недоступны.",

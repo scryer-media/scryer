@@ -43,11 +43,14 @@ import type { ScriptTriggerValue } from "@/lib/types/scripts";
 import type { RegoFamily } from "@/lib/utils/rego-assistance";
 import { useTheme } from "next-themes";
 import { Check, Copy } from "lucide-react";
+import { toast } from "sonner";
 import "@fontsource-variable/jetbrains-mono";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
 import { CODE_FONT } from "@/lib/fonts";
 import { isDarkTheme } from "@/lib/theme";
+import { useTranslate } from "@/lib/context/translate-context";
+import { copyText } from "@/lib/utils/clipboard";
 
 export type CodeEditorLanguage =
   "plain" | "javascript" | "json" | "rego" | "xml" | ScriptEditorLanguage;
@@ -457,8 +460,8 @@ export default function CodeEditor({
   scriptTrigger,
   scriptTranslate,
   copyable = false,
-  copyLabel = "Copy code",
-  copiedLabel = "Copied",
+  copyLabel,
+  copiedLabel,
   autoFocus = false,
   onAutoFocus,
 }: CodeEditorProps) {
@@ -470,6 +473,7 @@ export default function CodeEditor({
   const onChangeRef = useRef(onChange);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
+  const t = useTranslate();
   const { resolvedTheme } = useTheme();
   const lineCount = value.split("\n").length;
   const lineHeightPx = 20;
@@ -490,9 +494,10 @@ export default function CodeEditor({
   );
 
   const copyValue = async () => {
-    if (!navigator.clipboard) return;
-
-    await navigator.clipboard.writeText(value);
+    if (!(await copyText(value))) {
+      toast.error(t("status.copyFailed"));
+      return;
+    }
     setCopied(true);
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
     copyResetTimerRef.current = setTimeout(() => setCopied(false), 1500);
@@ -692,7 +697,11 @@ export default function CodeEditor({
       />
       {copyable ? (
         <IconButton
-          label={copied ? copiedLabel : copyLabel}
+          label={
+            copied
+              ? (copiedLabel ?? t("label.copied"))
+              : (copyLabel ?? t("label.copy"))
+          }
           appearance="boxed"
           className="absolute right-2 top-2 z-10 bg-[var(--scry-surf)] opacity-0 shadow-sm transition-opacity group-hover/code-editor:opacity-100 group-focus-within/code-editor:opacity-100 focus-visible:opacity-100"
           onClick={() => void copyValue()}

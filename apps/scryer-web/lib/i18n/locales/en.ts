@@ -1,6 +1,11 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
+  "settings.oauthClientIdCopied": "OAuth client ID copied.",
+  "status.copyFailedSelected":
+    "Could not copy. The text is selected; press Ctrl+C or ⌘C.",
+  "status.copyFailed": "Could not copy: the browser refused clipboard access.",
   "pendingImports.conflict.returnToConflicts": "Return to folder conflicts",
   "error.reason.LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED":
     "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
@@ -263,7 +268,6 @@ const en: LocaleDictionary = {
   "error.fallback.unableToAuthorizeThisIntegration":
     "Unable to authorize this integration.",
   "error.fallback.unableToCancelImport": "Unable to cancel import.",
-  "error.fallback.unableToCopyTheAPIKey": "Unable to copy the API key.",
   "error.fallback.unableToCreateAPIKey": "Unable to create API key.",
   "error.fallback.unableToDeleteOAuthApplication":
     "Unable to delete OAuth application.",
@@ -4887,7 +4891,6 @@ const en: LocaleDictionary = {
   "settings.indexerSearch": "Indexer Search",
   "settings.indexerClients": "Client management",
   "indexerClients.endpoints": "Endpoints",
-  "indexerClients.endpointCopyFailed": "Could not copy the endpoint URL.",
   "indexerClients.existing": "Indexer clients",
   "indexerClients.none": "No indexer clients yet.",
   "indexerClients.key": "Key",
@@ -5096,7 +5099,6 @@ const en: LocaleDictionary = {
   "settings.proxyValidationWireguardKeepalive":
     "Keepalive is a whole number of seconds, and 0 switches it off.",
   "status.proxyTunnelPublicKeyCopied": "Public key copied.",
-  "status.proxyTunnelPublicKeyCopyFailed": "Unable to copy the public key.",
   "settings.qualityProfiles": "Quality Profiles",
   "settings.downloadClients": "Download Clients",
   "settings.mediaServers": "Media Servers",
