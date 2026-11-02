@@ -1,15 +1,6 @@
 use super::*;
 
 async fn assert_extended_movie_import(extension: &str, contents: &[u8], allowed: bool) {
-    assert_extended_movie_import_with_rule(extension, contents, allowed, false).await;
-}
-
-async fn assert_extended_movie_import_with_rule(
-    extension: &str,
-    contents: &[u8],
-    allowed: bool,
-    block_unknown: bool,
-) {
     let ctx = TestContext::new().await;
     let app = app_with_real_imports(&ctx).await;
     let user = ctx.app.find_or_create_default_user().await.unwrap();
@@ -31,22 +22,6 @@ async fn assert_extended_movie_import_with_rule(
         )
         .await
         .unwrap();
-    }
-    if block_unknown {
-        install_rule(
-            &app,
-            &user,
-            r#"
-import rego.v1
-
-score_entry["unknown_duration"] := scryer.block_score() if {
-    input.file != null
-    input.file.duration_seconds == null
-}
-"#,
-            vec![MediaFacet::Movie],
-        )
-        .await;
     }
     let source_root = tempfile::tempdir().unwrap();
     let source = source_root
@@ -120,12 +95,6 @@ score_entry["unknown_duration"] := scryer.block_score() if {
         }
     } else {
         assert_ne!(result.decision, ImportDecision::Imported, "{result:?}");
-        if block_unknown {
-            assert_eq!(
-                result.skip_reason,
-                Some(ImportSkipReason::PostDownloadRuleBlocked)
-            );
-        }
         assert!(files.is_empty(), "{files:?}");
         assert!(
             std::fs::read_dir(dest_root.path())
@@ -137,9 +106,92 @@ score_entry["unknown_duration"] := scryer.block_score() if {
 }
 
 #[tokio::test]
-async fn unavailable_probe_still_obeys_explicit_post_download_rules() {
-    assert_extended_movie_import_with_rule("wtv", b"unsupported recorder container", false, true)
+async fn unavailable_probe_import_is_an_operator_decision_even_with_blocking_rules() {
+    // Automatic imports stop at the runtime check before any rule runs, and an
+    // operator import bypasses user rules, so the operator decides.
+    assert_extended_movie_import("wtv", b"unsupported recorder container", false).await;
+    assert_manual_unavailable_episode_import(true).await;
+}
+
+#[tokio::test]
+async fn operator_override_imports_an_episode_whose_runtime_cannot_be_read() {
+    assert_manual_unavailable_episode_import(false).await;
+}
+
+async fn assert_manual_unavailable_episode_import(with_blocking_rule: bool) {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_imports(&ctx).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    if with_blocking_rule {
+        install_rule(
+            &app,
+            &user,
+            r#"
+import rego.v1
+
+score_entry["unknown_duration"] := scryer.block_score() if {
+    input.file != null
+    input.file.duration_seconds == null
+}
+"#,
+            vec![MediaFacet::Series],
+        )
         .await;
+    }
+    let source_root = tempfile::tempdir().unwrap();
+    let source = source_root.path().join("Extended.Series.S01E01.wtv");
+    std::fs::write(&source, b"unsupported recorder container").unwrap();
+    pad_file_past_series_sample_threshold(&source);
+    let source_bytes = std::fs::read(&source).unwrap();
+    let dest_root = tempfile::tempdir().unwrap();
+    let title = add_short_form_series_title(
+        &ctx,
+        "extended-series-manual",
+        "Extended Series",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let episode = seed_short_form_series_episode(&ctx, &title).await;
+    let completed = scryer_completed(
+        "extended-series-manual",
+        source_root.path().to_str().unwrap(),
+        &title.id,
+        "series",
+    );
+    let import_id = queue_import_record(&ctx, &completed).await;
+    let results = tokio::time::timeout(
+        Duration::from_secs(60),
+        scryer_application::execute_manual_import(
+            &app,
+            &user,
+            &import_id,
+            &title.id,
+            Some(&completed),
+            vec![scryer_application::ManualImportFileMapping {
+                disc_selection: None,
+                file_path: source.to_string_lossy().to_string(),
+                episode_id: Some(episode.id.clone()),
+                episode_ids: Vec::new(),
+                series_movie_link_id: None,
+            }],
+            Some(source_root.path().to_path_buf()),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(results.len(), 1);
+    let files = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert!(results[0].success, "{results:#?}");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].episode_id.as_deref(), Some(episode.id.as_str()));
+    assert_eq!(files[0].duration_seconds, None);
+    assert_eq!(files[0].video_codec, None);
 }
 
 #[tokio::test]
@@ -168,19 +220,21 @@ async fn known_audio_only_containers_never_use_unavailable_import_fallback() {
     }
 }
 
+// Sonarr NotSampleSpecification.cs:36-38 rejects an automatic import whose
+// runtime cannot be read; the source is preserved and nothing is imported.
 #[tokio::test]
-async fn unsupported_self_contained_movie_imports_without_inventing_metadata() {
-    assert_extended_movie_import("wtv", b"unsupported recorder container", true).await;
+async fn unsupported_self_contained_movie_without_runtime_is_not_imported_automatically() {
+    assert_extended_movie_import("wtv", b"unsupported recorder container", false).await;
 }
 
 #[tokio::test]
-async fn partial_elementary_streams_import_without_inventing_duration() {
+async fn partial_elementary_streams_without_runtime_are_not_imported_automatically() {
     assert_extended_movie_import(
         "m2v",
         &[
             0, 0, 1, 0xb3, 0x2d, 0x01, 0xe0, 0x13, 0, 0, 0x60, 0, 0, 0, 1, 0, 0, 8,
         ],
-        true,
+        false,
     )
     .await;
     let mut avc = vec![0, 0, 1, 0x67, 66, 0, 30, 244, 5, 1, 236, 128];
@@ -189,15 +243,15 @@ async fn partial_elementary_streams_import_without_inventing_duration() {
     avc.extend([0, 0, 1, 0x0c]);
     avc.resize(512 * 1024, 0xff);
     avc.push(0x80);
-    assert_extended_movie_import("avc", &avc, true).await;
+    assert_extended_movie_import("avc", &avc, false).await;
 }
 
 #[tokio::test]
-async fn remote_reference_playlist_imports_without_fetching_its_target() {
+async fn remote_reference_playlist_is_not_imported_automatically_without_fetching_its_target() {
     assert_extended_movie_import(
         "m3u",
         b"#EXTM3U\nhttps://unreachable.invalid/video.mkv\n",
-        true,
+        false,
     )
     .await;
 }
@@ -214,7 +268,7 @@ async fn local_reference_playlists_and_disc_navigation_preserve_all_files() {
 }
 
 #[tokio::test]
-async fn unsupported_self_contained_episode_imports_and_links_episode() {
+async fn unsupported_self_contained_episode_without_runtime_is_not_imported_automatically() {
     let ctx = TestContext::new().await;
     let app = app_with_real_imports(&ctx).await;
     let user = ctx.app.find_or_create_default_user().await.unwrap();
@@ -230,7 +284,7 @@ async fn unsupported_self_contained_episode_imports_and_links_episode() {
         dest_root.path().to_str().unwrap(),
     )
     .await;
-    let episode = seed_short_form_series_episode(&ctx, &title).await;
+    seed_short_form_series_episode(&ctx, &title).await;
     let completed = scryer_completed(
         "extended-series",
         source_root.path().to_str().unwrap(),
@@ -244,16 +298,13 @@ async fn unsupported_self_contained_episode_imports_and_links_episode() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(result.decision, ImportDecision::Imported, "{result:?}");
+    assert_ne!(result.decision, ImportDecision::Imported, "{result:?}");
     let files = ctx
         .media_files
         .list_media_files_for_title(&title.id)
         .await
         .unwrap();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].episode_id.as_deref(), Some(episode.id.as_str()));
-    assert_eq!(files[0].duration_seconds, None);
-    assert_eq!(files[0].video_codec, None);
+    assert!(files.is_empty(), "{files:?}");
     assert!(source.exists());
 }
 

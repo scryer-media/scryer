@@ -864,13 +864,21 @@ fn infer_video_dimensions(quality: Option<&str>) -> (Option<i32>, Option<i32>) {
     }
 }
 
-#[cfg(not(feature = "runtime-media-analysis"))]
 fn inferred_container_format_for_path(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(str::trim)
         .filter(|ext| !ext.is_empty())
         .map(|ext| ext.to_ascii_lowercase())
+}
+
+/// Mount backends (nzbdav, decypharr, altmount) expose payloads as symlinks
+/// whose targets the native probe often cannot read.
+#[cfg(feature = "runtime-media-analysis")]
+fn path_is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn media_review_hold(code: &'static str, message: impl Into<String>) -> ImportedFileGateDecision {
@@ -944,29 +952,62 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
                 path, error,
             ));
         }
-        Err(error) => return media_review_hold(reasons::PROBE_IO_FAILED, error.to_string()),
+        // Another coded refusal is held under its own reason.
+        Err(error) if let Some(reason) = error.validation_reason() => {
+            return ImportedFileGateDecision::Rejected(ImportedFileRejection {
+                message: error.to_string(),
+                recycle_reason: MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE,
+                skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                blocking_rule_codes: vec![reason.to_string()],
+            });
+        }
+        // An uncoded failure (a metadata read through a mount symlink, a probe
+        // worker that died) is an I/O failure of the probe, handled below.
+        Err(error) => Err(scryer_mediainfo::MediaInfoError::Io(error.to_string())),
     };
     let mut analysis = match probe {
         Ok(analysis) => analysis,
         Err(error) => {
+            warn!(error = %error, path = %path.display(), "media analysis failed");
             if scryer_domain::is_disc_image(path) {
                 return ImportedFileGateDecision::Rejected(disc_review_rejection(format!(
                     "disc inspection could not complete: {error}; the source image has been preserved"
                 )));
             }
-            let code = match &error {
-                scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
-                scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
-                scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
-                    if handling == Some(MediaHandling::Playlist) =>
-                {
-                    reasons::REFERENCES_REQUIRE_REVIEW
-                }
-                scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
-                    MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
-                }
-            };
-            return media_review_hold(code, error.to_string());
+            if handling == Some(MediaHandling::Playlist)
+                && matches!(
+                    error,
+                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)
+                )
+            {
+                return media_review_hold(reasons::REFERENCES_REQUIRE_REVIEW, error.to_string());
+            }
+            if runtime_sample_validation.mode == RuntimeSampleValidationMode::EnforceAutomatic {
+                let code = match &error {
+                    scryer_mediainfo::MediaInfoError::Io(_) => reasons::PROBE_IO_FAILED,
+                    scryer_mediainfo::MediaInfoError::Parse(_) => reasons::PROBE_MALFORMED,
+                    scryer_mediainfo::MediaInfoError::UnsupportedFormat(_) => {
+                        MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+                    }
+                };
+                return media_review_hold(code, error.to_string());
+            }
+            // An operator override imports what the probe could not read, as
+            // before the typed holds. A symlinked payload from a mount backend
+            // keeps an analysis derived from the release name so the library
+            // entry still carries its quality.
+            let synthetic_analysis = path_is_symlink(path).then(|| {
+                build_synthetic_media_file_analysis(
+                    parsed,
+                    inferred_container_format_for_path(path),
+                )
+            });
+            return ImportedFileGateDecision::Accepted(Box::new(ImportedFileAcceptance {
+                analysis: synthetic_analysis,
+                scan_error: Some(error.to_string()),
+                rule_file_doc: None,
+                audio_language_warning: None,
+            }));
         }
     };
     use scryer_media_types::ProbeStatus;
@@ -980,10 +1021,17 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         _ => {}
     }
     let unavailable = analysis.details.report.status == ProbeStatus::Unsupported;
+    // A replacement needs the facts the probe actually resolved, not a complete
+    // inventory: an MKV prefix inventory stops at its coverage limit
+    // (`budget_exhausted`) on every real file while still resolving duration and
+    // codec. Sonarr's UpgradeSpecification compares quality only and never
+    // blocks on partial media info. An operator override skips the runtime
+    // check, so it needs only the codec, as release-0.22.0 allowed.
+    let operator_override =
+        runtime_sample_validation.mode == RuntimeSampleValidationMode::BypassRuntimeSampleCheck;
     let unverified = unavailable
-        || analysis.duration_seconds.is_none()
         || analysis.video_codec.is_none()
-        || analysis.details.report.budget_exhausted;
+        || (analysis.duration_seconds.is_none() && !operator_override);
     if unverified && has_existing_file {
         return media_review_hold(
             reasons::UNVERIFIED_REPLACEMENT,
@@ -1051,7 +1099,6 @@ pub(crate) async fn probe_and_validate_with_disc_selection(
         .disc
         .as_ref()
         .is_none_or(|disc| disc.selection.episode_mappings.is_empty())
-        && analysis.duration_seconds.is_some()
         && let Some(rejection) = sample_rejection(
             runtime_sample_validation,
             &title.facet,
@@ -2637,6 +2684,221 @@ mod tests {
         );
         assert_eq!(std::fs::read(&incumbent).unwrap(), b"preserve incumbent");
         assert!(!missing.exists());
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    async fn gate_movie_title(app: &AppUseCase, user: &crate::User, name: &str) -> Title {
+        app.add_title(
+            user,
+            crate::NewTitle {
+                name: name.into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    async fn gate_decision(
+        app: &AppUseCase,
+        title: &Title,
+        release: &str,
+        path: &Path,
+        has_existing_file: bool,
+        validation: RuntimeSampleValidation,
+    ) -> ImportedFileGateDecision {
+        let parsed = crate::parse_release_metadata(release);
+        let profile = crate::QualityProfile::default();
+        let size = std::fs::metadata(path).map_or(0, |metadata| metadata.len() as i64);
+        tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            probe_and_validate_with_disc_selection(
+                app,
+                title,
+                &parsed,
+                &profile,
+                path,
+                size,
+                has_existing_file,
+                has_existing_file.then_some(0),
+                false,
+                validation,
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// An MKV whose segment carries more top-level elements than the prefix
+    /// inventory walks, as every real-size MKV does.
+    #[cfg(feature = "runtime-media-analysis")]
+    fn coverage_limited_mkv(path: &Path) {
+        let mut bytes =
+            include_bytes!("../../../scryer-mediainfo/tests/media/h264_aac.mkv").to_vec();
+        // Segment header at 0x28: ID 18 53 80 67, then an 8-byte size vint.
+        assert_eq!(&bytes[0x28..0x2c], &[0x18, 0x53, 0x80, 0x67]);
+        assert_eq!(bytes[0x2c], 0x01);
+        let size =
+            u64::from_be_bytes(bytes[0x2c..0x34].try_into().unwrap()) & 0x00ff_ffff_ffff_ffff;
+        assert_eq!(0x34 + size, bytes.len() as u64);
+        const VOIDS: u64 = 200;
+        let grown = (size + 2 * VOIDS) | 0x0100_0000_0000_0000;
+        bytes[0x2c..0x34].copy_from_slice(&grown.to_be_bytes());
+        for _ in 0..VOIDS {
+            bytes.extend([0xec, 0x80]);
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn coverage_limited_mkv_upgrade_is_not_an_unverified_replacement() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Coverage Limit").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Coverage.Limit.2024.mkv");
+        coverage_limited_mkv(&candidate);
+        let probed = scryer_mediainfo::analyze_catalog_file(&candidate).unwrap();
+        assert!(
+            probed.details.report.budget_exhausted,
+            "{:?}",
+            probed.details.report
+        );
+        assert!(probed.video_codec.is_some());
+        let duration = probed.duration_seconds.expect("fixture duration resolves");
+
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Coverage.Limit.2024",
+            &candidate,
+            true,
+            automatic(Some(duration)),
+        )
+        .await;
+        match decision {
+            ImportedFileGateDecision::Accepted(acceptance) => {
+                let analysis = acceptance.analysis.expect("probed analysis");
+                assert_eq!(analysis.duration_seconds, Some(duration));
+                assert!(analysis.video_codec.is_some());
+            }
+            ImportedFileGateDecision::Rejected(rejection) => {
+                panic!("a coverage-limited probe must not block the upgrade: {rejection:?}")
+            }
+        }
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn unreadable_runtime_rejects_automatic_import_and_imports_on_override() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Unreadable Runtime").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Unreadable.Runtime.2024.wtv");
+        std::fs::write(&candidate, b"unsupported recorder container").unwrap();
+
+        let ImportedFileGateDecision::Rejected(rejection) = gate_decision(
+            &app,
+            &title,
+            "Unreadable.Runtime.2024",
+            &candidate,
+            false,
+            automatic(Some(7200)),
+        )
+        .await
+        else {
+            panic!("an automatic import with no readable runtime must be rejected");
+        };
+        assert_eq!(rejection.recycle_reason, SAMPLE_RUNTIME_INDETERMINATE_CODE);
+
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Unreadable.Runtime.2024",
+            &candidate,
+            false,
+            manual(Some(7200)),
+        )
+        .await;
+        if let ImportedFileGateDecision::Rejected(rejection) = decision {
+            panic!("an operator override imports the file: {rejection:?}");
+        }
+        assert_eq!(
+            std::fs::read(&candidate).unwrap(),
+            b"unsupported recorder container"
+        );
+    }
+
+    #[cfg(all(unix, feature = "runtime-media-analysis"))]
+    #[tokio::test]
+    async fn unreadable_symlinked_payload_imports_on_override_with_release_analysis() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Mount Backend").await;
+        let directory = tempfile::tempdir().unwrap();
+        // A mount backend's link whose target the probe cannot reach.
+        let link = directory.path().join("Mount.Backend.2024.1080p.WEB-DL.mkv");
+        std::os::unix::fs::symlink(directory.path().join("unmounted-target"), &link).unwrap();
+        let release = "Mount.Backend.2024.1080p.WEB-DL";
+
+        let ImportedFileGateDecision::Rejected(rejection) =
+            gate_decision(&app, &title, release, &link, false, automatic(Some(7200))).await
+        else {
+            panic!("an automatic import must not accept an unreadable payload");
+        };
+        assert_eq!(
+            rejection.recycle_reason,
+            crate::error_reasons::media::PROBE_IO_FAILED
+        );
+
+        let ImportedFileGateDecision::Accepted(acceptance) =
+            gate_decision(&app, &title, release, &link, false, manual(Some(7200))).await
+        else {
+            panic!("an operator override imports a symlinked payload the probe cannot read");
+        };
+        assert!(acceptance.scan_error.is_some());
+        let analysis = acceptance
+            .analysis
+            .expect("a symlinked payload keeps a release-derived analysis");
+        assert_eq!(analysis.container_format.as_deref(), Some("mkv"));
+        assert_eq!(
+            (analysis.video_width, analysis.video_height),
+            (Some(1920), Some(1080))
+        );
+        assert!(std::fs::symlink_metadata(&link).is_ok());
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn unreadable_regular_payload_imports_on_override_without_inventing_analysis() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = gate_movie_title(&app, &user, "Regular Payload").await;
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("Regular.Payload.2024.1080p.mkv");
+        std::fs::write(&candidate, b"not a matroska file").unwrap();
+        let decision = gate_decision(
+            &app,
+            &title,
+            "Regular.Payload.2024.1080p",
+            &candidate,
+            false,
+            manual(Some(7200)),
+        )
+        .await;
+        match decision {
+            ImportedFileGateDecision::Accepted(acceptance) => {
+                assert!(acceptance.analysis.is_none());
+                assert!(acceptance.scan_error.is_some());
+            }
+            ImportedFileGateDecision::Rejected(rejection) => {
+                panic!("an operator override imports an unreadable payload: {rejection:?}")
+            }
+        }
+        assert_eq!(std::fs::read(&candidate).unwrap(), b"not a matroska file");
     }
 
     #[test]
