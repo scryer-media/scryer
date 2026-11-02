@@ -28,14 +28,36 @@ function elements(node: unknown): Element[] {
   return [element, ...elements(element.props.children)];
 }
 
-function mountSection(itemOverrides: Partial<Props["items"][number]> = {}) {
+function mountSection(
+  itemOverrides: Partial<Props["items"][number]> = {},
+  initialProps: Partial<Props> = {},
+) {
   const slots: unknown[] = [];
+  const effects: Array<() => void> = [];
+  const scrolls: string[] = [];
+  const focused: string[] = [];
+  let tree: Element[] = [];
   let cursor = 0;
   const overrides: Record<string, unknown> = {
     "react-router": { Link: "Link" },
     react: {
       Fragment: require("react").Fragment,
       useMemo: (factory: () => unknown) => factory(),
+      useRef(initial: unknown) {
+        const index = cursor++;
+        if (!(index in slots)) slots[index] = { current: initial };
+        return slots[index];
+      },
+      useEffect(effect: () => void, dependencies: unknown[]) {
+        const index = cursor++;
+        const previous = slots[index] as unknown[] | undefined;
+        if (
+          !previous ||
+          dependencies.some((value, i) => !Object.is(value, previous[i]))
+        )
+          effects.push(effect);
+        slots[index] = dependencies;
+      },
       useState(initial: unknown) {
         const index = cursor++;
         if (!(index in slots)) slots[index] = initial;
@@ -74,7 +96,7 @@ function mountSection(itemOverrides: Partial<Props["items"][number]> = {}) {
   const module = {
     exports: {} as { SettingsRecycleBinSection: (props: Props) => unknown },
   };
-  new Function("require", "module", "exports", "Element", code)(
+  new Function("require", "module", "exports", "Element", "document", code)(
     (id: string) => {
       if (overrides[id]) return overrides[id];
       if (id.startsWith("@/components/") || id === "lucide-react")
@@ -84,6 +106,15 @@ function mountSection(itemOverrides: Partial<Props["items"][number]> = {}) {
     module,
     module.exports,
     ClickTarget,
+    {
+      getElementById(id: string) {
+        if (!tree.some((node) => node.props.id === id)) return null;
+        return {
+          scrollIntoView: () => scrolls.push(id),
+          focus: () => focused.push(id),
+        };
+      },
+    },
   );
   const items = ["first", "second"].map((id) => ({
     id,
@@ -130,12 +161,58 @@ function mountSection(itemOverrides: Partial<Props["items"][number]> = {}) {
     onRestoreItems: noop,
     onDeleteItems: noop,
     onEmptyAll: noop,
+    ...initialProps,
   };
-  return () => {
-    cursor = 0;
-    return elements(module.exports.SettingsRecycleBinSection(props));
-  };
+  return Object.assign(
+    (nextProps: Partial<Props> = {}) => {
+      cursor = 0;
+      effects.length = 0;
+      tree = elements(
+        module.exports.SettingsRecycleBinSection({ ...props, ...nextProps }),
+      );
+      for (const effect of effects) effect();
+      return tree;
+    },
+    { scrolls, focused },
+  );
 }
+
+test("a dashboard target opens its history and scrolls once after async rows load", () => {
+  const render = mountSection({}, { initialHistoryItemId: "second" });
+  const histories = (nodes: Element[]) =>
+    nodes
+      .filter((node) => node.type === "recycle-history")
+      .map((node) => node.props.id);
+  assert.deepEqual(histories(render({ loading: true, items: [] })), []);
+  assert.deepEqual(render.scrolls, []);
+  render({ librariesLoading: true, items: [] });
+  assert.deepEqual(render.scrolls, []);
+  let tree = render();
+  assert.deepEqual(histories(tree), ["second"]);
+  assert.deepEqual(render.scrolls, ["settings-recycle-bin-row-second"]);
+  assert.deepEqual(render.focused, ["settings-recycle-bin-history-second"]);
+
+  const toggle = tree.find(
+    (node) => node.props.id === "settings-recycle-bin-history-second",
+  );
+  assert.ok(toggle);
+  (toggle.props.onClick as () => void)();
+  assert.deepEqual(histories(render()), []);
+  render({ loading: true });
+  tree = render();
+  assert.deepEqual(histories(tree), []);
+  assert.deepEqual(render.scrolls, ["settings-recycle-bin-row-second"]);
+});
+
+test("an unavailable dashboard target never opens or scrolls to a different item", () => {
+  const render = mountSection({}, { initialHistoryItemId: "missing" });
+  assert.equal(
+    render().some((node) => node.type === "recycle-history"),
+    false,
+  );
+  assert.deepEqual(render.scrolls, []);
+  assert.deepEqual(render.focused, []);
+});
 
 test("history mounts only for the expanded item and changes scope when another row opens", () => {
   const render = mountSection();

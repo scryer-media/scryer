@@ -14,6 +14,7 @@ import {
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { dashboardRecycleBinQuery } from "@/lib/graphql/queries";
 import { formatBytes } from "@/lib/utils/activity-utils";
+import { buildRecycleBinItemHref } from "@/lib/utils/recycle-bin";
 import type { DashboardTier } from "@/lib/utils/dashboard-layout";
 
 type RecycleBinPreview = {
@@ -84,7 +85,7 @@ export function RecycleBinPanel({ tier }: { tier: DashboardTier }) {
               >
                 <div className="flex min-w-0 items-center gap-2">
                   <Link
-                    to="/system/recycle-bin"
+                    to={buildRecycleBinItemHref(item.id)}
                     className="min-w-0 flex-1 truncate text-[12px] font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     title={item.fileName}
                   >

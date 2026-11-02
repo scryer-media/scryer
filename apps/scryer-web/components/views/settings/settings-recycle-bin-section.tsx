@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { Trash2, Undo2 } from "lucide-react";
 import { RecycleBinHistory } from "./recycle-bin-history";
@@ -57,6 +57,7 @@ export type RecycledItem = {
 };
 
 type Props = {
+  initialHistoryItemId?: string | null;
   enabled: boolean;
   path: string | null;
   retentionDays: number;
@@ -343,6 +344,7 @@ function RecycleBinRelocationNotice({
 }
 
 export function SettingsRecycleBinSection({
+  initialHistoryItemId = null,
   enabled,
   path,
   retentionDays,
@@ -373,7 +375,31 @@ export function SettingsRecycleBinSection({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const [filter, setFilter] = useState("");
-  const [historyItemId, setHistoryItemId] = useState<string | null>(null);
+  const [historyItemId, setHistoryItemId] = useState<string | null>(
+    initialHistoryItemId,
+  );
+  const initialHistoryScrolled = useRef(false);
+  useEffect(() => {
+    if (
+      !initialHistoryItemId ||
+      initialHistoryScrolled.current ||
+      settingsLoading ||
+      loading ||
+      librariesLoading
+    )
+      return;
+    const row = document.getElementById(
+      selectorId("settings-recycle-bin-row", initialHistoryItemId),
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: "start" });
+    document
+      .getElementById(
+        selectorId("settings-recycle-bin-history", initialHistoryItemId),
+      )
+      ?.focus({ preventScroll: true });
+    initialHistoryScrolled.current = true;
+  }, [initialHistoryItemId, items, librariesLoading, loading, settingsLoading]);
   const toggleHistory = (id: string) =>
     setHistoryItemId((current) => (current === id ? null : id));
   const isBusy = settingsSaving || mutatingId !== null;
@@ -703,7 +729,7 @@ export function SettingsRecycleBinSection({
                           <TableRow
                             id={selectorId("settings-recycle-bin-row", item.id)}
                             data-ui="settings-table-row"
-                            className="cursor-pointer @max-[72rem]/recycle:relative @max-[72rem]/recycle:grid @max-[72rem]/recycle:grid-cols-2 @max-[72rem]/recycle:gap-x-4 @max-[72rem]/recycle:gap-y-3 @max-[72rem]/recycle:p-3 @[40rem]/recycle:grid-cols-3 @max-[72rem]/recycle:[&>td]:min-w-0 @max-[72rem]/recycle:[&>td]:p-0 @max-[72rem]/recycle:[&>td]:[overflow-wrap:anywhere]"
+                            className="scroll-mt-24 cursor-pointer @max-[72rem]/recycle:relative @max-[72rem]/recycle:grid @max-[72rem]/recycle:grid-cols-2 @max-[72rem]/recycle:gap-x-4 @max-[72rem]/recycle:gap-y-3 @max-[72rem]/recycle:p-3 @[40rem]/recycle:grid-cols-3 @max-[72rem]/recycle:[&>td]:min-w-0 @max-[72rem]/recycle:[&>td]:p-0 @max-[72rem]/recycle:[&>td]:[overflow-wrap:anywhere]"
                             onClick={(event) => {
                               if (
                                 event.target instanceof Element &&

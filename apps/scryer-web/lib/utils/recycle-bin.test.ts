@@ -2,11 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildRecycleBinItemHref,
   buildRecycleBinSettingsInput,
   groupRecycleBinItems,
   parseRecycleBinRetentionDays,
   recycleBinLocationChanges,
 } from "./recycle-bin.ts";
+
+test("dashboard recycle-bin links retain the exact item ID through URL encoding", () => {
+  const itemId = "entry /#?&";
+  const url = new URL(buildRecycleBinItemHref(itemId), "https://example.test");
+  assert.equal(url.pathname, "/system/recycle-bin");
+  assert.equal(url.searchParams.get("itemId"), itemId);
+  assert.equal(url.hash, "");
+});
 
 const items = [
   {
