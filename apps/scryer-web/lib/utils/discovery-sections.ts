@@ -163,9 +163,9 @@ const GENERIC_FOR_YOU_FALLBACK_SECTION_TYPES = new Set<string>(
 
 // Rails that say nothing about the library, so they never stand in for the
 // library context FOR_YOU falls back on.
-const NON_LIBRARY_PERSONALIZED_SECTION_TYPES = new Set([
-  FROM_YOUR_WATCHLIST_SECTION_TYPE,
-]);
+const NON_LIBRARY_PERSONALIZED_SECTION_TYPES = new Set<string>(
+  sectionOrder.nonLibraryPersonalized,
+);
 
 // World shelf (gateway public feed) in a fixed reading order, regardless of the
 // order the gateway happened to emit. Anything added later that is not listed

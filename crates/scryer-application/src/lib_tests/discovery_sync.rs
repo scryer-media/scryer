@@ -8500,14 +8500,28 @@ struct DiscoverySectionFixture {
 /// A personalized pool of `count` synthetic drama movies, all found through
 /// one library title, ranked by index.
 async fn discovery_section_fixture(username: &str, count: usize) -> DiscoverySectionFixture {
+    discovery_section_fixture_with_lists(username, count, None).await
+}
+
+/// [`discovery_section_fixture`], with the viewer's personal lists read from
+/// `lists` when given.
+async fn discovery_section_fixture_with_lists(
+    username: &str,
+    count: usize,
+    lists: Option<Arc<crate::lists::test_support::MemoryListStore>>,
+) -> DiscoverySectionFixture {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
     let (app, admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
     let discovery = Arc::new(RecordingDiscoveryRepository::default());
     let media_requests = Arc::new(super::support_events_requests::MockMediaRequestRepo::default());
     let app = app.with_test_overrides(|builder| {
-        builder
+        let builder = builder
             .with_discovery_store(discovery.clone())
-            .with_media_requests(media_requests.clone())
+            .with_media_requests(media_requests.clone());
+        match lists.clone() {
+            Some(lists) => builder.with_list_store(lists),
+            None => builder,
+        }
     });
     let (_viewer, viewer) = create_authenticated_user(
         &app,
@@ -9069,4 +9083,145 @@ async fn discovery_top_rated_section_skips_titles_earlier_rails_showed() {
             .collect::<Vec<_>>(),
         expected[15..]
     );
+}
+
+#[tokio::test]
+async fn discovery_watchlist_section_pages_the_rail_and_no_reason_rail_repeats_it() {
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
+    let fixture = discovery_section_fixture_with_lists(
+        "discovery-section-watchlist",
+        140,
+        Some(lists.clone()),
+    )
+    .await;
+    *lists.subscriptions.lock().unwrap() = vec![watchlist_subscription(
+        "section-watchlist",
+        &fixture.viewer.id,
+    )];
+    use scryer_domain::ListMembershipState as State;
+    // Every third pool title from the top of the pool, then two titles no
+    // stored item names.
+    let mut rows = (0..90)
+        .step_by(3)
+        .map(|index| {
+            watchlist_row(
+                "section-watchlist",
+                &(20_000 + index).to_string(),
+                index as i64,
+                State::Pending,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29001",
+        200,
+        State::Pending,
+    ));
+    rows.push(watchlist_row(
+        "section-watchlist",
+        "29002",
+        201,
+        State::Pending,
+    ));
+    lists.insert_rows(rows);
+    let watchlisted = (0..90)
+        .step_by(3)
+        .map(|index| format!("tmdb:movie:{}", 20_000 + index))
+        .chain([
+            "tmdb:movie:29001".to_string(),
+            "tmdb:movie:29002".to_string(),
+        ])
+        .collect::<HashSet<_>>();
+
+    // The home shows unresolved titles, so the section pages do too.
+    let watchlist_section_query = |section_id: &str, offset: usize| DiscoveryItemsQuery {
+        include_unresolved: true,
+        ..discovery_section_items_query(section_id, 25, offset, 25)
+    };
+    let home = fixture
+        .app
+        .discovery_home(
+            &fixture.viewer,
+            DiscoveryHomeQuery {
+                include_public: false,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 25,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("home should load");
+    let rail = home
+        .personalized_sections
+        .iter()
+        .find(|section| section.section_id == "from_your_watchlist")
+        .expect("the watchlist rail");
+    assert_eq!(rail.items.len(), 25);
+    assert_eq!(rail.total_count, 32);
+
+    let first = fixture
+        .app
+        .discovery_items(
+            &fixture.viewer,
+            watchlist_section_query("from_your_watchlist", 0),
+        )
+        .await
+        .expect("watchlist section page");
+    assert!(!first.generation_ids.is_empty());
+    let (pages, total_count) = discovery_section_pages(&fixture, |offset| {
+        watchlist_section_query("from_your_watchlist", offset)
+    })
+    .await;
+    assert_eq!(
+        pages.first(),
+        Some(
+            &rail
+                .items
+                .iter()
+                .map(|item| item.target_key.clone())
+                .collect::<Vec<_>>()
+        ),
+        "the first page of the watchlist is the home rail"
+    );
+    let all_keys = pages.iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(total_count, 32);
+    assert_eq!(all_keys.len(), 32);
+    assert_eq!(
+        all_keys.iter().cloned().collect::<HashSet<_>>(),
+        watchlisted
+    );
+
+    let reason_rails = home
+        .personalized_sections
+        .iter()
+        .filter(|section| {
+            section.section_id == "for_you" || section.section_id.starts_with("because_you_like_")
+        })
+        .collect::<Vec<_>>();
+    assert!(!reason_rails.is_empty(), "the pool composes a reason rail");
+    for reason_rail in reason_rails {
+        let (pages, _) = discovery_section_pages(&fixture, |offset| {
+            watchlist_section_query(&reason_rail.section_id, offset)
+        })
+        .await;
+        assert_eq!(
+            pages.first(),
+            Some(
+                &reason_rail
+                    .items
+                    .iter()
+                    .map(|item| item.target_key.clone())
+                    .collect::<Vec<_>>()
+            ),
+            "the first page of {} is still the home rail",
+            reason_rail.section_id
+        );
+        assert!(
+            pages.iter().flatten().all(|key| !watchlisted.contains(key)),
+            "{} never lists a title the watchlist claimed",
+            reason_rail.section_id
+        );
+    }
 }

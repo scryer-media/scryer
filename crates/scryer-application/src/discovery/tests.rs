@@ -3765,6 +3765,7 @@ fn section_reading_order_matches_the_web_contract() {
     struct SectionOrderContract {
         personalized_shelf: Vec<String>,
         generic_for_you_fallback: Vec<String>,
+        non_library_personalized: Vec<String>,
         public_promotion: Vec<String>,
         world_shelf: Vec<String>,
         curated: Vec<String>,
@@ -3790,6 +3791,10 @@ fn section_reading_order_matches_the_web_contract() {
     assert_eq!(
         contract.generic_for_you_fallback,
         owned(DISCOVERY_GENERIC_FOR_YOU_FALLBACK_TYPES)
+    );
+    assert_eq!(
+        contract.non_library_personalized,
+        owned(DISCOVERY_NON_LIBRARY_PERSONALIZED_TYPES)
     );
     assert_eq!(
         contract.public_promotion,

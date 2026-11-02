@@ -10,8 +10,8 @@
 
 use super::*;
 use crate::lists::ListSubscriptionQuery;
-use crate::ports::{DiscoveryExternalIdRecord, DiscoveryHomeFilters, MediaRequestQuery};
-use scryer_domain::{ListMembership, ListMembershipState, ListSubscription, MediaRequestStatus};
+use crate::ports::{DiscoveryExternalIdRecord, DiscoveryHomeFilters};
+use scryer_domain::{ListMembership, ListMembershipState, ListSubscription};
 
 pub(super) const DISCOVERY_WATCHLIST_SECTION_ID: &str = "from_your_watchlist";
 pub(super) const DISCOVERY_WATCHLIST_SECTION_TYPE: &str = "FROM_YOUR_WATCHLIST";
@@ -317,15 +317,10 @@ impl AppUseCase {
             Some(admitted)
         };
 
-        let pending_requests = self
-            .services
-            .catalog
-            .media_requests
-            .list(MediaRequestQuery {
-                status: Some(MediaRequestStatus::Pending),
-                ..MediaRequestQuery::default()
-            })
-            .await?;
+        // The same pending requests the section pages' "hide requested"
+        // reads: every requester's, in the libraries the viewer can request
+        // into or read.
+        let pending_requests = self.discovery_pending_requests(actor).await?;
 
         let row_card_media_kinds = discovery_watchlist_row_card_media_kinds(visibility, filters);
         Ok(compose_discovery_watchlist(

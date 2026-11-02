@@ -41,6 +41,7 @@ const DISCOVERY_BROWSE_THEME_SECTION_TYPE: &str = "BROWSE_THEME";
 
 /// Personalized shelf section types, in reading order.
 pub(super) const DISCOVERY_PERSONALIZED_SHELF_ORDER: &[&str] = &[
+    "FROM_YOUR_WATCHLIST",
     "BECAUSE_YOU_LIKE_TAG",
     "BECAUSE_YOU_LIKE_GENRE",
     "TOP_MOVIES_THIS_WEEK",
@@ -51,6 +52,9 @@ pub(super) const DISCOVERY_PERSONALIZED_SHELF_ORDER: &[&str] = &[
 ];
 /// Personalized types shown only when no library-based rail is.
 pub(super) const DISCOVERY_GENERIC_FOR_YOU_FALLBACK_TYPES: &[&str] = &["FOR_YOU"];
+/// Personalized types that say nothing about the library, so they never stand
+/// in for the library context the generic fallback waits on.
+pub(super) const DISCOVERY_NON_LIBRARY_PERSONALIZED_TYPES: &[&str] = &["FROM_YOUR_WATCHLIST"];
 /// Public types pinned between the personalized shelf and the world shelf.
 pub(super) const DISCOVERY_PUBLIC_PROMOTION_TYPES: &[&str] =
     &["NEW_ON_STREAMING", "NEW_ON_PHYSICAL"];
@@ -99,6 +103,7 @@ const DISCOVERY_SECTION_CACHE_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 pub(super) enum DiscoverySectionTarget {
+    Watchlist,
     PersonalizedRail,
     Browse(&'static DiscoveryRailLabel),
     TopRated,
@@ -107,6 +112,9 @@ pub(super) enum DiscoverySectionTarget {
 }
 
 pub(super) fn discovery_section_target(section_id: &str) -> DiscoverySectionTarget {
+    if section_id == DISCOVERY_WATCHLIST_SECTION_ID {
+        return DiscoverySectionTarget::Watchlist;
+    }
     if section_id == DISCOVERY_FOR_YOU_SECTION_ID
         || DISCOVERY_LABEL_RAIL_SECTION_PREFIXES
             .iter()
@@ -545,8 +553,11 @@ pub(super) fn discovery_rendered_window(
         .filter(|(index, section)| !shelved.contains(index) && !is_fallback(section))
         .map(|(_, section)| *section)
         .collect::<Vec<_>>();
-    let has_library_sections =
-        !shelf.is_empty() || complete_collection.is_some() || !unknown.is_empty();
+    let has_library_sections = shelf.iter().any(|section| {
+        !DISCOVERY_NON_LIBRARY_PERSONALIZED_TYPES
+            .contains(&discovery_section_type_key(section).as_str())
+    }) || complete_collection.is_some()
+        || !unknown.is_empty();
     let fallback = if has_library_sections {
         Vec::new()
     } else {
@@ -682,18 +693,20 @@ pub(super) fn continue_discovery_rendered_window(
 }
 
 /// A personalized rail from a rebuilt home shelf, continued past its window
-/// over `listable`: the rail's own eligible titles not claimed by it or by an
-/// earlier rail, in rail windows.
+/// over `listable`: the rail's own eligible titles not claimed by it, by an
+/// earlier rail or by the viewer's watchlist (`watchlist_claims`), in rail
+/// windows.
 pub(super) fn continue_discovery_personalized_rail(
     section_id: &str,
     shelf: Vec<DiscoverySectionResult>,
     listable: Vec<DiscoveryItemRecord>,
     context: &DiscoveryRailContext<'_>,
+    watchlist_claims: &HashSet<String>,
 ) -> Option<DiscoverySectionResult> {
     let position = shelf
         .iter()
         .position(|section| section.section_id == section_id)?;
-    let mut claimed = HashSet::new();
+    let mut claimed = watchlist_claims.clone();
     for section in &shelf[..=position] {
         claimed.extend(
             section
@@ -981,7 +994,14 @@ impl AppUseCase {
                     )
                     .await?;
                 if let Some(section) = members.section.as_mut() {
-                    if section_query.hide_requested {
+                    // The watchlist never offers a requested title, so it
+                    // needs no second pass.
+                    if section_query.hide_requested
+                        && !matches!(
+                            discovery_section_target(section_query.section_id.trim()),
+                            DiscoverySectionTarget::Watchlist
+                        )
+                    {
                         let requested = self.discovery_pending_request_visibility(actor).await?;
                         section
                             .items
@@ -1069,6 +1089,21 @@ impl AppUseCase {
         let mut candidates_by_id = HashMap::<String, DiscoveryHomeCandidate>::new();
 
         let section = match discovery_section_target(section_id) {
+            DiscoverySectionTarget::Watchlist => {
+                // Composed as the home composes it, every member listed; its
+                // cards are whole already, so nothing is hydrated per page.
+                self.discovery_section_watchlist(
+                    actor,
+                    visibility,
+                    can_view_personalized,
+                    status,
+                    filters,
+                    include_unresolved,
+                    usize::MAX,
+                )
+                .await?
+                .section
+            }
             target @ (DiscoverySectionTarget::PersonalizedRail
             | DiscoverySectionTarget::Browse(_)) => {
                 let Some(context_run_id) = context_run_id else {
@@ -1147,19 +1182,33 @@ impl AppUseCase {
                         discovery_browse_section(&listable_items, &context, entry)
                     }
                     _ => {
-                        // The viewer's watchlist supplies these claims.
-                        let claimed_item_keys = HashSet::new();
+                        // The home's own watchlist claims, so page one is the
+                        // home rail and later pages never offer a title the
+                        // watchlist holds.
+                        let watchlist_claims = self
+                            .discovery_section_watchlist(
+                                actor,
+                                visibility,
+                                can_view_personalized,
+                                status,
+                                filters,
+                                include_unresolved,
+                                rail_limit,
+                            )
+                            .await?
+                            .claimed_item_keys;
                         let shelf = personalized_section_results_in_context(
                             home_visible_items,
                             &library_profile,
                             &context,
-                            &claimed_item_keys,
+                            &watchlist_claims,
                         );
                         continue_discovery_personalized_rail(
                             section_id,
                             shelf,
                             listable_items,
                             &context,
+                            &watchlist_claims,
                         )
                     }
                 };
@@ -1337,6 +1386,44 @@ impl AppUseCase {
         })
     }
 
+    /// The viewer's watchlist under the home's gates: the personalized
+    /// switch, the viewer's visibility and owned titles, the filter bar and
+    /// `include_unresolved`.
+    #[allow(clippy::too_many_arguments)]
+    async fn discovery_section_watchlist(
+        &self,
+        actor: &User,
+        visibility: &DiscoveryVisibility,
+        can_view_personalized: bool,
+        status: &DiscoverySyncStatus,
+        filters: &crate::ports::DiscoveryHomeFilters,
+        include_unresolved: bool,
+        limit: usize,
+    ) -> AppResult<DiscoveryWatchlistComposition> {
+        if !self.personalized_discovery_enabled().await? {
+            return Ok(DiscoveryWatchlistComposition::default());
+        }
+        let owned_library_ids = self
+            .authorized_library_ids(actor, None, LibraryPermission::View)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let owned_visibility = self
+            .discovery_home_owned_visibility(&sorted_discovery_library_ids(&owned_library_ids))
+            .await?;
+        self.discovery_watchlist_composition(
+            actor,
+            visibility,
+            &owned_visibility,
+            &status.state,
+            can_view_personalized,
+            filters,
+            include_unresolved,
+            limit,
+        )
+        .await
+    }
+
     /// Pending requests in every library the viewer can request into or
     /// read. The toggle exists to avoid duplicate requests, so it counts
     /// every requester's pending requests, not only the viewer's.
@@ -1344,6 +1431,17 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<DiscoveryRequestedVisibility> {
+        Ok(DiscoveryRequestedVisibility::from_media_requests(
+            &self.discovery_pending_requests(actor).await?,
+        ))
+    }
+
+    /// Every pending request in a library the viewer can request into or
+    /// read, whoever asked.
+    pub(super) async fn discovery_pending_requests(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<scryer_domain::MediaRequest>> {
         let mut library_ids = self
             .authorized_library_ids(actor, None, LibraryPermission::Request)
             .await?
@@ -1356,10 +1454,9 @@ impl AppUseCase {
         library_ids.sort();
         library_ids.dedup();
         if library_ids.is_empty() {
-            return Ok(DiscoveryRequestedVisibility::default());
+            return Ok(Vec::new());
         }
-        let requests = self
-            .services
+        self.services
             .catalog
             .media_requests
             .list(MediaRequestQuery {
@@ -1367,8 +1464,7 @@ impl AppUseCase {
                 status: Some(MediaRequestStatus::Pending),
                 ..MediaRequestQuery::default()
             })
-            .await?;
-        Ok(DiscoveryRequestedVisibility::from_media_requests(&requests))
+            .await
     }
 
     /// One page of a composed section, its pool rows hydrated for display.
