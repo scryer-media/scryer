@@ -108,6 +108,7 @@ export const DISCOVERY_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -118,6 +119,7 @@ const DISCOVERY_HOME_SECTION_FIELDS = `
     sectionId
     sectionType
     title
+    labelKey
     surface
     totalCount
     items {
@@ -212,6 +214,7 @@ export const catalogDiscoveryQuery = `query CatalogDiscovery($input: CatalogDisc
       kind
       surface
       labelValue
+      labelKey
       totalCount
       items {
 ${CATALOG_DISCOVERY_ITEM_FIELDS}

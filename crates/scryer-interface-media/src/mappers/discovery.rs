@@ -278,6 +278,7 @@ fn from_catalog_discovery_group(
         kind: from_catalog_discovery_group_kind(group.kind),
         surface: from_catalog_discovery_surface(group.surface),
         label_value: group.label_value,
+        label_key: group.label_key,
         total_count: Long(group.total_count),
         items: group
             .items
@@ -321,6 +322,7 @@ pub fn from_discovery_section(
         section_type: section.section_type,
         title: section.title,
         surface: section.surface,
+        label_key: section.label_key,
         total_count: Long(section.total_count),
         items: section
             .items
@@ -358,6 +360,7 @@ fn from_discovery_home_section(
         section_type: section.section_type,
         title: section.title,
         surface,
+        label_key: section.label_key,
         total_count: Long(section.total_count),
         items,
     })

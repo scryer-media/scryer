@@ -4500,6 +4500,43 @@ mod tests {
         }
     }
 
+    /// The gateway serves `rail_label_eligible` only from a release that is not
+    /// deployed yet, and Scryer never probes for an older gateway, so no
+    /// document may select it until that release is live. Rail labels are gated
+    /// by Scryer's own allowlist mirror meanwhile.
+    #[test]
+    fn current_smg_queries_omit_rail_label_eligible() {
+        let documents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/metadata/gateway/metadata_gateway");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&documents_dir).expect("gateway documents directory") {
+            let path = entry.expect("gateway document entry").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("graphql") {
+                continue;
+            }
+            let document = std::fs::read_to_string(&path).expect("gateway document");
+            assert!(
+                !document.contains("rail_label_eligible"),
+                "{} selects rail_label_eligible before the gateway serves it",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no gateway documents were checked");
+        for query in [
+            graphql_docs::DISCOVER_PUBLIC_FEED_QUERY,
+            graphql_docs::DISCOVERY_CONTEXT_SNAPSHOT_PAGE_QUERY,
+            graphql_docs::DISCOVERY_CONTEXT_CHANGES_QUERY,
+            graphql_docs::COLLECTION_COMPLETIONS_QUERY,
+            graphql_docs::TITLE_RECOMMENDATIONS_QUERY,
+            graphql_docs::GET_MOVIE_QUERY,
+            graphql_docs::METADATA_BULK_QUERY,
+            graphql_docs::TITLES_QUERY,
+        ] {
+            assert!(!query.contains("rail_label_eligible"));
+        }
+    }
+
     #[test]
     fn discovery_title_applies_rating_provenance_as_external_ratings() {
         let mut item = scryer_application::DiscoveryTitle {

@@ -384,6 +384,10 @@ pub struct CatalogDiscoveryGroup {
     pub kind: CatalogDiscoveryGroupKind,
     pub surface: CatalogDiscoverySurface,
     pub label_value: Option<String>,
+    /// The allowlisted rail label a genre or theme affinity group is named
+    /// after (`coming-of-age`); `None` for every other group. Clients translate
+    /// it and fall back to `label_value`.
+    pub label_key: Option<String>,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
 }
@@ -461,6 +465,10 @@ pub struct DiscoverySectionResult {
     pub surface: String,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
+    /// The allowlisted rail label a "because you like" section is named
+    /// after, in its canonical hyphenated form (`coming-of-age`); `None` for
+    /// every other section. Clients translate it and fall back to `title`.
+    pub label_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

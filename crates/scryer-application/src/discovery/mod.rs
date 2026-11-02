@@ -228,12 +228,14 @@ mod catalog;
 mod context;
 mod home;
 mod medium;
+mod rail_labels;
 mod records;
 
 use catalog::*;
 use context::*;
 use home::*;
 use medium::*;
+use rail_labels::*;
 use records::*;
 
 pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
@@ -1331,6 +1333,7 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
     DiscoveryLibraryAffinityProfile {
         genre_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Genre,
             |title| {
                 corroborated_canonical_genre_labels(&title.canonical_tags, genre_rail_corroboration)
             },
@@ -1344,6 +1347,7 @@ pub(super) fn discovery_library_affinity_profile_from_titles(
         // sourced from canonical genre tags.
         theme_labels: top_owned_title_labels(
             titles,
+            DiscoveryRailLabelFamily::Theme,
             |title| qualified_owned_theme_labels(&title.canonical_tags),
             DISCOVERY_RAIL_LADDER_LABELS,
             support_floor,
