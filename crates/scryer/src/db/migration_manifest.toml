@@ -3613,19 +3613,19 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
-version = 318
+version = 321
 description = "workflow private inputs"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0318_workflow_private_inputs.sql"
+file = "migrations/0321_workflow_private_inputs.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0318_workflow_private_inputs.sql"
+file = "postgres/migrations/0321_workflow_private_inputs.sql"
 engine = "postgres"
 scope = "all"
 
