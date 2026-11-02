@@ -4662,10 +4662,9 @@ async fn builtin_settings_failure_isolates_only_the_misconfigured_plugin() {
 /// a required setting with no default and no saved value.
 async fn seed_settings_parity_fixture() -> TestHarness {
     let required_setting = |default_value: Option<&str>| {
-        serde_json::from_value::<Vec<scryer_plugin_sdk::ConfigFieldDef>>(serde_json::json!([
+        serde_json::json!([
             {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
-        ]))
-        .unwrap()
+        ])
     };
     let mut provider = MockPluginProvider::new()
         .with_builtin_provider("synthetic-bundled-invalid", "Invalid bundled fixture", None)
@@ -4675,10 +4674,7 @@ async fn seed_settings_parity_fixture() -> TestHarness {
         ("synthetic-bundled-valid", Some("bundled-value")),
     ] {
         let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
-        descriptor.settings = serde_json::from_value(serde_json::json!([
-            {"key":"required_value", "label":"Value", "field_type":"string", "required":true, "default_value":default_value}
-        ]))
-        .unwrap();
+        descriptor.settings = serde_json::from_value(required_setting(default_value)).unwrap();
         provider.builtin_descriptors.insert(id.into(), descriptor);
     }
     let h = bootstrap_plugins_with_settings(
@@ -4700,31 +4696,11 @@ async fn seed_settings_parity_fixture() -> TestHarness {
         let mut installation = official_catalog_installation(id, "0.1.0");
         let mut descriptor = make_runtime_plugin_load(id, "indexer", id).descriptor;
         descriptor.version = "0.1.0".into();
-        descriptor.settings = required_setting(default_value);
+        descriptor.settings = serde_json::from_value(required_setting(default_value)).unwrap();
         installation.descriptor_json = Some(serde_json::to_string(&descriptor).unwrap());
         seed_auto_update_installation(&h, installation).await;
     }
     h
-}
-
-/// The decoded runtime plugins startup hands to the shared apply step.
-async fn startup_runtime_plugin_loads(h: &TestHarness) -> Vec<RuntimePluginLoad> {
-    let mut loads = Vec::new();
-    for (installation, payload) in h.plugin_repo.get_enabled_plugin_wasm_bytes().await.unwrap() {
-        if !crate::runtime_plugin_installation_is_loadable(&installation) {
-            continue;
-        }
-        let Some(payload) = payload else { continue };
-        loads.push(
-            crate::load_runtime_plugin_from_persisted_installation_payload(
-                &installation,
-                &payload,
-            )
-            .await
-            .unwrap(),
-        );
-    }
-    loads
 }
 
 type LoadOutcome = (
@@ -4747,19 +4723,19 @@ async fn load_outcome(h: &TestHarness) -> LoadOutcome {
 }
 
 #[tokio::test]
-async fn startup_and_runtime_reload_block_unconfigured_plugins_identically() {
-    let startup = seed_settings_parity_fixture().await;
-    let loads = startup_runtime_plugin_loads(&startup).await;
-    assert_eq!(loads.len(), 2, "both downloaded plugins decode at startup");
-    startup.app.apply_startup_runtime_plugins(loads).await.unwrap();
-    let startup_outcome = load_outcome(&startup).await;
+async fn boot_load_reloads_once_with_settings_bound_and_blockers_recorded() {
+    let h = seed_settings_parity_fixture().await;
+    let provider = h.plugin_provider.clone().unwrap();
+    let reloads_before = provider.reload_count.load(Ordering::Relaxed);
 
-    let runtime = seed_settings_parity_fixture().await;
-    runtime.app.reload_plugin_providers().await.unwrap();
-    let runtime_outcome = load_outcome(&runtime).await;
+    let report = h.app.load_runtime_plugins_at_boot().await.unwrap();
 
-    assert_eq!(startup_outcome, runtime_outcome);
-    let (blockers, runtime_plugins, builtins) = startup_outcome;
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before + 1,
+        "the boot load reloads the providers exactly once"
+    );
+    let (blockers, runtime_plugins, builtins) = load_outcome(&h).await;
     assert_eq!(
         blockers,
         std::collections::HashMap::from([
@@ -4785,6 +4761,72 @@ async fn startup_and_runtime_reload_block_unconfigured_plugins_identically() {
         "only the configured downloaded plugin loads, with its resolved settings"
     );
     assert_eq!(builtins, ["synthetic-bundled-valid"]);
+    assert_eq!(
+        provider.builtin_settings.lock().unwrap()["synthetic-bundled-valid"]["required_value"],
+        "bundled-value"
+    );
+
+    let loaded = report
+        .loaded
+        .iter()
+        .map(|plugin| plugin.descriptor.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        loaded,
+        ["synthetic-external-valid"],
+        "the report carries the set rehydration is scheduled from"
+    );
+    assert_eq!(
+        report.settings_blocked,
+        ["synthetic-bundled-invalid", "synthetic-external-invalid"]
+    );
+    assert!(
+        report
+            .disabled_builtins
+            .contains(&"synthetic-bundled-invalid".to_string())
+    );
+    assert!(report.compatibility_blocked.is_empty());
+    assert!(report.sdk_incompatible.is_empty());
+    assert!(report.failed.is_empty());
+
+    // The boot load is the runtime reload: running it again changes nothing.
+    h.app.reload_plugin_providers().await.unwrap();
+    assert_eq!(
+        load_outcome(&h).await,
+        (blockers, runtime_plugins, builtins)
+    );
+}
+
+#[tokio::test]
+async fn boot_load_reports_plugins_with_incompatible_sdk_contracts() {
+    let h = bootstrap_plugins_with_settings(
+        Some(MockPluginProvider::new()),
+        MockSettingsStore::with_plugin_auto_update(false),
+    );
+    let mut legacy = official_catalog_installation("synthetic-legacy-sdk", "0.1.0");
+    legacy.sdk_version = "1.6.0".into();
+    legacy.sdk_constraint = ">=1.6.0, <1.7.0".into();
+    seed_auto_update_installation(&h, legacy).await;
+    let current = official_catalog_installation("synthetic-current-sdk", "0.1.0");
+    seed_auto_update_installation(&h, current).await;
+
+    let report = h.app.load_runtime_plugins_at_boot().await.unwrap();
+
+    assert_eq!(report.sdk_incompatible, ["synthetic-legacy-sdk"]);
+    assert!(
+        !report
+            .loaded
+            .iter()
+            .any(|plugin| plugin.descriptor.id == "synthetic-legacy-sdk")
+    );
+    assert!(
+        h.plugin_repo
+            .get_plugin_installation("synthetic-legacy-sdk")
+            .await
+            .unwrap()
+            .is_some(),
+        "the incompatible row is kept for the compatibility repair"
+    );
 }
 
 #[tokio::test]

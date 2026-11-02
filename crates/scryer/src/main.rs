@@ -114,11 +114,9 @@ use scryer_application::{
     AutoBackupRunOutcome, DownloadClientCategorySnapshotStore, DownloadClientPluginProvider,
     DownloadQueuePollerOptions, FacetRegistry, IndexerArtifactResolver, IndexerPluginProvider,
     JobTriggerSource, MovieFacetHandler, NotificationPluginProvider, PLUGIN_HTTP_CA_BUNDLE_PEM_KEY,
-    PluginHttpTrustConfigRuntime, PluginInstallationRepository, RUNTIME_PLUGIN_LOAD_CONCURRENCY,
-    RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
-    SystemInfoProvider, TitleImageKind, TitleImageRepository,
-    load_runtime_plugin_from_persisted_installation_payload,
-    runtime_plugin_installation_is_loadable, start_background_acquisition_poller,
+    PluginHttpTrustConfigRuntime, PluginInstallationRepository, SETTINGS_SCOPE_SYSTEM,
+    SeriesFacetHandler, SubtitlePluginProvider, SystemInfoProvider, TitleImageKind,
+    TitleImageRepository, start_background_acquisition_poller,
     start_background_auto_backup_scheduler, start_background_custom_job_scheduler,
     start_background_download_delete_poller, start_background_library_refresh_loop,
     start_background_manual_import_poller,
@@ -310,13 +308,6 @@ fn restore_datastore_handle() -> RestoreDatastoreHandle {
             None => runtime.block_on(work),
         }
     })
-}
-
-fn plugin_type_belongs_to_indexer_family(plugin_type: &str) -> bool {
-    matches!(
-        plugin_type,
-        "indexer" | "usenet_indexer" | "torrent_indexer" | "http_indexer"
-    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1574,41 +1565,13 @@ async fn bootstrap_application(
     bootstrap_plugin_installations(&customization_store, plugin_recovery_pending)
         .await
         .map_err(|e| format!("failed to bootstrap plugin installations: {e}"))?;
-    let (runtime_plugins, disabled_builtin_plugins) =
-        load_runtime_plugin_state(&customization_store)
-            .await
-            .map_err(|e| format!("failed to load runtime plugin state: {e}"))?;
-    scryer_plugins::schedule_plugin_rehydration(&runtime_plugins, &disabled_builtin_plugins);
-    let indexer_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin_type_belongs_to_indexer_family(plugin.descriptor.plugin_type()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let download_client_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin.descriptor.plugin_type() == "download_client")
-        .cloned()
-        .collect::<Vec<_>>();
-    let subtitle_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin.descriptor.plugin_type() == "subtitle_provider")
-        .cloned()
-        .collect::<Vec<_>>();
-    let archive_extractor_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin.descriptor.plugin_type() == "archive_extractor")
-        .cloned()
-        .collect::<Vec<_>>();
-    let list_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin.descriptor.plugin_type() == "list_provider")
-        .cloned()
-        .collect::<Vec<_>>();
-    let notification_runtime_plugins = runtime_plugins
-        .iter()
-        .filter(|plugin| plugin.descriptor.plugin_type() == "notification")
-        .cloned()
-        .collect::<Vec<_>>();
+    // The providers are assembled with the bundled builtins only. Persisted
+    // plugins, saved settings and settings blockers are put into service once,
+    // by `load_runtime_plugins_at_boot`, after the startup plugin compatibility
+    // pass and before the router is handed over.
+    let disabled_builtin_plugins = disabled_builtin_provider_types(&customization_store)
+        .await
+        .map_err(|e| format!("failed to read disabled builtin plugins: {e}"))?;
     // Built first because every other plugin family's command host takes it:
     // the host-owned `ArchiveExtract` service delegates to whatever extractor
     // is installed, so the extractor provider has to exist before the families
@@ -1616,7 +1579,7 @@ async fn bootstrap_application(
     let dynamic_archive_extractor_plugin_provider =
         Arc::new(scryer_plugins::DynamicArchiveExtractorPluginProvider::new(
             scryer_plugins::build_archive_extractor_plugin_provider_from_runtime_plugins(
-                &archive_extractor_runtime_plugins,
+                &[],
                 &disabled_builtin_plugins,
             ),
         ));
@@ -1632,7 +1595,7 @@ async fn bootstrap_application(
     let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
         Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
             scryer_plugins::build_download_client_plugin_provider_from_runtime_plugins(
-                &download_client_runtime_plugins,
+                &[],
                 &disabled_builtin_plugins,
             )
             .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
@@ -1657,7 +1620,7 @@ async fn bootstrap_application(
     // grab resolution.
     let dynamic_provider = Arc::new(scryer_plugins::DynamicPluginProvider::new(
         scryer_plugins::build_indexer_plugin_provider_from_runtime_plugins(
-            &indexer_runtime_plugins,
+            &[],
             &disabled_builtin_plugins,
         )
         .with_indexer_error_recorder(indexer_error_recorder)
@@ -1709,7 +1672,7 @@ async fn bootstrap_application(
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
             scryer_plugins::build_subtitle_plugin_provider_from_runtime_plugins(
-                &subtitle_runtime_plugins,
+                &[],
                 &disabled_builtin_plugins,
             )
             .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
@@ -1833,7 +1796,7 @@ async fn bootstrap_application(
 
     let notif_provider = scryer_plugins::DynamicNotificationPluginProvider::new(
         scryer_plugins::build_notification_plugin_provider_from_runtime_plugins(
-            &notification_runtime_plugins,
+            &[],
             &disabled_builtin_plugins,
         )
         .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
@@ -1901,7 +1864,7 @@ async fn bootstrap_application(
         .with_notification_provider(Arc::new(notif_provider))
         .with_list_plugin_provider(Arc::new(scryer_plugins::DynamicListPluginProvider::new(
             scryer_plugins::build_list_plugin_provider_from_runtime_plugins(
-                &list_runtime_plugins,
+                &[],
                 &disabled_builtin_plugins,
             ),
         )))
@@ -1936,13 +1899,6 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
-    // The providers above were built from decoded artifacts only. Finish the
-    // load the way every runtime reload does (saved settings validated and
-    // bound, settings blockers recorded) before anything can use a plugin.
-    app_use_case
-        .apply_startup_runtime_plugins(runtime_plugins)
-        .await
-        .map_err(|error| format!("failed to apply runtime plugin state at startup: {error}"))?;
     app_use_case.install_restore_coordinator(restore_coordinator);
     let restore_workers = app_use_case.restore_coordinator().clone();
     let worker_shutdown = restore_workers.shutdown_workers.clone();
@@ -2088,6 +2044,10 @@ async fn bootstrap_application(
         VersionLifecycle::Upgraded { previous } => Some(previous.as_str()),
         VersionLifecycle::FirstRun | VersionLifecycle::Unchanged => None,
     };
+    application_migrator
+        .run_plugin_component_compatibility(&app_use_case)
+        .await?;
+    load_runtime_plugins_at_boot(&app_use_case).await?;
     application_migrator
         .run_application_ready(
             &app_use_case,
@@ -3890,166 +3850,34 @@ pub(crate) fn normalize_env_option_with_legacy<'a>(
     None
 }
 
-#[derive(Debug)]
-struct RuntimePluginSdkContractFailure {
-    plugin_id: String,
-    version: String,
-    sdk_version: String,
-    sdk_constraint: String,
-    error: String,
-}
-
-type RuntimePluginLoadInput = (
-    scryer_domain::PluginInstallation,
-    Option<scryer_domain::PersistedPluginWasmPayload>,
-);
-type RuntimePluginLoadCandidate = (
-    scryer_domain::PluginInstallation,
-    scryer_domain::PersistedPluginWasmPayload,
-);
-
-fn runtime_installation_sdk_contract_failure(
-    installation: &scryer_domain::PluginInstallation,
-) -> Option<RuntimePluginSdkContractFailure> {
-    scryer_plugins::validate_sdk_contract(
-        installation.plugin_id.as_str(),
-        installation.sdk_version.as_str(),
-        installation.sdk_constraint.as_str(),
-        scryer_plugins::SDK_VERSION,
-    )
-    .err()
-    .map(|error| RuntimePluginSdkContractFailure {
-        plugin_id: installation.plugin_id.clone(),
-        version: installation.version.clone(),
-        sdk_version: installation.sdk_version.clone(),
-        sdk_constraint: installation.sdk_constraint.clone(),
-        error: error.to_string(),
-    })
-}
-
-fn log_runtime_plugin_sdk_contract_failures(failures: &[RuntimePluginSdkContractFailure]) {
-    if failures.is_empty() {
-        return;
-    }
-
-    let plugin_ids = failures
-        .iter()
-        .map(|failure| failure.plugin_id.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    tracing::warn!(
-        plugin_count = failures.len(),
-        plugin_ids = %plugin_ids,
-        "skipping installed plugins with incompatible sdk contracts; upgrade them from Plugins"
-    );
-    for failure in failures {
-        tracing::debug!(
-            plugin_id = failure.plugin_id.as_str(),
-            version = failure.version.as_str(),
-            sdk_version = failure.sdk_version.as_str(),
-            sdk_constraint = failure.sdk_constraint.as_str(),
-            error = failure.error.as_str(),
-            "installed plugin sdk contract is incompatible with this host"
-        );
-    }
-}
-
-fn collect_runtime_plugin_load_candidates(
-    enabled_plugins: Vec<RuntimePluginLoadInput>,
-) -> (
-    Vec<RuntimePluginLoadCandidate>,
-    Vec<RuntimePluginSdkContractFailure>,
-) {
-    let mut pending_plugins = Vec::new();
-    let mut sdk_contract_failures = Vec::new();
-
-    for (installation, payload) in enabled_plugins {
-        if !matches!(
-            installation.source_kind,
-            scryer_domain::PluginSourceKind::Downloaded
-                | scryer_domain::PluginSourceKind::Community
-                | scryer_domain::PluginSourceKind::Manual
-        ) {
-            continue;
-        }
-        // Collected only to report them together; the load decision below is
-        // the rule the runtime reload uses.
-        if let Some(failure) = runtime_installation_sdk_contract_failure(&installation) {
-            sdk_contract_failures.push(failure);
-            continue;
-        }
-        if !runtime_plugin_installation_is_loadable(&installation) {
-            continue;
-        }
-        if let Some(payload) = payload {
-            pending_plugins.push((installation, payload));
-        }
-    }
-
-    (pending_plugins, sdk_contract_failures)
-}
-
-async fn load_runtime_external_plugin_entry(
-    installation: &scryer_domain::PluginInstallation,
-    payload: scryer_domain::PersistedPluginWasmPayload,
-) -> Option<RuntimePluginLoad> {
-    match load_runtime_plugin_from_persisted_installation_payload(installation, &payload).await {
-        Ok(runtime_plugin) => Some(runtime_plugin),
-        Err(error) => {
-            tracing::warn!(
-                plugin_id = installation.plugin_id.as_str(),
-                version = installation.version.as_str(),
-                error = %error,
-                "skipping installed plugin after persisted payload validation failed at startup"
-            );
-            None
-        }
-    }
-}
-
-async fn load_runtime_plugin_state(
-    customization_store: &DatastoreCustomizationStore,
-) -> Result<(Vec<RuntimePluginLoad>, Vec<String>), String> {
-    let enabled_plugins = customization_store
-        .get_enabled_plugin_wasm_bytes()
+/// The one load of runtime plugins at boot.
+///
+/// Runs after the startup plugin compatibility pass has made its repairs and
+/// set its blockers, and before the application-ready migrations, the
+/// background workers and the router can use a plugin. Module rehydration is
+/// scheduled from what this load put into service, not from every enabled row.
+async fn load_runtime_plugins_at_boot(app: &AppUseCase) -> Result<(), String> {
+    let report = app
+        .load_runtime_plugins_at_boot()
         .await
-        .map_err(|error| error.to_string())?;
-    let mut runtime_plugins = Vec::new();
-    let (pending_plugins, sdk_contract_failures) =
-        collect_runtime_plugin_load_candidates(enabled_plugins);
-    log_runtime_plugin_sdk_contract_failures(&sdk_contract_failures);
-    let mut pending_plugins = pending_plugins.into_iter();
-    let mut tasks = tokio::task::JoinSet::new();
-    for _ in 0..RUNTIME_PLUGIN_LOAD_CONCURRENCY {
-        let Some((installation, payload)) = pending_plugins.next() else {
-            break;
-        };
-        tasks
-            .spawn(async move { load_runtime_external_plugin_entry(&installation, payload).await });
-    }
-    while let Some(result) = tasks.join_next().await {
-        let loaded =
-            result.map_err(|error| format!("startup plugin load task panicked: {error}"))?;
-        if let Some(entry) = loaded {
-            runtime_plugins.push(entry);
-        }
-        if let Some((installation, payload)) = pending_plugins.next() {
-            tasks.spawn(
-                async move { load_runtime_external_plugin_entry(&installation, payload).await },
-            );
-        }
-    }
+        .map_err(|error| format!("failed to load runtime plugins at boot: {error}"))?;
+    scryer_plugins::schedule_plugin_rehydration(&report.loaded, &report.disabled_builtins);
+    Ok(())
+}
 
-    let disabled_builtin_plugins = customization_store
+/// Provider types of the builtins the operator turned off, so the builtin-only
+/// providers assembled before the boot load never offer one.
+async fn disabled_builtin_provider_types(
+    customization_store: &DatastoreCustomizationStore,
+) -> Result<Vec<String>, String> {
+    Ok(customization_store
         .list_plugin_installations()
         .await
         .map_err(|error| error.to_string())?
         .into_iter()
         .filter(|installation| installation.is_builtin && !installation.is_enabled)
         .map(|installation| installation.provider_type)
-        .collect::<Vec<_>>();
-
-    Ok((runtime_plugins, disabled_builtin_plugins))
+        .collect())
 }
 
 async fn bootstrap_plugin_installations(
@@ -4261,13 +4089,12 @@ mod tests {
         ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV, AuthModeConfig, ImageProxyBlob, LogFormat,
         RECOVERY_ADMIN_PASSWORD_ENV, ResolvedLogFileConfig, SelfRestartController,
         UNAUTHENTICATED_PUBLIC_ACCESS_ALLOWLIST_ENV, bootstrap_plugin_installations,
-        collect_runtime_plugin_load_candidates, comma_separated_env_has_entries, extract_data_dir,
-        extract_log_file, flush_upstream_scheduler_after_shutdown, image_proxy_response,
-        invalid_log_format, load_runtime_plugin_state, resolve_auth_mode, resolve_development_mode,
-        resolve_log_file_config, resolve_log_format, resolve_wasmtime_cache_dir,
-        restart_spec_from_parts, should_warn_about_public_authless_release_bind,
-        title_image_handler, validate_authless_runtime_config,
-        validate_unauthenticated_public_access_allowlist_config,
+        comma_separated_env_has_entries, extract_data_dir, extract_log_file,
+        flush_upstream_scheduler_after_shutdown, image_proxy_response, invalid_log_format,
+        resolve_auth_mode, resolve_development_mode, resolve_log_file_config, resolve_log_format,
+        resolve_wasmtime_cache_dir, restart_spec_from_parts,
+        should_warn_about_public_authless_release_bind, title_image_handler,
+        validate_authless_runtime_config, validate_unauthenticated_public_access_allowlist_config,
     };
     use chrono::Utc;
     use std::ffi::OsString;
@@ -4885,71 +4712,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn runtime_plugin_load_candidates_collect_sdk_contract_failures() {
-        fn installation(
-            plugin_id: &str,
-            sdk_version: &str,
-            sdk_constraint: &str,
-        ) -> scryer_domain::PluginInstallation {
-            let now = Utc::now();
-            scryer_domain::PluginInstallation {
-                id: scryer_domain::Id::new().0,
-                plugin_id: plugin_id.to_string(),
-                name: plugin_id.to_string(),
-                description: plugin_id.to_string(),
-                version: "0.1.0".to_string(),
-                sdk_version: sdk_version.to_string(),
-                sdk_constraint: sdk_constraint.to_string(),
-                scryer_constraint: None,
-                plugin_type: "notification".to_string(),
-                provider_type: plugin_id.to_string(),
-                source_kind: scryer_domain::PluginSourceKind::Downloaded,
-                is_enabled: true,
-                is_builtin: false,
-                wasm_encoding: scryer_domain::PluginWasmEncoding::Identity,
-                wasm_digest_algo: None,
-                source_url: Some(format!("https://example.com/{plugin_id}.wasm")),
-                support_tier: scryer_domain::PluginSupportTier::Official,
-                publisher: Some("scryer".to_string()),
-                docs_url: None,
-                source_repo: None,
-                manifest_url: None,
-                wasm_digest: None,
-                artifact_digest: None,
-                descriptor_json: None,
-                installed_at: now,
-                updated_at: now,
-            }
-        }
-
-        let payload = scryer_domain::PersistedPluginWasmPayload {
-            encoding: scryer_domain::PluginWasmEncoding::Identity,
-            bytes: vec![1, 2, 3, 4],
-        };
-        let (pending, failures) = collect_runtime_plugin_load_candidates(vec![
-            (
-                installation("legacy-email", "1.6.0", ">=1.6.0, <1.7.0"),
-                Some(payload.clone()),
-            ),
-            (
-                installation(
-                    "current-email",
-                    scryer_plugins::SDK_VERSION,
-                    &scryer_plugins::sdk_constraint_or_legacy(scryer_plugins::SDK_VERSION, ""),
-                ),
-                Some(payload),
-            ),
-        ]);
-
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].0.plugin_id, "current-email");
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].plugin_id, "legacy-email");
+    /// The boot load against `customization`, the way bootstrap runs it.
+    async fn boot_load(
+        customization: &DatastoreCustomizationStore,
+    ) -> scryer_application::RuntimePluginLoadReport {
+        use scryer_application::testing::AppUseCaseTestExt;
+        let ctx = crate::middleware::integration_test_common::TestContext::new().await;
+        let app = ctx.app.with_test_overrides(|builder| {
+            builder
+                .with_plugin_installation_store(Arc::new(customization.clone()))
+                .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
+        });
+        app.load_runtime_plugins_at_boot()
+            .await
+            .expect("load runtime plugins at boot")
     }
 
     #[tokio::test]
-    async fn runtime_plugin_state_retains_legacy_external_rows_for_compatibility_repair() {
+    async fn boot_load_retains_legacy_external_rows_for_compatibility_repair() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("plugins.db");
         let services = SqliteServices::new(db_path.to_string_lossy())
@@ -4997,12 +4777,10 @@ mod tests {
             .await
             .expect("bootstrap plugin installations");
 
-        let (runtime_plugins, disabled_builtins) = load_runtime_plugin_state(&customization)
-            .await
-            .expect("load runtime plugin state");
+        let report = boot_load(&customization).await;
 
-        assert!(runtime_plugins.is_empty());
-        assert!(disabled_builtins.is_empty());
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.sdk_incompatible, ["legacy"]);
         assert!(
             customization
                 .get_plugin_installation("legacy")
@@ -5074,16 +4852,17 @@ mod tests {
                 .is_some()
         );
 
-        let (runtime_plugins, disabled_builtins) = load_runtime_plugin_state(&customization)
-            .await
-            .expect("load runtime plugin state");
+        let report = boot_load(&customization).await;
 
-        assert!(runtime_plugins.is_empty());
-        assert!(disabled_builtins.is_empty());
+        assert!(report.loaded.is_empty());
+        assert!(
+            report.failed.is_empty(),
+            "a row without an artifact is not a failure"
+        );
     }
 
     #[tokio::test]
-    async fn runtime_plugin_state_skips_corrupted_external_plugin_rows() {
+    async fn boot_load_skips_corrupted_external_plugin_rows() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("plugins.db");
         let services = SqliteServices::new(db_path.to_string_lossy())
@@ -5139,12 +4918,10 @@ mod tests {
             .await
             .expect("bootstrap plugin installations");
 
-        let (runtime_plugins, disabled_builtins) = load_runtime_plugin_state(&customization)
-            .await
-            .expect("load runtime plugin state");
+        let report = boot_load(&customization).await;
 
-        assert!(runtime_plugins.is_empty());
-        assert!(disabled_builtins.is_empty());
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.failed, ["corrupt"]);
         assert!(
             customization
                 .get_plugin_installation("corrupt")
