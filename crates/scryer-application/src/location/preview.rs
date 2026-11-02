@@ -28,7 +28,6 @@ use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::location::classify::ClassificationCounts;
 use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{LocationExecutionMode, LocationOperationType, VerificationDepth};
-use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 
 /// How many items of each section a preview returns alongside the complete
 /// count. Mirrors the rename-plan/delete-preview sampling contract (FR-081).
@@ -586,9 +585,7 @@ pub struct LocationPlanBuilder {
 
 impl LocationPlanBuilder {
     pub fn new(header: LocationPlanHeader) -> Self {
-        // A plan relocates library content, so it starts at the location
-        // floor, never at the import-copy preference's default.
-        let depth = LOCATION_OPERATION_VERIFICATION_DEPTH;
+        let depth = VerificationDepth::default();
         Self {
             header,
             items: Vec::new(),
@@ -629,9 +626,8 @@ impl LocationPlanBuilder {
 
     /// Sets the depth statement (FR-042/043).
     ///
-    /// The depth comes from the planning workflow: location workflows pass
-    /// `LOCATION_OPERATION_VERIFICATION_DEPTH` and never read the import-copy
-    /// preference, so this module stays free of settings access. The file and
+    /// The planning workflow resolves the configured depth, keeping this
+    /// module free of settings access. The file and
     /// byte totals are derived from the plan's copied content, which is the
     /// only content a verification pass applies to.
     pub fn verification_depth(&mut self, depth: VerificationDepth) -> &mut Self {
@@ -645,7 +641,12 @@ impl LocationPlanBuilder {
     }
 
     pub fn build(&self) -> LocationPlan {
-        let fingerprint = build_plan_fingerprint(&self.header, &self.items, &self.merges);
+        let fingerprint = build_plan_fingerprint(
+            &self.header,
+            &self.items,
+            &self.merges,
+            self.verification.depth,
+        );
         let counts = build_counts(&self.items);
         let sections = build_sections(&self.items, self.sample_limit);
         let verification = VerificationStatement {
@@ -669,7 +670,8 @@ impl LocationPlanBuilder {
 }
 
 /// Fingerprint over the complete plan: header, selection, every item in the
-/// order the planner produced them, and every merge summary (FR-081).
+/// order the planner produced them, every merge summary, and the promised
+/// verification depth (FR-081).
 ///
 /// Domain-separated through [`HashDomain::LocationPlan`], the same way the
 /// rename plan and delete preview are, so a plan fingerprint can never be
@@ -690,8 +692,10 @@ pub fn build_plan_fingerprint(
     header: &LocationPlanHeader,
     items: &[PlanItem],
     merges: &[MergePreviewSummary],
+    verification_depth: VerificationDepth,
 ) -> PlanFingerprint {
-    let payload = serde_json::to_string(&(header, items, merges)).unwrap_or_default();
+    let payload =
+        serde_json::to_string(&(header, items, merges, verification_depth)).unwrap_or_default();
     PlanFingerprint(blake3_identity_hex(HashDomain::LocationPlan, payload))
 }
 
@@ -1286,6 +1290,32 @@ mod tests {
         assert_eq!(plan.verification.files, 1);
         assert_eq!(plan.verification.bytes, 10);
         assert!(plan.verification.applies());
+    }
+
+    #[test]
+    fn changing_verification_depth_refuses_the_previewed_confirmation() {
+        let mut builder = LocationPlanBuilder::new(header());
+        builder.push(move_item("title-1", "/src/a.mkv", "/dst/a.mkv", 10).with_same_volume(false));
+        builder.verification_depth(VerificationDepth::Full);
+        let previewed = builder.build();
+        let confirmation = PlanConfirmationRequest {
+            fingerprint: previewed.fingerprint.clone(),
+            typed_confirmation: None,
+        };
+        assert_eq!(previewed.confirm(&confirmation), Ok(()));
+
+        builder.verification_depth(VerificationDepth::Quick);
+        let changed = builder.build();
+        assert_ne!(previewed.fingerprint, changed.fingerprint);
+        assert_eq!(
+            changed.confirm(&confirmation),
+            Err(PlanConfirmationError::Stale)
+        );
+        assert_eq!(
+            previewed.counts, changed.counts,
+            "only the verification promise changed"
+        );
+        assert_eq!(previewed.header, changed.header);
     }
 
     #[test]

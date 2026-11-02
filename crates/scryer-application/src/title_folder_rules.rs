@@ -142,6 +142,9 @@ fn comparable(path: &str) -> String {
 /// Dot components are resolved first, so `/media/tv/Show/..` is the root
 /// itself and `/media/tv/../movies` is not under `/media/tv` at all.
 fn under_or_equal(path: &str, folder: &str) -> bool {
+    if is_escaped_stored_path(path) || is_escaped_stored_path(folder) {
+        return crate::stored_paths::stored_path_is_lexically_within_folder(folder, path);
+    }
     let path = comparable(path);
     let folder = comparable(folder);
     !folder.is_empty()
@@ -163,6 +166,10 @@ fn spelled_under_or_equal(path: &str, folder: &str) -> bool {
 }
 
 fn same_location(left: &str, right: &str) -> bool {
+    if is_escaped_stored_path(left) || is_escaped_stored_path(right) {
+        return crate::stored_paths::stored_path_is_lexically_within_folder(left, right)
+            && crate::stored_paths::stored_path_is_lexically_within_folder(right, left);
+    }
     let left = comparable(left);
     !left.is_empty() && left == comparable(right)
 }

@@ -890,11 +890,8 @@ const de: LocaleDictionary = {
     "{{total}} Element(e), {{renamable}} umbenennbar, {{noop}} unverändert, {{conflicts}} Konflikte, {{errors}} Fehler",
   "settings.sectionTitle": "Einstellungen • {{section}}",
   "settings.generalText": "Allgemeine Anwendungseinstellungen.",
-  "settings.verificationDepthTitle": "Überprüfung von Importkopien",
   "settings.verificationDepthHelp":
     "Wie gründlich Scryer eine kopierte Datei prüft, bevor die Quelle angetastet wird.",
-  "settings.verificationDepthScope":
-    "Gilt nur für Importkopien von Download-Clients. Bibliotheks- und Stammordnerverschiebungen werden unabhängig davon immer vollständig überprüft.",
   "settings.verificationDepthLabel": "Prüftiefe",
   "settings.verificationDepthFull": "Vollständiges Zurücklesen",
   "settings.verificationDepthFullHelp":

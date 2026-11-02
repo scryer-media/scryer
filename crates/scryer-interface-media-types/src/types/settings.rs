@@ -85,10 +85,8 @@ pub struct RecycleBinRelocationFailurePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct VerificationSettingsPayload {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,
@@ -1539,10 +1537,8 @@ pub struct UpdateRecycleBinSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Verification depth applied to download-client completed-download copies.
-/// Location operations (library moves, root changes, consolidations) always
-/// verify in full and ignore this preference: they move the only copy of the
-/// content, so the stronger guarantee is a floor rather than a choice.
+/// Verification depth applied to download-client completed-download copies
+/// and to location operations (library moves, root changes, consolidations).
 pub struct UpdateVerificationSettingsInput {
     /// Depth applied when proving a copied file before its source is touched.
     pub depth: VerificationDepthValue,

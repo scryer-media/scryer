@@ -894,11 +894,8 @@ const it: LocaleDictionary = {
     "{{total}} elemento/i, {{renamable}} rinominabili, {{noop}} invariati, {{conflicts}} conflitti, {{errors}} errori",
   "settings.sectionTitle": "Impostazioni • {{section}}",
   "settings.generalText": "Impostazioni generali dell'applicazione.",
-  "settings.verificationDepthTitle": "Verifica delle copie di importazione",
   "settings.verificationDepthHelp":
     "Con quanto rigore Scryer verifica un file copiato prima di toccare l'origine.",
-  "settings.verificationDepthScope":
-    "Vale solo per le copie di importazione dei client di download. Gli spostamenti di libreria e di radice vengono sempre verificati per intero, qualunque sia la scelta qui.",
   "settings.verificationDepthLabel": "Profondità di verifica",
   "settings.verificationDepthFull": "Rilettura completa",
   "settings.verificationDepthFullHelp":

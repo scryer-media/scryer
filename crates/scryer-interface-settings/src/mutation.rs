@@ -1031,7 +1031,7 @@ impl SettingsMutations {
         Ok(from_recycle_bin_settings(settings))
     }
 
-    /// Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+    /// Saves the verification depth applied to download-client completed-download copies and to location operations (library moves, root changes, consolidations), after checking the system-settings permission.
     async fn update_verification_settings(
         &self,
         ctx: &Context<'_>,

@@ -208,7 +208,7 @@ fn renames_for(title: &RootMoveTitleExecution, done: bool) -> Vec<RenamedAsset> 
     title
         .renamed_destinations
         .iter()
-        .map(|destination_path| {
+        .filter_map(|destination_path| {
             // The rename branch of the planner keeps the file in the work list,
             // so its source is normally right here. A plan that lost the file
             // still names the destination rather than dropping the row.
@@ -216,10 +216,13 @@ fn renames_for(title: &RootMoveTitleExecution, done: bool) -> Vec<RenamedAsset> 
                 .files
                 .iter()
                 .find(|file| &file.destination_path == destination_path);
+            if file.is_some_and(|file| title.deduplicated_sources.contains(&file.source_path)) {
+                return None;
+            }
             let destination_name = crate::stored_paths::stored_file_name(destination_path);
             let source_name =
                 file.map(|file| crate::stored_paths::stored_file_name(&file.source_path));
-            RenamedAsset {
+            Some(RenamedAsset {
                 provenance_label: collision_provenance_label(
                     source_name.as_deref(),
                     &destination_name,
@@ -231,7 +234,7 @@ fn renames_for(title: &RootMoveTitleExecution, done: bool) -> Vec<RenamedAsset> 
                 media_file_id: file.and_then(|file| file.media_file_id.clone()),
                 size_bytes: file.map(|file| file.size_bytes).unwrap_or(0),
                 done,
-            }
+            })
         })
         .collect()
 }
@@ -383,35 +386,55 @@ impl AppUseCase {
                 .location_operations
                 .file_resolutions(operation_id, &title.title_id)
                 .await?;
-            for resolution in resolutions.into_iter().filter(|row| row.completed) {
-                // An identical merge is a dedup whichever name the transfer
-                // found the matching copy under, so it is classified before the
-                // rename check; the file's destination becomes the survivor.
-                if resolution.disposition == super::resolution::ResolutionDisposition::Identical {
-                    if !title.deduplicated_sources.contains(&resolution.source_path) {
-                        title
-                            .deduplicated_sources
-                            .push(resolution.source_path.clone());
-                    }
-                } else if resolution.original_destination != resolution.destination_path
-                    && !title
-                        .renamed_destinations
-                        .contains(&resolution.destination_path)
-                {
-                    title
-                        .renamed_destinations
-                        .push(resolution.destination_path.clone());
-                }
-                if let Some(file) = title
-                    .files
-                    .iter_mut()
-                    .find(|file| file.source_path == resolution.source_path)
-                {
-                    file.destination_path = resolution.destination_path;
-                }
+            for resolution in resolutions
+                .into_iter()
+                .filter(|row| row.completed && !row.is_disposal())
+            {
+                apply_file_resolution(title, &resolution);
             }
         }
         Ok(build_asset_listing(operation_id, &plan, &checkpoints))
+    }
+}
+
+fn apply_file_resolution(
+    title: &mut RootMoveTitleExecution,
+    resolution: &super::resolution::FileResolution,
+) {
+    let previous = title
+        .files
+        .iter()
+        .find(|file| file.source_path == resolution.source_path)
+        .map(|file| file.destination_path.clone());
+    let planned_rename = previous
+        .as_ref()
+        .is_some_and(|path| title.renamed_destinations.contains(path));
+    title
+        .renamed_destinations
+        .retain(|path| Some(path) != previous.as_ref());
+    // A merge names the existing survivor, regardless of how many candidate
+    // names were considered. A placed source contributes one final rename.
+    if resolution.disposition == super::resolution::ResolutionDisposition::Identical {
+        if !title.deduplicated_sources.contains(&resolution.source_path) {
+            title
+                .deduplicated_sources
+                .push(resolution.source_path.clone());
+        }
+    } else if (planned_rename || resolution.original_destination != resolution.destination_path)
+        && !title
+            .renamed_destinations
+            .contains(&resolution.destination_path)
+    {
+        title
+            .renamed_destinations
+            .push(resolution.destination_path.clone());
+    }
+    if let Some(file) = title
+        .files
+        .iter_mut()
+        .find(|file| file.source_path == resolution.source_path)
+    {
+        file.destination_path = resolution.destination_path.clone();
     }
 }
 
@@ -614,6 +637,8 @@ mod tests {
             10,
         )];
         title.deduplicated_sources = vec!["/source/Film (2020)/Film.mkv".to_string()];
+        title.renamed_destinations =
+            vec!["/destination/Film (2020)/Film (from Movies).mkv".to_string()];
         let plan = RootMoveExecutionPlan {
             titles: vec![title],
             ..RootMoveExecutionPlan::default()
@@ -636,6 +661,75 @@ mod tests {
             dedup.surviving_name.as_deref(),
             Some("Film (from Movies).mkv")
         );
+    }
+
+    #[test]
+    fn resolved_listing_keeps_one_final_rename_per_source_across_retries_and_dedup() {
+        use super::super::resolution::{FileResolution, ResolutionDisposition};
+        for (planned_rename, runtime_rename, identical) in [
+            (true, false, false),
+            (true, true, false),
+            (false, true, false),
+            (true, true, true),
+        ] {
+            let mut title = title("title-1", 1);
+            let source = "/source/movie.trickplay/frame.jpg";
+            let planned = "/destination/movie (from source).trickplay/frame.jpg";
+            let actual = if runtime_rename {
+                "/destination/movie (from source) (2).trickplay/frame.jpg"
+            } else {
+                planned
+            };
+            title.files = vec![file(None, source, planned, 10)];
+            title.renamed_destinations = if planned_rename {
+                vec![planned.into()]
+            } else {
+                vec![]
+            };
+            let resolution = FileResolution {
+                operation_id: "operation-1".into(),
+                title_id: title.title_id.clone(),
+                source_path: source.into(),
+                original_destination: planned.into(),
+                destination_path: actual.into(),
+                disposition: if identical {
+                    ResolutionDisposition::Identical
+                } else {
+                    ResolutionDisposition::Placed
+                },
+                completed: true,
+                source_version: None,
+                destination_version: None,
+                identity_hash: None,
+                warning: None,
+                reason_code: None,
+            };
+            apply_file_resolution(&mut title, &resolution);
+            apply_file_resolution(&mut title, &resolution);
+            let plan = RootMoveExecutionPlan {
+                titles: vec![title],
+                ..RootMoveExecutionPlan::default()
+            };
+            let listing = build_asset_listing(
+                "operation-1",
+                &plan,
+                &[checkpoint("title-1", 1, TitleCheckpointState::Completed)],
+            );
+            assert_eq!(listing.renames_done, i64::from(!identical));
+            assert_eq!(listing.dedups_done, i64::from(identical));
+            if identical {
+                assert_eq!(
+                    listing.titles[0].dedups[0].surviving_path.as_deref(),
+                    Some(actual)
+                );
+            } else {
+                assert_eq!(
+                    listing.titles[0].renames[0].source_path.as_deref(),
+                    Some(source)
+                );
+                assert_eq!(listing.titles[0].renames[0].destination_path, actual);
+            }
+        }
     }
 
     /// A file tracked outside its title's folder lands in the destination

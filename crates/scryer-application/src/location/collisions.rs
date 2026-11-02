@@ -374,6 +374,13 @@ pub fn collision_rename_base(name: &str, label: &str) -> String {
     format!("{stem} (from {label}){ext}")
 }
 
+pub(super) fn stored_collision_rename_base(name: &str, label: &str) -> String {
+    crate::stored_paths::path_to_stored_string(crate::stored_paths::suffix_path_stem(
+        &crate::stored_paths::stored_path_to_path_buf(name),
+        &format!(" (from {label})"),
+    ))
+}
+
 /// Apply numeric disambiguation to a base collision name:
 /// `"<stem> (from <Label>) (2)<.ext>"`, `(3)`, and so on (FR-074).
 fn numbered_variant(name: &str, index: u32) -> String {
@@ -565,6 +572,8 @@ impl CollisionDecision {
 /// planner performs no IO.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollisionPlanRequest {
+    /// Relative names use the lossless stored-path codec instead of plain text.
+    pub stored_path_names: bool,
     /// Case rule of the *destination* filesystem (FR-090).
     pub case_rule: PathCaseRule,
     pub naming: CollisionNaming,
@@ -577,11 +586,17 @@ pub struct CollisionPlanRequest {
 impl CollisionPlanRequest {
     pub fn new(case_rule: PathCaseRule, naming: CollisionNaming) -> Self {
         Self {
+            stored_path_names: false,
             case_rule,
             naming,
             destination: Vec::new(),
             incoming: Vec::new(),
         }
+    }
+
+    pub fn with_stored_path_names(mut self) -> Self {
+        self.stored_path_names = true;
+        self
     }
 
     pub fn with_destination(mut self, destination: Vec<DestinationItem>) -> Self {
@@ -688,23 +703,47 @@ pub fn is_self_collision(
 
 /// Index of names already claimed at the destination, plus names reserved by
 /// earlier decisions in this same plan.
+fn name_key(case_rule: PathCaseRule, name: &str, stored: bool) -> String {
+    if !stored || case_rule == PathCaseRule::CaseSensitive {
+        return case_rule.fold(name).into_owned();
+    }
+    let path = crate::stored_paths::stored_path_to_path_buf(name);
+    crate::stored_paths::path_to_stored_string(std::path::Path::new(
+        &crate::stored_paths::lowercase_os_str(path.as_os_str()),
+    ))
+}
+
+fn rename_base(name: &str, request: &CollisionPlanRequest) -> String {
+    if request.stored_path_names {
+        stored_collision_rename_base(name, &request.naming.source_library_label)
+    } else {
+        collision_rename_base(name, &request.naming.source_library_label)
+    }
+}
+
 struct NameIndex<'a> {
     case_rule: PathCaseRule,
+    stored_path_names: bool,
     destination: HashMap<String, &'a DestinationItem>,
     reserved: HashMap<String, String>,
 }
 
 impl<'a> NameIndex<'a> {
-    fn new(case_rule: PathCaseRule, destination: &'a [DestinationItem]) -> Self {
+    fn new(
+        case_rule: PathCaseRule,
+        destination: &'a [DestinationItem],
+        stored_path_names: bool,
+    ) -> Self {
         let mut map: HashMap<String, &'a DestinationItem> = HashMap::new();
         for item in destination {
             // On a case-insensitive destination two entries cannot really fold to
             // the same key; if the caller supplies them anyway, the first wins.
-            map.entry(case_rule.fold(&item.name).into_owned())
+            map.entry(name_key(case_rule, &item.name, stored_path_names))
                 .or_insert(item);
         }
         Self {
             case_rule,
+            stored_path_names,
             destination: map,
             reserved: HashMap::new(),
         }
@@ -714,19 +753,21 @@ impl<'a> NameIndex<'a> {
         // The `&str` is explicit because `Cow<str>` also implements `AsRef` for
         // path types some workspace dependencies bring in, which leaves the
         // lookup's key type ambiguous in a feature-unified build.
-        let key: &str = &self.case_rule.fold(name);
-        self.destination.get(key).copied()
+        self.destination
+            .get(&name_key(self.case_rule, name, self.stored_path_names))
+            .copied()
     }
 
     fn is_taken(&self, name: &str) -> bool {
-        let folded = self.case_rule.fold(name);
-        let key: &str = &folded;
-        self.destination.contains_key(key) || self.reserved.contains_key(key)
+        let key = name_key(self.case_rule, name, self.stored_path_names);
+        self.destination.contains_key(&key) || self.reserved.contains_key(&key)
     }
 
     fn reserve(&mut self, name: &str) {
-        self.reserved
-            .insert(self.case_rule.fold(name).into_owned(), name.to_string());
+        self.reserved.insert(
+            name_key(self.case_rule, name, self.stored_path_names),
+            name.to_string(),
+        );
     }
 
     /// First free name in the `base`, `base (2)`, `base (3)` … sequence.
@@ -735,7 +776,14 @@ impl<'a> NameIndex<'a> {
             return base.to_string();
         }
         for index in 2u32.. {
-            let candidate = numbered_variant(base, index);
+            let candidate = if self.stored_path_names {
+                crate::stored_paths::path_to_stored_string(crate::stored_paths::suffix_path_stem(
+                    &crate::stored_paths::stored_path_to_path_buf(base),
+                    &format!(" ({index})"),
+                ))
+            } else {
+                numbered_variant(base, index)
+            };
             if !self.is_taken(&candidate) {
                 return candidate;
             }
@@ -754,16 +802,55 @@ pub fn follow_media_rename(
     renamed_media_name: &str,
     case_rule: PathCaseRule,
 ) -> Option<String> {
-    let (original_stem, _) = split_name(original_media_name);
-    let (renamed_stem, _) = split_name(renamed_media_name);
-    if original_stem.is_empty() || companion_name.len() < original_stem.len() {
+    follow_native_media_rename(
+        std::path::Path::new(companion_name),
+        std::path::Path::new(original_media_name),
+        std::path::Path::new(renamed_media_name),
+        case_rule,
+    )
+    .map(|path| path.to_str().expect("UTF-8 names remain UTF-8").to_owned())
+}
+
+fn follow_native_media_rename(
+    companion: &std::path::Path,
+    original: &std::path::Path,
+    renamed: &std::path::Path,
+    case_rule: PathCaseRule,
+) -> Option<std::path::PathBuf> {
+    use crate::stored_paths::native_name_suffix;
+    let original_stem = original.with_file_name(original.file_stem()?);
+    let renamed_stem = renamed.with_file_name(renamed.file_stem()?);
+    if original_stem.as_os_str().is_empty() {
         return None;
     }
-    let (head, tail) = companion_name.split_at(original_stem.len());
-    if !case_rule.names_equal(head, original_stem) {
-        return None;
+    let tail = native_name_suffix(
+        companion.as_os_str(),
+        original_stem.as_os_str(),
+        case_rule == PathCaseRule::CaseInsensitive,
+    )?;
+    let mut name = renamed_stem.into_os_string();
+    name.push(tail);
+    Some(std::path::PathBuf::from(name))
+}
+
+fn follow_planned_media_rename(
+    companion: &str,
+    original: &str,
+    renamed: &str,
+    case_rule: PathCaseRule,
+    stored: bool,
+) -> Option<String> {
+    if !stored {
+        return follow_media_rename(companion, original, renamed, case_rule);
     }
-    Some(format!("{renamed_stem}{tail}"))
+    use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
+    follow_native_media_rename(
+        &stored_path_to_path_buf(companion),
+        &stored_path_to_path_buf(original),
+        &stored_path_to_path_buf(renamed),
+        case_rule,
+    )
+    .map(path_to_stored_string)
 }
 
 /// Plan every incoming item against the destination (FR-072–075, FR-090).
@@ -773,7 +860,7 @@ pub fn follow_media_rename(
 /// exactly one decision per incoming item, in input order.
 pub fn plan_collisions(request: &CollisionPlanRequest) -> CollisionPlan {
     let case_rule = request.case_rule;
-    let mut index = NameIndex::new(case_rule, &request.destination);
+    let mut index = NameIndex::new(case_rule, &request.destination, request.stored_path_names);
     let mut decisions: HashMap<String, CollisionDecision> = HashMap::new();
 
     let leaders = request.incoming.iter().filter(|i| i.companion_of.is_none());
@@ -792,11 +879,12 @@ pub fn plan_collisions(request: &CollisionPlanRequest) -> CollisionPlan {
         if let Some(parent_id) = item.companion_of.as_deref()
             && let Some(parent) = decisions.get(parent_id)
             && parent.final_name != parent.proposed_name
-            && let Some(next) = follow_media_rename(
+            && let Some(next) = follow_planned_media_rename(
                 &item.proposed_name,
                 &parent.proposed_name,
                 &parent.final_name,
                 case_rule,
+                request.stored_path_names,
             )
         {
             target = next;
@@ -828,7 +916,11 @@ fn decide_item(
     // a rename, not a collision (spec Edge Cases, FR-090).
     if let (Some(existing), Some(source_path)) = (existing, item.source_path.as_deref())
         && let Some(destination_path) = existing.path.as_deref()
-        && is_self_collision(source_path, destination_path, case_rule)
+        && (if request.stored_path_names {
+            name_key(case_rule, source_path, true) == name_key(case_rule, destination_path, true)
+        } else {
+            is_self_collision(source_path, destination_path, case_rule)
+        })
     {
         index.reserve(&target_name);
         return CollisionDecision {
@@ -847,7 +939,7 @@ fn decide_item(
             // Another incoming item in this same batch already claimed the name.
             // Destination-wins does not apply between two incoming files, but
             // they still cannot share a pathname.
-            let base = collision_rename_base(&target_name, &request.naming.source_library_label);
+            let base = rename_base(&target_name, request);
             let final_name = index.allocate(&base);
             index.reserve(&final_name);
             return CollisionDecision {
@@ -916,7 +1008,7 @@ fn decide_item(
 
     // FR-074/FR-075: destination keeps its filename; the incoming file is
     // renamed with the source-library suffix plus numeric disambiguation.
-    let base = collision_rename_base(&target_name, &request.naming.source_library_label);
+    let base = rename_base(&target_name, request);
     let final_name = index.allocate(&base);
     index.reserve(&final_name);
     if item.kind == CollisionItemKind::CanonicalSidecar
@@ -942,6 +1034,100 @@ fn decide_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_codec_prefix_names_keep_their_identity_in_both_planner_modes() {
+        use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
+        let literal = "scryer-path-v1:u:Film.mkv";
+        for stored in [false, true] {
+            let name = if stored {
+                path_to_stored_string(literal)
+            } else {
+                literal.into()
+            };
+            let mut request = request(PathCaseRule::CaseSensitive)
+                .with_destination(vec![DestinationItem::media(&name, 1)])
+                .with_incoming(vec![IncomingItem::media("movie", &name, 2)]);
+            request.stored_path_names = stored;
+            let plan = plan_collisions(&request);
+            let result = &plan.decision("movie").unwrap().final_name;
+            let expected = "scryer-path-v1:u:Film (from Movies 4K).mkv";
+            if stored {
+                assert_eq!(
+                    stored_path_to_path_buf(result),
+                    std::path::Path::new(expected)
+                );
+            } else {
+                assert_eq!(result, expected);
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_collision_names_keep_distinct_units_and_rename_companions_losslessly() {
+        use crate::stored_paths::{
+            path_to_stored_string, stored_path_to_path_buf, suffix_path_stem,
+        };
+        use std::{ffi::OsString, path::PathBuf};
+        #[cfg(unix)]
+        let names = {
+            use std::os::unix::ffi::OsStringExt;
+            [0xff, 0xfe]
+                .map(|byte| OsString::from_vec([b"Film".as_slice(), &[byte], b".mkv"].concat()))
+        };
+        #[cfg(windows)]
+        let names = {
+            use std::os::windows::ffi::OsStringExt;
+            [0xd800, 0xd801].map(|unit| {
+                OsString::from_wide(
+                    &[
+                        "Film".encode_utf16().collect::<Vec<_>>(),
+                        vec![unit],
+                        ".mkv".encode_utf16().collect(),
+                    ]
+                    .concat(),
+                )
+            })
+        };
+        let [first, second] = names.map(PathBuf::from);
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        let base = suffix_path_stem(&first, " (from Movies 4K)");
+        let final_media = suffix_path_stem(&base, " (2)");
+        let mut companion_name = first.file_stem().unwrap().to_os_string();
+        companion_name.push(".en.srt");
+        let companion = PathBuf::from(companion_name);
+        let mut final_companion_name = final_media.file_stem().unwrap().to_os_string();
+        final_companion_name.push(".en.srt");
+        for case_rule in [PathCaseRule::CaseSensitive, PathCaseRule::CaseInsensitive] {
+            let plan = plan_collisions(
+                &request(case_rule)
+                    .with_stored_path_names()
+                    .with_destination(vec![
+                        DestinationItem::media(path_to_stored_string(&first), 1),
+                        DestinationItem::media(path_to_stored_string(&base), 1),
+                    ])
+                    .with_incoming(vec![
+                        IncomingItem::media("first", path_to_stored_string(&first), 2),
+                        IncomingItem::media("second", path_to_stored_string(&second), 2),
+                        IncomingItem::companion("sub", path_to_stored_string(&companion), 2)
+                            .with_companion_of("first"),
+                    ]),
+            );
+            assert_eq!(
+                stored_path_to_path_buf(&plan.decision("first").unwrap().final_name),
+                final_media
+            );
+            assert_eq!(
+                stored_path_to_path_buf(&plan.decision("second").unwrap().final_name),
+                second
+            );
+            assert_eq!(
+                stored_path_to_path_buf(&plan.decision("sub").unwrap().final_name),
+                PathBuf::from(&final_companion_name)
+            );
+        }
+    }
 
     fn naming() -> CollisionNaming {
         CollisionNaming::from_source_library("Movies 4K")

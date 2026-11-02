@@ -1460,6 +1460,25 @@ fn should_skip_media_library_subpath(root: &Path, path: &Path, is_dir: bool) -> 
     false
 }
 
+/// Movie feature eligibility shared by scanning and ownership resolution.
+/// Video samples and the scanner's extras stay in the leftover-file class.
+pub(crate) fn is_movie_feature_media_candidate(folder: &Path, path: &Path) -> bool {
+    path.strip_prefix(folder).is_ok()
+        && is_allowed_video_path(path)
+        && !should_skip_movie_library_subpath(folder, path, false)
+        && !is_sample_video_candidate(path)
+}
+
+pub(crate) fn is_sample_video_candidate(path: &Path) -> bool {
+    path.file_stem()
+        .map(|stem| {
+            stem.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("sample")
+        })
+        .unwrap_or(false)
+}
+
 fn is_allowed_video_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -3024,6 +3043,53 @@ mod tests {
         let path = Path::new("/library/Movie Title/Sample.2024.BluRay.mkv");
 
         assert!(!should_skip_movie_library_subpath(root, path, false));
+    }
+
+    #[test]
+    fn movie_feature_media_eligibility_preserves_samples_and_extras_as_leftovers() {
+        let folder = Path::new("/library/Movie Title");
+        for relative in ["movie.mkv", "Short.Film.2024.MP4", "alternate.2160p.iso"] {
+            assert!(
+                is_movie_feature_media_candidate(folder, &folder.join(relative)),
+                "{relative}"
+            );
+        }
+        for relative in [
+            "sample.mkv",
+            "movie-sample-1080p.mkv",
+            "movie-trailer.mkv",
+            "movie-featurette.mkv",
+            "extras/bonus.mkv",
+            "deleted scenes/scene.mkv",
+            "movie.nfo",
+            "movie.en.srt",
+            "poster.jpg",
+        ] {
+            assert!(
+                !is_movie_feature_media_candidate(folder, &folder.join(relative)),
+                "{relative}"
+            );
+        }
+        assert!(!is_movie_feature_media_candidate(
+            folder,
+            Path::new("/library/Other/movie.mkv")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn movie_feature_media_eligibility_keeps_non_utf8_movie_identity() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let folder = Path::new("/library/Movie");
+        assert!(is_movie_feature_media_candidate(
+            folder,
+            Path::new(OsStr::from_bytes(b"/library/Movie/feature-\xFF.mkv"))
+        ));
+        assert!(!is_movie_feature_media_candidate(
+            folder,
+            Path::new(OsStr::from_bytes(b"/library/Movie/sample-\xFF.mkv"))
+        ));
     }
 
     #[test]

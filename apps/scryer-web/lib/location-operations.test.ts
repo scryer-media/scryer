@@ -606,6 +606,15 @@ test("plan again is offered for a stopped run with titles a fresh plan can selec
     false,
   );
 
+  for (const operationType of [
+    "FOLDER_CONSOLIDATION",
+    "FOLDER_KEEP_ONE",
+  ] as const) {
+    const stopped = operation({ state: "FAILED", operationType });
+    assert.equal(canPlanAgainOperation(stopped, selection), false);
+    assert.equal(canRetryOperation(stopped), true);
+  }
+
   // The dialog gets the titles as refs, whole or scoped to one row.
   assert.deepEqual(retrySelectionTitleRefs(selection), [
     { id: "t-2", name: "Second", libraryId: "lib-a", rootFolderId: "root-a" },

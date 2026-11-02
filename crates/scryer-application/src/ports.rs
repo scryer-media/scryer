@@ -6962,6 +6962,32 @@ pub trait JobRunRepository: Send + Sync {
             .collect())
     }
 
+    /// Stable history pages, so recovery can find unfinished work behind completed runs.
+    async fn list_job_runs_by_operation_type_before(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        before: Option<(DateTime<Utc>, String)>,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        let mut runs = self
+            .list_job_runs(Some(job_key), limit.saturating_add(1))
+            .await?;
+        if runs.len() > limit {
+            return Err(AppError::Repository(
+                "This job repository does not support paginated history recovery".into(),
+            ));
+        }
+        runs.retain(|run| {
+            run.operation_type == operation_type
+                && before.as_ref().is_none_or(|(started_at, id)| {
+                    (run.started_at, run.id.as_str()) < (*started_at, id.as_str())
+                })
+        });
+        runs.sort_by(|left, right| (right.started_at, &right.id).cmp(&(left.started_at, &left.id)));
+        Ok(runs)
+    }
+
     /// The newest run of each operation type recorded under `job_key`, in
     /// one read; used to show the last run of every user-defined job.
     async fn list_latest_job_run_per_operation_type(
@@ -7009,6 +7035,35 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32>;
     /// Remove every row bound to `title_id`; the title they point at is gone.
     async fn delete_for_title(&self, title_id: &str) -> AppResult<u32>;
+
+    /// Pending duplicate folders for one title, bounded independently of unrelated imports.
+    async fn list_pending_folder_conflicts_for_title(
+        &self,
+        library_id: &str,
+        title_id: &str,
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        let mut matches = Vec::new();
+        for offset in (0..250_000).step_by(1_000) {
+            let page = self
+                .list_library_scan_unmatched_items(
+                    Some(scryer_domain::MediaFacet::Movie),
+                    None,
+                    Some(PendingImportStatus::Pending),
+                    1_000,
+                    offset,
+                )
+                .await?;
+            let complete = page.len() < 1_000;
+            matches.extend(page.into_iter().filter(|item| item.library_id == library_id && item.title_id.as_deref() == Some(title_id) && item.reason_code == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER));
+            if complete {
+                return Ok(matches);
+            }
+        }
+        Err(AppError::validation_refused(
+            crate::location::conflicts::refusal::SELECTION_INVALID,
+            "The pending-import catalog exceeds the safe discovery bound",
+        ))
+    }
 
     async fn list_library_scan_unmatched_items(
         &self,

@@ -14,6 +14,8 @@ import type { Translate } from "@/components/root/types";
 export type LongValue = number | string;
 
 export type LocationOperationType =
+  | "FOLDER_CONSOLIDATION"
+  | "FOLDER_KEEP_ONE"
   | "FOLDER_REASSIGNMENT"
   | "TITLE_FOLDER_RECOVERY"
   | "ROOT_MOVE"
@@ -1228,7 +1230,12 @@ export function canPlanAgainOperation(
   operation: LocationOperation | null | undefined,
   selection: LocationRetrySelection | null | undefined,
 ): boolean {
-  return canRetryOperation(operation) && (selection?.titles.length ?? 0) > 0;
+  return (
+    canRetryOperation(operation) &&
+    operation?.operationType !== "FOLDER_CONSOLIDATION" &&
+    operation?.operationType !== "FOLDER_KEEP_ONE" &&
+    (selection?.titles.length ?? 0) > 0
+  );
 }
 
 /**

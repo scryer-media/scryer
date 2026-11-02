@@ -1,6 +1,94 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "pendingImports.conflict.returnToConflicts": "Return to folder conflicts",
+  "error.reason.LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED":
+    "This folder rename would leave an additional movie file outside the title folder. Keep the folder name or move the title with its additional files before renaming.",
+  "pendingImports.conflict.taskMissing":
+    "This resolution task is no longer available. Check Activity for its location operations or dismiss this progress panel.",
+  "pendingImports.conflict.hideProgress": "Hide progress",
+  "pendingImports.conflict.showFiles": "Show files",
+  "pendingImports.conflict.sampledFiles":
+    "Only a sample of paths is shown; the counts include all files.",
+  "pendingImports.conflict.ownershipHelp":
+    "This title already owns {{folder}}. Preview Adopt all or Keep one to settle its folders.",
+  "error.reason.LOCATION_CONFLICT_SELECTION_INVALID":
+    "Select pending folder conflicts to resolve.",
+  "error.reason.LOCATION_CONFLICT_NOT_FOUND":
+    "A selected conflict no longer exists. Refresh the page.",
+  "error.reason.LOCATION_CONFLICT_UNSUPPORTED":
+    "This conflict cannot be resolved with this workflow.",
+  "error.reason.LOCATION_CONFLICT_FOLDER_UNSAFE":
+    "A folder is outside the permitted roots or cannot be safely accessed.",
+  "error.reason.LOCATION_CONFLICT_OWNERSHIP_CHANGED":
+    "Folder ownership changed. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_MEDIA_MISSING":
+    "The media needed to resolve this conflict is missing.",
+  "error.reason.LOCATION_CONFLICT_PLAN_CHANGED":
+    "Files or folder ownership changed. Refresh the preview before applying.",
+  "error.reason.LOCATION_CONFLICT_PERMANENT_CONFIRMATION_REQUIRED":
+    "Confirm the listed permanent deletions before continuing.",
+  "error.reason.LOCATION_CONFLICT_FILE_CHANGED":
+    "A file changed since the preview. Refresh the preview.",
+  "error.reason.LOCATION_CONFLICT_RECYCLE_UNAVAILABLE":
+    "The recycle destination is unavailable. Restore access and try again.",
+
+  "pendingImports.conflict.select": "Select conflict",
+  "pendingImports.conflict.adoptAll": "Adopt all",
+  "pendingImports.conflict.keepOne": "Keep one",
+  "pendingImports.conflict.title": "Resolve folder conflicts",
+  "pendingImports.conflict.description":
+    "Preview how {{count}} conflicts will be settled. Each conflict runs as its own location operation in Activity.",
+  "pendingImports.conflict.policy": "Media policy",
+  "pendingImports.conflict.leftovers": "Remaining files",
+  "pendingImports.conflict.adoptHelp":
+    "Move every media file into the survivor folder. The best file becomes Primary; other movie files become Additional.",
+  "pendingImports.conflict.keepHelp":
+    "Keep the best media in the survivor folder, moving it there if needed. Recycle inferior media.",
+  "pendingImports.conflict.preserveAll": "Preserve all files (default)",
+  "pendingImports.conflict.mediaOnly": "Preserve media files only",
+  "pendingImports.conflict.preserveHelp":
+    "Move remaining files into the survivor folder, resolving collisions without overwriting files.",
+  "pendingImports.conflict.mediaOnlyHelp":
+    "Recycle the previewed non-media remainder only after the media is safe at its destination.",
+  "pendingImports.conflict.preview": "Refresh preview",
+  "pendingImports.conflict.previewCount":
+    "{{count}} conflicts; showing {{shown}} rows.",
+  "pendingImports.conflict.sampled":
+    "This is a sample. Counts include the entire selection.",
+  "pendingImports.conflict.titleColumn": "Title",
+  "pendingImports.conflict.survivor": "Survivor folder",
+  "pendingImports.conflict.primary": "Primary file",
+  "pendingImports.conflict.moveBytes": "To move",
+  "pendingImports.conflict.recycleBytes": "To recycle",
+  "pendingImports.conflict.renames": "Collision renames",
+  "pendingImports.conflict.leftoverFiles": "Remaining files",
+  "pendingImports.conflict.filesBytes": "{{count}} files · {{bytes}}",
+  "pendingImports.conflict.apply": "Apply resolution",
+  "pendingImports.conflict.permanentTitle": "Delete files permanently?",
+  "pendingImports.conflict.permanentDescription":
+    "No recycle bin is configured. The {{count}} previewed files ({{bytes}}) will be deleted permanently. This cannot be undone.",
+  "pendingImports.conflict.permanentConfirm": "Delete permanently",
+  "pendingImports.conflict.previewFailed":
+    "Could not preview these conflicts. Try again.",
+  "pendingImports.conflict.applyFailed":
+    "Could not start conflict resolution. Refresh the preview and try again.",
+  "pendingImports.conflict.progress":
+    "Settled {{settled}} of {{total}} conflicts; {{failed}} failed.",
+  "pendingImports.conflict.completed":
+    "Resolution finished: {{settled}} of {{total}} settled; {{failed}} failed.",
+  "pendingImports.conflict.progressUnavailable":
+    "Progress is temporarily unavailable. The background task can continue; check Activity.",
+  "pendingImports.conflict.operation": "View operation {{id}}",
+  "pendingImports.conflict.selectPage": "Select conflicts on this page",
+  "pendingImports.conflict.selected": "{{count}} selected",
+  "pendingImports.conflict.resolveSelected": "Resolve selected",
+  "move.operationType.FOLDER_CONSOLIDATION": "Folder consolidation",
+  "move.operationType.FOLDER_KEEP_ONE": "Keep one folder",
+
+  "settings.copyVerificationTitle": "Copy verification",
+  "settings.copyVerificationScope":
+    "Applies to download-client imports and library and root moves. Quick is the default. Choose Full when moving off a disk you plan to erase.",
   "error.reason.METADATA_GATEWAY_CLOCK_SKEW":
     "Scryer cannot connect to the metadata gateway because your system clock is off by more than 5 minutes. Synchronize your system clock and restart Scryer.",
   "initialAuth.title": "Set up access to Scryer",
@@ -5840,11 +5928,8 @@ const en: LocaleDictionary = {
   "settings.historyRetentionDaysSuffix": "days",
   "settings.securitySessionDurationSuffix": "days",
   "settings.generalSaved": "General settings saved.",
-  "settings.verificationDepthTitle": "Import copy verification",
   "settings.verificationDepthHelp":
     "How thoroughly Scryer proves a copied file before it touches the source.",
-  "settings.verificationDepthScope":
-    "This applies to download-client import copies only. Library and root moves always verify in full, whatever is chosen here.",
   "settings.verificationDepthLabel": "Verification depth",
   "settings.verificationDepthFull": "Full read-back",
   "settings.verificationDepthFullHelp":

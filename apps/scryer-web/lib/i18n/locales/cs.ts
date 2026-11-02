@@ -1543,11 +1543,8 @@ const cs: LocaleDictionary = {
   "settings.historyRetentionDaysSuffix": "dní",
   "settings.securitySessionDurationSuffix": "dní",
   "settings.generalSaved": "Obecná nastavení uložena.",
-  "settings.verificationDepthTitle": "Ověřování kopie při importu",
   "settings.verificationDepthHelp":
     "Jak důkladně Scryer ověří zkopírovaný soubor, než se dotkne zdroje.",
-  "settings.verificationDepthScope":
-    "Toto platí pouze pro kopie při importu z klienta pro stahování. Přesuny knihovny a kořenové složky se vždy ověřují plně, bez ohledu na tuto volbu.",
   "settings.verificationDepthLabel": "Hloubka ověření",
   "settings.verificationDepthFull": "Plné zpětné čtení",
   "settings.verificationDepthFullHelp":

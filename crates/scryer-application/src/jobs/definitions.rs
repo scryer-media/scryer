@@ -756,7 +756,14 @@ impl JobRun {
             summary_json: record.summary_json.clone(),
             summary_text: record.summary_text.clone(),
             error_text: record.error_text.clone(),
-            progress_json: record.progress_json.clone(),
+            // Conflict task progress is also its private recovery journal.
+            // Generic Activity readers may lack access to its libraries; the
+            // dedicated task query projects authorized counters and child IDs.
+            progress_json: if record.operation_type == "pending_import_conflicts" {
+                None
+            } else {
+                record.progress_json.clone()
+            },
             library_scan_progress,
         }
     }
