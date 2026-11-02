@@ -118,6 +118,9 @@ pub struct InteractiveReleaseSearchIndexerView {
     /// Wall time of this indexer's own call, once it has answered.
     pub elapsed_ms: Option<i64>,
     pub failure_reason: Option<String>,
+    /// Stable code beside `failure_reason` for a failure the operator must
+    /// act on, such as an indexer whose plugin client could not be built.
+    pub failure_reason_code: Option<&'static str>,
     pub caps: Option<crate::IndexerCapsDiagnostic>,
     /// The indexer asked Scryer to slow down rather than failing. It is a
     /// cooldown that lifts on its own, so the UI reads it as "cooling down"
@@ -661,6 +664,7 @@ impl AppUseCase {
                 result_count: 0,
                 elapsed_ms: None,
                 failure_reason: skip.map(|(reason, _)| reason.describe(None)),
+                failure_reason_code: None,
                 caps: None,
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
@@ -961,14 +965,15 @@ impl AppUseCase {
             } else {
                 InteractiveReleaseSearchIndexerStatus::Completed
             };
-            view.failure_reason =
-                skip.map(|(reason, until)| reason.describe(until))
-                    .or_else(|| {
-                        source
-                            .outcome
-                            .and_then(incomplete_indexer_reason)
-                            .map(|reason| reason.message)
-                    });
+            let incomplete = if skip.is_some() {
+                None
+            } else {
+                source.outcome.and_then(incomplete_indexer_reason)
+            };
+            view.failure_reason_code = incomplete.as_ref().and_then(|reason| reason.code);
+            view.failure_reason = skip
+                .map(|(reason, until)| reason.describe(until))
+                .or_else(|| incomplete.map(|reason| reason.message));
         }
     }
 
@@ -1300,6 +1305,7 @@ impl AppUseCase {
                     ) {
                         indexer.status = InteractiveReleaseSearchIndexerStatus::Failed;
                         indexer.failure_reason = Some("timed out".to_string());
+                        indexer.failure_reason_code = None;
                         indexer.rate_limited = false;
                     }
                 }
@@ -1341,6 +1347,7 @@ impl AppUseCase {
             indexer.rate_limited = failure_reason
                 .as_ref()
                 .is_some_and(super::release_search::reason_is_rate_limit);
+            indexer.failure_reason_code = failure_reason.as_ref().and_then(|reason| reason.code);
             indexer.failure_reason = failure_reason.map(|reason| reason.message);
             if elapsed_ms.is_some() {
                 indexer.elapsed_ms = elapsed_ms;
@@ -1379,6 +1386,7 @@ impl AppUseCase {
             indexer.result_count = 0;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = Some(reason.describe(until));
+            indexer.failure_reason_code = None;
             indexer.rate_limited = false;
             indexer.skip_reason = Some(reason);
             indexer.skipped_until = until;
@@ -1447,6 +1455,7 @@ impl AppUseCase {
             indexer.result_count = batch_len;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = None;
+            indexer.failure_reason_code = None;
             indexer.rate_limited = false;
             indexer.unroutable_results = unroutable;
         }

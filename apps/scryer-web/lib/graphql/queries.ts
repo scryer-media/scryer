@@ -1424,6 +1424,7 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       resultCount
       elapsedMs
       failureReason
+      failureReasonCode
       rateLimited
       skipReason
       skippedUntil

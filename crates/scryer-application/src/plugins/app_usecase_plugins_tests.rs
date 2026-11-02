@@ -4788,6 +4788,89 @@ async fn startup_and_runtime_reload_block_unconfigured_plugins_identically() {
 }
 
 #[tokio::test]
+async fn clearing_a_component_blocker_loads_the_recovered_plugin() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let provider = h.plugin_provider.clone().unwrap();
+    let original = official_catalog_installation("synthetic-recovering", "0.1.0");
+    seed_auto_update_installation(&h, original.clone()).await;
+    let replacement = make_runtime_plugin_load(
+        "synthetic-recovering",
+        "indexer",
+        "synthetic-recovering",
+    );
+    h.plugin_descriptor_loader
+        .register(&replacement.wasm_bytes, replacement.descriptor.clone());
+    h.app
+        .repair_plugin_component_installation(original, Some(replacement))
+        .await
+        .unwrap();
+    let mut installation = stored_installation(&h, "synthetic-recovering").await;
+    installation.scryer_constraint = Some(">=999.0.0".into());
+    h.plugin_repo
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    h.app
+        .set_plugin_component_blocker(&installation, Some("incompatible contract".into()))
+        .await
+        .unwrap();
+    let reloads_before = provider.reload_count.load(Ordering::Relaxed);
+
+    h.app
+        .finalize_runtime_plugin_mutation("notification", false)
+        .await
+        .unwrap();
+    assert!(
+        h.app
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .contains_key("synthetic-recovering"),
+        "an unrelated mutation keeps a blocker whose cause remains"
+    );
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before,
+        "nothing recovered, so nothing reloads"
+    );
+
+    installation.scryer_constraint = None;
+    h.plugin_repo
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    h.app
+        .finalize_runtime_plugin_mutation("notification", false)
+        .await
+        .unwrap();
+    assert!(
+        !h.app
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .contains_key("synthetic-recovering")
+    );
+    assert_eq!(
+        provider.reload_count.load(Ordering::Relaxed),
+        reloads_before + 1,
+        "clearing the blocker reloads the providers once"
+    );
+    assert!(
+        provider
+            .reloaded_runtime_plugins
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(plugin_id, _)| plugin_id == "synthetic-recovering"),
+        "the recovered plugin is handed to its provider"
+    );
+}
+
+#[tokio::test]
 async fn installed_plugin_without_settings_descriptor_has_no_settings_panel() {
     let h = bootstrap_plugins(None);
     let mut installation = make_installation("synthetic-builtin", "1.0.0", true, true);

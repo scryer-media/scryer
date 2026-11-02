@@ -4158,8 +4158,31 @@ pub mod release_search {
     pub const NO_TORRENT_CLIENT: &str = "RELEASE_SEARCH_NO_TORRENT_CLIENT";
     /// No enabled download client accepts direct HTTP downloads.
     pub const NO_HTTP_CLIENT: &str = "RELEASE_SEARCH_NO_HTTP_CLIENT";
+    /// No loaded download client accepts Usenet releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const USENET_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_USENET_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts torrent releases, and an enabled
+    /// client's plugin is blocked or uninstalled.
+    pub const TORRENT_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_TORRENT_CLIENT_PLUGIN_UNAVAILABLE";
+    /// No loaded download client accepts direct HTTP downloads, and an
+    /// enabled client's plugin is blocked or uninstalled.
+    pub const HTTP_CLIENT_PLUGIN_UNAVAILABLE: &str =
+        "RELEASE_SEARCH_HTTP_CLIENT_PLUGIN_UNAVAILABLE";
+    /// An automatic search set a release aside because its indexer has used
+    /// its whole grab allowance.
+    pub const INDEXER_GRAB_QUOTA_EXHAUSTED: &str = "RELEASE_SEARCH_INDEXER_GRAB_QUOTA_EXHAUSTED";
     /// Every reason a title search reports for removed releases.
-    pub const ALL: &[&str] = &[NO_USENET_CLIENT, NO_TORRENT_CLIENT, NO_HTTP_CLIENT];
+    pub const ALL: &[&str] = &[
+        NO_USENET_CLIENT,
+        NO_TORRENT_CLIENT,
+        NO_HTTP_CLIENT,
+        USENET_CLIENT_PLUGIN_UNAVAILABLE,
+        TORRENT_CLIENT_PLUGIN_UNAVAILABLE,
+        HTTP_CLIENT_PLUGIN_UNAVAILABLE,
+        INDEXER_GRAB_QUOTA_EXHAUSTED,
+    ];
 
     #[cfg(test)]
     mod tests {

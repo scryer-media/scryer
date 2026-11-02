@@ -130,6 +130,10 @@ impl AppUseCase {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+        // Plugin types of installations whose blocker cleared. A blocked
+        // plugin was left out of its provider, so clearing the blocker alone
+        // would leave it unloaded until the next full reload.
+        let mut recovered_plugin_types = Vec::new();
         for id in blocked {
             let installation = self
                 .services
@@ -153,10 +157,15 @@ impl AppUseCase {
                         .load_runtime_plugin_for_installation(installation)
                         .await
                     {
-                        Ok(runtime) => self
-                            .validate_component_upgrade_runtime(installation, &runtime)
-                            .await
-                            .is_ok(),
+                        Ok(runtime) => {
+                            self.validate_component_upgrade_runtime(installation, &runtime)
+                                .await
+                                .is_ok()
+                                && self
+                                    .runtime_plugin_settings(installation, &runtime.descriptor)
+                                    .await
+                                    .is_ok()
+                        }
                         Err(_) => false,
                     }
                 }
@@ -168,12 +177,25 @@ impl AppUseCase {
                     .write()
                     .await
                     .remove(&id);
+                if let Some(installation) = installation {
+                    recovered_plugin_types.push(installation.plugin_type);
+                }
             }
         }
-        if runtime_touched
+        let reloaded = !recovered_plugin_types.is_empty();
+        if reloaded {
+            // The reload keeps every blocker still recorded, so a plugin that
+            // is still blocked stays out of its provider.
+            self.reload_plugin_providers().await?;
+        }
+        if (runtime_touched
             && plugin_types
                 .iter()
-                .any(|plugin_type| is_indexer_plugin_type(plugin_type))
+                .any(|plugin_type| is_indexer_plugin_type(plugin_type)))
+            || (reloaded
+                && recovered_plugin_types
+                    .iter()
+                    .any(|plugin_type| is_indexer_plugin_type(plugin_type)))
         {
             self.rebuild_user_rules_engine().await?;
         }
@@ -182,6 +204,11 @@ impl AppUseCase {
             .into_iter()
             .flat_map(provider_catalog_families_for_plugin_type)
             .collect::<Vec<_>>();
+        families.extend(
+            recovered_plugin_types
+                .iter()
+                .flat_map(|plugin_type| provider_catalog_families_for_plugin_type(plugin_type)),
+        );
         families.sort_by_key(|family| family.as_str());
         families.dedup();
         self.publish_provider_catalog_changed(families);

@@ -227,7 +227,7 @@ impl AppUseCase {
     pub async fn uninstall_plugin(&self, actor: &User, plugin_id: &str) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
-        let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
+        let settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
 
         let installation = self
             .services
@@ -286,6 +286,8 @@ impl AppUseCase {
             } else {
                 self.apply_runtime_plugin_removal(&reverted)?;
             }
+            // Finalizing may reload every provider, which takes the lock.
+            drop(settings_guard);
             self.finalize_runtime_plugin_mutation(&reverted.plugin_type, runtime_touched)
                 .await?;
             return Ok(());
@@ -328,6 +330,7 @@ impl AppUseCase {
         self.services.config.settings.invalidate_cache();
 
         self.apply_runtime_plugin_removal(&installation)?;
+        drop(settings_guard);
         self.finalize_runtime_plugin_mutation(&installation.plugin_type, installation.is_enabled)
             .await?;
         Ok(())
@@ -438,6 +441,7 @@ impl AppUseCase {
         if enabled {
             if result.is_builtin && result.source_kind == PluginSourceKind::Bundled {
                 self.apply_runtime_builtin_restore(&result).await?;
+                drop(settings_guard);
             } else {
                 let runtime_plugin = prepared_runtime_plugin.ok_or_else(|| {
                     AppError::Repository(
@@ -450,7 +454,10 @@ impl AppUseCase {
             }
         } else {
             self.apply_runtime_plugin_removal(&result)?;
+            drop(settings_guard);
         }
+        // Finalizing may reload every provider, which takes the lock, so every
+        // branch above has released it.
         self.finalize_runtime_plugin_mutation(&installation.plugin_type, true)
             .await?;
         Ok(result)

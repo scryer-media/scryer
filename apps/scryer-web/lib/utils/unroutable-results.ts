@@ -1,6 +1,6 @@
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
 
-/** Server reason codes for releases no enabled download client accepts. */
+/** Server reason codes for releases no available download client accepts. */
 const REASON_KEYS: Readonly<Record<string, string>> = {
   RELEASE_SEARCH_NO_USENET_CLIENT:
     "title.contextReleaseSearchUnroutable.noUsenetClient",
@@ -8,6 +8,12 @@ const REASON_KEYS: Readonly<Record<string, string>> = {
     "title.contextReleaseSearchUnroutable.noTorrentClient",
   RELEASE_SEARCH_NO_HTTP_CLIENT:
     "title.contextReleaseSearchUnroutable.noHttpClient",
+  RELEASE_SEARCH_USENET_CLIENT_PLUGIN_UNAVAILABLE:
+    "title.contextReleaseSearchUnroutable.usenetClientPluginUnavailable",
+  RELEASE_SEARCH_TORRENT_CLIENT_PLUGIN_UNAVAILABLE:
+    "title.contextReleaseSearchUnroutable.torrentClientPluginUnavailable",
+  RELEASE_SEARCH_HTTP_CLIENT_PLUGIN_UNAVAILABLE:
+    "title.contextReleaseSearchUnroutable.httpClientPluginUnavailable",
 };
 
 const UNKNOWN_REASON_KEY = "title.contextReleaseSearchUnroutable.unknown";
