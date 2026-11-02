@@ -528,6 +528,7 @@ fn from_ui_catalog_view_mode(
         scryer_application::UiCatalogViewMode::Compact => UiCatalogViewModeValue::Compact,
         scryer_application::UiCatalogViewMode::PosterTable => UiCatalogViewModeValue::PosterTable,
         scryer_application::UiCatalogViewMode::Poster => UiCatalogViewModeValue::Poster,
+        scryer_application::UiCatalogViewMode::Graph => UiCatalogViewModeValue::Graph,
     }
 }
 
@@ -538,6 +539,7 @@ fn to_app_ui_catalog_view_mode(
         UiCatalogViewModeValue::Compact => scryer_application::UiCatalogViewMode::Compact,
         UiCatalogViewModeValue::PosterTable => scryer_application::UiCatalogViewMode::PosterTable,
         UiCatalogViewModeValue::Poster => scryer_application::UiCatalogViewMode::Poster,
+        UiCatalogViewModeValue::Graph => scryer_application::UiCatalogViewMode::Graph,
     }
 }
 

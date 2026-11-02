@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { UiSettings, UiTableColumnSetting } from "../types/settings.ts";
 import {
+  DISCOVERY_GRAPH_VIEW_ENABLED,
+  availableCatalogViewMode,
   catalogColumnsInput,
   catalogDeviceClass,
   catalogFacetForView,
+  catalogViewModeOptions,
   catalogViewModeToProfile,
   savedCatalogViewMode,
   savedCatalogVisibleColumns,
@@ -192,4 +195,42 @@ test("the saved slice lists every supported column for both table layouts", () =
       visible: true,
     },
   ]);
+});
+
+test("the graph view mode is saved and read back", () => {
+  assert.equal(catalogViewModeToProfile("graph"), "GRAPH");
+  const settings: Pick<UiSettings, "catalogViews"> = {
+    catalogViews: [
+      { deviceClass: "DESKTOP", facet: "ANIME", viewMode: "GRAPH" },
+    ],
+  };
+  assert.equal(savedCatalogViewMode(settings, "DESKTOP", "ANIME"), "graph");
+});
+
+test("the graph view is offered only while its gate is on", () => {
+  // The defaults follow the gate constant.
+  assert.deepEqual(
+    catalogViewModeOptions(),
+    catalogViewModeOptions(DISCOVERY_GRAPH_VIEW_ENABLED),
+  );
+  assert.equal(
+    availableCatalogViewMode("graph"),
+    availableCatalogViewMode("graph", DISCOVERY_GRAPH_VIEW_ENABLED),
+  );
+
+  assert.deepEqual(catalogViewModeOptions(false), [
+    "compact",
+    "poster-table",
+    "poster",
+  ]);
+  assert.deepEqual(catalogViewModeOptions(true), [
+    "compact",
+    "poster-table",
+    "poster",
+    "graph",
+  ]);
+  // A saved graph view falls back to posters while the gate is off.
+  assert.equal(availableCatalogViewMode("graph", false), "poster");
+  assert.equal(availableCatalogViewMode("graph", true), "graph");
+  assert.equal(availableCatalogViewMode("compact", false), "compact");
 });

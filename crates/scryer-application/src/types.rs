@@ -4737,6 +4737,7 @@ pub enum UiCatalogViewMode {
     Compact,
     PosterTable,
     Poster,
+    Graph,
 }
 
 impl UiCatalogViewMode {
@@ -4745,6 +4746,7 @@ impl UiCatalogViewMode {
             Self::Compact => "compact",
             Self::PosterTable => "poster-table",
             Self::Poster => "poster",
+            Self::Graph => "graph",
         }
     }
 
@@ -4753,8 +4755,31 @@ impl UiCatalogViewMode {
             "compact" => Some(Self::Compact),
             "poster-table" => Some(Self::PosterTable),
             "poster" => Some(Self::Poster),
+            "graph" => Some(Self::Graph),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod ui_settings_catalog_view_mode_tests {
+    use super::UiCatalogViewMode;
+
+    #[test]
+    fn every_catalog_view_mode_round_trips_through_its_stored_text() {
+        for mode in [
+            UiCatalogViewMode::Compact,
+            UiCatalogViewMode::PosterTable,
+            UiCatalogViewMode::Poster,
+            UiCatalogViewMode::Graph,
+        ] {
+            assert_eq!(UiCatalogViewMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(
+            UiCatalogViewMode::parse("graph"),
+            Some(UiCatalogViewMode::Graph)
+        );
+        assert_eq!(UiCatalogViewMode::parse("map"), None);
     }
 }
 
