@@ -1609,6 +1609,13 @@ type CatalogDiscoveryGroupPayload {
 	"""
 	labelValue: String
 	"""
+	Rail-label key a genre or theme affinity group is named after, in
+	canonical hyphenated form such as `coming-of-age`; null for every other
+	group. Clients translate the key and fall back to `labelValue` for a key
+	they do not know.
+	"""
+	labelKey: String
+	"""
 	Total matching items before the returned item page is applied.
 	"""
 	totalCount: Long!

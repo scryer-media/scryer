@@ -59,6 +59,11 @@ pub(crate) struct DiscoveryRailLabel {
     /// never rename or repurpose a released key.
     pub(crate) key: &'static str,
     pub(crate) family: DiscoveryRailLabelFamily,
+    /// The slug of the affinity signal the gateway attaches to this tag
+    /// (`affinity:<family>:<signal_slug>`). It equals `key` except where the
+    /// gateway's registry folds a tag into an older signal key: the `lgbtq`
+    /// theme signals as `affinity:theme:lgbt`.
+    pub(crate) signal_slug: &'static str,
     /// The English rail title. Clients that know the key translate it; the
     /// rest read this.
     pub(crate) title: &'static str,
@@ -68,14 +73,24 @@ const fn genre(key: &'static str, title: &'static str) -> DiscoveryRailLabel {
     DiscoveryRailLabel {
         key,
         family: DiscoveryRailLabelFamily::Genre,
+        signal_slug: key,
         title,
     }
 }
 
 const fn theme(key: &'static str, title: &'static str) -> DiscoveryRailLabel {
+    theme_with_signal(key, key, title)
+}
+
+const fn theme_with_signal(
+    key: &'static str,
+    signal_slug: &'static str,
+    title: &'static str,
+) -> DiscoveryRailLabel {
     DiscoveryRailLabel {
         key,
         family: DiscoveryRailLabelFamily::Theme,
+        signal_slug,
         title,
     }
 }
@@ -127,7 +142,7 @@ pub(crate) const DISCOVERY_RAIL_LABELS: &[DiscoveryRailLabel] = &[
     theme("royal-politics", "Because you like royal intrigue"),
     theme("first-love", "Because you like first-love stories"),
     theme("forbidden-love", "Because you like forbidden love"),
-    theme("lgbtq", "Because you like LGBTQ+ stories"),
+    theme_with_signal("lgbtq", "lgbt", "Because you like LGBTQ+ stories"),
     theme("samurai", "Because you like samurai"),
     theme("magical-girl", "Because you like magical girls"),
 ];
@@ -147,6 +162,24 @@ pub(crate) fn discovery_rail_label(
     DISCOVERY_RAIL_LABELS.iter().find(|entry| {
         entry.family == family && normalize_discovery_affinity_key(entry.key) == normalized
     })
+}
+
+/// Whether an affinity signal slug (the tail of `affinity:<family>:<slug>`) is
+/// the signal that backs `label` in `family`. A label outside the allowlist
+/// can only be backed by a signal that spells it the same way; an allowlisted
+/// label is also backed by the gateway's own signal key for its tag.
+pub(crate) fn discovery_rail_label_signal_matches(
+    family: DiscoveryRailLabelFamily,
+    label: &str,
+    signal_slug: &str,
+) -> bool {
+    let signal = normalize_discovery_affinity_key(signal_slug);
+    if signal.is_empty() {
+        return false;
+    }
+    normalize_discovery_affinity_key(label) == signal
+        || discovery_rail_label(family, label)
+            .is_some_and(|entry| normalize_discovery_affinity_key(entry.signal_slug) == signal)
 }
 
 #[cfg(test)]
@@ -202,6 +235,33 @@ mod tests {
         );
         assert!(discovery_rail_label(DiscoveryRailLabelFamily::Theme, "Horror").is_none());
         assert!(discovery_rail_label(DiscoveryRailLabelFamily::Genre, "Heist").is_none());
+    }
+
+    #[test]
+    fn only_lgbtq_signals_under_a_different_slug() {
+        for entry in DISCOVERY_RAIL_LABELS {
+            if entry.key == "lgbtq" {
+                assert_eq!(entry.signal_slug, "lgbt");
+            } else {
+                assert_eq!(entry.signal_slug, entry.key);
+            }
+        }
+        let theme = DiscoveryRailLabelFamily::Theme;
+        assert!(discovery_rail_label_signal_matches(theme, "LGBTQ", "lgbt"));
+        assert!(discovery_rail_label_signal_matches(theme, "LGBTQ", "lgbtq"));
+        assert!(discovery_rail_label_signal_matches(theme, "Heist", "heist"));
+        assert!(!discovery_rail_label_signal_matches(theme, "Heist", "lgbt"));
+        assert!(!discovery_rail_label_signal_matches(
+            theme,
+            "LGBTQ",
+            "coming-out"
+        ));
+        assert!(!discovery_rail_label_signal_matches(
+            DiscoveryRailLabelFamily::Genre,
+            "LGBTQ",
+            "lgbt"
+        ));
+        assert!(!discovery_rail_label_signal_matches(theme, "LGBTQ", ""));
     }
 
     #[test]

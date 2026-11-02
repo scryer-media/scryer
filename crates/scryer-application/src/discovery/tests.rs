@@ -2763,3 +2763,189 @@ fn discovery_owned_themes_require_the_same_evidence_as_candidates() {
     title.canonical_tags[0].affinity_signals.clear();
     assert!(profile(&title).theme_labels.is_empty());
 }
+
+/// The gateway registers the `lgbtq` theme tag with the older signal key
+/// `affinity:theme:lgbt`, so a matcher that compares the signal slug with the
+/// tag name never sees it. These fixtures are shaped the way the gateway
+/// serves that tag.
+fn smg_lgbtq_signal(rail_eligible: bool) -> crate::DiscoveryAffinitySignalRecord {
+    crate::DiscoveryAffinitySignalRecord {
+        affinity_key: "affinity:theme:lgbt".into(),
+        category: "theme".into(),
+        tier: "support".into(),
+        confidence: 0.9,
+        sources: vec!["anilist".into()],
+        rail_eligible,
+        ..Default::default()
+    }
+}
+
+fn smg_lgbtq_pool_item(item: DiscoveryItemRecord) -> DiscoveryItemRecord {
+    let mut item = item;
+    item.affinity_signals = vec![smg_lgbtq_signal(true)];
+    item
+}
+
+#[test]
+fn owned_lgbtq_titles_reach_the_profile_through_the_gateway_signal_key() {
+    let mut title = test_title("owned-lgbtq", "Owned Example", MediaFacet::Movie, vec![]);
+    title.canonical_tags = vec![CanonicalMediaTag {
+        key: "canonical:theme:lgbtq".into(),
+        category: "theme".into(),
+        name: "LGBTQ".into(),
+        confidence: Some(0.9),
+        sources: vec!["anilist".into()],
+        affinity_signals: vec![smg_lgbtq_signal(true)],
+        ..Default::default()
+    }];
+    let profile = |title: &Title| {
+        discovery_library_affinity_profile_from_titles(&vec![title.clone(); 10], true)
+    };
+    assert_eq!(profile(&title).theme_labels, vec!["LGBTQ"]);
+
+    // The gateway's verdict still decides.
+    title.canonical_tags[0].affinity_signals[0].rail_eligible = false;
+    assert!(profile(&title).theme_labels.is_empty());
+
+    // A secondary signal folded into the same tag is not the label's signal.
+    title.canonical_tags[0].affinity_signals[0] = crate::DiscoveryAffinitySignalRecord {
+        affinity_key: "affinity:theme:coming-out".into(),
+        ..smg_lgbtq_signal(true)
+    };
+    assert!(profile(&title).theme_labels.is_empty());
+}
+
+#[test]
+fn lgbtq_rail_composes_from_gateway_shaped_pool_items() {
+    let profile = affinity_profile(&[], &["LGBTQ"], balanced_library_mix());
+    let lead = smg_lgbtq_pool_item(affinity_test_item(
+        "lgbtq-lead",
+        "series",
+        &["canonical:theme:lgbtq"],
+    ));
+    let items = extend_with_fillers(
+        vec![lead],
+        vec![
+            affinity_filler_items("lgbtq", "series", &["canonical:theme:lgbtq"], 8)
+                .into_iter()
+                .map(smg_lgbtq_pool_item)
+                .collect(),
+        ],
+    );
+    let sections = compose_affinity_sections(&items, &profile, 10);
+    let rail = sections
+        .iter()
+        .find(|section| section.label_key.as_deref() == Some("lgbtq"))
+        .expect("the lgbtq rail composes from the gateway's signal key");
+    assert_eq!(rail.title, "Because you like LGBTQ+ stories");
+    assert_eq!(affinity_section_lead(rail, 1), vec!["Title lgbtq-lead"]);
+}
+
+#[test]
+fn a_label_that_cannot_name_a_rail_never_spends_the_label_budget() {
+    let candidates = HashMap::new();
+    let context = DiscoveryRailContext {
+        candidates_by_id: &candidates,
+        settings: DiscoveryRailCompositionSettings::default(),
+        medium_mix: balanced_library_mix(),
+        median_base_rank: None,
+        limit: 10,
+    };
+    let items = extend_with_fillers(
+        vec![affinity_test_item(
+            "budget-heist",
+            "series",
+            &["canonical:theme:heist"],
+        )],
+        vec![
+            affinity_filler_items("budget-school", "series", &["canonical:theme:school"], 9),
+            affinity_filler_items("budget-heist", "series", &["canonical:theme:heist"], 8),
+        ],
+    );
+    let sections = label_affinity_sections(
+        &items,
+        &["School".to_string(), "Heist".to_string()],
+        "theme",
+        "BECAUSE_YOU_LIKE_TAG",
+        "because_you_like_tag",
+        1,
+        &context,
+        &mut HashSet::new(),
+    );
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| section.label_key.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("heist")]
+    );
+}
+
+#[test]
+fn catalog_affinity_groups_carry_the_rail_label_and_skip_unsayable_labels() {
+    let profile = affinity_profile(
+        &["Anime", "Science Fiction"],
+        &["School", "Heist"],
+        balanced_library_mix(),
+    );
+    let items = extend_with_fillers(
+        Vec::new(),
+        vec![
+            affinity_filler_items("catalog-school", "series", &["canonical:theme:school"], 8),
+            affinity_filler_items("catalog-heist", "series", &["canonical:theme:heist"], 8),
+            affinity_filler_items("catalog-anime", "series", &["canonical:genre:anime"], 8),
+            affinity_filler_items(
+                "catalog-science-fiction",
+                "series",
+                &["canonical:genre:science-fiction"],
+                8,
+            ),
+        ],
+    );
+    let mut groups = Vec::new();
+    catalog_personalized_groups(
+        &mut groups,
+        &items,
+        &profile,
+        DiscoveryRailCompositionSettings::default(),
+        6,
+        6,
+        &mut HashSet::new(),
+    );
+    let affinity_groups = groups
+        .iter()
+        .filter(|group| {
+            matches!(
+                group.kind,
+                CatalogDiscoveryGroupKind::ThemeAffinity | CatalogDiscoveryGroupKind::GenreAffinity
+            )
+        })
+        .map(|group| {
+            (
+                group.id.as_str(),
+                group.label_value.as_deref(),
+                group.label_key.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        affinity_groups,
+        vec![
+            ("theme_heist", Some("Heist"), Some("heist")),
+            (
+                "genre_science_fiction",
+                Some("Science Fiction"),
+                Some("science-fiction")
+            ),
+        ]
+    );
+    assert!(
+        groups
+            .iter()
+            .filter(|group| group.label_key.is_none())
+            .all(|group| !matches!(
+                group.kind,
+                CatalogDiscoveryGroupKind::ThemeAffinity | CatalogDiscoveryGroupKind::GenreAffinity
+            ))
+    );
+}

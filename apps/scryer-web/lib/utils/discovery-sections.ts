@@ -34,6 +34,20 @@ export function discoveryRailLabelTitleKey(labelKey: string) {
   return `discovery.rail.becauseYouLike.${labelKey.trim()}`;
 }
 
+// The translated rail title for a server label key, or null when there is no
+// key or this client does not know it yet, so the caller keeps its fallback.
+export function discoveryRailLabelTitle(
+  labelKey: string | null | undefined,
+  t: (key: string) => string,
+): string | null {
+  if (!labelKey?.trim()) {
+    return null;
+  }
+  const key = discoveryRailLabelTitleKey(labelKey);
+  const title = t(key);
+  return title && title !== key ? title : null;
+}
+
 // Mirrors the view's own item identity so merge dedupe and hero visibility agree.
 function discoveryItemKey(item: OrderableDiscoveryItem) {
   return `${item.targetKind}:${item.targetKey}`;

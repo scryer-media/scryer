@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 
 import railLabels from "../contracts/discovery-rail-labels.json" with { type: "json" };
 import en from "../i18n/locales/en.ts";
-import { discoveryRailLabelTitleKey } from "./discovery-sections.ts";
+import {
+  discoveryRailLabelTitle,
+  discoveryRailLabelTitleKey,
+} from "./discovery-sections.ts";
 
 const RAIL_PREFIX = "discovery.rail.becauseYouLike.";
 
@@ -42,8 +45,15 @@ test("every locale names every rail label with a sentence of its own", async () 
     const titles = new Set<string>();
     for (const key of contractKeys) {
       const title = locale[discoveryRailLabelTitleKey(key)];
-      assert.equal(typeof title, "string", `${file} has no rail title for ${key}`);
-      assert.ok(title.trim().length > 0, `${file} rail title for ${key} is empty`);
+      assert.equal(
+        typeof title,
+        "string",
+        `${file} has no rail title for ${key}`,
+      );
+      assert.ok(
+        title.trim().length > 0,
+        `${file} rail title for ${key} is empty`,
+      );
       assert.ok(!titles.has(title), `${file} repeats a rail title for ${key}`);
       titles.add(title);
     }
@@ -52,6 +62,21 @@ test("every locale names every rail label with a sentence of its own", async () 
         key.startsWith(RAIL_PREFIX) &&
         !contractKeys.includes(key.slice(RAIL_PREFIX.length)),
     );
-    assert.deepEqual(extra, [], `${file} has rail titles the server never sends`);
+    assert.deepEqual(
+      extra,
+      [],
+      `${file} has rail titles the server never sends`,
+    );
   }
+});
+
+test("a rail title resolves from its key and leaves unknown keys to the caller", () => {
+  const t = (key: string) => (en as Record<string, string>)[key] ?? key;
+  assert.equal(
+    discoveryRailLabelTitle("science-fiction", t),
+    "Because you like science fiction",
+  );
+  assert.equal(discoveryRailLabelTitle("not-a-rail-label", t), null);
+  assert.equal(discoveryRailLabelTitle(null, t), null);
+  assert.equal(discoveryRailLabelTitle("  ", t), null);
 });

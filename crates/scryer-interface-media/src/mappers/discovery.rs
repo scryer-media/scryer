@@ -278,6 +278,7 @@ fn from_catalog_discovery_group(
         kind: from_catalog_discovery_group_kind(group.kind),
         surface: from_catalog_discovery_surface(group.surface),
         label_value: group.label_value,
+        label_key: group.label_key,
         total_count: Long(group.total_count),
         items: group
             .items

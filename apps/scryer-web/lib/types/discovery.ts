@@ -249,6 +249,7 @@ export type CatalogDiscoveryGroup = {
   kind: CatalogDiscoveryGroupKind;
   surface: CatalogDiscoverySurface;
   labelValue: string | null;
+  labelKey?: string | null;
   totalCount: number;
   items: CatalogDiscoveryItem[];
 };

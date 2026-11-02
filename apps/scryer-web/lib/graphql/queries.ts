@@ -214,6 +214,7 @@ export const catalogDiscoveryQuery = `query CatalogDiscovery($input: CatalogDisc
       kind
       surface
       labelValue
+      labelKey
       totalCount
       items {
 ${CATALOG_DISCOVERY_ITEM_FIELDS}

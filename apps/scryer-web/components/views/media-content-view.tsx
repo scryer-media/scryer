@@ -169,6 +169,7 @@ import {
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { discoveryItemFacet } from "@/lib/utils/discovery-actions";
 import { discoveryItemDisplayTitle } from "@/lib/utils/discovery-display";
+import { discoveryRailLabelTitle } from "@/lib/utils/discovery-sections";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
 import { cn } from "@/lib/utils";
 import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scroll-restoration";
@@ -440,13 +441,19 @@ function catalogDiscoveryGroupLabel(
     case "PUBLIC_SECTION":
       return group.labelValue ?? titleContextWeeklyLabel(view, t);
     case "GENRE_AFFINITY":
-      return t("title.contextForYouGenre", {
-        genre: group.labelValue ?? "",
-      });
+      return (
+        discoveryRailLabelTitle(group.labelKey, t) ??
+        t("title.contextForYouGenre", {
+          genre: group.labelValue ?? "",
+        })
+      );
     case "THEME_AFFINITY":
-      return t("title.contextForYouTag", {
-        tag: group.labelValue ?? "",
-      });
+      return (
+        discoveryRailLabelTitle(group.labelKey, t) ??
+        t("title.contextForYouTag", {
+          tag: group.labelValue ?? "",
+        })
+      );
     case "ACCLAIMED":
       return t("title.contextForYouAcclaimed");
     case "COMPLETE_COLLECTION":

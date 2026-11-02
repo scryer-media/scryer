@@ -1313,7 +1313,7 @@ const zh_HK: LocaleDictionary = {
   "discovery.rail.becauseYouLike.royal-politics": "因為您喜歡宮廷權謀",
   "discovery.rail.becauseYouLike.first-love": "因為您喜歡初戀故事",
   "discovery.rail.becauseYouLike.forbidden-love": "因為您喜歡禁忌之戀",
-  "discovery.rail.becauseYouLike.lgbtq": "因為您喜歡LGBTQ+ 故事",
+  "discovery.rail.becauseYouLike.lgbtq": "因為您喜歡 LGBTQ+ 故事",
   "discovery.rail.becauseYouLike.samurai": "因為您喜歡武士",
   "discovery.rail.becauseYouLike.magical-girl": "因為您喜歡魔法少女",
   "settings.keepHistoryForever": "永久保留歷史記錄",

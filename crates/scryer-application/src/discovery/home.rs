@@ -1070,15 +1070,14 @@ pub(super) fn label_affinity_sections(
     let Some(family) = DiscoveryRailLabelFamily::from_canonical_kind(canonical_kind) else {
         return sections;
     };
-    for label in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
+    // The profile only holds allowlisted labels; this is the floor that keeps
+    // any other path from naming a rail after a raw tag. It runs before the
+    // budget so a label that can never name a rail never spends a slot.
+    for (label, rail_label) in canonical_affinity_labels_for_profile(items, labels, canonical_kind)
         .into_iter()
+        .filter_map(|label| discovery_rail_label(family, &label).map(|entry| (label, entry)))
         .take(label_budget)
     {
-        // The profile only holds allowlisted labels; this is the floor that
-        // keeps any other path from naming a rail after a raw tag.
-        let Some(rail_label) = discovery_rail_label(family, &label) else {
-            continue;
-        };
         let section_items = items
             .iter()
             .filter(|item| {

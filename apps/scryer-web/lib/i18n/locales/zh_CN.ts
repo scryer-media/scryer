@@ -899,7 +899,7 @@ const zh_CN: LocaleDictionary = {
   "discovery.rail.becauseYouLike.royal-politics": "因为你喜欢宫廷权谋",
   "discovery.rail.becauseYouLike.first-love": "因为你喜欢初恋故事",
   "discovery.rail.becauseYouLike.forbidden-love": "因为你喜欢禁忌之恋",
-  "discovery.rail.becauseYouLike.lgbtq": "因为你喜欢LGBTQ+ 故事",
+  "discovery.rail.becauseYouLike.lgbtq": "因为你喜欢 LGBTQ+ 故事",
   "discovery.rail.becauseYouLike.samurai": "因为你喜欢武士",
   "discovery.rail.becauseYouLike.magical-girl": "因为你喜欢魔法少女",
   "settings.keepHistoryForever": "永久保留历史记录",

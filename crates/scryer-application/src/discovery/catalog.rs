@@ -260,6 +260,7 @@ pub(super) fn catalog_public_top_group(
             kind: CatalogDiscoveryGroupKind::PublicTop,
             surface: CatalogDiscoverySurface::Public,
             label_value,
+            label_key: None,
             total_count: Some(section.total_count),
         },
         section.items,
@@ -284,6 +285,7 @@ pub(super) fn catalog_public_section_group(
             kind: CatalogDiscoveryGroupKind::PublicSection,
             surface: CatalogDiscoverySurface::Public,
             label_value,
+            label_key: None,
             total_count: Some(section.total_count),
         },
         section.items,
@@ -350,11 +352,17 @@ pub(super) fn catalog_personalized_groups(
 
     // Same specificity ladder as the home composer
     // (`personalized_section_results`): theme/tag groups claim titles before
-    // the broader genre groups. Labels come from the rail-label allowlist, so
-    // no group is ever named after a medium; medium stays with the gate above.
+    // the broader genre groups. Labels come from the rail-label allowlist, and
+    // the same floor as home skips any other label, so no group is ever named
+    // after a medium or a raw tag; medium stays with the gate above.
     // The two surfaces must not disagree about what a rail means.
-    for label in
+    for (label, rail_label) in
         canonical_affinity_labels_for_profile(items, &library_profile.theme_labels, "theme")
+            .into_iter()
+            .filter_map(|label| {
+                discovery_rail_label(DiscoveryRailLabelFamily::Theme, &label)
+                    .map(|entry| (label, entry))
+            })
     {
         if groups.len() >= max_groups {
             return;
@@ -379,6 +387,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::ThemeAffinity,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: Some(label),
+                label_key: Some(rail_label.key.to_string()),
                 total_count: None,
             },
             section_items,
@@ -389,8 +398,13 @@ pub(super) fn catalog_personalized_groups(
         }
     }
 
-    for label in
+    for (label, rail_label) in
         canonical_affinity_labels_for_profile(items, &library_profile.genre_labels, "genre")
+            .into_iter()
+            .filter_map(|label| {
+                discovery_rail_label(DiscoveryRailLabelFamily::Genre, &label)
+                    .map(|entry| (label, entry))
+            })
     {
         if groups.len() >= max_groups {
             return;
@@ -415,6 +429,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::GenreAffinity,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: Some(label),
+                label_key: Some(rail_label.key.to_string()),
                 total_count: None,
             },
             section_items,
@@ -438,6 +453,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::CompleteCollection,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: None,
+                label_key: None,
                 total_count: None,
             },
             section_items,
@@ -457,6 +473,7 @@ pub(super) fn catalog_personalized_groups(
                 kind: CatalogDiscoveryGroupKind::Fallback,
                 surface: CatalogDiscoverySurface::Personalized,
                 label_value: None,
+                label_key: None,
                 total_count: None,
             },
             section_items,
@@ -473,6 +490,7 @@ pub(super) struct CatalogDiscoveryGroupDraft {
     kind: CatalogDiscoveryGroupKind,
     surface: CatalogDiscoverySurface,
     label_value: Option<String>,
+    label_key: Option<String>,
     total_count: Option<i64>,
 }
 
@@ -505,6 +523,7 @@ pub(super) fn catalog_group_excluding_emitted(
         kind: draft.kind,
         surface: draft.surface,
         label_value: draft.label_value,
+        label_key: draft.label_key,
         total_count: draft.total_count.unwrap_or(available_count),
         items,
     })
@@ -1169,7 +1188,7 @@ pub(super) fn theme_affinity_signal_qualifies(
         .strip_prefix("affinity:theme:")
         .unwrap_or("");
     signal.category == "theme"
-        && affinity_value_matches_label(key, label_key)
+        && discovery_rail_label_signal_matches(DiscoveryRailLabelFamily::Theme, label_key, key)
         && signal.rail_eligible
 }
 

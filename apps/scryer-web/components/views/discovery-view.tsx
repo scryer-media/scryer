@@ -37,7 +37,7 @@ import {
   HERO_RAIL_PREFERRED_SECTION_TYPE,
   NEW_ON_PHYSICAL_SECTION_TYPE,
   NEW_ON_STREAMING_SECTION_TYPE,
-  discoveryRailLabelTitleKey,
+  discoveryRailLabelTitle,
   discoverySectionType,
   orderDiscoveryHomeSectionsDetailed,
   sectionIsPublicPromotion,
@@ -250,12 +250,11 @@ function sectionDisplayTitle(
   // A "because you like" rail names its label by key; a key this client does
   // not know yet falls back to the server's English title.
   if (section.labelKey) {
-    const labelKey = discoveryRailLabelTitleKey(section.labelKey);
-    const label = t(labelKey);
-    if (label && label !== labelKey) {
-      return label;
-    }
-    return section.title || t("discovery.section.recommended");
+    return (
+      discoveryRailLabelTitle(section.labelKey, t) ||
+      section.title ||
+      t("discovery.section.recommended")
+    );
   }
   const key = SECTION_DISPLAY_NAME_KEYS[discoverySectionType(section)];
   if (key) {

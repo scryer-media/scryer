@@ -323,6 +323,11 @@ pub struct CatalogDiscoveryGroupPayload {
     pub surface: CatalogDiscoverySurfaceValue,
     /// Optional label value, such as a genre or theme key.
     pub label_value: Option<String>,
+    /// Rail-label key a genre or theme affinity group is named after, in
+    /// canonical hyphenated form such as `coming-of-age`; null for every other
+    /// group. Clients translate the key and fall back to `labelValue` for a key
+    /// they do not know.
+    pub label_key: Option<String>,
     /// Total matching items before the returned item page is applied.
     pub total_count: Long,
     /// Items returned for this group.

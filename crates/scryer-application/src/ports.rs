@@ -384,6 +384,10 @@ pub struct CatalogDiscoveryGroup {
     pub kind: CatalogDiscoveryGroupKind,
     pub surface: CatalogDiscoverySurface,
     pub label_value: Option<String>,
+    /// The allowlisted rail label a genre or theme affinity group is named
+    /// after (`coming-of-age`); `None` for every other group. Clients translate
+    /// it and fall back to `label_value`.
+    pub label_key: Option<String>,
     pub total_count: i64,
     pub items: Vec<DiscoveryItemRecord>,
 }
