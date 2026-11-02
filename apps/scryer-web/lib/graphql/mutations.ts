@@ -935,6 +935,8 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -976,6 +978,8 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView
@@ -1016,6 +1020,8 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView

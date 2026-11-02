@@ -4894,6 +4894,10 @@ pub struct UiSettings {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4917,6 +4921,10 @@ pub struct UiSettingsUpdate {
     pub high_contrast_mode: bool,
     pub reduce_motion: bool,
     pub hide_sponsor_button: bool,
+    /// Discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
@@ -4938,6 +4946,8 @@ impl UiSettings {
             high_contrast_mode: false,
             reduce_motion: false,
             hide_sponsor_button: false,
+            discovery_grid_hide_owned: true,
+            discovery_grid_hide_requested: false,
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),

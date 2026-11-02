@@ -144,6 +144,13 @@ ${DISCOVERY_HOME_SECTION_FIELDS}
     completeCollection {
 ${DISCOVERY_HOME_SECTION_FIELDS}
     }
+    browseLabels {
+      family
+      labelKey
+      sectionId
+      title
+      itemCount
+    }
   }
 }`;
 
@@ -161,6 +168,17 @@ export const discoveryItemsQuery = `query DiscoveryItems($input: DiscoveryItemsI
     canViewPersonalized
     items {
 ${DISCOVERY_ITEM_FIELDS}
+    }
+  }
+}`;
+
+export const discoverySectionPageQuery = `query DiscoverySectionPage($input: DiscoveryItemsInput) {
+  discoveryItems(input: $input) {
+    totalCount
+    canViewPersonalized
+    section {
+${DISCOVERY_HOME_SECTION_FIELDS}
+      generationIds
     }
   }
 }`;
@@ -3082,6 +3100,8 @@ export const myUiSettingsQuery = `query MyUiSettings {
     highContrastMode
     reduceMotion
     hideSponsorButton
+    discoveryGridHideOwned
+    discoveryGridHideRequested
     density
     sidebarMode
     defaultLandingView

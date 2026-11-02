@@ -6979,6 +6979,60 @@ async fn migration_0317_drops_saved_glow_preferences_and_keeps_the_rest() {
 }
 
 #[tokio::test]
+async fn migration_0320_adds_discovery_grid_preferences_with_their_defaults() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("discovery-grid-0320.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+    let mut conn = pool.acquire().await.expect("discovery grid connection");
+
+    // Replay the migration over a stored preference row written before it.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+    for statement in [
+        "ALTER TABLE user_ui_settings DROP COLUMN discovery_grid_hide_owned",
+        "ALTER TABLE user_ui_settings DROP COLUMN discovery_grid_hide_requested",
+    ] {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("drop the 0320 column");
+    }
+    sqlx::query(
+        "INSERT INTO user_ui_settings (user_id, hide_sponsor_button, reduce_motion)
+         VALUES ('user-grid-existing', 1, 0)",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed a saved preference row");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0320_user_ui_discovery_grid.sql"
+    ))
+    .execute(&mut *conn)
+    .await
+    .expect("0320 should apply");
+
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT user_id, hide_sponsor_button, discovery_grid_hide_owned,
+                discovery_grid_hide_requested
+           FROM user_ui_settings ORDER BY user_id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .expect("read preferences");
+    assert_eq!(rows, vec![("user-grid-existing".to_string(), 1, 1, 0)]);
+}
+
+#[tokio::test]
 async fn migration_0307_removes_operator_keeps_and_nothing_else() {
     let directory = tempfile::tempdir().expect("synthetic schema fixture");
     let services = SqliteServices::new(directory.path().join("keeps-0307.db").to_string_lossy())

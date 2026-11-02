@@ -26,7 +26,7 @@ use super::normalize_discovery_affinity_key;
 /// The canonical family a rail label belongs to. A key is only a label in its
 /// own family: a theme tag that happens to be named "Horror" is not the
 /// `horror` genre.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum DiscoveryRailLabelFamily {
     Genre,
     Theme,
@@ -67,84 +67,158 @@ pub(crate) struct DiscoveryRailLabel {
     /// The English rail title. Clients that know the key translate it; the
     /// rest read this.
     pub(crate) title: &'static str,
+    /// The English noun a "browse by" card is titled with. Equal to the web's
+    /// `discovery.browseBy.<key>` text, which a test here keeps in step.
+    pub(crate) browse_noun: &'static str,
 }
 
-const fn genre(key: &'static str, title: &'static str) -> DiscoveryRailLabel {
+const fn genre(
+    key: &'static str,
+    title: &'static str,
+    browse_noun: &'static str,
+) -> DiscoveryRailLabel {
     DiscoveryRailLabel {
         key,
         family: DiscoveryRailLabelFamily::Genre,
         signal_slug: key,
         title,
+        browse_noun,
     }
 }
 
-const fn theme(key: &'static str, title: &'static str) -> DiscoveryRailLabel {
-    theme_with_signal(key, key, title)
+const fn theme(
+    key: &'static str,
+    title: &'static str,
+    browse_noun: &'static str,
+) -> DiscoveryRailLabel {
+    theme_with_signal(key, key, title, browse_noun)
 }
 
 const fn theme_with_signal(
     key: &'static str,
     signal_slug: &'static str,
     title: &'static str,
+    browse_noun: &'static str,
 ) -> DiscoveryRailLabel {
     DiscoveryRailLabel {
         key,
         family: DiscoveryRailLabelFamily::Theme,
         signal_slug,
         title,
+        browse_noun,
     }
 }
 
 pub(crate) const DISCOVERY_RAIL_LABELS: &[DiscoveryRailLabel] = &[
-    genre("action", "Because you like action"),
-    genre("adventure", "Because you like adventure"),
-    genre("comedy", "Because you like comedy"),
-    genre("crime", "Because you like crime"),
-    genre("documentary", "Because you like documentaries"),
-    genre("drama", "Because you like drama"),
-    genre("family", "Because you like family favorites"),
-    genre("fantasy", "Because you like fantasy"),
-    genre("history", "Because you like history"),
-    genre("horror", "Because you like horror"),
-    genre("mystery", "Because you like mysteries"),
-    genre("romance", "Because you like romance"),
-    genre("science-fiction", "Because you like science fiction"),
-    genre("thriller", "Because you like thrillers"),
-    genre("war", "Because you like war stories"),
-    genre("western", "Because you like westerns"),
-    genre("sports", "Because you like sports stories"),
-    genre("supernatural", "Because you like the supernatural"),
-    theme("coming-of-age", "Because you like coming-of-age stories"),
-    theme("found-family", "Because you like found families"),
-    theme("revenge", "Because you like revenge stories"),
-    theme("heist", "Because you like heists"),
-    theme("time-travel", "Because you like time travel"),
-    theme("dystopia", "Because you like dystopias"),
-    theme("cyberpunk", "Because you like cyberpunk"),
-    theme("superhero", "Because you like superheroes"),
-    theme("vampire", "Because you like vampires"),
-    theme("zombie", "Because you like zombies"),
-    theme("survival", "Because you like survival stories"),
-    theme("space", "Because you like space adventures"),
-    theme("detective", "Because you like detective stories"),
-    theme("organized-crime", "Because you like organized crime"),
-    theme("period-drama", "Because you like period dramas"),
-    theme("psychological", "Because you like psychological stories"),
-    theme("mythology", "Because you like mythology"),
-    theme("isekai", "Because you like isekai"),
-    theme("mecha", "Because you like mecha"),
-    theme("martial-arts", "Because you like martial arts"),
-    theme("music", "Because you like music stories"),
-    theme("workplace", "Because you like workplace stories"),
-    theme("medical", "Because you like medical dramas"),
-    theme("military", "Because you like military stories"),
-    theme("spy", "Because you like spy stories"),
-    theme("royal-politics", "Because you like royal intrigue"),
-    theme("first-love", "Because you like first-love stories"),
-    theme("forbidden-love", "Because you like forbidden love"),
-    theme_with_signal("lgbtq", "lgbt", "Because you like LGBTQ+ stories"),
-    theme("samurai", "Because you like samurai"),
-    theme("magical-girl", "Because you like magical girls"),
+    genre("action", "Because you like action", "Action"),
+    genre("adventure", "Because you like adventure", "Adventure"),
+    genre("comedy", "Because you like comedy", "Comedy"),
+    genre("crime", "Because you like crime", "Crime"),
+    genre(
+        "documentary",
+        "Because you like documentaries",
+        "Documentaries",
+    ),
+    genre("drama", "Because you like drama", "Drama"),
+    genre("family", "Because you like family favorites", "Family"),
+    genre("fantasy", "Because you like fantasy", "Fantasy"),
+    genre("history", "Because you like history", "History"),
+    genre("horror", "Because you like horror", "Horror"),
+    genre("mystery", "Because you like mysteries", "Mystery"),
+    genre("romance", "Because you like romance", "Romance"),
+    genre(
+        "science-fiction",
+        "Because you like science fiction",
+        "Science Fiction",
+    ),
+    genre("thriller", "Because you like thrillers", "Thrillers"),
+    genre("war", "Because you like war stories", "War"),
+    genre("western", "Because you like westerns", "Westerns"),
+    genre("sports", "Because you like sports stories", "Sports"),
+    genre(
+        "supernatural",
+        "Because you like the supernatural",
+        "Supernatural",
+    ),
+    theme(
+        "coming-of-age",
+        "Because you like coming-of-age stories",
+        "Coming of Age",
+    ),
+    theme(
+        "found-family",
+        "Because you like found families",
+        "Found Family",
+    ),
+    theme("revenge", "Because you like revenge stories", "Revenge"),
+    theme("heist", "Because you like heists", "Heists"),
+    theme("time-travel", "Because you like time travel", "Time Travel"),
+    theme("dystopia", "Because you like dystopias", "Dystopia"),
+    theme("cyberpunk", "Because you like cyberpunk", "Cyberpunk"),
+    theme("superhero", "Because you like superheroes", "Superheroes"),
+    theme("vampire", "Because you like vampires", "Vampires"),
+    theme("zombie", "Because you like zombies", "Zombies"),
+    theme("survival", "Because you like survival stories", "Survival"),
+    theme("space", "Because you like space adventures", "Space"),
+    theme(
+        "detective",
+        "Because you like detective stories",
+        "Detectives",
+    ),
+    theme(
+        "organized-crime",
+        "Because you like organized crime",
+        "Organized Crime",
+    ),
+    theme(
+        "period-drama",
+        "Because you like period dramas",
+        "Period Dramas",
+    ),
+    theme(
+        "psychological",
+        "Because you like psychological stories",
+        "Psychological",
+    ),
+    theme("mythology", "Because you like mythology", "Mythology"),
+    theme("isekai", "Because you like isekai", "Isekai"),
+    theme("mecha", "Because you like mecha", "Mecha"),
+    theme(
+        "martial-arts",
+        "Because you like martial arts",
+        "Martial Arts",
+    ),
+    theme("music", "Because you like music stories", "Music"),
+    theme(
+        "workplace",
+        "Because you like workplace stories",
+        "Workplace",
+    ),
+    theme("medical", "Because you like medical dramas", "Medical"),
+    theme("military", "Because you like military stories", "Military"),
+    theme("spy", "Because you like spy stories", "Spies"),
+    theme(
+        "royal-politics",
+        "Because you like royal intrigue",
+        "Royal Intrigue",
+    ),
+    theme(
+        "first-love",
+        "Because you like first-love stories",
+        "First Love",
+    ),
+    theme(
+        "forbidden-love",
+        "Because you like forbidden love",
+        "Forbidden Love",
+    ),
+    theme_with_signal("lgbtq", "lgbt", "Because you like LGBTQ+ stories", "LGBTQ+"),
+    theme("samurai", "Because you like samurai", "Samurai"),
+    theme(
+        "magical-girl",
+        "Because you like magical girls",
+        "Magical Girls",
+    ),
 ];
 
 /// The allowlisted rail label a canonical label names in `family`, if any.
@@ -322,5 +396,20 @@ mod tests {
                 .insert(entry.key.to_string());
         }
         assert_eq!(contract, expected);
+    }
+
+    #[test]
+    fn browse_nouns_match_the_web_browse_strings() {
+        let locale = include_str!("../../../../apps/scryer-web/lib/i18n/locales/en.ts");
+        for entry in DISCOVERY_RAIL_LABELS {
+            let line = format!(
+                "\"discovery.browseBy.{}\": \"{}\",",
+                entry.key, entry.browse_noun
+            );
+            assert!(
+                locale.lines().any(|candidate| candidate.trim() == line),
+                "en.ts must carry {line}"
+            );
+        }
     }
 }

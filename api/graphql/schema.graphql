@@ -3890,6 +3890,49 @@ input DiscoverEmbyConnectServersInput {
 }
 
 """
+Label family a browse card lists titles under.
+"""
+enum DiscoveryBrowseLabelFamilyValue {
+	"""
+	A canonical genre.
+	"""
+	GENRE
+	"""
+	A canonical theme.
+	"""
+	THEME
+}
+
+"""
+One "browse by" card: an allowlisted genre or theme the caller's
+personalized pool holds enough titles of to open as a section.
+"""
+type DiscoveryBrowseLabelPayload {
+	"""
+	Whether the card lists a genre or a theme.
+	"""
+	family: DiscoveryBrowseLabelFamilyValue!
+	"""
+	Canonical hyphenated label key, such as `coming-of-age`. Clients
+	translate the key and fall back to `title` for a key they do not know.
+	"""
+	labelKey: String!
+	"""
+	Section id to pass to `discoveryItems.sectionId`.
+	"""
+	sectionId: String!
+	"""
+	English card title.
+	"""
+	title: String!
+	"""
+	Titles under the label in the home's candidate pool. The section reads
+	a deeper pool, so it can list more than this.
+	"""
+	itemCount: Long!
+}
+
+"""
 Content certification for one country and release type.
 """
 type DiscoveryContentCertificationPayload {
@@ -4077,6 +4120,11 @@ type DiscoveryHomeCardsPayload {
 	Complete-collection card section, or null when none is available.
 	"""
 	completeCollection: DiscoveryHomeSectionPayload
+	"""
+	"Browse by" genre and theme cards, in allowlist order; empty when
+	personalized results are unavailable.
+	"""
+	browseLabels: [DiscoveryBrowseLabelPayload!]!
 	"""
 	Whether the caller may view personalized cards.
 	"""
@@ -4286,6 +4334,11 @@ type DiscoveryHomePayload {
 	"""
 	facets: [DiscoveryFacetPayload!]!
 	"""
+	"Browse by" genre and theme cards, in allowlist order; empty when
+	personalized results are unavailable.
+	"""
+	browseLabels: [DiscoveryBrowseLabelPayload!]!
+	"""
 	Whether the caller may view personalized results.
 	"""
 	canViewPersonalized: Boolean!
@@ -4326,6 +4379,12 @@ type DiscoveryHomeSectionPayload {
 	Items returned for this section, possibly fewer than the total.
 	"""
 	items: [DiscoveryHomeCardPayload!]!
+	"""
+	Discovery generations a section page was composed from. Empty on the
+	home. A client paging a section restarts from the first page when
+	these change between pages.
+	"""
+	generationIds: [String!]!
 }
 
 """
@@ -4564,6 +4623,35 @@ input DiscoveryItemsInput {
 	Zero-based offset; defaults to 0 and negative values become 0.
 	"""
 	offset: Int
+	"""
+	Page one discovery home section in full instead of listing items.
+	With the same `sectionRailLimit`, home filters and `includeOwned` as
+	the home and the default sort, the first `sectionRailLimit` items are
+	the rail as the dashboard renders it, after titles earlier rails
+	showed. When set, only `includeOwned`, `includeUnresolved`, `limit`,
+	`offset` and the section fields below apply. A blank id is refused;
+	an unknown or empty section returns no items and no section.
+	"""
+	sectionId: String
+	"""
+	The home's `limitPerSection` the section was opened from; defaults to
+	25 and must be between 1 and 100. It must match the home for the
+	first page to match the rail.
+	"""
+	sectionRailLimit: Int
+	"""
+	Home filters applied to the section, validated as on the home.
+	"""
+	homeFilters: DiscoveryHomeFiltersInput
+	"""
+	Section ordering; defaults to `RELEVANCE`, the rail's own order.
+	"""
+	sort: DiscoverySectionSortValue
+	"""
+	Drop titles with a pending media request in a readable library;
+	defaults to false.
+	"""
+	hideRequested: Boolean
 }
 
 """
@@ -4582,6 +4670,11 @@ type DiscoveryItemsPayload {
 	Whether the caller may view personalized results.
 	"""
 	canViewPersonalized: Boolean!
+	"""
+	The paged section when `sectionId` was requested and found: its
+	identity, total and this page's items as cards. Null otherwise.
+	"""
+	section: DiscoveryHomeSectionPayload
 }
 
 """
@@ -4619,6 +4712,33 @@ type DiscoverySectionPayload {
 	Items returned for this section.
 	"""
 	items: [DiscoveryItemPayload!]!
+}
+
+"""
+Ordering of a paged discovery section. Every order other than relevance
+falls back to relevance on ties.
+"""
+enum DiscoverySectionSortValue {
+	"""
+	The section's own order, as the home rail shows it.
+	"""
+	RELEVANCE
+	"""
+	Most popular first.
+	"""
+	POPULARITY
+	"""
+	Highest rated first.
+	"""
+	RATING
+	"""
+	Newest release year first; titles without a year last.
+	"""
+	RELEASE_DATE
+	"""
+	Alphabetical by sort title.
+	"""
+	TITLE
 }
 
 """
@@ -19437,7 +19557,7 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, discovery_grid_hide_owned, discovery_grid_hide_requested, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
 	): UiSettingsPayload!
@@ -29253,6 +29373,16 @@ input SetMyUiSettingsInput {
 	"""
 	hideSponsorButton: Boolean!
 	"""
+	Whether discovery section grids leave out titles already in a library;
+	omitted or null preserves the saved value.
+	"""
+	discoveryGridHideOwned: Boolean
+	"""
+	Whether discovery section grids leave out titles with a pending
+	request; omitted or null preserves the saved value.
+	"""
+	discoveryGridHideRequested: Boolean
+	"""
 	Selected density.
 	"""
 	density: UiDensityValue!
@@ -32885,6 +33015,14 @@ type UiSettingsPayload {
 	Whether the sponsor button is hidden.
 	"""
 	hideSponsorButton: Boolean!
+	"""
+	Whether discovery section grids leave out titles already in a library.
+	"""
+	discoveryGridHideOwned: Boolean!
+	"""
+	Whether discovery section grids leave out titles with a pending request.
+	"""
+	discoveryGridHideRequested: Boolean!
 	"""
 	Selected density.
 	"""

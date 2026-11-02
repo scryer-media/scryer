@@ -486,6 +486,10 @@ pub struct UiSettingsPayload {
     pub reduce_motion: bool,
     /// Whether the sponsor button is hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library.
+    pub discovery_grid_hide_owned: bool,
+    /// Whether discovery section grids leave out titles with a pending request.
+    pub discovery_grid_hide_requested: bool,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
@@ -589,6 +593,12 @@ pub struct SetMyUiSettingsInput {
     pub reduce_motion: bool,
     /// Whether the sponsor button should be hidden.
     pub hide_sponsor_button: bool,
+    /// Whether discovery section grids leave out titles already in a library;
+    /// omitted or null preserves the saved value.
+    pub discovery_grid_hide_owned: Option<bool>,
+    /// Whether discovery section grids leave out titles with a pending
+    /// request; omitted or null preserves the saved value.
+    pub discovery_grid_hide_requested: Option<bool>,
     /// Selected density.
     pub density: UiDensityValue,
     /// Selected sidebar mode.
