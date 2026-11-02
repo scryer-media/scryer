@@ -2194,7 +2194,14 @@ export const queueStandbyReleaseMutation = `mutation QueueStandbyRelease($id: ID
       titleName
       state
     }
-    reason
+    cancelFailed {
+      downloadClientId
+      downloadClientType
+      downloadClientItemId
+      sourceTitle
+      titleName
+      state
+    }
   }
 }`;
 

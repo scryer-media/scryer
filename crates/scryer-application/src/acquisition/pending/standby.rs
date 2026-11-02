@@ -21,33 +21,6 @@ fn needs_confirmation(
                 .any(|item| !confirmed.contains(&locator(item))))
 }
 
-/// Whether a fresh client read proves the conflict no longer runs.
-///
-/// Only the live queue counts. A client may keep the cancelled job in its
-/// history under the same id (Weaver archives it as a failed row), and
-/// Sonarr's `QueueSpecification` likewise reads only the live queue. A row in
-/// a non-blocking state (completed, failed) is therefore not a running job.
-fn cancellation_confirmed(
-    snapshot: &DownloadClientSnapshotOutcome,
-    conflict: &SubmissionScopeConflict,
-) -> bool {
-    let identity = locator(conflict);
-    let authoritative = identity.client_id.as_ref().map_or(
-        snapshot.any_client_read_succeeded && snapshot.failed_client_ids.is_empty(),
-        |id| snapshot.authoritative_client_ids.contains(id),
-    );
-    authoritative
-        && !snapshot.items.iter().any(|item| {
-            item.download_client_item_id == identity.item_id
-                && item.client_type == identity.client_type
-                && identity
-                    .client_id
-                    .as_ref()
-                    .is_none_or(|id| id == &item.client_id)
-                && crate::catalog::workflow::queue_state_blocks_submission(item.state)
-        })
-}
-
 impl AppUseCase {
     /// Queue a saved release without searching or trusting browser-supplied release facts.
     ///
@@ -172,14 +145,15 @@ impl AppUseCase {
                 ..Default::default()
             });
         }
-        if choice == StandbyQueueChoice::CancelAndQueue && !conflicts.is_empty() {
-            if let Some(partial) = self
-                .cancel_standby_conflicts(&pr.title_id, &conflicts)
-                .await?
-            {
-                return Ok(partial);
-            }
-        }
+        // Best effort, as Sonarr's queue removal: ask each client to cancel,
+        // settle locally, and queue without waiting for the clients to act.
+        let (cancelled, cancel_failed) =
+            if choice == StandbyQueueChoice::CancelAndQueue && !conflicts.is_empty() {
+                self.cancel_standby_conflicts(&pr.title_id, conflicts)
+                    .await?
+            } else {
+                (Vec::new(), Vec::new())
+            };
         match self
             .grab_admitted_pending_release(
                 &wanted,
@@ -193,7 +167,9 @@ impl AppUseCase {
         {
             PendingGrabOutcome::Grabbed { .. } => Ok(StandbyQueueOutcome {
                 grabbed: true,
-                ..Default::default()
+                conflicts: Vec::new(),
+                cancelled,
+                cancel_failed,
             }),
             _ => Err(AppError::validation_refused(
                 refusal::NOT_QUEUEABLE,
@@ -207,7 +183,8 @@ impl AppUseCase {
     /// A submission row whose client is disabled, removed or unreachable is
     /// not a live conflict: nothing can be confirmed or cancelled there, and
     /// the canonical submission path treats an answering client's silence the
-    /// same way.
+    /// same way. When no client can be read at all there is nothing to
+    /// cancel, so the release queues as if nothing else were running.
     async fn live_standby_conflicts(
         &self,
         title: &Title,
@@ -223,18 +200,20 @@ impl AppUseCase {
         }
         let guards = &self.runtime.acquisition.download_submission_guards;
         let generation = guards.client_snapshot_generation();
-        let snapshot = self
+        let snapshot = match self
             .services
             .integrations
             .download_client
             .list_snapshot_outcome_excluding_client_types(100, &[])
-            .await?;
-        if !snapshot.any_client_read_succeeded {
-            return Err(AppError::validation_refused(
-                refusal::CANCELLATION_UNCONFIRMED,
-                "The current download queue could not be verified",
-            ));
-        }
+            .await
+        {
+            Ok(snapshot) if snapshot.any_client_read_succeeded => snapshot,
+            Ok(_) => return Ok(vec![]),
+            Err(error) => {
+                tracing::warn!(error = %error, "standby: download queue could not be read");
+                return Ok(vec![]);
+            }
+        };
         // Canonical deduplication must see the same fresh client failures
         // as this confirmation pass, rather than an older cached queue.
         guards.store_client_snapshot(generation, snapshot.clone());
@@ -273,35 +252,33 @@ impl AppUseCase {
         )
     }
 
-    /// Cancel every conflict, all-or-nothing as far as the clients allow.
+    /// Ask each conflict's client to cancel it, without waiting to see it go.
     ///
-    /// Nothing is cancelled unless every conflict is still replaceable: a job
-    /// that is verifying, extracting or waiting for import is never displaced
-    /// (Sonarr's queue never lets a grab displace an importing item). Local
-    /// rows are dropped only for jobs a fresh read of the live queue confirms
-    /// gone. Returns `Some` outcome when cancellation stopped part-way, naming
-    /// what was cancelled and what still runs; the release is then not queued.
+    /// Cancellation is best effort, whatever the conflict's state: most
+    /// clients ignore a cancel during post-processing, and Sonarr's queue
+    /// removal likewise issues the client delete and moves on. A conflict
+    /// whose client took the request is settled locally at once; one whose
+    /// request failed keeps running and stays tracked. Returns the cancelled
+    /// and the failed conflicts, in that order.
     async fn cancel_standby_conflicts(
         &self,
         title_id: &str,
-        conflicts: &[SubmissionScopeConflict],
-    ) -> AppResult<Option<StandbyQueueOutcome>> {
-        if conflicts.iter().any(|conflict| !conflict.replaceable) {
-            return Err(AppError::validation_refused(
-                refusal::CONFLICT_NOT_REPLACEABLE,
-                "A conflicting download is already being processed and cannot be cancelled",
-            ));
-        }
+        conflicts: Vec<SubmissionScopeConflict>,
+    ) -> AppResult<(Vec<SubmissionScopeConflict>, Vec<SubmissionScopeConflict>)> {
         let _location = self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
                 title_id,
             )
             .await?;
-        let mut requested = Vec::new();
+        let mut cancelled = Vec::new();
+        let mut failed = Vec::new();
         for conflict in conflicts {
-            match self.cancel_conflict_in_client(conflict).await {
-                Ok(()) => requested.push(conflict),
+            match self.cancel_conflict_in_client(&conflict).await {
+                Ok(()) => {
+                    self.settle_cancelled_conflict(&conflict).await?;
+                    cancelled.push(conflict);
+                }
                 Err(error) => {
                     tracing::warn!(
                         error = %error,
@@ -309,57 +286,10 @@ impl AppUseCase {
                         item_id = conflict.download_client_item_id.as_str(),
                         "standby: conflicting download could not be cancelled"
                     );
-                    break;
+                    failed.push(conflict);
                 }
             }
         }
-        let cancelled: Vec<&SubmissionScopeConflict> = if requested.is_empty() {
-            Vec::new()
-        } else {
-            // Do not discard a binding or submit a replacement on an ambiguous delete.
-            match self
-                .services
-                .integrations
-                .download_client
-                .list_snapshot_outcome_excluding_client_types(100, &[])
-                .await
-            {
-                Ok(snapshot) => requested
-                    .into_iter()
-                    .filter(|conflict| cancellation_confirmed(&snapshot, conflict))
-                    .collect(),
-                Err(error) => {
-                    tracing::warn!(error = %error, "standby: cancellation could not be confirmed");
-                    Vec::new()
-                }
-            }
-        };
-        for conflict in &cancelled {
-            self.settle_cancelled_conflict(conflict).await?;
-        }
-        if cancelled.len() == conflicts.len() {
-            return Ok(None);
-        }
-        if cancelled.is_empty() {
-            return Err(AppError::validation_refused(
-                refusal::CANCELLATION_UNCONFIRMED,
-                "Cancellation has not been confirmed; the saved release was not queued",
-            ));
-        }
-        let remaining = conflicts
-            .iter()
-            .filter(|conflict| {
-                !cancelled
-                    .iter()
-                    .any(|done| locator(done) == locator(conflict))
-            })
-            .cloned()
-            .collect();
-        Ok(Some(StandbyQueueOutcome {
-            grabbed: false,
-            conflicts: remaining,
-            cancelled: cancelled.into_iter().cloned().collect(),
-            refusal: Some(refusal::CANCELLATION_INCOMPLETE),
-        }))
+        Ok((cancelled, failed))
     }
 }

@@ -20,6 +20,26 @@ fn identities(conflicts: &[SubmissionScopeConflict]) -> Vec<ClientJobLocator> {
         .collect()
 }
 
+fn item_ids(conflicts: &[SubmissionScopeConflict]) -> Vec<&str> {
+    conflicts
+        .iter()
+        .map(|item| item.download_client_item_id.as_str())
+        .collect()
+}
+
+async fn row_ids(f: &Fixture) -> Vec<String> {
+    f.app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_title(&f.title.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.download_client_item_id)
+        .collect()
+}
+
 struct Fixture {
     app: AppUseCase,
     actor: User,
@@ -108,17 +128,6 @@ impl Fixture {
             })
             .await
             .unwrap();
-    }
-
-    async fn rows(&self) -> usize {
-        self.app
-            .services
-            .workflow
-            .download_submissions
-            .list_for_title(&self.title.id)
-            .await
-            .unwrap()
-            .len()
     }
 
     async fn queue(
@@ -268,22 +277,37 @@ async fn standby_queue_cancel_preserves_unrelated_downloads_and_files() {
 }
 
 #[tokio::test]
-async fn standby_queue_failed_or_unresolved_cancel_never_submits() {
+async fn standby_queue_cancel_is_best_effort_and_always_queues() {
     for fail in [false, true] {
+        // The client keeps the job listed after a cancel, the way most
+        // clients do while post-processing, or refuses the cancel outright.
         let f = Fixture::new(false).await;
         f.conflict("first", &f.title.id).await;
         let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
         if fail {
             f.client.set_delete_error(Some("synthetic refusal")).await;
         }
-        assert_refused(
-            f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
-                .await,
-            reason::CANCELLATION_UNCONFIRMED,
-        );
-        assert!(f.client.submitted_release_titles.lock().await.is_empty());
-        assert_eq!(f.status().await, PendingReleaseStatus::Standby);
-        assert_eq!(f.rows().await, 1);
+        let outcome = f
+            .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+            .await
+            .unwrap();
+        assert!(outcome.grabbed);
+        assert!(outcome.conflicts.is_empty());
+        assert_eq!(f.client.delete_attempts.lock().await.len(), 1);
+        assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+        assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
+        let (cancelled, failed) = if fail {
+            (vec![], vec!["first"])
+        } else {
+            (vec!["first"], vec![])
+        };
+        assert_eq!(item_ids(&outcome.cancelled), cancelled);
+        assert_eq!(item_ids(&outcome.cancel_failed), failed);
+        // A cancel the client took is settled at once without waiting to see
+        // the job go; one it refused keeps its row and stays tracked.
+        let rows = row_ids(&f).await;
+        assert!(rows.iter().any(|id| id != "first"));
+        assert_eq!(rows.iter().any(|id| id == "first"), fail);
     }
 }
 
@@ -449,7 +473,7 @@ async fn standby_queue_concurrent_clicks_submit_once_without_a_durable_claim() {
 }
 
 #[tokio::test]
-async fn standby_queue_refuses_to_cancel_a_download_being_processed() {
+async fn standby_queue_cancels_a_download_being_processed_best_effort() {
     for state in [
         DownloadQueueState::Verifying,
         DownloadQueueState::Extracting,
@@ -460,20 +484,21 @@ async fn standby_queue_refuses_to_cancel_a_download_being_processed() {
         f.conflict_in_state("importing", &f.title.id, state).await;
         let result = f.queue(StandbyQueueChoice::Check, &[]).await.unwrap();
         assert_eq!(result.conflicts.len(), 2);
-        assert_refused(
-            f.queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
-                .await,
-            reason::CONFLICT_NOT_REPLACEABLE,
-        );
-        assert!(f.client.delete_attempts.lock().await.is_empty());
-        assert!(f.client.submitted_release_titles.lock().await.is_empty());
-        assert_eq!(f.rows().await, 2);
-        assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+        let outcome = f
+            .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
+            .await
+            .unwrap();
+        assert!(outcome.grabbed, "{state:?}");
+        assert_eq!(f.client.delete_attempts.lock().await.len(), 2);
+        assert_eq!(outcome.cancelled.len(), 2);
+        assert!(outcome.cancel_failed.is_empty());
+        assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+        assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
     }
 }
 
 #[tokio::test]
-async fn standby_queue_confirms_a_cancel_the_client_keeps_in_history() {
+async fn standby_queue_queues_after_a_cancel_the_client_keeps_in_history() {
     let f = Fixture::with_client(StubDownloadClient {
         remove_queue_item_on_delete: true,
         keep_cancelled_in_history: true,
@@ -510,7 +535,7 @@ async fn standby_queue_ignores_rows_on_clients_that_cannot_be_reached() {
 }
 
 #[tokio::test]
-async fn standby_queue_partial_cancel_reports_what_was_cancelled() {
+async fn standby_queue_partial_cancel_still_queues_and_reports_both_sides() {
     let f = Fixture::new(true).await;
     f.conflict("first", &f.title.id).await;
     f.conflict("second", &f.title.id).await;
@@ -520,42 +545,39 @@ async fn standby_queue_partial_cancel_reports_what_was_cancelled() {
         .delete_refused_ids
         .lock()
         .await
-        .insert("second".into());
-    let partial = f
+        .insert("first".into());
+    let outcome = f
         .queue(StandbyQueueChoice::CancelAndQueue, &result.conflicts)
         .await
         .unwrap();
-    assert!(!partial.grabbed);
-    assert_eq!(partial.refusal, Some(reason::CANCELLATION_INCOMPLETE));
-    assert_eq!(
-        partial
-            .cancelled
-            .iter()
-            .map(|item| item.download_client_item_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["first"]
-    );
-    assert_eq!(
-        partial
-            .conflicts
-            .iter()
-            .map(|item| item.download_client_item_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["second"]
-    );
-    // Only the cancelled job's row is gone; nothing was submitted.
-    let rows = f
-        .app
-        .services
-        .workflow
-        .download_submissions
-        .list_for_title(&f.title.id)
-        .await
-        .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].download_client_item_id, "second");
-    assert!(f.client.submitted_release_titles.lock().await.is_empty());
-    assert_eq!(f.status().await, PendingReleaseStatus::Standby);
+    assert!(outcome.grabbed);
+    assert!(outcome.conflicts.is_empty());
+    // A failed cancel does not stop the later ones.
+    assert_eq!(item_ids(&outcome.cancelled), vec!["second"]);
+    assert_eq!(item_ids(&outcome.cancel_failed), vec!["first"]);
+    let rows = row_ids(&f).await;
+    assert!(rows.iter().any(|id| id == "first"));
+    assert!(rows.iter().all(|id| id != "second"));
+    assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+    assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
+}
+
+#[tokio::test]
+async fn standby_queue_proceeds_when_no_client_can_be_read() {
+    let f = Fixture::new(true).await;
+    f.conflict("first", &f.title.id).await;
+    f.client.set_queue_error(Some("synthetic outage")).await;
+    for choice in [
+        StandbyQueueChoice::Check,
+        StandbyQueueChoice::CancelAndQueue,
+    ] {
+        let outcome = f.queue(choice, &[]).await.unwrap();
+        assert!(outcome.grabbed, "{choice:?}");
+        assert!(outcome.conflicts.is_empty());
+    }
+    assert!(f.client.delete_attempts.lock().await.is_empty());
+    assert_eq!(f.client.submitted_release_titles.lock().await.len(), 1);
+    assert_eq!(f.status().await, PendingReleaseStatus::Grabbed);
 }
 
 #[tokio::test]

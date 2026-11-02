@@ -2110,12 +2110,6 @@ pub mod standby {
     pub const NOT_AVAILABLE: &str = "STANDBY_NOT_AVAILABLE";
     /// Current coverage cannot safely identify what to queue.
     pub const NOT_QUEUEABLE: &str = "STANDBY_NOT_QUEUEABLE";
-    /// The client has not confirmed cancellation or queue visibility.
-    pub const CANCELLATION_UNCONFIRMED: &str = "STANDBY_CANCELLATION_UNCONFIRMED";
-    /// Some conflicting downloads were cancelled, the rest were not, and nothing was queued.
-    pub const CANCELLATION_INCOMPLETE: &str = "STANDBY_CANCELLATION_INCOMPLETE";
-    /// A conflicting download is past the point where it may be cancelled (verifying, extracting, importing).
-    pub const CONFLICT_NOT_REPLACEABLE: &str = "STANDBY_CONFLICT_NOT_REPLACEABLE";
     /// The release is on this title's blocklist.
     pub const RELEASE_BLOCKLISTED: &str = "STANDBY_RELEASE_BLOCKLISTED";
     /// The same release is already active in a download client.
@@ -2127,9 +2121,6 @@ pub mod standby {
         NOT_FOUND,
         NOT_AVAILABLE,
         NOT_QUEUEABLE,
-        CANCELLATION_UNCONFIRMED,
-        CANCELLATION_INCOMPLETE,
-        CONFLICT_NOT_REPLACEABLE,
         RELEASE_BLOCKLISTED,
         ALREADY_ACTIVE,
         TITLE_BUSY,

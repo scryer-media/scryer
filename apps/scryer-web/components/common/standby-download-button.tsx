@@ -11,10 +11,7 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { queueStandbyReleaseMutation } from "@/lib/graphql/mutations";
-import {
-  ERROR_REASON_KEYS,
-  userFacingGraphQlErrorMessage,
-} from "@/lib/graphql/error-message";
+import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import type { PendingReleaseItem } from "@/lib/types";
 
 type Conflict = {
@@ -65,28 +62,22 @@ export function StandbyDownloadButton({
       const result = data?.queueStandbyRelease;
       if (result?.grabbed) {
         setConflicts([]);
-        setGlobalStatus(t("pending.grabbed"));
+        // Cancellation is best effort; the release is queued either way.
+        const notCancelled = result.cancelFailed?.length ?? 0;
+        if (notCancelled > 0) {
+          setGlobalStatus(
+            t("wanted.standbyQueuedCancelFailed", { count: notCancelled }),
+            { level: "WARNING" },
+          );
+        } else {
+          setGlobalStatus(t("pending.grabbed"));
+        }
         try {
           await onQueued();
         } catch {
           setGlobalStatus(t("wanted.standbyQueuedRefreshFailed"), {
             level: "ERROR",
           });
-        }
-      } else if (result?.reason) {
-        // Cancellation stopped part-way: some downloads are gone, the rest
-        // still run, and nothing was queued.
-        const key = ERROR_REASON_KEYS[result.reason];
-        const message = key
-          ? t(key, { count: result.cancelled?.length ?? 0 })
-          : t("status.apiError");
-        setConflicts(result.conflicts ?? []);
-        setErrorMessage(message);
-        setGlobalStatus(message, { level: "ERROR" });
-        try {
-          await onQueued();
-        } catch {
-          // The refusal above is the message that matters.
         }
       } else if (result?.conflicts?.length) {
         setConflicts(result.conflicts);

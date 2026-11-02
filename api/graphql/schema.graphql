@@ -26673,13 +26673,15 @@ type QueueStandbyReleasePayload {
 	"""
 	conflicts: [QueueDownloadConflictPayload!]!
 	"""
-	Conflicts that were cancelled before cancellation stopped part-way.
+	Conflicts whose client accepted the cancel request. Scryer stops
+	tracking them; a client may still finish a job it was post-processing.
 	"""
 	cancelled: [QueueDownloadConflictPayload!]!
 	"""
-	A stable reason code when cancellation stopped part-way and nothing was queued.
+	Conflicts whose cancel request failed. They keep running and stay
+	tracked; the release is queued anyway.
 	"""
-	reason: String
+	cancelFailed: [QueueDownloadConflictPayload!]!
 }
 
 """
@@ -30023,7 +30025,9 @@ enum StandbyQueueChoiceValue {
 	"""
 	QUEUE
 	"""
-	Cancel the confirmed conflicts, then queue.
+	Ask the clients to cancel the confirmed conflicts, then queue without
+	waiting for them to act. Cancellation is best effort: a conflict that is
+	already post-processing may still finish.
 	"""
 	CANCEL_AND_QUEUE
 }

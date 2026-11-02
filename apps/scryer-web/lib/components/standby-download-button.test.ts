@@ -83,19 +83,14 @@ function mount(responses: unknown[], refreshFails = false) {
       DialogDescription: "description",
     },
     "@/lib/context/translate-context": {
-      useTranslate:
-        () => (key: string, values?: Record<string, unknown>) =>
-          values?.count === undefined ? key : `${key}:${values.count}`,
+      useTranslate: () => (key: string, values?: Record<string, unknown>) =>
+        values?.count === undefined ? key : `${key}:${values.count}`,
     },
     "@/lib/context/global-status-context": {
       useGlobalStatus: () => (message: string) => statuses.push(message),
     },
     "@/lib/graphql/mutations": { queueStandbyReleaseMutation: "queue" },
     "@/lib/graphql/error-message": {
-      ERROR_REASON_KEYS: {
-        STANDBY_CANCELLATION_INCOMPLETE:
-          "error.reason.STANDBY_CANCELLATION_INCOMPLETE",
-      },
       userFacingGraphQlErrorMessage: () => "failure",
     },
   };
@@ -298,7 +293,7 @@ test(
 );
 
 test(
-  "standby partial cancellation keeps the remaining conflicts and refreshes",
+  "cancel and queue reports conflicts that could not be cancelled as queued",
   { timeout: 5000 },
   async () => {
     const h = mount([
@@ -313,10 +308,10 @@ test(
       {
         data: {
           queueStandbyRelease: {
-            grabbed: false,
-            conflicts: [conflict("two")],
+            grabbed: true,
+            conflicts: [],
             cancelled: [conflict("one")],
-            reason: "STANDBY_CANCELLATION_INCOMPLETE",
+            cancelFailed: [conflict("two")],
           },
         },
       },
@@ -324,17 +319,9 @@ test(
     await h.click("wanted.downloadStandby");
     await h.click("wanted.standbyCancelAndQueue");
     const tree = h.render();
-    assert.deepEqual(
-      h
-        .elements(tree)
-        .filter((item) => item.type === "li")
-        .map((item) => [item.props.children].flat()[0]),
-      ["Release two"],
-    );
-    assert.equal(
-      h.statuses.at(-1),
-      "error.reason.STANDBY_CANCELLATION_INCOMPLETE:1",
-    );
+    assert.ok(!h.elements(tree).some((item) => item.type === "li"));
+    assert.ok(!h.elements(tree).some((item) => item.props.role === "alert"));
+    assert.equal(h.statuses.at(-1), "wanted.standbyQueuedCancelFailed:1");
     assert.equal(h.refreshed(), 1);
   },
 );

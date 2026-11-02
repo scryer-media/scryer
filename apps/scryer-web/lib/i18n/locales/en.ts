@@ -3256,12 +3256,6 @@ const en: LocaleDictionary = {
     "This saved candidate is no longer available. Refresh the list and try again.",
   "error.reason.STANDBY_NOT_QUEUEABLE":
     "The saved release could not be queued. It remains available to retry.",
-  "error.reason.STANDBY_CANCELLATION_UNCONFIRMED":
-    "The download queue or cancellation could not be confirmed. The saved release was not queued.",
-  "error.reason.STANDBY_CANCELLATION_INCOMPLETE":
-    "{{count}} conflicting download(s) were cancelled, but the rest could not be. The saved release was not queued.",
-  "error.reason.STANDBY_CONFLICT_NOT_REPLACEABLE":
-    "A conflicting download is already verifying, extracting or importing and cannot be cancelled. Nothing was cancelled or queued.",
   "error.reason.STANDBY_RELEASE_BLOCKLISTED":
     "This release is on the title's blocklist. Remove it from the blocklist to queue it.",
   "error.reason.STANDBY_ALREADY_ACTIVE":
@@ -8372,6 +8366,8 @@ const en: LocaleDictionary = {
   "wanted.standbyQueuedRefreshFailed":
     "The release was queued, but the list could not be refreshed. Refresh the page to see the current status.",
   "wanted.standbyCancelAndQueue": "Cancel and queue",
+  "wanted.standbyQueuedCancelFailed":
+    "The release was queued, but {{count}} conflicting download(s) could not be cancelled and are still running.",
   "wanted.standbyRank": "Rank {{rank}}",
   "wanted.standbyIndexer": "Indexer",
   "wanted.standbySize": "Size",

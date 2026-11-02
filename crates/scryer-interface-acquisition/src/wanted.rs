@@ -14,7 +14,9 @@ pub enum StandbyQueueChoiceValue {
     Check,
     /// Queue alongside the confirmed conflicts, leaving them running.
     Queue,
-    /// Cancel the confirmed conflicts, then queue.
+    /// Ask the clients to cancel the confirmed conflicts, then queue without
+    /// waiting for them to act. Cancellation is best effort: a conflict that is
+    /// already post-processing may still finish.
     CancelAndQueue,
 }
 
@@ -36,10 +38,12 @@ pub struct QueueStandbyReleasePayload {
     pub grabbed: bool,
     /// Running downloads of this title that still need the operator's choice.
     pub conflicts: Vec<QueueDownloadConflictPayload>,
-    /// Conflicts that were cancelled before cancellation stopped part-way.
+    /// Conflicts whose client accepted the cancel request. Scryer stops
+    /// tracking them; a client may still finish a job it was post-processing.
     pub cancelled: Vec<QueueDownloadConflictPayload>,
-    /// A stable reason code when cancellation stopped part-way and nothing was queued.
-    pub reason: Option<String>,
+    /// Conflicts whose cancel request failed. They keep running and stay
+    /// tracked; the release is queued anyway.
+    pub cancel_failed: Vec<QueueDownloadConflictPayload>,
 }
 
 /// Shared builder for the media-request approval search outcome. The convergence
@@ -106,7 +110,11 @@ impl WantedMutations {
                 .into_iter()
                 .map(crate::downloads::queue_download_conflict_payload)
                 .collect(),
-            reason: outcome.refusal.map(str::to_string),
+            cancel_failed: outcome
+                .cancel_failed
+                .into_iter()
+                .map(crate::downloads::queue_download_conflict_payload)
+                .collect(),
         })
     }
 

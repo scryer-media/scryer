@@ -878,11 +878,13 @@ pub struct StandbyQueueOutcome {
     pub grabbed: bool,
     /// Live downloads that still need the operator's choice.
     pub conflicts: Vec<SubmissionScopeConflict>,
-    /// Conflicts the client confirmed cancelled before a later one could not
-    /// be; their local rows are gone. Empty unless `refusal` is set.
+    /// Conflicts whose client accepted the cancel request; their local rows
+    /// are gone. Cancellation is best effort: a client may still finish a job
+    /// it was already post-processing.
     pub cancelled: Vec<SubmissionScopeConflict>,
-    /// Set when cancellation stopped part-way and nothing was queued.
-    pub refusal: Option<&'static str>,
+    /// Conflicts whose cancel request the client refused or could not take.
+    /// They keep running and stay tracked; the release was queued anyway.
+    pub cancel_failed: Vec<SubmissionScopeConflict>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
