@@ -24,10 +24,16 @@ import {
   nodeSizesByTitleId,
   targetKeyMatchKeys,
   titleForTargetKey,
+  titleMatchKeys,
   titleIndexByMatchKey,
   titleTargetKey,
 } from "./library-graph-model.ts";
 import { createFixtureLibraryGraphSource } from "./library-graph-source.ts";
+import { buildTitlesQuery } from "../graphql/queries.ts";
+import {
+  titleCatalogProjectionForGraph,
+  titleCatalogProjectionForTable,
+} from "./title-catalog-query.ts";
 
 const dictionary: Record<string, string> = en;
 const t = (
@@ -97,12 +103,22 @@ test("the fixture source answers with the fixture, naming nodes by the given key
   assert.equal(loaded.nodes[1].targetKey, fixtureTargetKey("SERIES", 1));
 });
 
-test("target keys match titles by source and id, with or without the kind", () => {
+test("target keys match titles by source, kind and id", () => {
   assert.deepEqual(targetKeyMatchKeys("TMDB:movie:0042").sort(), [
-    "tmdb:0042",
-    "tmdb:42",
     "tmdb:movie:0042",
+    "tmdb:movie:42",
   ]);
+  // A key without a kind names nothing.
+  assert.deepEqual(targetKeyMatchKeys("tmdb:42"), []);
+  // The same provider id on a series never answers for a movie.
+  const series = fixtureTitle(8, {
+    facet: "SERIES",
+    externalIds: [{ source: "tmdb", value: "123" }],
+  });
+  const seriesIndex = titleIndexByMatchKey([series]);
+  assert.equal(titleForTargetKey("tmdb:movie:123", seriesIndex), null);
+  assert.equal(titleForTargetKey("tmdb:series:123", seriesIndex), series);
+  assert.ok(titleMatchKeys(series).every((key) => key.split(":").length === 3));
   const anime = fixtureTitle(5, {
     facet: "ANIME",
     externalIds: [{ source: "AniList", value: "77" }],
@@ -277,4 +293,144 @@ test("edge kinds read as localized phrases", () => {
     libraryGraphEdgeKindLabels(["semantic", "semantic", "relation:sequel"], t),
     ["Similar", "Sequel"],
   );
+});
+
+type Selection = Map<string, Selection | null>;
+
+// The fields the catalog query selects for each title, nested selections
+// included, read from the query text itself.
+function itemSelection(query: string): Selection {
+  const start = query.indexOf("items {");
+  assert.ok(start >= 0, "query selects no items");
+  const tokens = query
+    .slice(start + "items {".length)
+    .match(/[A-Za-z_][A-Za-z0-9_]*|[{}]/g);
+  assert.ok(tokens);
+  let position = 0;
+  const read = (): Selection => {
+    const selection: Selection = new Map();
+    let last: string | null = null;
+    while (position < tokens.length) {
+      const token = tokens[position++];
+      if (token === "}") {
+        return selection;
+      }
+      if (token === "{") {
+        assert.ok(last);
+        selection.set(last, read());
+        continue;
+      }
+      selection.set(token, null);
+      last = token;
+    }
+    return selection;
+  };
+  return read();
+}
+
+// A row as the server sends it for a query: only the selected fields.
+function project(value: unknown, selection: Selection): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => project(entry, selection));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const row: Record<string, unknown> = {};
+  for (const [field, nested] of selection) {
+    if (field in record) {
+      row[field] = nested ? project(record[field], nested) : record[field];
+    }
+  }
+  return row;
+}
+
+// Everything the server knows about a synthetic title, more than any one
+// query asks for.
+function serverTitle(index: number) {
+  return {
+    id: `title-${index}`,
+    name: `Synthetic Title ${index}`,
+    facet: "MOVIE",
+    libraryId: "library-1",
+    monitored: true,
+    tags: [],
+    slug: `synthetic-title-${index}`,
+    year: 2000 + (index % 20),
+    posterUrl: null,
+    imdbId: `tt${String(9_100_000 + index)}`,
+    externalIds: [
+      { source: "tmdb", kind: "movie", value: String(910_000 + index) },
+    ],
+    popularity: index,
+    ratings: {
+      rating: 5 + (index % 5),
+      ratingSources: ["imdb"],
+      externalRatings: [
+        {
+          source: "imdb",
+          value: "7.0",
+          score: 7,
+          normalized: 0.7,
+          votes: 10 * (index + 1),
+          url: null,
+        },
+      ],
+    },
+    qualityProfileId: "profile-1",
+    rootFolderId: "root-1",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+function catalogRows(query: string, count: number): TitleRecord[] {
+  const selection = itemSelection(query);
+  return Array.from(
+    { length: count },
+    (_, index) => project(serverTitle(index), selection) as TitleRecord,
+  );
+}
+
+test("the graph's catalog query returns rows the graph can join and size", () => {
+  const rows = catalogRows(
+    buildTitlesQuery(titleCatalogProjectionForGraph()),
+    64,
+  );
+  const { graph, titleBySubjectKey } = joinLibraryGraphToTitles(
+    libraryGraphFixture({ facet: "MOVIE" }),
+    rows,
+  );
+  assert.equal(graph.nodes.length, 64);
+  assert.equal(titleBySubjectKey.get(fixtureSubjectKey(5))?.id, "title-5");
+
+  // Ratings come back too, so nodes are not all one size.
+  const sizes = new Set(nodeSizesByTitleId(rows, "ratingEvidence").values());
+  assert.ok(sizes.size > 1);
+  assert.ok(sizes.has(LIBRARY_GRAPH_MAX_NODE_SIZE));
+
+  // The fixture source names its nodes after these rows' target keys.
+  const keys = rows
+    .map((row) => titleTargetKey(row))
+    .filter((key): key is string => key !== null);
+  assert.equal(keys.length, 64);
+});
+
+test("the table's catalog query carries no ids, so it cannot feed the graph", () => {
+  const rows = catalogRows(
+    buildTitlesQuery(
+      titleCatalogProjectionForTable({
+        facet: "movie",
+        visibleColumns: {},
+        sort: { key: "name", direction: "asc" },
+      }),
+    ),
+    8,
+  );
+  assert.ok(rows.every((row) => titleTargetKey(row) === null));
+  const { graph } = joinLibraryGraphToTitles(
+    libraryGraphFixture({ facet: "MOVIE" }),
+    rows,
+  );
+  assert.equal(graph.nodes.length, 0);
 });

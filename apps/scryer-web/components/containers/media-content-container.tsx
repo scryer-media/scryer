@@ -97,6 +97,7 @@ import {
   EMPTY_TITLE_QUICK_FILTERS,
   buildTitleCatalogQueryVariables,
   titleCatalogFilterInput,
+  titleCatalogProjectionForGraph,
   titleCatalogProjectionForTable,
   loadTitleCatalogSelection,
   titleCatalogQueryKey,
@@ -976,7 +977,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
-    if (effectiveViewMode === "poster") {
+    if (effectiveViewMode === "poster" || effectiveViewMode === "graph") {
       return defaultTitleCatalogSortState;
     }
     if (titleCatalogSort.key === "name") {
@@ -992,15 +993,18 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     return titleCatalogSort;
   }, [effectiveViewMode, titleCatalogSort, view, visibleTitleTableColumns]);
   const titleCatalogProjection = React.useMemo(
-    () => ({
-      ...titleCatalogProjectionForTable({
-        facet: activeFacet,
-        visibleColumns:
-          effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
-        sort: effectiveTitleCatalogSort,
-      }),
-      includeSettings: effectiveViewMode !== "poster",
-    }),
+    () =>
+      effectiveViewMode === "graph"
+        ? titleCatalogProjectionForGraph()
+        : {
+            ...titleCatalogProjectionForTable({
+              facet: activeFacet,
+              visibleColumns:
+                effectiveViewMode === "poster" ? {} : visibleTitleTableColumns,
+              sort: effectiveTitleCatalogSort,
+            }),
+            includeSettings: effectiveViewMode !== "poster",
+          },
     [
       activeFacet,
       effectiveTitleCatalogSort,
@@ -2916,7 +2920,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       sessionIds,
     };
     void refreshLoadedCatalogTitlesQuietly({
-      firstPageOnly: effectiveViewMode !== "poster",
+      // The poster grid and the graph show every loaded page, so a scan
+      // refreshes them all; the tables only need their first page.
+      firstPageOnly:
+        effectiveViewMode !== "poster" && effectiveViewMode !== "graph",
     });
   }, [
     effectiveViewMode,

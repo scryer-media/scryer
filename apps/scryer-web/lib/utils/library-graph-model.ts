@@ -51,33 +51,43 @@ function facetSlug(facet: Facet): string {
 }
 
 /**
- * The keys a discovery target key can match a catalog title by: the whole key,
- * and `source:id` when the key reads `source:kind:id`.
+ * The keys a discovery target key can match a catalog title by. Every key
+ * carries the kind, so `tmdb:movie:123` never matches a series with TMDB id
+ * 123; a key without a kind matches nothing.
  */
 export function targetKeyMatchKeys(targetKey: string): string[] {
-  const keys = new Set<string>();
-  const whole = normalizeKey(targetKey);
-  if (whole) {
-    keys.add(whole);
-  }
   const parts = targetKey
     .split(":")
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length >= 3) {
-    const source = normalizeKey(parts[0]);
-    const value = normalizeKey(parts.slice(2).join(":"));
-    if (source && value) {
-      keys.add(`${source}:${value}`);
-      keys.add(`${source}:${canonicalIdValue(value)}`);
-    }
+  if (parts.length < 3) {
+    return [];
   }
-  return Array.from(keys);
+  const source = normalizeKey(parts[0]);
+  const kind = normalizeKey(parts[1]);
+  const value = normalizeKey(parts.slice(2).join(":"));
+  if (!source || !kind || !value) {
+    return [];
+  }
+  return Array.from(
+    new Set([
+      `${source}:${kind}:${value}`,
+      `${source}:${kind}:${canonicalIdValue(value)}`,
+    ]),
+  );
 }
 
-/** The keys a catalog title answers to, from its IMDb id and external ids. */
+/**
+ * The keys a catalog title answers to, from its IMDb id and external ids,
+ * each under the title's own kind. Anime also answers to the series kind,
+ * which is how providers that do not tell anime apart name it.
+ */
 export function titleMatchKeys(title: TitleRecord): string[] {
   const keys = new Set<string>();
+  const kinds =
+    title.facet === "ANIME"
+      ? [facetSlug(title.facet), "series"]
+      : [facetSlug(title.facet)];
   const add = (source: string, rawValue: string | null | undefined) => {
     const normalizedSource = normalizeKey(source);
     const value = normalizeKey(rawValue);
@@ -85,10 +95,8 @@ export function titleMatchKeys(title: TitleRecord): string[] {
       return;
     }
     for (const candidate of new Set([value, canonicalIdValue(value)])) {
-      keys.add(`${normalizedSource}:${candidate}`);
-      keys.add(`${normalizedSource}:${facetSlug(title.facet)}:${candidate}`);
-      if (title.facet === "ANIME") {
-        keys.add(`${normalizedSource}:series:${candidate}`);
+      for (const kind of kinds) {
+        keys.add(`${normalizedSource}:${kind}:${candidate}`);
       }
     }
   };

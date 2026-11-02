@@ -80,13 +80,21 @@ export function clusterCenters(
  * position; the rest start beside their cluster's centre. When most nodes
  * already had a position the layout starts cool, so the next steps settle it
  * rather than shake it apart.
+ *
+ * `allClusterIds` names every cluster of the whole graph, before any filter.
+ * Cluster centres come from it, so filtering a whole cluster out leaves every
+ * other cluster where it was.
  */
 export function createLayout(
   nodes: readonly LayoutNodeInput[],
   edges: readonly LayoutEdgeInput[],
   previous: ReadonlyMap<string, LayoutPoint> = new Map(),
+  allClusterIds: Iterable<number> = [],
 ): LayoutState {
-  const centers = clusterCenters(nodes.map((node) => node.clusterId));
+  const centers = clusterCenters([
+    ...allClusterIds,
+    ...nodes.map((node) => node.clusterId),
+  ]);
   const keys = nodes.map((node) => node.key);
   const clusterIds = nodes.map((node) => node.clusterId);
   const x = new Float64Array(nodes.length);
@@ -134,6 +142,23 @@ export function createLayout(
 /** Whether the layout has cooled to rest. */
 export function layoutIsSettled(state: LayoutState): boolean {
   return state.temperature <= MIN_TEMPERATURE;
+}
+
+export type LayoutLoopDecision = "step" | "pause" | "done";
+
+/**
+ * What the animation loop does next. A settled (or missing) layout is done.
+ * A container with no width or height (a hidden drawer, a collapsed pane)
+ * pauses the loop; the next non-zero size resumes it from where it stopped.
+ */
+export function layoutLoopDecision(
+  container: { width: number; height: number },
+  layout: LayoutState | null,
+): LayoutLoopDecision {
+  if (!layout || layoutIsSettled(layout)) {
+    return "done";
+  }
+  return container.width > 0 && container.height > 0 ? "step" : "pause";
 }
 
 /**

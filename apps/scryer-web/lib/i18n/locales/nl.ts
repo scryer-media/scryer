@@ -1502,6 +1502,7 @@ const nl: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Rond {{title}}",
   "libraryGraph.unplaced": "Niet-ingedeelde titels",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} titels)",
+  "libraryGraph.collapseCluster": "{{name}} samenvouwen",
   "libraryGraph.linkedBy": "Verbonden door",
   "libraryGraph.empty":
     "Geen enkele titel in deze weergave staat al in de bibliotheekgraaf.",

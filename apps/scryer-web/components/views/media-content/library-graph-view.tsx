@@ -1,7 +1,7 @@
 import * as React from "react";
-import GraphologyGraph from "graphology";
+import Graph from "graphology";
 import Sigma from "sigma";
-import { Maximize2 } from "lucide-react";
+import { Maximize2, Minimize2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/types/library-graph";
 import { toggleClusterExpanded } from "@/lib/utils/library-graph-merge";
 import {
+  LIBRARY_GRAPH_COLLAPSE_THRESHOLD,
   LIBRARY_GRAPH_SIZE_METRICS,
   displayedLibraryGraph,
   joinLibraryGraphToTitles,
@@ -26,7 +27,7 @@ import {
 import {
   convexHull,
   createLayout,
-  layoutIsSettled,
+  layoutLoopDecision,
   layoutPositions,
   stepLayout,
   type LayoutPoint,
@@ -76,50 +77,28 @@ type EdgeAttributes = {
   kinds: string[];
 };
 
-// The part of graphology's graph this view uses. graphology publishes its
-// types in a separate package this app does not install, so the surface the
-// view relies on is typed here instead.
-type GraphStore = {
-  forEachNode(
-    callback: (key: string, attributes: NodeAttributes) => void,
-  ): void;
-  updateEachNodeAttributes(
-    updater: (key: string, attributes: NodeAttributes) => NodeAttributes,
-  ): void;
-  getNodeAttributes(key: string): NodeAttributes;
-  getEdgeAttribute(key: string, name: "kinds"): string[];
-  hasNode(key: string): boolean;
-  addNode(key: string, attributes: NodeAttributes): string;
-  replaceNodeAttributes(key: string, attributes: NodeAttributes): void;
-  dropNode(key: string): void;
-  hasEdge(source: string, target: string): boolean;
-  addUndirectedEdge(
-    source: string,
-    target: string,
-    attributes: EdgeAttributes,
-  ): string;
-  clearEdges(): void;
-};
-
-type GraphStoreConstructor = new (options: {
-  type: "undirected";
-  multi: boolean;
-}) => GraphStore;
-
-const Graph = GraphologyGraph as unknown as GraphStoreConstructor;
+type LibraryGraphStore = Graph<NodeAttributes, EdgeAttributes>;
 
 type Hover =
-  | { kind: "node"; x: number; y: number; lines: string[] }
-  | { kind: "edge"; x: number; y: number; lines: string[] };
+  | { kind: "node"; key: string; x: number; y: number; lines: string[] }
+  | {
+      kind: "edge";
+      from: string;
+      to: string;
+      x: number;
+      y: number;
+      lines: string[];
+    };
 
 function clusterColor(clusterId: number, order: readonly number[]): string {
   if (clusterId === UNPLACED_CLUSTER_ID) {
     return UNPLACED_COLOR;
   }
   const position = order.indexOf(clusterId);
-  return CLUSTER_COLORS[
-    (position < 0 ? clusterId : position) % CLUSTER_COLORS.length
-  ];
+  const index = position < 0 ? clusterId : position;
+  // An id the order does not know may be negative; wrap it into range.
+  const count = CLUSTER_COLORS.length;
+  return CLUSTER_COLORS[((index % count) + count) % count];
 }
 
 function withAlpha(hex: string, alpha: number): string {
@@ -135,6 +114,12 @@ function readCssColor(element: Element, name: string, fallback: string) {
 export type LibraryGraphViewProps = {
   facet: Facet;
   titles: readonly TitleRecord[];
+  /**
+   * Whether `titles` is the whole filtered catalog. While pages are still
+   * loading the graph keeps showing the last complete set instead of
+   * rebuilding on every page.
+   */
+  titlesComplete: boolean;
   libraryIds: readonly string[];
   selectedTitleId: string | null;
   contextPanelId?: string;
@@ -149,7 +134,8 @@ export type LibraryGraphViewProps = {
  */
 export default function LibraryGraphView({
   facet,
-  titles,
+  titles: currentTitles,
+  titlesComplete,
   libraryIds,
   selectedTitleId,
   contextPanelId,
@@ -159,16 +145,26 @@ export default function LibraryGraphView({
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const overlayRef = React.useRef<HTMLCanvasElement | null>(null);
   const hullLabelRefs = React.useRef(new Map<number, HTMLButtonElement>());
-  const sigmaRef = React.useRef<Sigma | null>(null);
-  const graphRef = React.useRef<GraphStore | null>(null);
+  const sigmaRef = React.useRef<Sigma<NodeAttributes, EdgeAttributes> | null>(
+    null,
+  );
+  const graphRef = React.useRef<LibraryGraphStore | null>(null);
   const layoutRef = React.useRef<LayoutState | null>(null);
   const frameRef = React.useRef<number | null>(null);
+  // Restarts the layout loop after it paused for a hidden container.
+  const resumeLayoutRef = React.useRef<() => void>(() => {});
   const positionsRef = React.useRef(new Map<string, LayoutPoint>());
   const posterCacheRef = React.useRef(new Map<string, HTMLImageElement>());
   const selectedTitleIdRef = React.useRef(selectedTitleId);
   const titlesByIdRef = React.useRef(new Map<string, TitleRecord>());
   const onSelectTitleRef = React.useRef(onSelectTitle);
 
+  const [titles, setTitles] = React.useState<readonly TitleRecord[] | null>(
+    titlesComplete ? currentTitles : null,
+  );
+  if (titlesComplete && titles !== currentTitles) {
+    setTitles(currentTitles);
+  }
   const [result, setResult] = React.useState<LibraryGraphResult | null>(null);
   const [metric, setMetric] =
     React.useState<LibraryGraphSizeMetric>("ratingEvidence");
@@ -206,21 +202,29 @@ export default function LibraryGraphView({
 
   const catalogTargetKeys = React.useMemo(
     () =>
-      titles
+      (titles ?? [])
         .map((title) => titleTargetKey(title))
         .filter((key): key is string => key !== null)
         .sort(),
     [titles],
   );
-  const catalogTargetKeySignature = catalogTargetKeys.join("\n");
+  const catalogTargetKeysRef = React.useRef(catalogTargetKeys);
+  React.useEffect(() => {
+    catalogTargetKeysRef.current = catalogTargetKeys;
+  }, [catalogTargetKeys]);
+  const hasTitles = catalogTargetKeys.length > 0;
   const libraryIdSignature = [...libraryIds].sort().join(",");
 
+  // The graph covers the facet's selected libraries; filters only prune it.
+  // It loads once per facet and library set, so a filter change keeps every
+  // node where it was. The fixture names its nodes after the titles loaded
+  // when it was built.
   React.useEffect(() => {
+    if (!hasTitles) {
+      return;
+    }
     let cancelled = false;
-    const keys = catalogTargetKeySignature
-      ? catalogTargetKeySignature.split("\n")
-      : [];
-    void libraryGraphSourceForCatalog(keys)
+    void libraryGraphSourceForCatalog(catalogTargetKeysRef.current)
       .load({
         facet,
         libraryIds: libraryIdSignature ? libraryIdSignature.split(",") : [],
@@ -238,10 +242,10 @@ export default function LibraryGraphView({
     return () => {
       cancelled = true;
     };
-  }, [catalogTargetKeySignature, facet, libraryIdSignature]);
+  }, [facet, hasTitles, libraryIdSignature]);
 
   const join = React.useMemo(
-    () => (result ? joinLibraryGraphToTitles(result, titles) : null),
+    () => (result && titles ? joinLibraryGraphToTitles(result, titles) : null),
     [result, titles],
   );
   const titlesById = React.useMemo(() => {
@@ -254,6 +258,15 @@ export default function LibraryGraphView({
   const displayed = React.useMemo(
     () => (join ? displayedLibraryGraph(join.graph, expandedClusterIds) : null),
     [expandedClusterIds, join],
+  );
+  // Every cluster of the whole graph, before filtering, so layout centres hold
+  // still when a filter empties a cluster.
+  const allClusterIds = React.useMemo(
+    () => [
+      UNPLACED_CLUSTER_ID,
+      ...(result?.clusters ?? []).map((cluster) => cluster.id),
+    ],
+    [result],
   );
   const clusterOrder = React.useMemo(
     () =>
@@ -355,19 +368,28 @@ export default function LibraryGraphView({
       }
       const hull = convexHull(points);
       context.beginPath();
-      hull.forEach((point, index) => {
-        if (index === 0) {
-          context.moveTo(point.x, point.y);
-        } else {
-          context.lineTo(point.x, point.y);
-        }
-      });
+      if (hull.length === 1) {
+        // One node, or several on one spot: a zero-length path strokes
+        // nothing, so the hull is the padding circle around that point.
+        context.arc(hull[0].x, hull[0].y, HULL_PADDING_PX, 0, Math.PI * 2);
+      } else {
+        hull.forEach((point, index) => {
+          if (index === 0) {
+            context.moveTo(point.x, point.y);
+          } else {
+            context.lineTo(point.x, point.y);
+          }
+        });
+      }
       context.closePath();
       context.fillStyle = withAlpha(group.color, 0.1);
-      context.strokeStyle = withAlpha(group.color, 0.1);
-      context.lineWidth = HULL_PADDING_PX * 2;
       context.fill();
-      context.stroke();
+      if (hull.length > 1) {
+        // The wide round pen pads the hull by HULL_PADDING_PX all round.
+        context.strokeStyle = withAlpha(group.color, 0.1);
+        context.lineWidth = HULL_PADDING_PX * 2;
+        context.stroke();
+      }
       if (label) {
         const top = hull.reduce(
           (best, point) => (point.y < best.y ? point : best),
@@ -456,9 +478,15 @@ export default function LibraryGraphView({
     if (!container) {
       return;
     }
-    const graph = new Graph({ type: "undirected", multi: false });
-    const sigma = new Sigma(graph, container, {
+    const graph: LibraryGraphStore = new Graph<NodeAttributes, EdgeAttributes>({
+      type: "undirected",
+      multi: false,
+    });
+    const sigma = new Sigma<NodeAttributes, EdgeAttributes>(graph, container, {
       settings: {
+        // The view can sit in a hidden drawer (narrow screens with a title
+        // open), where the container has no size; sigma must not throw there.
+        allowInvalidContainer: true,
         renderLabels: false,
         renderEdgeLabels: false,
         enableEdgeEvents: true,
@@ -473,15 +501,15 @@ export default function LibraryGraphView({
     sigma.on("clickNode", ({ node }) => {
       const attributes = graph.getNodeAttributes(node);
       if (attributes.collapsedClusterId !== undefined) {
+        const clusterId = attributes.collapsedClusterId;
         setExpandedClusterIds((current) =>
-          toggleClusterExpanded(
-            current,
-            attributes.collapsedClusterId as number,
-          ),
+          toggleClusterExpanded(current, clusterId),
         );
         return;
       }
-      const title = titlesByIdRef.current.get(attributes.titleId as string);
+      const title = attributes.titleId
+        ? titlesByIdRef.current.get(attributes.titleId)
+        : undefined;
       if (title) {
         onSelectTitleRef.current(title);
       }
@@ -490,9 +518,10 @@ export default function LibraryGraphView({
       const attributes = graph.getNodeAttributes(node);
       setHover({
         kind: "node",
+        key: node,
         x: event.x,
         y: event.y,
-        lines: [attributes.label as string],
+        lines: [attributes.label],
       });
       container.style.cursor = "pointer";
     });
@@ -501,19 +530,35 @@ export default function LibraryGraphView({
       container.style.cursor = "";
     });
     sigma.on("enterEdge", ({ edge, event }) => {
-      const kinds = graph.getEdgeAttribute(edge, "kinds") as string[];
-      setHover({ kind: "edge", x: event.x, y: event.y, lines: kinds });
+      setHover({
+        kind: "edge",
+        from: graph.source(edge),
+        to: graph.target(edge),
+        x: event.x,
+        y: event.y,
+        lines: graph.getEdgeAttribute(edge, "kinds"),
+      });
     });
     sigma.on("leaveEdge", () => setHover(null));
+    // A touch never leaves a node, so the tooltip goes when the finger lifts.
+    const clearHover = () => setHover(null);
+    container.addEventListener("touchend", clearHover);
+    container.addEventListener("touchcancel", clearHover);
 
     const resizeObserver = new ResizeObserver(() => {
+      if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+        return;
+      }
       sigma.resize();
       sigma.refresh();
+      resumeLayoutRef.current();
     });
     resizeObserver.observe(container);
 
     return () => {
       resizeObserver.disconnect();
+      container.removeEventListener("touchend", clearHover);
+      container.removeEventListener("touchcancel", clearHover);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
@@ -554,6 +599,7 @@ export default function LibraryGraphView({
       })),
       displayed.edges,
       positionsRef.current,
+      allClusterIds,
     );
     const start = layoutPositions(layout);
 
@@ -633,11 +679,21 @@ export default function LibraryGraphView({
     layoutRef.current = layout;
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
     }
+    const container = sigma.getContainer();
     const tick = () => {
       frameRef.current = null;
       const current = layoutRef.current;
-      if (!current || current !== layout) {
+      if (current !== layout) {
+        return;
+      }
+      const decision = layoutLoopDecision(
+        { width: container.offsetWidth, height: container.offsetHeight },
+        current,
+      );
+      if (decision !== "step") {
+        // Paused while hidden: the next non-zero size resumes it.
         return;
       }
       stepLayout(current, LAYOUT_STEPS_PER_FRAME);
@@ -647,15 +703,27 @@ export default function LibraryGraphView({
         const point = positions.get(key);
         return point ? { ...attributes, x: point.x, y: point.y } : attributes;
       });
-      if (!layoutIsSettled(current)) {
+      frameRef.current = window.requestAnimationFrame(tick);
+    };
+    resumeLayoutRef.current = () => {
+      if (frameRef.current === null && layoutRef.current === layout) {
         frameRef.current = window.requestAnimationFrame(tick);
       }
     };
     positionsRef.current = start;
     applySelection();
     sigma.refresh();
-    frameRef.current = window.requestAnimationFrame(tick);
-  }, [applySelection, clusterOrder, displayed, join, metric, t, titlesById]);
+    resumeLayoutRef.current();
+  }, [
+    allClusterIds,
+    applySelection,
+    clusterOrder,
+    displayed,
+    join,
+    metric,
+    t,
+    titlesById,
+  ]);
 
   const focusGroup = React.useCallback((clusterId: number) => {
     const sigma = sigmaRef.current;
@@ -700,11 +768,26 @@ export default function LibraryGraphView({
       .animate({ x: 0.5, y: 0.5, ratio: 1, angle: 0 }, { duration: 300 });
   }, []);
 
+  // A hovered node or edge that a filter removed has no tooltip.
+  const displayedKeys = React.useMemo(
+    () => new Set(displayed?.nodes.map((node) => node.subjectKey) ?? []),
+    [displayed],
+  );
+  const shownHover =
+    hover &&
+    (hover.kind === "node"
+      ? displayedKeys.has(hover.key)
+      : displayedKeys.has(hover.from) && displayedKeys.has(hover.to))
+      ? hover
+      : null;
   const hoverLines =
-    hover?.kind === "edge"
-      ? libraryGraphEdgeKindLabels(hover.lines, t)
-      : hover?.lines;
+    shownHover?.kind === "edge"
+      ? libraryGraphEdgeKindLabels(shownHover.lines, t)
+      : shownHover?.lines;
   const visibleNodeCount = join?.graph.nodes.length ?? 0;
+  // Above the threshold clusters start collapsed; an expanded one can fold
+  // back from its chip.
+  const collapsing = visibleNodeCount > LIBRARY_GRAPH_COLLAPSE_THRESHOLD;
   const selectedVisible =
     selectedTitleId !== null && titlesById.has(selectedTitleId);
 
@@ -764,20 +847,40 @@ export default function LibraryGraphView({
           className="flex gap-1.5 overflow-x-auto pb-1"
         >
           {groups.map((group) => (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => focusGroup(group.id)}
-              className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-1 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)]"
-            >
-              <span
-                aria-hidden="true"
-                className="h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: group.color }}
-              />
-              <span>{group.name}</span>
-              <span className="text-[var(--scry-muted2)]">{group.count}</span>
-            </button>
+            <span key={group.id} className="flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => focusGroup(group.id)}
+                className="flex items-center gap-1.5 rounded-full border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 py-1 text-[12px] text-[var(--scry-body)] transition hover:bg-[var(--scry-hover)]"
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: group.color }}
+                />
+                <span>{group.name}</span>
+                <span className="text-[var(--scry-muted2)]">{group.count}</span>
+              </button>
+              {collapsing && expandedClusterIds.has(group.id) ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedClusterIds((current) =>
+                      toggleClusterExpanded(current, group.id),
+                    )
+                  }
+                  aria-label={t("libraryGraph.collapseCluster", {
+                    name: group.name,
+                  })}
+                  title={t("libraryGraph.collapseCluster", {
+                    name: group.name,
+                  })}
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--scry-muted2)] transition hover:bg-[var(--scry-hover)]"
+                >
+                  <Minimize2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </span>
           ))}
         </nav>
       ) : null}
@@ -817,16 +920,16 @@ export default function LibraryGraphView({
               {group.name}
             </button>
           ))}
-        {hover && hoverLines && hoverLines.length > 0 ? (
+        {shownHover && hoverLines && hoverLines.length > 0 ? (
           <div
             role="tooltip"
             className="pointer-events-none absolute z-10 max-w-[16rem] rounded-[8px] border border-[var(--scry-border2)] bg-[var(--scry-card2)] px-2.5 py-1.5 text-[12px] text-[var(--scry-ink2)] shadow-lg"
             style={{
-              left: hover.x + 12,
-              top: hover.y + 12,
+              left: shownHover.x + 12,
+              top: shownHover.y + 12,
             }}
           >
-            {hover.kind === "edge" ? (
+            {shownHover.kind === "edge" ? (
               <div className="mb-0.5 text-[11px] text-[var(--scry-muted2)]">
                 {t("libraryGraph.linkedBy")}
               </div>

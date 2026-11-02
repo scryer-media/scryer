@@ -1143,6 +1143,7 @@ const pt_BR: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Em torno de {{title}}",
   "libraryGraph.unplaced": "Títulos sem grupo",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} títulos)",
+  "libraryGraph.collapseCluster": "Recolher {{name}}",
   "libraryGraph.linkedBy": "Ligados por",
   "libraryGraph.empty":
     "Nenhum título desta visualização está no grafo da biblioteca ainda.",

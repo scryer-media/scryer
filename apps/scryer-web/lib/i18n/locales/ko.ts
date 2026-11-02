@@ -1109,6 +1109,7 @@ const ko: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "{{title}} 주변",
   "libraryGraph.unplaced": "분류되지 않은 작품",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}}개 작품)",
+  "libraryGraph.collapseCluster": "{{name}} 접기",
   "libraryGraph.linkedBy": "연결 이유",
   "libraryGraph.empty": "이 보기의 작품은 아직 라이브러리 그래프에 없습니다.",
   "libraryGraph.edgeKind.semantic": "비슷함",

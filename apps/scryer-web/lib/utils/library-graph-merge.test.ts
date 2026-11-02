@@ -219,3 +219,62 @@ test("LRU pruning evicts the oldest ghosts and never an owned node", () => {
   // Under the cap nothing moves.
   assert.deepEqual(pruneLeastRecentlyUsed(merged, 10, lastUsed).evicted, []);
 });
+
+test("two new nodes naming the same title become one ghost", () => {
+  const merged = mergeLibraryGraphResult(owned(), {
+    generatedAt: "2026-01-02T00:00:00Z",
+    nodes: [
+      { subjectKey: "x:one", targetKey: "tmdb:movie:70", clusterId: 4 },
+      { subjectKey: "x:two", targetKey: "tmdb:movie:70", clusterId: 4 },
+    ],
+    edges: [
+      { from: "x:one", to: "s:a", weight: 0.4, kinds: ["semantic"] },
+      { from: "x:two", to: "s:a", weight: 0.6, kinds: ["relation:co_watch"] },
+    ],
+    clusters: [],
+  });
+  const ghosts = merged.nodes.filter((node) => node.ghost);
+  assert.deepEqual(
+    ghosts.map((node) => node.subjectKey),
+    ["x:one"],
+  );
+  const edge = edgeBetween(merged, "x:one", "s:a");
+  assert.deepEqual(edge?.kinds, ["relation:co_watch", "semantic"]);
+  assert.equal(edge?.weight, 0.6);
+});
+
+test("edge weights are clamped to [0, 1] and a non-number counts as 0", () => {
+  const graph = graphStateFromResult({
+    generatedAt: "2026-01-01T00:00:00Z",
+    nodes: [
+      { subjectKey: "s:a", targetKey: "tmdb:movie:1", clusterId: 0 },
+      { subjectKey: "s:b", targetKey: "tmdb:movie:2", clusterId: 1 },
+      { subjectKey: "s:c", targetKey: "tmdb:movie:3", clusterId: 2 },
+    ],
+    edges: [
+      { from: "s:a", to: "s:b", weight: Number.NaN, kinds: ["semantic"] },
+      { from: "s:b", to: "s:c", weight: 7, kinds: ["semantic"] },
+      { from: "s:a", to: "s:c", weight: -2, kinds: ["semantic"] },
+    ],
+    clusters: [],
+  });
+  assert.equal(edgeBetween(graph, "s:a", "s:b")?.weight, 0);
+  assert.equal(edgeBetween(graph, "s:b", "s:c")?.weight, 1);
+  assert.equal(edgeBetween(graph, "s:a", "s:c")?.weight, 0);
+
+  // A NaN edge never wins a ghost's placement over a real one.
+  const merged = mergeLibraryGraphResult(graph, {
+    generatedAt: "2026-01-02T00:00:00Z",
+    nodes: [{ subjectKey: "x:g", targetKey: "tmdb:movie:80", clusterId: 9 }],
+    edges: [
+      { from: "x:g", to: "s:a", weight: Number.NaN, kinds: ["semantic"] },
+      { from: "x:g", to: "s:c", weight: 0.3, kinds: ["semantic"] },
+    ],
+    clusters: [],
+  });
+  assert.equal(
+    merged.nodes.find((node) => node.subjectKey === "x:g")?.clusterId,
+    2,
+  );
+  assert.ok(merged.edges.every((edge) => Number.isFinite(edge.weight)));
+});

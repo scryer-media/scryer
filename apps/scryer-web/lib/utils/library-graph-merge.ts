@@ -45,6 +45,11 @@ export function graphStateFromResult(result: LibraryGraphResult): GraphState {
   );
 }
 
+/** An edge weight as a finite number in [0, 1]; anything else counts as 0. */
+export function clampEdgeWeight(weight: number): number {
+  return Number.isFinite(weight) ? Math.min(1, Math.max(0, weight)) : 0;
+}
+
 function sortedUnion(a: readonly string[], b: readonly string[]): string[] {
   return Array.from(new Set([...a, ...b])).sort();
 }
@@ -63,16 +68,17 @@ function dedupeEdges(
     }
     const key = edgePairKey(edge.from, edge.to);
     const existing = byPair.get(key);
+    const weight = clampEdgeWeight(edge.weight);
     if (!existing) {
       byPair.set(key, {
         from: edge.from,
         to: edge.to,
-        weight: edge.weight,
+        weight,
         kinds: sortedUnion([], edge.kinds),
       });
       continue;
     }
-    existing.weight = Math.max(existing.weight, edge.weight);
+    existing.weight = Math.max(existing.weight, weight);
     existing.kinds = sortedUnion(existing.kinds, edge.kinds);
   }
   return Array.from(byPair.values());
@@ -157,16 +163,20 @@ export function mergeLibraryGraphResult(
       continue;
     }
     snapTo.set(node.subjectKey, node.subjectKey);
-    ghosts.push({
+    const ghost: GraphNode = {
       subjectKey: node.subjectKey,
       targetKey: node.targetKey,
       clusterId: UNPLACED_CLUSTER_ID,
       ghost: true,
-    });
+    };
+    ghosts.push(ghost);
+    // A later node naming the same new title snaps to this one.
+    byTarget.set(node.targetKey, ghost);
   }
 
   const edges = incoming.edges.map((edge) => ({
     ...edge,
+    weight: clampEdgeWeight(edge.weight),
     from: snapTo.get(edge.from) ?? edge.from,
     to: snapTo.get(edge.to) ?? edge.to,
   }));

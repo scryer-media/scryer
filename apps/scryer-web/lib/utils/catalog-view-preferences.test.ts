@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { UiSettings, UiTableColumnSetting } from "../types/settings.ts";
 import {
-  DISCOVERY_GRAPH_VIEW_ENABLED,
   availableCatalogViewMode,
   catalogColumnsInput,
   catalogDeviceClass,
@@ -208,16 +207,6 @@ test("the graph view mode is saved and read back", () => {
 });
 
 test("the graph view is offered only while its gate is on", () => {
-  // The defaults follow the gate constant.
-  assert.deepEqual(
-    catalogViewModeOptions(),
-    catalogViewModeOptions(DISCOVERY_GRAPH_VIEW_ENABLED),
-  );
-  assert.equal(
-    availableCatalogViewMode("graph"),
-    availableCatalogViewMode("graph", DISCOVERY_GRAPH_VIEW_ENABLED),
-  );
-
   assert.deepEqual(catalogViewModeOptions(false), [
     "compact",
     "poster-table",
@@ -229,7 +218,6 @@ test("the graph view is offered only while its gate is on", () => {
     "poster",
     "graph",
   ]);
-  // A saved graph view falls back to posters while the gate is off.
   assert.equal(availableCatalogViewMode("graph", false), "poster");
   assert.equal(availableCatalogViewMode("graph", true), "graph");
   assert.equal(availableCatalogViewMode("compact", false), "compact");

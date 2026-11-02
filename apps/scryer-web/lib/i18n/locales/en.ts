@@ -6316,6 +6316,7 @@ const en: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Around {{title}}",
   "libraryGraph.unplaced": "Unplaced titles",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} titles)",
+  "libraryGraph.collapseCluster": "Collapse {{name}}",
   "libraryGraph.linkedBy": "Linked by",
   "libraryGraph.empty": "No titles in this view are in the library graph yet.",
   "libraryGraph.edgeKind.semantic": "Similar",

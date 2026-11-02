@@ -1503,6 +1503,8 @@ export type TitleCatalogTitleProjection = {
   ratings?: boolean;
   movieMedia?: boolean;
   popularity?: boolean;
+  /** The title's provider ids, which the library graph joins on. */
+  externalIds?: boolean;
 };
 
 export type TitleCatalogQueryBuildOptions = {
@@ -1582,6 +1584,14 @@ function titleCatalogListFields(projection: TitleCatalogTitleProjection = {}) {
   if (projection.popularity) {
     fields.push(`
     popularity`);
+  }
+  if (projection.externalIds) {
+    fields.push(`
+    imdbId
+    externalIds {
+      source
+      value
+    }`);
   }
   if (projection.movieMedia) {
     fields.push(`

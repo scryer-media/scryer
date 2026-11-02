@@ -1050,6 +1050,7 @@ const zh_CN: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "{{title}} 周边",
   "libraryGraph.unplaced": "未归类的作品",
   "libraryGraph.collapsedCluster": "{{name}}（{{count}} 部作品）",
+  "libraryGraph.collapseCluster": "折叠{{name}}",
   "libraryGraph.linkedBy": "关联原因",
   "libraryGraph.empty": "此视图中的作品尚未进入媒体库图谱。",
   "libraryGraph.edgeKind.semantic": "相似",

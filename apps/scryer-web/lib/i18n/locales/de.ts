@@ -1140,6 +1140,7 @@ const de: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Rund um {{title}}",
   "libraryGraph.unplaced": "Nicht zugeordnete Titel",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} Titel)",
+  "libraryGraph.collapseCluster": "{{name}} einklappen",
   "libraryGraph.linkedBy": "Verbunden durch",
   "libraryGraph.empty":
     "Keiner der Titel in dieser Ansicht ist bereits im Bibliotheksgraphen.",

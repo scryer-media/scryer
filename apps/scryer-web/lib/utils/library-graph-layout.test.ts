@@ -7,6 +7,7 @@ import {
   convexHull,
   createLayout,
   layoutIsSettled,
+  layoutLoopDecision,
   layoutPositions,
   stepLayout,
 } from "./library-graph-layout.ts";
@@ -111,4 +112,58 @@ test("the convex hull keeps the outer points in order", () => {
     { x: 0, y: 2 },
   ]);
   assert.deepEqual(convexHull([{ x: 1, y: 1 }]), [{ x: 1, y: 1 }]);
+});
+
+test("filtering out a whole cluster leaves the other clusters where they were", () => {
+  const { nodes, edges } = fixtureLayoutInput();
+  const allClusterIds = nodes.map((node) => node.clusterId);
+  const full = createLayout(nodes, edges, new Map(), allClusterIds);
+  settle(full);
+  const before = layoutPositions(full);
+
+  // Drop cluster 2 and the one unplaced node.
+  const kept = nodes.filter(
+    (node) => node.clusterId !== 2 && node.clusterId !== -1,
+  );
+  const drift = (layout: ReturnType<typeof createLayout>) => {
+    settle(layout);
+    const after = layoutPositions(layout);
+    const distances = kept
+      .map((node) => {
+        const was = before.get(node.key);
+        const now = after.get(node.key);
+        assert.ok(was && now);
+        return Math.hypot(now.x - was.x, now.y - was.y);
+      })
+      .sort((a, b) => a - b);
+    return {
+      median: distances[distances.length >> 1],
+      max: distances[distances.length - 1],
+    };
+  };
+
+  const resettled = createLayout(kept, edges, before, allClusterIds);
+  assert.deepEqual(resettled.centers, full.centers);
+  const settled = drift(resettled);
+  // Nodes that were linked into the dropped cluster ease inward a little;
+  // the rest barely move.
+  assert.ok(settled.median < 40, `median drift ${settled.median}`);
+  assert.ok(settled.max < 120, `max drift ${settled.max}`);
+
+  // Centres taken from the surviving nodes alone move whole clusters.
+  const fromSurvivors = createLayout(kept, edges, before);
+  assert.notDeepEqual(fromSurvivors.centers, full.centers);
+  assert.ok(drift(fromSurvivors).median > 100);
+});
+
+test("the layout loop pauses while its container has no size and resumes after", () => {
+  const { nodes, edges } = fixtureLayoutInput();
+  const layout = createLayout(nodes, edges);
+  assert.equal(layoutLoopDecision({ width: 0, height: 0 }, layout), "pause");
+  assert.equal(layoutLoopDecision({ width: 320, height: 0 }, layout), "pause");
+  assert.equal(layoutLoopDecision({ width: 320, height: 480 }, layout), "step");
+  settle(layout);
+  assert.equal(layoutLoopDecision({ width: 320, height: 480 }, layout), "done");
+  assert.equal(layoutLoopDecision({ width: 0, height: 0 }, layout), "done");
+  assert.equal(layoutLoopDecision({ width: 320, height: 480 }, null), "done");
 });

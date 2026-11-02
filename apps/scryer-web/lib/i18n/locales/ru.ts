@@ -1663,6 +1663,7 @@ const ru: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Вокруг «{{title}}»",
   "libraryGraph.unplaced": "Без кластера",
   "libraryGraph.collapsedCluster": "{{name}} (тайтлов: {{count}})",
+  "libraryGraph.collapseCluster": "Свернуть {{name}}",
   "libraryGraph.linkedBy": "Связь",
   "libraryGraph.empty":
     "Ни один тайтл в этом представлении пока не входит в граф библиотеки.",

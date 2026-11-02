@@ -1124,6 +1124,7 @@ const ja: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "{{title}} の周辺",
   "libraryGraph.unplaced": "未分類のタイトル",
   "libraryGraph.collapsedCluster": "{{name}}（{{count}} タイトル）",
+  "libraryGraph.collapseCluster": "{{name}} を折りたたむ",
   "libraryGraph.linkedBy": "つながりの理由",
   "libraryGraph.empty":
     "この表示のタイトルはまだライブラリグラフに含まれていません。",

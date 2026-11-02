@@ -177,6 +177,11 @@ import { releaseSupportsAdditionalFileQueue } from "@/lib/utils/release-queue-sc
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import type { ContentViewMode } from "./media-content/content-view-mode";
 import { catalogViewModeOptions } from "@/lib/utils/catalog-view-preferences";
+import {
+  INITIAL_GRAPH_PAGING_STATE,
+  graphPagingStep,
+  type GraphPagingState,
+} from "@/lib/utils/library-graph-paging";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { TitleOverviewActions } from "./title-overview-actions";
 import { TitleBlockedReleasesSection } from "@/components/common/title-blocked-releases-section";
@@ -2682,20 +2687,28 @@ export function MediaContentView({
     (collectionViewMode === "compact" || collectionViewMode === "poster-table");
 
   // The graph draws the whole filtered catalog, so it keeps paging until every
-  // title is loaded; each page that lands starts the next.
+  // title is loaded and builds once paging is over.
+  const graphPagingRef = React.useRef<GraphPagingState>(
+    INITIAL_GRAPH_PAGING_STATE,
+  );
+  const [graphTitlesComplete, setGraphTitlesComplete] = React.useState(false);
   React.useEffect(() => {
-    if (
-      !isTitleCatalogView ||
-      collectionViewMode !== "graph" ||
-      !catalogHasMoreTitles ||
-      catalogLoadingMoreTitles
-    ) {
-      return;
+    const step = graphPagingStep(graphPagingRef.current, {
+      active: isTitleCatalogView && collectionViewMode === "graph",
+      hasMore: catalogHasMoreTitles,
+      loadingMore: catalogLoadingMoreTitles,
+      pageFailed: catalogPageError !== null,
+      loadedCount: monitoredTitles.length,
+    });
+    graphPagingRef.current = step.state;
+    setGraphTitlesComplete(step.complete);
+    if (step.request) {
+      void loadMoreCatalogTitles();
     }
-    void loadMoreCatalogTitles();
   }, [
     catalogHasMoreTitles,
     catalogLoadingMoreTitles,
+    catalogPageError,
     collectionViewMode,
     isTitleCatalogView,
     loadMoreCatalogTitles,
@@ -3864,6 +3877,7 @@ export function MediaContentView({
                               : "SERIES"
                         }
                         titles={monitoredTitles}
+                        titlesComplete={graphTitlesComplete}
                         libraryIds={selectedLibraryIds}
                         selectedTitleId={contextPanelSelectedTitleId}
                         contextPanelId={selectedTitleContextPanelId}

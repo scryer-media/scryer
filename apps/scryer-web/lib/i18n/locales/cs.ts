@@ -1827,6 +1827,7 @@ const cs: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Kolem titulu {{title}}",
   "libraryGraph.unplaced": "Nezařazené tituly",
   "libraryGraph.collapsedCluster": "{{name}} (titulů: {{count}})",
+  "libraryGraph.collapseCluster": "Sbalit {{name}}",
   "libraryGraph.linkedBy": "Propojeno přes",
   "libraryGraph.empty":
     "Žádný titul v tomto zobrazení zatím není v grafu knihovny.",

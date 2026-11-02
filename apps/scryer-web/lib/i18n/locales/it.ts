@@ -1141,6 +1141,7 @@ const it: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "Attorno a {{title}}",
   "libraryGraph.unplaced": "Titoli non collocati",
   "libraryGraph.collapsedCluster": "{{name}} ({{count}} titoli)",
+  "libraryGraph.collapseCluster": "Comprimi {{name}}",
   "libraryGraph.linkedBy": "Collegati da",
   "libraryGraph.empty":
     "Nessun titolo di questa vista è ancora nel grafo della libreria.",

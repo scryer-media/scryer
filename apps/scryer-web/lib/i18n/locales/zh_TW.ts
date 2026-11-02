@@ -1575,6 +1575,7 @@ const zh_TW: LocaleDictionary = {
   "libraryGraph.clusterAroundTitle": "{{title}} 周邊",
   "libraryGraph.unplaced": "未歸類的作品",
   "libraryGraph.collapsedCluster": "{{name}}（{{count}} 部作品）",
+  "libraryGraph.collapseCluster": "摺疊{{name}}",
   "libraryGraph.linkedBy": "關聯原因",
   "libraryGraph.empty": "此檢視中的作品尚未納入媒體庫圖譜。",
   "libraryGraph.edgeKind.semantic": "相似",
